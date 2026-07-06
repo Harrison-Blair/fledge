@@ -1,0 +1,159 @@
+# fledge report: status counts, per-REQ completion, orphan tasks, --json, empty repo, usage/env errors
+
+# outside a fledge repo: not yet a git repository
+! exec fledge report
+stderr 'not inside a git repository'
+
+exec git init -q .
+
+# git repo exists, but .fledge/ is missing
+! exec fledge report
+stderr '\.fledge/ not found'
+
+mkdir .fledge
+
+# empty repo: .fledge/ present, no specs at all -> valid zero report, exit 0
+exec fledge report
+stdout 'Tasks: 0 total \(blocked: 0, ready: 0, in-progress: 0, done: 0\)'
+stdout '\(none\)'
+
+exec fledge report --json
+stdout '"total": 0'
+stdout '"requirements": \[\]'
+stdout '"orphans": \[\]'
+
+# usage error: unknown flag
+! exec fledge report --bogus
+stderr 'flag provided but not defined'
+
+# populate a repo with two requirements, mixed-status tasks, and an orphan task
+mkdir -p spec/requirements
+mkdir -p spec/tasks
+cp req1.md spec/requirements/REQ-001-first-requirement.md
+cp req2.md spec/requirements/REQ-002-second-requirement.md
+cp task1.md spec/tasks/TASK-001-first.md
+cp task2.md spec/tasks/TASK-002-second.md
+cp task3.md spec/tasks/TASK-003-third.md
+cp task4.md spec/tasks/TASK-004-orphan.md
+
+exec fledge report
+stdout 'Tasks: 4 total \(blocked: 1, ready: 2, in-progress: 0, done: 1\)'
+stdout 'REQ-001  First requirement  approved  1/2 done'
+stdout 'REQ-002  Second requirement  approved  0/1 done'
+stdout 'TASK-004  Orphan task  \(requirement: REQ-999\)'
+
+exec fledge report --json
+stdout '"blocked": 1'
+stdout '"ready": 2'
+stdout '"in_progress": 0'
+stdout '"done": 1'
+stdout '"total": 4'
+stdout '"id": "REQ-001"'
+stdout '"id": "REQ-002"'
+stdout '"id": "TASK-004"'
+stdout '"requirement": "REQ-999"'
+
+-- req1.md --
+---
+id: REQ-001
+title: First requirement
+status: approved
+priority: P1
+authored: 2026-07-06T12:00:00Z
+agent: t
+fledge_version: 0.1.0
+---
+## Context
+x
+## Functional Criteria
+x
+## Acceptance Criteria
+x
+-- req2.md --
+---
+id: REQ-002
+title: Second requirement
+status: approved
+priority: P1
+authored: 2026-07-06T12:00:00Z
+agent: t
+fledge_version: 0.1.0
+---
+## Context
+x
+## Functional Criteria
+x
+## Acceptance Criteria
+x
+-- task1.md --
+---
+id: TASK-001
+title: First
+requirement: REQ-001
+status: done
+priority: P1
+depends_on: []
+authored: 2026-07-06T12:00:00Z
+agent: t
+fledge_version: 0.1.0
+---
+## Description
+x
+## Tests
+- a test
+## Acceptance Criteria
+x
+-- task2.md --
+---
+id: TASK-002
+title: Second
+requirement: REQ-001
+status: blocked
+priority: P1
+depends_on: []
+authored: 2026-07-06T12:00:00Z
+agent: t
+fledge_version: 0.1.0
+---
+## Description
+x
+## Tests
+- a test
+## Acceptance Criteria
+x
+-- task3.md --
+---
+id: TASK-003
+title: Third
+requirement: REQ-002
+status: ready
+priority: P1
+depends_on: []
+authored: 2026-07-06T12:00:00Z
+agent: t
+fledge_version: 0.1.0
+---
+## Description
+x
+## Tests
+- a test
+## Acceptance Criteria
+x
+-- task4.md --
+---
+id: TASK-004
+title: Orphan task
+requirement: REQ-999
+status: ready
+priority: P1
+depends_on: []
+authored: 2026-07-06T12:00:00Z
+agent: t
+fledge_version: 0.1.0
+---
+## Description
+x
+## Tests
+- a test
+## Acceptance Criteria
+x
