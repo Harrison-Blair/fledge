@@ -1,40 +1,42 @@
 ---
-generated: 2026-07-06T21:54:21Z
-commit: 22c11810cf8ab8d8e8ae34253a6426af005561c2
-agent: context-gatherer
+generated: 2026-07-06T23:33:05Z
+commit: b701cf5a12a99b5adf9538e83f51178d4dead0c2
+agent: fledge-context-gatherer
 fledge_version: 0.1.0
 ---
 
 # Context Index
 
+Generated context for fledge — a single-binary Go CLI for spec-driven development that manages REQ/TASK markdown specs under `.fledge/`. Load docs below based on the `Read this when` routing lines.
+
 ## architecture.md
-The repo is pre-implementation: one metadata-only `root` module and the `.fledge/` context-generation scaffold (scan script → raw scout reports → concern docs). Describes which `.fledge/` paths are ephemeral vs. committed. No cross-module relationships exist.
-Read this when: you need the big picture of what exists in this repo, or how the `.fledge/` context pipeline is laid out, before planning any new structure.
+Describes the three-tier layering (cmd entry → internal/cli command layer → focused core packages), the dependency direction, and cross-cutting design principles: determinism/byte-preservation, atomic mutation, lock/status consistency invariants, findings-vs-errors, and how the `.claude/` agent layer sits above the CLI.
+Read this when: you need the big-picture shape, how packages relate, or the rationale behind determinism/atomicity/consistency decisions before changing cross-package behavior.
 
 ## modules.md
-Repo map with a single entry, `root`: README (name + tagline only), AGPL-3.0 LICENSE, `VERSION` = 0.1.0, and a `.gitignore` covering `.fledge/` intermediates.
-Read this when: you need to locate a specific file or confirm what modules exist before assigning work or adding a new top-level directory.
+Per-module map of the repo: `root`, `cmd`, and each `internal/*` sub-package (cli, spec, check, graph, lock, repo, scan) with purpose, key files, and a "Look here for" pointer.
+Read this when: you need to locate which file or package owns a given concern.
 
 ## conventions.md
-Bare-semver `VERSION` file, git-ignoring of `.fledge/context/raw/` and `.fledge/locks/` as regenerable intermediates, minimal lowercase README style, and AGPL-3.0 licensing. Notes the unfilled LICENSE copyright line.
-Read this when: writing anything that must match existing repo hygiene — version bumps, `.gitignore` changes, licensing headers — or establishing coding conventions for the first code.
+The codebase's operative patterns: one-command-per-file, fixed-key-order frontmatter and canonical quoting, ID/filename formats, the enum sets (status/priority P0–P3/oversight) and their transition rules, field mutability, findings-vs-errors, atomic writes, exit-code taxonomy, dual text/JSON output, and test conventions.
+Read this when: you are writing or reviewing code and need to match existing style, enum values, transition rules, or error/output conventions.
 
 ## data-model.md
-Empty by fact: no types, schemas, or tables exist; the only structured value is the semver string in `VERSION`.
-Read this when: you would otherwise search for existing types to reuse — this doc confirms there are none, so design from scratch.
+Authoritative field-by-field definitions of the core types — `Requirement`, `Task`, `Set`/`FileError`, `check.Finding`, `graph.Graph`, `lock.Record`, `scan.Module`/`Result` — plus the status/priority/oversight constants and frontmatter key order.
+Read this when: you need exact struct fields, valid enum values, or the frontmatter schema for specs.
 
 ## dependencies.md
-Empty by fact: no manifests or lockfiles, so no third-party dependencies and no committed language/toolchain choice.
-Read this when: deciding on a language or adding the first dependency — nothing constrains that choice yet.
+Direct/indirect third-party deps (goccy/go-yaml for frontmatter parsing, go-internal/testscript for e2e tests), the runtime dependency on git via os/exec, notable stdlib usage per package, the internal import graph (no cycles), and AGPL v3 licensing.
+Read this when: you need to know what a package may import, why a dependency exists, or the runtime git assumption.
 
 ## entry-points.md
-No product entry points, build steps, or usage docs exist; the only executable is the context-tooling helper `.fledge/scripts/scan`.
-Read this when: you need to run or build the project (you cannot yet) or are about to create its first CLI/entry point.
+Process entry (`main` → `cli.Run`), build/run/test commands and version stamping, the 0/1/2/3 exit-code taxonomy, the full subcommand table with args and flags, the library public interfaces, and graph output formats.
+Read this when: you need the exact command surface, flags, exit codes, or how to build/run/test the binary.
 
 ## testing.md
-Empty by fact: no tests, frameworks, or runners exist; testing conventions are unestablished.
-Read this when: adding the first tests or defining the test strategy — there is no prior pattern to follow.
+The two test layers — testscript/txtar e2e scripts in `cmd/fledge/testdata/` (one per command + e2e) and per-package unit tests — with what each covers, the git-determinism setup, the test-first convention, and known coverage gaps (internal/repo untested).
+Read this when: you are adding or debugging tests, or need to know how a behavior is currently verified.
 
 ## domain.md
-Four-term glossary: fledge, spec-driven development, per-run intermediates, and context (the `.fledge/context/` doc set).
-Read this when: you encounter fledge-specific vocabulary in specs or prompts and need its meaning in this repo.
+Glossary of the problem-domain vocabulary: spec-driven development, Requirement/Task and their lifecycles, dependency graph, waves, ready/blocked, locks, oversight, findings, priority, frontmatter, body preservation, scan modules, scan-ignore, and agent.
+Read this when: you encounter an unfamiliar term or need precise definitions of fledge's spec/workflow concepts.

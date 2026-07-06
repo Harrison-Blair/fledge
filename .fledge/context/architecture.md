@@ -1,28 +1,39 @@
 ---
-generated: 2026-07-06T21:54:21Z
-commit: 22c11810cf8ab8d8e8ae34253a6426af005561c2
-agent: context-gatherer
+generated: 2026-07-06T23:33:05Z
+commit: b701cf5a12a99b5adf9538e83f51178d4dead0c2
+agent: fledge-context-gatherer
 fledge_version: 0.1.0
 ---
 
 # Architecture
 
-This repository is `fledge`, a spec-driven development tool at version 0.1.0, in a pre-implementation state: the scan surface consists only of root metadata files (`README.md`, `LICENSE`, `VERSION`, `.gitignore`). There is no application source code, so the architecture that exists today is the tooling scaffold that generates and consumes planning context.
+fledge is a single-binary Go CLI for spec-driven development. It manages a repository's requirements and tasks as markdown files with YAML frontmatter under `.fledge/`, and provides deterministic operations over them (create, validate, graph, lock, scan) that agents and humans both drive. The codebase is a thin `cmd` entry point over an `internal` library organized as a command layer plus focused core packages.
 
-## Current shape
+## Layering
 
-- Single module (`root`) containing project identity and metadata only:
-  - `README.md` — project name and tagline ("my spec driven development tool"); no install or usage docs.
-  - `LICENSE` — AGPL-3.0, verbatim FSF text.
-  - `VERSION` — bare semver string `0.1.0`.
-  - `.gitignore` — excludes per-run regenerable intermediates.
-- `.fledge/` is the tool's state root (`.gitignore` comments it as holding "Per-run intermediates — regenerable, not shared"): `.fledge/context/raw/` holds ephemeral scout reports and `.fledge/locks/` holds locks; both are git-ignored. Committed context lives in `.fledge/context/*.md`.
-- Context generation flows: `.fledge/scripts/scan` enumerates modules → per-module scout reports in `.fledge/context/raw/` → synthesized concern docs in `.fledge/context/`.
+Execution flows top-down through three tiers (`cmd/fledge/main.go`, `internal/cli/*`, `internal/{spec,check,graph,lock,repo,scan}`):
 
-## Cross-module relationships
+- **Entry** — `cmd/fledge/main.go:main` is a bootstrap that calls `cli.Run(os.Args[1:])` and returns its exit code to the OS. It holds no logic.
+- **Command layer** — `internal/cli` implements every subcommand (one file per command), argument parsing, output formatting (text + `--json`), exit-code discipline, and dispatch via an init-time registry (`internal/cli/cli.go:commands`). It orchestrates the core packages but owns no domain algorithms itself.
+- **Core packages** — each `internal/*` package owns one concern and is independently testable:
+  - `internal/spec` — the data model: `Requirement` and `Task` structs, frontmatter parse/render with byte-for-byte body preservation, ID allocation, template scaffolding, atomic writes (`internal/spec/types.go`, `frontmatter.go`, `ids.go`, `load.go`, `templates.go`).
+  - `internal/check` — validation rules engine; `check.Run` returns `[]Finding` rather than errors (`internal/check/check.go`).
+  - `internal/graph` — task dependency DAG: cycle detection, wave (topological layer) computation, ready-set calculation (`internal/graph/graph.go`).
+  - `internal/lock` — advisory per-task file locks under `.fledge/locks/` with atomic `O_EXCL` acquisition (`internal/lock/lock.go`).
+  - `internal/repo` — repo root discovery via git and resolution of `.fledge/`, spec dirs, VERSION, HEAD (`internal/repo/repo.go`).
+  - `internal/scan` — file inventory grouped into modules for context gathering, honoring `.fledge/scan-ignore` (`internal/scan/scan.go`).
 
-None — there is only one module. No dependency edges exist yet.
+## Dependency direction
 
-## Open Questions
+`cmd` → `internal/cli` → core packages. Within core, `internal/check` depends on `internal/graph` and `internal/spec`; `internal/graph` depends on `internal/spec`; `spec`, `lock`, `repo`, and `scan` depend only on the standard library (plus `goccy/go-yaml` in `spec`). There are no import cycles; the domain model (`spec`) sits at the bottom and everything above consumes it.
 
-- Implementation language and tooling for fledge itself are not determinable; no package manifests exist at the root (`root.md` scout report).
+## Cross-cutting design principles
+
+- **Determinism** — operations are byte-reproducible. `internal/spec/frontmatter.go` renders frontmatter in a fixed key order with canonical scalar quoting and never rewrites the markdown body (`SplitFrontmatter` returns the body unchanged; `TestTaskRoundTrip` guards this). `internal/scan` output is documented as byte-compatible with a retired `.fledge/scripts/scan` bash script.
+- **Atomic mutation** — every spec and lock write goes through temp-file + rename (`spec.WriteFileAtomic`, `lock.Acquire` with `O_EXCL`), so concurrent writers collide safely instead of corrupting files.
+- **Consistency invariants across packages** — lock and status are kept coherent by the command layer: `fledge lock` acquires the lock then sets status to in-progress, rolling the lock back if the status write fails; `fledge unlock --done` writes done status *before* removing the lock (`internal/cli/lock.go`; `lock_test.go:TestLockRollsBackOnStatusWriteFailure`).
+- **Findings vs errors** — validation surfaces domain problems as `check.Finding` values with a rule and severity, distinct from Go `error`s used for I/O and environment failures. This maps onto the CLI's exit-code taxonomy (see `entry-points.md`).
+
+## Relationship to the agent layer
+
+The repository also contains `.claude/` agents and skills (excluded from scan via `.fledge/scan-ignore`) that orchestrate this CLI: a planning/orchestration skill authors REQ/TASK specs, and an implementation loop locks tasks, works them in git worktrees, and unlocks on completion. The CLI is the deterministic substrate those agents call; it does not itself contain agent logic.
