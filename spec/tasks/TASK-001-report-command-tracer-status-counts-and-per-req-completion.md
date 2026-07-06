@@ -2,7 +2,7 @@
 id: TASK-001
 title: "report command tracer: status counts and per-REQ completion"
 requirement: REQ-001
-status: ready
+status: done
 priority: P2
 depends_on: []
 oversight: merge
