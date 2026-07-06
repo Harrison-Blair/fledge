@@ -1,0 +1,26 @@
+# fledge scan: module grouping, scan-ignore filtering, output format
+exec git init -q .
+
+exec fledge scan
+stdout '# fledge scan — commit none'
+stdout 'module: <root> \(files: 1, bytes: 6\)'
+stdout 'module: dir1 \(files: 2, bytes: 7\)'
+stdout '  dir1/a.txt'
+! stdout 'skip.log'
+! stdout 'scan-ignore'
+
+exec fledge scan --json
+stdout '"commit": null'
+stdout '"name": "dir1"'
+
+-- .fledge/scan-ignore --
+*.log
+.fledge/
+-- README.md --
+hello
+-- dir1/a.txt --
+aaaa
+-- dir1/b.txt --
+b
+-- dir2/skip.log --
+ignored

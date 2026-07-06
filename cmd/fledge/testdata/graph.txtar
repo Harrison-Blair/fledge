@@ -1,0 +1,131 @@
+# fledge graph: waves, annotations, dot, cycle failure
+exec git init -q .
+
+exec fledge graph
+stdout 'wave 1: TASK-001 \[done\]'
+stdout 'wave 2: TASK-002'
+stdout 'wave 3: TASK-003'
+
+exec fledge graph --format dot
+stdout 'digraph fledge'
+stdout '"TASK-001" -> "TASK-002"'
+
+exec fledge graph --json
+stdout '"waves"'
+
+! exec fledge graph --format nope
+stderr 'unknown --format'
+
+# a cycle makes graph fail with the path
+cp cyc/TASK-004-c1.md spec/tasks/TASK-004-c1.md
+cp cyc/TASK-005-c2.md spec/tasks/TASK-005-c2.md
+! exec fledge graph
+stderr 'dependency cycle: TASK-00'
+
+-- .fledge/scan-ignore --
+-- spec/requirements/REQ-001-a.md --
+---
+id: REQ-001
+title: A requirement
+status: approved
+priority: P1
+authored: 2026-07-06T12:00:00Z
+agent: t
+fledge_version: 0.1.0
+---
+## Context
+x
+## Functional Criteria
+x
+## Acceptance Criteria
+x
+-- spec/tasks/TASK-001-first.md --
+---
+id: TASK-001
+title: First
+requirement: REQ-001
+status: done
+priority: P1
+depends_on: []
+authored: 2026-07-06T12:00:00Z
+agent: t
+fledge_version: 0.1.0
+---
+## Description
+x
+## Tests
+- a test
+## Acceptance Criteria
+x
+-- spec/tasks/TASK-002-second.md --
+---
+id: TASK-002
+title: Second
+requirement: REQ-001
+status: in-progress
+priority: P1
+depends_on: [TASK-001]
+authored: 2026-07-06T12:00:00Z
+agent: t
+fledge_version: 0.1.0
+---
+## Description
+x
+## Tests
+- a test
+## Acceptance Criteria
+x
+-- spec/tasks/TASK-003-third.md --
+---
+id: TASK-003
+title: Third
+requirement: REQ-001
+status: blocked
+priority: P1
+depends_on: [TASK-002]
+authored: 2026-07-06T12:00:00Z
+agent: t
+fledge_version: 0.1.0
+---
+## Description
+x
+## Tests
+- a test
+## Acceptance Criteria
+x
+-- cyc/TASK-004-c1.md --
+---
+id: TASK-004
+title: C1
+requirement: REQ-001
+status: blocked
+depends_on: [TASK-005]
+priority: P1
+authored: 2026-07-06T12:00:00Z
+agent: t
+fledge_version: 0.1.0
+---
+## Description
+x
+## Tests
+- a test
+## Acceptance Criteria
+x
+-- cyc/TASK-005-c2.md --
+---
+id: TASK-005
+title: C2
+requirement: REQ-001
+status: blocked
+depends_on: [TASK-004]
+priority: P1
+authored: 2026-07-06T12:00:00Z
+agent: t
+fledge_version: 0.1.0
+---
+## Description
+x
+## Tests
+- a test
+## Acceptance Criteria
+x

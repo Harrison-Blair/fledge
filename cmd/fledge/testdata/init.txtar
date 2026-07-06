@@ -1,0 +1,26 @@
+# fledge init: idempotent scaffolding
+exec git init -q .
+
+exec fledge init
+stdout 'created .fledge/context/raw/.gitkeep'
+stdout 'created .fledge/locks/.gitkeep'
+stdout 'created .fledge/scan-ignore'
+stdout 'created spec/requirements/.gitkeep'
+stdout 'created spec/tasks/.gitkeep'
+stdout 'created .gitignore'
+exists .fledge/scan-ignore
+grep '.fledge/context/raw/' .gitignore
+grep '.fledge/locks/' .gitignore
+
+# second run touches nothing and duplicates no gitignore lines
+exec fledge init
+stdout 'exists .fledge/scan-ignore'
+! stdout 'created'
+grep -count=1 '.fledge/locks/' .gitignore
+
+# the scaffold is immediately usable
+exec fledge check
+stdout 'spec clean: 0 requirements, 0 tasks'
+
+exec fledge init --json
+stdout '"created": \[\]'

@@ -1,0 +1,43 @@
+# End-to-end fledge lifecycle: init → new → approve → tasks → check →
+# graph → lock → unlock --done → ready unlocks the dependent task.
+exec git init -q .
+exec fledge init
+
+exec fledge new req --title 'Build the widget'
+exec fledge status REQ-001 approved
+exec fledge new task --title 'Lay foundation' --req REQ-001
+exec fledge new task --title 'Assemble widget' --req REQ-001 --depends-on TASK-001
+exec fledge new task --title 'Polish widget' --req REQ-001 --depends-on TASK-002 --oversight merge
+
+exec fledge check
+stdout 'spec clean: 1 requirements, 3 tasks'
+
+exec fledge graph
+stdout 'wave 1: TASK-001'
+stdout 'wave 2: TASK-002'
+stdout 'wave 3: TASK-003'
+
+exec fledge ready
+stdout 'TASK-001'
+! stdout 'TASK-002'
+
+# dispatch TASK-001
+exec fledge lock TASK-001 --owner adelie --branch task/TASK-001-lay-foundation
+exec fledge ready
+stdout 'no ready tasks'
+exec fledge locks
+stdout 'adelie'
+
+# complete it; the dependent becomes ready
+exec fledge unlock TASK-001 --done
+exec fledge ready
+stdout 'TASK-002'
+! stdout 'TASK-003'
+
+# graph reflects the done state
+exec fledge graph
+stdout 'wave 1: TASK-001 \[done\]'
+
+# spec still clean after all rewrites
+exec fledge check
+stdout 'spec clean'
