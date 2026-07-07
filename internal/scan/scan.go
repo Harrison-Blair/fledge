@@ -1,5 +1,5 @@
 // Package scan lists repository files (tracked + untracked, non-gitignored),
-// filters them through .fledge/scan-ignore, and groups them into modules by
+// filters them through .fledgeignore, and groups them into modules by
 // top-level directory. Root-level files group under "<root>".
 package scan
 
@@ -90,9 +90,9 @@ func listFiles(root string) ([]string, error) {
 	return files, nil
 }
 
-// filterIgnored drops paths matched by .fledge/scan-ignore, if present.
+// filterIgnored drops paths matched by .fledgeignore, if present.
 func filterIgnored(root string, files []string) ([]string, error) {
-	ignorePath := filepath.Join(root, ".fledge", "scan-ignore")
+	ignorePath := filepath.Join(root, ".fledgeignore")
 	if _, err := os.Stat(ignorePath); err != nil || len(files) == 0 {
 		return files, nil
 	}

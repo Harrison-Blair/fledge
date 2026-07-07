@@ -10,7 +10,7 @@ import (
 )
 
 // loadSet resolves the repo, requires .fledge/, and loads all specs plus the
-// IDs of tasks with a held lock. On failure it prints and returns a non-zero
+// IDs of feathers with a held brood. On failure it prints and returns a non-zero
 // exit code as ok=false.
 func loadSet() (r *repo.Repo, set *spec.Set, locked []string, exitCode int, ok bool) {
 	r, err := repo.Find()
@@ -27,12 +27,12 @@ func loadSet() (r *repo.Repo, set *spec.Set, locked []string, exitCode int, ok b
 	return r, set, lockedTaskIDs(r), 0, true
 }
 
-// lockedTaskIDs lists task IDs that have a lock file.
+// lockedTaskIDs lists feather IDs that have a brood file.
 func lockedTaskIDs(r *repo.Repo) []string {
-	matches, _ := filepath.Glob(filepath.Join(r.LocksDir(), "*.lock"))
+	matches, _ := filepath.Glob(filepath.Join(r.LocksDir(), "*.brood"))
 	var ids []string
 	for _, m := range matches {
-		ids = append(ids, strings.TrimSuffix(filepath.Base(m), ".lock"))
+		ids = append(ids, strings.TrimSuffix(filepath.Base(m), ".brood"))
 	}
 	return ids
 }

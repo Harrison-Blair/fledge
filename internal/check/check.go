@@ -32,12 +32,12 @@ type Finding struct {
 }
 
 var (
-	reqIDRe  = regexp.MustCompile(`^REQ-\d{3,}$`)
-	taskIDRe = regexp.MustCompile(`^TASK-\d{3,}$`)
+	reqIDRe  = regexp.MustCompile(`^PLM-\d{3,}$`)
+	taskIDRe = regexp.MustCompile(`^FTHR-\d{3,}$`)
 )
 
-// Run validates the set. lockedTasks are task IDs with a held lock file.
-// evidenceDir is where per-task evidence files (TASK-###.md) live; empty
+// Run validates the set. lockedTasks are feather IDs with a held brood file.
+// evidenceDir is where per-feather evidence files (FTHR-###.md) live; empty
 // disables the criteria-evidence rule.
 func Run(set *spec.Set, lockedTasks []string, evidenceDir string) []Finding {
 	var fs []Finding
@@ -81,7 +81,7 @@ func Run(set *spec.Set, lockedTasks []string, evidenceDir string) []Finding {
 			"id": r.ID, "title": r.Title, "status": r.Status, "priority": r.Priority,
 			"authored": r.Authored, "agent": r.Agent, "fledge_version": r.FledgeVersion,
 		})
-		checkEnum(add, r.Path, "status", r.Status, []string{spec.ReqDraft, spec.ReqApproved, spec.ReqDone})
+		checkEnum(add, r.Path, "status", r.Status, []string{spec.ReqEgg, spec.ReqHatched, spec.ReqFledged})
 		checkEnum(add, r.Path, "priority", r.Priority, spec.Priorities)
 		checkAuthored(add, r.Path, r.Authored)
 		checkIDFilename(add, r.Path, r.ID, reqIDRe)
@@ -90,19 +90,19 @@ func Run(set *spec.Set, lockedTasks []string, evidenceDir string) []Finding {
 				add(r.Path, "required-sections", Warning, "missing %q section", h)
 			}
 		}
-		if r.Status == spec.ReqDone {
+		if r.Status == spec.ReqFledged {
 			checkCriteriaComplete(add, r.Path, r.Body)
 		}
 	}
 
 	for _, t := range set.Tasks {
 		checkRequired(add, t.Path, map[string]string{
-			"id": t.ID, "title": t.Title, "requirement": t.Requirement, "status": t.Status,
+			"id": t.ID, "title": t.Title, "plumage": t.Requirement, "status": t.Status,
 			"priority": t.Priority, "authored": t.Authored, "agent": t.Agent,
 			"fledge_version": t.FledgeVersion,
 		})
 		checkEnum(add, t.Path, "status", t.Status,
-			[]string{spec.TaskBlocked, spec.TaskReady, spec.TaskInProgress, spec.TaskDone})
+			[]string{spec.TaskEgg, spec.TaskPipping, spec.TaskHatching, spec.TaskFledged})
 		checkEnum(add, t.Path, "priority", t.Priority, spec.Priorities)
 		if t.Oversight != "" && !slices.Contains(spec.OversightValues, t.Oversight) {
 			add(t.Path, "schema", Error, "oversight %q not one of merge|during", t.Oversight)
@@ -110,12 +110,12 @@ func Run(set *spec.Set, lockedTasks []string, evidenceDir string) []Finding {
 		checkAuthored(add, t.Path, t.Authored)
 		checkIDFilename(add, t.Path, t.ID, taskIDRe)
 
-		// dangling-ref / unapproved-req
+		// dangling-ref / unhatched-plumage
 		if t.Requirement != "" {
 			if req := set.Req(t.Requirement); req == nil {
-				add(t.Path, "dangling-ref", Error, "requirement %s does not exist", t.Requirement)
-			} else if req.Status == spec.ReqDraft {
-				add(t.Path, "unapproved-req", Error, "requirement %s is still draft", t.Requirement)
+				add(t.Path, "dangling-ref", Error, "plumage %s does not exist", t.Requirement)
+			} else if req.Status == spec.ReqEgg {
+				add(t.Path, "unhatched-plumage", Error, "plumage %s is still an egg", t.Requirement)
 			}
 		}
 		for _, dep := range t.DependsOn {
@@ -136,18 +136,18 @@ func Run(set *spec.Set, lockedTasks []string, evidenceDir string) []Finding {
 			}
 		}
 
-		if t.Status == spec.TaskDone {
+		if t.Status == spec.TaskFledged {
 			checkCriteriaComplete(add, t.Path, t.Body)
 		}
 		if evidenceDir != "" {
 			checkCriteriaEvidence(add, t, evidenceDir)
 		}
 
-		// stale-ready-hint: only the over-promising direction is suspicious.
-		// blocked-with-deps-done is routine (blocked→ready is never written
+		// stale-pipping-hint: only the over-promising direction is suspicious.
+		// egg-with-deps-fledged is routine (egg→pipping is never written
 		// back; readiness is recomputed at dispatch).
-		if t.Status == spec.TaskReady && !allDepsDone(set, t) {
-			add(t.Path, "stale-ready-hint", Warning, "status says ready but not all depends_on are done")
+		if t.Status == spec.TaskPipping && !allDepsDone(set, t) {
+			add(t.Path, "stale-pipping-hint", Warning, "status says pipping but not all depends_on are fledged")
 		}
 	}
 
@@ -160,18 +160,18 @@ func Run(set *spec.Set, lockedTasks []string, evidenceDir string) []Finding {
 		add(file, "cycle", Error, "dependency cycle: %s", strings.Join(c, " -> "))
 	}
 
-	// lock-consistency
+	// brood-consistency
 	for _, id := range lockedTasks {
 		t := set.Task(id)
 		if t == nil {
-			add(id, "lock-consistency", Warning, "lock held for unknown task %s", id)
-		} else if t.Status != spec.TaskInProgress {
-			add(t.Path, "lock-consistency", Warning, "lock held but status is %s (expected in-progress)", t.Status)
+			add(id, "brood-consistency", Warning, "brood held for unknown feather %s", id)
+		} else if t.Status != spec.TaskHatching {
+			add(t.Path, "brood-consistency", Warning, "brood held but status is %s (expected hatching)", t.Status)
 		}
 	}
 	for _, t := range set.Tasks {
-		if t.Status == spec.TaskInProgress && !slices.Contains(lockedTasks, t.ID) {
-			add(t.Path, "lock-consistency", Warning, "status in-progress but no lock is held")
+		if t.Status == spec.TaskHatching && !slices.Contains(lockedTasks, t.ID) {
+			add(t.Path, "brood-consistency", Warning, "status hatching but no brood is held")
 		}
 	}
 
@@ -191,7 +191,7 @@ func HasErrors(fs []Finding) bool {
 func allDepsDone(set *spec.Set, t *spec.Task) bool {
 	for _, dep := range t.DependsOn {
 		d := set.Task(dep)
-		if d == nil || d.Status != spec.TaskDone {
+		if d == nil || d.Status != spec.TaskFledged {
 			return false
 		}
 	}
@@ -245,12 +245,12 @@ func checkIDFilename(add addFunc, path, id string, re *regexp.Regexp) {
 	}
 }
 
-// checkCriteriaComplete flags a done spec whose AC boxes aren't all checked
+// checkCriteriaComplete flags a fledged spec whose AC boxes aren't all checked
 // (error), or that has no parseable checkboxes at all (legacy format, warning).
 func checkCriteriaComplete(add addFunc, path string, body []byte) {
 	cs := spec.ParseCriteria(body)
 	if len(cs) == 0 {
-		add(path, "criteria-format", Warning, "done but \"## Acceptance Criteria\" has no parseable checkboxes (expected \"- [ ] AC-N: ...\")")
+		add(path, "criteria-format", Warning, "fledged but \"## Acceptance Criteria\" has no parseable checkboxes (expected \"- [ ] AC-N: ...\")")
 		return
 	}
 	var unchecked []string
@@ -260,12 +260,12 @@ func checkCriteriaComplete(add addFunc, path string, body []byte) {
 		}
 	}
 	if len(unchecked) > 0 {
-		add(path, "criteria-incomplete", Error, "done but acceptance criteria unchecked: %s", strings.Join(unchecked, ", "))
+		add(path, "criteria-incomplete", Error, "fledged but acceptance criteria unchecked: %s", strings.Join(unchecked, ", "))
 	}
 }
 
-// checkCriteriaEvidence warns when a checked task AC has no matching "## AC-N"
-// section in the task's evidence file under evidenceDir.
+// checkCriteriaEvidence warns when a checked feather AC has no matching "## AC-N"
+// section in the feather's molt evidence file under evidenceDir.
 func checkCriteriaEvidence(add addFunc, t *spec.Task, evidenceDir string) {
 	var checked []spec.Criterion
 	for _, c := range spec.ParseCriteria(t.Body) {

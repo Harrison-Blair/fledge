@@ -4,21 +4,23 @@ import (
 	_ "embed"
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/Harrison-Blair/fledge/internal/bootstrap"
 	"github.com/Harrison-Blair/fledge/internal/repo"
 	"github.com/Harrison-Blair/fledge/internal/spec"
 )
 
 func init() { register("init", runInit, "fledge init [--json]") }
 
-//go:embed scan-ignore.default
+//go:embed fledgeignore.default
 var defaultScanIgnore []byte
 
 // gitignore lines fledge needs; appended as one block when any is missing.
-var gitignoreLines = []string{".fledge/context/raw/", ".fledge/locks/"}
+var gitignoreLines = []string{".fledge/nest/raw/", ".fledge/broods/"}
 
 func runInit(args []string) int {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
@@ -44,11 +46,11 @@ func runInit(args []string) int {
 		rel     string
 		content []byte
 	}{
-		{".fledge/context/raw/.gitkeep", nil},
-		{".fledge/locks/.gitkeep", nil},
-		{".fledge/scan-ignore", defaultScanIgnore},
-		{"spec/requirements/.gitkeep", nil},
-		{"spec/tasks/.gitkeep", nil},
+		{".fledge/nest/raw/.gitkeep", nil},
+		{".fledge/broods/.gitkeep", nil},
+		{".fledgeignore", defaultScanIgnore},
+		{"pluma/plumage/.gitkeep", nil},
+		{"pluma/feathers/.gitkeep", nil},
 	}
 	for _, f := range files {
 		path := filepath.Join(r.Root, f.rel)
@@ -71,6 +73,17 @@ func runInit(args []string) int {
 	}
 	note(".gitignore", changed)
 
+	bootstrapCreated, bootstrapSkipped, err := writeBootstrapFiles(r.Root)
+	if err != nil {
+		return fail("%v", err)
+	}
+	for _, rel := range bootstrapCreated {
+		note(rel, true)
+	}
+	for _, rel := range bootstrapSkipped {
+		note(rel, false)
+	}
+
 	if *jsonOut {
 		if created == nil {
 			created = []string{}
@@ -87,6 +100,38 @@ func runInit(args []string) int {
 		fmt.Printf("exists %s\n", rel)
 	}
 	return ExitOK
+}
+
+// writeBootstrapFiles copies the embedded .claude agents and skills into
+// root, skipping any file that already exists.
+func writeBootstrapFiles(root string) (created, skipped []string, err error) {
+	err = fs.WalkDir(bootstrap.FS, "claude", func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel := ".claude" + strings.TrimPrefix(path, "claude")
+		dest := filepath.Join(root, rel)
+		if fileExists(dest) {
+			skipped = append(skipped, rel)
+			return nil
+		}
+		data, readErr := bootstrap.FS.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		if mkErr := os.MkdirAll(filepath.Dir(dest), 0o755); mkErr != nil {
+			return mkErr
+		}
+		if writeErr := spec.WriteFileAtomic(dest, data); writeErr != nil {
+			return writeErr
+		}
+		created = append(created, rel)
+		return nil
+	})
+	return created, skipped, err
 }
 
 // ensureGitignore appends fledge's ignore lines when missing; reports change.

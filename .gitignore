@@ -1,7 +1,7 @@
 # Per-run intermediates — regenerable, not shared
-.fledge/context/raw/
-.fledge/locks/
-.fledge/worktrees/
+.fledge/nest/raw/
+.fledge/broods/
+.fledge/burrows/
 
 # Built binary
 /fledge

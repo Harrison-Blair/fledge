@@ -21,9 +21,9 @@ func TestLockRollsBackOnStatusWriteFailure(t *testing.T) {
 		}
 	}
 	reqFile := `---
-id: REQ-001
+id: PLM-001
 title: r
-status: approved
+status: hatched
 priority: P1
 authored: 2026-07-06T12:00:00Z
 agent: t
@@ -35,10 +35,10 @@ x
 x
 `
 	taskFile := `---
-id: TASK-001
+id: FTHR-001
 title: t
-requirement: REQ-001
-status: ready
+plumage: PLM-001
+status: pipping
 priority: P1
 depends_on: []
 authored: 2026-07-06T12:00:00Z
@@ -52,8 +52,8 @@ x
 ## Acceptance Criteria
 x
 `
-	os.WriteFile(filepath.Join(root, "spec", "requirements", "REQ-001-r.md"), []byte(reqFile), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, "TASK-001-t.md"), []byte(taskFile), 0o644)
+	os.WriteFile(filepath.Join(root, "spec", "requirements", "PLM-001-r.md"), []byte(reqFile), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, "FTHR-001-t.md"), []byte(taskFile), 0o644)
 
 	// Read-only tasks dir: the atomic rewrite's temp file creation fails.
 	if err := os.Chmod(tasksDir, 0o555); err != nil {
@@ -62,10 +62,10 @@ x
 	t.Cleanup(func() { os.Chmod(tasksDir, 0o755) })
 
 	t.Chdir(root)
-	if code := Run([]string{"lock", "TASK-001", "--owner", "tester"}); code != ExitFail {
+	if code := Run([]string{"brood", "FTHR-001", "--owner", "tester"}); code != ExitFail {
 		t.Fatalf("lock exit = %d, want %d", code, ExitFail)
 	}
-	if _, err := os.Stat(filepath.Join(root, ".fledge", "locks", "TASK-001.lock")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(root, ".fledge", "broods", "FTHR-001.brood")); !os.IsNotExist(err) {
 		t.Error("lock file was not rolled back")
 	}
 }

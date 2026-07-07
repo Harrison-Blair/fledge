@@ -5,19 +5,19 @@ import (
 	"strings"
 )
 
-//go:embed templates/requirement.md templates/task.md
+//go:embed templates/plumage.md templates/feather.md
 var templatesFS embed.FS
 
-// RequirementBody returns the skeleton body for a new requirement.
+// RequirementBody returns the skeleton body for a new plumage.
 func RequirementBody(id, title string) []byte {
-	return renderTemplate("templates/requirement.md", map[string]string{
+	return renderTemplate("templates/plumage.md", map[string]string{
 		"{{ID}}": id, "{{TITLE}}": title,
 	})
 }
 
-// TaskBody returns the skeleton body for a new task.
+// TaskBody returns the skeleton body for a new feather.
 func TaskBody(id, title, reqID string) []byte {
-	return renderTemplate("templates/task.md", map[string]string{
+	return renderTemplate("templates/feather.md", map[string]string{
 		"{{ID}}": id, "{{TITLE}}": title, "{{REQ}}": reqID,
 	})
 }

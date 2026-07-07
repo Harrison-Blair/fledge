@@ -8,8 +8,8 @@ import (
 
 func writeSpecs(t *testing.T, root string, files map[string]string) (reqDir, taskDir string) {
 	t.Helper()
-	reqDir = filepath.Join(root, "spec", "requirements")
-	taskDir = filepath.Join(root, "spec", "tasks")
+	reqDir = filepath.Join(root, "pluma", "plumage")
+	taskDir = filepath.Join(root, "pluma", "feathers")
 	for _, d := range []string{reqDir, taskDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
@@ -24,9 +24,9 @@ func writeSpecs(t *testing.T, root string, files map[string]string) (reqDir, tas
 }
 
 const validReq = `---
-id: REQ-001
+id: PLM-001
 title: A requirement
-status: approved
+status: hatched
 priority: P1
 authored: 2026-07-06T12:00:00Z
 agent: t
@@ -36,10 +36,10 @@ fledge_version: 0.1.0
 `
 
 const validTask = `---
-id: TASK-001
+id: FTHR-001
 title: A task
-requirement: REQ-001
-status: ready
+plumage: PLM-001
+status: pipping
 priority: P1
 depends_on: []
 authored: 2026-07-06T12:00:00Z
@@ -53,9 +53,9 @@ fledge_version: 0.1.0
 func TestLoad(t *testing.T) {
 	root := t.TempDir()
 	reqDir, taskDir := writeSpecs(t, root, map[string]string{
-		"spec/requirements/REQ-001-a-requirement.md": validReq,
-		"spec/tasks/TASK-001-a-task.md":              validTask,
-		"spec/tasks/TASK-002-broken.md":              "not frontmatter at all\n",
+		"pluma/plumage/PLM-001-a-requirement.md": validReq,
+		"pluma/feathers/FTHR-001-a-task.md":      validTask,
+		"pluma/feathers/FTHR-002-broken.md":      "not frontmatter at all\n",
 	})
 	set, err := Load(reqDir, taskDir)
 	if err != nil {
@@ -67,13 +67,13 @@ func TestLoad(t *testing.T) {
 	if len(set.Errors) != 1 {
 		t.Fatalf("want 1 file error for broken file, got %v", set.Errors)
 	}
-	if filepath.Base(set.Errors[0].Path) != "TASK-002-broken.md" {
+	if filepath.Base(set.Errors[0].Path) != "FTHR-002-broken.md" {
 		t.Errorf("error attributed to %q", set.Errors[0].Path)
 	}
-	if set.Req("REQ-001") == nil || set.Task("TASK-001") == nil {
+	if set.Req("PLM-001") == nil || set.Task("FTHR-001") == nil {
 		t.Error("lookup by ID failed")
 	}
-	if set.Req("REQ-999") != nil {
+	if set.Req("PLM-999") != nil {
 		t.Error("lookup of missing ID should be nil")
 	}
 }

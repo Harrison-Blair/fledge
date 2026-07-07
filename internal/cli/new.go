@@ -14,15 +14,15 @@ import (
 
 func init() {
 	register("new", runNew,
-		"fledge new req --title <t> [--priority P1] [--agent <s>] [--json]\n"+
-			"  fledge new task --title <t> --req REQ-### [--depends-on a,b] [--priority P1] [--oversight merge|during] [--force] [--json]")
+		"fledge new plumage --title <t> [--priority P1] [--agent <s>] [--json]\n"+
+			"  fledge new feather --title <t> --plumage PLM-### [--depends-on a,b] [--priority P1] [--oversight merge|during] [--force] [--json]")
 }
 
 const defaultAgent = "fledge-orchestrate/planning"
 
 func runNew(args []string) int {
-	if len(args) == 0 || (args[0] != "req" && args[0] != "task") {
-		return usageErr("usage: fledge new req|task ...")
+	if len(args) == 0 || (args[0] != "plumage" && args[0] != "feather") {
+		return usageErr("usage: fledge new plumage|feather ...")
 	}
 	kind := args[0]
 
@@ -30,10 +30,10 @@ func runNew(args []string) int {
 	title := fs.String("title", "", "spec title (required)")
 	priority := fs.String("priority", "P1", "priority P0..P3")
 	agent := fs.String("agent", defaultAgent, "authoring agent recorded in frontmatter")
-	reqID := fs.String("req", "", "parent requirement (task only)")
-	dependsOn := fs.String("depends-on", "", "comma-separated task IDs (task only)")
-	oversight := fs.String("oversight", "", "merge|during (task only)")
-	force := fs.Bool("force", false, "allow linking to a draft requirement")
+	reqID := fs.String("plumage", "", "parent plumage (feather only)")
+	dependsOn := fs.String("depends-on", "", "comma-separated feather IDs (feather only)")
+	oversight := fs.String("oversight", "", "merge|during (feather only)")
+	force := fs.Bool("force", false, "allow linking to an egg plumage")
 	jsonOut := fs.Bool("json", false, "machine-readable output")
 	if err := fs.Parse(args[1:]); err != nil {
 		return ExitUsage
@@ -58,29 +58,29 @@ func runNew(args []string) int {
 	var id, path string
 	var content []byte
 	switch kind {
-	case "req":
+	case "plumage":
 		dir := r.RequirementsDir()
 		var err error
-		if id, err = spec.NextID(dir, "REQ"); err != nil {
+		if id, err = spec.NextID(dir, "PLM"); err != nil {
 			return fail("%v", err)
 		}
 		path = filepath.Join(dir, fmt.Sprintf("%s-%s.md", id, spec.Kebab(*title)))
 		req := &spec.Requirement{
-			ID: id, Title: *title, Status: spec.ReqDraft, Priority: *priority,
+			ID: id, Title: *title, Status: spec.ReqEgg, Priority: *priority,
 			Authored: authored, Agent: *agent, FledgeVersion: version,
 			Body: spec.RequirementBody(id, *title),
 		}
 		content = req.Render()
-	case "task":
+	case "feather":
 		if *reqID == "" {
-			return usageErr("--req is required for tasks")
+			return usageErr("--plumage is required for feathers")
 		}
 		parent := set.Req(*reqID)
 		if parent == nil {
-			return fail("requirement %s does not exist", *reqID)
+			return fail("plumage %s does not exist", *reqID)
 		}
-		if parent.Status == spec.ReqDraft && !*force {
-			return fail("requirement %s is still draft; approve it first or pass --force", *reqID)
+		if parent.Status == spec.ReqEgg && !*force {
+			return fail("plumage %s is still an egg; hatch it first or pass --force", *reqID)
 		}
 		var deps []string
 		if *dependsOn != "" {
@@ -94,17 +94,17 @@ func runNew(args []string) int {
 			if dep == nil {
 				return fail("depends_on references unknown %s", d)
 			}
-			if dep.Status != spec.TaskDone {
+			if dep.Status != spec.TaskFledged {
 				allDone = false
 			}
 		}
-		status := spec.TaskBlocked
+		status := spec.TaskEgg
 		if allDone {
-			status = spec.TaskReady
+			status = spec.TaskPipping
 		}
 		dir := r.TasksDir()
 		var err error
-		if id, err = spec.NextID(dir, "TASK"); err != nil {
+		if id, err = spec.NextID(dir, "FTHR"); err != nil {
 			return fail("%v", err)
 		}
 		path = filepath.Join(dir, fmt.Sprintf("%s-%s.md", id, spec.Kebab(*title)))

@@ -48,7 +48,7 @@ func SplitFrontmatter(b []byte) (fm, body []byte, err error) {
 }
 
 var reqKeys = []string{"id", "title", "status", "priority", "authored", "agent", "fledge_version"}
-var taskKeys = []string{"id", "title", "requirement", "status", "priority", "depends_on", "oversight", "authored", "agent", "fledge_version"}
+var taskKeys = []string{"id", "title", "plumage", "status", "priority", "depends_on", "oversight", "authored", "agent", "fledge_version"}
 
 func parseFrontmatterMap(fm []byte) (map[string]any, error) {
 	var m map[string]any
@@ -91,7 +91,7 @@ func unknownKeys(m map[string]any, known []string) []string {
 	return out
 }
 
-// ParseRequirementFile parses one REQ file. Returns the requirement, any
+// ParseRequirementFile parses one PLM (plumage) file. Returns the requirement, any
 // unknown frontmatter keys, and a parse error.
 func ParseRequirementFile(path string, b []byte) (*Requirement, []string, error) {
 	fm, body, err := SplitFrontmatter(b)
@@ -116,7 +116,7 @@ func ParseRequirementFile(path string, b []byte) (*Requirement, []string, error)
 	return r, unknownKeys(m, reqKeys), nil
 }
 
-// ParseTaskFile parses one TASK file. Returns the task, any unknown
+// ParseTaskFile parses one FTHR (feather) file. Returns the task, any unknown
 // frontmatter keys, and a parse error.
 func ParseTaskFile(path string, b []byte) (*Task, []string, error) {
 	fm, body, err := SplitFrontmatter(b)
@@ -130,7 +130,7 @@ func ParseTaskFile(path string, b []byte) (*Task, []string, error) {
 	t := &Task{
 		ID:            strField(m, "id"),
 		Title:         strField(m, "title"),
-		Requirement:   strField(m, "requirement"),
+		Requirement:   strField(m, "plumage"),
 		Status:        strField(m, "status"),
 		Priority:      strField(m, "priority"),
 		Oversight:     strField(m, "oversight"),
@@ -192,7 +192,7 @@ func (t *Task) Frontmatter() []byte {
 	b.WriteString("---\n")
 	fmt.Fprintf(&b, "id: %s\n", t.ID)
 	fmt.Fprintf(&b, "title: %s\n", yamlScalar(t.Title))
-	fmt.Fprintf(&b, "requirement: %s\n", t.Requirement)
+	fmt.Fprintf(&b, "plumage: %s\n", t.Requirement)
 	fmt.Fprintf(&b, "status: %s\n", t.Status)
 	fmt.Fprintf(&b, "priority: %s\n", t.Priority)
 	fmt.Fprintf(&b, "depends_on: [%s]\n", strings.Join(t.DependsOn, ", "))

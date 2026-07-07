@@ -26,12 +26,12 @@ func Find() (*Repo, error) {
 }
 
 func (r *Repo) FledgeDir() string       { return filepath.Join(r.Root, ".fledge") }
-func (r *Repo) LocksDir() string        { return filepath.Join(r.FledgeDir(), "locks") }
-func (r *Repo) ContextDir() string      { return filepath.Join(r.FledgeDir(), "context") }
-func (r *Repo) ScanIgnorePath() string  { return filepath.Join(r.FledgeDir(), "scan-ignore") }
-func (r *Repo) EvidenceDir() string     { return filepath.Join(r.FledgeDir(), "evidence") }
-func (r *Repo) RequirementsDir() string { return filepath.Join(r.Root, "spec", "requirements") }
-func (r *Repo) TasksDir() string        { return filepath.Join(r.Root, "spec", "tasks") }
+func (r *Repo) LocksDir() string        { return filepath.Join(r.FledgeDir(), "broods") }
+func (r *Repo) ContextDir() string      { return filepath.Join(r.FledgeDir(), "nest") }
+func (r *Repo) ScanIgnorePath() string  { return filepath.Join(r.Root, ".fledgeignore") }
+func (r *Repo) EvidenceDir() string     { return filepath.Join(r.FledgeDir(), "molt") }
+func (r *Repo) RequirementsDir() string { return filepath.Join(r.Root, "pluma", "plumage") }
+func (r *Repo) TasksDir() string        { return filepath.Join(r.Root, "pluma", "feathers") }
 
 // RequireFledge errors unless .fledge/ exists at the repo root.
 func (r *Repo) RequireFledge() error {

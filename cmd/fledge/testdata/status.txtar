@@ -1,53 +1,53 @@
 # fledge status: reads and legal transitions
 exec git init -q .
 
-exec fledge status TASK-001
-stdout 'TASK-001: ready'
+exec fledge status FTHR-001
+stdout 'FTHR-001: pipping'
 
-# skipping in-progress is illegal without --force
-! exec fledge status TASK-001 done
+# skipping hatching is illegal without --force
+! exec fledge status FTHR-001 fledged
 stderr 'illegal transition'
 
-exec fledge status TASK-001 in-progress
-exec fledge status TASK-001 done
-grep 'status: done' spec/tasks/TASK-001-first.md
+exec fledge status FTHR-001 hatching
+exec fledge status FTHR-001 fledged
+grep 'status: fledged' pluma/feathers/FTHR-001-first.md
 
 # invalid enum is refused even with --force
-! exec fledge status TASK-002 nonsense --force
+! exec fledge status FTHR-002 nonsense --force
 stderr 'not one of'
 
 # --force bypasses transition legality
-exec fledge status TASK-002 done --force
-grep 'status: done' spec/tasks/TASK-002-second.md
+exec fledge status FTHR-002 fledged --force
+grep 'status: fledged' pluma/feathers/FTHR-002-second.md
 
-# requirement lifecycle
-exec fledge status REQ-001
-stdout 'REQ-001: draft'
-exec fledge status REQ-001 approved
-exec fledge status REQ-001 done
-grep 'status: done' spec/requirements/REQ-001-a.md
+# plumage lifecycle
+exec fledge status PLM-001
+stdout 'PLM-001: egg'
+exec fledge status PLM-001 hatched
+exec fledge status PLM-001 fledged
+grep 'status: fledged' pluma/plumage/PLM-001-a.md
 
 # unknown ID
-! exec fledge status TASK-099
+! exec fledge status FTHR-099
 stderr 'not found'
 
-# requirement done is gated on checked acceptance criteria
-! exec fledge status REQ-002 done
+# plumage fledged is gated on checked acceptance criteria
+! exec fledge status PLM-002 fledged
 stderr 'AC-1'
-grep 'status: approved' spec/requirements/REQ-002-gated.md
-exec fledge criteria check REQ-002 1
-exec fledge status REQ-002 done
-grep 'status: done' spec/requirements/REQ-002-gated.md
+grep 'status: hatched' pluma/plumage/PLM-002-gated.md
+exec fledge criteria check PLM-002 1
+exec fledge status PLM-002 fledged
+grep 'status: fledged' pluma/plumage/PLM-002-gated.md
 
 # body is preserved byte-for-byte through rewrites
-grep 'sentinel body line' spec/tasks/TASK-001-first.md
+grep 'sentinel body line' pluma/feathers/FTHR-001-first.md
 
--- .fledge/scan-ignore --
--- spec/requirements/REQ-001-a.md --
+-- .fledge/.gitkeep --
+-- pluma/plumage/PLM-001-a.md --
 ---
-id: REQ-001
+id: PLM-001
 title: A requirement
-status: draft
+status: egg
 priority: P1
 authored: 2026-07-06T12:00:00Z
 agent: t
@@ -59,12 +59,12 @@ x
 x
 ## Acceptance Criteria
 x
--- spec/tasks/TASK-001-first.md --
+-- pluma/feathers/FTHR-001-first.md --
 ---
-id: TASK-001
+id: FTHR-001
 title: First
-requirement: REQ-001
-status: ready
+plumage: PLM-001
+status: pipping
 priority: P1
 depends_on: []
 authored: 2026-07-06T12:00:00Z
@@ -77,14 +77,14 @@ sentinel body line
 - a test
 ## Acceptance Criteria
 x
--- spec/tasks/TASK-002-second.md --
+-- pluma/feathers/FTHR-002-second.md --
 ---
-id: TASK-002
+id: FTHR-002
 title: Second
-requirement: REQ-001
-status: blocked
+plumage: PLM-001
+status: egg
 priority: P1
-depends_on: [TASK-001]
+depends_on: [FTHR-001]
 authored: 2026-07-06T12:00:00Z
 agent: t
 fledge_version: 0.1.0
@@ -95,11 +95,11 @@ x
 - a test
 ## Acceptance Criteria
 x
--- spec/requirements/REQ-002-gated.md --
+-- pluma/plumage/PLM-002-gated.md --
 ---
-id: REQ-002
+id: PLM-002
 title: Gated requirement
-status: approved
+status: hatched
 priority: P1
 authored: 2026-07-06T12:00:00Z
 agent: t

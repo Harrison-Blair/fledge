@@ -1,73 +1,73 @@
-# fledge criteria: list, check, uncheck acceptance-criteria boxes
+# fledge criteria: list, preen, uncheck acceptance-criteria boxes
 exec git init -q .
 
 # list (human)
-exec fledge criteria TASK-001
+exec fledge criteria FTHR-001
 stdout '\[ \] AC-1: tests observed failing then passing'
 stdout '\[x\] AC-2: already verified'
 stdout '1/3 checked'
 
 # list (json)
-exec fledge criteria TASK-001 --json
-stdout '"id": "TASK-001"'
+exec fledge criteria FTHR-001 --json
+stdout '"id": "FTHR-001"'
 stdout '"total": 3'
 stdout '"checked": 1'
 stdout '"label": "AC-1"'
 
-# check by bare number
-exec fledge criteria check TASK-001 1
-stdout 'TASK-001: AC-1 checked'
-grep '\- \[x\] AC-1: tests observed failing then passing' spec/tasks/TASK-001-first.md
+# preen by bare number
+exec fledge criteria check FTHR-001 1
+stdout 'FTHR-001: AC-1 checked'
+grep '\- \[x\] AC-1: tests observed failing then passing' pluma/feathers/FTHR-001-first.md
 
 # re-check is idempotent
-exec fledge criteria check TASK-001 1 --json
+exec fledge criteria check FTHR-001 1 --json
 stdout '"changed": false'
 
-# check by AC label
-exec fledge criteria check TASK-001 AC-3
-grep '\- \[x\] AC-3: third' spec/tasks/TASK-001-first.md
-exec fledge criteria TASK-001
+# preen by AC label
+exec fledge criteria check FTHR-001 AC-3
+grep '\- \[x\] AC-3: third' pluma/feathers/FTHR-001-first.md
+exec fledge criteria FTHR-001
 stdout '3/3 checked'
 
 # uncheck
-exec fledge criteria uncheck TASK-001 3
-grep '\- \[ \] AC-3: third' spec/tasks/TASK-001-first.md
+exec fledge criteria uncheck FTHR-001 3
+grep '\- \[ \] AC-3: third' pluma/feathers/FTHR-001-first.md
 
-# works on requirements too
-exec fledge criteria REQ-001
+# works on plumages too
+exec fledge criteria PLM-001
 stdout '\[ \] AC-1: req criterion'
-exec fledge criteria check REQ-001 1
-grep '\- \[x\] AC-1: req criterion' spec/requirements/REQ-001-a.md
+exec fledge criteria check PLM-001 1
+grep '\- \[x\] AC-1: req criterion' pluma/plumage/PLM-001-a.md
 
 # body preserved byte-for-byte apart from the box
-grep 'sentinel body line' spec/tasks/TASK-001-first.md
+grep 'sentinel body line' pluma/feathers/FTHR-001-first.md
 
 # unknown ID
-! exec fledge criteria TASK-099
+! exec fledge criteria FTHR-099
 stderr 'not found'
 
 # unknown criterion number
-! exec fledge criteria check TASK-001 9
+! exec fledge criteria check FTHR-001 9
 stderr 'AC-9 not found'
 
 # spec without parseable checkboxes
-! exec fledge criteria check TASK-002 1
+! exec fledge criteria check FTHR-002 1
 stderr 'no acceptance-criteria checkboxes'
 
 # usage errors
 ! exec fledge criteria
 stderr 'usage'
-! exec fledge criteria check TASK-001
+! exec fledge criteria check FTHR-001
 stderr 'usage'
-! exec fledge criteria check TASK-001 notanumber
+! exec fledge criteria check FTHR-001 notanumber
 stderr 'usage'
 
--- .fledge/scan-ignore --
--- spec/requirements/REQ-001-a.md --
+-- .fledge/.gitkeep --
+-- pluma/plumage/PLM-001-a.md --
 ---
-id: REQ-001
+id: PLM-001
 title: A requirement
-status: approved
+status: hatched
 priority: P1
 authored: 2026-07-06T12:00:00Z
 agent: t
@@ -79,12 +79,12 @@ x
 1. FC-1: prose stays numbered
 ## Acceptance Criteria
 - [ ] AC-1: req criterion
--- spec/tasks/TASK-001-first.md --
+-- pluma/feathers/FTHR-001-first.md --
 ---
-id: TASK-001
+id: FTHR-001
 title: First
-requirement: REQ-001
-status: in-progress
+plumage: PLM-001
+status: hatching
 priority: P1
 depends_on: []
 authored: 2026-07-06T12:00:00Z
@@ -99,12 +99,12 @@ x
 - [ ] AC-1: tests observed failing then passing
 - [x] AC-2: already verified
 - [ ] AC-3: third
--- spec/tasks/TASK-002-second.md --
+-- pluma/feathers/FTHR-002-second.md --
 ---
-id: TASK-002
+id: FTHR-002
 title: Second
-requirement: REQ-001
-status: ready
+plumage: PLM-001
+status: pipping
 priority: P1
 depends_on: []
 authored: 2026-07-06T12:00:00Z

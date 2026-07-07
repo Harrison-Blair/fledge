@@ -9,7 +9,7 @@ import (
 	"unicode"
 )
 
-// NextID returns the next sequential zero-padded ID (e.g. TASK-004) for the
+// NextID returns the next sequential zero-padded ID (e.g. FTHR-004) for the
 // given prefix, scanning existing filenames in dir. Padding is 3 digits, or
 // wider if an existing ID is wider.
 func NextID(dir, prefix string) (string, error) {

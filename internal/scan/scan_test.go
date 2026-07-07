@@ -29,12 +29,12 @@ func write(t *testing.T, root, rel, content string) {
 
 func TestRun(t *testing.T) {
 	root := initRepo(t)
-	write(t, root, "README.md", "hello")            // 5 bytes, <root>
-	write(t, root, "dir1/a.txt", "aaaa")            // 4 bytes
-	write(t, root, "dir1/b.txt", "bb")              // 2 bytes
-	write(t, root, "dir2/c.txt", "c")               // 1 byte
-	write(t, root, "dir3/skip.log", "ignored")      // filtered by scan-ignore
-	write(t, root, ".fledge/scan-ignore", "*.log\n.fledge/\n")
+	write(t, root, "README.md", "hello")       // 5 bytes, <root>
+	write(t, root, "dir1/a.txt", "aaaa")       // 4 bytes
+	write(t, root, "dir1/b.txt", "bb")         // 2 bytes
+	write(t, root, "dir2/c.txt", "c")          // 1 byte
+	write(t, root, "dir3/skip.log", "ignored") // filtered by .fledgeignore
+	write(t, root, ".fledgeignore", "*.log\n.fledge/\n.fledgeignore\n")
 
 	res, err := Run(root)
 	if err != nil {

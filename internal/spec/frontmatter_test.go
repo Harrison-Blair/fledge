@@ -17,36 +17,36 @@ func TestSplitFrontmatter(t *testing.T) {
 	}{
 		{
 			name:     "basic",
-			in:       "---\nid: REQ-001\n---\n\n# REQ-001: X\n",
-			wantFM:   "id: REQ-001\n",
-			wantBody: "\n# REQ-001: X\n",
+			in:       "---\nid: PLM-001\n---\n\n# PLM-001: X\n",
+			wantFM:   "id: PLM-001\n",
+			wantBody: "\n# PLM-001: X\n",
 		},
 		{
 			name:     "crlf",
-			in:       "---\r\nid: REQ-001\r\n---\r\nbody\r\n",
-			wantFM:   "id: REQ-001\r\n",
+			in:       "---\r\nid: PLM-001\r\n---\r\nbody\r\n",
+			wantFM:   "id: PLM-001\r\n",
 			wantBody: "body\r\n",
 		},
 		{
 			name:    "no leading delimiter",
-			in:      "id: REQ-001\n---\n",
+			in:      "id: PLM-001\n---\n",
 			wantErr: true,
 		},
 		{
 			name:    "unterminated",
-			in:      "---\nid: REQ-001\n",
+			in:      "---\nid: PLM-001\n",
 			wantErr: true,
 		},
 		{
 			name:     "closing delimiter at EOF without trailing newline",
-			in:       "---\nid: REQ-001\n---",
-			wantFM:   "id: REQ-001\n",
+			in:       "---\nid: PLM-001\n---",
+			wantFM:   "id: PLM-001\n",
 			wantBody: "",
 		},
 		{
 			name:     "body containing --- line survives untouched",
-			in:       "---\nid: REQ-001\n---\nabove\n---\nbelow\n",
-			wantFM:   "id: REQ-001\n",
+			in:       "---\nid: PLM-001\n---\nabove\n---\nbelow\n",
+			wantFM:   "id: PLM-001\n",
 			wantBody: "above\n---\nbelow\n",
 		},
 	}
@@ -74,12 +74,12 @@ func TestSplitFrontmatter(t *testing.T) {
 
 func TestParseTaskFile(t *testing.T) {
 	in := `---
-id: TASK-003
+id: FTHR-003
 title: "Wire graph: waves"
-requirement: REQ-001
-status: blocked
+plumage: PLM-001
+status: egg
 priority: P1
-depends_on: [TASK-001, TASK-002]
+depends_on: [FTHR-001, FTHR-002]
 oversight: merge
 authored: 2026-07-06T12:00:00Z
 agent: fledge-orchestrate/planning
@@ -90,18 +90,18 @@ extra_key: surprise
 ## Description
 body text
 `
-	task, unknown, err := ParseTaskFile("spec/tasks/TASK-003-wire-graph.md", []byte(in))
+	task, unknown, err := ParseTaskFile("pluma/feathers/FTHR-003-wire-graph.md", []byte(in))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if task.ID != "TASK-003" || task.Title != "Wire graph: waves" ||
-		task.Requirement != "REQ-001" || task.Status != "blocked" ||
+	if task.ID != "FTHR-003" || task.Title != "Wire graph: waves" ||
+		task.Requirement != "PLM-001" || task.Status != "egg" ||
 		task.Priority != "P1" || task.Oversight != "merge" ||
 		task.Authored != "2026-07-06T12:00:00Z" ||
 		task.Agent != "fledge-orchestrate/planning" || task.FledgeVersion != "0.1.0" {
 		t.Errorf("parsed task fields wrong: %+v", task)
 	}
-	if len(task.DependsOn) != 2 || task.DependsOn[0] != "TASK-001" || task.DependsOn[1] != "TASK-002" {
+	if len(task.DependsOn) != 2 || task.DependsOn[0] != "FTHR-001" || task.DependsOn[1] != "FTHR-002" {
 		t.Errorf("depends_on = %v", task.DependsOn)
 	}
 	if len(unknown) != 1 || unknown[0] != "extra_key" {
@@ -114,9 +114,9 @@ body text
 
 func TestParseRequirementFile(t *testing.T) {
 	in := `---
-id: REQ-001
+id: PLM-001
 title: Deterministic CLI
-status: draft
+status: egg
 priority: P0
 authored: 2026-07-06T12:00:00Z
 agent: fledge-orchestrate/planning
@@ -124,11 +124,11 @@ fledge_version: 0.1.0
 ---
 ## Context
 `
-	req, unknown, err := ParseRequirementFile("spec/requirements/REQ-001-deterministic-cli.md", []byte(in))
+	req, unknown, err := ParseRequirementFile("pluma/plumage/PLM-001-deterministic-cli.md", []byte(in))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if req.ID != "REQ-001" || req.Title != "Deterministic CLI" || req.Status != "draft" || req.Priority != "P0" {
+	if req.ID != "PLM-001" || req.Title != "Deterministic CLI" || req.Status != "egg" || req.Priority != "P0" {
 		t.Errorf("parsed req fields wrong: %+v", req)
 	}
 	if len(unknown) != 0 {
@@ -140,10 +140,10 @@ fledge_version: 0.1.0
 // fields, and the body bytes are byte-identical.
 func TestTaskRoundTrip(t *testing.T) {
 	in := `---
-id: TASK-001
+id: FTHR-001
 title: plain title
-requirement: REQ-001
-status: ready
+plumage: PLM-001
+status: pipping
 priority: P2
 depends_on: []
 authored: 2026-07-06T12:00:00Z
@@ -158,12 +158,12 @@ Weird body bytes: trailing spaces
 ---
 frontmatter fence.
 `
-	task, _, err := ParseTaskFile("TASK-001-plain-title.md", []byte(in))
+	task, _, err := ParseTaskFile("FTHR-001-plain-title.md", []byte(in))
 	if err != nil {
 		t.Fatal(err)
 	}
 	out := task.Render()
-	task2, _, err := ParseTaskFile("TASK-001-plain-title.md", out)
+	task2, _, err := ParseTaskFile("FTHR-001-plain-title.md", out)
 	if err != nil {
 		t.Fatalf("reparse: %v\nrendered:\n%s", err, out)
 	}
@@ -179,7 +179,7 @@ frontmatter fence.
 // Oversight is omitted from emitted frontmatter when empty, present when set.
 func TestTaskFrontmatterOversightOptional(t *testing.T) {
 	task := &Task{
-		ID: "TASK-001", Title: "x", Requirement: "REQ-001", Status: "ready",
+		ID: "FTHR-001", Title: "x", Requirement: "PLM-001", Status: "pipping",
 		Priority: "P1", Authored: "2026-07-06T12:00:00Z",
 		Agent: "a", FledgeVersion: "0.1.0",
 	}
@@ -207,11 +207,11 @@ func TestFrontmatterTitleQuoting(t *testing.T) {
 		"trailing space ",
 	} {
 		task := &Task{
-			ID: "TASK-001", Title: title, Requirement: "REQ-001", Status: "ready",
+			ID: "FTHR-001", Title: title, Requirement: "PLM-001", Status: "pipping",
 			Priority: "P1", Authored: "2026-07-06T12:00:00Z", Agent: "a", FledgeVersion: "0.1.0",
 			Body: []byte("b\n"),
 		}
-		task2, _, err := ParseTaskFile("TASK-001-x.md", task.Render())
+		task2, _, err := ParseTaskFile("FTHR-001-x.md", task.Render())
 		if err != nil {
 			t.Errorf("title %q: reparse failed: %v\n%s", title, err, task.Render())
 			continue

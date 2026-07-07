@@ -12,33 +12,33 @@ func rec(task, owner string) Record {
 
 func TestAcquireReleaseGet(t *testing.T) {
 	dir := t.TempDir() + "/locks" // Acquire must create the dir
-	if err := Acquire(dir, rec("TASK-001", "adelie")); err != nil {
+	if err := Acquire(dir, rec("FTHR-001", "adelie")); err != nil {
 		t.Fatal(err)
 	}
-	got, err := Get(dir, "TASK-001")
+	got, err := Get(dir, "FTHR-001")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Owner != "adelie" || got.Task != "TASK-001" {
+	if got.Owner != "adelie" || got.Task != "FTHR-001" {
 		t.Errorf("got %+v", got)
 	}
-	if err := Release(dir, "TASK-001"); err != nil {
+	if err := Release(dir, "FTHR-001"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Get(dir, "TASK-001"); err == nil {
+	if _, err := Get(dir, "FTHR-001"); err == nil {
 		t.Error("Get after Release should fail")
 	}
-	if err := Release(dir, "TASK-001"); err == nil {
+	if err := Release(dir, "FTHR-001"); err == nil {
 		t.Error("double Release should fail")
 	}
 }
 
 func TestAcquireHeld(t *testing.T) {
 	dir := t.TempDir()
-	if err := Acquire(dir, rec("TASK-001", "adelie")); err != nil {
+	if err := Acquire(dir, rec("FTHR-001", "adelie")); err != nil {
 		t.Fatal(err)
 	}
-	err := Acquire(dir, rec("TASK-001", "gentoo"))
+	err := Acquire(dir, rec("FTHR-001", "gentoo"))
 	var held *HeldError
 	if !errors.As(err, &held) {
 		t.Fatalf("want HeldError, got %v", err)
@@ -58,7 +58,7 @@ func TestAcquireContention(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			if Acquire(dir, rec("TASK-001", "racer")) == nil {
+			if Acquire(dir, rec("FTHR-001", "racer")) == nil {
 				wins <- i
 			}
 		}(i)
@@ -79,13 +79,13 @@ func TestList(t *testing.T) {
 	if got, err := List(dir + "/missing"); err != nil || len(got) != 0 {
 		t.Errorf("missing dir should list empty, got %v, %v", got, err)
 	}
-	Acquire(dir, rec("TASK-002", "b"))
-	Acquire(dir, rec("TASK-001", "a"))
+	Acquire(dir, rec("FTHR-002", "b"))
+	Acquire(dir, rec("FTHR-001", "a"))
 	got, err := List(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0].Task != "TASK-001" || got[1].Task != "TASK-002" {
+	if len(got) != 2 || got[0].Task != "FTHR-001" || got[1].Task != "FTHR-002" {
 		t.Errorf("List = %+v", got)
 	}
 }

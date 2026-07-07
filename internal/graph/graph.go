@@ -115,13 +115,13 @@ func (g *Graph) Waves() ([][]string, error) {
 func (g *Graph) Ready() []string {
 	var out []string
 	for _, t := range g.tasks {
-		if t.Status != spec.TaskBlocked && t.Status != spec.TaskReady {
+		if t.Status != spec.TaskEgg && t.Status != spec.TaskPipping {
 			continue
 		}
 		ok := true
 		for _, dep := range t.DependsOn {
 			d := g.byID[dep]
-			if d == nil || d.Status != spec.TaskDone {
+			if d == nil || d.Status != spec.TaskFledged {
 				ok = false
 				break
 			}

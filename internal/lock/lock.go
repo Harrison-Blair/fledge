@@ -1,4 +1,4 @@
-// Package lock implements advisory task claim files under .fledge/locks/.
+// Package lock implements advisory feather claim (brood) files under .fledge/broods/.
 package lock
 
 import (
@@ -10,9 +10,9 @@ import (
 	"strings"
 )
 
-// Record is the JSON content of one .fledge/locks/<TASK-ID>.lock file.
+// Record is the JSON content of one .fledge/broods/<FTHR-ID>.brood file.
 type Record struct {
-	Task    string `json:"task"`
+	Task    string `json:"feather"`
 	Owner   string `json:"owner"`
 	PID     int    `json:"pid"`
 	Created string `json:"created"`
@@ -23,12 +23,12 @@ type Record struct {
 type HeldError struct{ Existing Record }
 
 func (e *HeldError) Error() string {
-	return fmt.Sprintf("lock already held by %s since %s", e.Existing.Owner, e.Existing.Created)
+	return fmt.Sprintf("brood already held by %s since %s", e.Existing.Owner, e.Existing.Created)
 }
 
-func lockPath(dir, task string) string { return filepath.Join(dir, task+".lock") }
+func lockPath(dir, task string) string { return filepath.Join(dir, task+".brood") }
 
-// Acquire atomically creates the lock file; *HeldError if already held.
+// Acquire atomically creates the brood file; *HeldError if already held.
 func Acquire(dir string, rec Record) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -52,16 +52,16 @@ func Acquire(dir string, rec Record) error {
 	return f.Close()
 }
 
-// Release removes the lock file; errors if not held.
+// Release removes the brood file; errors if not held.
 func Release(dir, task string) error {
 	err := os.Remove(lockPath(dir, task))
 	if os.IsNotExist(err) {
-		return fmt.Errorf("%s is not locked", task)
+		return fmt.Errorf("%s is not brooded", task)
 	}
 	return err
 }
 
-// Get reads one lock record.
+// Get reads one brood record.
 func Get(dir, task string) (*Record, error) {
 	b, err := os.ReadFile(lockPath(dir, task))
 	if err != nil {
@@ -69,12 +69,12 @@ func Get(dir, task string) (*Record, error) {
 	}
 	var rec Record
 	if err := json.Unmarshal(b, &rec); err != nil {
-		return nil, fmt.Errorf("corrupt lock file for %s: %w", task, err)
+		return nil, fmt.Errorf("corrupt brood file for %s: %w", task, err)
 	}
 	return &rec, nil
 }
 
-// List returns all held locks sorted by task ID; empty when dir is missing.
+// List returns all held broods sorted by feather ID; empty when dir is missing.
 func List(dir string) ([]Record, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -85,10 +85,10 @@ func List(dir string) ([]Record, error) {
 	}
 	var out []Record
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".lock") {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".brood") {
 			continue
 		}
-		rec, err := Get(dir, strings.TrimSuffix(e.Name(), ".lock"))
+		rec, err := Get(dir, strings.TrimSuffix(e.Name(), ".brood"))
 		if err != nil {
 			return nil, err
 		}

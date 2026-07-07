@@ -1,20 +1,20 @@
-// Package spec parses, validates, and rewrites fledge REQ/TASK spec files:
+// Package spec parses, validates, and rewrites fledge PLM/FTHR spec files:
 // YAML frontmatter plus an opaque markdown body that is preserved byte-for-byte.
 package spec
 
-// Requirement statuses.
+// Plumage (requirement) statuses.
 const (
-	ReqDraft    = "draft"
-	ReqApproved = "approved"
-	ReqDone     = "done"
+	ReqEgg     = "egg"
+	ReqHatched = "hatched"
+	ReqFledged = "fledged"
 )
 
-// Task statuses.
+// Feather (task) statuses.
 const (
-	TaskBlocked    = "blocked"
-	TaskReady      = "ready"
-	TaskInProgress = "in-progress"
-	TaskDone       = "done"
+	TaskEgg      = "egg"
+	TaskPipping  = "pipping"
+	TaskHatching = "hatching"
+	TaskFledged  = "fledged"
 )
 
 // Priorities and oversight values.
@@ -23,7 +23,7 @@ var (
 	OversightValues = []string{"merge", "during"}
 )
 
-// Requirement is one spec/requirements/REQ-###-<kebab>.md file.
+// Requirement is one pluma/plumage/PLM-###-<kebab>.md file.
 type Requirement struct {
 	ID            string
 	Title         string
@@ -37,7 +37,7 @@ type Requirement struct {
 	Body []byte // everything after the closing ---, byte-preserved
 }
 
-// Task is one spec/tasks/TASK-###-<kebab>.md file.
+// Task is one pluma/feathers/FTHR-###-<kebab>.md file.
 type Task struct {
 	ID            string
 	Title         string

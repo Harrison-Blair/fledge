@@ -31,7 +31,7 @@ func runSet(args []string) int {
 	switch field {
 	case "status":
 		return fail("status is not settable here; use `fledge status %s <new-status>`", id)
-	case "id", "requirement", "authored", "agent", "fledge_version":
+	case "id", "plumage", "authored", "agent", "fledge_version":
 		return fail("cannot set %s: field is immutable", field)
 	case "priority", "oversight", "depends_on", "title":
 	default:
@@ -60,7 +60,7 @@ func runSet(args []string) int {
 		}
 	case "oversight":
 		if task == nil {
-			return fail("oversight applies to tasks only")
+			return fail("oversight applies to feathers only")
 		}
 		if value == "none" {
 			task.Oversight = ""
@@ -71,7 +71,7 @@ func runSet(args []string) int {
 		}
 	case "depends_on":
 		if task == nil {
-			return fail("depends_on applies to tasks only")
+			return fail("depends_on applies to feathers only")
 		}
 		var deps []string
 		if value != "none" && value != "" {

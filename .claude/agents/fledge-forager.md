@@ -1,0 +1,1 @@
+../../internal/bootstrap/claude/agents/fledge-forager.md

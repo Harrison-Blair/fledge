@@ -1,46 +1,46 @@
 # fledge set: frontmatter field updates with validation
 exec git init -q .
 
-exec fledge set TASK-002 priority P0
-grep 'priority: P0' spec/tasks/TASK-002-second.md
-! exec fledge set TASK-002 priority P7
+exec fledge set FTHR-002 priority P0
+grep 'priority: P0' pluma/feathers/FTHR-002-second.md
+! exec fledge set FTHR-002 priority P7
 stderr 'not one of'
 
-exec fledge set TASK-002 oversight during
-grep 'oversight: during' spec/tasks/TASK-002-second.md
-exec fledge set TASK-002 oversight none
-! grep 'oversight' spec/tasks/TASK-002-second.md
+exec fledge set FTHR-002 oversight during
+grep 'oversight: during' pluma/feathers/FTHR-002-second.md
+exec fledge set FTHR-002 oversight none
+! grep 'oversight' pluma/feathers/FTHR-002-second.md
 
 # depends_on validates refs and acyclicity
-exec fledge set TASK-002 depends_on TASK-001
-grep 'depends_on: \[TASK-001\]' spec/tasks/TASK-002-second.md
-! exec fledge set TASK-002 depends_on TASK-099
-stderr 'TASK-099'
-! exec fledge set TASK-001 depends_on TASK-002
+exec fledge set FTHR-002 depends_on FTHR-001
+grep 'depends_on: \[FTHR-001\]' pluma/feathers/FTHR-002-second.md
+! exec fledge set FTHR-002 depends_on FTHR-099
+stderr 'FTHR-099'
+! exec fledge set FTHR-001 depends_on FTHR-002
 stderr 'cycle'
 
 # clearing depends_on
-exec fledge set TASK-002 depends_on none
-grep 'depends_on: \[\]' spec/tasks/TASK-002-second.md
+exec fledge set FTHR-002 depends_on none
+grep 'depends_on: \[\]' pluma/feathers/FTHR-002-second.md
 
 # title updates frontmatter and heading, warns about filename
-exec fledge set TASK-002 title 'Renamed task'
-grep 'title: Renamed task' spec/tasks/TASK-002-second.md
-grep '# TASK-002: Renamed task' spec/tasks/TASK-002-second.md
+exec fledge set FTHR-002 title 'Renamed task'
+grep 'title: Renamed task' pluma/feathers/FTHR-002-second.md
+grep '# FTHR-002: Renamed task' pluma/feathers/FTHR-002-second.md
 stderr 'filename'
 
 # immutable fields are refused
-! exec fledge set TASK-002 id TASK-009
+! exec fledge set FTHR-002 id FTHR-009
 stderr 'cannot set'
-! exec fledge set TASK-002 status done
+! exec fledge set FTHR-002 status done
 stderr 'fledge status'
 
--- .fledge/scan-ignore --
--- spec/requirements/REQ-001-a.md --
+-- .fledge/.gitkeep --
+-- pluma/plumage/PLM-001-a.md --
 ---
-id: REQ-001
+id: PLM-001
 title: A requirement
-status: approved
+status: hatched
 priority: P1
 authored: 2026-07-06T12:00:00Z
 agent: t
@@ -52,19 +52,19 @@ x
 x
 ## Acceptance Criteria
 x
--- spec/tasks/TASK-001-first.md --
+-- pluma/feathers/FTHR-001-first.md --
 ---
-id: TASK-001
+id: FTHR-001
 title: First
-requirement: REQ-001
-status: ready
+plumage: PLM-001
+status: pipping
 priority: P1
 depends_on: []
 authored: 2026-07-06T12:00:00Z
 agent: t
 fledge_version: 0.1.0
 ---
-# TASK-001: First
+# FTHR-001: First
 
 ## Description
 x
@@ -72,19 +72,19 @@ x
 - a test
 ## Acceptance Criteria
 x
--- spec/tasks/TASK-002-second.md --
+-- pluma/feathers/FTHR-002-second.md --
 ---
-id: TASK-002
+id: FTHR-002
 title: Second
-requirement: REQ-001
-status: blocked
+plumage: PLM-001
+status: egg
 priority: P1
-depends_on: [TASK-001]
+depends_on: [FTHR-001]
 authored: 2026-07-06T12:00:00Z
 agent: t
 fledge_version: 0.1.0
 ---
-# TASK-002: Second
+# FTHR-002: Second
 
 ## Description
 x

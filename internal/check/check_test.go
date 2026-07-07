@@ -1,9 +1,9 @@
 package check
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
-	"errors"
 	"strings"
 	"testing"
 
@@ -14,7 +14,7 @@ func req(id, status string) *spec.Requirement {
 	return &spec.Requirement{
 		ID: id, Title: "t", Status: status, Priority: "P1",
 		Authored: "2026-07-06T12:00:00Z", Agent: "a", FledgeVersion: "0.1.0",
-		Path: "spec/requirements/" + id + "-t.md",
+		Path: "pluma/plumage/" + id + "-t.md",
 		Body: []byte("## Context\nx\n## Functional Criteria\nx\n## Acceptance Criteria\nx\n"),
 	}
 }
@@ -26,7 +26,7 @@ func task(id, reqID, status string, deps ...string) *spec.Task {
 	return &spec.Task{
 		ID: id, Title: "t", Requirement: reqID, Status: status, Priority: "P1",
 		DependsOn: deps, Authored: "2026-07-06T12:00:00Z", Agent: "a", FledgeVersion: "0.1.0",
-		Path: "spec/tasks/" + id + "-t.md",
+		Path: "pluma/feathers/" + id + "-t.md",
 		Body: []byte("## Description\nx\n## Tests\n- a test\n## Acceptance Criteria\nx\n"),
 	}
 }
@@ -46,8 +46,8 @@ func hasRule(fs []Finding, rule string, sev Severity) bool {
 
 func TestCleanSetHasNoFindings(t *testing.T) {
 	s := newSet(
-		[]*spec.Requirement{req("REQ-001", "approved")},
-		[]*spec.Task{task("TASK-001", "REQ-001", "ready")},
+		[]*spec.Requirement{req("PLM-001", "hatched")},
+		[]*spec.Task{task("FTHR-001", "PLM-001", "pipping")},
 	)
 	if fs := Run(s, nil, ""); len(fs) != 0 {
 		t.Errorf("clean set produced findings: %v", fs)
@@ -56,34 +56,34 @@ func TestCleanSetHasNoFindings(t *testing.T) {
 
 func TestParseErrorsSurface(t *testing.T) {
 	s := newSet(nil, nil)
-	s.Errors = []spec.FileError{{Path: "spec/tasks/TASK-009-x.md", Err: errors.New("boom")}}
+	s.Errors = []spec.FileError{{Path: "pluma/feathers/FTHR-009-x.md", Err: errors.New("boom")}}
 	if !hasRule(Run(s, nil, ""), "parse", Error) {
 		t.Error("want parse error finding")
 	}
 }
 
 func TestUnknownFieldWarning(t *testing.T) {
-	s := newSet([]*spec.Requirement{req("REQ-001", "approved")}, nil)
-	s.UnknownFields["spec/requirements/REQ-001-t.md"] = []string{"extra"}
+	s := newSet([]*spec.Requirement{req("PLM-001", "hatched")}, nil)
+	s.UnknownFields["pluma/plumage/PLM-001-t.md"] = []string{"extra"}
 	if !hasRule(Run(s, nil, ""), "unknown-field", Warning) {
 		t.Error("want unknown-field warning")
 	}
 }
 
 func TestSchemaRules(t *testing.T) {
-	badStatus := task("TASK-001", "REQ-001", "wip")
-	missingTitle := task("TASK-002", "REQ-001", "ready")
+	badStatus := task("FTHR-001", "PLM-001", "wip")
+	missingTitle := task("FTHR-002", "PLM-001", "pipping")
 	missingTitle.Title = ""
-	badPriority := task("TASK-003", "REQ-001", "ready")
+	badPriority := task("FTHR-003", "PLM-001", "pipping")
 	badPriority.Priority = "P9"
-	badOversight := task("TASK-004", "REQ-001", "ready")
+	badOversight := task("FTHR-004", "PLM-001", "pipping")
 	badOversight.Oversight = "always"
-	badAuthored := task("TASK-005", "REQ-001", "ready")
+	badAuthored := task("FTHR-005", "PLM-001", "pipping")
 	badAuthored.Authored = "yesterday"
-	badReqStatus := req("REQ-002", "pending")
+	badReqStatus := req("PLM-002", "pending")
 
 	s := newSet(
-		[]*spec.Requirement{req("REQ-001", "approved"), badReqStatus},
+		[]*spec.Requirement{req("PLM-001", "hatched"), badReqStatus},
 		[]*spec.Task{badStatus, missingTitle, badPriority, badOversight, badAuthored},
 	)
 	fs := Run(s, nil, "")
@@ -99,29 +99,29 @@ func TestSchemaRules(t *testing.T) {
 }
 
 func TestIDFilenameAgreement(t *testing.T) {
-	tk := task("TASK-001", "REQ-001", "ready")
-	tk.Path = "spec/tasks/TASK-002-t.md" // filename says 002
-	s := newSet([]*spec.Requirement{req("REQ-001", "approved")}, []*spec.Task{tk})
+	tk := task("FTHR-001", "PLM-001", "pipping")
+	tk.Path = "pluma/feathers/FTHR-002-t.md" // filename says 002
+	s := newSet([]*spec.Requirement{req("PLM-001", "hatched")}, []*spec.Task{tk})
 	if !hasRule(Run(s, nil, ""), "id-filename", Error) {
 		t.Error("want id-filename error")
 	}
 }
 
 func TestDuplicateIDs(t *testing.T) {
-	t1 := task("TASK-001", "REQ-001", "ready")
-	t2 := task("TASK-001", "REQ-001", "ready")
-	t2.Path = "spec/tasks/TASK-001-other.md"
-	s := newSet([]*spec.Requirement{req("REQ-001", "approved")}, []*spec.Task{t1, t2})
+	t1 := task("FTHR-001", "PLM-001", "pipping")
+	t2 := task("FTHR-001", "PLM-001", "pipping")
+	t2.Path = "pluma/feathers/FTHR-001-other.md"
+	s := newSet([]*spec.Requirement{req("PLM-001", "hatched")}, []*spec.Task{t1, t2})
 	if !hasRule(Run(s, nil, ""), "duplicate-id", Error) {
 		t.Error("want duplicate-id error")
 	}
 }
 
 func TestDanglingRefs(t *testing.T) {
-	missingReq := task("TASK-001", "REQ-099", "ready")
-	missingDep := task("TASK-002", "REQ-001", "blocked", "TASK-098")
-	selfRef := task("TASK-003", "REQ-001", "blocked", "TASK-003")
-	s := newSet([]*spec.Requirement{req("REQ-001", "approved")},
+	missingReq := task("FTHR-001", "PLM-099", "pipping")
+	missingDep := task("FTHR-002", "PLM-001", "egg", "FTHR-098")
+	selfRef := task("FTHR-003", "PLM-001", "egg", "FTHR-003")
+	s := newSet([]*spec.Requirement{req("PLM-001", "hatched")},
 		[]*spec.Task{missingReq, missingDep, selfRef})
 	fs := Run(s, nil, "")
 	count := 0
@@ -136,34 +136,34 @@ func TestDanglingRefs(t *testing.T) {
 }
 
 func TestUnapprovedRequirement(t *testing.T) {
-	s := newSet([]*spec.Requirement{req("REQ-001", "draft")},
-		[]*spec.Task{task("TASK-001", "REQ-001", "ready")})
-	if !hasRule(Run(s, nil, ""), "unapproved-req", Error) {
-		t.Error("want unapproved-req error")
+	s := newSet([]*spec.Requirement{req("PLM-001", "egg")},
+		[]*spec.Task{task("FTHR-001", "PLM-001", "pipping")})
+	if !hasRule(Run(s, nil, ""), "unhatched-plumage", Error) {
+		t.Error("want unhatched-plumage error")
 	}
 	// done requirement is fine
-	s2 := newSet([]*spec.Requirement{req("REQ-001", "done")},
-		[]*spec.Task{task("TASK-001", "REQ-001", "done")})
-	if hasRule(Run(s2, nil, ""), "unapproved-req", Error) {
-		t.Error("done requirement should not trigger unapproved-req")
+	s2 := newSet([]*spec.Requirement{req("PLM-001", "fledged")},
+		[]*spec.Task{task("FTHR-001", "PLM-001", "fledged")})
+	if hasRule(Run(s2, nil, ""), "unhatched-plumage", Error) {
+		t.Error("done requirement should not trigger unhatched-plumage")
 	}
 }
 
 func TestCycleRule(t *testing.T) {
-	t1 := task("TASK-001", "REQ-001", "blocked", "TASK-002")
-	t2 := task("TASK-002", "REQ-001", "blocked", "TASK-001")
-	s := newSet([]*spec.Requirement{req("REQ-001", "approved")}, []*spec.Task{t1, t2})
+	t1 := task("FTHR-001", "PLM-001", "egg", "FTHR-002")
+	t2 := task("FTHR-002", "PLM-001", "egg", "FTHR-001")
+	s := newSet([]*spec.Requirement{req("PLM-001", "hatched")}, []*spec.Task{t1, t2})
 	if !hasRule(Run(s, nil, ""), "cycle", Error) {
 		t.Error("want cycle error")
 	}
 }
 
 func TestTestsSectionRequired(t *testing.T) {
-	noTests := task("TASK-001", "REQ-001", "ready")
+	noTests := task("FTHR-001", "PLM-001", "pipping")
 	noTests.Body = []byte("## Description\nx\n## Acceptance Criteria\nx\n")
-	emptyTests := task("TASK-002", "REQ-001", "ready")
+	emptyTests := task("FTHR-002", "PLM-001", "pipping")
 	emptyTests.Body = []byte("## Description\nx\n## Tests\n\n## Acceptance Criteria\nx\n")
-	s := newSet([]*spec.Requirement{req("REQ-001", "approved")},
+	s := newSet([]*spec.Requirement{req("PLM-001", "hatched")},
 		[]*spec.Task{noTests, emptyTests})
 	fs := Run(s, nil, "")
 	count := 0
@@ -178,11 +178,11 @@ func TestTestsSectionRequired(t *testing.T) {
 }
 
 func TestRequiredSectionsWarning(t *testing.T) {
-	bare := task("TASK-001", "REQ-001", "ready")
+	bare := task("FTHR-001", "PLM-001", "pipping")
 	bare.Body = []byte("## Tests\n- x\n")
-	bareReq := req("REQ-002", "approved")
+	bareReq := req("PLM-002", "hatched")
 	bareReq.Body = []byte("## Context\nx\n")
-	s := newSet([]*spec.Requirement{req("REQ-001", "approved"), bareReq}, []*spec.Task{bare})
+	s := newSet([]*spec.Requirement{req("PLM-001", "hatched"), bareReq}, []*spec.Task{bare})
 	fs := Run(s, nil, "")
 	count := 0
 	for _, f := range fs {
@@ -197,72 +197,72 @@ func TestRequiredSectionsWarning(t *testing.T) {
 }
 
 func TestStaleReadyHint(t *testing.T) {
-	dep := task("TASK-001", "REQ-001", "done")
-	staleReady := task("TASK-002", "REQ-001", "ready", "TASK-003")   // dep not done → warn
-	satisfiedBlocked := task("TASK-003", "REQ-001", "blocked", "TASK-001") // routine, no warning
-	s := newSet([]*spec.Requirement{req("REQ-001", "approved")},
+	dep := task("FTHR-001", "PLM-001", "fledged")
+	staleReady := task("FTHR-002", "PLM-001", "pipping", "FTHR-003")   // dep not done → warn
+	satisfiedBlocked := task("FTHR-003", "PLM-001", "egg", "FTHR-001") // routine, no warning
+	s := newSet([]*spec.Requirement{req("PLM-001", "hatched")},
 		[]*spec.Task{dep, staleReady, satisfiedBlocked})
 	fs := Run(s, nil, "")
 	count := 0
 	var files []string
 	for _, f := range fs {
-		if f.Rule == "stale-ready-hint" && f.Severity == Warning {
+		if f.Rule == "stale-pipping-hint" && f.Severity == Warning {
 			count++
 			files = append(files, f.File)
 		}
 	}
-	if count != 1 || !strings.Contains(files[0], "TASK-002") {
-		t.Errorf("want exactly 1 stale-ready-hint warning on TASK-002, got %d: %v", count, fs)
+	if count != 1 || !strings.Contains(files[0], "FTHR-002") {
+		t.Errorf("want exactly 1 stale-pipping-hint warning on FTHR-002, got %d: %v", count, fs)
 	}
 }
 
 func TestLockConsistency(t *testing.T) {
-	notStarted := task("TASK-001", "REQ-001", "ready")
-	inProgress := task("TASK-002", "REQ-001", "in-progress")
-	s := newSet([]*spec.Requirement{req("REQ-001", "approved")},
+	notStarted := task("FTHR-001", "PLM-001", "pipping")
+	inProgress := task("FTHR-002", "PLM-001", "hatching")
+	s := newSet([]*spec.Requirement{req("PLM-001", "hatched")},
 		[]*spec.Task{notStarted, inProgress})
-	// TASK-001 locked but not in-progress; TASK-002 in-progress but not locked
-	fs := Run(s, []string{"TASK-001"}, "")
+	// FTHR-001 locked but not in-progress; FTHR-002 in-progress but not locked
+	fs := Run(s, []string{"FTHR-001"}, "")
 	count := 0
 	for _, f := range fs {
-		if f.Rule == "lock-consistency" && f.Severity == Warning {
+		if f.Rule == "brood-consistency" && f.Severity == Warning {
 			count++
 		}
 	}
 	if count != 2 {
-		t.Errorf("want 2 lock-consistency warnings, got %d: %v", count, fs)
+		t.Errorf("want 2 brood-consistency warnings, got %d: %v", count, fs)
 	}
 }
 
 func TestCriteriaIncomplete(t *testing.T) {
-	doneUnchecked := task("TASK-001", "REQ-001", "done")
+	doneUnchecked := task("FTHR-001", "PLM-001", "fledged")
 	doneUnchecked.Body = []byte("## Description\nx\n## Tests\n- a test\n## Acceptance Criteria\n- [x] AC-1: verified\n- [ ] AC-2: not yet\n")
-	doneChecked := task("TASK-002", "REQ-001", "done")
+	doneChecked := task("FTHR-002", "PLM-001", "fledged")
 	doneChecked.Body = []byte("## Description\nx\n## Tests\n- a test\n## Acceptance Criteria\n- [x] AC-1: verified\n")
-	inFlight := task("TASK-003", "REQ-001", "in-progress")
+	inFlight := task("FTHR-003", "PLM-001", "hatching")
 	inFlight.Body = []byte("## Description\nx\n## Tests\n- a test\n## Acceptance Criteria\n- [ ] AC-1: pending\n")
-	s := newSet([]*spec.Requirement{req("REQ-001", "approved")},
+	s := newSet([]*spec.Requirement{req("PLM-001", "hatched")},
 		[]*spec.Task{doneUnchecked, doneChecked, inFlight})
-	fs := Run(s, []string{"TASK-003"}, "")
+	fs := Run(s, []string{"FTHR-003"}, "")
 	var files []string
 	for _, f := range fs {
 		if f.Rule == "criteria-incomplete" && f.Severity == Error {
 			files = append(files, f.File)
 		}
 	}
-	if len(files) != 1 || !strings.Contains(files[0], "TASK-001") {
-		t.Errorf("want exactly 1 criteria-incomplete error on TASK-001, got %v: %v", files, fs)
+	if len(files) != 1 || !strings.Contains(files[0], "FTHR-001") {
+		t.Errorf("want exactly 1 criteria-incomplete error on FTHR-001, got %v: %v", files, fs)
 	}
 }
 
 func TestCriteriaIncompleteRequirement(t *testing.T) {
-	doneReq := req("REQ-001", "done")
+	doneReq := req("PLM-001", "fledged")
 	doneReq.Body = []byte("## Context\nx\n## Functional Criteria\nx\n## Acceptance Criteria\n- [ ] AC-1: unmet\n")
 	s := newSet([]*spec.Requirement{doneReq}, nil)
 	if !hasRule(Run(s, nil, ""), "criteria-incomplete", Error) {
 		t.Error("want criteria-incomplete error on done requirement with unchecked box")
 	}
-	approvedReq := req("REQ-002", "approved")
+	approvedReq := req("PLM-002", "hatched")
 	approvedReq.Body = doneReq.Body
 	s2 := newSet([]*spec.Requirement{approvedReq}, nil)
 	if hasRule(Run(s2, nil, ""), "criteria-incomplete", Error) {
@@ -271,13 +271,13 @@ func TestCriteriaIncompleteRequirement(t *testing.T) {
 }
 
 func TestCriteriaFormatLegacyWarning(t *testing.T) {
-	legacyDone := task("TASK-001", "REQ-001", "done") // AC section is prose "x"
-	s := newSet([]*spec.Requirement{req("REQ-001", "approved")}, []*spec.Task{legacyDone})
+	legacyDone := task("FTHR-001", "PLM-001", "fledged") // AC section is prose "x"
+	s := newSet([]*spec.Requirement{req("PLM-001", "hatched")}, []*spec.Task{legacyDone})
 	if !hasRule(Run(s, nil, ""), "criteria-format", Warning) {
 		t.Error("want criteria-format warning for done task without parseable checkboxes")
 	}
-	legacyReady := task("TASK-002", "REQ-001", "ready")
-	s2 := newSet([]*spec.Requirement{req("REQ-001", "approved")}, []*spec.Task{legacyReady})
+	legacyReady := task("FTHR-002", "PLM-001", "pipping")
+	s2 := newSet([]*spec.Requirement{req("PLM-001", "hatched")}, []*spec.Task{legacyReady})
 	if hasRule(Run(s2, nil, ""), "criteria-format", Warning) {
 		t.Error("non-done task without checkboxes should not warn")
 	}
@@ -285,13 +285,13 @@ func TestCriteriaFormatLegacyWarning(t *testing.T) {
 
 func TestCriteriaEvidence(t *testing.T) {
 	dir := t.TempDir()
-	withEvidence := task("TASK-001", "REQ-001", "in-progress")
+	withEvidence := task("FTHR-001", "PLM-001", "hatching")
 	withEvidence.Body = []byte("## Description\nx\n## Tests\n- a test\n## Acceptance Criteria\n- [x] AC-1: verified\n")
-	missingSection := task("TASK-002", "REQ-001", "in-progress")
+	missingSection := task("FTHR-002", "PLM-001", "hatching")
 	missingSection.Body = withEvidence.Body
-	noFile := task("TASK-003", "REQ-001", "in-progress")
+	noFile := task("FTHR-003", "PLM-001", "hatching")
 	noFile.Body = withEvidence.Body
-	unchecked := task("TASK-004", "REQ-001", "in-progress")
+	unchecked := task("FTHR-004", "PLM-001", "hatching")
 	unchecked.Body = []byte("## Description\nx\n## Tests\n- a test\n## Acceptance Criteria\n- [ ] AC-1: pending\n")
 
 	writeFile := func(name, content string) {
@@ -299,12 +299,12 @@ func TestCriteriaEvidence(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	writeFile("TASK-001.md", "# Evidence\n## AC-1\noutput\n")
-	writeFile("TASK-002.md", "# Evidence\n## AC-9\nwrong section\n")
+	writeFile("FTHR-001.md", "# Evidence\n## AC-1\noutput\n")
+	writeFile("FTHR-002.md", "# Evidence\n## AC-9\nwrong section\n")
 
-	s := newSet([]*spec.Requirement{req("REQ-001", "approved")},
+	s := newSet([]*spec.Requirement{req("PLM-001", "hatched")},
 		[]*spec.Task{withEvidence, missingSection, noFile, unchecked})
-	fs := Run(s, []string{"TASK-001", "TASK-002", "TASK-003", "TASK-004"}, dir)
+	fs := Run(s, []string{"FTHR-001", "FTHR-002", "FTHR-003", "FTHR-004"}, dir)
 	var files []string
 	for _, f := range fs {
 		if f.Rule == "criteria-evidence" && f.Severity == Warning {
@@ -314,12 +314,12 @@ func TestCriteriaEvidence(t *testing.T) {
 	if len(files) != 2 {
 		t.Fatalf("want 2 criteria-evidence warnings, got %v: %v", files, fs)
 	}
-	if !strings.Contains(files[0], "TASK-002") || !strings.Contains(files[1], "TASK-003") {
+	if !strings.Contains(files[0], "FTHR-002") || !strings.Contains(files[1], "FTHR-003") {
 		t.Errorf("warnings on wrong files: %v", files)
 	}
 
 	// empty evidenceDir disables the rule
-	if hasRule(Run(s, []string{"TASK-001", "TASK-002", "TASK-003", "TASK-004"}, ""), "criteria-evidence", Warning) {
+	if hasRule(Run(s, []string{"FTHR-001", "FTHR-002", "FTHR-003", "FTHR-004"}, ""), "criteria-evidence", Warning) {
 		t.Error("evidence rule should be disabled with empty dir")
 	}
 }

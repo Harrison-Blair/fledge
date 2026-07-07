@@ -6,7 +6,7 @@ import (
 )
 
 const criteriaBody = `
-# TASK-001: Example
+# FTHR-001: Example
 
 ## Description
 Prose with - [ ] AC-9: decoy outside the section.
@@ -14,7 +14,7 @@ Prose with - [ ] AC-9: decoy outside the section.
 ## Acceptance Criteria
 Checkbox list, one criterion per line.
 - [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [x] AC-2: Satisfies REQ-001 FC-2.
+- [x] AC-2: Satisfies PLM-001 FC-2.
 - [X] AC-3: Uppercase checked variant.
   - [ ] AC-4: indented, not a criterion
 - [ ] AC-5 missing colon, not a criterion
@@ -34,7 +34,7 @@ func TestParseCriteria(t *testing.T) {
 		text    string
 	}{
 		{1, "AC-1", false, "The tests listed above were observed failing before implementation and pass after."},
-		{2, "AC-2", true, "Satisfies REQ-001 FC-2."},
+		{2, "AC-2", true, "Satisfies PLM-001 FC-2."},
 		{3, "AC-3", true, "Uppercase checked variant."},
 		{6, "AC-6", false, "last one"},
 	}

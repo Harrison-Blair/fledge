@@ -1,49 +1,49 @@
 # fledge new: ID allocation, template instantiation, validation
 exec git init -q .
 
-exec fledge new req --title 'Deterministic CLI' --priority P0
-stdout 'spec/requirements/REQ-001-deterministic-cli.md'
-exists spec/requirements/REQ-001-deterministic-cli.md
-grep 'status: draft' spec/requirements/REQ-001-deterministic-cli.md
-grep 'priority: P0' spec/requirements/REQ-001-deterministic-cli.md
-grep '# REQ-001: Deterministic CLI' spec/requirements/REQ-001-deterministic-cli.md
-grep '\- \[ \] AC-1:' spec/requirements/REQ-001-deterministic-cli.md
-grep '1. FC-1:' spec/requirements/REQ-001-deterministic-cli.md
+exec fledge new plumage --title 'Deterministic CLI' --priority P0
+stdout 'pluma/plumage/PLM-001-deterministic-cli.md'
+exists pluma/plumage/PLM-001-deterministic-cli.md
+grep 'status: egg' pluma/plumage/PLM-001-deterministic-cli.md
+grep 'priority: P0' pluma/plumage/PLM-001-deterministic-cli.md
+grep '# PLM-001: Deterministic CLI' pluma/plumage/PLM-001-deterministic-cli.md
+grep '\- \[ \] AC-1:' pluma/plumage/PLM-001-deterministic-cli.md
+grep '1. FC-1:' pluma/plumage/PLM-001-deterministic-cli.md
 
-# a task against a draft requirement is refused without --force
-! exec fledge new task --title 'First task' --req REQ-001
-stderr 'draft'
+# a feather against a egg plumage is refused without --force
+! exec fledge new feather --title 'First task' --plumage PLM-001
+stderr 'egg'
 
-exec fledge status REQ-001 approved
-exec fledge new task --title 'First task' --req REQ-001
-stdout 'spec/tasks/TASK-001-first-task.md'
-grep 'status: ready' spec/tasks/TASK-001-first-task.md
-grep 'depends_on: \[\]' spec/tasks/TASK-001-first-task.md
-grep '\- \[ \] AC-1: The tests listed above were observed failing before implementation and pass after' spec/tasks/TASK-001-first-task.md
-grep '\- \[ \] AC-2:' spec/tasks/TASK-001-first-task.md
+exec fledge status PLM-001 hatched
+exec fledge new feather --title 'First task' --plumage PLM-001
+stdout 'pluma/feathers/FTHR-001-first-task.md'
+grep 'status: pipping' pluma/feathers/FTHR-001-first-task.md
+grep 'depends_on: \[\]' pluma/feathers/FTHR-001-first-task.md
+grep '\- \[ \] AC-1: The tests listed above were observed failing before implementation and pass after' pluma/feathers/FTHR-001-first-task.md
+grep '\- \[ \] AC-2:' pluma/feathers/FTHR-001-first-task.md
 
-# dependent task starts blocked; oversight recorded
-exec fledge new task --title 'Second' --req REQ-001 --depends-on TASK-001 --oversight merge
-grep 'status: blocked' spec/tasks/TASK-002-second.md
-grep 'depends_on: \[TASK-001\]' spec/tasks/TASK-002-second.md
-grep 'oversight: merge' spec/tasks/TASK-002-second.md
+# dependent feather starts egg; oversight recorded
+exec fledge new feather --title 'Second' --plumage PLM-001 --depends-on FTHR-001 --oversight merge
+grep 'status: egg' pluma/feathers/FTHR-002-second.md
+grep 'depends_on: \[FTHR-001\]' pluma/feathers/FTHR-002-second.md
+grep 'oversight: merge' pluma/feathers/FTHR-002-second.md
 
-# dangling dependency and unknown requirement are refused
-! exec fledge new task --title 'Bad' --req REQ-001 --depends-on TASK-099
-stderr 'TASK-099'
-! exec fledge new task --title 'Bad' --req REQ-042
-stderr 'REQ-042'
+# dangling dependency and unknown plumage are refused
+! exec fledge new feather --title 'Bad' --plumage PLM-001 --depends-on FTHR-099
+stderr 'FTHR-099'
+! exec fledge new feather --title 'Bad' --plumage PLM-042
+stderr 'PLM-042'
 
 # invalid enums are usage errors
-! exec fledge new req --title 'X' --priority P9
-! exec fledge new task --title 'X' --req REQ-001 --oversight always
+! exec fledge new plumage --title 'X' --priority P9
+! exec fledge new feather --title 'X' --plumage PLM-001 --oversight always
 
 # json output and IDs allocate sequentially
-exec fledge new req --title 'Colon: in title' --json
-stdout '"id": "REQ-002"'
+exec fledge new plumage --title 'Colon: in title' --json
+stdout '"id": "PLM-002"'
 
-# everything fledge new writes passes fledge check (REQ-002 is draft with no tasks)
-exec fledge check
-stdout 'spec clean: 2 requirements, 2 tasks'
+# everything fledge new writes passes fledge preen (PLM-002 is egg with no feathers)
+exec fledge preen
+stdout 'spec clean: 2 plumages, 2 feathers'
 
--- .fledge/scan-ignore --
+-- .fledge/.gitkeep --

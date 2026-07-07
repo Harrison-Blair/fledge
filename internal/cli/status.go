@@ -14,16 +14,16 @@ func init() { register("status", runStatus, "fledge status <ID> [<new-status>] [
 // Legal transitions. Keys are "from", values are allowed "to".
 var (
 	taskTransitions = map[string][]string{
-		spec.TaskBlocked:    {spec.TaskInProgress},
-		spec.TaskReady:      {spec.TaskInProgress},
-		spec.TaskInProgress: {spec.TaskDone, spec.TaskReady},
+		spec.TaskEgg:      {spec.TaskHatching},
+		spec.TaskPipping:  {spec.TaskHatching},
+		spec.TaskHatching: {spec.TaskFledged, spec.TaskPipping},
 	}
 	reqTransitions = map[string][]string{
-		spec.ReqDraft:    {spec.ReqApproved},
-		spec.ReqApproved: {spec.ReqDone, spec.ReqDraft},
+		spec.ReqEgg:     {spec.ReqHatched},
+		spec.ReqHatched: {spec.ReqFledged, spec.ReqEgg},
 	}
-	taskStatuses = []string{spec.TaskBlocked, spec.TaskReady, spec.TaskInProgress, spec.TaskDone}
-	reqStatuses  = []string{spec.ReqDraft, spec.ReqApproved, spec.ReqDone}
+	taskStatuses = []string{spec.TaskEgg, spec.TaskPipping, spec.TaskHatching, spec.TaskFledged}
+	reqStatuses  = []string{spec.ReqEgg, spec.ReqHatched, spec.ReqFledged}
 )
 
 func runStatus(args []string) int {
@@ -72,7 +72,7 @@ func runStatus(args []string) int {
 	if !*force && !slices.Contains(transitions[*current], next) {
 		return fail("illegal transition %s -> %s (use --force to override)", *current, next)
 	}
-	if next == spec.ReqDone && !*force {
+	if next == spec.ReqFledged && !*force {
 		if unchecked := uncheckedCriteria(body); len(unchecked) > 0 {
 			return fail("%s: acceptance criteria unchecked: %s (use --force to override)", id, strings.Join(unchecked, ", "))
 		}

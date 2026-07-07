@@ -17,7 +17,7 @@ type readyTask struct {
 	ID          string `json:"id"`
 	Title       string `json:"title"`
 	Priority    string `json:"priority"`
-	Requirement string `json:"requirement"`
+	Requirement string `json:"plumage"`
 	Oversight   string `json:"oversight,omitempty"`
 	Path        string `json:"path"`
 }
@@ -41,7 +41,7 @@ func runReady(args []string) int {
 				fmt.Fprintf(os.Stderr, "ERROR %s: %s\n", relPath(r.Root, f.File), f.Message)
 			}
 		}
-		return fail("spec set has errors; fix them (see `fledge check`) before dispatch")
+		return fail("spec set has errors; fix them (see `fledge preen`) before dispatch")
 	}
 
 	var out []readyTask
@@ -70,11 +70,11 @@ func runReady(args []string) int {
 		return emitJSON(out)
 	}
 	if len(out) == 0 {
-		fmt.Println("no ready tasks")
+		fmt.Println("no pipping feathers")
 		return ExitOK
 	}
 	for _, t := range out {
-		line := fmt.Sprintf("%s  %s  %s  (req %s)", t.ID, t.Priority, t.Title, t.Requirement)
+		line := fmt.Sprintf("%s  %s  %s  (plumage %s)", t.ID, t.Priority, t.Title, t.Requirement)
 		if t.Oversight != "" {
 			line += fmt.Sprintf("  [oversight: %s]", t.Oversight)
 		}

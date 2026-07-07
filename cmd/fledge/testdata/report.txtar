@@ -1,92 +1,92 @@
-# fledge report: status counts, per-REQ completion, orphan tasks, --json, empty repo, usage/env errors
+# fledge colony: status counts, per-REQ completion, orphan feathers, --json, empty repo, usage/env errors
 
 # outside a fledge repo: not yet a git repository
-! exec fledge report
+! exec fledge colony
 stderr 'not inside a git repository'
 
 exec git init -q .
 
 # git repo exists, but .fledge/ is missing
-! exec fledge report
+! exec fledge colony
 stderr '\.fledge/ not found'
 
 mkdir .fledge
 
-# empty repo: .fledge/ present, no specs at all -> valid zero report, exit 0
-exec fledge report
-stdout 'Tasks: 0 total \(blocked: 0, ready: 0, in-progress: 0, done: 0\)'
+# empty repo: .fledge/ present, no specs at all -> valid zero colony, exit 0
+exec fledge colony
+stdout 'Feathers: 0 total \(egg: 0, pipping: 0, hatching: 0, fledged: 0\)'
 stdout '\(none\)'
 
-exec fledge report --json
+exec fledge colony --json
 stdout '"total": 0'
-stdout '"requirements": \[\]'
+stdout '"plumages": \[\]'
 stdout '"orphans": \[\]'
 
 # usage error: unknown flag
-! exec fledge report --bogus
+! exec fledge colony --bogus
 stderr 'flag provided but not defined'
 
-# populate a repo with two requirements, mixed-status tasks, and an orphan task
-mkdir -p spec/requirements
-mkdir -p spec/tasks
-cp req1.md spec/requirements/REQ-001-first-requirement.md
-cp req2.md spec/requirements/REQ-002-second-requirement.md
-cp task1.md spec/tasks/TASK-001-first.md
-cp task2.md spec/tasks/TASK-002-second.md
-cp task3.md spec/tasks/TASK-003-third.md
-cp task4.md spec/tasks/TASK-004-orphan.md
+# populate a repo with two plumages, mixed-status feathers, and an orphan feather
+mkdir -p pluma/plumage
+mkdir -p pluma/feathers
+cp req1.md pluma/plumage/PLM-001-first-requirement.md
+cp req2.md pluma/plumage/PLM-002-second-requirement.md
+cp task1.md pluma/feathers/FTHR-001-first.md
+cp task2.md pluma/feathers/FTHR-002-second.md
+cp task3.md pluma/feathers/FTHR-003-third.md
+cp task4.md pluma/feathers/FTHR-004-orphan.md
 
-exec fledge report
-stdout 'Tasks: 4 total \(blocked: 1, ready: 2, in-progress: 0, done: 1\)'
-stdout 'REQ-001  First requirement  approved  1/2 done'
-stdout 'REQ-002  Second requirement  approved  0/1 done'
-stdout 'TASK-004  Orphan task  \(requirement: REQ-999\)'
+exec fledge colony
+stdout 'Feathers: 4 total \(egg: 1, pipping: 2, hatching: 0, fledged: 1\)'
+stdout 'PLM-001  First requirement  hatched  1/2 fledged'
+stdout 'PLM-002  Second requirement  hatched  0/1 fledged'
+stdout 'FTHR-004  Orphan task  \(plumage: PLM-999\)'
 
-exec fledge report --json
-stdout '"blocked": 1'
-stdout '"ready": 2'
-stdout '"in_progress": 0'
-stdout '"done": 1'
+exec fledge colony --json
+stdout '"egg": 1'
+stdout '"pipping": 2'
+stdout '"hatching": 0'
+stdout '"fledged": 1'
 stdout '"total": 4'
-stdout '"id": "REQ-001"'
-stdout '"id": "REQ-002"'
-stdout '"id": "TASK-004"'
-stdout '"requirement": "REQ-999"'
+stdout '"id": "PLM-001"'
+stdout '"id": "PLM-002"'
+stdout '"id": "FTHR-004"'
+stdout '"plumage": "PLM-999"'
 
-# blocked detail: a dep chain with one done dep, one not-done dep, and one
-# dangling dep -> the blocked task line names exactly its unmet dep IDs (FC-4)
-cp task101.md spec/tasks/TASK-101-done-dep.md
-cp task102.md spec/tasks/TASK-102-notdone-dep.md
-cp task103.md spec/tasks/TASK-103-blocked-detail.md
+# egg detail: a dep chain with one fledged dep, one unfledged dep, and one
+# dangling dep -> the egg feather line names exactly its unmet dep IDs (FC-4)
+cp task101.md pluma/feathers/FTHR-101-done-dep.md
+cp task102.md pluma/feathers/FTHR-102-notdone-dep.md
+cp task103.md pluma/feathers/FTHR-103-blocked-detail.md
 
-exec fledge report
-stdout 'TASK-103  Blocked detail task  \(unmet: TASK-102, TASK-999\)'
+exec fledge colony
+stdout 'FTHR-103  Blocked detail task  \(unmet: FTHR-102, FTHR-999\)'
 
-# active locks: lock a task, then the report locks section shows task + owner (FC-5)
-exec fledge lock TASK-102 --owner alice
-exec fledge report
-stdout 'Locks:'
-stdout '  TASK-102  alice'
+# active broods: brood a feather, then the colony broods section shows feather + owner (FC-5)
+exec fledge brood FTHR-102 --owner alice
+exec fledge colony
+stdout 'Broods:'
+stdout '  FTHR-102  alice'
 
-# degraded data: a file with broken frontmatter plus dangling refs (TASK-004's
-# dangling requirement, TASK-103's dangling depends_on) -> report still exits 0,
+# degraded data: a file with broken frontmatter plus dangling refs (FTHR-004's
+# dangling plumage, FTHR-103's dangling depends_on) -> colony still exits 0,
 # names the parse failure and dangling refs, and still summarizes parsed specs (FC-7)
-cp badfrontmatter.md spec/tasks/TASK-105-broken.md
+cp badfrontmatter.md pluma/feathers/FTHR-105-broken.md
 
-exec fledge report
-stdout 'Tasks: 7 total \(blocked: 2, ready: 2, in-progress: 1, done: 2\)'
+exec fledge colony
+stdout 'Feathers: 7 total \(egg: 2, pipping: 2, hatching: 1, fledged: 2\)'
 stdout 'Issues:'
-stdout 'spec/tasks/TASK-105-broken\.md: unterminated frontmatter'
-stdout 'TASK-004 requirement REQ-999 not found'
-stdout 'TASK-103 depends_on TASK-999 not found'
+stdout 'pluma/feathers/FTHR-105-broken\.md: unterminated frontmatter'
+stdout 'FTHR-004 plumage PLM-999 not found'
+stdout 'FTHR-103 depends_on FTHR-999 not found'
 
-# --json: blocked, locks, and issues keys all present in the same document (FC-6)
-exec fledge report --json
-stdout '"blocked": \['
-stdout '"id": "TASK-103"'
+# --json: egg, broods, and issues keys all present in the same document (FC-6)
+exec fledge colony --json
+stdout '"egg": \['
+stdout '"id": "FTHR-103"'
 stdout '"unmet": \['
-stdout '"locks": \['
-stdout '"task": "TASK-102"'
+stdout '"broods": \['
+stdout '"feather": "FTHR-102"'
 stdout '"owner": "alice"'
 stdout '"issues": {'
 stdout '"parse_errors": \['
@@ -94,9 +94,9 @@ stdout '"dangling_refs": \['
 
 -- req1.md --
 ---
-id: REQ-001
+id: PLM-001
 title: First requirement
-status: approved
+status: hatched
 priority: P1
 authored: 2026-07-06T12:00:00Z
 agent: t
@@ -110,9 +110,9 @@ x
 x
 -- req2.md --
 ---
-id: REQ-002
+id: PLM-002
 title: Second requirement
-status: approved
+status: hatched
 priority: P1
 authored: 2026-07-06T12:00:00Z
 agent: t
@@ -126,10 +126,10 @@ x
 x
 -- task1.md --
 ---
-id: TASK-001
+id: FTHR-001
 title: First
-requirement: REQ-001
-status: done
+plumage: PLM-001
+status: fledged
 priority: P1
 depends_on: []
 authored: 2026-07-06T12:00:00Z
@@ -144,10 +144,10 @@ x
 x
 -- task2.md --
 ---
-id: TASK-002
+id: FTHR-002
 title: Second
-requirement: REQ-001
-status: blocked
+plumage: PLM-001
+status: egg
 priority: P1
 depends_on: []
 authored: 2026-07-06T12:00:00Z
@@ -162,10 +162,10 @@ x
 x
 -- task3.md --
 ---
-id: TASK-003
+id: FTHR-003
 title: Third
-requirement: REQ-002
-status: ready
+plumage: PLM-002
+status: pipping
 priority: P1
 depends_on: []
 authored: 2026-07-06T12:00:00Z
@@ -180,10 +180,10 @@ x
 x
 -- task4.md --
 ---
-id: TASK-004
+id: FTHR-004
 title: Orphan task
-requirement: REQ-999
-status: ready
+plumage: PLM-999
+status: pipping
 priority: P1
 depends_on: []
 authored: 2026-07-06T12:00:00Z
@@ -198,10 +198,10 @@ x
 x
 -- task101.md --
 ---
-id: TASK-101
+id: FTHR-101
 title: Done dep task
-requirement: REQ-001
-status: done
+plumage: PLM-001
+status: fledged
 priority: P1
 depends_on: []
 authored: 2026-07-06T12:00:00Z
@@ -216,10 +216,10 @@ x
 x
 -- task102.md --
 ---
-id: TASK-102
+id: FTHR-102
 title: Not-done dep task
-requirement: REQ-001
-status: ready
+plumage: PLM-001
+status: pipping
 priority: P1
 depends_on: []
 authored: 2026-07-06T12:00:00Z
@@ -234,12 +234,12 @@ x
 x
 -- task103.md --
 ---
-id: TASK-103
+id: FTHR-103
 title: Blocked detail task
-requirement: REQ-001
-status: blocked
+plumage: PLM-001
+status: egg
 priority: P1
-depends_on: [TASK-101, TASK-102, TASK-999]
+depends_on: [FTHR-101, FTHR-102, FTHR-999]
 authored: 2026-07-06T12:00:00Z
 agent: t
 fledge_version: 0.1.0
@@ -252,6 +252,6 @@ x
 x
 -- badfrontmatter.md --
 ---
-id: TASK-105
+id: FTHR-105
 title: Broken
 

@@ -12,11 +12,11 @@ func TestNextID(t *testing.T) {
 		files []string
 		want  string
 	}{
-		{"empty dir", nil, "TASK-001"},
-		{"sequential", []string{"TASK-001-a.md", "TASK-002-b.md"}, "TASK-003"},
-		{"gaps use max not count", []string{"TASK-001-a.md", "TASK-007-b.md"}, "TASK-008"},
-		{"wide ids keep width", []string{"TASK-1042-a.md"}, "TASK-1043"},
-		{"ignores non-matching files", []string{"README.md", "TASK-002-b.md", "notes.txt"}, "TASK-003"},
+		{"empty dir", nil, "FTHR-001"},
+		{"sequential", []string{"FTHR-001-a.md", "FTHR-002-b.md"}, "FTHR-003"},
+		{"gaps use max not count", []string{"FTHR-001-a.md", "FTHR-007-b.md"}, "FTHR-008"},
+		{"wide ids keep width", []string{"FTHR-1042-a.md"}, "FTHR-1043"},
+		{"ignores non-matching files", []string{"README.md", "FTHR-002-b.md", "notes.txt"}, "FTHR-003"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -26,7 +26,7 @@ func TestNextID(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			got, err := NextID(dir, "TASK")
+			got, err := NextID(dir, "FTHR")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -38,12 +38,12 @@ func TestNextID(t *testing.T) {
 }
 
 func TestNextIDMissingDir(t *testing.T) {
-	got, err := NextID(filepath.Join(t.TempDir(), "nope"), "REQ")
+	got, err := NextID(filepath.Join(t.TempDir(), "nope"), "PLM")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "REQ-001" {
-		t.Errorf("NextID = %q, want REQ-001", got)
+	if got != "PLM-001" {
+		t.Errorf("NextID = %q, want PLM-001", got)
 	}
 }
 

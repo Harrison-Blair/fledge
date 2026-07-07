@@ -1,7 +1,8 @@
-# fledge scan-ignore — gitignore syntax.
+# .fledgeignore — gitignore syntax.
 # Paths matched here are excluded from context gathering (`fledge scan`).
 .git/
 .fledge/
+.fledgeignore
 .claude/
 node_modules/
 dist/
