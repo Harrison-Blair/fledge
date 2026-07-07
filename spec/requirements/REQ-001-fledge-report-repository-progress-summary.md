@@ -1,7 +1,7 @@
 ---
 id: REQ-001
 title: "fledge report: repository progress summary"
-status: approved
+status: done
 priority: P2
 authored: 2026-07-06T23:40:05Z
 agent: fledge-orchestrate/planning
