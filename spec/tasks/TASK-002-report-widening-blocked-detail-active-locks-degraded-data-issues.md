@@ -2,7 +2,7 @@
 id: TASK-002
 title: "report widening: blocked detail, active locks, degraded-data issues"
 requirement: REQ-001
-status: blocked
+status: done
 priority: P2
 depends_on: [TASK-001]
 authored: 2026-07-06T23:45:00Z
