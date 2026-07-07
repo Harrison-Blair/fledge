@@ -46,6 +46,23 @@ exec fledge unlock TASK-002
 stderr 'in-progress'
 grep 'status: in-progress' spec/tasks/TASK-002-second.md
 
+# unlock --done refuses while acceptance criteria are unchecked
+exec fledge lock TASK-003 --owner emperor
+! exec fledge unlock TASK-003 --done
+stderr 'AC-2'
+exists .fledge/locks/TASK-003.lock
+grep 'status: in-progress' spec/tasks/TASK-003-gated.md
+
+# --force bypasses the criteria gate
+exec fledge unlock TASK-003 --done --force
+grep 'status: done' spec/tasks/TASK-003-gated.md
+
+# gate passes once every box is checked
+exec fledge lock TASK-004 --owner king
+exec fledge criteria check TASK-004 1
+exec fledge unlock TASK-004 --done
+grep 'status: done' spec/tasks/TASK-004-gated2.md
+
 -- .fledge/scan-ignore --
 -- spec/requirements/REQ-001-a.md --
 ---
@@ -99,3 +116,40 @@ x
 - a test
 ## Acceptance Criteria
 x
+-- spec/tasks/TASK-003-gated.md --
+---
+id: TASK-003
+title: Gated
+requirement: REQ-001
+status: blocked
+priority: P1
+depends_on: [TASK-001]
+authored: 2026-07-06T12:00:00Z
+agent: t
+fledge_version: 0.1.0
+---
+## Description
+x
+## Tests
+- a test
+## Acceptance Criteria
+- [x] AC-1: verified
+- [ ] AC-2: unmet
+-- spec/tasks/TASK-004-gated2.md --
+---
+id: TASK-004
+title: Gated two
+requirement: REQ-001
+status: blocked
+priority: P1
+depends_on: [TASK-001]
+authored: 2026-07-06T12:00:00Z
+agent: t
+fledge_version: 0.1.0
+---
+## Description
+x
+## Tests
+- a test
+## Acceptance Criteria
+- [ ] AC-1: the only criterion

@@ -17,8 +17,26 @@ stdout 'ERROR spec/tasks/TASK-003-bad.md: missing or empty "## Tests" section'
 ! exec fledge check --json
 stdout '"ok": false'
 
-# strict promotes warnings: stale ready hint on TASK-002
 rm spec/tasks/TASK-003-bad.md
+
+# done task with unchecked criteria is an error
+cp bad/TASK-004-done-unchecked.md spec/tasks/TASK-004-done-unchecked.md
+! exec fledge check
+stdout 'ERROR spec/tasks/TASK-004-done-unchecked.md: done but acceptance criteria unchecked: AC-2'
+rm spec/tasks/TASK-004-done-unchecked.md
+
+# checked criteria warn without a matching evidence section
+cp bad/TASK-005-no-evidence.md spec/tasks/TASK-005-no-evidence.md
+exec fledge check
+stdout 'TASK-005.md is missing'
+mkdir .fledge/evidence
+cp evidence/TASK-005.md .fledge/evidence/TASK-005.md
+exec fledge check
+! stdout 'TASK-005.md is missing'
+! stdout 'missing evidence sections'
+rm spec/tasks/TASK-005-no-evidence.md
+
+# clean again, including under --strict
 exec fledge check
 exec fledge check --strict
 
@@ -91,3 +109,45 @@ fledge_version: 0.1.0
 x
 ## Acceptance Criteria
 x
+-- bad/TASK-004-done-unchecked.md --
+---
+id: TASK-004
+title: Done unchecked
+requirement: REQ-001
+status: done
+priority: P1
+depends_on: []
+authored: 2026-07-06T12:00:00Z
+agent: t
+fledge_version: 0.1.0
+---
+## Description
+x
+## Tests
+- a test
+## Acceptance Criteria
+- [x] AC-1: verified
+- [ ] AC-2: unmet
+-- bad/TASK-005-no-evidence.md --
+---
+id: TASK-005
+title: Checked without evidence
+requirement: REQ-001
+status: in-progress
+priority: P1
+depends_on: []
+authored: 2026-07-06T12:00:00Z
+agent: t
+fledge_version: 0.1.0
+---
+## Description
+x
+## Tests
+- a test
+## Acceptance Criteria
+- [x] AC-1: verified
+-- evidence/TASK-005.md --
+# Evidence: TASK-005
+
+## AC-1
+Commands and captured output.

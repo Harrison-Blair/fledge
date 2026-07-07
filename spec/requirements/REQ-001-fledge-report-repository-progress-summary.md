@@ -29,10 +29,10 @@ Fledge repositories accumulate REQ/TASK specs, but no single command answers "wh
 9. FC-9: Exit codes follow the existing taxonomy: 0 success (including degraded-data reports), 2 usage error, 3 environment error (e.g. not a fledge repo). No report condition produces exit 1.
 
 ## Acceptance Criteria
-1. AC-1: Tests written first and observed failing against the unchanged code, then passing after implementation (per-repo test-first convention).
-2. AC-2: A txtar e2e suite covers: populated repo (counts, per-REQ completion, blocked-with-unmet-deps, locks), empty repo, degraded repo (parse error + dangling refs), and `--json` output shape.
-3. AC-3: Running `fledge report` in this repository after implementation reflects its own specs accurately (human-verified against `status`/`ready`/`locks`).
-4. AC-4: `fledge check` reports no findings for the spec set after authoring.
+- [x] AC-1: Tests written first and observed failing against the unchanged code, then passing after implementation (per-repo test-first convention).
+- [x] AC-2: A txtar e2e suite covers: populated repo (counts, per-REQ completion, blocked-with-unmet-deps, locks), empty repo, degraded repo (parse error + dangling refs), and `--json` output shape.
+- [x] AC-3: Running `fledge report` in this repository after implementation reflects its own specs accurately (human-verified against `status`/`ready`/`locks`).
+- [x] AC-4: `fledge check` reports no findings for the spec set after authoring.
 
 ## Out of Scope
 - Scoping/filtering (e.g. `fledge report REQ-001`) — repo-wide only.

@@ -35,7 +35,7 @@ Extend `cmd/fledge/testdata/report.txtar`:
 Implementation order is fixed: (1) write the new txtar sections; (2) run `go test ./cmd/fledge -run TestScript/report` against the merged TASK-001 code and confirm the new assertions FAIL (sections absent from output); (3) implement until green.
 
 ## Acceptance Criteria
-1. AC-1: The tests listed above were observed failing before implementation (missing-section failures captured) and pass after.
-2. AC-2: Report output satisfies REQ-001 FC-4, FC-5, FC-7 as pinned by the txtar assertions; TASK-001's existing assertions pass unmodified.
-3. AC-3: `go test ./...` green; `go vet ./...` clean.
-4. AC-4: `fledge report` run in this repository reflects its own specs accurately (REQ-001 AC-3 self-hosting check).
+- [x] AC-1: The tests listed above were observed failing before implementation (missing-section failures captured) and pass after.
+- [x] AC-2: Report output satisfies REQ-001 FC-4, FC-5, FC-7 as pinned by the txtar assertions; TASK-001's existing assertions pass unmodified.
+- [x] AC-3: `go test ./...` green; `go vet ./...` clean.
+- [x] AC-4: `fledge report` run in this repository reflects its own specs accurately (REQ-001 AC-3 self-hosting check).

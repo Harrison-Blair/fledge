@@ -31,6 +31,14 @@ grep 'status: done' spec/requirements/REQ-001-a.md
 ! exec fledge status TASK-099
 stderr 'not found'
 
+# requirement done is gated on checked acceptance criteria
+! exec fledge status REQ-002 done
+stderr 'AC-1'
+grep 'status: approved' spec/requirements/REQ-002-gated.md
+exec fledge criteria check REQ-002 1
+exec fledge status REQ-002 done
+grep 'status: done' spec/requirements/REQ-002-gated.md
+
 # body is preserved byte-for-byte through rewrites
 grep 'sentinel body line' spec/tasks/TASK-001-first.md
 
@@ -87,3 +95,19 @@ x
 - a test
 ## Acceptance Criteria
 x
+-- spec/requirements/REQ-002-gated.md --
+---
+id: REQ-002
+title: Gated requirement
+status: approved
+priority: P1
+authored: 2026-07-06T12:00:00Z
+agent: t
+fledge_version: 0.1.0
+---
+## Context
+x
+## Functional Criteria
+x
+## Acceptance Criteria
+- [ ] AC-1: unmet requirement criterion

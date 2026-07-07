@@ -7,6 +7,8 @@ exists spec/requirements/REQ-001-deterministic-cli.md
 grep 'status: draft' spec/requirements/REQ-001-deterministic-cli.md
 grep 'priority: P0' spec/requirements/REQ-001-deterministic-cli.md
 grep '# REQ-001: Deterministic CLI' spec/requirements/REQ-001-deterministic-cli.md
+grep '\- \[ \] AC-1:' spec/requirements/REQ-001-deterministic-cli.md
+grep '1. FC-1:' spec/requirements/REQ-001-deterministic-cli.md
 
 # a task against a draft requirement is refused without --force
 ! exec fledge new task --title 'First task' --req REQ-001
@@ -17,6 +19,8 @@ exec fledge new task --title 'First task' --req REQ-001
 stdout 'spec/tasks/TASK-001-first-task.md'
 grep 'status: ready' spec/tasks/TASK-001-first-task.md
 grep 'depends_on: \[\]' spec/tasks/TASK-001-first-task.md
+grep '\- \[ \] AC-1: The tests listed above were observed failing before implementation and pass after' spec/tasks/TASK-001-first-task.md
+grep '\- \[ \] AC-2:' spec/tasks/TASK-001-first-task.md
 
 # dependent task starts blocked; oversight recorded
 exec fledge new task --title 'Second' --req REQ-001 --depends-on TASK-001 --oversight merge

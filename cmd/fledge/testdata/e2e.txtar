@@ -28,7 +28,17 @@ stdout 'no ready tasks'
 exec fledge locks
 stdout 'adelie'
 
-# complete it; the dependent becomes ready
+# completion is gated: new-task templates emit unchecked AC boxes
+! exec fledge unlock TASK-001 --done
+stderr 'unchecked'
+exec fledge criteria TASK-001
+stdout '\[ \] AC-1:'
+
+# verify criteria (with evidence) and complete; the dependent becomes ready
+exec fledge criteria check TASK-001 1
+exec fledge criteria check TASK-001 2
+mkdir .fledge/evidence
+cp evidence/TASK-001.md .fledge/evidence/TASK-001.md
 exec fledge unlock TASK-001 --done
 exec fledge ready
 stdout 'TASK-002'
@@ -41,3 +51,12 @@ stdout 'wave 1: TASK-001 \[done\]'
 # spec still clean after all rewrites
 exec fledge check
 stdout 'spec clean'
+-- evidence/TASK-001.md --
+# Evidence: TASK-001 — Lay foundation
+
+## AC-1
+Commands: `go test ./...`
+Captured failing-then-passing output.
+
+## AC-2
+Claim and supporting output.

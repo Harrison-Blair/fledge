@@ -29,6 +29,7 @@ func (r *Repo) FledgeDir() string       { return filepath.Join(r.Root, ".fledge"
 func (r *Repo) LocksDir() string        { return filepath.Join(r.FledgeDir(), "locks") }
 func (r *Repo) ContextDir() string      { return filepath.Join(r.FledgeDir(), "context") }
 func (r *Repo) ScanIgnorePath() string  { return filepath.Join(r.FledgeDir(), "scan-ignore") }
+func (r *Repo) EvidenceDir() string     { return filepath.Join(r.FledgeDir(), "evidence") }
 func (r *Repo) RequirementsDir() string { return filepath.Join(r.Root, "spec", "requirements") }
 func (r *Repo) TasksDir() string        { return filepath.Join(r.Root, "spec", "tasks") }
 

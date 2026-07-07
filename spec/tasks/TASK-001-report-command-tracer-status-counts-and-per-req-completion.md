@@ -37,7 +37,7 @@ Follow the existing command pattern exactly (model: `internal/cli/ready.go`):
 Implementation order is fixed: (1) write the txtar; (2) run `go test ./cmd/fledge -run TestScript/report` against unchanged code and confirm it FAILS with `unknown command "report"`; (3) implement until green.
 
 ## Acceptance Criteria
-1. AC-1: The tests listed above were observed failing before implementation (unknown-command failure captured) and pass after.
-2. AC-2: `fledge report` and `fledge report --json` satisfy REQ-001 FC-1, FC-2, FC-3, FC-6, FC-8, FC-9 as pinned by the txtar assertions.
-3. AC-3: `go test ./...` green; `go vet ./...` clean; full suite unaffected.
-4. AC-4: `fledge report` appears in the usage listing (`commandOrder`).
+- [x] AC-1: The tests listed above were observed failing before implementation (unknown-command failure captured) and pass after.
+- [x] AC-2: `fledge report` and `fledge report --json` satisfy REQ-001 FC-1, FC-2, FC-3, FC-6, FC-8, FC-9 as pinned by the txtar assertions.
+- [x] AC-3: `go test ./...` green; `go vet ./...` clean; full suite unaffected.
+- [x] AC-4: `fledge report` appears in the usage listing (`commandOrder`).

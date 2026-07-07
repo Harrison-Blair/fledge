@@ -29,8 +29,8 @@ Numbered, testable statements of behavior. Referenced downstream as FC-1, FC-2, 
 2. FC-2: …
 
 ## Acceptance Criteria
-Numbered, verifiable conditions under which this requirement is considered done. Referenced as AC-1, AC-2, …
-1. AC-1: …
+Checkbox list of verifiable conditions under which this requirement is considered done, one `- [ ] AC-N: …` line each. Authored unchecked; checked only via `fledge criteria check` (never hand-edited) at requirement closeout, when the orchestrator verifies each criterion against the completed tasks with the user.
+- [ ] AC-1: …
 
 ## Out of Scope
 What this requirement deliberately does not cover.
@@ -39,4 +39,4 @@ What this requirement deliberately does not cover.
 Unresolved items carried out of interrogation, if any.
 ```
 
-Lifecycle: written as `draft` during interrogation; set to `approved` on explicit user sign-off; `done` when all linked tasks are done.
+Lifecycle: written as `draft` during interrogation; set to `approved` on explicit user sign-off; `done` when all linked tasks are done and every acceptance-criteria box is checked (`fledge status REQ-### done` refuses while boxes are unchecked; `fledge check` errors on a done requirement with unchecked boxes).

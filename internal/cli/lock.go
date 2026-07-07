@@ -118,9 +118,9 @@ func runUnlock(args []string) int {
 	}
 
 	status := ""
-	if *done && !*force {
-		if task == nil {
-			return fail("%s not found", id)
+	if *done && task != nil {
+		if unchecked := uncheckedCriteria(task.Body); len(unchecked) > 0 && !*force {
+			return fail("%s: acceptance criteria unchecked: %s (use --force to override)", id, strings.Join(unchecked, ", "))
 		}
 		// Flip to done BEFORE removing the lock: a crash in between leaves
 		// done + stale lock, which `fledge check` reports.

@@ -34,7 +34,7 @@ func runReady(args []string) int {
 	}
 
 	// Refuse to compute readiness over a broken spec set.
-	findings := check.Run(set, locked)
+	findings := check.Run(set, locked, r.EvidenceDir())
 	if check.HasErrors(findings) {
 		for _, f := range findings {
 			if f.Severity == check.Error {

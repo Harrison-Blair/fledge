@@ -39,7 +39,7 @@ The tests that prove this task's behavior, written test-first:
 - Implementation order is fixed: (1) write the tests; (2) run them against the unchanged code and confirm they FAIL for the expected reason; (3) implement until they pass. A test that has only ever been seen passing proves nothing.
 
 ## Acceptance Criteria
-Numbered, verifiable. Reference the parent requirement's criteria where applicable (e.g. "satisfies REQ-001 FC-2"). AC-1 is always:
-1. AC-1: The tests listed above were observed failing before implementation and pass after.
-2. AC-2: …
+Checkbox list, one `- [ ] AC-N: …` line per criterion — authored unchecked; checked only via `fledge criteria check` (never hand-edited), with per-criterion evidence in `.fledge/evidence/TASK-003.md`. Reference the parent requirement's criteria where applicable (e.g. "satisfies REQ-001 FC-2"). AC-1 is always:
+- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [ ] AC-2: …
 ```

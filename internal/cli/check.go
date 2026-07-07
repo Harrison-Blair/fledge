@@ -21,7 +21,7 @@ func runCheck(args []string) int {
 	if !ok {
 		return code
 	}
-	findings := check.Run(set, locked)
+	findings := check.Run(set, locked, r.EvidenceDir())
 	for i := range findings {
 		findings[i].File = relPath(r.Root, findings[i].File)
 	}

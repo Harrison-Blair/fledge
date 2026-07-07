@@ -57,7 +57,7 @@ func printUsage(w *os.File) {
 // commandOrder controls usage listing; keep in sync with registrations.
 var commandOrder = []string{
 	"init", "scan", "new", "check", "ready", "graph", "report",
-	"status", "set", "lock", "unlock", "locks", "version",
+	"status", "set", "criteria", "lock", "unlock", "locks", "version",
 }
 
 // emitJSON writes v as indented JSON to stdout.

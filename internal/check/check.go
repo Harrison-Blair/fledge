@@ -3,6 +3,7 @@ package check
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -36,7 +37,9 @@ var (
 )
 
 // Run validates the set. lockedTasks are task IDs with a held lock file.
-func Run(set *spec.Set, lockedTasks []string) []Finding {
+// evidenceDir is where per-task evidence files (TASK-###.md) live; empty
+// disables the criteria-evidence rule.
+func Run(set *spec.Set, lockedTasks []string, evidenceDir string) []Finding {
 	var fs []Finding
 	add := func(file, rule string, sev Severity, format string, a ...any) {
 		fs = append(fs, Finding{File: file, Rule: rule, Severity: sev, Message: fmt.Sprintf(format, a...)})
@@ -87,6 +90,9 @@ func Run(set *spec.Set, lockedTasks []string) []Finding {
 				add(r.Path, "required-sections", Warning, "missing %q section", h)
 			}
 		}
+		if r.Status == spec.ReqDone {
+			checkCriteriaComplete(add, r.Path, r.Body)
+		}
 	}
 
 	for _, t := range set.Tasks {
@@ -128,6 +134,13 @@ func Run(set *spec.Set, lockedTasks []string) []Finding {
 			if !hasSection(t.Body, h) {
 				add(t.Path, "required-sections", Warning, "missing %q section", h)
 			}
+		}
+
+		if t.Status == spec.TaskDone {
+			checkCriteriaComplete(add, t.Path, t.Body)
+		}
+		if evidenceDir != "" {
+			checkCriteriaEvidence(add, t, evidenceDir)
 		}
 
 		// stale-ready-hint: only the over-promising direction is suspicious.
@@ -229,6 +242,54 @@ func checkIDFilename(add addFunc, path, id string, re *regexp.Regexp) {
 	base := filepath.Base(path)
 	if !strings.HasPrefix(base, id+"-") && base != id+".md" {
 		add(path, "id-filename", Error, "filename %q does not match id %s", base, id)
+	}
+}
+
+// checkCriteriaComplete flags a done spec whose AC boxes aren't all checked
+// (error), or that has no parseable checkboxes at all (legacy format, warning).
+func checkCriteriaComplete(add addFunc, path string, body []byte) {
+	cs := spec.ParseCriteria(body)
+	if len(cs) == 0 {
+		add(path, "criteria-format", Warning, "done but \"## Acceptance Criteria\" has no parseable checkboxes (expected \"- [ ] AC-N: ...\")")
+		return
+	}
+	var unchecked []string
+	for _, c := range cs {
+		if !c.Checked {
+			unchecked = append(unchecked, c.Label)
+		}
+	}
+	if len(unchecked) > 0 {
+		add(path, "criteria-incomplete", Error, "done but acceptance criteria unchecked: %s", strings.Join(unchecked, ", "))
+	}
+}
+
+// checkCriteriaEvidence warns when a checked task AC has no matching "## AC-N"
+// section in the task's evidence file under evidenceDir.
+func checkCriteriaEvidence(add addFunc, t *spec.Task, evidenceDir string) {
+	var checked []spec.Criterion
+	for _, c := range spec.ParseCriteria(t.Body) {
+		if c.Checked {
+			checked = append(checked, c)
+		}
+	}
+	if len(checked) == 0 {
+		return
+	}
+	evPath := filepath.Join(evidenceDir, t.ID+".md")
+	ev, err := os.ReadFile(evPath)
+	if err != nil {
+		add(t.Path, "criteria-evidence", Warning, "criteria checked but evidence file %s is missing", evPath)
+		return
+	}
+	var missing []string
+	for _, c := range checked {
+		if !hasSection(ev, "## "+c.Label) {
+			missing = append(missing, c.Label)
+		}
+	}
+	if len(missing) > 0 {
+		add(t.Path, "criteria-evidence", Warning, "checked criteria missing evidence sections in %s: %s", evPath, strings.Join(missing, ", "))
 	}
 }
 

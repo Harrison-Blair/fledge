@@ -48,10 +48,11 @@ func runStatus(args []string) int {
 	var enum []string
 	var transitions map[string][]string
 	var save func() error
+	var body []byte
 	if t := set.Task(id); t != nil {
-		current, enum, transitions, save = &t.Status, taskStatuses, taskTransitions, t.Save
+		current, enum, transitions, save, body = &t.Status, taskStatuses, taskTransitions, t.Save, t.Body
 	} else if req := set.Req(id); req != nil {
-		current, enum, transitions, save = &req.Status, reqStatuses, reqTransitions, req.Save
+		current, enum, transitions, save, body = &req.Status, reqStatuses, reqTransitions, req.Save, req.Body
 	} else {
 		return fail("%s not found", id)
 	}
@@ -70,6 +71,11 @@ func runStatus(args []string) int {
 	}
 	if !*force && !slices.Contains(transitions[*current], next) {
 		return fail("illegal transition %s -> %s (use --force to override)", *current, next)
+	}
+	if next == spec.ReqDone && !*force {
+		if unchecked := uncheckedCriteria(body); len(unchecked) > 0 {
+			return fail("%s: acceptance criteria unchecked: %s (use --force to override)", id, strings.Join(unchecked, ", "))
+		}
 	}
 	from := *current
 	*current = next
