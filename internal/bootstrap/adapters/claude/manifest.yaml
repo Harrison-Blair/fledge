@@ -1,0 +1,38 @@
+name: claude
+detector:
+  exists: .claude/
+tier_primitives:
+  confirm-gate: AskUserQuestion
+  read-only-shell: Bash
+  write-file: Write
+  run-fledge: Bash(fledge ...)
+  spawn-worker: teammate-spawn
+  spawn-pool: persistent-teammate
+  message-peer: SendMessage
+files:
+  - src: agents/fledge-brooder.md
+    dst: .claude/agents/fledge-brooder.md
+  - src: agents/fledge-forager.md
+    dst: .claude/agents/fledge-forager.md
+  - src: agents/fledge-context-scout.md
+    dst: .claude/agents/fledge-context-scout.md
+  - src: agents/fledge-skua.md
+    dst: .claude/agents/fledge-skua.md
+  - src: settings.json
+    dst: .claude/settings.json
+    overwrite: true
+  - src: settings.local.json
+    dst: .claude/settings.local.json
+    generate: true
+  - src: team-loop.md
+    dst: .claude/team-loop.md
+    overwrite: true
+  - src: fledge-adapter.md
+    dst: .claude/fledge-adapter.md
+    generate: true
+    primitive_map: true
+  - dst: .claude/skills/fledge-orchestrate
+    symlink: ../../.fledge/skills/fledge-orchestrate
+  - dst: .claude/skills/fledge-interrogate
+    symlink: ../../.fledge/skills/fledge-interrogate
+piping_file: .claude/team-loop.md

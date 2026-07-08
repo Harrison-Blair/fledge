@@ -1,0 +1,186 @@
+# fledge unfledged: list non-fledged plumage and feathers, two sections,
+# priority-then-ID order, --plumage/--feathers scoping, --json, degraded, empty, errors
+
+# outside a fledge repo -> env error, exit 3
+! exec fledge unfledged
+stderr 'not inside a git repository'
+
+exec git init -q .
+
+# git repo but no .fledge/ -> env error
+! exec fledge unfledged
+stderr '\.fledge/ not found'
+
+mkdir .fledge
+
+# empty repo: .fledge/ present, no specs -> valid empty report, exit 0
+exec fledge unfledged
+stdout 'Plumage:'
+stdout 'Feathers:'
+stdout '\(none\)'
+
+exec fledge unfledged --json
+stdout '"plumage": \[\]'
+stdout '"feathers": \[\]'
+
+# usage error: unknown flag -> exit 2
+! exec fledge unfledged --bogus
+stderr 'flag provided but not defined'
+
+# populate: two plumages (one fledged, one hatched), feathers in mixed statuses
+mkdir -p pluma/plumage
+mkdir -p pluma/feathers
+cp req1.md pluma/plumage/PLM-001-done.md
+cp req2.md pluma/plumage/PLM-002-open.md
+cp task1.md pluma/feathers/FTHR-001-fledged.md
+cp task2.md pluma/feathers/FTHR-002-egg-p0.md
+cp task3.md pluma/feathers/FTHR-003-hatching-p2.md
+
+# FC-1/FC-2: fledged items absent; open plumage + open feathers listed with fields.
+# PLM-001 is fledged -> must NOT appear; PLM-002 (hatched) must appear.
+exec fledge unfledged
+! stdout 'PLM-001'
+stdout 'PLM-002  hatched  P2  Open plumage'
+# FTHR-001 fledged -> absent; the two open feathers present with (plumage ...) link
+! stdout 'FTHR-001'
+stdout 'FTHR-002  egg  P0  Egg feather  \(plumage PLM-002\)'
+stdout 'FTHR-003  hatching  P2  Hatching feather  \(plumage PLM-002\)'
+
+# FC-3: priority-then-ID order within the Feathers section -> P0 before P2
+cmp stdout expected-order.txt
+
+# FC-5: --plumage shows only the Plumage section
+exec fledge unfledged --plumage
+stdout 'PLM-002'
+! stdout 'FTHR-002'
+! stdout 'Feathers:'
+
+# FC-5: --feathers shows only the Feathers section
+# (PLM-002 still appears as the "(plumage PLM-002)" link, so assert the plumage
+# ENTRY is absent, not the bare ID)
+exec fledge unfledged --feathers
+stdout 'FTHR-002'
+! stdout 'Open plumage'
+! stdout 'Plumage:'
+
+# FC-5: both flags -> both sections
+exec fledge unfledged --plumage --feathers
+stdout 'PLM-002'
+stdout 'FTHR-002'
+
+# FC-6: --json shape — plumage/feathers arrays, feather carries plumage link + path
+exec fledge unfledged --json
+stdout '"id": "PLM-002"'
+stdout '"status": "hatched"'
+stdout '"id": "FTHR-002"'
+stdout '"plumage": "PLM-002"'
+stdout '"path": "pluma/feathers/FTHR-002-egg-p0\.md"'
+! stdout '"id": "PLM-001"'
+! stdout '"id": "FTHR-001"'
+
+# FC-7: degraded data — an unparseable spec file is surfaced under issues,
+# everything that parses is still listed, exit 0
+cp badfrontmatter.md pluma/feathers/FTHR-009-broken.md
+exec fledge unfledged
+stdout 'Issues:'
+stdout 'pluma/feathers/FTHR-009-broken\.md: unterminated frontmatter'
+stdout 'FTHR-002'
+exec fledge unfledged --json
+stdout '"issues": \['
+
+-- req1.md --
+---
+id: PLM-001
+title: Done plumage
+status: fledged
+priority: P1
+authored: 2026-07-06T12:00:00Z
+agent: t
+fledge_version: 0.1.0
+---
+## Context
+x
+## Functional Criteria
+x
+## Acceptance Criteria
+- [x] AC-1: x
+-- req2.md --
+---
+id: PLM-002
+title: Open plumage
+status: hatched
+priority: P2
+authored: 2026-07-06T12:00:00Z
+agent: t
+fledge_version: 0.1.0
+---
+## Context
+x
+## Functional Criteria
+x
+## Acceptance Criteria
+x
+-- task1.md --
+---
+id: FTHR-001
+title: Fledged feather
+plumage: PLM-002
+status: fledged
+priority: P1
+depends_on: []
+authored: 2026-07-06T12:00:00Z
+agent: t
+fledge_version: 0.1.0
+---
+## Description
+x
+## Tests
+- a test
+## Acceptance Criteria
+- [x] AC-1: x
+-- task2.md --
+---
+id: FTHR-002
+title: Egg feather
+plumage: PLM-002
+status: egg
+priority: P0
+depends_on: []
+authored: 2026-07-06T12:00:00Z
+agent: t
+fledge_version: 0.1.0
+---
+## Description
+x
+## Tests
+- a test
+## Acceptance Criteria
+x
+-- task3.md --
+---
+id: FTHR-003
+title: Hatching feather
+plumage: PLM-002
+status: hatching
+priority: P2
+depends_on: []
+authored: 2026-07-06T12:00:00Z
+agent: t
+fledge_version: 0.1.0
+---
+## Description
+x
+## Tests
+- a test
+## Acceptance Criteria
+x
+-- badfrontmatter.md --
+---
+id: FTHR-009
+title: Broken
+-- expected-order.txt --
+Plumage:
+  PLM-002  hatched  P2  Open plumage
+Feathers:
+  FTHR-002  egg  P0  Egg feather  (plumage PLM-002)
+  FTHR-003  hatching  P2  Hatching feather  (plumage PLM-002)

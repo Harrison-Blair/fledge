@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+{{- range $i, $cmd := .CommandOrder}}
+{{- if $i}},{{end}}
+      "Bash(fledge {{ $cmd }} *)"
+{{- end}}
+    ]
+  }
+}

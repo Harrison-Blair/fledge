@@ -1,1 +1,1 @@
-../../internal/bootstrap/claude/agents/fledge-brooder.md
+../../internal/bootstrap/adapters/claude/agents/fledge-brooder.md

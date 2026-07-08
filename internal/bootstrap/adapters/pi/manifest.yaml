@@ -1,0 +1,20 @@
+name: pi
+detector:
+  exists: .pi/
+tier_primitives:
+  confirm-gate: chat (TUI) / ctx.ui.select|confirm (extension)
+  read-only-shell: bash tool
+  write-file: write tool
+  run-fledge: bash tool (fledge ...)
+files:
+  - src: settings.json
+    dst: .pi/settings.json
+    overwrite: true
+  - src: prompts/fledge-plan.md
+    dst: .pi/prompts/fledge-plan.md
+  - src: prompts/fledge-implement.md
+    dst: .pi/prompts/fledge-implement.md
+  - src: fledge-adapter.md
+    dst: .pi/fledge-adapter.md
+    generate: true
+    primitive_map: true

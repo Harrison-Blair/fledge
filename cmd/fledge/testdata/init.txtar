@@ -8,18 +8,30 @@ stdout 'created .fledgeignore'
 stdout 'created pluma/plumage/.gitkeep'
 stdout 'created pluma/feathers/.gitkeep'
 stdout 'created .gitignore'
+stdout 'created .fledge/skills/fledge-orchestrate/SKILL.md'
+stdout 'created .fledge/skills/fledge-interrogate/SKILL.md'
 stdout 'created .claude/agents/fledge-brooder.md'
-stdout 'created .claude/skills/fledge-orchestrate/SKILL.md'
+stdout 'created .claude/fledge-adapter.md'
+stdout 'scaffolded agents: claude'
+stderr 'no agent harness detected; scaffolded the claude adapter by default'
 exists .fledgeignore
 exists .claude/agents/fledge-brooder.md
-exists .claude/skills/fledge-orchestrate/templates/plumage.md
+exists .claude/settings.local.json
+exists .claude/team-loop.md
+exists .fledge/skills/fledge-orchestrate/templates/plumage.md
+exists .claude/skills/fledge-orchestrate/SKILL.md
+exists .claude/skills/fledge-interrogate/SKILL.md
 grep '.fledge/nest/raw/' .gitignore
 grep '.fledge/broods/' .gitignore
 
-# second run touches nothing and duplicates no gitignore lines
+# second run is fully quiet: creates nothing, and byte-identical files
+# (including generated ones) report exists, not updated
 exec fledge init
 stdout 'exists .fledgeignore'
 ! stdout 'created'
+! stdout 'updated'
+stdout 'exists .claude/fledge-adapter.md'
+stdout 'exists .fledge/skills/fledge-orchestrate/SKILL.md'
 grep -count=1 '.fledge/broods/' .gitignore
 
 # the scaffold is immediately usable
@@ -28,3 +40,5 @@ stdout 'spec clean: 0 plumages, 0 feathers'
 
 exec fledge init --json
 stdout '"created": \[\]'
+stdout '"agents": \['
+stdout '"claude"'

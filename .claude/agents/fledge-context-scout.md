@@ -1,1 +1,1 @@
-../../internal/bootstrap/claude/agents/fledge-context-scout.md
+../../internal/bootstrap/adapters/claude/agents/fledge-context-scout.md

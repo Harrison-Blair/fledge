@@ -1,0 +1,109 @@
+# multi-agent init: --list-agents, auto-detect, --agent, --refresh,
+# duplicate guard, --json agents field
+
+# --list-agents enumerates adapters and derived tiers; works outside a repo
+exec fledge init --list-agents
+stdout 'claude\ttier C'
+stdout 'codex\ttier A'
+stdout 'pi\ttier A'
+
+# auto-detect: a .pi/ marker scaffolds only the pi adapter
+mkdir pi-repo
+cd pi-repo
+exec git init -q .
+mkdir .pi
+exec fledge init
+stdout 'scaffolded agents: pi'
+! stdout 'claude'
+exists .pi/settings.json
+exists .pi/prompts/fledge-plan.md
+exists .pi/prompts/fledge-implement.md
+exists .pi/fledge-adapter.md
+exists .fledge/skills/fledge-orchestrate/SKILL.md
+! exists .claude
+
+# auto-detect: both markers scaffold both adapters
+cd $WORK
+mkdir both-repo
+cd both-repo
+exec git init -q .
+mkdir .claude .pi
+exec fledge init
+stdout 'scaffolded agents: claude, pi'
+exists .claude/fledge-adapter.md
+exists .pi/fledge-adapter.md
+
+# --agent overrides detection; re-running with another agent is additive
+cd $WORK
+mkdir agent-repo
+cd agent-repo
+exec git init -q .
+exec fledge init --agent claude,pi
+stdout 'scaffolded agents: claude, pi'
+exists .claude/fledge-adapter.md
+exists .pi/fledge-adapter.md
+
+exec fledge init --agent codex
+stdout 'scaffolded agents: codex'
+exists .codex/fledge-adapter.md
+grep 'fledge-orchestrate/SKILL.md' AGENTS.md
+exists .claude/fledge-adapter.md
+exists .pi/fledge-adapter.md
+
+# the AGENTS.md pointer line is appended once, never duplicated
+exec fledge init --agent codex
+grep -count=1 'fledge-orchestrate/SKILL.md' AGENTS.md
+
+# unknown agent → usage error pointing at --list-agents
+! exec fledge init --agent nope
+stderr 'unknown agent "nope"'
+stderr 'list-agents'
+
+# --refresh: fledge-owned files (core skills, adapter agent files) are
+# skip-if-exists by default; --refresh syncs them to the shipped versions
+# (with a loud note), and a second refresh over identical files is silent
+cd $WORK
+mkdir core-repo
+cd core-repo
+exec git init -q .
+mkdir .claude
+exec fledge init
+cp $WORK/custom-skill.md .fledge/skills/fledge-orchestrate/SKILL.md
+cp $WORK/custom-skill.md .claude/agents/fledge-brooder.md
+exec fledge init
+grep 'my local edit' .fledge/skills/fledge-orchestrate/SKILL.md
+grep 'my local edit' .claude/agents/fledge-brooder.md
+exec fledge init --refresh
+stderr 'refreshed'
+stdout 'updated .fledge/skills/fledge-orchestrate/SKILL.md'
+stdout 'updated .claude/agents/fledge-brooder.md'
+! grep 'my local edit' .fledge/skills/fledge-orchestrate/SKILL.md
+! grep 'my local edit' .claude/agents/fledge-brooder.md
+exec fledge init --refresh
+! stdout 'updated'
+! stderr 'refreshed'
+
+# duplicate guard: a same-name skill in a harness-native skills dir refuses init
+cd $WORK
+mkdir dup-repo
+cd dup-repo
+exec git init -q .
+mkdir .claude/skills/fledge-orchestrate
+cp $WORK/custom-skill.md .claude/skills/fledge-orchestrate/SKILL.md
+! exec fledge init
+stderr 'duplicate skill'
+stderr 'MIGRATION.md'
+! exists .fledge/skills/fledge-orchestrate/SKILL.md
+
+# --json reports which adapters were scaffolded
+cd $WORK
+mkdir json-repo
+cd json-repo
+exec git init -q .
+exec fledge init --agent pi --json
+stdout '"agents": \['
+stdout '"pi"'
+! stdout '"claude"'
+
+-- custom-skill.md --
+my local edit

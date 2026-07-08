@@ -4,9 +4,9 @@ import (
 	_ "embed"
 	"flag"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/Harrison-Blair/fledge/internal/bootstrap"
@@ -14,7 +14,10 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/spec"
 )
 
-func init() { register("init", runInit, "fledge init [--json]") }
+func init() {
+	register("init", runInit,
+		"fledge init [--agent <name>]... [--refresh] [--list-agents] [--json]")
+}
 
 //go:embed fledgeignore.default
 var defaultScanIgnore []byte
@@ -22,27 +25,53 @@ var defaultScanIgnore []byte
 // gitignore lines fledge needs; appended as one block when any is missing.
 var gitignoreLines = []string{".fledge/nest/raw/", ".fledge/broods/"}
 
+// stringListFlag implements flag.Value for a repeatable, comma-separated list.
+type stringListFlag []string
+
+func (s *stringListFlag) String() string     { return strings.Join(*s, ",") }
+func (s *stringListFlag) Set(v string) error {
+	for _, part := range strings.Split(v, ",") {
+		if name := strings.TrimSpace(part); name != "" {
+			*s = append(*s, name)
+		}
+	}
+	return nil
+}
+
 func runInit(args []string) int {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	var agents stringListFlag
+	fs.Var(&agents, "agent", "agent harness to scaffold (repeatable, comma-separated)")
+	refresh := fs.Bool("refresh", false, "sync fledge-owned files to the shipped versions, overwriting local edits (git is the backup)")
+	listAgents := fs.Bool("list-agents", false, "list available agent adapters and exit")
 	jsonOut := fs.Bool("json", false, "machine-readable output")
 	if err := fs.Parse(args); err != nil {
 		return ExitUsage
 	}
+
+	if *listAgents {
+		return listAdapters(false, *jsonOut)
+	}
+
 	r, err := repo.Find()
 	if err != nil {
 		return envErr("%v", err)
 	}
 
-	var created, skipped []string
-	note := func(rel string, wasCreated bool) {
-		if wasCreated {
+	var created, skipped, updated []string
+	note := func(rel string, state int) {
+		switch state {
+		case 0:
 			created = append(created, rel)
-		} else {
+		case 1:
 			skipped = append(skipped, rel)
+		case 2:
+			updated = append(updated, rel)
 		}
 	}
 
-	files := []struct {
+	// Base fledge scaffold (agent-agnostic, additive).
+	baseFiles := []struct {
 		rel     string
 		content []byte
 	}{
@@ -52,10 +81,10 @@ func runInit(args []string) int {
 		{"pluma/plumage/.gitkeep", nil},
 		{"pluma/feathers/.gitkeep", nil},
 	}
-	for _, f := range files {
+	for _, f := range baseFiles {
 		path := filepath.Join(r.Root, f.rel)
 		if fileExists(path) {
-			note(f.rel, false)
+			note(f.rel, 1)
 			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -64,74 +93,160 @@ func runInit(args []string) int {
 		if err := spec.WriteFileAtomic(path, f.content); err != nil {
 			return fail("%v", err)
 		}
-		note(f.rel, true)
+		note(f.rel, 0)
 	}
 
 	changed, err := ensureGitignore(filepath.Join(r.Root, ".gitignore"))
 	if err != nil {
 		return fail("%v", err)
 	}
-	note(".gitignore", changed)
+	if changed {
+		note(".gitignore", 0)
+	} else {
+		note(".gitignore", 1)
+	}
 
-	bootstrapCreated, bootstrapSkipped, err := writeBootstrapFiles(r.Root)
+	// Resolve which adapters to scaffold (Q7).
+	selected, defaulted, err := resolveAgents(r.Root, agents)
 	if err != nil {
 		return fail("%v", err)
 	}
-	for _, rel := range bootstrapCreated {
-		note(rel, true)
+
+	// Duplicate guard (Q10): refuse a broken state before writing core.
+	if err := bootstrap.CheckDuplicateSkills(r.Root); err != nil {
+		return fail("%v", err)
 	}
-	for _, rel := range bootstrapSkipped {
-		note(rel, false)
+
+	// Core skill: agent-neutral, written to .fledge/skills/ (Q2).
+	cCreated, cUpdated, cSkipped, err := bootstrap.WriteCore(r.Root, *refresh)
+	if err != nil {
+		return fail("%v", err)
+	}
+	created = append(created, cCreated...)
+	updated = append(updated, cUpdated...)
+	skipped = append(skipped, cSkipped...)
+
+	// Adapters: per-harness, written to their native paths.
+	var scaffolded []string
+	for _, name := range selected {
+		m, err := bootstrap.FindAdapter(name)
+		if err != nil {
+			return fail("%v", err)
+		}
+		if m == nil {
+			return usageErr("unknown agent %q (run `fledge init --list-agents`)", name)
+		}
+		aCreated, aUpdated, aSkipped, err := m.WriteAdapter(r.Root, commandOrder, *refresh)
+		if err != nil {
+			return fail("%v", err)
+		}
+		created = append(created, aCreated...)
+		updated = append(updated, aUpdated...)
+		skipped = append(skipped, aSkipped...)
+		scaffolded = append(scaffolded, name)
+	}
+	sort.Strings(scaffolded)
+
+	if *refresh && len(updated) > 0 {
+		fmt.Fprintf(os.Stderr, "note: refreshed %d file(s) to the shipped versions — `git diff` to review; your edits are recoverable via git.\n", len(updated))
+	}
+
+	if defaulted && !*jsonOut {
+		fmt.Fprintf(os.Stderr, "note: no agent harness detected; scaffolded the claude adapter by default. Run `fledge init --agent <name>` to add another (see `fledge init --list-agents`).\n")
 	}
 
 	if *jsonOut {
-		if created == nil {
-			created = []string{}
-		}
-		if skipped == nil {
-			skipped = []string{}
-		}
-		return emitJSON(map[string][]string{"created": created, "skipped": skipped})
+		return emitJSON(initJSON{
+			Created: nonEmpty(created),
+			Skipped: nonEmpty(skipped),
+			Updated: nonEmpty(updated),
+			Agents:  nonEmpty(scaffolded),
+		})
 	}
 	for _, rel := range created {
 		fmt.Printf("created %s\n", rel)
 	}
+	for _, rel := range updated {
+		fmt.Printf("updated %s\n", rel)
+	}
 	for _, rel := range skipped {
 		fmt.Printf("exists %s\n", rel)
+	}
+	if len(scaffolded) > 0 {
+		fmt.Printf("scaffolded agents: %s\n", strings.Join(scaffolded, ", "))
 	}
 	return ExitOK
 }
 
-// writeBootstrapFiles copies the embedded .claude agents and skills into
-// root, skipping any file that already exists.
-func writeBootstrapFiles(root string) (created, skipped []string, err error) {
-	err = fs.WalkDir(bootstrap.FS, "claude", func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
+type initJSON struct {
+	Created []string `json:"created"`
+	Skipped []string `json:"skipped"`
+	Updated []string `json:"updated"`
+	Agents  []string `json:"agents"`
+}
+
+func nonEmpty(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
+// resolveAgents implements Q7: --agent overrides/adds; otherwise auto-detect via
+// each adapter's marker; nothing detected → claude default + hint (defaulted=true).
+func resolveAgents(root string, agents stringListFlag) (selected []string, defaulted bool, err error) {
+	if len(agents) > 0 {
+		// Deduplicate, preserve order.
+		seen := map[string]bool{}
+		for _, a := range agents {
+			if !seen[a] {
+				seen[a] = true
+				selected = append(selected, a)
+			}
 		}
-		if d.IsDir() {
-			return nil
+		return selected, false, nil
+	}
+	detected, err := bootstrap.DetectAdapters(root)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(detected) == 0 {
+		return []string{"claude"}, true, nil
+	}
+	for _, m := range detected {
+		selected = append(selected, m.Name)
+	}
+	sort.Strings(selected)
+	return selected, false, nil
+}
+
+// listAdapters prints available adapters (name, tier) and, when inRepo is true,
+// which are scaffolded in the current repo. Used by --list-agents.
+func listAdapters(inRepo bool, jsonOut bool) int {
+	adapters, err := bootstrap.LoadAdapters()
+	if err != nil {
+		return fail("%v", err)
+	}
+	sort.Slice(adapters, func(i, j int) bool { return adapters[i].Name < adapters[j].Name })
+	if jsonOut {
+		out := make([]adapterInfo, 0, len(adapters))
+		for _, m := range adapters {
+			out = append(out, manifestInfo(m, false))
 		}
-		rel := ".claude" + strings.TrimPrefix(path, "claude")
-		dest := filepath.Join(root, rel)
-		if fileExists(dest) {
-			skipped = append(skipped, rel)
-			return nil
-		}
-		data, readErr := bootstrap.FS.ReadFile(path)
-		if readErr != nil {
-			return readErr
-		}
-		if mkErr := os.MkdirAll(filepath.Dir(dest), 0o755); mkErr != nil {
-			return mkErr
-		}
-		if writeErr := spec.WriteFileAtomic(dest, data); writeErr != nil {
-			return writeErr
-		}
-		created = append(created, rel)
-		return nil
-	})
-	return created, skipped, err
+		return emitJSON(map[string]any{"agents": out})
+	}
+	for _, m := range adapters {
+		fmt.Printf("%s\ttier %s\n", m.Name, tierLabel(m.Tier()))
+	}
+	return ExitOK
+}
+
+// tierLabel renders a tier, marking sub-A adapters.
+func tierLabel(t string) string {
+	if t == "" {
+		return "—"
+	}
+	return t
 }
 
 // ensureGitignore appends fledge's ignore lines when missing; reports change.
