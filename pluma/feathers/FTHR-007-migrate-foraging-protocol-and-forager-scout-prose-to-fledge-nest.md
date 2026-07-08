@@ -66,12 +66,12 @@ This is prose/fixture work; verification is the existing scaffolding suite, not 
   nothing else (`git status` review) — the human sign-off at the merge gate.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before the prose/fixture edits
+- [x] AC-1: The tests listed above were observed failing before the prose/fixture edits
   (fixtures mismatch the new bytes) and pass after.
-- [ ] AC-2: `foraging.md` and the two Claude agent files instruct foragers/scouts to use
+- [x] AC-2: `foraging.md` and the two Claude agent files instruct foragers/scouts to use
   `fledge nest scaffold`/`scout`/`stamp` and no longer describe hand-writing frontmatter or
   hand-deleting the nest (satisfies PLM-003 FC-9).
-- [ ] AC-3: `context-doc.md` and `templates/scout-report.md` no longer duplicate the
+- [x] AC-3: `context-doc.md` and `templates/scout-report.md` no longer duplicate the
   frontmatter schema; they point at the CLI as the single source (satisfies PLM-003 FC-7).
-- [ ] AC-4: `TestCoreNeutral` + `TestCorePrimitivesReferenced` pass; `go test ./...` and
+- [x] AC-4: `TestCoreNeutral` + `TestCorePrimitivesReferenced` pass; `go test ./...` and
   `go vet ./...` green; `fledge init --refresh` regenerates only the expected repo output.
