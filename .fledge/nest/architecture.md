@@ -1,62 +1,36 @@
 ---
-generated: 2026-07-08T01:03:26Z
-commit: e44524d1f089dcfe1c1f313f819ec18d9a42eceb
+generated: 2026-07-08T05:28:12Z
+commit: e46c481a047d45ef10bcd79a3326d47932b32868
 agent: fledge-forager
 fledge_version: 0.2.1
 ---
 
 # Architecture
 
-fledge is a Go CLI that brings spec-driven development to agent-assisted repos. It is built as two deliberately separated layers plus a spec corpus that both layers operate on: a deterministic CLI/domain layer, an embedded bootstrap/adapter layer that scaffolds one agent-neutral orchestration workflow into any harness, and the `pluma/` spec tree the CLI manipulates. This repo dogfoods itself — it has its own `.fledge/` state and `pluma/` specs.
+fledge is a Go CLI that keeps spec-driven development artifacts on disk and scaffolds one agent-neutral orchestration workflow into any agent harness. The system is two deliberately separated layers plus the spec corpus they both operate on; understand how a change ripples across these before touching `internal/bootstrap` or the CLI surface.
 
-## Layer 1: deterministic CLI + domain packages (`internal/cli`, `internal/spec`, `internal/check`, `internal/graph`, `internal/lock`, `internal/repo`, `internal/scan`)
+## The two layers
 
-`cmd/fledge/main.go:9` is the sole binary entry point; it calls `cli.Run(os.Args[1:])` and exits with the returned code. `internal/cli/cli.go` dispatches to 16 commands registered via `register(name, runFunc, usage)` in each command file's `init()`; `commandOrder` (a global slice) drives both `usage` output and the generated Claude allow-list. Exit codes are shared and meaningful across every command: `ExitOK=0`, `ExitFail=1` (domain failure — check findings, lock held, illegal transition, cycle), `ExitUsage=2`, `ExitEnv=3` (not a git repo, no `.fledge/`). Every command supports `--json` via `emitJSON()`.
+**1. The deterministic CLI (`internal/cli` + domain packages).** Agent-agnostic spec operations with meaningful, shared exit codes (`ExitOK/Fail/Usage/Env` = 0/1/2/3) and a uniform `--json` on every command (`internal/cli/cli.go`). Command dispatch is registration-based: each command file's `init()` calls `register(name, run, usage)`, and `commandOrder` (`cli.go`) controls both usage output and the generated allow-lists. Domain logic lives in focused packages: `spec` (frontmatter, ID allocation, templates, load, atomic writes), `check` (validation = `preen`), `graph` (dependency graph = `vee`; cycles, waves, readiness), `lock` (feather claims = `brood`), `scan`, `nest` (concern/scout doc rendering), `repo` (root discovery, directory paths, git HEAD/version).
 
-Domain packages beneath `internal/cli`:
-- `internal/spec` — frontmatter parse/render with byte-exact body preservation (`internal/spec/frontmatter.go:SplitFrontmatter`), ID allocation (`internal/spec/ids.go:NextID`), criteria checkbox parsing/toggling by byte offset (`internal/spec/criteria.go`), embedded spec body templates (`internal/spec/templates.go`).
-- `internal/check` — validation engine (`internal/check/check.go:Run`) producing `[]Finding` (error/warning severity) across ~15 rules (parse, duplicate-id, dangling-ref, cycle, brood-consistency, criteria-format, criteria-evidence, etc.).
-- `internal/graph` — dependency graph over feathers (`internal/graph/graph.go:Graph`): `Cycle()`, `Waves()` (topological layers), `Ready()`.
-- `internal/lock` — brood (claim) file management (`internal/lock/lock.go`): atomic `Acquire()` via `O_EXCL`, `Release()`, `Get()`, `List()`; one winner under contention.
-- `internal/repo` — repo path resolution (`internal/repo/repo.go:Repo`): `FledgeDir()`, `LocksDir()`, `ContextDir()` (`.fledge/nest`), `EvidenceDir()` (`.fledge/molt`), `RequirementsDir()` (`pluma/plumage`), `TasksDir()` (`pluma/feathers`).
-- `internal/scan` — file inventory (`internal/scan/scan.go:Run`) via `git ls-files` + `.fledgeignore` filtering (`git check-ignore`), grouped by top-level module.
+**2. The bootstrap/adapter system (`internal/bootstrap`).** What `fledge init` scaffolds. `bootstrap.go` embeds two trees via `//go:embed core adapters`:
+- **`core/`** is the single agent-neutral source — the `fledge-orchestrate` and `fledge-interrogate` skills, written to a repo's `.fledge/skills/` by `WriteCore` (`registry.go:304`). The actual workflow prose (planning.md, implementation.md, foraging.md, worker-protocols.md, templates/) lives here.
+- **`adapters/<harness>/`** is a thin format-only mapping per harness, driven entirely by its `manifest.yaml` (`registry.go` → `Manifest`): a detector, the `tier_primitives` map, and a file list with per-file write policies. Adding/changing a harness is editing a manifest — zero Go code.
 
-This layer is entirely agent-agnostic — it has no notion of harnesses, workers, or orchestration.
+## The primitive/tier contract
 
-## Layer 2: bootstrap/adapter system (`internal/bootstrap`)
+The workflow is written to **6 orchestration primitives** (`primitives.go`, `PrimitiveOrder`): `confirm-gate`, `read-only-shell`, `write-file`, `run-fledge`, `spawn-worker`, `message-peer`. An adapter declares which mechanism realizes each; its **tier** (A=4 / B=5 / C=6 primitives) is *derived* from that coverage via `DeriveTier` (`primitives.go:46`), never declared. Claude Code is Tier C. Core prose branches on capability ("If you provide `spawn-worker`…"), so one skill adapts to any tier without duplication (`docs/generalization-plan.md` §5.1).
 
-What `fledge init` scaffolds. `internal/bootstrap/bootstrap.go` embeds two trees via `//go:embed core adapters`:
+## How the layers interact (the dogfooding loop)
 
-- **`core/`** — the single agent-neutral source of workflow prose: the `fledge-orchestrate` and `fledge-interrogate` skills (`internal/bootstrap/core/skills/`). Written verbatim to a target repo's `.fledge/skills/` by `WriteCore()` (`internal/bootstrap/registry.go`), shared unmodified by every harness. Core prose never references harness-specific paths (`.claude/`, `.pi/`, `.codex/`) — enforced by `TestCoreNeutral` in `internal/bootstrap/registry_test.go:140-159`.
-- **`adapters/<harness>/`** — a thin, format-only mapping per harness (`claude`, `pi`, `codex`), driven entirely by that adapter's `manifest.yaml`. A `Manifest` (`internal/bootstrap/registry.go`) declares: `Detector` (marker path for auto-detection), `TierPrimitives` (primitive → mechanism map), `Files` (write-policy list), `PipingFile`. **Adding or changing a harness is editing a manifest, zero Go code** (`internal/bootstrap/registry.go:17-20`).
+`fledge init` scaffolds `.fledge/skills/` + the harness adapter → the agent auto-loads the skill and adapter → the agent drives the CLI for every deterministic spec op (`fledge new/status/set/criteria/brood/preen/nest`) and writes only spec *bodies* by hand. This repo is itself fledge-managed: it dogfoods its own binary, so the installed `fledge` must match the source (`scripts/install.sh`).
 
-### The 7-primitive contract (`internal/bootstrap/primitives.go`)
+## Ripple map (what to change together)
 
-`PrimitiveOrder`: `confirm-gate`, `read-only-shell`, `write-file`, `run-fledge`, `spawn-worker`, `message-peer`. An adapter's **tier** (A/B/C) is *derived*, never declared, from which primitives it provides (`DeriveTier()`): Tier A = the first 4 (solo planning + implementation), Tier B = adds `spawn-worker` (fan-out foraging), Tier C = adds `message-peer` (team loop). Per `registry_test.go:70`, the Claude adapter derives Tier C, codex and pi derive Tier A.
-
-### File write policies (`ManifestFile`, `internal/bootstrap/registry.go:37-44`)
-
-- `generate`/`primitive_map` — render a `text/template`, feeding in provided/not-provided primitive rows.
-- `overwrite` — always rewrite (generated files, never user-edited).
-- `append_if_missing` — additive line (e.g. `AGENTS.md` pointer for codex).
-- `symlink` — e.g. `.claude/skills/fledge-orchestrate` → `.fledge/skills/fledge-orchestrate` (`registry.go:364-388`).
-- default — copy, **skip-if-exists** so user edits to skill prose survive; `fledge init --refresh` re-syncs to shipped bytes.
-
-`writeIfChanged` makes writes byte-idempotent (compares on-disk bytes before rewriting), which the `cmd/fledge/testdata/*.txtar` acceptance tests depend on for idempotency assertions.
-
-`CheckDuplicateSkills()` refuses to scaffold if a real (non-symlink) `SKILL.md` already exists at a harness's native skill path, preventing divergent copies.
-
-## Layer 3: the spec corpus (`pluma/`)
-
-`pluma/plumage/PLM-###.md` (feature intents) and `pluma/feathers/FTHR-###.md` (implementable tasks), YAML-fronted markdown, IDs and frontmatter allocated only by the CLI (`fledge new`, `status`, `set`, `criteria`, `brood`) — never hand-edited. Plumage lifecycle: `egg → hatched → fledged`. Feather lifecycle: `egg → pipping → hatching → fledged`, guarded by `internal/cli/status.go` transition tables; `--force` bypasses legality checks but not enum validity. Feathers hold `depends_on` (acyclic, feather-ID list) and optional `oversight` (`merge`/`during`) gates.
-
-## How the layers interact
-
-1. A user or agent runs `fledge init` (layer 2) to scaffold `.fledge/skills/` + a harness adapter into a target repo.
-2. The scaffolded skill (`fledge-orchestrate`) instructs the agent to drive spec operations exclusively through the `fledge` CLI (layer 1) — `fledge new`, `fledge set`, `fledge criteria check`, `fledge brood` — never by hand-editing `pluma/` frontmatter.
-3. `internal/bootstrap` itself depends on `internal/cli`'s `commandOrder` to generate the Claude `settings.local.json` Bash allow-list (`TestClaudeAllowListGenerated`, `registry_test.go:396-415`) — the one place the two layers are coupled.
-4. The orchestration workflow (planning → feather authoring → implementation) is described in `core/skills/fledge-orchestrate/{planning,implementation,worker-protocols,foraging}.md` and executed by agents in the target repo using the primitives their harness's adapter provides.
+- Change embedded `core/` or `adapters/` content → regenerate this repo's scaffold (`fledge init --refresh`) **and** update the `cmd/fledge/testdata/` txtar fixtures that assert on scaffolded output (`init.txtar`, `init_agents.txtar`, `agents.txtar`).
+- Add a CLI command → `register()` in a new command file + append to `commandOrder` (feeds usage and the generated `Bash(fledge …)` allow-list) + a `<cmd>.txtar` acceptance test.
+- Change the primitive set → update `primitives.go`, every adapter manifest's `tier_primitives`, and `registry_test.go` coverage tests (which fail if core prose references a primitive no adapter declares, or vice versa).
 
 ## Open Questions
-- How does bootstrap adapter detection integrate with command registration and primitive-coverage tiers beyond the allow-list generation described above? (internal-domain scout, unresolved from assigned files)
-- How are `commandOrder` and each adapter's generated allow-list kept in sync as commands are added? (internal-domain scout)
+
+- Whether Claude Code `settings.json` supports a `skills` array or only recursive `.claude/skills/` scanning determines if the adapter must symlink `.claude/skills/fledge-orchestrate` → `.fledge/skills/fledge-orchestrate` (`docs/generalization-plan.md` §12 — the one fragile piece of the core-relocation design). Directly relevant to agent-detection work.

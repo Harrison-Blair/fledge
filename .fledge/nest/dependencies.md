@@ -1,45 +1,36 @@
 ---
-generated: 2026-07-08T01:03:26Z
-commit: e44524d1f089dcfe1c1f313f819ec18d9a42eceb
+generated: 2026-07-08T05:28:12Z
+commit: e46c481a047d45ef10bcd79a3326d47932b32868
 agent: fledge-forager
 fledge_version: 0.2.1
 ---
 
 # Dependencies
 
-External dependencies used by the fledge codebase, deduplicated across modules with usage notes.
+External libraries, the internal package dependency direction, and the agent-harness systems fledge targets.
 
-## Go module dependencies (`go.mod`, Go 1.26.4 required)
+## Third-party (go.mod, Go 1.26.4)
 
-- **`github.com/goccy/go-yaml`** (v1.19.2, direct) — YAML parsing/unmarshaling for two things: spec frontmatter (`internal/spec/frontmatter.go`) and adapter `manifest.yaml` files (`internal/bootstrap/registry.go:114`).
-- **`github.com/rogpeppe/go-internal`** (v1.15.0, direct) — supplies the `testscript` package used to run the `cmd/fledge/testdata/*.txtar` acceptance tests (`cmd/fledge/main_test.go`).
-- **`golang.org/x/sys`** (v0.26.0, indirect) — system-level calls (e.g. PID liveness checks in lock handling).
-- **`golang.org/x/tools`** (v0.26.0, indirect) — Go tooling support, indirect transitive dependency.
+- `github.com/goccy/go-yaml v1.19.2` — YAML frontmatter and manifest parsing.
+- `github.com/rogpeppe/go-internal v1.15.0` — `testscript`/txtar engine for CLI acceptance tests.
+- `golang.org/x/sys`, `golang.org/x/tools` — indirect.
 
-## Standard library (heavily used, not third-party but notable)
+Deliberately lean: no cobra/urfave (hand-rolled dispatch in `cli.go`), no external logging. Standard library does the rest (`flag`, `text/template`, `embed`, `os`, `path/filepath`, `io/fs`, `encoding/json`, `syscall` for PID checks).
 
-- `embed` — `internal/bootstrap/bootstrap.go` embeds the entire `core/` and `adapters/` trees into the binary via `//go:embed core adapters`.
-- `text/template` — renders scaffolded adapter files (`generate`/`primitive_map` write policies) in `internal/bootstrap/registry.go`.
-- `os/exec` — shells out to `git` for repo introspection: `git rev-parse` (commit sha), `git ls-files` (file inventory for `scan`), `git check-ignore` (`.fledgeignore` filtering).
-- `flag`, `encoding/json`, `regexp`, `sort`/`slices`, `path/filepath` — CLI argument parsing, JSON output, ID/kebab pattern matching, sorting, and path handling across `internal/cli` and `internal/spec`.
+## Internal package dependency direction
 
-## Runtime / tooling dependencies (not Go packages)
+`cmd/fledge` → `internal/cli` → domain packages. `internal/cli` depends on `repo`, `spec`, `check`, `graph`, `lock`, `scan`, `nest`, `bootstrap`. The domain packages do not depend on `cli` (one-way). Notable couplings:
+- `cli` → `bootstrap` (`LoadAdapters`, `DetectAdapters`, `WriteCore`, `WriteAdapter`) for `init`/`agents`.
+- `cli` → `check` (`Run`) for `preen`; `check` receives the spec set, locked IDs, and `repo.EvidenceDir()`.
+- `cli` → `graph` (`New`, `Cycle`, `Waves`, `Ready`) for `vee`/`ready`/cycle validation in `set`/`new`.
+- `cli` → `nest` (`Doc`, `ClearNest`, `ConcernDocs`, renderers) for `nest`.
+- `bootstrap` → `goccy/go-yaml` for manifests; embeds `core/` + `adapters/` via `//go:embed`.
 
-- **Git** — required at runtime for `fledge scan` (`git ls-files`, `git check-ignore`) and for commit-sha stamping in scaffolded/generated file frontmatter. The project takes a "trust-git" stance per `docs/generalization-plan.md`: no backup machinery for scaffolded files — `.fledge/skills/` is expected to be committed and recoverable via git.
-- **Agent Skills standard** — all currently-targeted harnesses (Claude Code, pi, Codex) and future ones (Cursor, opencode per the generalization plan) load skills natively; fledge's `core/skills/` already conforms to that format.
+## Target agent harnesses (adapters)
 
-## Per-harness adapter dependencies (mechanism, not code dependency)
-
-These aren't Go dependencies but are external mechanisms each adapter maps fledge's 6 primitives onto (`docs/generalization-plan.md` §2, verified/unverified per adapter):
-- **Claude Code** — teammate spawn (`spawn-worker`), `AskUserQuestion` (confirm-gate), tmux for team-loop piping (`internal/bootstrap/adapters/claude/team-loop.md`).
-- **pi** — `fledge_gate` tool + SDK sessions.
-- **Codex** — skills config + `AGENTS.md` auto-load (unverified exact layout, per `docs/generalization-plan.md` open verification V2).
-- **Cursor** (0.3.0, not yet built) — `.cursor/rules/*.mdc` format, unverified.
-- **opencode** (0.3.0, not yet built) — config layout (`opencode.json` / `.opencode/`), unverified.
-
-## Notes
-
-No web framework, database, or network-service dependency anywhere in the codebase — fledge is a purely local, filesystem/git-backed CLI. No Makefile; `go build`/`go test`/`go vet` are used directly (see `README.md`/`CLAUDE.md` for exact invocations).
+Realized as manifests under `internal/bootstrap/adapters/`: **claude** (Tier C — all 6 primitives), **codex** (Tier A), **pi** (Tier A). Detection markers: `.claude/`, `.codex/`, `.pi/`. Planned for 0.3.0 (`docs/generalization-plan.md`): Cursor, opencode. Each harness relies on an external "Agent Skills" convention (a `SKILL.md` + siblings the harness auto-discovers); skill names must be ≤64 chars, lowercase-hyphen.
 
 ## Open Questions
-None observed.
+
+- Whether Claude Code auto-discovers skills via a `settings.json` `skills` array or only by scanning `.claude/skills/` recursively is unverified (`docs/generalization-plan.md` §12) and governs the symlink-vs-array detection strategy — a direct input to agent-detection work.
+- Exact skill/config discovery for Codex (`.codex/skills/` vs `AGENTS.md`), Cursor, and opencode is unverified pending those releases.

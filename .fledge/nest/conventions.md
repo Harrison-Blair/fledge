@@ -1,49 +1,42 @@
 ---
-generated: 2026-07-08T01:03:26Z
-commit: e44524d1f089dcfe1c1f313f819ec18d9a42eceb
+generated: 2026-07-08T05:28:12Z
+commit: e46c481a047d45ef10bcd79a3326d47932b32868
 agent: fledge-forager
 fledge_version: 0.2.1
 ---
 
 # Conventions
 
-Cross-cutting conventions observed across the repository, reconciled from module-level reports.
+Cross-cutting patterns actually observed in the code — follow these so new work matches existing idiom.
 
-## Command dispatch
+## CLI structure
 
-Every CLI command lives in its own `internal/cli/<name>.go` file, registers itself via `register(name, runFunc, usage)` inside a file-level `init()`, and is added to the global `commandOrder` slice — which in turn drives both `fledge --help`/usage text and the generated Claude `settings.local.json` Bash allow-list. Mixed positional/flag argument parsing goes through a shared `parseMixed(fs, args)` helper. Exit codes (`ExitOK/Fail/Usage/Env` = 0/1/2/3) are shared and semantically meaningful across every command; helpers `fail()`, `usageErr()`, `envErr()` print to stderr and return the appropriate code. Output is either human-readable text (`fmt.Printf`) or JSON via `emitJSON()`, selected by a `--json` flag present on every command.
+- **Command registration:** every command file has an `init()` calling `register(name, run, usage)`; `commandOrder` (`cli.go`) is the single ordering used for both usage output and the generated `Bash(fledge …)` allow-list. Add a command → also add it to `commandOrder`.
+- **Exit codes are meaningful and shared:** `ExitOK`=0, `ExitFail`=1 (domain errors: validation, lock held, illegal transition, cycle), `ExitUsage`=2 (bad args), `ExitEnv`=3 (not a fledge repo / env). Error printers `fail`/`usageErr`/`envErr` prepend `fledge: `, print to stderr, return the code.
+- **Uniform `--json`:** every command supports it via `emitJSON()`; JSON is indented. Human text is default; both come from one computed struct.
+- **Shared loader:** most commands use `loadSet()` (`specload.go`) → repo + spec set + brood-held IDs + exit code. `relPath()` renders repo-relative paths for display.
 
-## Spec files are CLI-owned, never hand-edited
+## CLI owns frontmatter (never hand-edit)
 
-IDs (`PLM-###`, `FTHR-###`) and frontmatter are allocated and mutated exclusively through the `fledge` CLI (`new`, `status`, `set`, `criteria`, `brood`). Spec *bodies* (prose after frontmatter) are byte-exact preserved on every write — `internal/spec/frontmatter.go:SplitFrontmatter` never re-serializes the body. Acceptance-criteria checkboxes (`- [ ] AC-N: text`) are toggled by exact byte offset (`internal/spec/criteria.go:SetCriterion`), touching exactly one byte, and only via `fledge criteria check` — never hand-edited. All spec/frontmatter writes are atomic (temp file in the same directory + rename).
+- IDs (`PLM-###`, `FTHR-###`) and all frontmatter are CLI-allocated via `fledge new` / `set` / `status` / `criteria`. `id`, `plumage`, `authored`, `agent`, `fledge_version` are immutable through `set`. Spec *bodies* (prose) are hand-authored.
+- Acceptance criteria are checkbox lists checked **only** via `fledge criteria check` — never by editing a box. `status … fledged` and `abandon --fledged` refuse while boxes are unchecked; `preen` errors on fledged specs with unchecked boxes.
+- Status transitions are governed by maps (`taskTransitions`, `reqTransitions`); `--force` bypasses legality but not enum validity.
 
-## Manifest-driven scaffolding, not code-driven
+## Writes & idempotence
 
-Every adapter's behavior (which files are written, by which policy, and which primitives it provides) is declared entirely in that adapter's `manifest.yaml`. Adding or changing a target harness requires editing a manifest, not Go code (`internal/bootstrap/registry.go:17-20`). File write policies (`generate`, `primitive_map`, `overwrite`, `append_if_missing`, `symlink`, default skip-if-exists) are enumerated once in `ManifestFile` (`registry.go:37-44`) and apply uniformly across harnesses.
+- Spec creation uses `O_CREATE|O_EXCL` (concurrent ID-allocation safety); teardown uses `WriteFileAtomic` (temp + rename).
+- Scaffolding writes are **byte-idempotent** via `writeIfChanged()` (`registry.go:482`) — identical content = no write; this is what the txtar tests depend on.
+- Lock acquisition rolls back if the status write fails after the lock file is created (`brood.go`; `lock_test.go:TestLockRollsBackOnStatusWriteFailure`).
 
-## Byte-idempotent, additive writes
+## Manifest-driven scaffolding
 
-`writeIfChanged` compares on-disk bytes before rewriting scaffolded files, so re-running `fledge init` (without `--refresh`) is a no-op on unchanged files and `fledge init --refresh` only rewrites files whose shipped bytes actually changed. `fledge init` never destroys existing files — reruns only add missing agents/adapters (the "additive invariant", `docs/generalization-plan.md` Q9). Skill prose under `.fledge/skills/` uses skip-if-exists so user edits survive normal reruns; only `--refresh` restores embedded bytes.
+- Adding/changing a harness is editing a `manifest.yaml`, zero Go code. Write policies (`ManifestFile`, documented `registry.go:38`): `generate`/`primitive_map` (render a template), `overwrite` (verbatim, rewrite on diff), `append_if_missing` (additive line), `symlink`, and default (copy, **skip-if-exists** so user edits survive; `init --refresh` re-syncs).
+- **Agent-neutral core:** prose in `core/` must not reference harness-native paths (`.claude/`, `.pi/`) — enforced by `TestCoreNeutral`. Prose branches on *primitives* ("If you provide `spawn-worker`…"), never tier labels.
 
-## Agent-neutral core prose
+## Bird-themed naming
 
-Workflow prose in `internal/bootstrap/core/skills/` (`foraging.md`, `planning.md`, `implementation.md`, `worker-protocols.md`) never names a harness-specific path (`.claude/`, `.pi/`, `.codex/`, `.cursor/`) — enforced by `TestCoreNeutral` (`internal/bootstrap/registry_test.go:140-159`). Cross-references to other skill files use relative, self-referential phrasing ("the template at `templates/scout-report.md` in this skill's directory"), not adapter-specific paths, so the same prose renders correctly regardless of which harness scaffolded it.
+Terminology is bird-themed throughout and load-bearing — match it (see `domain.md`; `README.md` decodes it). nest, plumage, feather, brood, preen (validate), vee (graph), molt (evidence), colony (report), forager/scout/brooder/skua (agent roles). Worker names are `<role>-<species>` from an 18-penguin-species pool; **one species per brooder+skua pair** (`fledge-brooder-adelie` + `fledge-skua-adelie`), freed only after both confirm shutdown.
 
-## Primitive/tier discipline
+## Dogfooding discipline (this repo)
 
-Every primitive named in core prose must be one of the canonical 7 (`TestCorePrimitivesReferenced`, `registry_test.go:116-137`) and must be declared by at least one adapter — an unreferenced primitive is treated as a dead contract. Tiers (A/B/C) are always *derived* from an adapter's declared primitive coverage (`DeriveTier()`), never hand-declared in a manifest — this lets an adapter with an unusual primitive profile (e.g. fan-out but no team loop) self-label the correct tier rather than being miscategorized.
-
-## Terminology: bird-themed throughout
-
-`nest`, `plumage`, `feather`, `brood`, `preen`, `molt`, `forager`, `scout`, `vee`, `skua`, `colony`, `brooder`, `fledged`/`unfledged`. `README.md` decodes the metaphor; match it in new code, commands, and prose rather than introducing generic naming.
-
-## Worker naming (team loop / Tier C)
-
-Spawned workers get unique names from a fixed penguin-species list (emperor, king, adelie, ... macaroni — 18 base names, numeric suffix once exhausted), per `internal/bootstrap/core/skills/fledge-orchestrate/implementation.md` §3.1. The orchestrator itself is never given a species name — it uses whatever identity the harness assigns (e.g. `team-lead` on Claude Code).
-
-## Testing conventions
-
-Acceptance tests use the testscript/txtar format under `cmd/fledge/testdata/*.txtar`; unit tests sit beside their package (`internal/<pkg>/<pkg>_test.go`) using standard `testing.T`, table-driven where practical, with `t.TempDir()` for filesystem isolation and `exec.Command("git", "init", ...)` where a real git repo is needed (scan, lock tests). See `testing.md` for the full breakdown.
-
-## Open Questions
-- How are `commandOrder` and each adapter's generated allow-list kept in sync as new commands are added — is there a check that fails if a command is missing from an allow-list? (unresolved from internal-domain, internal-bootstrap reports)
+The installed `fledge` on `PATH` must match the source. After changing CLI or `internal/bootstrap/...`: `scripts/install.sh` (build → `go install` with version ldflags → `hash -r` → verify `fledge version` == `VERSION`), then `fledge init --refresh` to re-sync `.fledge/skills/` and the `.claude/` adapter, then update the affected `cmd/fledge/testdata/*.txtar` fixtures.
