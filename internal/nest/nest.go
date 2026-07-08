@@ -6,7 +6,11 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+
+	"github.com/goccy/go-yaml"
 
 	"github.com/Harrison-Blair/fledge/internal/spec"
 )
@@ -94,4 +98,74 @@ func ScoutBody(module string) []byte {
 	}
 	s := "\n" + strings.ReplaceAll(string(b), "{{MODULE}}", module)
 	return []byte(s)
+}
+
+// ClearNest removes all .md files directly under contextDir and the entire
+// raw/ subdirectory, then recreates raw/. contextDir itself is not removed.
+func ClearNest(contextDir string) error {
+	matches, err := filepath.Glob(filepath.Join(contextDir, "*.md"))
+	if err != nil {
+		return err
+	}
+	for _, m := range matches {
+		if err := os.Remove(m); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	rawDir := filepath.Join(contextDir, "raw")
+	if err := os.RemoveAll(rawDir); err != nil {
+		return err
+	}
+	return os.MkdirAll(rawDir, 0o755)
+}
+
+// RefreshDoc rebuilds a nest document from its raw bytes b. It parses the
+// existing frontmatter to recover the stored agent and module fields, constructs
+// a Doc with the supplied derived values (generated, commit, version), drops
+// unknown frontmatter keys, and returns the rendered bytes (canonical FM +
+// original body). For Scout kind, generated is used as the authored timestamp.
+// If agentOverride is non-empty it replaces the stored agent field.
+func RefreshDoc(b []byte, kind Kind, generated, commit, agentOverride, version string) ([]byte, error) {
+	fm, body, err := spec.SplitFrontmatter(b)
+	if err != nil {
+		return nil, err
+	}
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal(fm, &parsed); err != nil {
+		return nil, fmt.Errorf("invalid frontmatter: %w", err)
+	}
+	agent := strFromMap(parsed, "agent")
+	if agentOverride != "" {
+		agent = agentOverride
+	}
+	module := strFromMap(parsed, "module")
+
+	d := &Doc{
+		Kind:          kind,
+		Agent:         agent,
+		FledgeVersion: version,
+		Body:          body,
+	}
+	switch kind {
+	case Concern:
+		d.Generated = generated
+		d.Commit = commit
+	case Scout:
+		d.Module = module
+		d.Authored = generated
+	}
+	return d.Render(), nil
+}
+
+// strFromMap extracts a string value from a YAML-decoded map, returning ""
+// when the key is absent or not a string.
+func strFromMap(m map[string]interface{}, key string) string {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprint(v)
 }
