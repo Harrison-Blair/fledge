@@ -112,3 +112,34 @@ ok      github.com/Harrison-Blair/fledge/internal/spec
 - `.fledge/skills/fledge-orchestrate/templates/scout-report.md` — updated
 
 The `.claude/agents/` files in this repo are symlinks to the adapter source, so they automatically reflect the updated source bytes (no separate regeneration step needed).
+
+---
+
+### Post-rebase revalidation (2026-07-07)
+
+Main advanced with `38e483e` (skua redesign) and `c4b34ec` (version bump) before FTHR-007 merged. FTHR-007 rebased cleanly onto `c4b34ec` — no conflicts, no file overlap.
+
+**`.claude/agents` sync check:**
+```
+ls -la .claude/agents/
+diff .claude/agents/fledge-forager.md internal/bootstrap/adapters/claude/agents/fledge-forager.md
+diff .claude/agents/fledge-context-scout.md internal/bootstrap/adapters/claude/agents/fledge-context-scout.md
+```
+Both `.claude/agents/fledge-forager.md` and `.claude/agents/fledge-context-scout.md` are **symlinks** into `internal/bootstrap/adapters/claude/agents/`, so they automatically reflect the updated source bytes. Both `diff` commands returned no output (byte-for-byte match).
+
+**Post-rebase full suite:**
+```
+go test ./... && go vet ./...
+```
+```
+ok      github.com/Harrison-Blair/fledge/cmd/fledge     0.056s
+ok      github.com/Harrison-Blair/fledge/internal/bootstrap     0.005s
+ok      github.com/Harrison-Blair/fledge/internal/check (cached)
+ok      github.com/Harrison-Blair/fledge/internal/cli   0.002s
+ok      github.com/Harrison-Blair/fledge/internal/graph (cached)
+ok      github.com/Harrison-Blair/fledge/internal/lock  (cached)
+ok      github.com/Harrison-Blair/fledge/internal/nest  (cached)
+ok      github.com/Harrison-Blair/fledge/internal/scan  0.008s
+ok      github.com/Harrison-Blair/fledge/internal/spec  (cached)
+```
+`go vet ./...` — no output (clean). No txtar fixture updates were needed; the redesign touched different files (worker-protocols.md, implementation.md, brooder/skua agents, primitives.go) with no overlap with FTHR-007's foraging.md/forager/scout/templates changes.
