@@ -4,14 +4,7 @@ Applies to all files the `fledge-forager` writes into `.fledge/nest/` (the eight
 
 ## Frontmatter (all files)
 
-```yaml
----
-generated: <UTC ISO 8601>
-commit: <full git HEAD sha>
-agent: fledge-forager
-fledge_version: <VERSION file contents>
----
-```
+Frontmatter is stamped by the CLI (`fledge nest scaffold` on creation; `fledge nest stamp <file>` to refresh). The binary is the single source of the schema — do not restate it here.
 
 ## Concern docs
 
@@ -25,7 +18,7 @@ fledge_version: <VERSION file contents>
 
 ```markdown
 ---
-<frontmatter as above>
+<frontmatter stamped by fledge nest scaffold / fledge nest stamp>
 ---
 
 # Context Index

@@ -68,6 +68,8 @@ cd core-repo
 exec git init -q .
 mkdir .claude
 exec fledge init
+grep 'fledge nest scaffold' .claude/agents/fledge-forager.md
+grep 'fledge nest scout --module' .claude/agents/fledge-context-scout.md
 cp $WORK/custom-skill.md .fledge/skills/fledge-orchestrate/SKILL.md
 cp $WORK/custom-skill.md .claude/agents/fledge-brooder.md
 exec fledge init
@@ -79,6 +81,8 @@ stdout 'updated .fledge/skills/fledge-orchestrate/SKILL.md'
 stdout 'updated .claude/agents/fledge-brooder.md'
 ! grep 'my local edit' .fledge/skills/fledge-orchestrate/SKILL.md
 ! grep 'my local edit' .claude/agents/fledge-brooder.md
+grep 'fledge nest scaffold' .claude/agents/fledge-forager.md
+grep 'fledge nest scout --module' .claude/agents/fledge-context-scout.md
 exec fledge init --refresh
 ! stdout 'updated'
 ! stderr 'refreshed'

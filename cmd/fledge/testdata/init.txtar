@@ -24,6 +24,8 @@ exists .claude/skills/fledge-interrogate/SKILL.md
 grep '.fledge/nest/raw/' .gitignore
 grep '.fledge/broods/' .gitignore
 grep 'fledge nest' .claude/settings.local.json
+grep 'fledge nest scaffold' .claude/agents/fledge-forager.md
+grep 'fledge nest scout --module' .claude/agents/fledge-context-scout.md
 
 # second run is fully quiet: creates nothing, and byte-identical files
 # (including generated ones) report exists, not updated
