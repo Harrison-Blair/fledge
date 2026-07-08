@@ -1,0 +1,33 @@
+# fledge nest new: creates known concern docs, rejects unknown, --force, --json
+exec git init -q .
+exec git -c user.email=t@t commit --allow-empty -m init
+
+# nest new creates a known doc in .fledge/nest/
+exec fledge nest new architecture
+stdout '.fledge/nest/architecture.md'
+exists .fledge/nest/architecture.md
+grep 'generated:' .fledge/nest/architecture.md
+grep 'commit:' .fledge/nest/architecture.md
+grep 'fledge_version:' .fledge/nest/architecture.md
+grep '# Architecture' .fledge/nest/architecture.md
+
+# unknown doc → exit 2 (usage error)
+! exec fledge nest new bogus
+stderr 'bogus'
+! exists .fledge/nest/bogus.md
+
+# existing file without --force → exit 1
+! exec fledge nest new architecture
+stderr 'architecture'
+
+# existing file with --force → overwrites, exit 0
+exec fledge nest new architecture --force
+stdout '.fledge/nest/architecture.md'
+exists .fledge/nest/architecture.md
+
+# --json emits {"path": "..."}
+exec fledge nest new modules --json
+stdout '"path"'
+stdout '.fledge/nest/modules.md'
+
+-- .fledge/.gitkeep --
