@@ -155,6 +155,11 @@ func ParseTaskFile(path string, b []byte) (*Task, []string, error) {
 // safeScalar matches strings that need no quoting in our frontmatter.
 var safeScalar = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._/()-]*$`)
 
+// YAMLScalar returns s as a canonical YAML scalar: quoted when necessary
+// (empty, numeric, boolean keyword, or containing unsafe characters), bare otherwise.
+// The same quoting rules apply to all fledge frontmatter fields.
+func YAMLScalar(s string) string { return yamlScalar(s) }
+
 func yamlScalar(s string) string {
 	if s == "" {
 		return `""`

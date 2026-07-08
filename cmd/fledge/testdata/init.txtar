@@ -23,6 +23,7 @@ exists .claude/skills/fledge-orchestrate/SKILL.md
 exists .claude/skills/fledge-interrogate/SKILL.md
 grep '.fledge/nest/raw/' .gitignore
 grep '.fledge/broods/' .gitignore
+grep 'fledge nest' .claude/settings.local.json
 
 # second run is fully quiet: creates nothing, and byte-identical files
 # (including generated ones) report exists, not updated
