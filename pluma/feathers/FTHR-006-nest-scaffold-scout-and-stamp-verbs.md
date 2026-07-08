@@ -2,7 +2,7 @@
 id: FTHR-006
 title: "nest scaffold, scout, and stamp verbs"
 plumage: PLM-003
-status: egg
+status: fledged
 priority: P2
 depends_on: [FTHR-005]
 authored: 2026-07-08T01:52:52Z
