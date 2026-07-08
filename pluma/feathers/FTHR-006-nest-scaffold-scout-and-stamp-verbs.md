@@ -61,15 +61,15 @@ Test-first (write → observe FAIL → implement):
   stamp/refresh helper directly.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass
+- [x] AC-1: The tests listed above were observed failing before implementation and pass
   after.
-- [ ] AC-2: `nest scaffold` clears the whole nest (incl. `raw/`) and recreates nine docs with
+- [x] AC-2: `nest scaffold` clears the whole nest (incl. `raw/`) and recreates nine docs with
   stamped frontmatter, overwriting by default (satisfies PLM-003 FC-3).
-- [ ] AC-3: `nest scout --module <m>` creates `raw/<m>.md` from the scout template with the
+- [x] AC-3: `nest scout --module <m>` creates `raw/<m>.md` from the scout template with the
   scout schema; refuses overwrite without `--force`; missing `--module` is a usage error
   (satisfies PLM-003 FC-5).
-- [ ] AC-4: `nest stamp <file>` refreshes derived fields, preserves `agent`/`module` and the
+- [x] AC-4: `nest stamp <file>` refreshes derived fields, preserves `agent`/`module` and the
   body byte-for-byte, drops unknown keys, detects kind by path with `--kind` override, and
   rejects out-of-nest paths (satisfies PLM-003 FC-6).
-- [ ] AC-5: All verbs honor `--json` and the exit-code taxonomy; `go test ./...` and
+- [x] AC-5: All verbs honor `--json` and the exit-code taxonomy; `go test ./...` and
   `go vet ./...` pass (satisfies PLM-003 FC-8).
