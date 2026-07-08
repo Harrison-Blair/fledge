@@ -2,7 +2,7 @@
 id: FTHR-007
 title: migrate foraging protocol and forager/scout prose to fledge nest
 plumage: PLM-003
-status: egg
+status: fledged
 priority: P2
 depends_on: [FTHR-006]
 oversight: merge
