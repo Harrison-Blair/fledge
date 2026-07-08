@@ -50,7 +50,7 @@ func TestAdapterManifests(t *testing.T) {
 
 // TestPrimitiveCoverage: adapters declare only known primitives; the derived
 // tiers match the shipped profiles (Q5); every primitive named anywhere in the
-// core prose is one of the 7 (no phantom capabilities).
+// core prose is one of the 6 (no phantom capabilities).
 func TestPrimitiveCoverage(t *testing.T) {
 	known := map[string]bool{}
 	for _, p := range PrimitiveOrder {
@@ -80,7 +80,7 @@ func TestPrimitiveCoverage(t *testing.T) {
 	}
 
 	// Any `primitive`-shaped backtick token in core prose that looks like one of
-	// the 7 must be exact — catches renames drifting between contract and prose.
+	// the 6 must be exact — catches renames drifting between contract and prose.
 	tick := regexp.MustCompile("`([a-z-]+)`")
 	err = fs.WalkDir(FS, "core", func(p string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil || d.IsDir() || !strings.HasSuffix(p, ".md") {
@@ -97,7 +97,7 @@ func TestPrimitiveCoverage(t *testing.T) {
 			}
 		}
 		// Every primitive the core prose uses must be coverable by the richest
-		// shipped adapter (claude declares all 7) — trivially true unless the
+		// shipped adapter (claude declares all 6) — trivially true unless the
 		// contract shrinks; keeps prose and contract in lockstep.
 		for p := range used {
 			if !known[p] {

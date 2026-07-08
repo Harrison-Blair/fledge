@@ -2,15 +2,15 @@
 
 The team-loop (Tier C) worker roles, agent-neutral. These are spawned workers: a spawn prompt is a worker's entire context (it inherits no conversation history) and must be fully self-contained. A `spawn-worker` is fresh, named, addressable, killable, may idle, and returns one final message.
 
-A worker's spawn prompt tells it which protocol below to follow (brooder or skua), plus its name, feather ID, worktree/branch, evidence-file path, assigned counterpart's name, and the orchestrator's name (the harness-assigned name the orchestrator supplies — address the orchestrator by exactly that name; e.g. on Claude Code it is `team-lead`).
+A worker's spawn prompt tells it which protocol below to follow (brooder or skua), plus its name, feather ID, worktree/branch, evidence-file path, paired counterpart's name (same species), and the orchestrator's name (the harness-assigned name the orchestrator supplies — address the orchestrator by exactly that name; e.g. on Claude Code it is `team-lead`).
 
 ## Brooder
 
-A fledge brooder is spawned by the orchestrator with one feather spec and a dedicated git worktree; it implements test-first, hands off to its assigned skua, and lives until the feather is merged and verified. It works ONLY inside its worktree — never the main working tree, other worktrees, or spec files on main.
+A fledge brooder is spawned by the orchestrator with one feather spec and a dedicated git worktree; it implements test-first, hands off to its paired skua, and lives until the feather is merged and verified. It works ONLY inside its worktree — never the main working tree, other worktrees, or spec files on main.
 
 ### Communication rules
 
-A brooder may message exactly two parties, addressed by name: its assigned skua (named in its spawn prompt) and the orchestrator (addressed by the orchestrator name given in its spawn prompt). Never message other brooders or other skuas — route boundary questions through the orchestrator.
+A brooder may message exactly two parties, addressed by name: its paired skua (named in its spawn prompt) and the orchestrator (addressed by the orchestrator name given in its spawn prompt). Never message other brooders or other skuas — route boundary questions through the orchestrator.
 
 Two hard prohibitions:
 
@@ -24,7 +24,7 @@ Two hard prohibitions:
 3. **Scope discipline.** Only changes that trace directly to the feather spec. No speculative features, abstractions, or configurability. Don't "improve" adjacent code, comments, or formatting; match existing style. Remove only orphans its own changes created.
 4. **Evidence per criterion.** The evidence file holds one `## AC-N` section per acceptance criterion: the commands run and their verbatim captured output (for AC-1, the failing pre-implementation run; add the passing post-implementation run once it exists). Write each section as its criterion is satisfied, not from memory at the end, and commit the file with the work. The brooder never checks the AC boxes in the spec — its skua does that as it verifies each claim against this file.
 5. **Commit.** Commit work to the branch in logical units. NEVER add a `Co-Authored-By` trailer or any other attribution trailer.
-6. **Handoff to skua.** When tests pass and the feather's acceptance criteria are met, message the assigned skua (`message-peer`) with: feather ID, the feather spec path, worktree path, branch name, the evidence-file path, a short summary of the change (what and why, by file), exact commands to run the feather's tests, and an AC-by-AC self-check (each criterion and the `## AC-N` evidence section that substantiates it).
+6. **Handoff to skua.** When tests pass and the feather's acceptance criteria are met, message the paired skua (`message-peer`) with: feather ID, the feather spec path, worktree path, branch name, the evidence-file path, a short summary of the change (what and why, by file), exact commands to run the feather's tests, and an AC-by-AC self-check (each criterion and the `## AC-N` evidence section that substantiates it).
 7. **Fix loop.** When the skua returns findings, address them in the worktree, commit, and resubmit to the **same** skua with a note on what changed per finding. Do not argue a finding with the skua past one round of clarification — if you believe a finding is wrong, say why once; if the skua holds, either comply or escalate to the orchestrator.
 8. **Post-merge fixes.** If the orchestrator reports that the full suite broke on main after merge, fix the breakage as directed (possibly a fresh worktree or new instructions), with the same test-first rigor.
 
@@ -38,11 +38,11 @@ A brooder never marks its own feather done and never merges. After handing off t
 
 ## Skua
 
-A fledge skua is a persistent worker spawned by the orchestrator for the whole implementation run. It reviews completed feathers from multiple brooders, one review request at a time in arrival order. Being idle between review requests is normal — stay alive and responsive. It reads code and runs tests, but never modifies code, never merges, and never fixes anything itself. Its single permitted write: checking (or unchecking) acceptance-criteria boxes with `fledge criteria check|uncheck FTHR-### <n>` inside the brooder's worktree, and committing that spec-only change to the feather branch — that commit is the audit record that *it* verified each criterion. Never hand-edit a box.
+A fledge skua is an ephemeral worker spawned by the orchestrator together with a brooder at feather dispatch — the pair shares a species name. It reviews exactly one feather from exactly one brooder, across as many review cycles as that feather needs, and lives until the feather is merged and verified. Being idle while its brooder implements is normal — stay alive and responsive. It reads code and runs tests, but never modifies code, never merges, and never fixes anything itself. Its single permitted write: checking (or unchecking) acceptance-criteria boxes with `fledge criteria check|uncheck FTHR-### <n>` inside the brooder's worktree, and committing that spec-only change to the feather branch — that commit is the audit record that *it* verified each criterion. Never hand-edit a box.
 
 ### Communication rules
 
-A skua may message exactly two kinds of parties, addressed by name: the brooder whose review request it is handling, and the orchestrator (addressed by the orchestrator name given in its spawn prompt). Never message other skuas or brooders not in an active review.
+A skua may message exactly two parties, addressed by name: its paired brooder (named in its spawn prompt) and the orchestrator (addressed by the orchestrator name given in its spawn prompt). Never message other skuas or other brooders — route boundary questions through the orchestrator.
 
 Two hard prohibitions:
 
@@ -71,4 +71,4 @@ If a brooder pushes back on a finding with a fact verified to be correct, withdr
 
 ### Lifecycle
 
-A skua persists until the orchestrator requests its shutdown at the end of the run; comply promptly when asked.
+A skua lives until its feather is merged and verified. After sending a pass it stays alive and addressable — the orchestrator may still route a rebase or post-merge-fix re-check to it. The orchestrator requests its shutdown (by name) once its feather's merge is green; comply promptly when asked.

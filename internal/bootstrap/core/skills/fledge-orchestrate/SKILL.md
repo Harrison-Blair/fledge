@@ -21,11 +21,11 @@ Future phases will be added as sibling files to `planning.md`.
 
 ## Primitives and your adapter
 
-Fledge's workflow is **agent-neutral**: it is written to a fixed set of orchestration *primitives* (the 7-primitive contract in `implementation.md`), not to any one agent harness. Your harness provides each primitive through a harness-specific mechanism.
+Fledge's workflow is **agent-neutral**: it is written to a fixed set of orchestration *primitives* (the 6-primitive contract in `implementation.md`), not to any one agent harness. Your harness provides each primitive through a harness-specific mechanism.
 
 Before driving a phase, locate your **adapter documentation** — the files your harness auto-loads (subagent definitions, prompt templates, or a root `AGENTS.md`) point to it. There you will find:
 
-- the **primitive map** — how each fledge primitive is realized in your harness (`confirm-gate`, `read-only-shell`, `write-file`, `run-fledge`, `spawn-worker`, `spawn-pool`, `message-peer`); and
+- the **primitive map** — how each fledge primitive is realized in your harness (`confirm-gate`, `read-only-shell`, `write-file`, `run-fledge`, `spawn-worker`, `message-peer`); and
 - the **piping notes** — harness runtime behavior (teammate display, recovery after resume, permission inheritance) where applicable.
 
 Phases below refer to primitives by name ("run a `confirm-gate`", "spawn a `spawn-worker`"); your adapter's map tells you how. Capability-conditional prose in a phase ("if you provide `spawn-worker`…") branches on which primitives your adapter declares.

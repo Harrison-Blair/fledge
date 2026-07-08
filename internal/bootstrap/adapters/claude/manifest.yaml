@@ -7,7 +7,6 @@ tier_primitives:
   write-file: Write
   run-fledge: Bash(fledge ...)
   spawn-worker: teammate-spawn
-  spawn-pool: persistent-teammate
   message-peer: SendMessage
 files:
   - src: agents/fledge-brooder.md

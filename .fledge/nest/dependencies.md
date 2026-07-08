@@ -30,8 +30,8 @@ External dependencies used by the fledge codebase, deduplicated across modules w
 
 ## Per-harness adapter dependencies (mechanism, not code dependency)
 
-These aren't Go dependencies but are external mechanisms each adapter maps fledge's 7 primitives onto (`docs/generalization-plan.md` §2, verified/unverified per adapter):
-- **Claude Code** — teammate spawn (`spawn-worker`/`spawn-pool`), `AskUserQuestion` (confirm-gate), tmux for team-loop piping (`internal/bootstrap/adapters/claude/team-loop.md`).
+These aren't Go dependencies but are external mechanisms each adapter maps fledge's 6 primitives onto (`docs/generalization-plan.md` §2, verified/unverified per adapter):
+- **Claude Code** — teammate spawn (`spawn-worker`), `AskUserQuestion` (confirm-gate), tmux for team-loop piping (`internal/bootstrap/adapters/claude/team-loop.md`).
 - **pi** — `fledge_gate` tool + SDK sessions.
 - **Codex** — skills config + `AGENTS.md` auto-load (unverified exact layout, per `docs/generalization-plan.md` open verification V2).
 - **Cursor** (0.3.0, not yet built) — `.cursor/rules/*.mdc` format, unverified.

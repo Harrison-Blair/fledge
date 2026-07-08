@@ -32,7 +32,7 @@ What `fledge init` scaffolds. `internal/bootstrap/bootstrap.go` embeds two trees
 
 ### The 7-primitive contract (`internal/bootstrap/primitives.go`)
 
-`PrimitiveOrder`: `confirm-gate`, `read-only-shell`, `write-file`, `run-fledge`, `spawn-worker`, `spawn-pool`, `message-peer`. An adapter's **tier** (A/B/C) is *derived*, never declared, from which primitives it provides (`DeriveTier()`): Tier A = the first 4 (solo planning + implementation), Tier B = adds `spawn-worker` (fan-out foraging), Tier C = adds `spawn-pool` + `message-peer` (team loop). Per `registry_test.go:70`, the Claude adapter derives Tier C, codex and pi derive Tier A.
+`PrimitiveOrder`: `confirm-gate`, `read-only-shell`, `write-file`, `run-fledge`, `spawn-worker`, `message-peer`. An adapter's **tier** (A/B/C) is *derived*, never declared, from which primitives it provides (`DeriveTier()`): Tier A = the first 4 (solo planning + implementation), Tier B = adds `spawn-worker` (fan-out foraging), Tier C = adds `message-peer` (team loop). Per `registry_test.go:70`, the Claude adapter derives Tier C, codex and pi derive Tier A.
 
 ### File write policies (`ManifestFile`, `internal/bootstrap/registry.go:37-44`)
 

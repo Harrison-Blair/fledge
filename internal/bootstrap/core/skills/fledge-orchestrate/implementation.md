@@ -4,9 +4,9 @@ Executes ready feathers from `pluma/feathers/`. This phase runs in the main sess
 
 Your fledge role name is `fledge-orchestrator` — fledge prefix, no species postfix. On a team harness, though, teammates address you by your **harness-assigned** name, which may differ (e.g. on Claude Code the lead is `team-lead`); your adapter's piping file gives it. Use that harness name whenever you tell a worker how to reach you, and use it consistently. (In solo tiers you address the user directly; there are no teammates.)
 
-## Primitives — the 7-primitive contract
+## Primitives — the 6-primitive contract
 
-Fledge's workflow is written to seven primitives. Your adapter declares which it provides (see your adapter's primitive map). This phase branches on that declaration:
+Fledge's workflow is written to six primitives. Your adapter declares which it provides (see your adapter's primitive map). This phase branches on that declaration:
 
 | Primitive | Capability (what the worker may attempt) | Tier required for |
 |---|---|---|
@@ -14,14 +14,13 @@ Fledge's workflow is written to seven primitives. Your adapter declares which it
 | `read-only-shell` | run read-only shell commands | A |
 | `write-file` | write a file | A |
 | `run-fledge` | run any `fledge` CLI subcommand (incl. all spec mutation) | A |
-| `spawn-worker` | spawn a fresh, context-free, named, addressable, killable sub-session that returns one final message | B (foraging), C (brooders) |
-| `spawn-pool` | keep N named workers alive and addressable across requests | C (skua pool) |
+| `spawn-worker` | spawn a fresh, context-free, named, addressable, killable sub-session that returns one final message | B (foraging), C (brooders and skuas) |
 | `message-peer` | send an async by-name message; sender may idle, woken on reply | C (fix loop) |
 
 **Tier derivation (never declared — it falls out of coverage):**
 - **Tier A (solo):** `confirm-gate` + `read-only-shell` + `write-file` + `run-fledge` (4). You implement each feather yourself, gating with the user. Follow §solo.
 - **+Tier B (fan-out foraging):** adds `spawn-worker` (5). You may fan out foraging scouts (planning) and, during implementation, may spawn short-lived worker scouts to read code — but implementation is still solo: you implement each feather yourself. Follow §solo.
-- **+Tier C (team loop):** adds `spawn-pool` + `message-peer` (7). You may run the brooder/skua team loop. Follow §team; fall back to §solo for any feather you choose not to team-ify.
+- **+Tier C (team loop):** adds `message-peer` (6). You may run the brooder/skua team loop. Follow §team; fall back to §solo for any feather you choose not to team-ify.
 
 **Instructed rules (not primitives — stated here at point of use):**
 - "Never hand-edit spec frontmatter the CLI can write" — all spec mutation goes through `run-fledge`.
@@ -69,9 +68,9 @@ For each feather:
 
 ## 3. Team loop (Tier C)
 
-If you provide `spawn-worker` + `spawn-pool` + `message-peer`, you may run the team loop: ephemeral `fledge-brooder` workers (one per feather, each in its own git worktree) paired with a small persistent pool of `fledge-skua` workers. You do not implement or review code yourself — you dispatch, gate, merge, and triage. For the per-primitive mechanism ("spawn-worker = ?" in your harness), see your adapter's map; for harness runtime behavior (teammate display, `/resume` recovery, permission inheritance, team task list), see your adapter's piping file.
+If you provide `spawn-worker` + `message-peer`, you may run the team loop: ephemeral `fledge-brooder`/`fledge-skua` **pairs** — one pair per feather, spawned together at dispatch, the brooder in its own git worktree, its dedicated skua reviewing only that feather. You do not implement or review code yourself — you dispatch, gate, merge, and triage. For the per-primitive mechanism ("spawn-worker = ?" in your harness), see your adapter's map; for harness runtime behavior (teammate display, `/resume` recovery, permission inheritance, team task list), see your adapter's piping file.
 
-Communication topology is strict: each brooder talks only to its assigned skua and to you; skuas talk only to their current brooder and to you. There are no other peer channels — boundary questions between feathers route through you. Workers can technically address any worker by name; this topology is a rule you and they enforce, not a technical limit.
+Communication topology is strict: each brooder talks only to its paired skua and to you; each skua talks only to its paired brooder and to you. There are no other peer channels — boundary questions between feathers route through you. Workers can technically address any worker by name; this topology is a rule you and they enforce, not a technical limit.
 
 Workers inherit no conversation history — a spawn prompt is a worker's entire context and must be fully self-contained (a `spawn-worker` is fresh, named, addressable, killable, may idle, and returns one final message).
 
@@ -83,29 +82,29 @@ For each feather dispatched:
 
 1. **Oversight gate (during):** if the feather's frontmatter has `oversight: during`, STOP and run a `confirm-gate` (decision) to confirm the user is ready to participate before spawning. Do not dispatch it until they confirm; keep dispatching other ready feathers meanwhile. Because the brooder may message only its skua and you, you are the user's proxy for this feather: instruct the brooder in its spawn prompt to surface decision checkpoints to you rather than deciding autonomously, and relay each one to the user and their answer back.
 2. Create a worktree: `git worktree add <scratchpad or .fledge/burrows>/FTHR-### -b feather/FTHR-###-<kebab>` from main.
-3. Assign a skua round-robin from the pool.
-4. Spawn a `fledge-brooder` worker (see your adapter's map), named per the naming scheme below, whose spawn prompt contains: its own name and feather ID, the feather spec path, the worktree path and branch, its evidence-file path (`.fledge/molt/FTHR-###.md`, written inside the worktree) and the duty to record per-criterion evidence there, the assigned skua's name, your harness-assigned orchestrator name (the name the worker must use to reach you — e.g. `team-lead` on Claude Code; see your adapter's piping file), and which `.fledge/nest/` docs to read (from the feather's Affected Modules citations).
-5. Claim the feather: `fledge brood FTHR-### --owner <worker-name> --branch feather/FTHR-###-<kebab>`. This atomically creates the lock (failing loudly if another dispatch already holds it) and sets the feather file's `status: hatching` in one step (you run fledge on main; brooders never touch spec files — the assigned skua is the only worker that mutates one, checking AC boxes via `fledge criteria` in the worktree). From this point until the branch merges, do not edit the dispatched feather's spec file on main — the skua's checked boxes ride the branch and a mid-flight edit conflicts at merge. Track the name→feather mapping in your roster.
+3. Pick the pair's species (naming scheme below) and spawn the feather's dedicated `fledge-skua-<species>` worker (`spawn-worker`, like any other worker), whose spawn prompt contains: its own name, the feather ID and spec path, the worktree path and branch, the evidence-file path (`.fledge/molt/FTHR-###.md`), its paired brooder's name (`fledge-brooder-<species>`), your harness-assigned orchestrator name, and that it reviews this one feather only and lives only until it merges.
+4. Spawn the paired `fledge-brooder-<species>` worker (see your adapter's map), whose spawn prompt contains: its own name and feather ID, the feather spec path, the worktree path and branch, its evidence-file path (`.fledge/molt/FTHR-###.md`, written inside the worktree) and the duty to record per-criterion evidence there, its paired skua's name (same species), your harness-assigned orchestrator name (the name the worker must use to reach you — e.g. `team-lead` on Claude Code; see your adapter's piping file), and which `.fledge/nest/` docs to read (from the feather's Affected Modules citations).
+5. Claim the feather: `fledge brood FTHR-### --owner <worker-name> --branch feather/FTHR-###-<kebab>`. This atomically creates the lock (failing loudly if another dispatch already holds it) and sets the feather file's `status: hatching` in one step (you run fledge on main; brooders never touch spec files — the paired skua is the only worker that mutates one, checking AC boxes via `fledge criteria` in the worktree). From this point until the branch merges, do not edit the dispatched feather's spec file on main — the skua's checked boxes ride the branch and a mid-flight edit conflicts at merge. Track the name→feather mapping in your roster.
 6. Mirror into the shared team task list (your harness's piping file describes how it is kept): create a team task titled `FTHR-###: <title>`, assigned to that brooder, state in-progress. You are the **sole writer** of the team task list — workers never create, claim, or update entries. It is a visibility mirror only; spec frontmatter is the source of truth and wins on any disagreement.
 
-**Skua pool (`spawn-pool`):** size is `ceil(active brooders / 3)`, minimum 1. Spawn `fledge-skua` workers (named per the scheme below) as the active brooder count crosses each multiple of 3; skuas persist until the end of the run. A skua idle between review requests is normal — idle is not completion; it stays alive and addressable.
+A skua idle while its brooder implements is normal — idle is not completion; it stays alive and addressable until its feather's green teardown.
 
-**Naming scheme:** a worker's name is its role name plus a unique identifier drawn from the 18 extant penguin species — `<role>-<species>`, e.g. `fledge-brooder-adelie`, `fledge-skua-emperor`. The name is set at spawn and is how you and other workers address it. The scheme covers every `spawn-worker` you create, including the forager spawned during planning (`fledge-forager-<species>`); scouts (spawned by the forager, never addressed by name) are exempt and take no species. Species identifiers are for spawned workers only — you never take a species (your fledge role is `fledge-orchestrator`; teammates reach you by your harness-assigned name — see §orchestrator identity above and your adapter's piping file). One species per living worker, shared across roles:
+**Naming scheme:** a worker's name is its role name plus a unique identifier drawn from the 18 extant penguin species — `<role>-<species>`, e.g. `fledge-brooder-adelie`, `fledge-skua-emperor`. The name is set at spawn and is how you and other workers address it. The scheme covers every `spawn-worker` you create, including the forager spawned during planning (`fledge-forager-<species>`); scouts (spawned by the forager, never addressed by name) are exempt and take no species. Species identifiers are for spawned workers only — you never take a species (your fledge role is `fledge-orchestrator`; teammates reach you by your harness-assigned name — see §orchestrator identity above and your adapter's piping file). One species per **worker pair** — a feather's brooder and skua share the species (`fledge-brooder-adelie` + `fledge-skua-adelie`); solo spawns like the forager take a species of their own:
 
 `emperor`, `king`, `adelie`, `chinstrap`, `gentoo`, `little`, `yellow-eyed`, `african`, `humboldt`, `magellanic`, `galapagos`, `fiordland`, `snares`, `erect-crested`, `southern-rockhopper`, `northern-rockhopper`, `royal`, `macaroni`
 
-Assign the first unused species; a species frees for reuse only after its worker's shutdown is confirmed. If all 18 species are in use (≥14 brooders plus their skua pool can exceed the list), append a numeric suffix to the first species — `fledge-brooder-adelie-2`, then `-3` — so a full pool never blocks dispatch. Report a one-line roster delta to the user whenever it changes (e.g. `+ fledge-brooder-gentoo → FTHR-007`); give the full roster (name → role → feather) on request. Keep the full name→feather mapping internally — species reuse depends on it.
+Assign the first unused species; a species frees for reuse only after **every** worker bearing it has confirmed shutdown (for a pair: both members). If all 18 species are in use (>18 concurrent pairs), append a numeric suffix to the first species — `adelie-2`, then `-3`, applied to both members of the pair — so a full roster never blocks dispatch. Report a one-line roster delta to the user whenever it changes (e.g. `+ fledge-brooder-gentoo, fledge-skua-gentoo → FTHR-007`); give the full roster (name → role → feather) on request. Keep the full name→feather mapping internally — species reuse depends on it.
 
 ### 3.2 On approval
 
 A feather is cleared for merge in one of two ways: its skua messages you a pass (having checked every AC box in the worktree and committed that change), or — after a skua's 3rd-rejection escalation (§4), presenting the unresolved findings and cycle history — the user chooses (decision gate) to ship anyway (waiving the findings) rather than send it back for another cycle. On a user override, record the accepted (waived) findings on the feather file and use `--force` on the criteria-gated commands, so the decision is auditable. Then:
 
 1. **Oversight gate (merge):** if the feather has `oversight: merge`, hold the branch unmerged. Show the user the full diff and the skua's verdict, then run a `confirm-gate` (review): Merge / Make changes ("Make changes" routes the feedback to the brooder as findings and re-gates after the fix).
-2. Merge the branch to main (prefer a regular merge). On conflict, have the brooder rebase its branch and re-run its tests; because the rebase produces hand-resolved changes the skua never saw, route the rebased diff back through the assigned skua for a lightweight re-check (tests pass + resolution looks right) before you merge.
+2. Merge the branch to main (prefer a regular merge). On conflict, have the brooder rebase its branch and re-run its tests; because the rebase produces hand-resolved changes the skua never saw, route the rebased diff back through the paired skua for a lightweight re-check (tests pass + resolution looks right) before you merge.
 3. Run the full test suite on main.
-   - **Green:** verify the criteria arrived with the merge — `fledge criteria FTHR-### --json` shows every box checked and `.fledge/molt/FTHR-###.md` exists on main — then run `fledge abandon FTHR-### --fledged`. Commit the spec update, and mark the mirrored team task completed yourself (never rely on a worker to do it). Then remove the worktree (`git worktree remove`), delete the branch, and request graceful shutdown of the brooder by name (`message-peer`); its species frees only after shutdown is confirmed.
-   - **Red:** the combination broke — the brooder is still alive and its worktree and branch survive (teardown happens only on green). Send it the failure (`message-peer`); it fixes in its worktree and commits to the same branch. Route that fix commit through the assigned skua for a lightweight re-check, then merge the fix commit to main and re-run the suite. Loop until green, then proceed to the green teardown above. The fix reaches main only through this merge — never leave it stranded on the (already-merged) branch.
-4. Re-evaluate the ready set and dispatch newly unblocked feathers. Shrink nothing: existing skuas stay for the run.
+   - **Green:** verify the criteria arrived with the merge — `fledge criteria FTHR-### --json` shows every box checked and `.fledge/molt/FTHR-###.md` exists on main — then run `fledge abandon FTHR-### --fledged`. Commit the spec update, and mark the mirrored team task completed yourself (never rely on a worker to do it). Then remove the worktree (`git worktree remove`), delete the branch, and request graceful shutdown of **both** the brooder and its paired skua by name (`message-peer`); the pair's species frees only after both shutdowns are confirmed.
+   - **Red:** the combination broke — the pair is still alive and the worktree and branch survive (teardown happens only on green). Send the brooder the failure (`message-peer`); it fixes in its worktree and commits to the same branch. Route that fix commit through the paired skua for a lightweight re-check, then merge the fix commit to main and re-run the suite. Loop until green, then proceed to the green teardown above. The fix reaches main only through this merge — never leave it stranded on the (already-merged) branch.
+4. Re-evaluate the ready set and dispatch newly unblocked feathers.
 5. **Plumage closeout:** if that was the last unfinished feather of its plumage, verify each plumage acceptance criterion — citing which feathers and evidence files satisfy it — and present that AC-by-AC accounting through a `confirm-gate` (review). On "Accept", check each box with `fledge criteria check PLM-### <n>` on main, run `fledge status PLM-### fledged`, and commit the spec update. On "Make changes", the gap goes back into the run before the plumage can close.
 
 ## 4. Escalations
@@ -119,7 +118,7 @@ An escalated brooder stays alive and paused; other feathers keep flowing while i
 
 ## 5. End of run
 
-When no feathers remain in the set that are unfinished and dispatchable, gracefully shut down each skua by name, then reconcile the team task list (Tier C): every team task dispatched this run should be completed — complete any stragglers yourself and note discrepancies. Then report:
+When no feathers remain in the set that are unfinished and dispatchable, verify every pair from the run has been torn down — gracefully shut down any straggler by name — then reconcile the team task list (Tier C): every team task dispatched this run should be completed — complete any stragglers yourself and note discrepancies. Then report:
 
 - feathers completed (merged, suite green) vs. blocked or escalated, with reasons
 - merges performed and the final suite status on main
@@ -131,9 +130,8 @@ Resume does not restore workers — after a resume, no worker from the transcrip
 
 1. Treat all remembered workers as gone; clear the roster.
 2. Inventory reality: `git worktree list`, feather branches, `fledge broods` (owner, branch, and pid-alive per held lock), and `fledge vee`. Feathers with a held lock (equivalently `status: hatching`) and a surviving worktree are the resume set. Locks whose feather has no surviving worktree are stale — release them with `fledge abandon FTHR-### --force`, then set their status explicitly (`fledge status FTHR-### pipping --force`) so they re-enter the ready set.
-3. For each, respawn a fresh brooder (a new species is fine) into the **existing** worktree and branch. Its spawn prompt must say partial work may exist: inspect commits and the diff before continuing, and re-verify the test-first evidence chain — if the captured failing-test output was lost with the old worker, re-derive it (revert/stash) or flag the gap to the skua.
-4. Respawn the skua pool at the computed size and reassign round-robin.
-5. Reconcile the team task list against spec frontmatter (complete or create entries as needed).
-6. Report the reconstructed roster to the user before proceeding.
+3. For each, respawn a fresh **pair** (a new species is fine — one species for both members) into the **existing** worktree and branch. The brooder's spawn prompt must say partial work may exist: inspect commits and the diff before continuing, and re-verify the test-first evidence chain — if the captured failing-test output was lost with the old worker, re-derive it (revert/stash) or flag the gap to the skua. The skua's spawn prompt names its paired brooder and notes an earlier skua may have already checked some AC boxes on the branch — audit rather than assume.
+4. Reconcile the team task list against spec frontmatter (complete or create entries as needed).
+5. Report the reconstructed roster to the user before proceeding.
 
 For solo tiers, recovery is simpler: re-derive state from `fledge broods` + `git worktree list` + `fledge vee`, resume into existing worktrees, and continue from step 2 of §solo per feather.

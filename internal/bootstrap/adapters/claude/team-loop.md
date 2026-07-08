@@ -1,6 +1,6 @@
 # Claude Code — fledge team-loop piping
 
-Harness runtime behavior for fledge's Tier C team loop on Claude Code. The workflow *logic* (brooder/skua roles, fix loop, merge gating, pool sizing, recovery steps) lives in the agent-neutral core skill at `.fledge/skills/fledge-orchestrate/implementation.md`; this file covers only how Claude Code realizes the piping. For each primitive's mechanism mapping, see `fledge-adapter.md` in this directory.
+Harness runtime behavior for fledge's Tier C team loop on Claude Code. The workflow *logic* (brooder/skua pairing, fix loop, merge gating, recovery steps) lives in the agent-neutral core skill at `.fledge/skills/fledge-orchestrate/implementation.md`; this file covers only how Claude Code realizes the piping. For each primitive's mechanism mapping, see `fledge-adapter.md` in this directory.
 
 ## Teammate display (tmux)
 
@@ -28,9 +28,8 @@ You are the **sole writer** of the shared team task list. Create one team task p
 
 1. Treat all remembered teammates as gone; clear the roster.
 2. Inventory reality: `git worktree list`, feather branches, `fledge broods` (owner, branch, pid-alive), `fledge vee`. Resume set = held lock + surviving worktree.
-3. Respawn a fresh brooder teammate (a new species is fine) into the **existing** worktree and branch; its spawn prompt must say partial work may exist.
-4. Respawn the skua pool at `ceil(active brooders / 3)` (min 1) and reassign round-robin.
-5. Reconcile the team task list against spec frontmatter.
+3. Respawn a fresh brooder+skua **pair** (a new species is fine — one species for both) into the **existing** worktree and branch; the brooder's spawn prompt must say partial work may exist, and the skua's must note an earlier skua may have already checked some AC boxes on the branch.
+4. Reconcile the team task list against spec frontmatter.
 
 Manual reconstruction via `fledge vee` + `fledge broods` + `git worktree list` is the resume method; `/resume` does not restore the team.
 

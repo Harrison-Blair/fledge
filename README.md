@@ -47,9 +47,9 @@ the harness auto-loads, and (for Claude) `team-loop.md` runtime notes. Adapters
 are defined by a `manifest.yaml` in this repo — adding a harness requires no Go
 code.
 
-## The 7-primitive contract
+## The 6-primitive contract
 
-The core workflow is written against seven orchestration *primitives*, not any
+The core workflow is written against six orchestration *primitives*, not any
 harness's tool names. An adapter's **tier** is derived from which primitives it
 provides — never declared:
 
@@ -60,7 +60,6 @@ provides — never declared:
 | `write-file` | write a file | A |
 | `run-fledge` | run any `fledge` subcommand | A |
 | `spawn-worker` | spawn a fresh, named, addressable sub-session | B |
-| `spawn-pool` | keep N named workers alive across requests | C |
 | `message-peer` | async by-name messaging between workers | C |
 
 - **Tier A** — solo planning + implementation: **pi**, **Codex**

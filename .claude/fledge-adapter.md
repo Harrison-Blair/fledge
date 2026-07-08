@@ -4,7 +4,7 @@ fledge's agent-neutral workflow lives at `.fledge/skills/fledge-orchestrate/` (C
 
 ## Derived tier
 
-**Tier C** — provided: `confirm-gate`, `read-only-shell`, `write-file`, `run-fledge`, `spawn-worker`, `spawn-pool`, `message-peer`.
+**Tier C** — provided: `confirm-gate`, `read-only-shell`, `write-file`, `run-fledge`, `spawn-worker`, `message-peer`.
 
 ## Primitive map
 
@@ -15,7 +15,6 @@ fledge's agent-neutral workflow lives at `.fledge/skills/fledge-orchestrate/` (C
 | `write-file` | write a file | Write | yes | A |
 | `run-fledge` | run any fledge CLI subcommand (incl. all spec mutation) | Bash(fledge ...) | yes | A |
 | `spawn-worker` | spawn a fresh, context-free, named, addressable sub-session returning one final message | teammate-spawn | yes | B |
-| `spawn-pool` | keep N named workers alive and addressable across requests | persistent-teammate | yes | C |
 | `message-peer` | send an async by-name message; sender may idle, woken on reply | SendMessage | yes | C |
 
 ## Harness piping

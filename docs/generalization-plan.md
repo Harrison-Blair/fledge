@@ -4,6 +4,13 @@ Status: **locked design** — 23 decisions resolved through interrogation. Ready
 Target: fledge 0.1.0 → 0.2.0.
 Author: planning session with pi (interrogation transcript preserved inline as Q1–Q23 below).
 
+> **Amendment (2026-07):** `spawn-pool` was removed from the primitive contract.
+> Skuas are now ephemeral, paired 1:1 with brooders (spawned together at
+> dispatch via `spawn-worker`, sharing one species, torn down together after
+> merge). The contract is 6 primitives; Tier C = Tier B + `message-peer`. Any
+> mention below of a persistent skua pool, `ceil(active brooders / 3)` sizing,
+> round-robin assignment, or `spawn-pool` is superseded.
+
 ## 0. Thesis
 
 fledge is two layers:

@@ -105,8 +105,8 @@ scaffolds. This is the part to understand before touching init.
   driven entirely by its **`manifest.yaml`** (`registry.go` → `Manifest`) — the
   detector, the `tier_primitives` map, and a file list with per-file write
   policies. **Adding or changing a harness is editing a manifest, zero Go code.**
-- **The 7 primitives** (`primitives.go`, `PrimitiveOrder`): `confirm-gate`,
-  `read-only-shell`, `write-file`, `run-fledge`, `spawn-worker`, `spawn-pool`,
+- **The 6 primitives** (`primitives.go`, `PrimitiveOrder`): `confirm-gate`,
+  `read-only-shell`, `write-file`, `run-fledge`, `spawn-worker`,
   `message-peer`. An adapter declares which mechanism realizes each; its **tier**
   (A/B/C) is *derived* from that coverage via `DeriveTier`, never declared.
 

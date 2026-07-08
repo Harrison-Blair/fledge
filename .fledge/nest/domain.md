@@ -39,15 +39,15 @@ Glossary of fledge's bird-themed vocabulary and orchestration concepts, reconcil
 
 - **Forager** — the planning-phase worker (needs `spawn-worker`) that orchestrates scouts and synthesizes their reports into `.fledge/nest/`. One-shot: no further work after its final message.
 - **Scout** — a cheap, unnamed forager subagent assigned one module and an explicit file list; writes exactly one raw report to `.fledge/nest/raw/<module>.md`, then self-terminates.
-- **Brooder** — an ephemeral team-loop (Tier C) worker, one per feather, one dedicated git worktree; implements test-first and hands off to its assigned skua.
-- **Skua** — a persistent team-loop worker that reviews a brooder's completed feather (re-runs tests, audits test-first evidence, reports approval/findings to the orchestrator).
+- **Brooder** — an ephemeral team-loop (Tier C) worker, one per feather, one dedicated git worktree; implements test-first and hands off to its paired skua.
+- **Skua** — an ephemeral team-loop worker paired 1:1 with a brooder (same species), spawned together at dispatch; reviews that brooder's completed feather (re-runs tests, audits test-first evidence, reports approval/findings to the orchestrator) and is torn down with its brooder after merge.
 - **Orchestrator** — the user-proxying role driving the implementation phase; never given a species name — uses whatever identity the harness assigns (e.g. `team-lead` on Claude Code).
-- **Species** — the unique per-worker identifier assigned on spawn: a penguin name (emperor, king, adelie, ...) with a numeric suffix once the 18-name base list is exhausted.
+- **Species** — the unique identifier assigned on spawn: a penguin name (emperor, king, adelie, ...) with a numeric suffix once the 18-name base list is exhausted. A brooder/skua pair shares one species; solo spawns take their own.
 
 ## Harness/adapter concepts
 
 - **Harness** — a target agent execution environment: currently Claude Code, pi, Codex (0.2.0); Cursor, opencode planned for 0.3.0.
-- **Primitive** — one of 7 canonical orchestration capabilities a harness may provide: `confirm-gate`, `read-only-shell`, `write-file`, `run-fledge`, `spawn-worker`, `spawn-pool`, `message-peer`.
+- **Primitive** — one of 6 canonical orchestration capabilities a harness may provide: `confirm-gate`, `read-only-shell`, `write-file`, `run-fledge`, `spawn-worker`, `message-peer`.
 - **Tier** — capability level (A = solo, B = adds fan-out foraging, C = adds team loop) *derived* from an adapter's declared primitive coverage, never hand-declared.
 - **Adapter** — a manifest + scaffolded files mapping fledge's primitives to one harness's actual mechanisms; format-only, zero Go code per new harness.
 - **Core skill** — agent-neutral workflow prose (`fledge-orchestrate`, `fledge-interrogate`), written identically to `.fledge/skills/` regardless of harness.

@@ -14,7 +14,7 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-// Manifest is an adapter's single source of truth: detector, the 7-row
+// Manifest is an adapter's single source of truth: detector, the 6-row
 // primitive coverage (which derives the tier), the file map (source → target),
 // and the optional harness piping file. Stays in the binary; never clutters the
 // target repo. Adding a new harness = adding a manifest.yaml, zero Go code.

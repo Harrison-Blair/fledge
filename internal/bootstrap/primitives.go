@@ -1,6 +1,6 @@
 package bootstrap
 
-// PrimitiveOrder is the canonical order of fledge's 7 orchestration primitives.
+// PrimitiveOrder is the canonical order of fledge's 6 orchestration primitives.
 // Adapters declare subsets of these; the orchestration core is written to them.
 var PrimitiveOrder = []string{
 	"confirm-gate",
@@ -8,7 +8,6 @@ var PrimitiveOrder = []string{
 	"write-file",
 	"run-fledge",
 	"spawn-worker",
-	"spawn-pool",
 	"message-peer",
 }
 
@@ -21,7 +20,6 @@ var primitiveDesc = map[string]string{
 	"write-file":     "write a file",
 	"run-fledge":     "run any fledge CLI subcommand (incl. all spec mutation)",
 	"spawn-worker":   "spawn a fresh, context-free, named, addressable sub-session returning one final message",
-	"spawn-pool":     "keep N named workers alive and addressable across requests",
 	"message-peer":   "send an async by-name message; sender may idle, woken on reply",
 }
 
@@ -32,7 +30,6 @@ var primitiveTier = map[string]string{
 	"write-file":      "A",
 	"run-fledge":      "A",
 	"spawn-worker":    "B",
-	"spawn-pool":      "C",
 	"message-peer":    "C",
 }
 
@@ -40,7 +37,7 @@ var primitiveTier = map[string]string{
 var TierPrimitives = map[string][]string{
 	"A": {"confirm-gate", "read-only-shell", "write-file", "run-fledge"},
 	"B": {"confirm-gate", "read-only-shell", "write-file", "run-fledge", "spawn-worker"},
-	"C": {"confirm-gate", "read-only-shell", "write-file", "run-fledge", "spawn-worker", "spawn-pool", "message-peer"},
+	"C": {"confirm-gate", "read-only-shell", "write-file", "run-fledge", "spawn-worker", "message-peer"},
 }
 
 // DeriveTier returns the highest tier whose required primitive set is fully
