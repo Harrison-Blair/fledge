@@ -1,59 +1,78 @@
 ---
-generated: 2026-07-06T23:33:05Z
-commit: b701cf5a12a99b5adf9538e83f51178d4dead0c2
-agent: fledge-context-gatherer
-fledge_version: 0.1.0
+generated: 2026-07-08T01:03:26Z
+commit: e44524d1f089dcfe1c1f313f819ec18d9a42eceb
+agent: fledge-forager
+fledge_version: 0.2.1
 ---
 
 # Entry Points & Public Interfaces
 
-How execution enters fledge and the full command surface it exposes.
+## Binary entry point
 
-## Process entry
-- **`cmd/fledge/main.go:main`** — the only executable entry point. It calls `internal/cli.Run(os.Args[1:])` and exits with the returned code.
-- **`internal/cli.Run(args []string) int`** — top-level dispatcher. Looks up the subcommand in the init-time registry (`internal/cli/cli.go:commands`); on an unknown command it prints usage and returns `ExitUsage`.
+`func main()` at `cmd/fledge/main.go:9` — the sole entry point. Delegates immediately to `cli.Run(os.Args[1:])` and calls `os.Exit` with the returned code.
 
-## Build & run
-- Build: `go build ./cmd/fledge` (produces `/fledge`, git-ignored). Version can be stamped at build time: `-ldflags "-X github.com/Harrison-Blair/fledge/internal/cli.binaryVersion=x.y.z"` (`internal/cli/version.go`).
-- Run without building: `go run ./cmd/fledge <command>`.
-- Test: `go test ./...` (runs both the txtar e2e suite and per-package unit tests).
+## Build / install / run
 
-## Exit-code taxonomy (`internal/cli/cli.go`)
-- `0` `ExitOK` — success.
-- `1` `ExitFail` — domain failure: check findings, lock held, illegal status transition, dependency cycle, file I/O error.
-- `2` `ExitUsage` — usage error: unknown command, bad flag syntax.
-- `3` `ExitEnv` — environment error: not in a git repo, or `.fledge/` missing where required.
+```sh
+go build ./...                    # build everything
+go build -o fledge ./cmd/fledge   # build the CLI binary
+go install ./cmd/fledge           # install to $(go env GOPATH)/bin
+go vet ./...
+```
 
-## Command surface
-All commands accept `--json` for structured output alongside human-readable text.
+After changing CLI or `internal/bootstrap/...` code, reinstall and verify the installed binary matches source before relying on it:
 
-| Command | Args | Key flags | Purpose |
-|---|---|---|---|
-| `init` | — | — | Scaffold `.fledge/` (spec dirs, default `.fledgeignore`) and append per-run intermediates to `.gitignore`. Idempotent (reports "exists" on re-run). |
-| `scan` | — | — | Inventory repo files grouped into modules, honoring `.fledgeignore`; output byte-compatible with the retired scan script. |
-| `new req` | — | `--title`*, `--priority`, `--agent` | Create a requirement; allocates next `PLM-NNN`; status defaults to `draft`; default agent `fledge-orchestrate/planning`. |
-| `new task` | — | `--title`*, `--req`*, `--depends-on`, `--priority`, `--oversight`, `--force` | Create a task; allocates next `FTHR-NNN`; status computed from deps (ready if all deps done, else blocked). Linking to a `draft` requirement requires `--force`. |
-| `check` | — | `--strict` | Run all validation rules; `--strict` promotes warnings to errors. Findings → `ExitFail`. |
-| `ready` | — | — | List tasks with all deps done and not locked, sorted by priority then ID. |
-| `graph` | `[PLM-NNN]` | `--format {text\|dot\|json}` | Render the dependency graph; optional requirement filter limits to that requirement's subgraph plus dependency closure; detects cycles (→ `ExitFail`). |
-| `status` | `ID [new-status]` | `--force` | View or transition a requirement/task status; enforces legal transitions unless `--force`. |
-| `set` | `ID field value` | — | Update a mutable field (`priority`, `oversight`, `depends_on`, `title`); rejects immutable fields; cycle-checks `depends_on`. |
-| `lock` | `FTHR-NNN` | `--owner`*, `--branch` | Acquire an exclusive lock; auto-sets status to in-progress; branch defaults to current git branch; rolls back on status-write failure. |
-| `unlock` | `FTHR-NNN` | `--done`, `--force` | Release a lock; `--done` sets status to done first; `--force` skips status changes and tolerates a missing lock. |
-| `locks` | — | — | List active locks with owner, timestamp, branch, and PID-liveness indicator. |
-| `version` | — | — | Print the binary version. |
+```sh
+go install ./cmd/fledge
+hash -r
+command -v fledge
+fledge version                    # must match the VERSION file
+```
 
-(*) required flag.
+## CLI commands (`internal/cli`, dispatched from `commandOrder`)
 
-## Library public interfaces (for internal callers)
-- `internal/spec`: `Load`, `ParseRequirementFile`, `ParseTaskFile`, `SplitFrontmatter`, `NextID`, `Kebab`, `RequirementBody`, `TaskBody`, and `Requirement`/`Task` methods `Frontmatter`/`Render`/`Save`.
-- `internal/check`: `Run(set, lockedTasks) []Finding`, `HasErrors`.
-- `internal/graph`: `New(tasks)`, then `Cycle`, `Waves`, `Ready`.
-- `internal/lock`: `Acquire`, `Release`, `Get`, `List`.
-- `internal/repo`: `Find`, plus path resolvers for `.fledge/`, spec dirs, VERSION, HEAD.
-- `internal/scan`: `Run(root) (*Result, error)`.
+16 commands, each in its own `internal/cli/<name>.go`, registered via `register(name, runFunc, usage)`: `init`, `agents`, `scan`, `new`, `preen`, `ready`, `vee`, `colony`, `unfledged`, `status`, `set`, `criteria`, `brood`, `abandon`, `broods`, `version`. Every command supports `--json`.
 
-## Graph output formats (`internal/cli/graph.go`)
-- **text** — waves numbered 1..N, tasks per wave annotated with status.
-- **dot** — Graphviz `rankdir=LR`; done nodes filled lightgray, in-progress lightyellow.
-- **json** — `{nodes:[{id,title,status,requirement,depends_on}], waves:[[...]]}`.
+- `fledge init [--agent] [--list-agents] [--refresh]` — scaffolds `.fledge/skills/` (core, agent-neutral) + harness adapter(s) into a repo; idempotent, additive; `--refresh` re-syncs fledge-owned files to shipped bytes.
+- `fledge scan` — file inventory grouped by top-level module, `.fledgeignore`-filtered, with byte/file counts (used by the forager pipeline as the authoritative scout work-list).
+- `fledge new` — allocates a new plumage or feather ID and scaffolds its spec file from an embedded template.
+- `fledge status` — reads/transitions a spec's lifecycle status, enforcing legal-transition tables (`internal/cli/status.go`); `--force` bypasses legality but not enum validity.
+- `fledge set` — updates frontmatter fields (priority, oversight, depends_on, title); rejects edits to CLI-owned/immutable fields.
+- `fledge criteria [check|uncheck]` — lists or toggles acceptance-criteria checkboxes by number or `AC-N` label; the only sanctioned way to check a box.
+- `fledge preen` — runs the `internal/check` validation engine over the spec set; supports a strict mode where warnings become blocking.
+- `fledge ready` — lists feathers eligible to start (deps met, not brooded).
+- `fledge vee [PLM-###]` — dependency graph visualization (waves, cycle detection with path reporting, text/dot/json output).
+- `fledge brood` / `fledge abandon` / `fledge broods` — claim, release, and list feather locks (`.fledge/broods/`).
+- `fledge colony` — repo-wide progress report: counts, per-requirement completion, blocked-task detail, active locks, degraded-data issues.
+- `fledge unfledged [--plumage] [--feathers] [--json]` — lists all non-`fledged` plumage/feathers, priority-then-ID ordered, with type filters.
+- `fledge agents` — adapter inventory with derived tier and per-repo scaffolding status.
+- `fledge version` — prints the CLI version (compare against `VERSION` file).
+
+## Core spec/domain APIs (Go, `internal/spec`, `internal/check`, `internal/graph`, `internal/lock`, `internal/scan`)
+
+- `spec.Load(reqDir, taskDir) *Set` — parses all specs; `Set.Req(id)`, `Set.Task(id)` lookups; `Set.Errors`, `Set.UnknownFields` surface parse/schema problems.
+- `check.Run(set, lockedTasks, evidenceDir) []Finding`, `check.HasErrors(findings) bool` — validation entry points.
+- `graph.New(tasks) *Graph` — `Cycle()`, `Waves()`, `Ready()`.
+- `lock.Acquire(dir, rec) (*HeldError)`, `lock.Release(dir, task)`, `lock.Get(dir, task)`, `lock.List(dir)`.
+- `scan.Run(root) (*Result, error)`.
+
+## Bootstrap/adapter public API (`internal/bootstrap`)
+
+- `LoadAdapters() []*Manifest` — all adapter manifests, sorted by name, skipping `_`-prefixed dirs.
+- `FindAdapter(name string) *Manifest`.
+- `DetectAdapters(root string) []*Manifest` — auto-detects harnesses present in a repo via each manifest's `Detector.Exists` marker path.
+- `Manifest.Provides(p string) bool`, `Manifest.Tier() string` (`"A"|"B"|"C"|""`).
+- `Manifest.WriteAdapter(root, commandOrder, refresh)` — scaffolds a harness's files; returns created/updated/skipped classification.
+- `WriteCore(root, refresh)` — scaffolds `.fledge/skills/` from the embedded `core/` tree.
+- `DeriveTier(provided map[string]bool) string`.
+- `CheckDuplicateSkills(root string) error` — guard against pre-existing real (non-symlink) skill copies.
+- `CoreSkillNames() []string` — currently `fledge-orchestrate`, `fledge-interrogate`.
+
+## Orchestration entry points (agent-facing, not code)
+
+- `.fledge/skills/fledge-orchestrate/SKILL.md` (scaffolded from `internal/bootstrap/core/skills/fledge-orchestrate/SKILL.md`) — the routing entrypoint agents read first; routes to `planning.md` (new feature/spec work) or `implementation.md` (implementing feathers).
+- `.fledge/skills/fledge-interrogate/SKILL.md` — plumage/feature design stress-testing interview script.
+- `.claude/fledge-adapter.md` (or the equivalent per-harness adapter file) — the generated primitive map for the current repo's detected harness.
+
+## Open Questions
+None observed.

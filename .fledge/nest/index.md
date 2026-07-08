@@ -1,42 +1,40 @@
 ---
-generated: 2026-07-06T23:33:05Z
-commit: b701cf5a12a99b5adf9538e83f51178d4dead0c2
-agent: fledge-context-gatherer
-fledge_version: 0.1.0
+generated: 2026-07-08T01:03:26Z
+commit: e44524d1f089dcfe1c1f313f819ec18d9a42eceb
+agent: fledge-forager
+fledge_version: 0.2.1
 ---
 
 # Context Index
 
-Generated context for fledge — a single-binary Go CLI for spec-driven development that manages PLM/FTHR markdown specs under `.fledge/`. Load docs below based on the `Read this when` routing lines.
-
 ## architecture.md
-Describes the three-tier layering (cmd entry → internal/cli command layer → focused core packages), the dependency direction, and cross-cutting design principles: determinism/byte-preservation, atomic mutation, lock/status consistency invariants, findings-vs-errors, and how the `.claude/` agent layer sits above the CLI.
-Read this when: you need the big-picture shape, how packages relate, or the rationale behind determinism/atomicity/consistency decisions before changing cross-package behavior.
+Describes the three-part system: the deterministic `internal/cli`+domain-package layer, the embedded `internal/bootstrap` scaffolding/adapter layer (7-primitive contract, tier derivation, manifest-driven adapters, file write policies), and the `pluma/` spec corpus they both operate on — plus exactly how the layers interact (init scaffolds → agent uses skill → agent drives CLI).
+Read this when: you need to understand how a change ripples across layers, are about to touch `internal/bootstrap` or add/change a harness adapter, or need the big picture before a cross-cutting change.
 
 ## modules.md
-Per-module map of the repo: `root`, `cmd`, and each `internal/*` sub-package (cli, spec, check, graph, lock, repo, scan) with purpose, key files, and a "Look here for" pointer.
-Read this when: you need to locate which file or package owns a given concern.
+Repo map organized by `fledge scan` module (root, cmd, docs, internal/bootstrap, internal domain packages, pluma): purpose, key files, and a "Look here for" pointer per module.
+Read this when: you know roughly what you need to change but not which files/directory own it — start here to orient before diving into a specific concern doc.
 
 ## conventions.md
-The codebase's operative patterns: one-command-per-file, fixed-key-order frontmatter and canonical quoting, ID/filename formats, the enum sets (status/priority P0–P3/oversight) and their transition rules, field mutability, findings-vs-errors, atomic writes, exit-code taxonomy, dual text/JSON output, and test conventions.
-Read this when: you are writing or reviewing code and need to match existing style, enum values, transition rules, or error/output conventions.
+Cross-cutting patterns actually observed in the code: command-registration pattern, CLI-owns-frontmatter discipline, manifest-driven scaffolding, byte-idempotent writes, agent-neutral core-prose rules, primitive/tier discipline, bird-themed naming, worker-species naming, testing conventions.
+Read this when: writing new code in this repo and you want it to match existing idiom — especially before adding a CLI command, a scaffolded file, or touching spec frontmatter.
 
 ## data-model.md
-Authoritative field-by-field definitions of the core types — `Requirement`, `Task`, `Set`/`FileError`, `check.Finding`, `graph.Graph`, `lock.Record`, `scan.Module`/`Result` — plus the status/priority/oversight constants and frontmatter key order.
-Read this when: you need exact struct fields, valid enum values, or the frontmatter schema for specs.
+Every core Go type (`Requirement`, `Task`, `Set`, `Criterion`, `Finding`, `Graph`, `Record`, `Repo`, `Result`, `Manifest`, `ManifestFile`, ...) with file:symbol references, plus an ASCII relationship diagram tying plumage/feather/lock/evidence/manifest together.
+Read this when: you need to know a type's exact fields, or how spec/lock/evidence/manifest records relate to each other, before writing code that touches them.
 
 ## dependencies.md
-Direct/indirect third-party deps (goccy/go-yaml for frontmatter parsing, go-internal/testscript for e2e tests), the runtime dependency on git via os/exec, notable stdlib usage per package, the internal import graph (no cycles), and AGPL v3 licensing.
-Read this when: you need to know what a package may import, why a dependency exists, or the runtime git assumption.
+The (short) list of third-party Go packages (`goccy/go-yaml`, `rogpeppe/go-internal`), notable stdlib usage (`embed`, `text/template`, `os/exec` for git), and the non-Go runtime dependency on git; also lists per-harness adapter mechanisms (tmux, `AskUserQuestion`, `fledge_gate`, etc.) as external integration points.
+Read this when: adding a dependency, wondering whether a capability already exists via an existing library, or working on a harness adapter and need to know what mechanism it should target.
 
 ## entry-points.md
-Process entry (`main` → `cli.Run`), build/run/test commands and version stamping, the 0/1/2/3 exit-code taxonomy, the full subcommand table with args and flags, the library public interfaces, and graph output formats.
-Read this when: you need the exact command surface, flags, exit codes, or how to build/run/test the binary.
+Every way into the system: the `main()` binary entry, build/install/verify commands, all 16 CLI commands with one-line descriptions, the core Go domain APIs (`spec.Load`, `check.Run`, `graph.New`, `lock.Acquire`, `scan.Run`), the `internal/bootstrap` public API, and the agent-facing skill entry points (`SKILL.md` files).
+Read this when: you need the exact command/flag/API surface for a command or package, or need to know how an agent enters the orchestration workflow.
 
 ## testing.md
-The two test layers — testscript/txtar e2e scripts in `cmd/fledge/testdata/` (one per command + e2e) and per-package unit tests — with what each covers, the git-determinism setup, the test-first convention, and known coverage gaps (internal/repo untested).
-Read this when: you are adding or debugging tests, or need to know how a behavior is currently verified.
+How to run every test tier (`go test ./...`, scoped acceptance tests, scoped unit tests), a table mapping each of the 17 `cmd/fledge/testdata/*.txtar` files to what it covers, a list of every `internal/*/**_test.go` file with what it exercises (including the 9-test `internal/bootstrap/registry_test.go` suite), and the test-first spec-level convention (AC-1 pattern, `.fledge/molt/` evidence).
+Read this when: writing or extending a test, deciding which existing test file already covers behavior you're about to change, or verifying you haven't broken an acceptance-test fixture that asserts on scaffolded output.
 
 ## domain.md
-Glossary of the problem-domain vocabulary: spec-driven development, Requirement/Task and their lifecycles, dependency graph, waves, ready/blocked, locks, oversight, findings, priority, frontmatter, body preservation, scan modules, .fledgeignore, and agent.
-Read this when: you encounter an unfamiliar term or need precise definitions of fledge's spec/workflow concepts.
+Glossary of the bird-themed vocabulary (plumage, feather, brood, preen, molt, vee, colony, forager, scout, brooder, skua, species) and the orchestration concepts (primitive, tier, harness, adapter, manifest, core skill) with grounding references — resolves the "what is a skua" ambiguity left open by an individual scout report.
+Read this when: you hit unfamiliar terminology anywhere in this repo's code, specs, or skill prose and need a precise definition rather than inferring from context.

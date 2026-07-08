@@ -1,58 +1,58 @@
 ---
-generated: 2026-07-06T23:33:05Z
-commit: b701cf5a12a99b5adf9538e83f51178d4dead0c2
-agent: fledge-context-gatherer
-fledge_version: 0.1.0
+generated: 2026-07-08T01:03:26Z
+commit: e44524d1f089dcfe1c1f313f819ec18d9a42eceb
+agent: fledge-forager
+fledge_version: 0.2.1
 ---
 
 # Modules
 
-Repository map organized by module (top-level directory). Use the "Look here for" lines to route to the right package.
+Repo map, organized by top-level module as reported by `fledge scan`. One entry per module: purpose, key files, where to look for what.
 
 ## root
-- **Purpose:** Project metadata and Go module definition.
-- **Key files:** `go.mod` (module `github.com/Harrison-Blair/fledge`, `go 1.26.4`), `VERSION` (`0.1.0`), `README.md` (one-line description), `LICENSE` (AGPL v3), `.gitignore`.
-- **Look here for:** the module path, declared Go/dependency versions, license, and the ignore rules for the built `/fledge` binary and per-run intermediates.
+
+Repository root: license, versioning, module definition, and the two docs that orient a newcomer.
+
+Key files: `README.md` (quick start, 7-primitive contract, command inventory), `CLAUDE.md` (architecture + build/test/run + conventions), `MIGRATION.md` (0.1.0→0.2.0 upgrade path), `VERSION` (single line, currently `0.2.1`), `go.mod` (Go 1.26.4, two direct deps), `.gitignore` (ignores `.fledge/nest/raw/`, `.fledge/broods/`, `.fledge/burrows/`, built `/fledge` binary).
+
+Look here for: build/install/test commands, license terms, version number, top-level dependency list, upgrade instructions between fledge versions.
 
 ## cmd
-- **Purpose:** CLI binary entry point and the end-to-end (testscript/txtar) test suite that exercises every subcommand.
-- **Key files:** `cmd/fledge/main.go` (thin `cli.Run` bootstrap), `cmd/fledge/main_test.go` (testscript runner with locked git identity), `cmd/fledge/testdata/*.txtar` (10 scripts: `init`, `new`, `check`, `graph`, `ready`, `lock`, `status`, `set`, `scan`, `e2e`).
-- **Look here for:** how the binary is launched, and the authoritative behavioral contract of each command expressed as black-box CLI scripts.
 
-## internal
-The library behind the CLI. Split below into the sub-packages that matter (scouted as `internal-cli`, `internal-spec`, `internal-core`).
+CLI entry point package. Thin — no domain logic of its own.
 
-### internal/cli — command layer
-- **Purpose:** Implements every subcommand, dispatch, flag parsing, output formatting, and exit codes.
-- **Key files:** `cli.go` (registry, `Run`, exit-code constants, usage), one file per command (`init.go`, `scan.go`, `new.go`, `check.go`, `ready.go`, `graph.go`, `status.go`, `set.go`, `lock.go`, `version.go`), `specload.go` (shared `loadSet`/path helpers), `.fledgeignore.default` (embedded default ignore file).
-- **Look here for:** what a command does, its flags, status-transition rules, JSON output shapes, and how lock/status consistency is enforced.
+Key files: `cmd/fledge/main.go` (9-line `main()`, delegates to `cli.Run`), `cmd/fledge/main_test.go` (testscript harness setup, git determinism), `cmd/fledge/testdata/*.txtar` (17 acceptance-test files, one per command/workflow area: `init`, `init_agents`, `agents`, `new`, `status`, `set`, `criteria`, `check`, `lock`, `graph`, `scan`, `ready`, `report`, `unfledged`, `e2e`).
 
-### internal/spec — data model
-- **Purpose:** Parse, validate, scaffold, and byte-preservingly serialize PLM/FTHR spec files.
-- **Key files:** `types.go` (`Requirement`, `Task`, status/priority/oversight constants), `frontmatter.go` (split/parse/render/atomic-save), `ids.go` (`NextID`, `Kebab`), `load.go` (`Load` → `Set`, lookups), `templates.go` + `templates/{requirement,task}.md` (embedded scaffolds).
-- **Look here for:** the canonical struct definitions, frontmatter schema and key order, ID/filename format, and the requirement/task body templates.
+Look here for: what a full end-to-end CLI invocation of any command looks like, exact stdout/exit-code contracts, acceptance-test coverage for a given command before touching its behavior.
 
-### internal/check — validation engine
-- **Purpose:** Run all spec-integrity rules over a loaded set.
-- **Key files:** `check.go` (`Run` → `[]Finding`, `HasErrors`).
-- **Look here for:** every validation rule (dangling refs, duplicate IDs, cycles, missing sections, ID/filename mismatch, unapproved-requirement links, stale-ready hints, lock consistency) and its severity.
+## docs
 
-### internal/graph — dependency DAG
-- **Purpose:** Compute cycles, waves, and ready sets over task `depends_on` edges.
-- **Key files:** `graph.go` (`New`, `Cycle`, `Waves`, `Ready`).
-- **Look here for:** cycle detection, topological wave layout, and ready-task computation semantics (including dangling-dep handling).
+Design documentation, not shipped code.
 
-### internal/lock — task locks
-- **Purpose:** Advisory, atomic per-task claim files under `.fledge/broods/`.
-- **Key files:** `lock.go` (`Acquire`, `Release`, `Get`, `List`, `Record`, `HeldError`).
-- **Look here for:** lock file format, acquisition/contention semantics, and holder metadata.
+Key files: `docs/generalization-plan.md` — the locked design (23 Q&A decisions, milestones M0–M5) for generalizing fledge's orchestration to more harnesses (Cursor, opencode) beyond the current Claude/pi/Codex set.
 
-### internal/repo — repo discovery
-- **Purpose:** Locate the repo via git and resolve fledge paths.
-- **Key files:** `repo.go` (`Find`, `Repo` path methods for `.fledge/`, spec dirs, VERSION, HEAD).
-- **Look here for:** how the repo root and all fledge-relative paths are computed (only package here with no test file).
+Look here for: the rationale behind the 7-primitive contract and tier derivation, the manifest-driven adapter design, milestone/release sequencing (0.2.0 vs 0.3.0), unresolved harness-integration verifications (Claude `settings.json` skills array, Codex `AGENTS.md` auto-load, Cursor `.mdc` format, opencode config layout).
 
-### internal/scan — file inventory
-- **Purpose:** List tracked+untracked files, filter via .fledgeignore, group into modules.
-- **Key files:** `scan.go` (`Run` → `Result{Commit, ShortCommit, Modules}`, `Module{Name, Files, Count, Bytes}`).
-- **Look here for:** how context modules are derived and how `.fledgeignore` filtering and commit stamping work.
+## internal/bootstrap
+
+The scaffolding/adapter layer — what `fledge init` writes into a target repo. See `architecture.md` for full design.
+
+Key files: `bootstrap.go` (`//go:embed core adapters`), `primitives.go` (7-primitive contract, tier derivation), `registry.go` (manifest loading, all file-write policies, symlink + duplicate-skill guard — 517 lines, the largest file in the repo), `registry_test.go` (9 tests covering manifest validity, tier derivation, core neutrality, write classification, symlinks, allow-list generation). Plus `core/skills/fledge-orchestrate/{SKILL,planning,implementation,worker-protocols,foraging}.md` + `templates/{scout-report,plumage,feather,context-doc}.md`, `core/skills/fledge-interrogate/SKILL.md`, and `adapters/{claude,pi,codex}/manifest.yaml` + per-harness generated/static files.
+
+Look here for: adding or changing a target-harness adapter (edit `manifest.yaml`, no Go), changing orchestration workflow prose (edit `core/skills/...`, then regenerate this repo's own `.fledge/skills/` via `fledge init --refresh`), the primitive/tier contract, write-policy semantics for scaffolded files.
+
+## internal (domain packages: cli, check, graph, lock, repo, scan, spec)
+
+The deterministic CLI dispatch and spec domain logic. See `architecture.md` for full design.
+
+Key files: `internal/cli/cli.go` (command dispatch, exit codes), `internal/cli/specload.go` (shared `loadSet()` helper), 13 command files under `internal/cli/` (one per command), `internal/spec/{types,frontmatter,load,ids,criteria,templates}.go` (spec data model + parsing), `internal/check/check.go` (validation rules), `internal/graph/graph.go` (dependency waves/cycles/ready-set), `internal/lock/lock.go` (brood claim files), `internal/repo/repo.go` (path resolution), `internal/scan/scan.go` (file inventory).
+
+Look here for: adding a new CLI command, changing spec frontmatter schema or validation rules, dependency-graph or lock-contention logic, exactly which paths under `.fledge/` and `pluma/` the CLI reads/writes.
+
+## pluma
+
+The spec corpus for *this* repository's own features and tasks (fledge is fledge-managed).
+
+Key files: `pluma/plumage/PLM-001-*.md`, `PLM-002-*.md` (both `fledged`), `pluma/feathers/FTHR-001-*.md` through `FTHR-004-*.md` (all `fledged`) — the `fledge colony` and `fledge unfledged` commands were themselves built through this spec workflow.
+
+Look here for: worked examples of real plumage/feather spec bodies (Context, User Stories, Functional Criteria, Acceptance Criteria sections), the frontmatter schema in practice, evidence of test-first discipline (AC-1 pattern) across a completed feature.

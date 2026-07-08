@@ -1,54 +1,49 @@
 ---
-generated: 2026-07-06T23:33:05Z
-commit: b701cf5a12a99b5adf9538e83f51178d4dead0c2
-agent: fledge-context-gatherer
-fledge_version: 0.1.0
+generated: 2026-07-08T01:03:26Z
+commit: e44524d1f089dcfe1c1f313f819ec18d9a42eceb
+agent: fledge-forager
+fledge_version: 0.2.1
 ---
 
 # Conventions
 
-Patterns observed across the fledge codebase. These are descriptive of the current code, reconciled across modules.
+Cross-cutting conventions observed across the repository, reconciled from module-level reports.
 
-## Code organization
-- **One command per file** in `internal/cli` (`init.go`, `new.go`, …), each registered into a shared registry at init time (`internal/cli/cli.go:register`). Command display order is fixed by `commandOrder`.
-- **One concern per package** under `internal/`; core packages (`spec`, `lock`, `repo`, `scan`) depend only on the standard library where possible, keeping the domain model dependency-light.
-- **Thin entry point:** `cmd/fledge/main.go` contains no logic beyond delegating to `internal/cli`.
+## Command dispatch
 
-## Determinism & byte preservation
-- **Frontmatter rendered in fixed key order** per spec type, with canonical scalar quoting decided by `yamlScalar` (`internal/spec/frontmatter.go`): plain alphanumerics plus space/dot/slash/parens/hyphen stay unquoted; booleans, numbers, reserved words, and leading/trailing-space values are quoted.
-- **Markdown body is never rewritten.** `SplitFrontmatter` returns the post-`---` body byte-for-byte; round-trips (`TestTaskRoundTrip`) and internal `---` lines in the body are preserved. `fledge set`/`status` only rewrite the frontmatter block.
-- **`scan` output is byte-compatible** with the retired `.fledge/scripts/scan` bash implementation (noted in `internal/cli/scan.go`).
+Every CLI command lives in its own `internal/cli/<name>.go` file, registers itself via `register(name, runFunc, usage)` inside a file-level `init()`, and is added to the global `commandOrder` slice — which in turn drives both `fledge --help`/usage text and the generated Claude `settings.local.json` Bash allow-list. Mixed positional/flag argument parsing goes through a shared `parseMixed(fs, args)` helper. Exit codes (`ExitOK/Fail/Usage/Env` = 0/1/2/3) are shared and semantically meaningful across every command; helpers `fail()`, `usageErr()`, `envErr()` print to stderr and return the appropriate code. Output is either human-readable text (`fmt.Printf`) or JSON via `emitJSON()`, selected by a `--json` flag present on every command.
 
-## Identifiers & filenames
-- **IDs:** `PREFIX-NNN` — `PLM-001`, `FTHR-042`. Minimum 3-digit zero padding; if any existing ID in the directory is wider, new IDs match that width (`internal/spec/ids.go:NextID`). Allocation is max-existing + 1 (gaps are not backfilled).
-- **Filenames:** `{ID}-{slug}.md` where slug is `Kebab(title)` — unicode-aware lowercase, runs of non-alphanumerics collapsed to a single hyphen, trailing hyphens trimmed (`internal/spec/ids.go:Kebab`). Validation checks the filename prefix matches the ID; renaming title via `fledge set` intentionally does NOT rename the file (leaves a mismatch warning surface).
+## Spec files are CLI-owned, never hand-edited
 
-## Enums (canonical source: `internal/spec/types.go`)
-- **Requirement status:** `draft` → `approved` → `done` (transitions: draft→approved, approved→done|draft).
-- **Task status:** `blocked`, `ready`, `in-progress`, `done` (transitions: ready→in-progress, blocked→in-progress, in-progress→done|ready). Enforced by `internal/cli/status.go` unless `--force`.
-- **Priority:** `P0`–`P3` only (`Priorities` slice). Out-of-range values such as `P9` are rejected (`cmd/fledge/testdata/new.txtar:34`).
-- **Oversight:** `merge` or `during`; empty when unset (omitted from frontmatter when empty).
+IDs (`PLM-###`, `FTHR-###`) and frontmatter are allocated and mutated exclusively through the `fledge` CLI (`new`, `status`, `set`, `criteria`, `brood`). Spec *bodies* (prose after frontmatter) are byte-exact preserved on every write — `internal/spec/frontmatter.go:SplitFrontmatter` never re-serializes the body. Acceptance-criteria checkboxes (`- [ ] AC-N: text`) are toggled by exact byte offset (`internal/spec/criteria.go:SetCriterion`), touching exactly one byte, and only via `fledge criteria check` — never hand-edited. All spec/frontmatter writes are atomic (temp file in the same directory + rename).
 
-## Field mutability
-- **Immutable after creation:** `id`, `requirement`, `authored`, `agent`, `fledge_version`. `fledge set` rejects these.
-- **Mutable via `fledge set`:** `priority`, `oversight`, `depends_on` (cycle-checked), `title` (updates frontmatter and the `# ID: <title>` heading).
+## Manifest-driven scaffolding, not code-driven
 
-## Error handling & I/O
-- **Validation uses findings, not errors:** `check.Run` returns `[]check.Finding{File, Rule, Severity, Message}`; `Severity` is `Error` or `Warning`. Go `error`s are reserved for I/O and environment problems.
-- **Atomic writes everywhere:** temp file in the same directory → `chmod 0o644` → atomic rename, with temp cleanup on failure (`spec.WriteFileAtomic`). Locks use `O_EXCL` create so exactly one acquirer wins a race.
-- **Graceful missing state:** missing spec directories load as an empty `Set` (no error); missing `.fledgeignore` means no filtering; missing VERSION falls back; no git commits yields `ShortCommit == "none"`; missing lock dir lists empty.
-- **Exit codes** are a deliberate taxonomy (`internal/cli/cli.go`): 0 OK, 1 domain failure, 2 usage error, 3 environment error. See `entry-points.md`.
+Every adapter's behavior (which files are written, by which policy, and which primitives it provides) is declared entirely in that adapter's `manifest.yaml`. Adding or changing a target harness requires editing a manifest, not Go code (`internal/bootstrap/registry.go:17-20`). File write policies (`generate`, `primitive_map`, `overwrite`, `append_if_missing`, `symlink`, default skip-if-exists) are enumerated once in `ManifestFile` (`registry.go:37-44`) and apply uniformly across harnesses.
 
-## Output
-- **Dual output:** most commands accept `--json` for structured output alongside the default human-readable text; JSON is emitted via a shared `emitJSON` helper with indentation.
-- **Sorted output:** graph node lists, `ready`, `locks`, and scan modules are sorted (by ID or name) for stable output.
+## Byte-idempotent, additive writes
+
+`writeIfChanged` compares on-disk bytes before rewriting scaffolded files, so re-running `fledge init` (without `--refresh`) is a no-op on unchanged files and `fledge init --refresh` only rewrites files whose shipped bytes actually changed. `fledge init` never destroys existing files — reruns only add missing agents/adapters (the "additive invariant", `docs/generalization-plan.md` Q9). Skill prose under `.fledge/skills/` uses skip-if-exists so user edits survive normal reruns; only `--refresh` restores embedded bytes.
+
+## Agent-neutral core prose
+
+Workflow prose in `internal/bootstrap/core/skills/` (`foraging.md`, `planning.md`, `implementation.md`, `worker-protocols.md`) never names a harness-specific path (`.claude/`, `.pi/`, `.codex/`, `.cursor/`) — enforced by `TestCoreNeutral` (`internal/bootstrap/registry_test.go:140-159`). Cross-references to other skill files use relative, self-referential phrasing ("the template at `templates/scout-report.md` in this skill's directory"), not adapter-specific paths, so the same prose renders correctly regardless of which harness scaffolded it.
+
+## Primitive/tier discipline
+
+Every primitive named in core prose must be one of the canonical 7 (`TestCorePrimitivesReferenced`, `registry_test.go:116-137`) and must be declared by at least one adapter — an unreferenced primitive is treated as a dead contract. Tiers (A/B/C) are always *derived* from an adapter's declared primitive coverage (`DeriveTier()`), never hand-declared in a manifest — this lets an adapter with an unusual primitive profile (e.g. fan-out but no team loop) self-label the correct tier rather than being miscategorized.
+
+## Terminology: bird-themed throughout
+
+`nest`, `plumage`, `feather`, `brood`, `preen`, `molt`, `forager`, `scout`, `vee`, `skua`, `colony`, `brooder`, `fledged`/`unfledged`. `README.md` decodes the metaphor; match it in new code, commands, and prose rather than introducing generic naming.
+
+## Worker naming (team loop / Tier C)
+
+Spawned workers get unique names from a fixed penguin-species list (emperor, king, adelie, ... macaroni — 18 base names, numeric suffix once exhausted), per `internal/bootstrap/core/skills/fledge-orchestrate/implementation.md` §3.1. The orchestrator itself is never given a species name — it uses whatever identity the harness assigns (e.g. `team-lead` on Claude Code).
 
 ## Testing conventions
-- **Two-layer testing:** black-box testscript/txtar suites in `cmd/fledge/testdata/` drive the whole binary; unit tests live beside each core package. See `testing.md`.
-- **Git determinism in tests:** `main_test.go` pins `GIT_CONFIG_GLOBAL`/`SYSTEM` to `/dev/null` and locks author/committer identity to `test`/`test@example.invalid`.
-- **Test-first discipline is baked into the task template:** the task body scaffold mandates AC-1 = "tests observed failing before implementation and passing after" (`internal/spec/templates/task.md`).
 
-## Metadata
-- **Frontmatter block** starts every generated markdown file: `id/title/status/...` for specs; `generated/commit/agent/fledge_version` for context docs.
-- **Timestamps** are RFC 3339 / ISO 8601 UTC (validated by `check.checkAuthored`).
-- **Agent field** records the authoring agent, e.g. `fledge-orchestrate/planning` (default for new requirements).
+Acceptance tests use the testscript/txtar format under `cmd/fledge/testdata/*.txtar`; unit tests sit beside their package (`internal/<pkg>/<pkg>_test.go`) using standard `testing.T`, table-driven where practical, with `t.TempDir()` for filesystem isolation and `exec.Command("git", "init", ...)` where a real git repo is needed (scan, lock tests). See `testing.md` for the full breakdown.
+
+## Open Questions
+- How are `commandOrder` and each adapter's generated allow-list kept in sync as new commands are added — is there a check that fails if a command is missing from an allow-list? (unresolved from internal-domain, internal-bootstrap reports)

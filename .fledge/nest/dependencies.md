@@ -1,38 +1,45 @@
 ---
-generated: 2026-07-06T23:33:05Z
-commit: b701cf5a12a99b5adf9538e83f51178d4dead0c2
-agent: fledge-context-gatherer
-fledge_version: 0.1.0
+generated: 2026-07-08T01:03:26Z
+commit: e44524d1f089dcfe1c1f313f819ec18d9a42eceb
+agent: fledge-forager
+fledge_version: 0.2.1
 ---
 
 # Dependencies
 
-External and internal dependencies of the fledge codebase. Module path is `github.com/Harrison-Blair/fledge`, declared `go 1.26.4` (`go.mod`).
+External dependencies used by the fledge codebase, deduplicated across modules with usage notes.
 
-## Third-party (direct)
-- **`github.com/goccy/go-yaml` v1.19.2** — YAML unmarshalling of spec frontmatter (with `time.Time` awareness). Used only in `internal/spec` for parsing; rendering is done by fledge's own canonical writer, not this library.
-- **`github.com/rogpeppe/go-internal` v1.15.0** — provides `testscript`, the txtar-based end-to-end test framework driving `cmd/fledge/testdata/*.txtar` via `cmd/fledge/main_test.go`. Test-only usage.
+## Go module dependencies (`go.mod`, Go 1.26.4 required)
 
-## Third-party (indirect)
-- **`golang.org/x/sys` v0.26.0** — transitive (OS/syscall support).
-- **`golang.org/x/tools` v0.26.0** — transitive (tooling support pulled in by go-internal).
+- **`github.com/goccy/go-yaml`** (v1.19.2, direct) — YAML parsing/unmarshaling for two things: spec frontmatter (`internal/spec/frontmatter.go`) and adapter `manifest.yaml` files (`internal/bootstrap/registry.go:114`).
+- **`github.com/rogpeppe/go-internal`** (v1.15.0, direct) — supplies the `testscript` package used to run the `cmd/fledge/testdata/*.txtar` acceptance tests (`cmd/fledge/main_test.go`).
+- **`golang.org/x/sys`** (v0.26.0, indirect) — system-level calls (e.g. PID liveness checks in lock handling).
+- **`golang.org/x/tools`** (v0.26.0, indirect) — Go tooling support, indirect transitive dependency.
 
-## External tools invoked at runtime
-- **git** — shelled out via `os/exec` for repo discovery, commit/HEAD resolution, and listing tracked+untracked files. Used by `internal/repo` (`Find`, HEAD/VERSION resolution) and `internal/scan` (`Run` file listing and commit stamping). fledge assumes it runs inside a git repository; absence yields an environment error (exit code 3).
+## Standard library (heavily used, not third-party but notable)
 
-## Standard library (notable usage)
-- `internal/spec`: `os`, `path/filepath`, `regexp`, `strings`, `bytes`, `strconv`, `time`, `unicode`, `embed` (templates and default .fledgeignore are embedded).
-- `internal/lock`: `encoding/json` (lock records), `os` (`O_EXCL` atomic create), `syscall` (PID liveness via `Kill(pid, 0)` in the CLI layer, informational only).
-- `internal/check`: `regexp` (ID validation), `slices`, `sort`, `time`.
-- `internal/graph`: `fmt`, `strings` only.
-- `internal/repo`, `internal/scan`: `os/exec` (git), plus `os`/`path/filepath`/`sort`/`bytes`.
+- `embed` — `internal/bootstrap/bootstrap.go` embeds the entire `core/` and `adapters/` trees into the binary via `//go:embed core adapters`.
+- `text/template` — renders scaffolded adapter files (`generate`/`primitive_map` write policies) in `internal/bootstrap/registry.go`.
+- `os/exec` — shells out to `git` for repo introspection: `git rev-parse` (commit sha), `git ls-files` (file inventory for `scan`), `git check-ignore` (`.fledgeignore` filtering).
+- `flag`, `encoding/json`, `regexp`, `sort`/`slices`, `path/filepath` — CLI argument parsing, JSON output, ID/kebab pattern matching, sorting, and path handling across `internal/cli` and `internal/spec`.
 
-## Internal dependency edges
-- `cmd/fledge` → `internal/cli`.
-- `internal/cli` → all core packages (`check`, `graph`, `lock`, `repo`, `scan`, `spec`).
-- `internal/check` → `internal/graph`, `internal/spec`.
-- `internal/graph` → `internal/spec`.
-- `internal/spec`, `internal/lock`, `internal/repo`, `internal/scan` → standard library (spec also uses go-yaml). No import cycles.
+## Runtime / tooling dependencies (not Go packages)
 
-## Licensing
-The project is licensed under the **GNU Affero General Public License v3** (`LICENSE`).
+- **Git** — required at runtime for `fledge scan` (`git ls-files`, `git check-ignore`) and for commit-sha stamping in scaffolded/generated file frontmatter. The project takes a "trust-git" stance per `docs/generalization-plan.md`: no backup machinery for scaffolded files — `.fledge/skills/` is expected to be committed and recoverable via git.
+- **Agent Skills standard** — all currently-targeted harnesses (Claude Code, pi, Codex) and future ones (Cursor, opencode per the generalization plan) load skills natively; fledge's `core/skills/` already conforms to that format.
+
+## Per-harness adapter dependencies (mechanism, not code dependency)
+
+These aren't Go dependencies but are external mechanisms each adapter maps fledge's 7 primitives onto (`docs/generalization-plan.md` §2, verified/unverified per adapter):
+- **Claude Code** — teammate spawn (`spawn-worker`/`spawn-pool`), `AskUserQuestion` (confirm-gate), tmux for team-loop piping (`internal/bootstrap/adapters/claude/team-loop.md`).
+- **pi** — `fledge_gate` tool + SDK sessions.
+- **Codex** — skills config + `AGENTS.md` auto-load (unverified exact layout, per `docs/generalization-plan.md` open verification V2).
+- **Cursor** (0.3.0, not yet built) — `.cursor/rules/*.mdc` format, unverified.
+- **opencode** (0.3.0, not yet built) — config layout (`opencode.json` / `.opencode/`), unverified.
+
+## Notes
+
+No web framework, database, or network-service dependency anywhere in the codebase — fledge is a purely local, filesystem/git-backed CLI. No Makefile; `go build`/`go test`/`go vet` are used directly (see `README.md`/`CLAUDE.md` for exact invocations).
+
+## Open Questions
+None observed.

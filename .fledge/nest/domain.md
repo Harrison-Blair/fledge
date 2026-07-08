@@ -1,42 +1,60 @@
 ---
-generated: 2026-07-06T23:33:05Z
-commit: b701cf5a12a99b5adf9538e83f51178d4dead0c2
-agent: fledge-context-gatherer
-fledge_version: 0.1.0
+generated: 2026-07-08T01:03:26Z
+commit: e44524d1f089dcfe1c1f313f819ec18d9a42eceb
+agent: fledge-forager
+fledge_version: 0.2.1
 ---
 
-# Domain Glossary
+# Domain Terms
 
-Business/domain vocabulary embodied by fledge, a spec-driven development tool.
+Glossary of fledge's bird-themed vocabulary and orchestration concepts, reconciled across all scouted modules. `README.md` is the canonical decoder for the metaphor; this glossary adds file-level grounding.
 
-- **Spec-driven development** — the methodology fledge supports: specifications (requirements and tasks) are the primary, versioned artifacts that drive and gate implementation.
+## Spec corpus
 
-- **Requirement (REQ)** — a feature specification stating *what* and *why*, identified `PLM-NNN`. Lifecycle: `draft` → `approved` → `done` (may revert approved → draft). Its body template has sections: Context, User Stories, Functional Criteria (FC-*), Acceptance Criteria (AC-*), Out of Scope, Open Questions. Functional Criteria drive task implementation; Acceptance Criteria verify completion. (`internal/spec/templates/requirement.md`)
+- **Plumage** (`PLM-###`) — a feature/requirement spec, `pluma/plumage/PLM-###.md`. Lifecycle: `egg → hatched → fledged`. Body sections: Context, User Stories, Functional Criteria (FC-N), Acceptance Criteria, Out of Scope, Open Questions.
+- **Feather** (`FTHR-###`) — an implementable task under a plumage, `pluma/feathers/FTHR-###.md`. Lifecycle: `egg → pipping → hatching → fledged`. Body sections: Description, Affected Modules, Approach, Tests, Acceptance Criteria.
+- **Fledged** — terminal status for both plumages and feathers; all acceptance criteria checked, work complete.
+- **Unfledged** — anything not yet `fledged`; also the name of the `fledge unfledged` reporting command.
+- **Tracer task** — a feather scoped to implement a whole feature end-to-end (e.g. FTHR-001, FTHR-003 in this repo's own spec history), as opposed to follow-on feathers that widen or wire in an already-tracered feature.
+- **Depends_on** — a feather's list of prerequisite feather IDs; acyclic, validated at creation and on `set`.
+- **Oversight** — an optional feather flag (`merge` or `during`) that gates completion behind review at a specific point.
+- **Functional Criteria (FC-N)** — numbered, testable statements in a plumage body, defining what the feature must do.
+- **Acceptance Criteria (AC-N)** — checkbox list (`- [ ] AC-N: text`) in a spec body, verifiable conditions for task completion; checked only via `fledge criteria check`.
 
-- **Task (TASK)** — a unit of work implementing *how*, identified `FTHR-NNN`, linked to exactly one parent requirement. Lifecycle: `blocked`/`ready` → `in-progress` → `done`. May depend on other tasks (`depends_on`). Its body template has sections: Description, Affected Modules, Approach, Tests (test-first), Acceptance Criteria — with AC-1 mandated as "tests observed failing before implementation and passing after." (`internal/spec/templates/task.md`)
+## Repo-local state (`.fledge/`)
 
-- **Dependency graph** — the directed acyclic graph of tasks formed by `depends_on` edges. Cycles are errors, detected and reported as a path (`internal/graph`). A task depends on the tasks that must finish before it.
+- **Nest** (`.fledge/nest/`) — repository knowledge store; this document set. Raw scout reports live under `.fledge/nest/raw/`.
+- **Brood** (`.fledge/broods/<FTHR-ID>.brood`) — an advisory lock/claim file recording who is actively working a feather (owner, PID, created time, branch). "Brooding" a feather = claiming it.
+- **Molt** (`.fledge/molt/`) — evidence directory storing per-acceptance-criterion verification output for a feather (test-first: failing run pre-implementation, passing run post-implementation).
+- **Colony** — the `fledge colony` command; a repo-wide progress report (counts, per-plumage completion, blocked-task detail, active locks, degraded-data issues).
 
-- **Wave** — a topological layer of the dependency graph. Wave 1 tasks have no dependencies; wave N tasks depend only on earlier waves. Used for `graph` layout and reasoning about parallelizable work.
+## CLI verbs (bird-themed commands)
 
-- **Ready task** — a task whose dependencies are all `done` and which is not currently locked. `fledge ready` lists these, sorted by priority then ID. Dangling dependencies count as never-done, so they keep a task out of the ready set.
+- **Preen** — `fledge preen`; validates the spec set against the check-rule engine, surfacing errors/warnings.
+- **Vee** — `fledge vee`; dependency graph visualization (named for the "V" shape of a bird formation / upstream-downstream shape), supports waves, cycle detection, dot/JSON output.
+- **Scan** — `fledge scan`; file inventory grouped by top-level module, `.fledgeignore`-filtered; the authoritative work-list for forager scout assignment.
+- **Ready** — feathers eligible to start: dependencies met (all `fledged`), not currently brooded.
 
-- **Blocked task** — a task with at least one unfinished dependency; the inverse of ready at creation time.
+## Orchestration roles (agent-facing, Tier B/C)
 
-- **Lock** — an advisory claim on a task, stored as `.fledge/broods/FTHR-NNN.lock` (JSON: task, owner, PID, created, branch). Acquiring a lock auto-transitions the task to in-progress and removes it from `ready`. Locks are atomic (`O_EXCL`); a second claimant gets a "held" error. PID liveness in `locks` output is informational only (PIDs recycle).
+- **Forager** — the planning-phase worker (needs `spawn-worker`) that orchestrates scouts and synthesizes their reports into `.fledge/nest/`. One-shot: no further work after its final message.
+- **Scout** — a cheap, unnamed forager subagent assigned one module and an explicit file list; writes exactly one raw report to `.fledge/nest/raw/<module>.md`, then self-terminates.
+- **Brooder** — an ephemeral team-loop (Tier C) worker, one per feather, one dedicated git worktree; implements test-first and hands off to its assigned skua.
+- **Skua** — a persistent team-loop worker that reviews a brooder's completed feather (re-runs tests, audits test-first evidence, reports approval/findings to the orchestrator).
+- **Orchestrator** — the user-proxying role driving the implementation phase; never given a species name — uses whatever identity the harness assigns (e.g. `team-lead` on Claude Code).
+- **Species** — the unique per-worker identifier assigned on spawn: a penguin name (emperor, king, adelie, ...) with a numeric suffix once the 18-name base list is exhausted.
 
-- **Oversight** — an optional review gate on a task: `merge` (review before merge) or `during` (review while in progress). Absent by default.
+## Harness/adapter concepts
 
-- **Finding** — a single validation result from `fledge preen`, attributed to a file with a rule ID and a severity (Error or Warning). `--strict` promotes warnings to errors.
+- **Harness** — a target agent execution environment: currently Claude Code, pi, Codex (0.2.0); Cursor, opencode planned for 0.3.0.
+- **Primitive** — one of 7 canonical orchestration capabilities a harness may provide: `confirm-gate`, `read-only-shell`, `write-file`, `run-fledge`, `spawn-worker`, `spawn-pool`, `message-peer`.
+- **Tier** — capability level (A = solo, B = adds fan-out foraging, C = adds team loop) *derived* from an adapter's declared primitive coverage, never hand-declared.
+- **Adapter** — a manifest + scaffolded files mapping fledge's primitives to one harness's actual mechanisms; format-only, zero Go code per new harness.
+- **Core skill** — agent-neutral workflow prose (`fledge-orchestrate`, `fledge-interrogate`), written identically to `.fledge/skills/` regardless of harness.
+- **Manifest** — the YAML file that is the single source of truth for one adapter (detector, primitive coverage, file write policies).
+- **Interrogate** — the `fledge-interrogate` skill; a structured, one-question-at-a-time interview used to stress-test a plumage/feature design before it's written.
+- **Piping file** — adapter-specific prose describing a harness's runtime mechanics (tmux display, `/resume` recovery, permission inheritance) — a Tier C concern.
+- **Duplicate guard** — the refusal mechanism (`CheckDuplicateSkills`) preventing `fledge init` from scaffolding over a pre-existing, non-symlinked skill copy at a harness's native path.
 
-- **Priority** — an urgency level `P0`–`P3` (P0 highest) on requirements and tasks; used to order the ready list.
-
-- **Frontmatter** — the YAML metadata block delimited by `---` at the top of every spec file, above the markdown body.
-
-- **Body preservation** — fledge's guarantee that the markdown body below the frontmatter is never modified when it rewrites metadata; edits are byte-for-byte preserving.
-
-- **Scan module** — a grouping of repository files by top-level directory (root-level files grouped as `<root>`), produced by `fledge scan` as the unit of context gathering.
-
-- **Scan-ignore** — a gitignore-syntax file (`.fledgeignore`) listing paths excluded from `fledge scan` (e.g. `.git/`, `.fledge/`, `.claude/`, vendored/build dirs, lockfiles).
-
-- **Agent** — the authoring identity recorded on a spec (e.g. `fledge-orchestrate/planning`). fledge is designed to be driven by `.claude/` agents that plan specs and run an implementation loop over locked tasks.
+## Open Questions
+None outstanding — all terms surfaced by scouts (including "skua", initially unresolved by the root-module scout) were subsequently grounded in `internal-bootstrap`/`internal-domain`/`docs` reports.

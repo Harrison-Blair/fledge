@@ -1,81 +1,71 @@
 ---
-generated: 2026-07-06T23:33:05Z
-commit: b701cf5a12a99b5adf9538e83f51178d4dead0c2
-agent: fledge-context-gatherer
-fledge_version: 0.1.0
+generated: 2026-07-08T01:03:26Z
+commit: e44524d1f089dcfe1c1f313f819ec18d9a42eceb
+agent: fledge-forager
+fledge_version: 0.2.1
 ---
 
 # Data Model
 
-The core types fledge operates on. The authoritative definitions live in `internal/spec/types.go` and `internal/spec/load.go`; lock and scan types live in their respective packages.
+Core types across the CLI/domain layer and the spec files they represent on disk.
 
-## Requirement (`internal/spec/types.go:Requirement`)
-A feature specification ("what and why").
+## Spec types (`internal/spec/types.go`)
 
-| Field | Type | Notes |
-|---|---|---|
-| `ID` | string | `PLM-NNN`, e.g. `PLM-001` |
-| `Title` | string | |
-| `Status` | string | `draft` \| `approved` \| `done` |
-| `Priority` | string | `P0`–`P3` |
-| `Authored` | string | RFC 3339 timestamp |
-| `Agent` | string | authoring agent, e.g. `fledge-orchestrate/planning` |
-| `FledgeVersion` | string | fledge version at creation, e.g. `0.1.0` |
-| `Path` | string | file path when loaded; `""` if unsaved |
-| `Body` | []byte | markdown body, byte-preserved |
+- **`Requirement`** (a plumage, `pluma/plumage/PLM-###.md`) — `id`, `title`, `status` (`egg|hatched|fledged`), `priority` (`P0`–`P3`), `authored` (RFC3339), `agent`, `fledge_version`, `path`, `body`.
+- **`Task`** (a feather, `pluma/feathers/FTHR-###.md`) — `id`, `title`, `plumage` (parent requirement ID), `status` (`egg|pipping|hatching|fledged`), `priority`, `depends_on` (`[]string` of feather IDs, acyclic), `oversight` (`merge|during|""`), `authored`, `agent`, `fledge_version`, `path`, `body`.
 
-Frontmatter key order (all mandatory): `id, title, status, priority, authored, agent, fledge_version` (`internal/spec/frontmatter.go`).
+Frontmatter keys are fixed-order on serialize; optional keys are omitted when empty. Unknown keys are tracked per file rather than rejected, surfacing as a warning in `fledge preen` output (`internal/spec/load.go:Set.UnknownFields`).
 
-## Task (`internal/spec/types.go:Task`)
-A unit of work implementing one requirement ("how").
+## Load result (`internal/spec/load.go`)
 
-| Field | Type | Notes |
-|---|---|---|
-| `ID` | string | `FTHR-NNN` |
-| `Title` | string | |
-| `Requirement` | string | parent `PLM-NNN` |
-| `Status` | string | `blocked` \| `ready` \| `in-progress` \| `done` |
-| `Priority` | string | `P0`–`P3` |
-| `DependsOn` | []string | blocking `FTHR-NNN` IDs |
-| `Oversight` | string | `""` when absent; `merge` or `during` when set |
-| `Authored` | string | RFC 3339 |
-| `Agent` | string | |
-| `FledgeVersion` | string | |
-| `Path` | string | |
-| `Body` | []byte | byte-preserved |
+- **`Set`** — `Reqs`, `Tasks`, `Errors` (`[]FileError`: path + parse error), `UnknownFields` (`map[path][]keys`). `spec.Load(reqDir, taskDir)` builds a `Set`; `Set.Req(id)` / `Set.Task(id)` do lookup.
 
-Frontmatter key order (mandatory except `oversight`): `id, title, requirement, status, priority, depends_on, oversight, authored, agent, fledge_version`. `depends_on` always renders (as `[]` when empty); `oversight` is omitted when empty (`internal/spec/frontmatter.go`; `TestTaskFrontmatterOversightOptional`).
+## Criteria (`internal/spec/criteria.go`)
 
-## Set (`internal/spec/load.go:Set`)
-Result of loading all specs from the requirements and tasks directories.
+- **`Criterion`** — `N` (int), `Label` (`AC-N` string), `Checked` (bool), `Text`, `boxOff` (byte offset of the checkbox character in the file). Parsed by regex, scoped strictly to content under a `## Acceptance Criteria` heading. `SetCriterion` flips exactly the one byte at `boxOff` — the rest of the file, including surrounding prose, is untouched.
 
-| Field | Type | Notes |
-|---|---|---|
-| `Reqs` | []*Requirement | |
-| `Tasks` | []*Task | |
-| `Errors` | []FileError | aggregated per-file parse failures (`FileError{Path, Err}`) |
-| `UnknownFields` | map[string][]string | file path → unrecognized frontmatter keys |
+## Validation findings (`internal/check/check.go`)
 
-Lookups: `Set.Req(id)` and `Set.Task(id)` return the matching spec or nil. `Load` tolerates missing directories (returns an empty set, no error).
+- **`Severity`** — `Error | Warning`.
+- **`Finding`** — `file`, `rule`, `severity`, `message` (all JSON-tagged for `--json` output). Rules include: parse, unknown-field, duplicate-id, schema (required fields/enum/format), id-filename, dangling-ref, unhatched-plumage, tests-section, required-sections, stale-pipping-hint, cycle, brood-consistency, criteria-format, criteria-incomplete, criteria-evidence.
 
-## Constants (`internal/spec/types.go`)
-- Requirement statuses: `ReqDraft="draft"`, `ReqApproved="approved"`, `ReqDone="done"`.
-- Task statuses: `TaskBlocked="blocked"`, `TaskReady="ready"`, `TaskInProgress="in-progress"`, `TaskDone="done"`.
-- `Priorities = ["P0","P1","P2","P3"]`.
-- `OversightValues = ["merge","during"]`.
+## Dependency graph (`internal/graph/graph.go`)
 
-## check.Finding (`internal/check/check.go`)
-A single validation result: `{File, Rule, Severity, Message}`, where `Severity` is `Error` or `Warning`. Returned as `[]Finding` from `check.Run`; `HasErrors` reports whether any are errors.
+- **`Graph`** — built over `[]*Task`, backed by a `byID` map. Methods: `Cycle()` (detect + report a cycle path), `Waves()` (topological layers for parallel-work planning), `Ready()` (feathers whose dependencies are all `fledged` and which are not currently brooded). Dangling `depends_on` references are tolerated by the graph (reported separately by `check`) but excluded from wave/cycle computation.
 
-## Graph (`internal/graph/graph.go`)
-Internal representation of the task dependency DAG: the task slice plus a `byID` index. Not persisted; constructed on demand via `graph.New(tasks)` for `Cycle`/`Waves`/`Ready`.
+## Brood / lock records (`internal/lock/lock.go`)
 
-## lock.Record (`internal/lock/lock.go`)
-JSON content of a `.fledge/broods/FTHR-NNN.lock` file: `{Task, Owner, PID, Created, Branch}`. Acquisition contention returns a `HeldError` wrapping the existing `Record`.
+- **`Record`** — `Task` (FTHR-ID), `Owner`, `PID`, `Created` (RFC3339), `Branch`. Serialized as JSON to `.fledge/broods/<FTHR-ID>.brood`.
+- **`HeldError`** — wraps the existing `Record` when `Acquire()` loses a race; acquisition is atomic via `O_EXCL` so exactly one caller wins under concurrent contention (tested with 16 concurrent acquirers in `internal/lock/lock_test.go`).
 
-## scan types (`internal/scan/scan.go`)
-- `Module{Name, Files, Count, Bytes}` — files grouped by top-level directory (`<root>` for root-level files).
-- `Result{Commit, ShortCommit, Modules}` — inventory plus commit stamp (`ShortCommit == "none"` when there are no commits).
+## Repo paths (`internal/repo/repo.go`)
+
+- **`Repo`** — wraps `Root`; exposes `FledgeDir()`, `LocksDir()` (`.fledge/broods`), `ContextDir()` (`.fledge/nest`), `EvidenceDir()` (`.fledge/molt`), `RequirementsDir()` (`pluma/plumage`), `TasksDir()` (`pluma/feathers`), plus `RequireFledge()`, `Version()`, `Head()`.
+
+## Scan result (`internal/scan/scan.go`)
+
+- **`Module`** — `Name`, `Files`, `Count`, `Bytes`.
+- **`Result`** — `Commit` (full sha), `ShortCommit`, `Modules` (grouped by top-level directory, `.fledgeignore`-filtered via `git check-ignore`).
+
+## Bootstrap/adapter types (`internal/bootstrap/registry.go`, `primitives.go`)
+
+- **`Manifest`** — `Name`, `Detector` (marker path for auto-detect), `TierPrimitives` (primitive → mechanism map), `Files` (`[]ManifestFile`), `PipingFile`, plus an internal `dir`.
+- **`ManifestDetector`** — `Exists` (path checked to auto-detect this harness is in use).
+- **`ManifestFile`** — `Src`, `Dst`, and mutually-describing write-policy fields: `Generate`, `PrimitiveMap`, `Overwrite`, `AppendIfMissing`, `Symlink`.
+- **`primitiveRow`** / **`renderContext`** — template-rendering data structures (adapter name, tier, provided/not-provided primitive rows, `PipingFile`, `CommandOrder`) used when generating each adapter's `fledge-adapter.md`.
+- **`PrimitiveOrder`** — canonical ordered list of the 7 primitives; **`primitiveDesc`**, **`primitiveTier`**, **`TierPrimitives`** — maps from primitive name to description / minimum tier / full per-tier primitive set.
+
+## Relationships
+
+```
+Requirement (PLM-###) 1---N Task (FTHR-###)     [Task.plumage → Requirement.id]
+Task N---N Task                                  [Task.depends_on → other Task.id, acyclic]
+Task 1---0..1 Record                             [lock.Record.Task → Task.id, while hatching]
+Task 1---0..1 evidence file                       [.fledge/molt/<FTHR-ID>.md, per-criterion evidence]
+Manifest 1---N ManifestFile                       [scaffolded file write policies]
+Manifest N---N primitive                          [TierPrimitives: which of the 7 this harness realizes]
+```
 
 ## Open Questions
-- Whether the spec layer validates that a Task's `Requirement` and `DependsOn` IDs actually exist is a higher-level responsibility: existence/dangling-ref checks are enforced in `internal/check`, not in `internal/spec` parsing.
+- Full JSON schema/shape for `--json` output of each command is described in prose (functional criteria) but not published as a formal schema document.
+- Are `.fledge/molt/<FTHR-ID>.md` evidence files generated automatically by the CLI or authored manually by the implementing agent? Full semantics of the `criteria-evidence` check rule were not resolved from assigned source files.

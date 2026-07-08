@@ -1,46 +1,71 @@
 ---
-generated: 2026-07-06T23:33:05Z
-commit: b701cf5a12a99b5adf9538e83f51178d4dead0c2
-agent: fledge-context-gatherer
-fledge_version: 0.1.0
+generated: 2026-07-08T01:03:26Z
+commit: e44524d1f089dcfe1c1f313f819ec18d9a42eceb
+agent: fledge-forager
+fledge_version: 0.2.1
 ---
 
 # Testing
 
-fledge has two complementary test layers, both run by `go test ./...`.
+Two layers of tests: CLI acceptance tests (testscript/txtar, black-box through the built binary) and Go unit tests (white-box, beside each package). No Makefile — everything runs via `go test`.
 
-## End-to-end: testscript / txtar (`cmd/fledge`)
-- **Framework:** `github.com/rogpeppe/go-internal/testscript`, wired in `cmd/fledge/main_test.go`. It registers the command name `fledge` to call `cli.Run`, so `.txtar` scripts invoke `fledge <subcommand>` as if it were the real binary.
-- **Determinism:** the runner pins `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` to `/dev/null` and locks `GIT_AUTHOR_*`/`GIT_COMMITTER_*` to `test` / `test@example.invalid`, so git-dependent output is reproducible.
-- **Script format:** each `.txtar` in `cmd/fledge/testdata/` declares shell-style commands (`exec`, `!` for expected failure, `grep`, `exists`, `mkdir`, `cp`, `rm`), sets up inline files (`-- path --`), runs in an isolated dir, and asserts stdout/stderr with regex.
-- **Coverage (one script per command plus an integration script):**
-  - `init.txtar` — scaffold creation, idempotency.
-  - `new.txtar` — ID allocation, dependency validation, field defaults, enum validation (e.g. `P9` rejected).
-  - `check.txtar` — dangling refs, missing sections, `--strict`.
-  - `graph.txtar` — wave layout, DOT export, cycle detection.
-  - `ready.txtar` — dependency resolution, lock exclusion, JSON.
-  - `lock.txtar` — acquisition/conflict, status auto-update, force unlock, done-task restriction.
-  - `status.txtar` — legal transitions, `--force`, unknown ID, body preservation (sentinel body line survives frontmatter rewrite).
-  - `set.txtar` — field updates, enum checks, acyclicity, immutable-field rejection.
-  - `scan.txtar` — module grouping, .fledgeignore filtering, JSON.
-  - `e2e.txtar` — full workflow: init → new → status change → lock/unlock → graph.
+## Running tests
 
-## Unit tests (`internal/*`)
-Per-package `_test.go` files covering the core algorithms:
-- **`internal/spec`** — `frontmatter_test.go` (LF/CRLF split, missing/unterminated delimiters, EOF handling, body-with-`---` survival, task round-trip integrity, optional-oversight rendering, title quoting, atomic write with no leftover temp files); `ids_test.go` (`NextID` sequencing, gaps use max not count, width preservation, missing dir; `Kebab` casing incl. unicode); `load_test.go` (valid load, per-file parse-error aggregation, ID lookup, missing dirs → empty set).
-- **`internal/check`** — `check_test.go`, ~15 tests spanning every rule: clean set, parse errors, unknown fields, schema/ID/filename mismatch, duplicate IDs, dangling refs (missing requirement, missing dep, self-reference), unapproved-requirement links, cycles, required sections incl. Tests section, stale-ready hints, lock consistency, `HasErrors`.
-- **`internal/graph`** — `graph_test.go`, ~5 tests: wave topological grouping, cycle detection (self-loop, multi-node, dangling-dep-still-acyclic), ready-set filtering (blocked/started excluded, dangling deps block).
-- **`internal/lock`** — `lock_test.go`, ~4 tests: acquire/release/get lifecycle, held-error reporting, 16-way concurrent contention with exactly one winner, list on missing dir → empty & sorted.
-- **`internal/scan`** — `scan_test.go`, 3 tests: module grouping with file/byte counts, no-.fledgeignore includes all, empty repo → no modules.
-- **`internal/cli`** — `lock_test.go`: `TestLockRollsBackOnStatusWriteFailure` verifies the lock is rolled back when the atomic task-status rewrite fails.
+```sh
+go test ./...                                        # everything
+go test ./cmd/fledge -run TestScripts                 # all CLI acceptance tests
+go test ./cmd/fledge -run TestScripts/init             # one script (init.txtar)
+go test ./cmd/fledge -run TestScripts/init -v           # verbose, shows script trace
+go test ./internal/spec -run TestAllocateID              # a single unit test
+go test ./internal/bootstrap -run TestAdapterManifests    # a single bootstrap test
+go vet ./...
+```
 
-## Patterns
-- **Test-first discipline is a product convention:** the task template (`internal/spec/templates/task.md`) mandates AC-1 = "tests observed failing before implementation and passing after," so authored tasks carry the same failing-then-passing requirement the codebase itself follows.
-- **Round-trip and atomicity are explicitly guarded** (parse→render→reparse equality; no leftover temp files), reflecting the byte-preservation and atomic-write design goals.
+## CLI acceptance tests (`cmd/fledge/testdata/*.txtar`, testscript format)
 
-## Coverage gaps
-- `internal/repo` has **no test file** — repo discovery and path resolution are exercised only indirectly through the txtar e2e scripts.
+Driven by `cmd/fledge/main_test.go`, which registers `fledge` as a testscript command and isolates git config (author, committer) for reproducibility. 17 `.txtar` files, each covering one command or workflow:
+
+| File | Covers |
+|---|---|
+| `init.txtar` | repo scaffolding, `.fledge/` structure, idempotency, harness auto-detection |
+| `init_agents.txtar` | multi-agent scaffolding: `--list-agents`, `--agent` override, `--refresh` idempotency, duplicate prevention |
+| `agents.txtar` | adapter inventory, tier derivation, scaffolding status |
+| `new.txtar` | plumage/feather creation, ID allocation, title/priority/dependency validation, template instantiation |
+| `status.txtar` | lifecycle transitions, legal/illegal paths (e.g. `egg→fledged` requires intermediates), gate enforcement |
+| `set.txtar` | frontmatter updates, validation, immutable-field rejection |
+| `criteria.txtar` | acceptance-criteria listing, check/uncheck by number or `AC-N` label, idempotency, body preservation |
+| `check.txtar` | `preen` validation, error/warning reporting, strict mode, degraded-data handling |
+| `lock.txtar` | brood/abandon lifecycle, criteria gates, `--force` override |
+| `graph.txtar` | `vee` dependency graph, wave detection, dot format, cycle detection with path reporting |
+| `scan.txtar` | module grouping, `.fledgeignore` filtering, byte-accurate summaries |
+| `ready.txtar` | pipping-feather detection, brood exclusion, JSON output |
+| `report.txtar` | `colony` status summaries, orphan detection, per-plumage fledge counts, active brood listing, degraded-repo behavior |
+| `unfledged.txtar` | non-fledged item listing, `--plumage`/`--feathers` scoping, priority-then-ID ordering, JSON shape |
+| `e2e.txtar` | full workflow: init → new plumage/feathers → preen → vee → brood → criteria check → abandon `--fledged` → dependent unlock |
+
+Convention: idempotent, human-readable output — second runs of `init` report "exists", not "created". Testscript files mix shell directives (`exec`, `! exec`, `stdout`, `grep`, `mkdir`) with inline test data (`-- path --` blocks).
+
+**Update discipline:** when embedded `core/`/`adapters/` content changes, these fixtures (especially `init.txtar`, `init_agents.txtar`, `agents.txtar`) must be updated alongside, since they assert on the scaffolded output byte-for-byte in places.
+
+## Go unit tests (beside each package, standard `testing.T`)
+
+- `internal/spec/frontmatter_test.go` — `SplitFrontmatter` (leading/closing delimiter, CRLF, body preservation).
+- `internal/spec/ids_test.go` — `NextID` (sequential, gap-handling, wide IDs), `Kebab` (lowercasing, Unicode, hyphens).
+- `internal/spec/load_test.go` — `Load` with parse errors, unknown-field tracking.
+- `internal/spec/criteria_test.go` — `ParseCriteria` (format, checkbox states, section scoping), `SetCriterion`.
+- `internal/check/check_test.go` — clean set, parse errors, rule coverage (duplicate-id, dangling-ref, cycle, brood-consistency, criteria).
+- `internal/graph/graph_test.go` — `Waves` (topological order), `Cycle` (self-loop, two-cycle), `Ready`.
+- `internal/lock/lock_test.go` — `Acquire`/`Release`/`Get`, `HeldError`, contention (16 concurrent acquirers → exactly 1 winner), `LockRollsBackOnStatusWriteFailure` (integration-style).
+- `internal/scan/scan_test.go` — module grouping, `.fledgeignore` filtering, byte counts.
+- `internal/cli/lock_test.go` — brood + status transactionality (read-only dir forces rollback).
+- `internal/bootstrap/registry_test.go` (9 tests, the most extensive suite) — `TestAdapterManifests` (manifest validity, file sources exist in embed FS), `TestPrimitiveCoverage` (tier derivation correctness), `TestCorePrimitivesReferenced` (no dead primitive contracts), `TestCoreNeutral` (core prose never references harness-specific paths), `TestSkillFrontmatter` (Agent-Skills-format validity), `TestWriteCoreClassification` (created/updated/skipped correctness), `TestClaudeSkillSymlinks` (symlink resolution + idempotency + duplicate guard), `TestWriteAdapterRefresh` (default vs overwrite policy behavior on refresh), `TestClaudeAllowListGenerated` (generated allow-list matches `commandOrder`).
+
+Patterns: table-driven tests, `t.TempDir()` for filesystem isolation, `exec.Command("git", "init", ...)` to set up a real git repo where scan/lock tests need one.
+
+## Test-first discipline (spec-level convention, not a test framework)
+
+Every feather's Acceptance Criteria mandate an AC-1-style test-first pattern: write the test, observe it fail against unfixed/unimplemented code, then implement until it passes. Evidence of this is expected in `.fledge/molt/<FTHR-ID>.md` (see `data-model.md` Open Questions — exact generation mechanism for these evidence files is unresolved from source alone).
 
 ## Open Questions
-- scan behavior on symlinks and non-UTF-8 file content is not directly tested.
-- Whether `lock.Record.Branch` is consumed downstream or is purely informational is untested.
+- What exactly triggers `preen --strict` to fail — `check.HasErrors` alone, or warnings escalated under `--strict` too?
+- Is there a test asserting `commandOrder` and generated per-adapter allow-lists never drift out of sync when a command is added?
