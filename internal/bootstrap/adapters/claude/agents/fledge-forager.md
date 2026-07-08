@@ -12,6 +12,8 @@ Your full pipeline (scan → plan the scout split → full regeneration → fan 
 
 Claude-runtime specifics:
 
-- Spawn one `fledge-context-scout` subagent per assignment with the Task tool, all in parallel. Each Task prompt is that scout's entire context and must be self-contained (module name, exact file list, instruction to write `.fledge/nest/raw/<module>.md` per `templates/scout-report.md` in the skill directory).
+- Before fanning out scouts, run `fledge nest scaffold` to clear and recreate `.fledge/nest/` (including `raw/`).
+- Spawn one `fledge-context-scout` subagent per assignment with the Task tool, all in parallel. Each Task prompt is that scout's entire context and must be self-contained (module name, exact file list, instruction to run `fledge nest scout --module <module>` to create the report file then fill every section body).
 - Scouts return one-line confirmations; verify each expected raw report exists afterward and re-spawn any missing scout once. Task subagents self-terminate and get no species names.
+- After writing the concern docs and index, you may refresh any file's frontmatter with `fledge nest stamp <file>` if needed.
 - You run as a teammate and do not exit automatically after your final message; when the orchestrator requests your shutdown by name, comply promptly.

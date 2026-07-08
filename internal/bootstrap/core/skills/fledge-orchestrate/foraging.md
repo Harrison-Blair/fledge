@@ -14,8 +14,8 @@ You produce the `.fledge/nest/` document set that downstream planning agents rel
 2. **Plan the scout split.** One scout per module as the baseline, adjusted by context size:
    - Merge small modules (roughly < 5 files and < 20 KB combined) into a single scout assignment named after the largest member (note merged members in the prompt).
    - Split large modules (roughly > 100 files or > 300 KB) into multiple scouts by subdirectory, named `<module>-<subdir>`.
-3. **Full regeneration.** Delete any existing `.fledge/nest/*.md` and everything in `.fledge/nest/raw/`, then recreate the directories. Every run rebuilds from scratch; never merge with stale docs.
-4. **Fan out scouts.** Spawn one `fledge-context-scout` worker per assignment, all in parallel. Each spawn prompt must contain: the module name, the exact file list, and the instruction to write `.fledge/nest/raw/<module>.md` per the template at `templates/scout-report.md` in this skill's directory. Scouts return one-line confirmations; verify each expected raw report file exists afterward, and re-spawn any scout whose report is missing (once).
+3. **Full regeneration.** Run `fledge nest scaffold` from the repo root. This clears `.fledge/nest/` (including `raw/`) and recreates the directories. Every run rebuilds from scratch; never merge with stale docs.
+4. **Fan out scouts.** Spawn one `fledge-context-scout` worker per assignment, all in parallel. Each spawn prompt must contain: the module name, the exact file list, and the instruction to run `fledge nest scout --module <module>` to create the report file, then fill every section body. Scouts return one-line confirmations; verify each expected raw report file exists afterward, and re-spawn any scout whose report is missing (once).
 5. **Synthesize concern documents.** Read the raw reports and write these eight documents to `.fledge/nest/`, following the conventions in `templates/context-doc.md`:
 
    | Document | Synthesized from (report sections) |
@@ -34,16 +34,7 @@ You produce the `.fledge/nest/` document set that downstream planning agents rel
 
 ### Frontmatter
 
-Every file you write starts with:
-
-```yaml
----
-generated: <UTC ISO 8601, via date -u +%Y-%m-%dT%H:%M:%SZ>
-commit: <git rev-parse HEAD>
-agent: fledge-forager
-fledge_version: <contents of VERSION file, or "unknown">
----
-```
+Frontmatter is written by the CLI: `fledge nest scaffold` stamps every file it creates; refresh any file's frontmatter with `fledge nest stamp <file>`.
 
 ### Final message
 
@@ -61,9 +52,9 @@ A scout's prompt assigns a module name and an explicit list of files. Its entire
 
 - Read ONLY the files assigned in the prompt. Do not wander into other modules.
 - Use `read-only-shell` only for read-only inspection (`wc`, `file`, `head`, `git log --oneline -- <path>`), never to mutate anything.
-- Write exactly one file: `.fledge/nest/raw/<module>.md`, where `<module>` is the module name from the prompt.
-- Follow the report template at `templates/scout-report.md` in this skill's directory exactly — every section present, in order. Write `None observed.` under any section with nothing to report; never omit a section.
-- Fill the frontmatter: `module`, `authored` (UTC ISO 8601, via `date -u +%Y-%m-%dT%H:%M:%SZ`), `agent: fledge-context-scout`, `fledge_version` (contents of the repo's `VERSION` file, or `unknown`).
+- Run `fledge nest scout --module <module>` to create `.fledge/nest/raw/<module>.md` with the correct structure and frontmatter. Then fill every section body in that file.
+- Follow the section order in `templates/scout-report.md` in this skill's directory exactly — every section present, in order. Write `None observed.` under any section with nothing to report; never omit a section.
+- Frontmatter is stamped by `fledge nest scout`; refresh it with `fledge nest stamp <file>` if needed.
 - Report facts you observed, with file paths. Do not speculate about code you did not read; put uncertainties under Open Questions.
 - Be dense: bullet points, file references, identifier names. No prose padding.
 
