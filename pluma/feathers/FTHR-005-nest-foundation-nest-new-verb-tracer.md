@@ -80,13 +80,13 @@ reason; (3) implement until green.
   `nest` in the generated allow-list; whole `go test ./...` + `go vet ./...` green.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass
+- [x] AC-1: The tests listed above were observed failing before implementation and pass
   after.
-- [ ] AC-2: `internal/nest` renders both frontmatter schemas in canonical fixed-key order
+- [x] AC-2: `internal/nest` renders both frontmatter schemas in canonical fixed-key order
   with body byte-preservation (satisfies PLM-003 FC-2; unit tests above).
-- [ ] AC-3: `fledge nest new <doc>` creates a known concern doc with stamped frontmatter,
+- [x] AC-3: `fledge nest new <doc>` creates a known concern doc with stamped frontmatter,
   rejects unknown names (exit 2), and refuses overwrite without `--force` (exit 1) (satisfies
   PLM-003 FC-4; `--json`/exit codes per FC-8).
-- [ ] AC-4: `nest` is registered in `commandOrder` and the generated Claude allow-list +
+- [x] AC-4: `nest` is registered in `commandOrder` and the generated Claude allow-list +
   `init`/`agents` txtar fixtures are updated; `go test ./...` and `go vet ./...` pass
   (satisfies PLM-003 FC-1 and AC-4).
