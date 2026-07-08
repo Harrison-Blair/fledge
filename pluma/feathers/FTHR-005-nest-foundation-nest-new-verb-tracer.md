@@ -2,7 +2,7 @@
 id: FTHR-005
 title: "nest foundation + nest new verb (tracer)"
 plumage: PLM-003
-status: pipping
+status: fledged
 priority: P2
 depends_on: []
 authored: 2026-07-08T01:49:45Z
