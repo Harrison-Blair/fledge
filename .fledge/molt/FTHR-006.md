@@ -95,6 +95,8 @@ From the passing txtar test run:
 - Refreshes derived fields (`generated`, `commit`, `fledge_version`), drops unknown keys, preserves `agent` and body byte-for-byte — verified in txtar test with pre-seeded `stale-doc.md` (contains `stale_key:`) and `TestStampPreservesBodyAndDropsUnknownKeys` unit test.
 - `--agent` override replaces stored agent — verified in both tests.
 - Detects kind by path: `raw/cli.md` → Scout schema (no `generated:` field) — txtar asserts `! grep 'generated:' .fledge/nest/raw/cli.md`.
+- `--kind concern` overrides path-based detection: `raw/cli.md --kind concern` → concern schema (`generated:` present, `module:` absent) — txtar asserts `grep 'generated:'` and `! grep 'module:'`.
+- Invalid `--kind bogus` → exit 2, stderr `bogus`.
 - Out-of-nest path → exit 2 — txtar: `! exec fledge nest stamp outsidepath.md`, stderr `outside`.
 
 From passing txtar run:
@@ -108,6 +110,11 @@ From passing txtar run:
 > grep 'agent: fledge-new-agent' ...             ✓
 > exec fledge nest stamp .fledge/nest/raw/cli.md
 > ! grep 'generated:' .fledge/nest/raw/cli.md    ✓
+> exec fledge nest stamp .fledge/nest/raw/cli.md --kind concern
+[stdout] stamped .fledge/nest/raw/cli.md
+> grep 'generated:' .fledge/nest/raw/cli.md      ✓
+> ! grep 'module:' .fledge/nest/raw/cli.md       ✓
+> ! exec fledge nest stamp .fledge/nest/stale-doc.md --kind bogus → exit 2, stderr 'bogus' ✓
 > ! exec fledge nest stamp outsidepath.md → exit 2, stderr 'outside' ✓
 ```
 

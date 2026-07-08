@@ -80,6 +80,16 @@ grep 'module: cli' .fledge/nest/raw/cli.md
 grep 'authored:' .fledge/nest/raw/cli.md
 ! grep 'generated:' .fledge/nest/raw/cli.md
 
+# nest stamp: --kind concern overrides path-based scout detection
+exec fledge nest stamp .fledge/nest/raw/cli.md --kind concern
+stdout 'stamped .fledge/nest/raw/cli.md'
+grep 'generated:' .fledge/nest/raw/cli.md
+! grep 'module:' .fledge/nest/raw/cli.md
+
+# nest stamp: --kind invalid value → exit 2 (usage error)
+! exec fledge nest stamp .fledge/nest/stale-doc.md --kind bogus
+stderr 'bogus'
+
 # nest stamp: path outside .fledge/nest/ → exit 2 (usage error)
 ! exec fledge nest stamp outsidepath.md
 stderr 'outside'
