@@ -1,7 +1,7 @@
 ---
 id: PLM-003
 title: "fledge nest: deterministic authoring and stamping of nest documents"
-status: hatched
+status: fledged
 priority: P2
 authored: 2026-07-08T01:26:58Z
 agent: fledge-orchestrate/planning
@@ -77,21 +77,21 @@ Numbered, testable statements of behavior. Referenced downstream as FC-1, FC-2, 
 
 ## Acceptance Criteria
 Checkbox list of verifiable conditions under which this plumage is considered fledged, one `- [ ] AC-N: …` line each. Authored unchecked; checked only via `fledge criteria check` at plumage closeout.
-- [ ] AC-1: Tests written first and observed FAILING against unchanged code for the expected
+- [x] AC-1: Tests written first and observed FAILING against unchanged code for the expected
   reason, then passing after implementation (per-repo test-first convention).
-- [ ] AC-2: A txtar e2e suite covers each verb: `scaffold` (nine files created, correct
+- [x] AC-2: A txtar e2e suite covers each verb: `scaffold` (nine files created, correct
   frontmatter, prior nest cleared), `new <doc>` (known-name success, unknown-name usage
   error, `--force` overwrite behavior), `scout --module` (report created, missing-module
   usage error), and `stamp` (derived fields refreshed, body byte-preserved, unknown keys
   dropped, out-of-nest path rejected, `raw/` vs concern kind detection). `--json` shapes and
   exit codes asserted.
-- [ ] AC-3: Go unit tests for the `internal/nest` canonical frontmatter renderer prove
+- [x] AC-3: Go unit tests for the `internal/nest` canonical frontmatter renderer prove
   fixed-key order, canonical scalar quoting, and round-trip body preservation.
-- [ ] AC-4: The `init`/`agents` txtar fixtures and generated Claude allow-list are updated
+- [x] AC-4: The `init`/`agents` txtar fixtures and generated Claude allow-list are updated
   for the new `nest` command; `go test ./...` and `go vet ./...` pass.
-- [ ] AC-5: Running the commands in this repo reproduces the current nest output form
+- [x] AC-5: Running the commands in this repo reproduces the current nest output form
   (frontmatter byte-identical to what the forager now hand-writes), human-verified.
-- [ ] AC-6: `fledge preen` reports no findings for the spec set after authoring.
+- [x] AC-6: `fledge preen` reports no findings for the spec set after authoring.
 
 ## Out of Scope
 - Nest *validation* (a `preen`-style rule checking nest completeness or frontmatter
