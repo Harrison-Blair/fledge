@@ -60,6 +60,32 @@ grep '"pi"' .fledge/scaffold.json
 exec fledge init --agent codex
 grep -count=1 'fledge-orchestrate/SKILL.md' AGENTS.md
 
+# the Claude CLAUDE.md pointer: created when absent, exact wording, idempotent
+cd $WORK
+mkdir claude-pointer-repo
+cd claude-pointer-repo
+exec git init -q .
+! exists CLAUDE.md
+exec fledge init --agent claude
+stdout 'scaffolded agents: claude'
+exists CLAUDE.md
+grep 'fledge-orchestrate/SKILL.md' CLAUDE.md
+# exact pointer line, differing from the Codex line only in the adapter path
+grep '> fledge: load and follow .fledge/skills/fledge-orchestrate/SKILL.md — primitive map at .claude/fledge-adapter.md' CLAUDE.md
+# re-running appends the line once, never duplicated
+exec fledge init --agent claude
+grep -count=1 'fledge-orchestrate/SKILL.md' CLAUDE.md
+
+# an existing CLAUDE.md is preserved; the pointer is appended additively
+cd $WORK
+mkdir claude-existing-repo
+cd claude-existing-repo
+exec git init -q .
+cp $WORK/seed-claude.md CLAUDE.md
+exec fledge init --agent claude
+grep 'my existing claude prose' CLAUDE.md
+grep 'fledge-orchestrate/SKILL.md' CLAUDE.md
+
 # unknown agent → usage error pointing at --list-agents
 ! exec fledge init --agent nope
 stderr 'unknown agent "nope"'
@@ -123,3 +149,6 @@ stdout '"pi"'
 
 -- custom-skill.md --
 my local edit
+-- seed-claude.md --
+# Project notes
+my existing claude prose

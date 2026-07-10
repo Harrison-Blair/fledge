@@ -103,6 +103,12 @@
         ".fledge/broods/"
       ]
     },
+    "CLAUDE.md": {
+      "policy": "append",
+      "lines": [
+        "\u003e fledge: load and follow .fledge/skills/fledge-orchestrate/SKILL.md — primitive map at .claude/fledge-adapter.md"
+      ]
+    },
     "pluma/feathers/.gitkeep": {
       "policy": "default",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"

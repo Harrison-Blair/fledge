@@ -138,3 +138,4 @@ presence and consistency.
 - When you change embedded `core/` or `adapters/` content, the `cmd/fledge`
   txtar tests (especially `init.txtar`, `init_agents.txtar`, `agents.txtar`)
   assert on the scaffolded output — update those fixtures alongside.
+> fledge: load and follow .fledge/skills/fledge-orchestrate/SKILL.md — primitive map at .claude/fledge-adapter.md

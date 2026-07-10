@@ -69,8 +69,8 @@ then the manifest entry makes them pass.
 - **Suite:** `go test ./...` green; `go build ./...` and `go vet ./...` clean.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after (the AC-1/AC-2/AC-3 txtar cases failed against the unchanged manifest — no CLAUDE.md created — and pass once the entry is added).
-- [ ] AC-2: In a Claude repo with no pre-existing CLAUDE.md, `fledge init` creates CLAUDE.md containing the pointer line (satisfies PLM-004 FC-1, AC-1).
-- [ ] AC-3: In a Claude repo with an existing CLAUDE.md, `fledge init` appends the pointer without altering existing content, and a repeated init leaves exactly one copy (`grep -count=1`) — satisfies PLM-004 FC-2, AC-2.
-- [ ] AC-4: The scaffolded line matches the Codex pointer verbatim except for the adapter path (`.claude/fledge-adapter.md`), asserted by an exact-line `grep` — satisfies PLM-004 FC-3, AC-3.
-- [ ] AC-5: `go build ./...`, `go vet ./...`, and the full `go test ./...` suite pass; no Go source under `internal/` or `cmd/` changed except test fixtures (satisfies PLM-004 AC-4).
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after (the AC-1/AC-2/AC-3 txtar cases failed against the unchanged manifest — no CLAUDE.md created — and pass once the entry is added).
+- [x] AC-2: In a Claude repo with no pre-existing CLAUDE.md, `fledge init` creates CLAUDE.md containing the pointer line (satisfies PLM-004 FC-1, AC-1).
+- [x] AC-3: In a Claude repo with an existing CLAUDE.md, `fledge init` appends the pointer without altering existing content, and a repeated init leaves exactly one copy (`grep -count=1`) — satisfies PLM-004 FC-2, AC-2.
+- [x] AC-4: The scaffolded line matches the Codex pointer verbatim except for the adapter path (`.claude/fledge-adapter.md`), asserted by an exact-line `grep` — satisfies PLM-004 FC-3, AC-3.
+- [x] AC-5: `go build ./...`, `go vet ./...`, and the full `go test ./...` suite pass; no Go source under `internal/` or `cmd/` changed except test fixtures (satisfies PLM-004 AC-4).

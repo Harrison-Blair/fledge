@@ -34,4 +34,6 @@ files:
     symlink: ../../.fledge/skills/fledge-orchestrate
   - dst: .claude/skills/fledge-interrogate
     symlink: ../../.fledge/skills/fledge-interrogate
+  - dst: CLAUDE.md
+    append_if_missing: "> fledge: load and follow .fledge/skills/fledge-orchestrate/SKILL.md — primitive map at .claude/fledge-adapter.md"
 piping_file: .claude/team-loop.md
