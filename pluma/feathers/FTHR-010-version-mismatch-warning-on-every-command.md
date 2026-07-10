@@ -53,7 +53,7 @@ expected reason; (3) implement until green.
 - Whole `go test ./...` + `go vet ./...` green.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: On stamp/binary version mismatch, every command except `init` and `version` emits the one-line stderr warning naming both versions and suggesting `fledge init --refresh`, from any depth inside the repo (satisfies PLM-009 FC-2).
-- [ ] AC-3: stdout is byte-identical with and without the warning (`--json` output remains valid), exit codes are unchanged, and matching-stamp and no-stamp repos produce no warning.
-- [ ] AC-4: `go test ./...` and `go vet ./...` pass.
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: On stamp/binary version mismatch, every command except `init` and `version` emits the one-line stderr warning naming both versions and suggesting `fledge init --refresh`, from any depth inside the repo (satisfies PLM-009 FC-2).
+- [x] AC-3: stdout is byte-identical with and without the warning (`--json` output remains valid), exit codes are unchanged, and matching-stamp and no-stamp repos produce no warning.
+- [x] AC-4: `go test ./...` and `go vet ./...` pass.
