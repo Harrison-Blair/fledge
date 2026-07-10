@@ -1,7 +1,7 @@
 ---
 id: PLM-010
 title: fledge-incubator subagent for spec-body drafting
-status: hatched
+status: fledged
 priority: P2
 authored: 2026-07-10T21:12:21Z
 agent: fledge-orchestrate/planning
@@ -58,23 +58,23 @@ Numbered, testable statements of behavior. Referenced downstream as FC-1, FC-2, 
    expected intermediate state, not a failure.
 
 ## Acceptance Criteria
-- [ ] AC-1: A `fledge-incubator` agent spec is scaffolded by the Claude adapter (listed in its
+- [x] AC-1: A `fledge-incubator` agent spec is scaffolded by the Claude adapter (listed in its
       manifest, written to `.claude/agents/fledge-incubator.md` by `fledge init`); it runs on
       claude-sonnet-5 and instructs a non-interactive, one-shot draft-and-return of a plumage
       or feather body with no spec mutation.
-- [ ] AC-2: The incubator's instructions define its input/output contract: it is given the
+- [x] AC-2: The incubator's instructions define its input/output contract: it is given the
       resolved decisions + pointers, reads the template and cited concern docs itself, and
       returns the full drafted body (frontmatter fields + all sections) as its final message.
-- [ ] AC-3: `planning.md` (core) delegates plumage-body (3.4) and feather-body (4.6) drafting
+- [x] AC-3: `planning.md` (core) delegates plumage-body (3.4) and feather-body (4.6) drafting
       capability-conditionally on `spawn-worker`, with the confirm-gate and `fledge new`
       commit explicitly retained by the orchestrator and the incubator explicitly barred from
       committing.
-- [ ] AC-4: Core guidance (foraging.md and/or planning.md) documents the empty-post-scaffold
+- [x] AC-4: Core guidance (foraging.md and/or planning.md) documents the empty-post-scaffold
       nest as the expected intermediate state so agents do not flag it as a failure.
-- [ ] AC-5: The scaffold is regenerated (`fledge init --refresh`) and the affected acceptance
+- [x] AC-5: The scaffold is regenerated (`fledge init --refresh`) and the affected acceptance
       fixtures (`init_agents.txtar`, `agents.txtar`, and `init.txtar` if its file list
       changes) are updated to include the new agent; `go test ./...` passes.
-- [ ] AC-6: Automated tests assert the Claude adapter includes `fledge-incubator` and
+- [x] AC-6: Automated tests assert the Claude adapter includes `fledge-incubator` and
       scaffolds it, and that the adapter's derived tier and primitive coverage are unchanged
       (the incubator introduces no new primitive).
 
