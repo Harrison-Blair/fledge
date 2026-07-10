@@ -2,7 +2,7 @@
 id: FTHR-009
 title: "Scaffold stamp module + init stamping (tracer)"
 plumage: PLM-009
-status: pipping
+status: hatching
 priority: P1
 depends_on: []
 authored: 2026-07-10T14:57:51Z
