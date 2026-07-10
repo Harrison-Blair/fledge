@@ -1,0 +1,104 @@
+# refresh_scaffold.txtar: tests for init --refresh preserve/prune/force behavior.
+# Tests are disjoint from init.txtar/init_agents.txtar (FTHR-010/FTHR-011 fixtures).
+
+# ---------------------------------------------------------------
+# A. Prune: old stamp entry with hash-matching disk file → removed.
+#    Start with a hand-crafted stub stamp containing one fake path.
+#    After fledge init --refresh, the fake file is pruned (hash match).
+# ---------------------------------------------------------------
+exec git init -q .
+exec fledge init --refresh
+stdout 'removed .fledge/old-skill/SKILL.md'
+! exists .fledge/old-skill/SKILL.md
+# Real scaffold files created on this fresh run.
+exists .fledge/scaffold.json
+exists .claude/agents/fledge-brooder.md
+
+# ---------------------------------------------------------------
+# B. Preserve: editing a default-policy file → --refresh keeps it
+#              and reports "kept … (user-edited; use --force)".
+# ---------------------------------------------------------------
+cp custom_brooder.md .claude/agents/fledge-brooder.md
+
+exec fledge init --refresh
+stdout 'kept .claude/agents/fledge-brooder.md \(user-edited; use --force\)'
+! stdout 'updated .claude/agents/fledge-brooder.md'
+grep 'MY CUSTOM BROODER' .claude/agents/fledge-brooder.md
+
+# ---------------------------------------------------------------
+# C. Force: --refresh --force overwrites the user-edited file.
+# ---------------------------------------------------------------
+exec fledge init --refresh --force
+stdout 'updated .claude/agents/fledge-brooder.md'
+! grep 'MY CUSTOM BROODER' .claude/agents/fledge-brooder.md
+
+# ---------------------------------------------------------------
+# D. Recreate: deleting a core file → --refresh recreates it.
+# ---------------------------------------------------------------
+rm .fledge/skills/fledge-orchestrate/SKILL.md
+exec fledge init --refresh
+stdout 'created .fledge/skills/fledge-orchestrate/SKILL.md'
+exists .fledge/skills/fledge-orchestrate/SKILL.md
+
+# ---------------------------------------------------------------
+# E. Prune mismatch: old stamp entry with user-edited disk file →
+#    reported as obsolete, NOT deleted.
+#    Inject a new stamp that adds a mismatched fake entry.
+# ---------------------------------------------------------------
+cp mismatch_stamp.json .fledge/scaffold.json
+cp mismatch_file.md .fledge/old-skill/mismatch.md
+
+exec fledge init --refresh
+stdout 'obsolete .fledge/old-skill/mismatch.md \(user-edited — remove manually\)'
+! stdout 'removed .fledge/old-skill/mismatch.md'
+exists .fledge/old-skill/mismatch.md
+
+# ---------------------------------------------------------------
+# F. Stampless adoption: rm scaffold.json, then --refresh preserves
+#    user edits, prunes nothing, writes a fresh stamp.
+# ---------------------------------------------------------------
+rm .fledge/scaffold.json
+cp custom_brooder.md .claude/agents/fledge-brooder.md
+
+exec fledge init --refresh
+! stdout 'removed'
+stdout 'kept .claude/agents/fledge-brooder.md \(user-edited; use --force\)'
+exists .fledge/scaffold.json
+grep 'MY CUSTOM BROODER' .claude/agents/fledge-brooder.md
+
+# ---------------------------------------------------------------
+# Fixture files
+# ---------------------------------------------------------------
+
+-- custom_brooder.md --
+# MY CUSTOM BROODER
+This is my customized brooder agent.
+
+-- .fledge/scaffold.json --
+{
+  "fledgeVersion": "0.1.0",
+  "agents": [],
+  "files": {
+    ".fledge/old-skill/SKILL.md": {
+      "policy": "core",
+      "sha256": "e662e919fa8ffa492ab1d1b9e89c909b2fe8575a50e70d65a99008d27786b763"
+    }
+  }
+}
+
+-- .fledge/old-skill/SKILL.md --
+fledge-owned obsolete content
+-- mismatch_stamp.json --
+{
+  "fledgeVersion": "0.1.0",
+  "agents": [],
+  "files": {
+    ".fledge/old-skill/mismatch.md": {
+      "policy": "core",
+      "sha256": "9b672d8d21b783d424b7240e25171b7a638699a262a5dd94316b20b6009c0a41"
+    }
+  }
+}
+
+-- mismatch_file.md --
+user-edited-content

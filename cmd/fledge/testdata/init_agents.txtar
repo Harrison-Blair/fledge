@@ -65,9 +65,9 @@ grep -count=1 'fledge-orchestrate/SKILL.md' AGENTS.md
 stderr 'unknown agent "nope"'
 stderr 'list-agents'
 
-# --refresh: fledge-owned files (core skills, adapter agent files) are
-# skip-if-exists by default; --refresh syncs them to the shipped versions
-# (with a loud note), and a second refresh over identical files is silent
+# --refresh: default-policy files the user has edited are preserved and
+# reported ("kept … use --force"); --refresh --force restores them to the
+# shipped version (with a stderr note); a second refresh with no edits is silent.
 cd $WORK
 mkdir core-repo
 cd core-repo
@@ -82,6 +82,12 @@ exec fledge init
 grep 'my local edit' .fledge/skills/fledge-orchestrate/SKILL.md
 grep 'my local edit' .claude/agents/fledge-brooder.md
 exec fledge init --refresh
+! stderr 'refreshed'
+stdout 'kept .fledge/skills/fledge-orchestrate/SKILL.md \(user-edited; use --force\)'
+stdout 'kept .claude/agents/fledge-brooder.md \(user-edited; use --force\)'
+grep 'my local edit' .fledge/skills/fledge-orchestrate/SKILL.md
+grep 'my local edit' .claude/agents/fledge-brooder.md
+exec fledge init --refresh --force
 stderr 'refreshed'
 stdout 'updated .fledge/skills/fledge-orchestrate/SKILL.md'
 stdout 'updated .claude/agents/fledge-brooder.md'

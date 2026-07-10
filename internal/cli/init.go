@@ -17,7 +17,7 @@ import (
 
 func init() {
 	register("init", runInit,
-		"fledge init [--agent <name>]... [--refresh] [--list-agents] [--json]")
+		"fledge init [--agent <name>]... [--refresh] [--force] [--list-agents] [--json]")
 }
 
 //go:embed fledgeignore.default
@@ -43,7 +43,8 @@ func runInit(args []string) int {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	var agents stringListFlag
 	fs.Var(&agents, "agent", "agent harness to scaffold (repeatable, comma-separated)")
-	refresh := fs.Bool("refresh", false, "sync fledge-owned files to the shipped versions, overwriting local edits (git is the backup)")
+	refresh := fs.Bool("refresh", false, "sync fledge-owned files to the shipped versions; user-edited default-policy files are kept and reported unless --force is also set")
+	force := fs.Bool("force", false, "with --refresh: overwrite user-edited files (restores old overwrite behavior)")
 	listAgents := fs.Bool("list-agents", false, "list available agent adapters and exit")
 	jsonOut := fs.Bool("json", false, "machine-readable output")
 	if err := fs.Parse(args); err != nil {
@@ -59,7 +60,7 @@ func runInit(args []string) int {
 		return envErr("%v", err)
 	}
 
-	var created, skipped, updated []string
+	var created, skipped, updated, kept []string
 	note := func(rel string, state int) {
 		switch state {
 		case 0:
@@ -122,13 +123,15 @@ func runInit(args []string) int {
 	}
 
 	// Core skill: agent-neutral, written to .fledge/skills/ (Q2).
-	cCreated, cUpdated, cSkipped, err := bootstrap.WriteCore(r.Root, *refresh)
+	opts := bootstrap.WriteOpts{Refresh: *refresh, Force: *force, Old: oldStamp}
+	cCreated, cUpdated, cSkipped, cKept, err := bootstrap.WriteCore(r.Root, opts)
 	if err != nil {
 		return fail("%v", err)
 	}
 	created = append(created, cCreated...)
 	updated = append(updated, cUpdated...)
 	skipped = append(skipped, cSkipped...)
+	kept = append(kept, cKept...)
 
 	// Adapters: per-harness, written to their native paths.
 	// allFiles accumulates expected-file entries for the stamp (base + core + adapters).
@@ -142,13 +145,14 @@ func runInit(args []string) int {
 		if m == nil {
 			return usageErr("unknown agent %q (run `fledge init --list-agents`)", name)
 		}
-		aCreated, aUpdated, aSkipped, err := m.WriteAdapter(r.Root, commandOrder, *refresh)
+		aCreated, aUpdated, aSkipped, aKept, err := m.WriteAdapter(r.Root, commandOrder, opts)
 		if err != nil {
 			return fail("%v", err)
 		}
 		created = append(created, aCreated...)
 		updated = append(updated, aUpdated...)
 		skipped = append(skipped, aSkipped...)
+		kept = append(kept, aKept...)
 		scaffolded = append(scaffolded, name)
 
 		ef, efErr := bootstrap.ExpectedFiles(m, commandOrder)
@@ -197,6 +201,39 @@ func runInit(args []string) int {
 		skipped = append(skipped, stampRel)
 	}
 
+	// Prune pass (refresh only): remove obsolete files whose content still
+	// matches the old stamp (provably unmodified); report everything else.
+	var pruned, obsolete []string
+	if *refresh && oldStamp != nil {
+		newExpected := make(map[string]bool, len(allFiles)+1)
+		for k := range allFiles {
+			newExpected[k] = true
+		}
+		newExpected[stampRel] = true
+
+		var pruneTargets []string
+		for p := range oldStamp.Files {
+			if !newExpected[p] {
+				pruneTargets = append(pruneTargets, p)
+			}
+		}
+		sort.Strings(pruneTargets)
+
+		for _, p := range pruneTargets {
+			del, rep, pErr := bootstrap.PruneObsolete(r.Root, p, oldStamp.Files[p])
+			if pErr != nil {
+				return fail("prune %s: %v", p, pErr)
+			}
+			if del {
+				pruned = append(pruned, p)
+				// Remove now-empty ancestor dirs within .fledge/skills/ and .claude/.
+				removeEmptyParents(r.Root, p)
+			} else if rep {
+				obsolete = append(obsolete, p)
+			}
+		}
+	}
+
 	if *refresh && len(updated) > 0 {
 		fmt.Fprintf(os.Stderr, "note: refreshed %d file(s) to the shipped versions — `git diff` to review; your edits are recoverable via git.\n", len(updated))
 	}
@@ -207,10 +244,13 @@ func runInit(args []string) int {
 
 	if *jsonOut {
 		return emitJSON(initJSON{
-			Created: nonEmpty(created),
-			Skipped: nonEmpty(skipped),
-			Updated: nonEmpty(updated),
-			Agents:  nonEmpty(scaffolded),
+			Created:  nonEmpty(created),
+			Skipped:  nonEmpty(skipped),
+			Updated:  nonEmpty(updated),
+			Agents:   nonEmpty(scaffolded),
+			Kept:     nonEmpty(kept),
+			Removed:  nonEmpty(pruned),
+			Obsolete: nonEmpty(obsolete),
 		})
 	}
 	for _, rel := range created {
@@ -218,6 +258,15 @@ func runInit(args []string) int {
 	}
 	for _, rel := range updated {
 		fmt.Printf("updated %s\n", rel)
+	}
+	for _, rel := range kept {
+		fmt.Printf("kept %s (user-edited; use --force)\n", rel)
+	}
+	for _, rel := range pruned {
+		fmt.Printf("removed %s\n", rel)
+	}
+	for _, rel := range obsolete {
+		fmt.Printf("obsolete %s (user-edited — remove manually)\n", rel)
 	}
 	for _, rel := range skipped {
 		fmt.Printf("exists %s\n", rel)
@@ -229,10 +278,43 @@ func runInit(args []string) int {
 }
 
 type initJSON struct {
-	Created []string `json:"created"`
-	Skipped []string `json:"skipped"`
-	Updated []string `json:"updated"`
-	Agents  []string `json:"agents"`
+	Created  []string `json:"created"`
+	Skipped  []string `json:"skipped"`
+	Updated  []string `json:"updated"`
+	Agents   []string `json:"agents"`
+	Kept     []string `json:"kept"`
+	Removed  []string `json:"removed"`
+	Obsolete []string `json:"obsolete"`
+}
+
+// removeEmptyParents removes empty ancestor directories under .fledge/skills/
+// and .claude/ (the two managed subtrees) after a file prune.
+func removeEmptyParents(root, repoPath string) {
+	managed := []string{".fledge/skills/", ".claude/"}
+	for _, prefix := range managed {
+		if !strings.HasPrefix(repoPath, prefix) {
+			continue
+		}
+		dir := filepath.Join(root, filepath.FromSlash(filepath.Dir(repoPath)))
+		for {
+			rel, err := filepath.Rel(root, dir)
+			if err != nil {
+				break
+			}
+			rel = filepath.ToSlash(rel)
+			if rel == strings.TrimSuffix(prefix, "/") || rel == "." {
+				break
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil || len(entries) > 0 {
+				break
+			}
+			if err := os.Remove(dir); err != nil {
+				break
+			}
+			dir = filepath.Dir(dir)
+		}
+	}
 }
 
 func nonEmpty(s []string) []string {
