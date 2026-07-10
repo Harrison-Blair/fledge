@@ -2,7 +2,7 @@
 id: FTHR-008
 title: scaffold CLAUDE.md fledge-detection pointer for the Claude adapter
 plumage: PLM-004
-status: pipping
+status: fledged
 priority: P1
 depends_on: []
 oversight: merge
