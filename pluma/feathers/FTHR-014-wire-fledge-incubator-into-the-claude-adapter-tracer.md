@@ -2,7 +2,7 @@
 id: FTHR-014
 title: Wire fledge-incubator into the Claude adapter (tracer)
 plumage: PLM-010
-status: pipping
+status: hatching
 priority: P2
 depends_on: []
 oversight: merge
