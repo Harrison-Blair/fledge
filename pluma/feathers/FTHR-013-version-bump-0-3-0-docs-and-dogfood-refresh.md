@@ -2,7 +2,7 @@
 id: FTHR-013
 title: "Version bump 0.3.0, docs, and dogfood refresh"
 plumage: PLM-009
-status: hatching
+status: fledged
 priority: P1
 depends_on: [FTHR-010, FTHR-011, FTHR-012]
 oversight: merge
