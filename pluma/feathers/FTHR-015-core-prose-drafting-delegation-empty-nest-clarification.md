@@ -2,7 +2,7 @@
 id: FTHR-015
 title: "Core prose: drafting delegation + empty-nest clarification"
 plumage: PLM-010
-status: hatching
+status: fledged
 priority: P2
 depends_on: []
 oversight: merge
