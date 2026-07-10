@@ -435,6 +435,35 @@ func contains(list []string, s string) bool {
 	return false
 }
 
+// TestClaudeIncubatorWired: the Claude adapter Files include an entry writing
+// .claude/agents/fledge-incubator.md, and the adapter's derived tier (C) and
+// tier_primitives count are unchanged (no new primitive introduced by FTHR-014).
+func TestClaudeIncubatorWired(t *testing.T) {
+	m, err := FindAdapter("claude")
+	if err != nil || m == nil {
+		t.Fatalf("claude adapter: %v", err)
+	}
+
+	var found bool
+	for _, f := range m.Files {
+		if f.Dst == ".claude/agents/fledge-incubator.md" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("claude adapter Files: missing entry for .claude/agents/fledge-incubator.md")
+	}
+
+	if got := m.Tier(); got != "C" {
+		t.Errorf("claude adapter derived tier = %q, want C", got)
+	}
+
+	if got, want := len(m.TierPrimitives), len(PrimitiveOrder); got != want {
+		t.Errorf("claude tier_primitives count = %d, want %d (no new primitive)", got, want)
+	}
+}
+
 // TestClaudeAllowListGenerated: the generated Claude settings.local.json embeds
 // a Bash(fledge …) allow entry per CLI command fed via commandOrder (Q23).
 func TestClaudeAllowListGenerated(t *testing.T) {
