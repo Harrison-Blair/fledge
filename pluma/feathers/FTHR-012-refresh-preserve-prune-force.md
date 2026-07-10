@@ -70,7 +70,7 @@ expected reason; (3) implement until green.
 - Whole `go test ./...` + `go vet ./...` green.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: Refresh rewrites provably-unedited files, keeps and reports user-edited ones, and `--force` restores overwrite behavior; always-managed policies are unaffected (satisfies PLM-009 FC-4).
-- [ ] AC-3: Refresh prunes only stamp-proven, content-matching obsolete files (or symlinks at their recorded target), reports everything else without deleting, never touches paths outside the stamp, and the stampless path adopts without pruning (satisfies PLM-009 FC-5).
-- [ ] AC-4: `--refresh` help text and the init refresh note describe the new preserve/prune semantics; `go test ./...` and `go vet ./...` pass.
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: Refresh rewrites provably-unedited files, keeps and reports user-edited ones, and `--force` restores overwrite behavior; always-managed policies are unaffected (satisfies PLM-009 FC-4).
+- [x] AC-3: Refresh prunes only stamp-proven, content-matching obsolete files (or symlinks at their recorded target), reports everything else without deleting, never touches paths outside the stamp, and the stampless path adopts without pruning (satisfies PLM-009 FC-5).
+- [x] AC-4: `--refresh` help text and the init refresh note describe the new preserve/prune semantics; `go test ./...` and `go vet ./...` pass.
