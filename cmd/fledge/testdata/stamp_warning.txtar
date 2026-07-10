@@ -1,0 +1,58 @@
+# stamp_warning.txtar: version-mismatch warning fires on every command except
+# init/version, is silent when stamp matches or is absent, and fires from
+# subdirectories via the upward walk.
+
+exec git init -q .
+
+# preen with mismatched stamp (0.0.1 vs binary 0.2.1) → exit 0, one-line stderr warning
+exec fledge preen
+stderr 'fledge: scaffold was written by fledge 0\.0\.1, binary is 0\.2\.1 — run .fledge init --refresh.'
+stdout 'spec clean'
+
+# --json: stdout is valid JSON (first byte '{'), stderr still warns
+exec fledge preen --json
+stderr 'fledge: scaffold was written by fledge 0\.0\.1'
+stdout '^\{'
+
+# fledge version with mismatched stamp → no warning
+exec fledge version
+! stderr 'scaffold was written'
+
+# fledge init with mismatched stamp → no warning; init also updates scaffold.json to binary version
+exec fledge init
+! stderr 'scaffold was written'
+
+# matching stamp (init just wrote binaryVersion) → no warning
+exec fledge preen
+! stderr 'scaffold was written'
+stdout 'spec clean'
+
+# absent stamp → no warning
+rm .fledge/scaffold.json
+exec fledge preen
+! stderr 'scaffold was written'
+stdout 'spec clean'
+
+# restore mismatched stamp, run from a subdirectory → warning still fires (upward walk)
+cp .fledge/scaffold-mismatch.json .fledge/scaffold.json
+mkdir subdir
+cd subdir
+exec fledge preen
+stderr 'scaffold was written by fledge 0\.0\.1'
+cd ..
+
+-- .fledge/.gitkeep --
+-- .fledge/scaffold.json --
+{
+  "fledgeVersion": "0.0.1",
+  "agents": [],
+  "files": {}
+}
+-- .fledge/scaffold-mismatch.json --
+{
+  "fledgeVersion": "0.0.1",
+  "agents": [],
+  "files": {}
+}
+-- pluma/plumage/.gitkeep --
+-- pluma/feathers/.gitkeep --

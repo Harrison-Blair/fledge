@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+
+	"github.com/Harrison-Blair/fledge/internal/bootstrap"
 )
 
 // Exit codes shared by all commands.
@@ -41,7 +44,51 @@ func Run(args []string) int {
 		printUsage(os.Stderr)
 		return ExitUsage
 	}
+	warnStampMismatch(name)
 	return cmd.run(args[1:])
+}
+
+// warnStampMismatch prints a one-line stderr advisory when the scaffold stamp's
+// fledgeVersion differs from the running binary. Skipped for init and version
+// (which have no need for the warning), and for any error reading the stamp
+// (missing stamp, unreadable file) — the warning must never break a command.
+func warnStampMismatch(name string) {
+	if name == "init" || name == "version" {
+		return
+	}
+	root := findFledgeRoot()
+	if root == "" {
+		return
+	}
+	stamp, err := bootstrap.LoadStamp(root)
+	if err != nil || stamp == nil {
+		return
+	}
+	if stamp.FledgeVersion != binaryVersion {
+		fmt.Fprintf(os.Stderr,
+			"fledge: scaffold was written by fledge %s, binary is %s — run 'fledge init --refresh'\n",
+			stamp.FledgeVersion, binaryVersion)
+	}
+}
+
+// findFledgeRoot walks up from the current working directory looking for
+// .fledge/scaffold.json. Returns the directory that contains .fledge/, or ""
+// when no stamp is found. Uses no git subprocess.
+func findFledgeRoot() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".fledge", "scaffold.json")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
 }
 
 func printUsage(w *os.File) {
