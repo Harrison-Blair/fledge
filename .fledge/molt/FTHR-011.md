@@ -138,3 +138,31 @@ $ grep -r 'bootstrap' internal/check/
 ```
 
 `go test ./... -count=1` and `go vet ./...` both pass clean.
+
+## Post-rebase note (recovery)
+
+Branch was rebased onto main (which contains FTHR-010). The rebase resolved cleanly
+without conflicts. The FTHR-010 × FTHR-011 interaction: `stamp_warning.txtar` expected
+`stdout 'spec clean'` after removing the scaffold stamp, but FTHR-011's scaffold-drift
+check now fires an adoption warning when `skills/` exists (created earlier by `fledge init`
+in that test). Fix: removed the stale `stdout 'spec clean'` assertion from the "absent
+stamp" block; the FTHR-010 assertion `! stderr 'scaffold was written'` is unaffected.
+The AC-1 failing-run captures remain valid (tests failed for the expected reasons before
+implementation). Post-rebase full suite:
+
+```
+$ go test ./... -count=1
+ok  	github.com/Harrison-Blair/fledge/cmd/fledge	0.060s
+ok  	github.com/Harrison-Blair/fledge/internal/bootstrap	0.006s
+ok  	github.com/Harrison-Blair/fledge/internal/check	0.001s
+ok  	github.com/Harrison-Blair/fledge/internal/cli	0.003s
+ok  	github.com/Harrison-Blair/fledge/internal/graph	0.001s
+ok  	github.com/Harrison-Blair/fledge/internal/lock	0.002s
+ok  	github.com/Harrison-Blair/fledge/internal/nest	0.002s
+?   	github.com/Harrison-Blair/fledge/internal/repo	[no test files]
+ok  	github.com/Harrison-Blair/fledge/internal/scan	0.008s
+ok  	github.com/Harrison-Blair/fledge/internal/spec	0.002s
+
+$ go vet ./...
+(no output — clean)
+```
