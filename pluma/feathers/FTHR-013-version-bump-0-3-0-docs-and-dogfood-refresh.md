@@ -54,7 +54,7 @@ mechanics verified by existing suites.
   output after the dogfood refresh.
 
 ## Acceptance Criteria
-- [ ] AC-1: `VERSION` and `binaryVersion` both read 0.3.0 and version_test passes (satisfies PLM-009 FC-6).
-- [ ] AC-2: CLAUDE.md and the migration note accurately describe the stamp file and the new preserve/prune refresh semantics.
-- [ ] AC-3: `fledge init --refresh` in this repository produces `.fledge/scaffold.json` with no prunes and no kept-as-edited reports, and `fledge preen` reports the scaffold healthy (satisfies PLM-009 AC-6).
-- [ ] AC-4: Full `go test ./...` and `go vet ./...` pass on the final tree.
+- [x] AC-1: `VERSION` and `binaryVersion` both read 0.3.0 and version_test passes (satisfies PLM-009 FC-6).
+- [x] AC-2: CLAUDE.md and the migration note accurately describe the stamp file and the new preserve/prune refresh semantics.
+- [x] AC-3: `fledge init --refresh` in this repository produces `.fledge/scaffold.json` with no prunes and no kept-as-edited reports, and `fledge preen` reports the scaffold healthy (satisfies PLM-009 AC-6).
+- [x] AC-4: Full `go test ./...` and `go vet ./...` pass on the final tree.

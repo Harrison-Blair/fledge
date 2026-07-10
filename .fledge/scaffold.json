@@ -1,0 +1,115 @@
+{
+  "fledgeVersion": "0.3.0",
+  "agents": [
+    "claude"
+  ],
+  "files": {
+    ".claude/agents/fledge-brooder.md": {
+      "policy": "default",
+      "sha256": "095e231fbfc01c5a3f2a5e57ea33c3708c33f1f17a6b7ed53f0e1c95961ae10b"
+    },
+    ".claude/agents/fledge-context-scout.md": {
+      "policy": "default",
+      "sha256": "e4dcea963ef94d9a3b93e5eca90a5c6c5588319b56c72ee7c1da5b1a9f86942f"
+    },
+    ".claude/agents/fledge-forager.md": {
+      "policy": "default",
+      "sha256": "5016c3e2b07eeab708845194e9d75a60fe264725a31ac6714316c69efc61d2cf"
+    },
+    ".claude/agents/fledge-skua.md": {
+      "policy": "default",
+      "sha256": "8b20b68631a6db9b7698a8d60566c98b8270108ea6896d8717faec009b28fbfb"
+    },
+    ".claude/fledge-adapter.md": {
+      "policy": "primitive_map",
+      "sha256": "2e7eafc1dcd83578522c27ab35e6792d2e9a017c99522b7b402bd613de2d98d8"
+    },
+    ".claude/settings.json": {
+      "policy": "overwrite",
+      "sha256": "4198f5b412fb0f6810020099b1cacd939032bc4ee307ae699df8094311a9b35c"
+    },
+    ".claude/settings.local.json": {
+      "policy": "generate",
+      "sha256": "957b8dfb49a596cc308630a89a9803eec58a6d6ae6ade325ef9a483a4aa1aa12"
+    },
+    ".claude/skills/fledge-interrogate": {
+      "policy": "symlink",
+      "target": "../../.fledge/skills/fledge-interrogate"
+    },
+    ".claude/skills/fledge-orchestrate": {
+      "policy": "symlink",
+      "target": "../../.fledge/skills/fledge-orchestrate"
+    },
+    ".claude/team-loop.md": {
+      "policy": "overwrite",
+      "sha256": "88daca40272e407801adfed346015dad13e6d8dce8165faa09da0128e306ecc1"
+    },
+    ".fledge/broods/.gitkeep": {
+      "policy": "default",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    ".fledge/nest/raw/.gitkeep": {
+      "policy": "default",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    ".fledge/skills/fledge-interrogate/SKILL.md": {
+      "policy": "core",
+      "sha256": "b09529a6b2119847d879ad1284247cf258862c030b2fb6193cfd50b7ca59c690"
+    },
+    ".fledge/skills/fledge-orchestrate/SKILL.md": {
+      "policy": "core",
+      "sha256": "a74bf85596da4089dd5c1778e6f2ed5aa3ddea548967a9269dda07b341e7bb25"
+    },
+    ".fledge/skills/fledge-orchestrate/foraging.md": {
+      "policy": "core",
+      "sha256": "c85cb7c7df9a03f6cb954ef31a907a03b0521e964b5dde29fe5c53cdc168b318"
+    },
+    ".fledge/skills/fledge-orchestrate/implementation.md": {
+      "policy": "core",
+      "sha256": "9b53886249d6bff22d53048785a7373cd8cf3884576d54a51299077a14c23f05"
+    },
+    ".fledge/skills/fledge-orchestrate/planning.md": {
+      "policy": "core",
+      "sha256": "694e0d3e2beaa730fe7f2874704ab514613e4458148e68c53121b3f58b1d9b1a"
+    },
+    ".fledge/skills/fledge-orchestrate/templates/context-doc.md": {
+      "policy": "core",
+      "sha256": "a67459acd7fea3df03001b1e5e013b55775ae7ebad9c5a4d94c9d7f5a5e789ac"
+    },
+    ".fledge/skills/fledge-orchestrate/templates/feather.md": {
+      "policy": "core",
+      "sha256": "91d2a3ad83e0d0552c4701a27949e2445fe553b66395eabe0c127a328ddae2f4"
+    },
+    ".fledge/skills/fledge-orchestrate/templates/plumage.md": {
+      "policy": "core",
+      "sha256": "69c09fa1fa8d0cfcbbe7381a197b61a959e57a788d4b6ef227b17686c9c0ab38"
+    },
+    ".fledge/skills/fledge-orchestrate/templates/scout-report.md": {
+      "policy": "core",
+      "sha256": "2cded5914b5679dd6b380a088fe4659f84d9220ad8d0ef81ebf5ceb75f41e9f6"
+    },
+    ".fledge/skills/fledge-orchestrate/worker-protocols.md": {
+      "policy": "core",
+      "sha256": "721cb353b9122a196fbd2509a71e7096e3d1f8b4e18a5198ea96caff6ae48c60"
+    },
+    ".fledgeignore": {
+      "policy": "default",
+      "sha256": "0307a7e722c441be9d1588d2f329fd2b6a2f864a570dda0c5fbf9c94f6c3614f"
+    },
+    ".gitignore": {
+      "policy": "append",
+      "lines": [
+        ".fledge/nest/raw/",
+        ".fledge/broods/"
+      ]
+    },
+    "pluma/feathers/.gitkeep": {
+      "policy": "default",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "pluma/plumage/.gitkeep": {
+      "policy": "default",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  }
+}

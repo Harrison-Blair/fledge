@@ -4,9 +4,9 @@
 
 exec git init -q .
 
-# preen with mismatched stamp (0.0.1 vs binary 0.2.1) → exit 0, one-line stderr warning
+# preen with mismatched stamp (0.0.1 vs binary 0.3.0) → exit 0, one-line stderr warning
 exec fledge preen
-stderr 'fledge: scaffold was written by fledge 0\.0\.1, binary is 0\.2\.1 — run .fledge init --refresh.'
+stderr 'fledge: scaffold was written by fledge 0\.0\.1, binary is 0\.3\.0 — run .fledge init --refresh.'
 stdout 'spec clean'
 
 # --json: stdout is valid JSON (first byte '{'), stderr still warns
