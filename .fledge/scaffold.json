@@ -10,15 +10,15 @@
     },
     ".claude/agents/fledge-context-scout.md": {
       "policy": "default",
-      "sha256": "e4dcea963ef94d9a3b93e5eca90a5c6c5588319b56c72ee7c1da5b1a9f86942f"
+      "sha256": "209d3f245422797b1bf89f1d7747223eca750f423028f45f9222ad97e2096b57"
     },
     ".claude/agents/fledge-forager.md": {
       "policy": "default",
-      "sha256": "5016c3e2b07eeab708845194e9d75a60fe264725a31ac6714316c69efc61d2cf"
+      "sha256": "2eaa98c2eac309912061f6116e221d2bda6b6b93af7a596e42d1d647ef3effa6"
     },
     ".claude/agents/fledge-incubator.md": {
       "policy": "default",
-      "sha256": "cd872f9e2ece9d25c9612a531bf963e9611502600fda8160776627bf9eac8943"
+      "sha256": "9863c8aaa75888ebdb2dbab7c5bd0ab3a6967c82ce6baf7010380d1c7d06938c"
     },
     ".claude/agents/fledge-skua.md": {
       "policy": "default",
@@ -74,7 +74,7 @@
     },
     ".fledge/skills/fledge-orchestrate/planning.md": {
       "policy": "core",
-      "sha256": "e998b97c9c879b726072dfc8b9894a8cf2c9c718da7d7e8c453d4c0c451db9e0"
+      "sha256": "f1745f8609727160651211e269ce3d8cad8d6098e39d3ca3010a35c2a590962b"
     },
     ".fledge/skills/fledge-orchestrate/templates/context-doc.md": {
       "policy": "core",
