@@ -66,7 +66,7 @@ expected reason; (3) implement until green.
 - Whole `go test ./...` + `go vet ./...` green.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: `fledge preen` classifies up-to-date, stale, modified, missing, and obsolete scaffold entries correctly in human output and in the `--json` scaffold object, at warning severity (satisfies PLM-009 FC-3).
-- [ ] AC-3: A stampless repo produces exactly one adoption warning finding; symlink and append entries are checked without error on any platform.
-- [ ] AC-4: `internal/check` gains no bootstrap import; `go test ./...` and `go vet ./...` pass.
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: `fledge preen` classifies up-to-date, stale, modified, missing, and obsolete scaffold entries correctly in human output and in the `--json` scaffold object, at warning severity (satisfies PLM-009 FC-3).
+- [x] AC-3: A stampless repo produces exactly one adoption warning finding; symlink and append entries are checked without error on any platform.
+- [x] AC-4: `internal/check` gains no bootstrap import; `go test ./...` and `go vet ./...` pass.

@@ -1,0 +1,70 @@
+# preen scaffold-drift: classifies scaffold entries and reports findings
+
+exec git init -q .
+exec fledge init --agent claude
+
+# fresh init: preen must be clean (no scaffold-drift findings)
+exec fledge preen
+! stdout 'scaffold'
+stdout 'spec clean: 0 plumages, 0 feathers'
+
+# fresh init --json: scaffold object present, all files up-to-date
+exec fledge preen --json
+stdout '"ok": true'
+stdout '"scaffold"'
+stdout '"stampVersion"'
+stdout '"binaryVersion"'
+stdout '"files"'
+! stdout '"modified"'
+! stdout '"stale"'
+! stdout '"missing"'
+! stdout '"obsolete"'
+
+# edit a default-policy file → modified warning, exit 0; --strict exit 1
+exec sh -c 'echo user-edit >> .fledgeignore'
+exec fledge preen
+stdout 'WARN'
+stdout 'user-edited'
+stdout '.fledgeignore'
+
+exec fledge preen --json
+stdout '"scaffold-drift"'
+stdout '"warning"'
+stdout '"modified"'
+
+! exec fledge preen --strict
+
+# restore with refresh
+exec fledge init --refresh
+
+# delete a core skill file → missing finding
+rm .fledge/skills/fledge-orchestrate/SKILL.md
+exec fledge preen
+stdout 'WARN'
+stdout 'missing'
+stdout 'fledge-orchestrate/SKILL.md'
+! exec fledge preen --strict
+
+# add an obsolete stamp entry (a path no longer in expected)
+exec sh -c 'python3 -c "import json; d=json.load(open(\".fledge/scaffold.json\")); d[\"files\"][\"old/removed-file.md\"]={\"policy\":\"default\",\"sha256\":\"deadbeef\"}; f=open(\".fledge/scaffold.json\",\"w\"); json.dump(d,f,indent=2); f.write(\"\\n\")"'
+exec fledge preen
+stdout 'obsolete'
+stdout 'old/removed-file.md'
+
+# restore for remaining tests
+exec fledge init --refresh
+
+# remove the stamp → single adoption warning finding
+rm .fledge/scaffold.json
+exec fledge preen
+stdout 'WARN'
+stdout 'no scaffold stamp'
+stdout 'fledge init --refresh'
+
+# --json when stamp is absent: scaffold object has stampVersion ""
+exec fledge preen --json
+stdout '"scaffold"'
+stdout '"stampVersion": ""'
+! stdout '"ok": false'
+
+-- .fledge/.gitkeep --

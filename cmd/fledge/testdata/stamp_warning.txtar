@@ -27,11 +27,10 @@ exec fledge preen
 ! stderr 'scaffold was written'
 stdout 'spec clean'
 
-# absent stamp → no warning
+# absent stamp → no warning (after init, skills dir exists so preen emits adoption warning, not version-mismatch)
 rm .fledge/scaffold.json
 exec fledge preen
 ! stderr 'scaffold was written'
-stdout 'spec clean'
 
 # restore mismatched stamp, run from a subdirectory → warning still fires (upward walk)
 cp .fledge/scaffold-mismatch.json .fledge/scaffold.json
