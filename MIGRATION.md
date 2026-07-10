@@ -1,3 +1,37 @@
+# Migrating a fledge 0.2.x repo to 0.3.0
+
+fledge 0.3.0 adds a scaffold stamp file (`.fledge/scaffold.json`) that records
+which files fledge owns and at what content hash. The stamp enables the new
+preserve/prune semantics: `fledge init --refresh` keeps user-edited files
+as-is and prunes files that no longer belong to the scaffold.
+
+## What changed
+
+- `fledge init --refresh` now writes `.fledge/scaffold.json` after each run.
+  Prior releases had no stamp; first-time refresh on a 0.2.x repo is
+  unconditional and creates the stamp from scratch — no manual steps needed.
+- `fledge preen` validates the stamp; it reports healthy once the stamp exists
+  and is consistent with the on-disk scaffold.
+- `.fledge/scaffold.json` is deterministic (keys sorted, stable JSON), so
+  merge conflicts are straightforward to resolve. If two branches both ran
+  `init --refresh`, accept whichever is more recent (or re-run refresh after
+  merge to regenerate a consistent stamp).
+
+## Steps
+
+No manual steps required. Run `fledge init --refresh` once after upgrading:
+
+```sh
+fledge init --refresh     # creates .fledge/scaffold.json; zero prunes on a clean repo
+git add .fledge/scaffold.json
+git commit -m "chore: create scaffold stamp (fledge 0.3.0)"
+```
+
+Everything else is unchanged: `.fledge/nest/`, `pluma/`, spec files, and all
+CLI commands behave as before.
+
+---
+
 # Migrating a fledge 0.1.0 repo to 0.2.0
 
 fledge 0.2.0 moves the orchestration workflow out of `.claude/` into an

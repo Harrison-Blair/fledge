@@ -75,9 +75,15 @@ When you change embedded `core/`/`adapters/` content, also **regenerate** this
 repo's own scaffolded output so it stays consistent with the new binary:
 
 ```sh
-fledge init --refresh          # re-sync .fledge/skills/ and the .claude/ adapter
+fledge init --refresh          # re-sync; preserves user-edited files, prunes obsolete ones
 git status                     # review what regeneration changed
 ```
+
+`--refresh` writes `.fledge/scaffold.json` (the stamp of what fledge owns and at
+what content hash). Files the user has edited since last init are kept as-is and
+reported; files that no longer belong to the scaffold are pruned. Use `--force`
+to overwrite user-edited files. `fledge preen` reports the scaffold healthy when
+the stamp is present and consistent.
 
 ## Architecture
 
@@ -117,6 +123,9 @@ verbatim, rewrite when changed), `append_if_missing` (additive line), `symlink`
 (e.g. `.claude/skills/...` points into `.fledge/skills/`), and the default
 (copy, **skip-if-exists** so user edits survive; `init --refresh` re-syncs).
 `writeIfChanged` makes writes byte-idempotent, which the txtar tests depend on.
+`fledge init --refresh` writes `.fledge/scaffold.json` — the stamp that records
+which files fledge owns and at what content hash. `fledge preen` validates its
+presence and consistency.
 
 ## Conventions
 
