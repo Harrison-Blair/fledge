@@ -2,7 +2,7 @@
 id: FTHR-010
 title: Version-mismatch warning on every command
 plumage: PLM-009
-status: egg
+status: hatching
 priority: P1
 depends_on: [FTHR-009]
 authored: 2026-07-10T14:59:00Z

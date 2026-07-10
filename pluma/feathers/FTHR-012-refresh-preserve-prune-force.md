@@ -2,7 +2,7 @@
 id: FTHR-012
 title: "Refresh preserve/prune + --force"
 plumage: PLM-009
-status: egg
+status: hatching
 priority: P1
 depends_on: [FTHR-009]
 authored: 2026-07-10T15:01:02Z

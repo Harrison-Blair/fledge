@@ -2,7 +2,7 @@
 id: FTHR-011
 title: Preen scaffold-drift report
 plumage: PLM-009
-status: egg
+status: hatching
 priority: P1
 depends_on: [FTHR-009]
 authored: 2026-07-10T15:00:04Z
