@@ -1,7 +1,7 @@
 ---
 id: PLM-004
 title: Agent detection of fledge-managed repositories
-status: hatched
+status: fledged
 priority: P1
 authored: 2026-07-08T05:58:02Z
 agent: fledge-orchestrate/planning
@@ -42,10 +42,10 @@ Numbered, testable statements of behavior. Referenced downstream as FC-1, FC-2, 
    harnesses (e.g. Codex), so the detection cue is uniform across adapters.
 
 ## Acceptance Criteria
-- [ ] AC-1: Initializing a Claude repository that has no pre-existing project-memory file produces one containing the fledge detection pointer.
-- [ ] AC-2: Initializing a Claude repository that already has a project-memory file appends the pointer without altering existing content, and repeating initialization neither duplicates nor rewrites it.
-- [ ] AC-3: The scaffolded pointer directs the agent to the fledge orchestration skill and the Claude adapter/primitive map, matching the wording used for the Codex adapter.
-- [ ] AC-4: Automated acceptance tests cover AC-1..AC-3 and the full test suite passes.
+- [x] AC-1: Initializing a Claude repository that has no pre-existing project-memory file produces one containing the fledge detection pointer.
+- [x] AC-2: Initializing a Claude repository that already has a project-memory file appends the pointer without altering existing content, and repeating initialization neither duplicates nor rewrites it.
+- [x] AC-3: The scaffolded pointer directs the agent to the fledge orchestration skill and the Claude adapter/primitive map, matching the wording used for the Codex adapter.
+- [x] AC-4: Automated acceptance tests cover AC-1..AC-3 and the full test suite passes.
 
 ## Out of Scope
 - Native skill auto-discovery and the `.claude/settings.json` `skills`-pointer discrepancy
