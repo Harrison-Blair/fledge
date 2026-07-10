@@ -2,7 +2,7 @@
 id: FTHR-016
 title: Dogfood fledge init --refresh closeout
 plumage: PLM-010
-status: hatching
+status: fledged
 priority: P2
 depends_on: [FTHR-014, FTHR-015]
 authored: 2026-07-10T21:22:50Z
