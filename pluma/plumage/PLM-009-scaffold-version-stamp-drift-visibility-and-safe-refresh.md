@@ -1,7 +1,7 @@
 ---
 id: PLM-009
 title: "Scaffold version stamp, drift visibility, and safe refresh"
-status: hatched
+status: fledged
 priority: P1
 authored: 2026-07-10T14:54:16Z
 agent: fledge-orchestrate/planning
@@ -75,12 +75,12 @@ Numbered, testable statements of behavior. Referenced downstream as FC-1, FC-2, 
 
 ## Acceptance Criteria
 Checkbox list of verifiable conditions under which this plumage is considered fledged, one `- [ ] AC-N: …` line each. Authored unchecked; checked only via `fledge criteria check` at plumage closeout.
-- [ ] AC-1: A fresh `fledge init` produces `.fledge/scaffold.json` with the binary version and a manifest entry (policy + hash/target/lines) for every scaffolded file, and a second run changes zero bytes.
-- [ ] AC-2: With a stamp version older than the binary, every command except `init` and `version` emits the one-line stderr mismatch warning while `--json` stdout remains parseable; with a matching or absent stamp, commands are silent.
-- [ ] AC-3: `fledge preen` (human and `--json`) correctly classifies seeded up-to-date, stale, modified, missing, and obsolete scaffold files, and reports the no-stamp adoption warning when the stamp is absent.
-- [ ] AC-4: `fledge init --refresh` updates unedited files, keeps and reports user-edited files (overwriting them only with `--force`), prunes provably-owned unmodified obsolete files, reports — without deleting — everything else, and never touches paths outside the stamp manifest.
-- [ ] AC-5: Automated tests cover AC-1..AC-4 (unit tests for stamp/drift/prune decisions; txtar acceptance tests including the no-stamp adoption path), each observed failing before its implementation, and the full suite passes.
-- [ ] AC-6: VERSION and `binaryVersion` read 0.3.0, and this repo's own `fledge init --refresh` produces a clean stamp with no pruning and no kept-as-edited reports.
+- [x] AC-1: A fresh `fledge init` produces `.fledge/scaffold.json` with the binary version and a manifest entry (policy + hash/target/lines) for every scaffolded file, and a second run changes zero bytes.
+- [x] AC-2: With a stamp version older than the binary, every command except `init` and `version` emits the one-line stderr mismatch warning while `--json` stdout remains parseable; with a matching or absent stamp, commands are silent.
+- [x] AC-3: `fledge preen` (human and `--json`) correctly classifies seeded up-to-date, stale, modified, missing, and obsolete scaffold files, and reports the no-stamp adoption warning when the stamp is absent.
+- [x] AC-4: `fledge init --refresh` updates unedited files, keeps and reports user-edited files (overwriting them only with `--force`), prunes provably-owned unmodified obsolete files, reports — without deleting — everything else, and never touches paths outside the stamp manifest.
+- [x] AC-5: Automated tests cover AC-1..AC-4 (unit tests for stamp/drift/prune decisions; txtar acceptance tests including the no-stamp adoption path), each observed failing before its implementation, and the full suite passes.
+- [x] AC-6: VERSION and `binaryVersion` read 0.3.0, and this repo's own `fledge init --refresh` produces a clean stamp with no pruning and no kept-as-edited reports.
 
 ## Out of Scope
 - Automatic refresh / self-healing writes on version mismatch (explicitly
