@@ -47,10 +47,10 @@ green suite, not a new unit test:
 - `go test ./...` and `go vet ./...` green after refresh.
 
 ## Acceptance Criteria
-- [ ] AC-1: The drift transition was observed — `fledge preen` showed the incubator missing /
+- [x] AC-1: The drift transition was observed — `fledge preen` showed the incubator missing /
       core stale before `fledge init --refresh`, and reports clean after.
-- [ ] AC-2: `fledge init --refresh` regenerates this repo's scaffold so
+- [x] AC-2: `fledge init --refresh` regenerates this repo's scaffold so
       `.claude/agents/fledge-incubator.md` exists and `.fledge/skills/fledge-orchestrate/`
       carries the FTHR-015 prose, with `.fledge/scaffold.json` updated (satisfies PLM-010 AC-5).
-- [ ] AC-3: `go test ./...` and `go vet ./...` pass, and `fledge preen` is clean for the whole
+- [x] AC-3: `go test ./...` and `go vet ./...` pass, and `fledge preen` is clean for the whole
       repo.
