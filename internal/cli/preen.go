@@ -3,8 +3,11 @@ package cli
 import (
 	"flag"
 	"fmt"
+	"path/filepath"
+	"sort"
 	"strings"
 
+	"github.com/Harrison-Blair/fledge/internal/bootstrap"
 	"github.com/Harrison-Blair/fledge/internal/check"
 )
 
@@ -25,13 +28,22 @@ func runCheck(args []string) int {
 	for i := range findings {
 		findings[i].File = relPath(r.Root, findings[i].File)
 	}
+
+	// Scaffold drift check: load stamp, build expected, classify.
+	scaffoldFindings, scaffoldJSON := scaffoldDrift(r.Root)
+	findings = append(findings, scaffoldFindings...)
+
 	failed := check.HasErrors(findings) || (*strict && len(findings) > 0)
 
 	if *jsonOut {
 		if findings == nil {
 			findings = []check.Finding{}
 		}
-		emitJSON(map[string]any{"ok": !failed, "findings": findings})
+		emitJSON(map[string]any{
+			"ok":       !failed,
+			"findings": findings,
+			"scaffold": scaffoldJSON,
+		})
 	} else {
 		errs, warns := 0, 0
 		for _, f := range findings {
@@ -55,6 +67,118 @@ func runCheck(args []string) int {
 		return ExitFail
 	}
 	return ExitOK
+}
+
+// scaffoldJSON is the --json shape for the scaffold section.
+type scaffoldJSONOut struct {
+	StampVersion  string          `json:"stampVersion"`
+	BinaryVersion string          `json:"binaryVersion"`
+	Files         []scaffoldEntry `json:"files"`
+}
+
+type scaffoldEntry struct {
+	Path   string              `json:"path"`
+	Status bootstrap.DriftStatus `json:"status"`
+	Policy string              `json:"policy"`
+}
+
+// scaffoldDrift loads the stamp, builds the expected file set from the stamp's
+// agents, runs DriftReport, and returns check.Findings (warnings) plus the JSON
+// object for --json output.
+//
+// If .fledge/skills/ does not exist, init has never been run for this repo and
+// no scaffold check is needed.
+func scaffoldDrift(root string) ([]check.Finding, scaffoldJSONOut) {
+	if !fileExists(filepath.Join(root, ".fledge", "skills")) {
+		return nil, scaffoldJSONOut{BinaryVersion: binaryVersion}
+	}
+
+	stamp, err := bootstrap.LoadStamp(root)
+	if err != nil {
+		// Unreadable stamp is not a hard failure; report as a single warning.
+		f := check.Finding{
+			File:     ".fledge/scaffold.json",
+			Rule:     "scaffold-drift",
+			Severity: check.Warning,
+			Message:  fmt.Sprintf("could not read scaffold stamp: %v", err),
+		}
+		return []check.Finding{f}, scaffoldJSONOut{BinaryVersion: binaryVersion}
+	}
+
+	if stamp == nil {
+		// No stamp yet: adoption warning.
+		f := check.Finding{
+			File:     ".fledge/scaffold.json",
+			Rule:     "scaffold-drift",
+			Severity: check.Warning,
+			Message:  "no scaffold stamp — run fledge init --refresh to adopt",
+		}
+		return []check.Finding{f}, scaffoldJSONOut{StampVersion: "", BinaryVersion: binaryVersion}
+	}
+
+	// Build the expected file map from the stamp's agents.
+	expected := baseScaffoldEntries()
+	for _, agentName := range stamp.Agents {
+		m, mErr := bootstrap.FindAdapter(agentName)
+		if mErr != nil || m == nil {
+			continue // unknown adapter; skip gracefully
+		}
+		ef, efErr := bootstrap.ExpectedFiles(m, commandOrder)
+		if efErr != nil {
+			continue
+		}
+		for k, v := range ef {
+			expected[k] = v
+		}
+	}
+
+	drifts := bootstrap.DriftReport(root, stamp, expected)
+
+	// Sort for deterministic output.
+	sort.Slice(drifts, func(i, j int) bool { return drifts[i].Path < drifts[j].Path })
+
+	// Build JSON files list (all entries, including up-to-date).
+	files := make([]scaffoldEntry, 0, len(drifts))
+	for _, d := range drifts {
+		files = append(files, scaffoldEntry{Path: d.Path, Status: d.Status, Policy: d.Policy})
+	}
+
+	// Emit findings for non-up-to-date entries.
+	var findings []check.Finding
+	for _, d := range drifts {
+		if d.Status == bootstrap.StatusUpToDate {
+			continue
+		}
+		msg := scaffoldMessage(d)
+		findings = append(findings, check.Finding{
+			File:     d.Path,
+			Rule:     "scaffold-drift",
+			Severity: check.Warning,
+			Message:  msg,
+		})
+	}
+
+	return findings, scaffoldJSONOut{
+		StampVersion:  stamp.FledgeVersion,
+		BinaryVersion: binaryVersion,
+		Files:         files,
+	}
+}
+
+// scaffoldMessage returns an actionable human message for a non-up-to-date drift entry.
+func scaffoldMessage(d bootstrap.Drift) string {
+	switch d.Status {
+	case bootstrap.StatusStale:
+		return fmt.Sprintf("scaffold file is stale (unedited, refresh-safe) — run fledge init --refresh")
+	case bootstrap.StatusModified:
+		return fmt.Sprintf("scaffold file is user-edited; refresh will preserve it — run fledge init --refresh")
+	case bootstrap.StatusMissing:
+		return fmt.Sprintf("scaffold file is missing — run fledge init --refresh")
+	case bootstrap.StatusObsolete:
+		return fmt.Sprintf("scaffold file is obsolete (no longer shipped) — run fledge init --refresh to prune")
+	default:
+		return fmt.Sprintf("scaffold drift: %s", d.Status)
+	}
 }
 
 func summaryLine(errs, warns int) string {
