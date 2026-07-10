@@ -1,41 +1,50 @@
 ---
-generated: 2026-07-08T05:28:12Z
-commit: e46c481a047d45ef10bcd79a3326d47932b32868
+generated: 2026-07-10T14:50:00Z
+commit: 7678344ab9a18730530b9f6edf507ad0c449d352
 agent: fledge-forager
 fledge_version: 0.2.1
 ---
 
 # Data Model
 
-The on-disk artifacts fledge reads and writes, and the in-memory types that back them. All frontmatter is YAML, CLI-owned; bodies are markdown.
+Core types and schemas that fledge operates on: the spec model (plumages/feathers), CLI JSON-output types, and the bootstrap/manifest schema.
 
-## Plumage (`pluma/plumage/PLM-###-<kebab>.md`)
+## Spec model (`internal/spec/types.go`)
 
-Requirement/feature spec. Frontmatter: `id`, `title`, `status` (`egg` → `hatched` → `fledged`), `priority` (P0–P3), `authored`, `agent`, `fledge_version`. Body sections: Context/motivation, user stories, Functional Criteria, Acceptance Criteria (unchecked `- [ ] AC-N:` boxes), out-of-scope. Backed by `spec.Requirement` (`internal/spec`); rendered via `Requirement.Render` + `RequirementBody`.
+- **`spec.Requirement`** (a plumage/PLM): `ID, Title, Status, Priority, Authored, Agent, FledgeVersion, Path, Body`. Status: `egg → hatched → fledged`.
+- **`spec.Task`** (a feather/FTHR): `ID, Title, Requirement, Status, Priority, DependsOn[], Oversight, Authored, Agent, FledgeVersion, Path, Body`. Status: `egg → pipping → hatching → fledged`. `DependsOn` references other FTHR/PLM IDs; validated for dangling refs and cycles.
+- **`spec.Set`**: loaded spec collection — `Reqs[], Tasks[], Errors[], UnknownFields map`. `Load()` never aborts on a single parse error; accumulates all in `Set.Errors` (`internal/spec/load.go`).
+- **`spec.Criterion`**: a parsed AC checkbox — `N, Label, Checked, Text`, plus an internal `boxOff` byte-offset for in-place mutation (`internal/spec/criteria.go`).
+- **`spec.FileError`**: a parse error attributed to a file path.
 
-## Feather (`pluma/feathers/FTHR-###-<kebab>.md`)
+**Spec frontmatter (YAML), on disk** (`pluma/plumage/PLM-*.md`, `pluma/feathers/FTHR-*.md`):
+- Plumage: `id, title, status, priority, authored, agent, fledge_version`.
+- Feather: `id, title, plumage` (parent ID), `status, priority, depends_on` (list), `oversight` (merge gate), `authored, agent, fledge_version`.
+- Prose body sections — Plumage: Context, User Stories, Functional Criteria (FC-N), Acceptance Criteria (AC-N), Out of Scope, Open Questions. Feather: Description, Affected Modules, Approach, Tests, Acceptance Criteria (checkboxes).
 
-Implementable task under one plumage. Frontmatter: `id`, `title`, `plumage` (parent link), `status` (`egg` → `pipping` → `hatching` → `fledged`), `priority`, `depends_on` (list of FTHR IDs, DAG — cycles rejected), optional `oversight` (`during` | `merge`; omitted = autonomous), `authored`, `agent`, `fledge_version`. Body: Description, Affected Modules, Approach, Tests, Acceptance Criteria (`- [ ] AC-N:`). Backed by `spec.Task`.
+## Validation & graph types (`internal/check`, `internal/graph`, `internal/lock`)
 
-## Brood / lock (`.fledge/broods/FTHR-###.brood`)
+- **`check.Finding`**: `File, Rule, Severity, Message` — JSON-serializable validation result. **`check.Severity`**: `"error" | "warning"`. Rules (`internal/check/check.go`): parse, unknown-field, duplicate-id, schema, id-filename, dangling-ref, unhatched-plumage, tests-section, required-sections, criteria-format, criteria-incomplete, criteria-evidence, stale-pipping-hint, cycle, brood-consistency.
+- **`graph.Graph`**: depends-on DAG over tasks; tolerates dangling refs (treated as never-done by `Ready`, skipped by `Cycle`/`Waves`).
+- **`lock.Record`** (a brood): `Task, Owner, PID, Created, Branch` — JSON persisted at `.fledge/broods/<FTHR-ID>.brood`. **`lock.HeldError`**: acquisition conflict distinguishing "held by someone else" from corruption.
 
-Claim on a feather while it is worked. `lock.Record{Task, Owner, PID, Created, Branch}` (JSON). Created by `fledge brood` (atomically also sets the feather `status: hatching`), released by `fledge abandon`. `fledge broods` lists held locks with a PID-liveness check. Gitignored. **This is the only durable record of who owns in-flight work** — relevant to any worker-pairing/recovery work.
+## Nest doc types (`internal/nest`)
 
-## Evidence / molt (`.fledge/molt/FTHR-###.md`)
+- **`nest.Doc`**: unified context-doc representation — `Kind` (`concern`|`scout`), plus `Generated`/`Commit` (concern) or `Module`/`Authored` (scout), `Agent, FledgeVersion, Body`.
+- **`nest.Kind`**: `"concern" | "scout"`. `internal/nest/docs.go`'s `ConcernDocs` is the closed set of the 8 concern-doc names plus `index.md`.
 
-Per-feather evidence file holding per-criterion (AC-N) output — AC-1 typically the pre-implementation failing test run, the rest post-implementation proof. Written inside the worktree by the brooder; the paired skua audits it. `check.Run()` receives `repo.EvidenceDir()` and validates evidence presence for checked criteria. NOTE: the most recent commit (`e46c481`) reconstructs an FTHR-004 evidence file "never captured at build time" — evidence files can go missing/orphaned, which is a live concern.
+## CLI JSON output types (`internal/cli`)
 
-## Nest documents (`.fledge/nest/`)
+Types serialized for `--json` flags, one per command: `adapterInfo` (agents), `criterionJSON` (criteria), `reportCounts`/`reqCompletion`/`orphanTask`/`blockedTask`/`lockEntry`/`issues`/`report` (colony), `readyTask` (ready), `unfledgedItem`/`unfledgedReport` (unfledged), `graphNode` (vee), `initJSON` (init: `Created[], Skipped[], Updated[], Agents[]`), `nestDoc` (nest, mirrors `internal/nest.Doc`).
 
-Distilled repo knowledge. Eight concern docs (architecture, modules, conventions, data-model, dependencies, entry-points, testing, domain) + `index.md` (routing) written by the forager; `raw/<module>.md` scout reports (gitignored). Backed by `internal/nest` (`Doc`, `Kind` = Concern|Scout, renderers). Frontmatter (`generated`, `commit`, `agent`, `fledge_version`) is stamped by `fledge nest scaffold`/`stamp` — the binary is the schema's single source.
+## Bootstrap/manifest schema (`internal/bootstrap`)
 
-## Manifest (`internal/bootstrap/adapters/<harness>/manifest.yaml`, embedded)
+- **`bootstrap.Manifest`**: `Name, Detector (ManifestDetector), TierPrimitives map[string]string, Files []ManifestFile, PipingFile string`.
+- **`bootstrap.ManifestFile`**: `Src, Dst string`, plus policy flags `Generate, PrimitiveMap, Overwrite bool`, `AppendIfMissing, Symlink string` (see `conventions.md` for policy semantics).
+- **`bootstrap.ManifestDetector`**: `Exists string` — marker path for harness auto-detection.
+- **`bootstrap.primitiveRow`** / **`renderContext`**: template-time structs for rendering the primitive table into generated adapter files (`CommandOrder` here is how `internal/cli`'s `commandOrder` reaches generated allow-lists).
 
-`Manifest{name, detector, tier_primitives (primitive→mechanism), files, piping_file, dir}`; `ManifestFile{src, dst, + write-policy flags}`. Read at build time by `registry.go`, embedded in the binary — never lands in a target repo. Tier is derived from `tier_primitives` coverage, never stored.
+## Repo/scan types (`internal/repo`, `internal/scan`)
 
-## Relationships & integrity
-
-- feather `plumage` → PLM must resolve, else it is an **orphan feather** (`colony.go`).
-- feather `depends_on` → FTHRs must resolve, else a **dangling ref** (`colony.go`).
-- checked AC boxes require a matching evidence file (`check`/`preen`).
-- These integrity checks are surfaced by `fledge preen` (errors) and `fledge colony` (reports orphans, dangling refs, blocked, degraded-data). See `entry-points.md`.
+- **`repo.Repo`**: resolved git root; exposes `FledgeDir, LocksDir, ContextDir, RequirementsDir, TasksDir, EvidenceDir, Head(), Version()`.
+- **`scan.Module`**: `Name, Files[], Count, Bytes` — one row of `fledge scan`'s module grouping. **`scan.Result`**: `Commit, ShortCommit, Modules[]`.

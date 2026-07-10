@@ -1,38 +1,68 @@
 ---
-generated: 2026-07-08T05:28:12Z
-commit: e46c481a047d45ef10bcd79a3326d47932b32868
+generated: 2026-07-10T14:50:00Z
+commit: 7678344ab9a18730530b9f6edf507ad0c449d352
 agent: fledge-forager
 fledge_version: 0.2.1
 ---
 
 # Entry Points
 
-Where execution and agents enter the system: the CLI command surface, the process entry, and the files an agent harness auto-loads.
+Where execution enters fledge, the public interface each package exposes to callers, and how to build/install/run the project.
 
-## Process entry
+## Build, test, run (from `CLAUDE.md`)
 
-`cmd/fledge/main.go:main()` → `cli.Run(os.Args[1:])` (returns the exit code). `Run` dispatches `args[0]` to a registered command, prints usage on unknown/empty.
+```sh
+go build ./...                     # build everything
+go build -o fledge ./cmd/fledge    # build the CLI binary
+go test ./...                      # run all tests
+go vet ./...
 
-## CLI command surface (`commandOrder`)
+go test ./cmd/fledge -run TestScripts             # all txtar acceptance tests
+go test ./cmd/fledge -run TestScripts/init -v      # one script, verbose trace
+go test ./internal/spec -run TestAllocateID        # a single unit test
+```
 
-`init`, `agents`, `scan`, `new`, `nest`, `preen`, `ready`, `vee`, `colony`, `unfledged`, `status`, `set`, `criteria`, `brood`, `abandon`, `broods`, `version`. All support `--json`. Grouped by role:
+Go 1.26, no Makefile — use `go` directly.
 
-- **Scaffolding:** `init [--agent <name>] [--refresh] [--list-agents]` (detects harness, writes core skills + adapter, ensures `.gitignore`/`.fledgeignore`), `agents` (lists adapters with derived tier + scaffolded status).
-- **Spec creation/mutation:** `new plumage|feather --title … [--plumage] [--depends-on] [--priority] [--oversight]`, `status <ID> [<new>] [--force]`, `set <ID> <field> <value>` (priority/oversight/depends_on/title; cycle-checked), `criteria <ID> [check|uncheck] <AC-N>`.
-- **Validation & triage:** `preen`/`check [--strict]` (validation errors/warnings — bad frontmatter, dangling refs, unchecked fledged criteria, missing evidence), `colony` (repo-wide report: counts by status, per-plumage completion, **orphan feathers** with unresolved plumage, **dangling refs**, blocked feathers, active broods, degraded-data issues), `unfledged [--plumage|--feathers]` (all non-fledged items, priority-then-ID).
-- **Graph & readiness:** `vee [--format text|dot|json] [PLM-###]` (dependency waves, cycle detection, subgraph filter), `ready`/`pipping` (dispatchable-now: pipping, deps fledged, no brood held).
-- **Claims:** `brood <FTHR> --owner <name> [--branch]` (acquire lock + set `hatching`), `abandon <FTHR> [--fledged] [--force]`, `broods` (held locks + PID liveness).
-- **Knowledge:** `nest {scaffold|new <doc>|scout --module <m>|stamp <file>}` (deterministic nest-doc creation/frontmatter stamping), `scan` (module inventory), `version`.
+Install/reinstall/verify (`scripts/install.sh`, also documented in `CLAUDE.md`):
 
-### Triage-relevant detail (for orphan/evidence work)
+```sh
+go install ./cmd/fledge     # install to $(go env GOPATH)/bin
+hash -r                     # drop shell's cached path
+command -v fledge           # confirm it resolves to the new build
+fledge version               # must match VERSION file
+fledge init --refresh        # re-sync this repo's own .fledge/skills/ + .claude/ after bootstrap changes
+```
 
-Integrity surfacing today is split: `preen` returns hard validation errors; `colony` reports orphans/dangling-refs/degraded-data but **exits 0** (it is an observer, leaving enforcement to `preen`). Neither currently detects an **orphaned evidence file** in `.fledge/molt/` whose feather was renamed/removed, nor evidence *missing* for a fledged feather except via the checked-criteria rule in `check`. `check.Run()` already receives `repo.EvidenceDir()`, so evidence-orphan detection is a natural extension of the `check`/`colony` surface.
+## Binary entry point
 
-## Agent-loaded entry (harness discovery)
+- `cmd/fledge/main.go`: `main()` calls `internal/cli.Run(os.Args[1:])` and `os.Exit`s with its return code. This is the *only* entry point into the compiled binary — all logic lives in `internal/cli`.
 
-An agent working in a fledge repo is meant to enter through scaffolded files:
-- `.claude/` adapter — `fledge-adapter.md` (primitive map), `settings.local.json` (generated `Bash(fledge …)` allow-list), `settings.json` (`skills` pointer), `team-loop.md` (runtime notes), `agents/*.md` (fledge-brooder/skua/forager/context-scout entry files).
-- `.claude/skills/fledge-orchestrate` → symlink into `.fledge/skills/fledge-orchestrate/` (`SKILL.md` routing → `planning.md` / `implementation.md`).
-- Root `CLAUDE.md` (this repo) tells the agent to route feature/spec/impl requests through the orchestration skill.
+## CLI dispatcher (`internal/cli/cli.go`)
 
-How reliably an agent *notices* these on entry — vs improvising — is exactly the agent-detection/legibility concern (feedback items 1–2).
+- **`Run(args []string) int`** — the CLI's real entry point. Dispatches to whichever subcommand is registered; prints usage and returns `ExitUsage` on no args / unknown command.
+- Subcommand registration pattern: every command file's `init()` calls `register(name, run, usage)`, populating the `commands` map and reserving a slot in `commandOrder`.
+- Exit codes: `ExitOK/Fail/Usage/Env` = `0/1/2/3`.
+
+## CLI command surface (all under `internal/cli`, all support `--json`)
+
+`init, agents, new, status, brood, abandon, broods, criteria, preen, ready, vee, colony, unfledged, set, scan, nest, version`. See `internal/cli/*.go` (one file per command) and `entry-points` usage detail matches `modules.md`'s internal-cli entry.
+
+- `fledge nest new|scaffold|scout|stamp` (`internal/cli/nest.go`) — the nest doc lifecycle; `runNestScout()` is the entrypoint scouts invoke (`fledge nest scout --module <name>`), the exact mechanism this forager/scout pipeline itself just used to regenerate this document set.
+
+## Package-level public interfaces (importable Go APIs)
+
+- **`internal/spec`**: `ParseRequirementFile`, `ParseTaskFile`, `Load`, `Set.Req`/`Set.Task`, `NextID`, `Kebab`, `ParseCriteria`/`SetCriterion`, `YAMLScalar`, `WriteFileAtomic`.
+- **`internal/check`**: `Run(set) []Finding`, `HasErrors`.
+- **`internal/graph`**: `New`, `Cycle`, `Waves`, `Ready`.
+- **`internal/lock`**: `Acquire`, `Release`, `Get`, `List`.
+- **`internal/nest`**: `RefreshDoc`, `ClearNest`, `ScoutBody`/`IndexBody`/`ConcernBody`, `IsKnownDoc`, `ConcernDocs`.
+- **`internal/repo`**: `Find`, `Repo.{FledgeDir,LocksDir,ContextDir,RequirementsDir,TasksDir,EvidenceDir,Head,Version}`.
+- **`internal/scan`**: `Run`.
+- **`internal/bootstrap`**: `LoadAdapters`, `FindAdapter`, `DetectAdapters`, `DeriveTier`, `CheckDuplicateSkills`, `WriteCore`, `(*Manifest).WriteAdapter`, `(*Manifest).Provides`, `(*Manifest).Tier`, `PrimitiveDesc`, `PrimitiveTier`, `CoreSkillNames`.
+
+## Agent-facing entry points (not code — orchestration workflow)
+
+- `.fledge/skills/fledge-orchestrate/SKILL.md` — routing entrypoint agents read first (planning vs. implementation phase); points to `planning.md`/`implementation.md`.
+- `.fledge/skills/fledge-orchestrate/foraging.md` — the forager/scout protocol this document set was generated by.
+- `.claude/fledge-adapter.md` — Claude-specific primitive map (generated, `internal/bootstrap/adapters/claude/`).

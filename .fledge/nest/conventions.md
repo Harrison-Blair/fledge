@@ -1,42 +1,50 @@
 ---
-generated: 2026-07-08T05:28:12Z
-commit: e46c481a047d45ef10bcd79a3326d47932b32868
+generated: 2026-07-10T14:50:00Z
+commit: 7678344ab9a18730530b9f6edf507ad0c449d352
 agent: fledge-forager
 fledge_version: 0.2.1
 ---
 
 # Conventions
 
-Cross-cutting patterns actually observed in the code — follow these so new work matches existing idiom.
+Naming, error-handling, and idiom conventions observed across the CLI, domain packages, bootstrap system, and specs, reconciled across all scouted modules.
 
-## CLI structure
+## Bird-themed terminology (repo-wide)
 
-- **Command registration:** every command file has an `init()` calling `register(name, run, usage)`; `commandOrder` (`cli.go`) is the single ordering used for both usage output and the generated `Bash(fledge …)` allow-list. Add a command → also add it to `commandOrder`.
-- **Exit codes are meaningful and shared:** `ExitOK`=0, `ExitFail`=1 (domain errors: validation, lock held, illegal transition, cycle), `ExitUsage`=2 (bad args), `ExitEnv`=3 (not a fledge repo / env). Error printers `fail`/`usageErr`/`envErr` prepend `fledge: `, print to stderr, return the code.
-- **Uniform `--json`:** every command supports it via `emitJSON()`; JSON is indented. Human text is default; both come from one computed struct.
-- **Shared loader:** most commands use `loadSet()` (`specload.go`) → repo + spec set + brood-held IDs + exit code. `relPath()` renders repo-relative paths for display.
+Every layer uses the same vocabulary — see `domain.md` for full glossary. Match it in new code/prose (`README.md`, `CLAUDE.md`).
 
-## CLI owns frontmatter (never hand-edit)
+## Command structure (`internal/cli`)
 
-- IDs (`PLM-###`, `FTHR-###`) and all frontmatter are CLI-allocated via `fledge new` / `set` / `status` / `criteria`. `id`, `plumage`, `authored`, `agent`, `fledge_version` are immutable through `set`. Spec *bodies* (prose) are hand-authored.
-- Acceptance criteria are checkbox lists checked **only** via `fledge criteria check` — never by editing a box. `status … fledged` and `abandon --fledged` refuse while boxes are unchecked; `preen` errors on fledged specs with unchecked boxes.
-- Status transitions are governed by maps (`taskTransitions`, `reqTransitions`); `--force` bypasses legality but not enum validity.
+- One file per command; each file's `init()` calls `register(name, run, usage)` (`internal/cli/cli.go`); `commandOrder` centrally controls both `--help` ordering and generated Claude allow-lists (Q23, `docs/generalization-plan.md`).
+- Command signature: `func(args []string) int`. Uses `flag.NewFlagSet` with `flag.ContinueOnError`; several commands use a custom `parseMixed()` to allow positionals before flags (`brood`, `criteria`, `set`, `nest`).
+- Shared helpers in `internal/cli/specload.go`: `loadSet()`, `lockedTaskIDs()`, `relPath()`, `fileExists()`, reused across nearly every command.
+- Output: human text to stdout by default; `--json` via shared `emitJSON()` (indented, snake_case field names e.g. `depends_on`, `fledge_version`). Errors to stderr via `fail()` (domain), `usageErr()` (usage), `envErr()` (environment) — exit codes `ExitOK/Fail/Usage/Env` = 0/1/2/3.
+- Sorted output everywhere: adapters by name, tasks by priority-then-ID, findings/orphans/issues alphabetically.
 
-## Writes & idempotence
+## Spec/file conventions (`internal/spec`, `internal/nest`, `internal/bootstrap`)
 
-- Spec creation uses `O_CREATE|O_EXCL` (concurrent ID-allocation safety); teardown uses `WriteFileAtomic` (temp + rename).
-- Scaffolding writes are **byte-idempotent** via `writeIfChanged()` (`registry.go:482`) — identical content = no write; this is what the txtar tests depend on.
-- Lock acquisition rolls back if the status write fails after the lock file is created (`brood.go`; `lock_test.go:TestLockRollsBackOnStatusWriteFailure`).
+- **Byte preservation**: spec bodies are never re-serialized — frontmatter is canonical and rewritten, body returned exactly as found on disk (`internal/spec/frontmatter.go`).
+- **Atomic writes**: `spec.WriteFileAtomic()` (temp file + rename) used for all file creation (`new`, `init`, `nest`); locking uses `os.OpenFile(...O_CREATE|O_EXCL...)` for single-writer guarantees (`internal/lock/lock.go`).
+- **Byte idempotence**: `internal/bootstrap`'s `writeIfChanged` skips writes when content is identical — depended on by the `cmd/fledge/testdata/*.txtar` fixtures; a second `fledge init --refresh` over unchanged files reports all-skipped.
+- **YAML scalar quoting**: `spec.YAMLScalar` quotes strings containing special characters, numeric-like values, or ambiguous keywords, to keep frontmatter round-trippable.
+- **Frontmatter key order** is fixed per doc kind (`internal/nest/nest.go`): concern docs use `generated, commit, agent, fledge_version`; scout docs use `module, authored, agent, fledge_version`.
+- **ID allocation**: `spec.NextID` scans existing filenames per-prefix (never hand-invented), preserving digit width if any existing ID is wider than 3 digits. `spec.Kebab` lowercases titles, collapses non-alphanumeric runs to single hyphens, strips leading/trailing hyphens, preserves Unicode letters.
+- **Acceptance criteria**: strict regex format `^- \[([ xX])\] (AC-(\d+)):[ \t]?(.*)$`, unindented only, mutated only via `fledge criteria check/uncheck` — never hand-edited.
 
-## Manifest-driven scaffolding
+## Bootstrap/manifest conventions (`internal/bootstrap`)
 
-- Adding/changing a harness is editing a `manifest.yaml`, zero Go code. Write policies (`ManifestFile`, documented `registry.go:38`): `generate`/`primitive_map` (render a template), `overwrite` (verbatim, rewrite on diff), `append_if_missing` (additive line), `symlink`, and default (copy, **skip-if-exists** so user edits survive; `init --refresh` re-syncs).
-- **Agent-neutral core:** prose in `core/` must not reference harness-native paths (`.claude/`, `.pi/`) — enforced by `TestCoreNeutral`. Prose branches on *primitives* ("If you provide `spawn-worker`…"), never tier labels.
+- Core skills are a single agent-neutral source under `core/skills/` (no harness-specific naming); adapters live under `adapters/<harness>/`, each with exactly one `manifest.yaml`.
+- Adapter directories prefixed `_` are skipped (shared assets, not surfaced as harnesses).
+- Adapter/primitive names are lowercase, kebab-case single words (`claude`, `pi`, `codex`; `confirm-gate`, `read-only-shell`).
+- Generated files (`Generate`/`PrimitiveMap` policy) always use `text/template` with a shared `renderContext`; default-policy files skip-if-exists so user edits survive; `overwrite`-policy files are always repaired.
+- Registry errors wrap context via `fmt.Errorf` (adapter name, operation, file path).
 
-## Bird-themed naming
+## Testing conventions
 
-Terminology is bird-themed throughout and load-bearing — match it (see `domain.md`; `README.md` decodes it). nest, plumage, feather, brood, preen (validate), vee (graph), molt (evidence), colony (report), forager/scout/brooder/skua (agent roles). Worker names are `<role>-<species>` from an 18-penguin-species pool; **one species per brooder+skua pair** (`fledge-brooder-adelie` + `fledge-skua-adelie`), freed only after both confirm shutdown.
+See `testing.md` for full detail. Summary: unit tests live beside their package; CLI-level behavior is asserted via testscript/txtar acceptance fixtures in `cmd/fledge/testdata/`, which the `cmd/fledge/testdata/*.txtar` fixtures depend on byte-idempotent writes to pass reliably across repeated runs.
 
-## Dogfooding discipline (this repo)
+## Documentation/build conventions
 
-The installed `fledge` on `PATH` must match the source. After changing CLI or `internal/bootstrap/...`: `scripts/install.sh` (build → `go install` with version ldflags → `hash -r` → verify `fledge version` == `VERSION`), then `fledge init --refresh` to re-sync `.fledge/skills/` and the `.claude/` adapter, then update the affected `cmd/fledge/testdata/*.txtar` fixtures.
+- No Makefile; direct `go build`/`go test`/`go vet` commands (`CLAUDE.md`).
+- `scripts/install.sh` uses bash strict mode (`set -euo pipefail`); verifies installed binary version matches the `VERSION` file post-install.
+- Version is single-sourced from the root `VERSION` file, injected into the binary via `-ldflags "-X .../internal/cli.binaryVersion=$want"`; `internal/cli/version_test.go` pins this at test time.
