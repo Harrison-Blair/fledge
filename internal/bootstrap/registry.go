@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"io/fs"
 	"os"
@@ -12,6 +13,16 @@ import (
 
 	"github.com/goccy/go-yaml"
 )
+
+// WriteOpts controls the behavior of WriteCore and WriteAdapter on a refresh.
+// Refresh must be true for any preserve/prune logic to engage; Force restores
+// the old "overwrite everything" behavior; Old is the stamp from the previous
+// run (nil for a stampless / first-time init).
+type WriteOpts struct {
+	Refresh bool
+	Force   bool
+	Old     *Stamp
+}
 
 // Manifest is an adapter's single source of truth: detector, the 6-row
 // primitive coverage (which derives the tier), the file map (source → target),
@@ -301,10 +312,11 @@ func fileExists(path string) bool {
 }
 
 // WriteCore writes the embedded core/skills tree into root/.fledge/skills/.
-// Files are skip-if-exists unless refresh is true, in which case files whose
-// bytes differ from the embedded version are rewritten (byte-identical files
-// are skipped). Returns created/updated/skipped repo-relative paths.
-func WriteCore(root string, refresh bool) (created, updated, skipped []string, err error) {
+// Without refresh, existing files are skipped. With refresh, the preserve
+// decision applies (see WriteOpts): provably-unedited files are rewritten,
+// user-edited files are added to preserved (not overwritten) unless Force is
+// set. Returns created/updated/skipped/preserved repo-relative paths.
+func WriteCore(root string, opts WriteOpts) (created, updated, skipped, preserved []string, err error) {
 	err = fs.WalkDir(FS, "core", func(p string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -316,13 +328,26 @@ func WriteCore(root string, refresh bool) (created, updated, skipped []string, e
 		dst := filepath.Join(root, ".fledge", rel)        // .fledge/skills/…
 		exists := fileExists(dst)
 		relRepo := filepath.ToSlash(filepath.Join(".fledge", rel))
-		if exists && !refresh {
+		if exists && !opts.Refresh {
 			skipped = append(skipped, relRepo)
 			return nil
 		}
 		data, rErr := FS.ReadFile(p)
 		if rErr != nil {
 			return rErr
+		}
+		// Preserve decision: applies when refreshing an existing file without force.
+		if exists && opts.Refresh && !opts.Force {
+			diskBytes, dErr := os.ReadFile(dst)
+			if dErr == nil && !bytes.Equal(diskBytes, data) {
+				// disk differs from embedded; check if provably unedited by user.
+				pres := corePreserveDecision(relRepo, diskBytes, opts.Old)
+				if pres {
+					preserved = append(preserved, relRepo)
+					return nil
+				}
+				// provably unedited → fall through to rewrite
+			}
 		}
 		wrote, wErr := writeIfChanged(dst, data)
 		if wErr != nil {
@@ -338,103 +363,182 @@ func WriteCore(root string, refresh bool) (created, updated, skipped []string, e
 		}
 		return nil
 	})
-	return created, updated, skipped, err
+	return created, updated, skipped, preserved, err
+}
+
+// corePreserveDecision reports whether a core file should be preserved
+// (not overwritten) on refresh. Returns true when:
+//   - no old stamp (stampless adoption — preserve everything), or
+//   - no stamp entry for this path, or
+//   - stamp entry exists but disk hash differs (user-edited).
+//
+// Returns false (rewrite) only when the old stamp records exactly the disk bytes.
+func corePreserveDecision(relRepo string, diskBytes []byte, old *Stamp) bool {
+	if old == nil {
+		return true
+	}
+	entry, ok := old.Files[relRepo]
+	if !ok {
+		return true
+	}
+	diskHash := sha256.Sum256(diskBytes)
+	return entry.Sha256 != fmt.Sprintf("%x", diskHash)
 }
 
 // WriteAdapter writes one adapter's files into root per their policies.
 // commandOrder is the CLI's command order, fed to generated templates (e.g. the
-// Claude allow-list, Q23). Returns created/updated/skipped repo-relative paths.
-func (m *Manifest) WriteAdapter(root string, commandOrder []string, refresh bool) (created, updated, skipped []string, err error) {
+// Claude allow-list, Q23). Returns created/updated/skipped/preserved paths.
+func (m *Manifest) WriteAdapter(root string, commandOrder []string, opts WriteOpts) (created, updated, skipped, preserved []string, err error) {
 	ctx := m.renderContext(commandOrder)
 	for _, f := range m.Files {
-		c, u, s, wErr := m.writeFileEntry(root, f, ctx, refresh)
+		c, u, s, p, wErr := m.writeFileEntry(root, f, ctx, opts)
 		if wErr != nil {
-			return created, updated, skipped, fmt.Errorf("adapter %s: %w", m.Name, wErr)
+			return created, updated, skipped, preserved, fmt.Errorf("adapter %s: %w", m.Name, wErr)
 		}
 		created = append(created, c...)
 		updated = append(updated, u...)
 		skipped = append(skipped, s...)
+		preserved = append(preserved, p...)
 	}
-	return created, updated, skipped, nil
+	return created, updated, skipped, preserved, nil
 }
 
-func (m *Manifest) writeFileEntry(root string, f ManifestFile, ctx renderContext, refresh bool) (created, updated, skipped []string, err error) {
+func (m *Manifest) writeFileEntry(root string, f ManifestFile, ctx renderContext, opts WriteOpts) (created, updated, skipped, preserved []string, err error) {
 	dst := filepath.Join(root, filepath.FromSlash(f.Dst))
 	exists := fileExists(dst)
 
 	// Symlink: dst points at target; created or repointed, never copied.
+	// Always managed — no preserve check.
 	if f.Symlink != "" {
 		if fi, lErr := os.Lstat(dst); lErr == nil {
 			if fi.Mode()&os.ModeSymlink == 0 {
 				// A real file/dir is in the way; leave it to the user (the
 				// duplicate guard already refuses core-skill copies).
-				return nil, nil, []string{f.Dst}, nil
+				return nil, nil, []string{f.Dst}, nil, nil
 			}
 			if cur, rlErr := os.Readlink(dst); rlErr == nil && cur == filepath.FromSlash(f.Symlink) {
-				return nil, nil, []string{f.Dst}, nil
+				return nil, nil, []string{f.Dst}, nil, nil
 			}
 			if rmErr := os.Remove(dst); rmErr != nil {
-				return nil, nil, nil, rmErr
+				return nil, nil, nil, nil, rmErr
 			}
 			if slErr := makeSymlink(f.Symlink, dst); slErr != nil {
-				return nil, nil, nil, slErr
+				return nil, nil, nil, nil, slErr
 			}
-			return nil, []string{f.Dst}, nil, nil
+			return nil, []string{f.Dst}, nil, nil, nil
 		}
 		if slErr := makeSymlink(f.Symlink, dst); slErr != nil {
-			return nil, nil, nil, slErr
+			return nil, nil, nil, nil, slErr
 		}
-		return []string{f.Dst}, nil, nil, nil
+		return []string{f.Dst}, nil, nil, nil, nil
 	}
 
 	// Additive append: ensure the line is present; never clobber.
 	if f.AppendIfMissing != "" || (f.Src == "" && f.Dst != "") {
 		line := f.AppendIfMissing
 		if line == "" {
-			return nil, nil, nil, fmt.Errorf("file entry for %q has no src and no append_if_missing", f.Dst)
+			return nil, nil, nil, nil, fmt.Errorf("file entry for %q has no src and no append_if_missing", f.Dst)
 		}
 		had, aErr := ensureLine(dst, line)
 		if aErr != nil {
-			return nil, nil, nil, aErr
+			return nil, nil, nil, nil, aErr
 		}
 		switch {
 		case !exists:
-			return []string{f.Dst}, nil, nil, nil
+			return []string{f.Dst}, nil, nil, nil, nil
 		case had:
-			return nil, nil, []string{f.Dst}, nil
+			return nil, nil, []string{f.Dst}, nil, nil
 		default:
-			return nil, []string{f.Dst}, nil, nil
+			return nil, []string{f.Dst}, nil, nil, nil
 		}
 	}
 
-	// Generated (template) file: render; rewritten when content differs.
+	// Generated (template) file: always managed — render; rewritten when content differs.
 	if f.Generate || f.PrimitiveMap {
 		data, rErr := renderEntry(m, f, ctx)
 		if rErr != nil {
-			return nil, nil, nil, rErr
+			return nil, nil, nil, nil, rErr
 		}
-		return classifyWrite(dst, f.Dst, data, exists)
+		c, u, s, wErr := classifyWrite(dst, f.Dst, data, exists)
+		return c, u, s, nil, wErr
 	}
 
-	// Overwrite policy: copy verbatim; rewritten when content differs.
+	// Overwrite policy: always managed — copy verbatim; rewritten when content differs.
 	if f.Overwrite {
 		data, rErr := renderEntry(m, f, ctx)
 		if rErr != nil {
-			return nil, nil, nil, rErr
+			return nil, nil, nil, nil, rErr
 		}
-		return classifyWrite(dst, f.Dst, data, exists)
+		c, u, s, wErr := classifyWrite(dst, f.Dst, data, exists)
+		return c, u, s, nil, wErr
 	}
 
-	// Default: copy verbatim, skip-if-exists (user may customize);
+	// Default policy: copy verbatim, skip-if-exists (user may customize);
 	// synced to the embedded version by `init --refresh`.
-	if exists && !refresh {
-		return nil, nil, []string{f.Dst}, nil
+	if exists && !opts.Refresh {
+		return nil, nil, []string{f.Dst}, nil, nil
 	}
 	data, rErr := renderEntry(m, f, ctx)
 	if rErr != nil {
-		return nil, nil, nil, rErr
+		return nil, nil, nil, nil, rErr
 	}
-	return classifyWrite(dst, f.Dst, data, exists)
+	// Preserve decision: applies when refreshing an existing file without force.
+	if exists && opts.Refresh && !opts.Force {
+		diskBytes, dErr := os.ReadFile(dst)
+		if dErr == nil && !bytes.Equal(diskBytes, data) {
+			pres := corePreserveDecision(f.Dst, diskBytes, opts.Old)
+			if pres {
+				return nil, nil, nil, []string{f.Dst}, nil
+			}
+			// provably unedited → fall through to rewrite
+		}
+	}
+	c, u, s, wErr := classifyWrite(dst, f.Dst, data, exists)
+	return c, u, s, nil, wErr
+}
+
+// PruneObsolete checks one obsolete path (present in the old stamp, absent
+// from the new expected tree) and either deletes or reports it.
+//
+//   - deleted=true: path was removed (content hash or symlink target matched stamp).
+//   - reported=true: path exists but has been user-modified; not deleted, caller reports it.
+//   - both false: path does not exist on disk; nothing to do.
+func PruneObsolete(root, repoPath string, entry StampEntry) (deleted bool, reported bool, err error) {
+	abs := filepath.Join(root, filepath.FromSlash(repoPath))
+
+	if entry.Policy == "symlink" {
+		// Symlink: safe to delete only when it still points at the recorded target.
+		fi, lErr := os.Lstat(abs)
+		if lErr != nil {
+			return false, false, nil // doesn't exist
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			// Not a symlink — user replaced it; report.
+			return false, true, nil
+		}
+		cur, rlErr := os.Readlink(abs)
+		if rlErr != nil {
+			return false, true, nil
+		}
+		if cur != filepath.FromSlash(entry.Target) {
+			return false, true, nil // repointed by user
+		}
+		return true, false, os.Remove(abs)
+	}
+
+	// Content-bearing file: safe to delete only when disk hash matches stamp.
+	diskBytes, rErr := os.ReadFile(abs)
+	if rErr != nil {
+		if os.IsNotExist(rErr) {
+			return false, false, nil
+		}
+		return false, false, rErr
+	}
+	diskHash := sha256.Sum256(diskBytes)
+	if fmt.Sprintf("%x", diskHash) != entry.Sha256 {
+		return false, true, nil // user-edited
+	}
+	return true, false, os.Remove(abs)
 }
 
 // classifyWrite writes data to dst when its content differs and classifies the
