@@ -17,6 +17,8 @@ files:
     dst: .claude/agents/fledge-context-scout.md
   - src: agents/fledge-skua.md
     dst: .claude/agents/fledge-skua.md
+  - src: agents/fledge-incubator.md
+    dst: .claude/agents/fledge-incubator.md
   - src: settings.json
     dst: .claude/settings.json
     overwrite: true

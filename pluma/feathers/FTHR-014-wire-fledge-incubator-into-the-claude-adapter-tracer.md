@@ -69,15 +69,15 @@ reason (agent file + manifest entry absent); (3) implement until green.
 - Whole `go test ./...` + `go vet ./...` green.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: An embedded `agents/fledge-incubator.md` + a `manifest.yaml` entry cause
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: An embedded `agents/fledge-incubator.md` + a `manifest.yaml` entry cause
       `fledge init` to scaffold `.claude/agents/fledge-incubator.md`; the file declares
       `model: claude-sonnet-5` and a non-interactive, one-shot draft-and-return contract that
       mutates no spec (satisfies PLM-010 FC-1, AC-1).
-- [ ] AC-3: The agent's instructions define the input/output contract — given resolved
+- [x] AC-3: The agent's instructions define the input/output contract — given resolved
       decisions + pointers, it reads the template and cited concern docs itself and returns the
       full drafted body (frontmatter + all sections) as its final message (satisfies PLM-010
       FC-2, AC-2).
-- [ ] AC-4: `registry_test.go` asserts the Claude adapter includes `fledge-incubator` and that
+- [x] AC-4: `registry_test.go` asserts the Claude adapter includes `fledge-incubator` and that
       its derived tier (C) and primitive coverage are unchanged; `go test ./...` and
       `go vet ./...` pass (satisfies PLM-010 AC-6).

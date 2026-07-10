@@ -11,11 +11,13 @@ stdout 'created .gitignore'
 stdout 'created .fledge/skills/fledge-orchestrate/SKILL.md'
 stdout 'created .fledge/skills/fledge-interrogate/SKILL.md'
 stdout 'created .claude/agents/fledge-brooder.md'
+stdout 'created .claude/agents/fledge-incubator.md'
 stdout 'created .claude/fledge-adapter.md'
 stdout 'scaffolded agents: claude'
 stderr 'no agent harness detected; scaffolded the claude adapter by default'
 exists .fledgeignore
 exists .claude/agents/fledge-brooder.md
+exists .claude/agents/fledge-incubator.md
 exists .claude/settings.local.json
 exists .claude/team-loop.md
 exists .fledge/skills/fledge-orchestrate/templates/plumage.md
@@ -26,6 +28,7 @@ grep '.fledge/broods/' .gitignore
 grep 'fledge nest' .claude/settings.local.json
 grep 'fledge nest scaffold' .claude/agents/fledge-forager.md
 grep 'fledge nest scout --module' .claude/agents/fledge-context-scout.md
+grep 'mutates no spec' .claude/agents/fledge-incubator.md
 stdout 'created .fledge/scaffold.json'
 exists .fledge/scaffold.json
 grep '"fledgeVersion"' .fledge/scaffold.json
