@@ -1,0 +1,12 @@
+# fledge init: planning.md delegation branch and foraging.md empty-nest note
+exec git init -q .
+
+exec fledge init
+exists .fledge/skills/fledge-orchestrate/planning.md
+exists .fledge/skills/fledge-orchestrate/foraging.md
+
+# delegation marker: pins capability-conditional incubator delegation in planning.md
+grep 'incubator never runs .fledge new. or mutates specs' .fledge/skills/fledge-orchestrate/planning.md
+
+# empty-nest marker: pins the expected-intermediate-state clarification in foraging.md
+grep 'expected intermediate after scaffolding' .fledge/skills/fledge-orchestrate/foraging.md
