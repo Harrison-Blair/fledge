@@ -76,7 +76,7 @@ expected reason; (3) implement until green.
 - Whole `go test ./...` + `go vet ./...` green.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: `fledge init` writes `.fledge/scaffold.json` containing the binary version, the scaffolded agents, and a manifest entry (policy + sha256/target/lines) for every file it wrote, excluding the stamp itself (satisfies PLM-009 FC-1).
-- [ ] AC-3: A second `fledge init` (and `--refresh` with no changes) leaves the stamp byte-identical — the init.txtar quiet block passes unchanged in spirit with the stamp present.
-- [ ] AC-4: `ExpectedFiles` output matches the write path byte-for-byte for rendered files, providing the shared surface FTHR-011/012 build on; `go test ./...` and `go vet ./...` pass.
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: `fledge init` writes `.fledge/scaffold.json` containing the binary version, the scaffolded agents, and a manifest entry (policy + sha256/target/lines) for every file it wrote, excluding the stamp itself (satisfies PLM-009 FC-1).
+- [x] AC-3: A second `fledge init` (and `--refresh` with no changes) leaves the stamp byte-identical — the init.txtar quiet block passes unchanged in spirit with the stamp present.
+- [x] AC-4: `ExpectedFiles` output matches the write path byte-for-byte for rendered files, providing the shared surface FTHR-011/012 build on; `go test ./...` and `go vet ./...` pass.
