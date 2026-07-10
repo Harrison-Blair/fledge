@@ -65,13 +65,13 @@ core, observe the greps FAIL (markers absent); (3) add the prose, observe PASS.
 - Whole `go test ./...` green.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: `planning.md` steps 3.4 and 4.6 delegate drafting capability-conditionally on
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: `planning.md` steps 3.4 and 4.6 delegate drafting capability-conditionally on
       `spawn-worker`, and explicitly retain the confirm-gate and `fledge new` commit with the
       orchestrator while barring the incubator from mutating specs (satisfies PLM-010 FC-3,
       AC-3).
-- [ ] AC-3: `foraging.md` (with a pointer from planning.md step 2) documents the
+- [x] AC-3: `foraging.md` (with a pointer from planning.md step 2) documents the
       empty-post-`fledge nest scaffold` nest as the expected intermediate state, not a failure
       (satisfies PLM-010 FC-4, AC-4).
-- [ ] AC-4: The added core prose keeps the skills agent-neutral (`TestCoreNeutral` passes) and
+- [x] AC-4: The added core prose keeps the skills agent-neutral (`TestCoreNeutral` passes) and
       the new grep fixture passes; `go test ./...` is green.
