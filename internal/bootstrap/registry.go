@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"text/template"
 
 	"github.com/goccy/go-yaml"
 )
@@ -410,26 +409,18 @@ func (m *Manifest) writeFileEntry(root string, f ManifestFile, ctx renderContext
 
 	// Generated (template) file: render; rewritten when content differs.
 	if f.Generate || f.PrimitiveMap {
-		data, rErr := FS.ReadFile(path.Join(m.dir, f.Src))
+		data, rErr := renderEntry(m, f, ctx)
 		if rErr != nil {
-			return nil, nil, nil, fmt.Errorf("read %s: %w", f.Src, rErr)
+			return nil, nil, nil, rErr
 		}
-		tmpl, pErr := template.New(f.Src).Parse(string(data))
-		if pErr != nil {
-			return nil, nil, nil, fmt.Errorf("parse template %s: %w", f.Src, pErr)
-		}
-		var b bytes.Buffer
-		if eErr := tmpl.Execute(&b, ctx); eErr != nil {
-			return nil, nil, nil, fmt.Errorf("render %s: %w", f.Src, eErr)
-		}
-		return classifyWrite(dst, f.Dst, b.Bytes(), exists)
+		return classifyWrite(dst, f.Dst, data, exists)
 	}
 
 	// Overwrite policy: copy verbatim; rewritten when content differs.
 	if f.Overwrite {
-		data, rErr := FS.ReadFile(path.Join(m.dir, f.Src))
+		data, rErr := renderEntry(m, f, ctx)
 		if rErr != nil {
-			return nil, nil, nil, fmt.Errorf("read %s: %w", f.Src, rErr)
+			return nil, nil, nil, rErr
 		}
 		return classifyWrite(dst, f.Dst, data, exists)
 	}
@@ -439,9 +430,9 @@ func (m *Manifest) writeFileEntry(root string, f ManifestFile, ctx renderContext
 	if exists && !refresh {
 		return nil, nil, []string{f.Dst}, nil
 	}
-	data, rErr := FS.ReadFile(path.Join(m.dir, f.Src))
+	data, rErr := renderEntry(m, f, ctx)
 	if rErr != nil {
-		return nil, nil, nil, fmt.Errorf("read %s: %w", f.Src, rErr)
+		return nil, nil, nil, rErr
 	}
 	return classifyWrite(dst, f.Dst, data, exists)
 }

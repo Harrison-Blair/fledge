@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"crypto/sha256"
 	_ "embed"
 	"flag"
 	"fmt"
@@ -106,6 +107,9 @@ func runInit(args []string) int {
 		note(".gitignore", 1)
 	}
 
+	// Load old stamp now so we can union its agents list later.
+	oldStamp, _ := bootstrap.LoadStamp(r.Root)
+
 	// Resolve which adapters to scaffold (Q7).
 	selected, defaulted, err := resolveAgents(r.Root, agents)
 	if err != nil {
@@ -127,6 +131,8 @@ func runInit(args []string) int {
 	skipped = append(skipped, cSkipped...)
 
 	// Adapters: per-harness, written to their native paths.
+	// allFiles accumulates expected-file entries for the stamp (base + core + adapters).
+	allFiles := baseScaffoldEntries()
 	var scaffolded []string
 	for _, name := range selected {
 		m, err := bootstrap.FindAdapter(name)
@@ -144,8 +150,52 @@ func runInit(args []string) int {
 		updated = append(updated, aUpdated...)
 		skipped = append(skipped, aSkipped...)
 		scaffolded = append(scaffolded, name)
+
+		ef, efErr := bootstrap.ExpectedFiles(m, commandOrder)
+		if efErr != nil {
+			return fail("build expected files for %s: %v", name, efErr)
+		}
+		for k, v := range ef {
+			allFiles[k] = v
+		}
 	}
 	sort.Strings(scaffolded)
+
+	// Build stamp: agents = this run's adapters ∪ old stamp's agents.
+	agentSet := map[string]bool{}
+	for _, a := range scaffolded {
+		agentSet[a] = true
+	}
+	if oldStamp != nil {
+		for _, a := range oldStamp.Agents {
+			agentSet[a] = true
+		}
+	}
+	var stampAgents []string
+	for a := range agentSet {
+		stampAgents = append(stampAgents, a)
+	}
+	sort.Strings(stampAgents)
+
+	const stampRel = ".fledge/scaffold.json"
+	stampPreexists := fileExists(filepath.Join(r.Root, stampRel))
+	stamp := &bootstrap.Stamp{
+		FledgeVersion: binaryVersion,
+		Agents:        stampAgents,
+		Files:         allFiles,
+	}
+	stampWrote, sErr := stamp.Write(r.Root)
+	if sErr != nil {
+		return fail("write scaffold stamp: %v", sErr)
+	}
+	switch {
+	case !stampPreexists:
+		created = append(created, stampRel)
+	case stampWrote:
+		updated = append(updated, stampRel)
+	default:
+		skipped = append(skipped, stampRel)
+	}
 
 	if *refresh && len(updated) > 0 {
 		fmt.Fprintf(os.Stderr, "note: refreshed %d file(s) to the shipped versions — `git diff` to review; your edits are recoverable via git.\n", len(updated))
@@ -190,6 +240,35 @@ func nonEmpty(s []string) []string {
 		return []string{}
 	}
 	return s
+}
+
+// baseScaffoldEntries returns StampEntry values for the agent-agnostic base
+// files that runInit writes. These are merged into the ExpectedFiles map before
+// building the stamp, so init and later preen/refresh share the same complete
+// picture of every scaffolded file.
+func baseScaffoldEntries() map[string]bootstrap.StampEntry {
+	out := make(map[string]bootstrap.StampEntry)
+	for _, f := range []struct {
+		rel     string
+		content []byte
+	}{
+		{".fledge/nest/raw/.gitkeep", nil},
+		{".fledge/broods/.gitkeep", nil},
+		{".fledgeignore", defaultScanIgnore},
+		{"pluma/plumage/.gitkeep", nil},
+		{"pluma/feathers/.gitkeep", nil},
+	} {
+		h := sha256.Sum256(f.content)
+		out[f.rel] = bootstrap.StampEntry{
+			Policy: "default",
+			Sha256: fmt.Sprintf("%x", h),
+		}
+	}
+	out[".gitignore"] = bootstrap.StampEntry{
+		Policy: "append",
+		Lines:  gitignoreLines,
+	}
+	return out
 }
 
 // resolveAgents implements Q7: --agent overrides/adds; otherwise auto-detect via

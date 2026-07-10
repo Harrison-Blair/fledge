@@ -21,6 +21,8 @@ exists .pi/prompts/fledge-implement.md
 exists .pi/fledge-adapter.md
 exists .fledge/skills/fledge-orchestrate/SKILL.md
 ! exists .claude
+exists .fledge/scaffold.json
+grep '"pi"' .fledge/scaffold.json
 
 # auto-detect: both markers scaffold both adapters
 cd $WORK
@@ -49,6 +51,10 @@ exists .codex/fledge-adapter.md
 grep 'fledge-orchestrate/SKILL.md' AGENTS.md
 exists .claude/fledge-adapter.md
 exists .pi/fledge-adapter.md
+exists .fledge/scaffold.json
+grep '"codex"' .fledge/scaffold.json
+grep '"claude"' .fledge/scaffold.json
+grep '"pi"' .fledge/scaffold.json
 
 # the AGENTS.md pointer line is appended once, never duplicated
 exec fledge init --agent codex
