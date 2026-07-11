@@ -35,7 +35,7 @@ Per `.fledge/nest/architecture.md` and `.fledge/nest/modules.md`:
 - Manual/scripted check (documented in the evidence file, not necessarily a new automated test): build the binary, run `fledge init` in a scratch temp dir, confirm `.fledge/pluma/plumage/.gitkeep` and `.fledge/pluma/feathers/.gitkeep` exist and no root-level `pluma/` is created — pins FC-2.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation (against unchanged `repo.go`/`init.go`) and pass after.
-- [ ] AC-2: `internal/repo.Repo.RequirementsDir()` returns `<FledgeDir>/pluma/plumage` and `TasksDir()` returns `<FledgeDir>/pluma/feathers` (satisfies PLM-011 FC-1).
-- [ ] AC-3: A fresh `fledge init` in a scratch temp repo scaffolds `.fledge/pluma/plumage/.gitkeep` and `.fledge/pluma/feathers/.gitkeep`, with no root-level `pluma/` created (satisfies PLM-011 FC-2).
-- [ ] AC-4: `go build ./...` succeeds and `go test ./internal/repo ./internal/spec ./internal/check ./internal/cli` pass.
+- [x] AC-1: The tests listed above were observed failing before implementation (against unchanged `repo.go`/`init.go`) and pass after.
+- [x] AC-2: `internal/repo.Repo.RequirementsDir()` returns `<FledgeDir>/pluma/plumage` and `TasksDir()` returns `<FledgeDir>/pluma/feathers` (satisfies PLM-011 FC-1).
+- [x] AC-3: A fresh `fledge init` in a scratch temp repo scaffolds `.fledge/pluma/plumage/.gitkeep` and `.fledge/pluma/feathers/.gitkeep`, with no root-level `pluma/` created (satisfies PLM-011 FC-2).
+- [x] AC-4: `go build ./...` succeeds and `go test ./internal/repo ./internal/spec ./internal/check ./internal/cli` pass.
