@@ -2,7 +2,7 @@
 id: FTHR-018
 title: Update embedded scaffold prose and spec doc comments to .fledge/pluma/
 plumage: PLM-011
-status: hatching
+status: fledged
 priority: P2
 depends_on: []
 authored: 2026-07-11T02:25:28Z
