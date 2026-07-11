@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  safety-net:
+    name: Lint, build, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)"
+      - name: go vet
+        run: go vet ./...
+      - name: go build
+        run: go build ./...
+      - name: go test
+        run: go test ./...
+
+  detect-version:
+    name: Detect VERSION change
+    needs: safety-net
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Compare VERSION to previous commit
+        id: check
+        run: |
+          current="$(cat VERSION)"
+          previous="$(git show HEAD^:VERSION 2>/dev/null || echo '')"
+          echo "version=$current" >> "$GITHUB_OUTPUT"
+          if [ "$current" != "$previous" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  release:
+    name: Build and release linux/amd64
+    needs: detect-version
+    if: needs.detect-version.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.detect-version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build linux/amd64
+        run: |
+          mkdir -p dist
+          GOOS=linux GOARCH=amd64 go build \
+            -ldflags "-X github.com/Harrison-Blair/fledge/internal/cli.binaryVersion=$VERSION" \
+            -o dist/fledge ./cmd/fledge
+      - name: Package archive
+        run: |
+          cd dist
+          tar -czf fledge_linux_amd64.tar.gz fledge
+          sha256sum fledge_linux_amd64.tar.gz > checksums.txt
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v$VERSION" \
+            --generate-notes \
+            dist/fledge_linux_amd64.tar.gz \
+            dist/checksums.txt
