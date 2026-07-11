@@ -37,7 +37,7 @@ Per `.fledge/nest/entry-points.md` (`VERSION` file, ldflag version injection pat
 - Real-world evidence (per the agreed CI test strategy): a no-VERSION-change scratch merge showing no release appears (pins FC-5, AC-3; no side effects, any throwaway commit is fine), and the actual next intended real VERSION-bump merge showing a real release with correct tag, notes, one archive, and checksums.txt, with the downloaded binary verified to run and report the right version (pins FC-4, FC-6, FC-7, AC-4 (single-platform slice), AC-6) — this real bump is the only release cut during evidence-gathering, never a disposable test tag.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation (workflow file missing) and pass after.
+- [x] AC-1: The tests listed above were observed failing before implementation (workflow file missing) and pass after.
 - [ ] AC-2: A real merge to `main` that does not change `VERSION` produces no new GitHub Release or tag (satisfies PLM-012 AC-3).
 - [ ] AC-3: The actual next intended real merge to `main` that changes `VERSION` produces a GitHub Release tagged `v<VERSION>` with auto-generated notes and one `linux_amd64` binary archive plus a `checksums.txt` (partially satisfies PLM-012 AC-4 — full 5-platform coverage is FTHR-c's job).
 - [ ] AC-4: The released `linux_amd64` binary, downloaded and run, reports the correct version via `fledge version` (partially satisfies PLM-012 AC-5).
