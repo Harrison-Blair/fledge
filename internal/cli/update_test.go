@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -76,15 +77,15 @@ func TestUpdate_NewerAvailable_PromptsAndShowsNotes(t *testing.T) {
 func TestUpdate_ConfirmYes(t *testing.T) {
 	srv := newUpdateTestServer(t, "v99.99.99", "notes")
 	withUpdateBaseURL(t, srv.URL)
+	withUpdateTargetPath(t, filepath.Join(t.TempDir(), "fledge"))
 
 	var out strings.Builder
 	code := runUpdateWith(nil, strings.NewReader("y\n"), &out)
 
-	if code != ExitOK {
-		t.Fatalf("exit code = %d, want ExitOK", code)
-	}
-	if !strings.Contains(out.String(), "update mechanics not yet implemented") {
-		t.Errorf("output = %q, want placeholder confirm-path action", out.String())
+	// No matching release asset is served, so the confirmed update attempt
+	// fails during the download/verify/swap step rather than succeeding.
+	if code != ExitFail {
+		t.Fatalf("exit code = %d, want ExitFail (no matching release asset)", code)
 	}
 }
 
@@ -106,17 +107,17 @@ func TestUpdate_ConfirmDefaultDeny(t *testing.T) {
 func TestUpdate_YesFlagSkipsPrompt(t *testing.T) {
 	srv := newUpdateTestServer(t, "v99.99.99", "notes")
 	withUpdateBaseURL(t, srv.URL)
+	withUpdateTargetPath(t, filepath.Join(t.TempDir(), "fledge"))
 
 	var out strings.Builder
 	code := runUpdateWith([]string{"--yes"}, strings.NewReader(""), &out)
 
-	if code != ExitOK {
-		t.Fatalf("exit code = %d, want ExitOK", code)
+	// No matching release asset is served, so the confirmed update attempt
+	// fails during the download/verify/swap step rather than succeeding.
+	if code != ExitFail {
+		t.Fatalf("exit code = %d, want ExitFail (no matching release asset)", code)
 	}
 	got := out.String()
-	if !strings.Contains(got, "update mechanics not yet implemented") {
-		t.Errorf("output = %q, want placeholder confirm-path action", got)
-	}
 	if strings.Contains(got, "[y/N]") {
 		t.Errorf("output = %q, --yes should skip the prompt", got)
 	}
