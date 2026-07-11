@@ -191,3 +191,41 @@ func TestReleaseWorkflow_BuildsAllFourPlatforms(t *testing.T) {
 		t.Errorf("matrix.include has %d entries, want %d: %#v", len(pairs), len(want), pairs)
 	}
 }
+
+// TestReleaseWorkflow_ReleaseJobNeedsDetectVersion pins the job wiring that a
+// live release exposed: the `release` job references
+// `needs.detect-version.outputs.version` for the tag, so `detect-version` must
+// be in its `needs` list. When it was only `needs: build`, the version
+// resolved to empty and the release was published with the tag `v`.
+func TestReleaseWorkflow_ReleaseJobNeedsDetectVersion(t *testing.T) {
+	doc := loadReleaseWorkflow(t)
+	jobs, _ := doc["jobs"].(map[string]any)
+	release, ok := jobs["release"].(map[string]any)
+	if !ok {
+		t.Fatal("no `release` job found in release.yml")
+	}
+
+	var needs []string
+	switch v := release["needs"].(type) {
+	case string:
+		needs = []string{v}
+	case []any:
+		for _, n := range v {
+			if s, ok := n.(string); ok {
+				needs = append(needs, s)
+			}
+		}
+	default:
+		t.Fatalf("release job `needs` has unexpected type %T", release["needs"])
+	}
+
+	found := false
+	for _, n := range needs {
+		if n == "detect-version" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("release job `needs` = %v; must include \"detect-version\" so v$VERSION resolves (else the release is tagged `v`)", needs)
+	}
+}

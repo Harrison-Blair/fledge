@@ -82,18 +82,16 @@ jobs:
           cd dist
           name="fledge_${{ matrix.goos }}_${{ matrix.goarch }}"
           tar -czf "$name.tar.gz" fledge
-          sha256sum "$name.tar.gz" > checksums.txt
+          sha256sum "$name.tar.gz" > "$name.sha256"
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: dist-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: |
-            dist/fledge_*
-            dist/checksums.txt
+          path: dist/fledge_*
 
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [detect-version, build]
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.detect-version.outputs.version }}
@@ -108,9 +106,8 @@ jobs:
       - name: Merge checksums
         run: |
           cd dist
-          cat checksums.txt > combined-checksums.txt
-          rm checksums.txt
-          mv combined-checksums.txt checksums.txt
+          cat fledge_*.sha256 > checksums.txt
+          rm -f fledge_*.sha256
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
