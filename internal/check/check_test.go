@@ -14,7 +14,7 @@ func req(id, status string) *spec.Requirement {
 	return &spec.Requirement{
 		ID: id, Title: "t", Status: status, Priority: "P1",
 		Authored: "2026-07-06T12:00:00Z", Agent: "a", FledgeVersion: "0.1.0",
-		Path: "pluma/plumage/" + id + "-t.md",
+		Path: ".fledge/pluma/plumage/" + id + "-t.md",
 		Body: []byte("## Context\nx\n## Functional Criteria\nx\n## Acceptance Criteria\nx\n"),
 	}
 }
@@ -26,7 +26,7 @@ func task(id, reqID, status string, deps ...string) *spec.Task {
 	return &spec.Task{
 		ID: id, Title: "t", Requirement: reqID, Status: status, Priority: "P1",
 		DependsOn: deps, Authored: "2026-07-06T12:00:00Z", Agent: "a", FledgeVersion: "0.1.0",
-		Path: "pluma/feathers/" + id + "-t.md",
+		Path: ".fledge/pluma/feathers/" + id + "-t.md",
 		Body: []byte("## Description\nx\n## Tests\n- a test\n## Acceptance Criteria\nx\n"),
 	}
 }
@@ -56,7 +56,7 @@ func TestCleanSetHasNoFindings(t *testing.T) {
 
 func TestParseErrorsSurface(t *testing.T) {
 	s := newSet(nil, nil)
-	s.Errors = []spec.FileError{{Path: "pluma/feathers/FTHR-009-x.md", Err: errors.New("boom")}}
+	s.Errors = []spec.FileError{{Path: ".fledge/pluma/feathers/FTHR-009-x.md", Err: errors.New("boom")}}
 	if !hasRule(Run(s, nil, ""), "parse", Error) {
 		t.Error("want parse error finding")
 	}
@@ -64,7 +64,7 @@ func TestParseErrorsSurface(t *testing.T) {
 
 func TestUnknownFieldWarning(t *testing.T) {
 	s := newSet([]*spec.Requirement{req("PLM-001", "hatched")}, nil)
-	s.UnknownFields["pluma/plumage/PLM-001-t.md"] = []string{"extra"}
+	s.UnknownFields[".fledge/pluma/plumage/PLM-001-t.md"] = []string{"extra"}
 	if !hasRule(Run(s, nil, ""), "unknown-field", Warning) {
 		t.Error("want unknown-field warning")
 	}
@@ -100,7 +100,7 @@ func TestSchemaRules(t *testing.T) {
 
 func TestIDFilenameAgreement(t *testing.T) {
 	tk := task("FTHR-001", "PLM-001", "pipping")
-	tk.Path = "pluma/feathers/FTHR-002-t.md" // filename says 002
+	tk.Path = ".fledge/pluma/feathers/FTHR-002-t.md" // filename says 002
 	s := newSet([]*spec.Requirement{req("PLM-001", "hatched")}, []*spec.Task{tk})
 	if !hasRule(Run(s, nil, ""), "id-filename", Error) {
 		t.Error("want id-filename error")
@@ -110,7 +110,7 @@ func TestIDFilenameAgreement(t *testing.T) {
 func TestDuplicateIDs(t *testing.T) {
 	t1 := task("FTHR-001", "PLM-001", "pipping")
 	t2 := task("FTHR-001", "PLM-001", "pipping")
-	t2.Path = "pluma/feathers/FTHR-001-other.md"
+	t2.Path = ".fledge/pluma/feathers/FTHR-001-other.md"
 	s := newSet([]*spec.Requirement{req("PLM-001", "hatched")}, []*spec.Task{t1, t2})
 	if !hasRule(Run(s, nil, ""), "duplicate-id", Error) {
 		t.Error("want duplicate-id error")

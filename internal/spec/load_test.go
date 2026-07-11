@@ -8,8 +8,8 @@ import (
 
 func writeSpecs(t *testing.T, root string, files map[string]string) (reqDir, taskDir string) {
 	t.Helper()
-	reqDir = filepath.Join(root, "pluma", "plumage")
-	taskDir = filepath.Join(root, "pluma", "feathers")
+	reqDir = filepath.Join(root, ".fledge", "pluma", "plumage")
+	taskDir = filepath.Join(root, ".fledge", "pluma", "feathers")
 	for _, d := range []string{reqDir, taskDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
@@ -53,9 +53,9 @@ fledge_version: 0.1.0
 func TestLoad(t *testing.T) {
 	root := t.TempDir()
 	reqDir, taskDir := writeSpecs(t, root, map[string]string{
-		"pluma/plumage/PLM-001-a-requirement.md": validReq,
-		"pluma/feathers/FTHR-001-a-task.md":      validTask,
-		"pluma/feathers/FTHR-002-broken.md":      "not frontmatter at all\n",
+		".fledge/pluma/plumage/PLM-001-a-requirement.md": validReq,
+		".fledge/pluma/feathers/FTHR-001-a-task.md":      validTask,
+		".fledge/pluma/feathers/FTHR-002-broken.md":      "not frontmatter at all\n",
 	})
 	set, err := Load(reqDir, taskDir)
 	if err != nil {
