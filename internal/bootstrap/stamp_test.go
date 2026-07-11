@@ -198,7 +198,7 @@ func TestRenderEntryMatchesWritePath(t *testing.T) {
 			if err := os.MkdirAll(filepath.Join(fileRoot, filepath.Dir(filepath.FromSlash(f.Dst))), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			_, _, _, _, err = m.writeFileEntry(fileRoot, f, ctx, WriteOpts{})
+			_, _, _, err = m.writeFileEntry(fileRoot, f, ctx, WriteOpts{})
 			if err != nil {
 				t.Fatalf("writeFileEntry: %v", err)
 			}

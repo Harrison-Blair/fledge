@@ -1,6 +1,6 @@
 # Foraging protocol
 
-Agent-neutral context-gathering protocol used by the planning phase when the `spawn-worker` primitive is available. Two roles: a **forager** (one, spawned by the orchestrator) that orchestrates **scouts** (many, spawned by the forager) and synthesizes their reports. The orchestrator never runs foraging itself unless `spawn-worker` is unavailable (in which case it performs both roles in-session per `planning.md` step 2).
+Agent-neutral context-gathering protocol used by the planning phase when the `spawn-worker` primitive is available. Two roles: a **forager** (one, commissioned by whoever runs the planning phase — the incubator when planning is delegated, else the orchestrator; see `planning.md` §0/§2) that orchestrates **scouts** (many, spawned by the forager) and synthesizes their reports. Foraging runs in the planner's own session only when `spawn-worker` is unavailable (in which case the planner performs both roles per `planning.md` step 2).
 
 A spawn prompt is a worker's entire context — it inherits no conversation history — and must be fully self-contained.
 
@@ -42,7 +42,7 @@ Report: modules scanned, scouts spawned (and any re-spawns), documents written, 
 
 ### Lifecycle
 
-A forager is one-shot: after sending its final message it has no further work. In harnesses where workers persist after their final message, the orchestrator will request its shutdown by name once the nest output is verified — comply promptly. Scouts are unnamed (no species): they self-terminate on their one-line final message and are never addressed by name.
+A forager is one-shot: after sending its final message it has no further work. In harnesses where workers persist after their final message, the worker that commissioned it (the incubator or the orchestrator) will request its shutdown by name once the nest output is verified — comply promptly. Scouts are unnamed (no species): they self-terminate on their one-line final message and are never addressed by name.
 
 ## Scout
 

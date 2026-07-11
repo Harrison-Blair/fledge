@@ -28,7 +28,7 @@ grep '.fledge/broods/' .gitignore
 grep 'fledge nest' .claude/settings.local.json
 grep 'fledge nest scaffold' .claude/agents/fledge-forager.md
 grep 'fledge nest scout --module' .claude/agents/fledge-context-scout.md
-grep 'mutates no spec' .claude/agents/fledge-incubator.md
+grep 'owns the planning phase end to end' .claude/agents/fledge-incubator.md
 stdout 'created .fledge/scaffold.json'
 exists .fledge/scaffold.json
 grep '"fledgeVersion"' .fledge/scaffold.json

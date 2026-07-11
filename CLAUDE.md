@@ -75,14 +75,16 @@ When you change embedded `core/`/`adapters/` content, also **regenerate** this
 repo's own scaffolded output so it stays consistent with the new binary:
 
 ```sh
-fledge init --refresh          # re-sync; preserves user-edited files, prunes obsolete ones
+fledge init --refresh          # reset fledge-owned files to the shipped versions; prunes obsolete ones
 git status                     # review what regeneration changed
 ```
 
 `--refresh` writes `.fledge/scaffold.json` (the stamp of what fledge owns and at
-what content hash). Files the user has edited since last init are kept as-is and
-reported; files that no longer belong to the scaffold are pruned. Use `--force`
-to overwrite user-edited files. `fledge preen` reports the scaffold healthy when
+what content hash). It is a reset: every fledge-owned file is overwritten with
+the shipped version and files that no longer belong to the scaffold are pruned.
+When user-edited files would be overwritten it confirms first on an interactive
+terminal and refuses otherwise (rerun with `--force` to skip the confirmation);
+edits are recoverable via git. `fledge preen` reports the scaffold healthy when
 the stamp is present and consistent.
 
 ## Architecture

@@ -7,7 +7,7 @@ import (
 
 // binaryVersion is the version of the fledge binary itself.
 // Overridable at build time: -ldflags "-X ...internal/cli.binaryVersion=x.y.z".
-var binaryVersion = "0.3.0"
+var binaryVersion = "0.3.4"
 
 func init() { register("version", runVersion, "fledge version [--json]") }
 

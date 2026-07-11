@@ -88,8 +88,10 @@ fledged`.
 
 - Core skill files under `.fledge/skills/` and adapter agent files (e.g.
   `.claude/agents/*.md`) are yours after init (skip-if-exists); `fledge init
-  --refresh` syncs all fledge-owned files to the shipped versions, skipping
-  byte-identical ones (git is the backup for your edits).
+  --refresh` resets all fledge-owned files to the shipped versions. When it
+  would overwrite files you have edited, it confirms first on an interactive
+  terminal and refuses otherwise — use `--force` to skip the confirmation (git
+  is the backup for your edits).
 - Generated adapter files (`fledge-adapter.md`, `settings.local.json`, …) are
   regenerated on every init — don't hand-edit those.
 - Coming from 0.1.0 (skill under `.claude/skills/`)? See

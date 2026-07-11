@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"bufio"
+	"bytes"
 	"crypto/sha256"
 	_ "embed"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -43,8 +46,8 @@ func runInit(args []string) int {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	var agents stringListFlag
 	fs.Var(&agents, "agent", "agent harness to scaffold (repeatable, comma-separated)")
-	refresh := fs.Bool("refresh", false, "sync fledge-owned files to the shipped versions; user-edited default-policy files are kept and reported unless --force is also set")
-	force := fs.Bool("force", false, "with --refresh: overwrite user-edited files (restores old overwrite behavior)")
+	refresh := fs.Bool("refresh", false, "reset all fledge-owned files to the shipped versions (confirms before overwriting user-edited files)")
+	force := fs.Bool("force", false, "with --refresh: skip the confirmation prompt and overwrite user-edited files")
 	listAgents := fs.Bool("list-agents", false, "list available agent adapters and exit")
 	jsonOut := fs.Bool("json", false, "machine-readable output")
 	if err := fs.Parse(args); err != nil {
@@ -60,7 +63,64 @@ func runInit(args []string) int {
 		return envErr("%v", err)
 	}
 
-	var created, skipped, updated, kept []string
+	// Load old stamp now: refresh detection and the stamp's agents union need it.
+	oldStamp, _ := bootstrap.LoadStamp(r.Root)
+
+	// Resolve which adapters to scaffold (Q7).
+	selected, defaulted, err := resolveAgents(r.Root, agents)
+	if err != nil {
+		return fail("%v", err)
+	}
+
+	// Resolve manifests and build the expected-file map (base + core + adapters)
+	// before any write: refresh needs it to detect user edits up front, and the
+	// stamp is built from it afterwards.
+	allFiles := baseScaffoldEntries()
+	manifests := make([]*bootstrap.Manifest, 0, len(selected))
+	for _, name := range selected {
+		m, err := bootstrap.FindAdapter(name)
+		if err != nil {
+			return fail("%v", err)
+		}
+		if m == nil {
+			return usageErr("unknown agent %q (run `fledge init --list-agents`)", name)
+		}
+		manifests = append(manifests, m)
+		ef, efErr := bootstrap.ExpectedFiles(m, commandOrder)
+		if efErr != nil {
+			return fail("build expected files for %s: %v", name, efErr)
+		}
+		for k, v := range ef {
+			allFiles[k] = v
+		}
+	}
+
+	// Duplicate guard (Q10): refuse a broken state before writing anything.
+	if err := bootstrap.CheckDuplicateSkills(r.Root); err != nil {
+		return fail("%v", err)
+	}
+
+	// Refresh is a reset-to-shipped: confirm before overwriting user edits.
+	if *refresh && !*force {
+		edited := bootstrap.EditedOnRefresh(r.Root, oldStamp, allFiles)
+		if len(edited) > 0 {
+			fmt.Fprintf(os.Stderr, "refresh will overwrite %d user-edited file(s):\n", len(edited))
+			for _, p := range edited {
+				fmt.Fprintf(os.Stderr, "  %s\n", p)
+			}
+			if !*jsonOut && stdinIsTTY() {
+				if !promptYesNo(os.Stdin, os.Stderr, fmt.Sprintf("overwrite %d user-edited file(s)? [y/N] ", len(edited))) {
+					fmt.Fprintln(os.Stderr, "aborted; nothing written")
+					return ExitFail
+				}
+			} else {
+				fmt.Fprintln(os.Stderr, "refusing to overwrite; rerun with --force")
+				return ExitFail
+			}
+		}
+	}
+
+	var created, skipped, updated []string
 	note := func(rel string, state int) {
 		switch state {
 		case 0:
@@ -85,9 +145,16 @@ func runInit(args []string) int {
 	}
 	for _, f := range baseFiles {
 		path := filepath.Join(r.Root, f.rel)
-		if fileExists(path) {
+		exists := fileExists(path)
+		if exists && !*refresh {
 			note(f.rel, 1)
 			continue
+		}
+		if exists {
+			if cur, rErr := os.ReadFile(path); rErr == nil && bytes.Equal(cur, f.content) {
+				note(f.rel, 1)
+				continue
+			}
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return fail("%v", err)
@@ -95,7 +162,11 @@ func runInit(args []string) int {
 		if err := spec.WriteFileAtomic(path, f.content); err != nil {
 			return fail("%v", err)
 		}
-		note(f.rel, 0)
+		if exists {
+			note(f.rel, 2)
+		} else {
+			note(f.rel, 0)
+		}
 	}
 
 	changed, err := ensureGitignore(filepath.Join(r.Root, ".gitignore"))
@@ -108,60 +179,27 @@ func runInit(args []string) int {
 		note(".gitignore", 1)
 	}
 
-	// Load old stamp now so we can union its agents list later.
-	oldStamp, _ := bootstrap.LoadStamp(r.Root)
-
-	// Resolve which adapters to scaffold (Q7).
-	selected, defaulted, err := resolveAgents(r.Root, agents)
-	if err != nil {
-		return fail("%v", err)
-	}
-
-	// Duplicate guard (Q10): refuse a broken state before writing core.
-	if err := bootstrap.CheckDuplicateSkills(r.Root); err != nil {
-		return fail("%v", err)
-	}
-
 	// Core skill: agent-neutral, written to .fledge/skills/ (Q2).
-	opts := bootstrap.WriteOpts{Refresh: *refresh, Force: *force, Old: oldStamp}
-	cCreated, cUpdated, cSkipped, cKept, err := bootstrap.WriteCore(r.Root, opts)
+	opts := bootstrap.WriteOpts{Refresh: *refresh}
+	cCreated, cUpdated, cSkipped, err := bootstrap.WriteCore(r.Root, opts)
 	if err != nil {
 		return fail("%v", err)
 	}
 	created = append(created, cCreated...)
 	updated = append(updated, cUpdated...)
 	skipped = append(skipped, cSkipped...)
-	kept = append(kept, cKept...)
 
 	// Adapters: per-harness, written to their native paths.
-	// allFiles accumulates expected-file entries for the stamp (base + core + adapters).
-	allFiles := baseScaffoldEntries()
 	var scaffolded []string
-	for _, name := range selected {
-		m, err := bootstrap.FindAdapter(name)
-		if err != nil {
-			return fail("%v", err)
-		}
-		if m == nil {
-			return usageErr("unknown agent %q (run `fledge init --list-agents`)", name)
-		}
-		aCreated, aUpdated, aSkipped, aKept, err := m.WriteAdapter(r.Root, commandOrder, opts)
+	for _, m := range manifests {
+		aCreated, aUpdated, aSkipped, err := m.WriteAdapter(r.Root, commandOrder, opts)
 		if err != nil {
 			return fail("%v", err)
 		}
 		created = append(created, aCreated...)
 		updated = append(updated, aUpdated...)
 		skipped = append(skipped, aSkipped...)
-		kept = append(kept, aKept...)
-		scaffolded = append(scaffolded, name)
-
-		ef, efErr := bootstrap.ExpectedFiles(m, commandOrder)
-		if efErr != nil {
-			return fail("build expected files for %s: %v", name, efErr)
-		}
-		for k, v := range ef {
-			allFiles[k] = v
-		}
+		scaffolded = append(scaffolded, m.Name)
 	}
 	sort.Strings(scaffolded)
 
@@ -201,9 +239,9 @@ func runInit(args []string) int {
 		skipped = append(skipped, stampRel)
 	}
 
-	// Prune pass (refresh only): remove obsolete files whose content still
-	// matches the old stamp (provably unmodified); report everything else.
-	var pruned, obsolete []string
+	// Prune pass (refresh only): remove obsolete files (in the old stamp,
+	// absent from the new expected tree). User-edited ones were confirmed above.
+	var pruned []string
 	if *refresh && oldStamp != nil {
 		newExpected := make(map[string]bool, len(allFiles)+1)
 		for k := range allFiles {
@@ -220,7 +258,7 @@ func runInit(args []string) int {
 		sort.Strings(pruneTargets)
 
 		for _, p := range pruneTargets {
-			del, rep, pErr := bootstrap.PruneObsolete(r.Root, p, oldStamp.Files[p])
+			del, pErr := bootstrap.PruneObsolete(r.Root, p, oldStamp.Files[p])
 			if pErr != nil {
 				return fail("prune %s: %v", p, pErr)
 			}
@@ -228,8 +266,6 @@ func runInit(args []string) int {
 				pruned = append(pruned, p)
 				// Remove now-empty ancestor dirs within .fledge/skills/ and .claude/.
 				removeEmptyParents(r.Root, p)
-			} else if rep {
-				obsolete = append(obsolete, p)
 			}
 		}
 	}
@@ -244,13 +280,11 @@ func runInit(args []string) int {
 
 	if *jsonOut {
 		return emitJSON(initJSON{
-			Created:  nonEmpty(created),
-			Skipped:  nonEmpty(skipped),
-			Updated:  nonEmpty(updated),
-			Agents:   nonEmpty(scaffolded),
-			Kept:     nonEmpty(kept),
-			Removed:  nonEmpty(pruned),
-			Obsolete: nonEmpty(obsolete),
+			Created: nonEmpty(created),
+			Skipped: nonEmpty(skipped),
+			Updated: nonEmpty(updated),
+			Agents:  nonEmpty(scaffolded),
+			Removed: nonEmpty(pruned),
 		})
 	}
 	for _, rel := range created {
@@ -259,14 +293,8 @@ func runInit(args []string) int {
 	for _, rel := range updated {
 		fmt.Printf("updated %s\n", rel)
 	}
-	for _, rel := range kept {
-		fmt.Printf("kept %s (user-edited; use --force)\n", rel)
-	}
 	for _, rel := range pruned {
 		fmt.Printf("removed %s\n", rel)
-	}
-	for _, rel := range obsolete {
-		fmt.Printf("obsolete %s (user-edited — remove manually)\n", rel)
 	}
 	for _, rel := range skipped {
 		fmt.Printf("exists %s\n", rel)
@@ -278,13 +306,32 @@ func runInit(args []string) int {
 }
 
 type initJSON struct {
-	Created  []string `json:"created"`
-	Skipped  []string `json:"skipped"`
-	Updated  []string `json:"updated"`
-	Agents   []string `json:"agents"`
-	Kept     []string `json:"kept"`
-	Removed  []string `json:"removed"`
-	Obsolete []string `json:"obsolete"`
+	Created []string `json:"created"`
+	Skipped []string `json:"skipped"`
+	Updated []string `json:"updated"`
+	Agents  []string `json:"agents"`
+	Removed []string `json:"removed"`
+}
+
+// stdinIsTTY reports whether stdin is an interactive terminal (char device).
+func stdinIsTTY() bool {
+	fi, err := os.Stdin.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// promptYesNo writes prompt to w and reads one line from r; only an explicit
+// "y"/"yes" (case-insensitive) answers true.
+func promptYesNo(r io.Reader, w io.Writer, prompt string) bool {
+	fmt.Fprint(w, prompt)
+	sc := bufio.NewScanner(r)
+	if !sc.Scan() {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(sc.Text())) {
+	case "y", "yes":
+		return true
+	}
+	return false
 }
 
 // removeEmptyParents removes empty ancestor directories under .fledge/skills/

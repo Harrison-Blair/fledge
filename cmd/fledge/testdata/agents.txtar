@@ -19,7 +19,7 @@ stdout '"scaffolded": true'
 stdout '"name": "claude"'
 stdout '"tier": "C"'
 
-# scaffolding claude includes the incubator agent
+# scaffolding claude includes the incubator (delegated planner) agent
 exec fledge init --agent claude
 exists .claude/agents/fledge-incubator.md
-grep 'mutates no spec' .claude/agents/fledge-incubator.md
+grep 'owns the planning phase end to end' .claude/agents/fledge-incubator.md

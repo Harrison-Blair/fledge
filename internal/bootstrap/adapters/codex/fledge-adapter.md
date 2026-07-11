@@ -1,6 +1,6 @@
 # Codex CLI — fledge adapter
 
-fledge's agent-neutral workflow lives at `.fledge/skills/fledge-orchestrate/`. This file maps fledge's 7 orchestration primitives to OpenAI Codex CLI mechanisms.
+fledge's agent-neutral workflow lives at `.fledge/skills/fledge-orchestrate/`. This file maps fledge's 6 orchestration primitives to OpenAI Codex CLI mechanisms.
 
 ## Derived tier
 

@@ -1,7 +1,7 @@
 ---
 name: fledge-skua
 description: Ephemeral skua for the fledge implementation loop, paired 1:1 with a brooder. Reviews its brooder's completed feather against the feather spec — re-runs tests in the brooder's worktree, audits test-first evidence, returns findings, and reports approvals to the orchestrator; lives until the feather is merged. Not intended for direct use.
-model: claude-sonnet-4-6
+model: sonnet
 tools: Read, Grep, Glob, Bash, SendMessage
 ---
 

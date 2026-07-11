@@ -171,7 +171,7 @@ func scaffoldMessage(d bootstrap.Drift) string {
 	case bootstrap.StatusStale:
 		return fmt.Sprintf("scaffold file is stale (unedited, refresh-safe) — run fledge init --refresh")
 	case bootstrap.StatusModified:
-		return fmt.Sprintf("scaffold file is user-edited; refresh will preserve it — run fledge init --refresh")
+		return fmt.Sprintf("scaffold file is user-edited — fledge init --refresh resets it to the shipped version (confirms first; --force skips)")
 	case bootstrap.StatusMissing:
 		return fmt.Sprintf("scaffold file is missing — run fledge init --refresh")
 	case bootstrap.StatusObsolete:

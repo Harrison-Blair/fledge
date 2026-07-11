@@ -1,4 +1,7 @@
-# refresh_scaffold.txtar: tests for init --refresh preserve/prune/force behavior.
+# refresh_scaffold.txtar: tests for init --refresh reset/prune/confirm behavior.
+# --refresh resets fledge-owned files to the shipped versions; with user-edited
+# files present it prompts on a TTY and fails otherwise (testscript stdin is
+# non-TTY, so these scripts exercise the fail and --force paths).
 # Tests are disjoint from init.txtar/init_agents.txtar (FTHR-010/FTHR-011 fixtures).
 
 # ---------------------------------------------------------------
@@ -15,14 +18,15 @@ exists .fledge/scaffold.json
 exists .claude/agents/fledge-brooder.md
 
 # ---------------------------------------------------------------
-# B. Preserve: editing a default-policy file → --refresh keeps it
-#              and reports "kept … (user-edited; use --force)".
+# B. Confirm: editing a default-policy file → non-interactive
+#             --refresh refuses (exit 1), lists the file, writes nothing.
 # ---------------------------------------------------------------
 cp custom_brooder.md .claude/agents/fledge-brooder.md
 
-exec fledge init --refresh
-stdout 'kept .claude/agents/fledge-brooder.md \(user-edited; use --force\)'
-! stdout 'updated .claude/agents/fledge-brooder.md'
+! exec fledge init --refresh
+stderr 'refresh will overwrite 1 user-edited file\(s\):'
+stderr '  .claude/agents/fledge-brooder.md'
+stderr 'refusing to overwrite; rerun with --force'
 grep 'MY CUSTOM BROODER' .claude/agents/fledge-brooder.md
 
 # ---------------------------------------------------------------
@@ -42,29 +46,37 @@ exists .fledge/skills/fledge-orchestrate/SKILL.md
 
 # ---------------------------------------------------------------
 # E. Prune mismatch: old stamp entry with user-edited disk file →
-#    reported as obsolete, NOT deleted.
+#    non-interactive --refresh refuses; --force removes it.
 #    Inject a new stamp that adds a mismatched fake entry.
 # ---------------------------------------------------------------
 cp mismatch_stamp.json .fledge/scaffold.json
 cp mismatch_file.md .fledge/old-skill/mismatch.md
 
-exec fledge init --refresh
-stdout 'obsolete .fledge/old-skill/mismatch.md \(user-edited — remove manually\)'
-! stdout 'removed .fledge/old-skill/mismatch.md'
+! exec fledge init --refresh
+stderr '  .fledge/old-skill/mismatch.md'
 exists .fledge/old-skill/mismatch.md
 
+exec fledge init --refresh --force
+stdout 'removed .fledge/old-skill/mismatch.md'
+! exists .fledge/old-skill/mismatch.md
+
 # ---------------------------------------------------------------
-# F. Stampless adoption: rm scaffold.json, then --refresh preserves
-#    user edits, prunes nothing, writes a fresh stamp.
+# F. Stampless: rm scaffold.json, then --refresh treats any differing
+#    file as user-edited (refuses without --force); --force resets it
+#    and writes a fresh stamp.
 # ---------------------------------------------------------------
 rm .fledge/scaffold.json
 cp custom_brooder.md .claude/agents/fledge-brooder.md
 
-exec fledge init --refresh
-! stdout 'removed'
-stdout 'kept .claude/agents/fledge-brooder.md \(user-edited; use --force\)'
-exists .fledge/scaffold.json
+! exec fledge init --refresh
+stderr '  .claude/agents/fledge-brooder.md'
 grep 'MY CUSTOM BROODER' .claude/agents/fledge-brooder.md
+
+exec fledge init --refresh --force
+! stdout 'removed'
+stdout 'updated .claude/agents/fledge-brooder.md'
+exists .fledge/scaffold.json
+! grep 'MY CUSTOM BROODER' .claude/agents/fledge-brooder.md
 
 # ---------------------------------------------------------------
 # Fixture files

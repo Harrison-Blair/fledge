@@ -1,6 +1,6 @@
 # pi — fledge adapter
 
-fledge's agent-neutral workflow lives at `.fledge/skills/fledge-orchestrate/` (pi discovers it via the `skills` pointer in `.pi/settings.json`). This file maps fledge's 7 orchestration primitives to pi mechanisms.
+fledge's agent-neutral workflow lives at `.fledge/skills/fledge-orchestrate/` (pi discovers it via the `skills` pointer in `.pi/settings.json`). This file maps fledge's 6 orchestration primitives to pi mechanisms.
 
 ## Derived tier
 

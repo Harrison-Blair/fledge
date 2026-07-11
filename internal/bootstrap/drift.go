@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -87,6 +88,55 @@ func DriftReport(root string, stamp *Stamp, expected map[string]StampEntry) []Dr
 		out = append(out, d)
 	}
 	return out
+}
+
+// EditedOnRefresh returns the repo-relative paths of user-edited files that a
+// refresh would overwrite or remove: expected files whose disk content is
+// modified (differs from both the shipped bytes and the old stamp), plus
+// obsolete stamp entries the user has edited since fledge wrote them. The CLI
+// confirms with the user before refreshing when this list is non-empty.
+// stamp may be nil (stampless: any expected file that differs counts as edited).
+func EditedOnRefresh(root string, stamp *Stamp, expected map[string]StampEntry) []string {
+	var out []string
+	for _, d := range DriftReport(root, stamp, expected) {
+		switch d.Status {
+		case StatusModified:
+			out = append(out, d.Path)
+		case StatusObsolete:
+			if stamp != nil && obsoleteEdited(root, d.Path, stamp.Files[d.Path]) {
+				out = append(out, d.Path)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// obsoleteEdited reports whether an obsolete stamp entry's on-disk state
+// differs from what fledge last wrote (content hash or symlink target).
+// A missing path is not edited (nothing to overwrite).
+func obsoleteEdited(root, repoPath string, entry StampEntry) bool {
+	abs := filepath.Join(root, filepath.FromSlash(repoPath))
+	if entry.Policy == "symlink" {
+		fi, err := os.Lstat(abs)
+		if err != nil {
+			return false
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			return true // user replaced the symlink with a real file/dir
+		}
+		cur, err := os.Readlink(abs)
+		if err != nil {
+			return true
+		}
+		return filepath.ToSlash(cur) != entry.Target
+	}
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		return false
+	}
+	h := sha256.Sum256(data)
+	return fmt.Sprintf("%x", h) != entry.Sha256
 }
 
 // classifyContent classifies a content-bearing (sha256) entry.

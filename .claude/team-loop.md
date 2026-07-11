@@ -15,8 +15,24 @@ The agent-neutral skill calls you `fledge-orchestrator`; on Claude Code that rol
 ## Spawning and addressing teammates
 
 - Spawn a teammate of a given agent type (e.g. `fledge-brooder`) named per the penguin-species scheme in `implementation.md` §3.1. The teammate's agent definition (`.claude/agents/fledge-<role>.md`) is its system prompt; the spawn prompt you pass is its task context. Both are the teammate's entire context — it inherits no conversation history.
-- Address a teammate by name via `SendMessage`. A teammate may go idle; idle is not completion. It stays alive and addressable until you request its shutdown by name.
+- Address a teammate by name via `SendMessage`. A teammate may go idle; idle is not completion. It stays alive and addressable until you shut it down (see "Shutting down teammates" below).
 - Teammates inherit your permission mode at spawn. Brooders must edit files and run tests unattended in their panes — `implementation.md` §1 surfaces the current mode via a `confirm-gate` and asks whether to proceed or stop while the user switches to a mode without per-action prompts (e.g. `acceptEdits`). Without this, brooder panes stall awaiting approvals.
+
+## Shutting down teammates
+
+This is the Claude Code realization of the core skill's teammate teardown (`implementation.md` §3.2 green teardown, §3.2 plumage closeout, §5). Get it right or pairs linger.
+
+- **A `SendMessage` shutdown request does not, by itself, terminate a teammate.** Named teammates do not self-exit — a request can only prompt an acknowledgement and leave the teammate idle in its pane. Idle is not gone.
+- **`TaskStop <name>` is what actually terminates a teammate.** Use it as the real teardown mechanism, not merely an escalation.
+- **Procedure per worker** (do this for the brooder *and* its paired skua at green teardown): first `SendMessage` the graceful shutdown request by name (lets it finish an in-flight commit or reply and reach quiescence), then `TaskStop <name>` to actually terminate it. Issue the `TaskStop` regardless of whether the teammate acked — do not wait indefinitely for a reply.
+- **Confirmed shutdown** = the teammate no longer appears in the team roster and its tmux pane has closed. That observed absence — not the teammate's acknowledgement — is what frees its species for reuse (`implementation.md` §3.1). If a teammate does not quiesce, `TaskStop` it anyway and confirm it is gone.
+
+## Planning delegation
+
+The planning phase (`planning.md` §0) is delegated to a `fledge-incubator-<species>` teammate; you are a pure relay and hold no planning context. Two Claude Code specifics:
+
+- Relay each `GATE`/`QUESTION` message from the incubator to the user via AskUserQuestion, verbatim and in full, and SendMessage the user's choice (and any feedback) back verbatim. Never answer on the user's behalf.
+- Teammates cannot spawn teammates: when the incubator needs a forager it sends you a `SPAWN-REQUEST`; spawn the `fledge-forager-<species>` teammate yourself with exactly the spawn prompt provided (it names the incubator as the report target), then confirm back to the incubator.
 
 ## The team task list
 

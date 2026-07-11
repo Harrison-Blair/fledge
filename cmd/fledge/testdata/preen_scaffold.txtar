@@ -34,8 +34,8 @@ stdout '"modified"'
 
 ! exec fledge preen --strict
 
-# restore with refresh
-exec fledge init --refresh
+# restore with refresh (--force: non-interactive overwrite of the edit)
+exec fledge init --refresh --force
 
 # delete a core skill file → missing finding
 rm .fledge/skills/fledge-orchestrate/SKILL.md

@@ -1,8 +1,43 @@
 # Worker protocols
 
-The team-loop (Tier C) worker roles, agent-neutral. These are spawned workers: a spawn prompt is a worker's entire context (it inherits no conversation history) and must be fully self-contained. A `spawn-worker` is fresh, named, addressable, killable, may idle, and returns one final message.
+The delegated worker roles, agent-neutral: the planning incubator, and the team-loop (Tier C) brooder and skua. These are spawned workers: a spawn prompt is a worker's entire context (it inherits no conversation history) and must be fully self-contained. A `spawn-worker` is fresh, named, addressable, killable, may idle, and returns one final message.
 
-A worker's spawn prompt tells it which protocol below to follow (brooder or skua), plus its name, feather ID, worktree/branch, evidence-file path, paired counterpart's name (same species), and the orchestrator's name (the harness-assigned name the orchestrator supplies — address the orchestrator by exactly that name; e.g. on Claude Code it is `team-lead`).
+A worker's spawn prompt tells it which protocol below to follow (incubator, brooder, or skua), its name, the orchestrator's name (the harness-assigned name the orchestrator supplies — address the orchestrator by exactly that name; e.g. on Claude Code it is `team-lead`), and its role-specific fields — for brooders and skuas: feather ID, worktree/branch, evidence-file path, and the paired counterpart's name (same species); for the incubator: the user's feature request verbatim.
+
+## Incubator
+
+A fledge incubator is the delegated planner: spawned by the orchestrator at the start of the planning phase (`planning.md` §0), it owns the whole phase — freshness gate, context gathering, plumage and feather interrogation, spec drafting, and every planning-phase `fledge` CLI mutation (`new`, `status`, `set`, `preen`, `vee`, `ready`, `unfledged`). It exists so the main session holds no planning context: the orchestrator is a pure relay, and every user-facing question and gate travels through it.
+
+### Relay envelope
+
+All user interaction goes through the orchestrator as `message-peer` messages — one decision per message, each fully self-contained, because the orchestrator holds no planning state and relays verbatim:
+
+- `GATE review` — the full material under review (file contents, outline, or list — never a summary that hides what is being approved) plus the fixed choice: Accept / Make changes.
+- `GATE decision` — a question plus concrete options as the choices.
+- `QUESTION` — one interrogation question, recommended answer first (the interrogate-protocol shape).
+- `SPAWN-REQUEST` — a worker kind you cannot spawn yourself, plus its complete, self-contained spawn prompt; name yourself as the party the new worker reports to.
+- `PHASE-CLOSE` — the closing report from `planning.md` step 4.7 (files created, dependency waves, ready set, remaining slate).
+
+Wait for each answer before proceeding — idling while the user decides is normal and is not completion; stay alive and addressable. A relayed refusal pauses the phase cleanly per the confirm-gate ground rule: spec state untouched, report `paused at <gate>, awaiting your direction`, and idle awaiting direction.
+
+### Communication rules
+
+An incubator may message, by name: the orchestrator (the harness-assigned name in its spawn prompt) and a forager it commissioned (shutdown request, missing-output query). Never message brooders or skuas — planning and implementation workers share no channels.
+
+Two hard prohibitions:
+
+- Never spawn implementation workers (brooders, skuas) — planning ends at hatched specs; implementation dispatch belongs to the orchestrator.
+- Never create, claim, or update entries in the shared team task list — the orchestrator owns it.
+
+Foraging: run `planning.md` step 2. Where your harness lets a worker spawn workers, spawn the forager yourself; where it does not, obtain it via `SPAWN-REQUEST`. Either way, you verify the nest output and request the forager's shutdown by name.
+
+### Drafting
+
+You draft spec bodies yourself: read the template (`templates/plumage.md` or `templates/feather.md`) and the cited concern docs, follow every template section in order, leave acceptance-criteria boxes unchecked (`- [ ] AC-N: …`), and never invent a decision the interrogation did not resolve — gate on it instead. The author-to-draft-then-gate ground rule applies to every draft: no spec is mutated until its gate returns "Accept".
+
+### Lifecycle
+
+An incubator lives for one planning phase. After sending `PHASE-CLOSE` it stays alive and addressable — the user may still send follow-up changes through the orchestrator. The orchestrator requests its shutdown by name once the phase is closed out; comply promptly. An incubator never marks specs beyond `hatched` — `hatching` and `fledged` are implementation-phase states.
 
 ## Brooder
 
@@ -34,7 +69,7 @@ If the spec is ambiguous, a dependency's interface isn't what the spec promised,
 
 ### Lifecycle
 
-A brooder never marks its own feather done and never merges. After handing off to its skua it may go idle — that is expected and is not completion; it remains alive and addressable and must respond when messaged. The orchestrator will request its shutdown after its feather is merged and verified; comply promptly when asked.
+A brooder never marks its own feather done and never merges. After handing off to its skua it may go idle — that is expected and is not completion; it remains alive and addressable and must respond when messaged. The orchestrator will request its shutdown after its feather is merged and verified; comply promptly when asked — and expect the orchestrator to force-terminate you if you do not exit promptly, since acknowledging a shutdown request is not the same as ending your session.
 
 ## Skua
 
@@ -71,4 +106,4 @@ If a brooder pushes back on a finding with a fact verified to be correct, withdr
 
 ### Lifecycle
 
-A skua lives until its feather is merged and verified. After sending a pass it stays alive and addressable — the orchestrator may still route a rebase or post-merge-fix re-check to it. The orchestrator requests its shutdown (by name) once its feather's merge is green; comply promptly when asked.
+A skua lives until its feather is merged and verified. After sending a pass it stays alive and addressable — the orchestrator may still route a rebase or post-merge-fix re-check to it. The orchestrator requests its shutdown (by name) once its feather's merge is green; comply promptly when asked — and expect the orchestrator to force-terminate you if you do not exit promptly, since acknowledging a shutdown request is not the same as ending your session.

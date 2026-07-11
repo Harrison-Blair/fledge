@@ -91,9 +91,9 @@ grep 'fledge-orchestrate/SKILL.md' CLAUDE.md
 stderr 'unknown agent "nope"'
 stderr 'list-agents'
 
-# --refresh: default-policy files the user has edited are preserved and
-# reported ("kept … use --force"); --refresh --force restores them to the
-# shipped version (with a stderr note); a second refresh with no edits is silent.
+# --refresh: user-edited files make a non-interactive refresh refuse (exit 1,
+# listing the files); --refresh --force resets them to the shipped version
+# (with a stderr note); a second refresh with no edits is silent.
 cd $WORK
 mkdir core-repo
 cd core-repo
@@ -102,16 +102,16 @@ mkdir .claude
 exec fledge init
 grep 'fledge nest scaffold' .claude/agents/fledge-forager.md
 grep 'fledge nest scout --module' .claude/agents/fledge-context-scout.md
-grep 'mutates no spec' .claude/agents/fledge-incubator.md
 cp $WORK/custom-skill.md .fledge/skills/fledge-orchestrate/SKILL.md
 cp $WORK/custom-skill.md .claude/agents/fledge-brooder.md
 exec fledge init
 grep 'my local edit' .fledge/skills/fledge-orchestrate/SKILL.md
 grep 'my local edit' .claude/agents/fledge-brooder.md
-exec fledge init --refresh
-! stderr 'refreshed'
-stdout 'kept .fledge/skills/fledge-orchestrate/SKILL.md \(user-edited; use --force\)'
-stdout 'kept .claude/agents/fledge-brooder.md \(user-edited; use --force\)'
+! exec fledge init --refresh
+stderr 'refresh will overwrite 2 user-edited file\(s\):'
+stderr '  .fledge/skills/fledge-orchestrate/SKILL.md'
+stderr '  .claude/agents/fledge-brooder.md'
+stderr 'refusing to overwrite; rerun with --force'
 grep 'my local edit' .fledge/skills/fledge-orchestrate/SKILL.md
 grep 'my local edit' .claude/agents/fledge-brooder.md
 exec fledge init --refresh --force
@@ -122,7 +122,6 @@ stdout 'updated .claude/agents/fledge-brooder.md'
 ! grep 'my local edit' .claude/agents/fledge-brooder.md
 grep 'fledge nest scaffold' .claude/agents/fledge-forager.md
 grep 'fledge nest scout --module' .claude/agents/fledge-context-scout.md
-grep 'mutates no spec' .claude/agents/fledge-incubator.md
 exec fledge init --refresh
 ! stdout 'updated'
 ! stderr 'refreshed'
