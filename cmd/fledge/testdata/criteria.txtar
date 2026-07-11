@@ -17,7 +17,7 @@ stdout '"label": "AC-1"'
 # preen by bare number
 exec fledge criteria check FTHR-001 1
 stdout 'FTHR-001: AC-1 checked'
-grep '\- \[x\] AC-1: tests observed failing then passing' pluma/feathers/FTHR-001-first.md
+grep '\- \[x\] AC-1: tests observed failing then passing' .fledge/pluma/feathers/FTHR-001-first.md
 
 # re-check is idempotent
 exec fledge criteria check FTHR-001 1 --json
@@ -25,22 +25,22 @@ stdout '"changed": false'
 
 # preen by AC label
 exec fledge criteria check FTHR-001 AC-3
-grep '\- \[x\] AC-3: third' pluma/feathers/FTHR-001-first.md
+grep '\- \[x\] AC-3: third' .fledge/pluma/feathers/FTHR-001-first.md
 exec fledge criteria FTHR-001
 stdout '3/3 checked'
 
 # uncheck
 exec fledge criteria uncheck FTHR-001 3
-grep '\- \[ \] AC-3: third' pluma/feathers/FTHR-001-first.md
+grep '\- \[ \] AC-3: third' .fledge/pluma/feathers/FTHR-001-first.md
 
 # works on plumages too
 exec fledge criteria PLM-001
 stdout '\[ \] AC-1: req criterion'
 exec fledge criteria check PLM-001 1
-grep '\- \[x\] AC-1: req criterion' pluma/plumage/PLM-001-a.md
+grep '\- \[x\] AC-1: req criterion' .fledge/pluma/plumage/PLM-001-a.md
 
 # body preserved byte-for-byte apart from the box
-grep 'sentinel body line' pluma/feathers/FTHR-001-first.md
+grep 'sentinel body line' .fledge/pluma/feathers/FTHR-001-first.md
 
 # unknown ID
 ! exec fledge criteria FTHR-099
@@ -63,7 +63,7 @@ stderr 'usage'
 stderr 'usage'
 
 -- .fledge/.gitkeep --
--- pluma/plumage/PLM-001-a.md --
+-- .fledge/pluma/plumage/PLM-001-a.md --
 ---
 id: PLM-001
 title: A requirement
@@ -79,7 +79,7 @@ x
 1. FC-1: prose stays numbered
 ## Acceptance Criteria
 - [ ] AC-1: req criterion
--- pluma/feathers/FTHR-001-first.md --
+-- .fledge/pluma/feathers/FTHR-001-first.md --
 ---
 id: FTHR-001
 title: First
@@ -99,7 +99,7 @@ x
 - [ ] AC-1: tests observed failing then passing
 - [x] AC-2: already verified
 - [ ] AC-3: third
--- pluma/feathers/FTHR-002-second.md --
+-- .fledge/pluma/feathers/FTHR-002-second.md --
 ---
 id: FTHR-002
 title: Second

@@ -28,13 +28,13 @@ stdout '"feathers": \[\]'
 stderr 'flag provided but not defined'
 
 # populate: two plumages (one fledged, one hatched), feathers in mixed statuses
-mkdir -p pluma/plumage
-mkdir -p pluma/feathers
-cp req1.md pluma/plumage/PLM-001-done.md
-cp req2.md pluma/plumage/PLM-002-open.md
-cp task1.md pluma/feathers/FTHR-001-fledged.md
-cp task2.md pluma/feathers/FTHR-002-egg-p0.md
-cp task3.md pluma/feathers/FTHR-003-hatching-p2.md
+mkdir -p .fledge/pluma/plumage
+mkdir -p .fledge/pluma/feathers
+cp req1.md .fledge/pluma/plumage/PLM-001-done.md
+cp req2.md .fledge/pluma/plumage/PLM-002-open.md
+cp task1.md .fledge/pluma/feathers/FTHR-001-fledged.md
+cp task2.md .fledge/pluma/feathers/FTHR-002-egg-p0.md
+cp task3.md .fledge/pluma/feathers/FTHR-003-hatching-p2.md
 
 # FC-1/FC-2: fledged items absent; open plumage + open feathers listed with fields.
 # PLM-001 is fledged -> must NOT appear; PLM-002 (hatched) must appear.
@@ -74,16 +74,16 @@ stdout '"id": "PLM-002"'
 stdout '"status": "hatched"'
 stdout '"id": "FTHR-002"'
 stdout '"plumage": "PLM-002"'
-stdout '"path": "pluma/feathers/FTHR-002-egg-p0\.md"'
+stdout '"path": ".fledge/pluma/feathers/FTHR-002-egg-p0\.md"'
 ! stdout '"id": "PLM-001"'
 ! stdout '"id": "FTHR-001"'
 
 # FC-7: degraded data — an unparseable spec file is surfaced under issues,
 # everything that parses is still listed, exit 0
-cp badfrontmatter.md pluma/feathers/FTHR-009-broken.md
+cp badfrontmatter.md .fledge/pluma/feathers/FTHR-009-broken.md
 exec fledge unfledged
 stdout 'Issues:'
-stdout 'pluma/feathers/FTHR-009-broken\.md: unterminated frontmatter'
+stdout '.fledge/pluma/feathers/FTHR-009-broken\.md: unterminated frontmatter'
 stdout 'FTHR-002'
 exec fledge unfledged --json
 stdout '"issues": \['

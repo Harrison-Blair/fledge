@@ -29,6 +29,6 @@ Per `.fledge/nest/testing.md` and the reference count mapped during planning —
 - `go test ./cmd/fledge -run TestScripts` (all 21 acceptance tests, testscript-driven per `cmd/fledge/main_test.go:TestScripts`) — pins FC-4 for this surface. Captured FAILING against the 12 unfixed fixtures post-FTHR-017, then passing once all are updated.
 
 ## Acceptance Criteria
-- [ ] AC-1: `go test ./cmd/fledge -run TestScripts` was observed failing (against unfixed fixtures, post-FTHR-017 code change) and passing after every fixture is updated.
-- [ ] AC-2: None of the 12 listed `.txtar` files contain a `pluma/plumage` or `pluma/feathers` path reference (all read `.fledge/pluma/...`) — satisfies PLM-011 FC-4 for this surface.
-- [ ] AC-3: The full `cmd/fledge` acceptance suite (all 21 `.txtar` files) passes.
+- [x] AC-1: `go test ./cmd/fledge -run TestScripts` was observed failing (against unfixed fixtures, post-FTHR-017 code change) and passing after every fixture is updated.
+- [x] AC-2: None of the 12 listed `.txtar` files contain a `pluma/plumage` or `pluma/feathers` path reference (all read `.fledge/pluma/...`) — satisfies PLM-011 FC-4 for this surface.
+- [x] AC-3: The full `cmd/fledge` acceptance suite (all 21 `.txtar` files) passes.
