@@ -13,10 +13,10 @@ func init() { register("agents", runAgents, "fledge agents [--json]") }
 
 // adapterInfo is the JSON shape for one adapter in `fledge agents`/`--list-agents`.
 type adapterInfo struct {
-	Name        string `json:"name"`
-	Tier        string `json:"tier"`
-	Detector    string `json:"detector"`
-	Scaffolded  bool   `json:"scaffolded"`
+	Name       string `json:"name"`
+	Tier       string `json:"tier"`
+	Detector   string `json:"detector"`
+	Scaffolded bool   `json:"scaffolded"`
 }
 
 func runAgents(args []string) int {

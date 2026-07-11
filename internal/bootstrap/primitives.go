@@ -15,12 +15,12 @@ var PrimitiveOrder = []string{
 // each primitive. Used to render adapter primitive maps and in consistency
 // tests.
 var primitiveDesc = map[string]string{
-	"confirm-gate":   "present material, get a structured Accept/Make-changes or option choice",
+	"confirm-gate":    "present material, get a structured Accept/Make-changes or option choice",
 	"read-only-shell": "run read-only shell commands",
-	"write-file":     "write a file",
-	"run-fledge":     "run any fledge CLI subcommand (incl. all spec mutation)",
-	"spawn-worker":   "spawn a fresh, context-free, named, addressable sub-session returning one final message",
-	"message-peer":   "send an async by-name message; sender may idle, woken on reply",
+	"write-file":      "write a file",
+	"run-fledge":      "run any fledge CLI subcommand (incl. all spec mutation)",
+	"spawn-worker":    "spawn a fresh, context-free, named, addressable sub-session returning one final message",
+	"message-peer":    "send an async by-name message; sender may idle, woken on reply",
 }
 
 // primitiveTier is the tier each primitive is first required for.

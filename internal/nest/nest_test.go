@@ -204,11 +204,11 @@ func TestYAMLScalarQuoting(t *testing.T) {
 	}{
 		{"simple", false},
 		{"plain-with-hyphens", false},
-		{"needs: colon", true},   // colon is outside safe charset
-		{"true", true},           // YAML boolean keyword
-		{"null", true},           // YAML null keyword
-		{"", true},               // empty string → ""
-		{"123", true},            // numeric → quoted
+		{"needs: colon", true}, // colon is outside safe charset
+		{"true", true},         // YAML boolean keyword
+		{"null", true},         // YAML null keyword
+		{"", true},             // empty string → ""
+		{"123", true},          // numeric → quoted
 	}
 	for _, tt := range tests {
 		got := spec.YAMLScalar(tt.input)

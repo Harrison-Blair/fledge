@@ -36,7 +36,7 @@ type Doc struct {
 	Commit    string // full git HEAD SHA
 
 	// Scout fields (Kind == Scout).
-	Module  string // top-level module name
+	Module   string // top-level module name
 	Authored string // UTC RFC3339 timestamp
 
 	// Shared.

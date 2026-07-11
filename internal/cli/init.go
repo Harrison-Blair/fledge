@@ -32,7 +32,7 @@ var gitignoreLines = []string{".fledge/nest/raw/", ".fledge/broods/"}
 // stringListFlag implements flag.Value for a repeatable, comma-separated list.
 type stringListFlag []string
 
-func (s *stringListFlag) String() string     { return strings.Join(*s, ",") }
+func (s *stringListFlag) String() string { return strings.Join(*s, ",") }
 func (s *stringListFlag) Set(v string) error {
 	for _, part := range strings.Split(v, ",") {
 		if name := strings.TrimSpace(part); name != "" {

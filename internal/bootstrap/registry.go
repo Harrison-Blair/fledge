@@ -320,8 +320,8 @@ func WriteCore(root string, opts WriteOpts) (created, updated, skipped []string,
 		if d.IsDir() {
 			return nil
 		}
-		rel := strings.TrimPrefix(p, "core/")            // skills/fledge-…/SKILL.md
-		dst := filepath.Join(root, ".fledge", rel)        // .fledge/skills/…
+		rel := strings.TrimPrefix(p, "core/")      // skills/fledge-…/SKILL.md
+		dst := filepath.Join(root, ".fledge", rel) // .fledge/skills/…
 		exists := fileExists(dst)
 		relRepo := filepath.ToSlash(filepath.Join(".fledge", rel))
 		if exists && !opts.Refresh {

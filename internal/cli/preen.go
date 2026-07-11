@@ -77,9 +77,9 @@ type scaffoldJSONOut struct {
 }
 
 type scaffoldEntry struct {
-	Path   string              `json:"path"`
+	Path   string                `json:"path"`
 	Status bootstrap.DriftStatus `json:"status"`
-	Policy string              `json:"policy"`
+	Policy string                `json:"policy"`
 }
 
 // scaffoldDrift loads the stamp, builds the expected file set from the stamp's

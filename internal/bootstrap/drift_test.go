@@ -29,7 +29,7 @@ func TestDriftReport(t *testing.T) {
 		// setup writes files to the temp root.
 		setup func(root string)
 		// stamp entries (nil map means no stamp — use stamp=nil).
-		stampFiles map[string]StampEntry
+		stampFiles  map[string]StampEntry
 		useNilStamp bool
 		// expected entries.
 		expected map[string]StampEntry

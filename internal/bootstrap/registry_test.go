@@ -492,8 +492,8 @@ func TestEditedOnRefresh(t *testing.T) {
 
 	// Stale (disk == stamp, embedded moved) → not edited.
 	write(target, oldBytes)
-	write(".fledge/old/gone.md", obsContent)   // obsolete, unedited → not listed
-	write(".fledge/old/edited.md", userBytes)  // obsolete, edited → listed
+	write(".fledge/old/gone.md", obsContent)  // obsolete, unedited → not listed
+	write(".fledge/old/edited.md", userBytes) // obsolete, edited → listed
 	edited := EditedOnRefresh(root, stamp, expected)
 	if contains(edited, target) {
 		t.Errorf("stale file listed as edited: %v", edited)
