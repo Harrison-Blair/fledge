@@ -35,6 +35,6 @@ Per `.fledge/nest/architecture.md` (`internal/bootstrap/core/` is the single age
 - `go test ./internal/bootstrap` — confirms no structural regression; run before and after to show it was green throughout (this feather doesn't change Go code, so this isn't a fail→pass test, but its output is still captured as evidence that nothing else broke).
 
 ## Acceptance Criteria
-- [ ] AC-1: The grep-based check was observed showing stale references before the edit and zero stale references after.
-- [ ] AC-2: None of the 6 affected files contain a `pluma/plumage` or `pluma/feathers` path reference (all read `.fledge/pluma/...`) — satisfies PLM-011 FC-4 for this surface.
-- [ ] AC-3: `go test ./internal/bootstrap` passes unchanged.
+- [x] AC-1: The grep-based check was observed showing stale references before the edit and zero stale references after.
+- [x] AC-2: None of the 6 affected files contain a `pluma/plumage` or `pluma/feathers` path reference (all read `.fledge/pluma/...`) — satisfies PLM-011 FC-4 for this surface.
+- [x] AC-3: `go test ./internal/bootstrap` passes unchanged.
