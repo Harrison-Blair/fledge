@@ -1,3 +1,52 @@
+# Migrating a fledge 0.3.x repo to 0.4.0
+
+fledge 0.4.0 moves the spec-directory convention from root `pluma/` to
+`.fledge/pluma/`, so every plumage and feather lives under `.fledge/` instead
+of the repo root. fledge will not move your files, so a 0.3.x repo needs one
+manual move plus a refresh.
+
+## What changed
+
+- The spec-directory convention is now `.fledge/pluma/` (was `pluma/` at the
+  repo root). `plumage/PLM-###` and `feathers/FTHR-###` subpaths are unchanged
+  — only the parent directory moved.
+- The `fledge` CLI, the scaffolded skills, and this repo's own docs all
+  reference `.fledge/pluma/...` now; a 0.3.x repo's on-disk `pluma/` and its
+  doc references are stale until migrated.
+
+## Steps
+
+1. Move the spec directory (git keeps the history):
+
+   ```sh
+   git mv pluma .fledge/pluma
+   ```
+
+2. Rebuild and reinstall `fledge` against the version that expects
+   `.fledge/pluma/` (skip this if you're already running it from a package
+   manager or release build):
+
+   ```sh
+   go install ./cmd/fledge
+   hash -r
+   fledge version
+   ```
+
+3. Re-run refresh to sync the scaffold to the new convention:
+
+   ```sh
+   fledge init --refresh
+   ```
+
+4. Review and commit:
+
+   ```sh
+   git add -A
+   git commit -m "chore: migrate pluma/ to .fledge/pluma/ (fledge 0.4.0)"
+   ```
+
+---
+
 # Migrating a fledge 0.2.x repo to 0.3.0
 
 fledge 0.3.0 adds a scaffold stamp file (`.fledge/scaffold.json`) that records
@@ -27,8 +76,9 @@ git add .fledge/scaffold.json
 git commit -m "chore: create scaffold stamp (fledge 0.3.0)"
 ```
 
-Everything else is unchanged: `.fledge/nest/`, `pluma/`, spec files, and all
-CLI commands behave as before.
+Everything else is unchanged: `.fledge/nest/`, spec files, and all CLI
+commands behave as before. (`pluma/` itself later moved to `.fledge/pluma/`
+in 0.4.0 — see the migration section above.)
 
 ---
 
@@ -72,5 +122,6 @@ create a duplicate skill, so a 0.1.0 repo needs these one-time manual moves.
    into `.fledge/skills/` — those files are yours after init (skip-if-exists;
    `fledge init --refresh` syncs them back to the shipped versions).
 
-Nothing else moves: `.fledge/nest/`, `pluma/`, and all spec files are
-untouched, and every CLI command behaves as before.
+Nothing else moves: `.fledge/nest/` and all spec files are untouched, and
+every CLI command behaves as before. (`pluma/` itself later moved to
+`.fledge/pluma/` in 0.4.0 — see the migration section above.)

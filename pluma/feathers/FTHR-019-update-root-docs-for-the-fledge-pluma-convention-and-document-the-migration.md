@@ -33,6 +33,6 @@ Per `.fledge/nest/modules.md` (`<root>` module) and the reference surface mapped
 - Manual read-through of `MIGRATION.md`'s new section against the actual steps the repo-migration feather will perform, confirming they match — recorded as evidence, not an automated test (this is documentation, not executable behavior).
 
 ## Acceptance Criteria
-- [ ] AC-1: The grep-based check was observed showing stale references before the edit and zero stale references after, in README.md/CLAUDE.md/docs/generalization-plan.md.
-- [ ] AC-2: None of the three docs contain a `pluma/plumage` or `pluma/feathers` path reference — satisfies PLM-011 FC-4 for this surface.
-- [ ] AC-3: `MIGRATION.md` contains a new section documenting the manual `git mv pluma .fledge/pluma` migration step, and no longer claims `pluma/` is unaffected — satisfies PLM-011 AC-4.
+- [x] AC-1: The grep-based check was observed showing stale references before the edit and zero stale references after, in README.md/CLAUDE.md/docs/generalization-plan.md.
+- [x] AC-2: None of the three docs contain a `pluma/plumage` or `pluma/feathers` path reference — satisfies PLM-011 FC-4 for this surface.
+- [x] AC-3: `MIGRATION.md` contains a new section documenting the manual `git mv pluma .fledge/pluma` migration step, and no longer claims `pluma/` is unaffected — satisfies PLM-011 AC-4.

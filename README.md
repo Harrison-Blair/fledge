@@ -5,8 +5,8 @@ and implementable work as validated markdown specs on disk, and teaches any
 agent harness — Claude Code, pi, Codex — one shared workflow for planning and
 implementing against them.
 
-The bird theme, decoded: a **plumage** (`pluma/plumage/PLM-###`) is a
-requirement/feature spec; a **feather** (`pluma/feathers/FTHR-###`) is one
+The bird theme, decoded: a **plumage** (`.fledge/pluma/plumage/PLM-###`) is a
+requirement/feature spec; a **feather** (`.fledge/pluma/feathers/FTHR-###`) is one
 implementable task under a plumage; the **nest** (`.fledge/nest/`) holds
 distilled repository knowledge; a **brood** is a claim on a feather while an
 agent works it.
@@ -17,7 +17,7 @@ agent works it.
 go install github.com/Harrison-Blair/fledge/cmd/fledge@latest
 
 cd your-repo
-fledge init                 # scaffold .fledge/, pluma/, and your agent's adapter
+fledge init                 # scaffold .fledge/ (including .fledge/pluma/) and your agent's adapter
 ```
 
 `fledge init` auto-detects your agent harness (`.claude/`, `.pi/`, `.codex/`);
