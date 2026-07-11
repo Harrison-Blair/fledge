@@ -30,8 +30,8 @@ func (r *Repo) LocksDir() string        { return filepath.Join(r.FledgeDir(), "b
 func (r *Repo) ContextDir() string      { return filepath.Join(r.FledgeDir(), "nest") }
 func (r *Repo) ScanIgnorePath() string  { return filepath.Join(r.Root, ".fledgeignore") }
 func (r *Repo) EvidenceDir() string     { return filepath.Join(r.FledgeDir(), "molt") }
-func (r *Repo) RequirementsDir() string { return filepath.Join(r.Root, "pluma", "plumage") }
-func (r *Repo) TasksDir() string        { return filepath.Join(r.Root, "pluma", "feathers") }
+func (r *Repo) RequirementsDir() string { return filepath.Join(r.FledgeDir(), "pluma", "plumage") }
+func (r *Repo) TasksDir() string        { return filepath.Join(r.FledgeDir(), "pluma", "feathers") }
 
 // RequireFledge errors unless .fledge/ exists at the repo root.
 func (r *Repo) RequireFledge() error {
