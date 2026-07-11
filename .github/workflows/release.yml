@@ -66,8 +66,6 @@ jobs:
             goarch: amd64
           - goos: darwin
             goarch: arm64
-          - goos: windows
-            goarch: amd64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -76,22 +74,15 @@ jobs:
       - name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
         run: |
           mkdir -p dist
-          out="dist/fledge"
-          if [ "${{ matrix.goos }}" = "windows" ]; then out="$out.exe"; fi
           GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build \
             -ldflags "-X github.com/Harrison-Blair/fledge/internal/cli.binaryVersion=$VERSION" \
-            -o "$out" ./cmd/fledge
+            -o dist/fledge ./cmd/fledge
       - name: Package archive
         run: |
           cd dist
           name="fledge_${{ matrix.goos }}_${{ matrix.goarch }}"
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            zip "$name.zip" fledge.exe
-            sha256sum "$name.zip" > checksums.txt
-          else
-            tar -czf "$name.tar.gz" fledge
-            sha256sum "$name.tar.gz" > checksums.txt
-          fi
+          tar -czf "$name.tar.gz" fledge
+          sha256sum "$name.tar.gz" > checksums.txt
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -130,5 +121,4 @@ jobs:
             dist/fledge_linux_arm64.tar.gz \
             dist/fledge_darwin_amd64.tar.gz \
             dist/fledge_darwin_arm64.tar.gz \
-            dist/fledge_windows_amd64.zip \
             dist/checksums.txt

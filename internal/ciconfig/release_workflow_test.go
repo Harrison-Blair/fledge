@@ -159,16 +159,17 @@ func matrixIncludePairs(t *testing.T, doc map[string]any) []map[string]any {
 	return nil
 }
 
-func TestReleaseWorkflow_BuildsAllFivePlatforms(t *testing.T) {
+func TestReleaseWorkflow_BuildsAllFourPlatforms(t *testing.T) {
 	doc := loadReleaseWorkflow(t)
 	pairs := matrixIncludePairs(t, doc)
 
+	// windows/amd64 was dropped: fledge is Unix-only (brood.go's pidAlive uses
+	// syscall.Kill), so the release matrix covers the four Unix targets only.
 	want := []string{
 		"linux/amd64",
 		"linux/arm64",
 		"darwin/amd64",
 		"darwin/arm64",
-		"windows/amd64",
 	}
 
 	got := make(map[string]bool)
@@ -182,5 +183,11 @@ func TestReleaseWorkflow_BuildsAllFivePlatforms(t *testing.T) {
 		if !got[w] {
 			t.Errorf("matrix.include missing %q; entries seen: %#v", w, pairs)
 		}
+	}
+	if got["windows/amd64"] {
+		t.Errorf("matrix.include should not contain windows/amd64 (fledge is Unix-only); entries seen: %#v", pairs)
+	}
+	if len(pairs) != len(want) {
+		t.Errorf("matrix.include has %d entries, want %d: %#v", len(pairs), len(want), pairs)
 	}
 }

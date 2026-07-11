@@ -29,5 +29,5 @@ Same as FTHR-023: `.github/workflows/release.yml` (extends the existing build st
 
 ## Acceptance Criteria
 - [x] AC-1: The tests listed above were observed failing before implementation (matrix incomplete) and pass after (all 5 entries present).
-- [ ] AC-2: The next real `VERSION`-bumping release after this feather merges attaches exactly 5 binary archives (`linux_amd64`, `linux_arm64`, `darwin_amd64`, `darwin_arm64`, `windows_amd64`) plus one `checksums.txt` covering all 5 (satisfies PLM-012 AC-4 fully).
+- [ ] AC-2: The next real `VERSION`-bumping release after this feather merges attaches exactly 4 binary archives (`linux_amd64`, `linux_arm64`, `darwin_amd64`, `darwin_arm64`) plus one `checksums.txt` covering all 4 (satisfies PLM-012 AC-4). NOTE: `windows_amd64` was dropped on 2026-07-11 — the 5-platform matrix build revealed fledge does not cross-compile to Windows (`internal/cli/brood.go` `pidAlive` uses `syscall.Kill`); the maintainer chose to ship the four Unix targets. The structural test now pins exactly these four and asserts `windows/amd64` is absent.
 - [ ] AC-3: Each archive's checksum in `checksums.txt` matches its actual downloaded content (satisfies PLM-012 AC-5, at least for the platforms practically runnable during review).
