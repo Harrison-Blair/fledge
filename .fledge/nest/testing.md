@@ -41,7 +41,7 @@ Each `.txtar` is a self-contained, hermetic test: a bash-like script section (`e
 ## Conventions
 
 - Tests are hermetic: `os.TempDir()`/testscript temp dirs, no shared global state, no external service dependencies.
-- Test-first is a written discipline for feathers themselves (`pluma/feathers/*.md` describe writing a failing test before implementing) — mirrored in this repo's own `CLAUDE.md` "Test Verification" rules (a new test must be shown to fail against unfixed code before it's trusted).
+- Test-first is a written discipline for feathers themselves (`.fledge/pluma/feathers/*.md` describe writing a failing test before implementing) — mirrored in this repo's own `CLAUDE.md` "Test Verification" rules (a new test must be shown to fail against unfixed code before it's trusted).
 
 ## Open Questions
 

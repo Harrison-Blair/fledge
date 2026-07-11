@@ -11,8 +11,8 @@ Glossary of fledge's bird-themed domain vocabulary, reconciled across all scoute
 
 ## Spec artifacts
 
-- **Plumage (`PLM-###`)** — a feature/requirement spec (`pluma/plumage/`). Sections: Context, User Stories, Functional Criteria, Acceptance Criteria, Out of Scope, Open Questions. Lifecycle: `egg` (draft) → `hatched` (spec complete) → `fledged` (all feathers done).
-- **Feather (`FTHR-###`)** — an implementable task spec under a plumage (`pluma/feathers/`). Sections: Description, Affected Modules, Approach, Tests, Acceptance Criteria. Lifecycle: `egg` (unstarted/blocked) → `pipping` (ready to work, deps satisfied) → `hatching` (actively worked, brood held) → `fledged` (complete, all AC checked).
+- **Plumage (`PLM-###`)** — a feature/requirement spec (`.fledge/pluma/plumage/`). Sections: Context, User Stories, Functional Criteria, Acceptance Criteria, Out of Scope, Open Questions. Lifecycle: `egg` (draft) → `hatched` (spec complete) → `fledged` (all feathers done).
+- **Feather (`FTHR-###`)** — an implementable task spec under a plumage (`.fledge/pluma/feathers/`). Sections: Description, Affected Modules, Approach, Tests, Acceptance Criteria. Lifecycle: `egg` (unstarted/blocked) → `pipping` (ready to work, deps satisfied) → `hatching` (actively worked, brood held) → `fledged` (complete, all AC checked).
 - **Acceptance Criteria (AC-N)** — checkbox items in a spec body; the only supported mutation path is `fledge criteria check`/`uncheck`, never hand-editing.
 - **Functional Criteria (FC-N)** — testable requirement statements in feather specs, referenced by ID and pinned by txtar test assertions.
 - **Frontmatter** — YAML metadata header (`id`, `title`, `status`, `priority`, `authored`, `agent`, `fledge_version`, plus `plumage`/`depends_on`/`oversight` for feathers) bounded by `---` delimiters; CLI-owned, never hand-edited.

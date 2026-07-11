@@ -35,7 +35,7 @@ The Go implementation, split into focused packages (grouped below to match how t
 Look here for: all actual business logic. `internal/cli` is a thin shell; the domain packages hold the rules.
 
 ## `pluma`
-This repo's own spec set (dogfooding): `pluma/plumage/PLM-001`…`PLM-010` (feature specs) and `pluma/feathers/FTHR-001`…`FTHR-016` (task specs), each YAML-frontmatter + markdown, validated and mutated only via the CLI.
+This repo's own spec set (dogfooding): `.fledge/pluma/plumage/PLM-001`…`PLM-010` (feature specs) and `.fledge/pluma/feathers/FTHR-001`…`FTHR-016` (task specs), each YAML-frontmatter + markdown, validated and mutated only via the CLI.
 Look here for: the history and status of every feature/task fledge has planned or shipped against itself; a worked example of the plumage/feather spec format.
 
 ## `scripts`
