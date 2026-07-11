@@ -14,7 +14,7 @@
     },
     ".claude/agents/fledge-forager.md": {
       "policy": "default",
-      "sha256": "585662ae6bcc32207b9b62913a9ed6fae824cf830df773a09c924765b775b73d"
+      "sha256": "39a990b7e52aa06b7a1a3350ead8e2ae7fb64bc17509f72f984dca00c97e6149"
     },
     ".claude/agents/fledge-incubator.md": {
       "policy": "default",
@@ -74,7 +74,7 @@
     },
     ".fledge/skills/fledge-orchestrate/foraging.md": {
       "policy": "core",
-      "sha256": "9ce14be4086b6902396cfa1dcaa4a9f25d09754924d6229c3c9be537a0d5ade7"
+      "sha256": "c0e9a8bd53b82d5bdd41f21f40b923c74c168a6093d8631fcd5edec7105e899a"
     },
     ".fledge/skills/fledge-orchestrate/implementation.md": {
       "policy": "core",
@@ -82,7 +82,7 @@
     },
     ".fledge/skills/fledge-orchestrate/planning.md": {
       "policy": "core",
-      "sha256": "2448b1707522b8d2e7c64c85f108a1d87f95c41a4f3193621a1d80fd4c371338"
+      "sha256": "235f1fbbf49355af6e424db9eb43374b5c0beb15450dacd787673a2ceaacfd28"
     },
     ".fledge/skills/fledge-orchestrate/templates/context-doc.md": {
       "policy": "core",
@@ -102,7 +102,7 @@
     },
     ".fledge/skills/fledge-orchestrate/worker-protocols.md": {
       "policy": "core",
-      "sha256": "205fccd83d7b7a517abfb3f2529270d16e2fcb21d785ece0437c9a1ff5a15c4f"
+      "sha256": "6785f70acecbf0c4ef6f46706f2c082ed7172599d8635e3bcb9242de26fa58f2"
     },
     ".fledgeignore": {
       "policy": "default",

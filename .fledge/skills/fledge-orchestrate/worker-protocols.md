@@ -29,7 +29,7 @@ Two hard prohibitions:
 - Never spawn implementation workers (brooders, skuas) — planning ends at hatched specs; implementation dispatch belongs to the orchestrator.
 - Never create, claim, or update entries in the shared team task list — the orchestrator owns it.
 
-Foraging: run `planning.md` step 2. Where your harness lets a worker spawn workers, spawn the forager yourself; where it does not, obtain it via `SPAWN-REQUEST`. Either way, you verify the nest output and request the forager's shutdown by name.
+Foraging: run `planning.md` step 2. Where your harness lets a worker spawn workers, spawn the forager yourself; where it does not, obtain it via `SPAWN-REQUEST`. Either way, you verify the nest output and request the forager's shutdown by name. Honor the same completion contract as step 2: the forager's by-name final message is the sole "done" signal — a bare idle notification is not completion, and the half-filled nest during synthesis is not a stall. Apply the same suspected-stall procedure: on an idle with no final message, send at most three by-name missing-output queries ~2 minutes apart, and if none is answered with a final message, escalate to the user rather than abandoning the forager yourself — relay a `GATE decision` (intervene or keep waiting) up through the orchestrator. On a harness where the orchestrator (not you) spawned the forager and receives its lifecycle notifications, the notification receiver runs that stall procedure; your part is to report whether the forager's final message has reached you, since it is addressed to you.
 
 ### Drafting
 
