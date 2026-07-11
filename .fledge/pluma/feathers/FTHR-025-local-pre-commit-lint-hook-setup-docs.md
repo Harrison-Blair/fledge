@@ -35,9 +35,9 @@ Written first against the not-yet-existing `scripts/hooks/pre-commit` (all fail:
 - `TestPreCommitHook_MatchesCICommands` — a lightweight assertion (string comparison or shared constant) that the hook's `gofmt -l` and `go vet ./...` invocations are textually identical to what PLM-012's `pr-check.yml`/`release.yml` run — pins AC-5. (If PLM-012's feathers haven't merged yet when this runs, this assertion can compare against the literal command strings specified in both plumages' FCs rather than reading the actual workflow files — no `depends_on` needed since it's a text/constant comparison, not a runtime dependency.)
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: With `core.hooksPath` set, attempting to commit a change that includes an unformatted `.go` file is blocked, and the hook's output names the unformatted file(s) (satisfies PLM-013 AC-1).
-- [ ] AC-3: With `core.hooksPath` set, attempting to commit a change that introduces a `go vet` violation is blocked, and the hook's output shows `go vet`'s diagnostic (satisfies PLM-013 AC-2).
-- [ ] AC-4: With `core.hooksPath` set, a commit whose tree is fully clean succeeds, and no file is modified by the hook (satisfies PLM-013 AC-3).
-- [ ] AC-5: Without `core.hooksPath` configured, commits are unaffected by this hook (satisfies PLM-013 AC-4).
-- [ ] AC-6: The hook's two commands are textually identical to PLM-012's CI lint commands (satisfies PLM-013 AC-5).
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: With `core.hooksPath` set, attempting to commit a change that includes an unformatted `.go` file is blocked, and the hook's output names the unformatted file(s) (satisfies PLM-013 AC-1).
+- [x] AC-3: With `core.hooksPath` set, attempting to commit a change that introduces a `go vet` violation is blocked, and the hook's output shows `go vet`'s diagnostic (satisfies PLM-013 AC-2).
+- [x] AC-4: With `core.hooksPath` set, a commit whose tree is fully clean succeeds, and no file is modified by the hook (satisfies PLM-013 AC-3).
+- [x] AC-5: Without `core.hooksPath` configured, commits are unaffected by this hook (satisfies PLM-013 AC-4).
+- [x] AC-6: The hook's two commands are textually identical to PLM-012's CI lint commands (satisfies PLM-013 AC-5).
