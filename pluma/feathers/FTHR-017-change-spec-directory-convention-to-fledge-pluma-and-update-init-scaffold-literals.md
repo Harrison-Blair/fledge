@@ -2,7 +2,7 @@
 id: FTHR-017
 title: Change spec-directory convention to .fledge/pluma/ and update init scaffold literals
 plumage: PLM-011
-status: pipping
+status: hatching
 priority: P2
 depends_on: []
 authored: 2026-07-11T02:24:20Z
