@@ -1,7 +1,7 @@
 ---
 id: PLM-013
 title: Local Lint Pre-Commit Hook
-status: hatched
+status: fledged
 priority: P2
 authored: 2026-07-11T05:36:31Z
 agent: fledge-orchestrate/planning
@@ -28,11 +28,11 @@ PLM-012 adds a CI-enforced lint gate (`gofmt -l` + `go vet`) as a required PR ch
 8. FC-8: Setup (`git config core.hooksPath scripts/hooks`) is documented (in `CLAUDE.md` and/or `README.md`) as a manual, opt-in step for contributors — it is not auto-run by `fledge init`, `scripts/install.sh`, or any other automation.
 
 ## Acceptance Criteria
-- [ ] AC-1: With `core.hooksPath` set to `scripts/hooks`, attempting to commit a change that includes an unformatted `.go` file is blocked, and the hook's output names the unformatted file(s).
-- [ ] AC-2: With `core.hooksPath` set, attempting to commit a change that introduces a `go vet` violation is blocked, and the hook's output shows `go vet`'s diagnostic.
-- [ ] AC-3: With `core.hooksPath` set, a commit whose tree is fully `gofmt`-clean and `go vet`-clean succeeds, and no file is modified by the hook.
-- [ ] AC-4: Without `core.hooksPath` configured (default clone state), commits are unaffected by this hook (it does not run) — confirming setup is truly opt-in.
-- [ ] AC-5: The hook's two commands (`gofmt -l .`, `go vet ./...`) are textually identical to the commands PLM-012's CI lint job runs, confirmed by inspecting both the workflow file and the hook script.
+- [x] AC-1: With `core.hooksPath` set to `scripts/hooks`, attempting to commit a change that includes an unformatted `.go` file is blocked, and the hook's output names the unformatted file(s).
+- [x] AC-2: With `core.hooksPath` set, attempting to commit a change that introduces a `go vet` violation is blocked, and the hook's output shows `go vet`'s diagnostic.
+- [x] AC-3: With `core.hooksPath` set, a commit whose tree is fully `gofmt`-clean and `go vet`-clean succeeds, and no file is modified by the hook.
+- [x] AC-4: Without `core.hooksPath` configured (default clone state), commits are unaffected by this hook (it does not run) — confirming setup is truly opt-in.
+- [x] AC-5: The hook's two commands (`gofmt -l .`, `go vet ./...`) are textually identical to the commands PLM-012's CI lint job runs, confirmed by inspecting both the workflow file and the hook script.
 
 ## Out of Scope
 - Running `go test ./...` locally in this hook (already a required PR check in PLM-012; kept out to keep commits fast).

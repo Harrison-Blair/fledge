@@ -1,7 +1,7 @@
 ---
 id: PLM-012
 title: "CI Build & Release Pipeline"
-status: hatched
+status: fledged
 priority: P1
 authored: 2026-07-11T05:25:19Z
 agent: fledge-orchestrate/planning
@@ -28,12 +28,12 @@ fledge is currently built and installed by hand (`go build`, `go install`, or `s
 7. FC-7: If any job in the post-merge safety-net workflow fails (lint, build, or test), no release is created and no tag is pushed.
 
 ## Acceptance Criteria
-- [ ] AC-1: A pull request that introduces an unformatted `.go` file, a `go vet` violation, a build failure, or a failing test is blocked from merging by a required status check on `main`.
-- [ ] AC-2: A pull request with clean formatting, vet, build, and tests is allowed to merge.
-- [ ] AC-3: Merging a PR to `main` that does NOT change `VERSION` runs the post-merge workflow (lint/build/test) but produces no new GitHub Release or tag.
-- [ ] AC-4: Merging a PR to `main` that DOES change `VERSION` (e.g. `0.4.0` → `0.4.1`) produces a GitHub Release tagged `v0.4.1` with auto-generated notes and four binary archives (`linux_amd64`, `linux_arm64`, `darwin_amd64`, `darwin_arm64`) plus a `checksums.txt`, all attached to the release. (`windows_amd64` dropped 2026-07-11 — fledge is Unix-only.)
-- [ ] AC-5: Each attached binary, when downloaded and run on its target platform, reports the correct version via `fledge version` (ldflag-injected, matching the release's `VERSION`).
-- [ ] AC-6: If the post-merge safety-net lint/build/test re-run fails after a `VERSION`-changing merge, no release/tag is created.
+- [x] AC-1: A pull request that introduces an unformatted `.go` file, a `go vet` violation, a build failure, or a failing test is blocked from merging by a required status check on `main`.
+- [x] AC-2: A pull request with clean formatting, vet, build, and tests is allowed to merge.
+- [x] AC-3: Merging a PR to `main` that does NOT change `VERSION` runs the post-merge workflow (lint/build/test) but produces no new GitHub Release or tag.
+- [x] AC-4: Merging a PR to `main` that DOES change `VERSION` (e.g. `0.4.0` → `0.4.1`) produces a GitHub Release tagged `v0.4.1` with auto-generated notes and four binary archives (`linux_amd64`, `linux_arm64`, `darwin_amd64`, `darwin_arm64`) plus a `checksums.txt`, all attached to the release. (`windows_amd64` dropped 2026-07-11 — fledge is Unix-only.)
+- [x] AC-5: Each attached binary, when downloaded and run on its target platform, reports the correct version via `fledge version` (ldflag-injected, matching the release's `VERSION`).
+- [x] AC-6: If the post-merge safety-net lint/build/test re-run fails after a `VERSION`-changing merge, no release/tag is created.
 
 ## Out of Scope
 - Homebrew tap, Docker image, or any package-manager (apt/scoop/etc.) publishing.
