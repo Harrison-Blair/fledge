@@ -1,7 +1,7 @@
 ---
 id: PLM-014
 title: fledge update Command
-status: hatched
+status: fledged
 priority: P1
 authored: 2026-07-11T05:44:38Z
 agent: fledge-orchestrate/planning
@@ -30,12 +30,12 @@ PLM-012 makes fledge releases exist as versioned, checksummed GitHub Releases wi
 9. FC-9: On any error before the final rename (network failure, checksum mismatch, missing asset for the current platform, etc.), `fledge update` exits non-zero with a descriptive error and the currently-installed binary is unchanged.
 
 ## Acceptance Criteria
-- [ ] AC-1: Running `fledge update` when already on the latest release prints the up-to-date message and exits 0, with no network write/download and no prompt.
-- [ ] AC-2: Running `fledge update` when a newer release exists prints the current version, latest version, and release notes, then prompts for confirmation.
-- [ ] AC-3: Answering the prompt with anything other than `y`/`yes` (including a bare Enter) aborts with no changes to the installed binary.
-- [ ] AC-4: Answering `y` (or running with `--yes`) downloads the correct platform asset, verifies its checksum against `checksums.txt`, and replaces the running binary such that a subsequent `fledge version` reports the new version.
-- [ ] AC-5: If the downloaded asset's SHA-256 does not match `checksums.txt`, the command aborts with an error and the pre-existing binary is provably unchanged (e.g. unchanged file mtime/checksum).
-- [ ] AC-6: `fledge update --json` outputs valid JSON containing current version, latest version, up-to-date boolean, and release notes, and never downloads or replaces the binary, whether or not an update is available.
+- [x] AC-1: Running `fledge update` when already on the latest release prints the up-to-date message and exits 0, with no network write/download and no prompt.
+- [x] AC-2: Running `fledge update` when a newer release exists prints the current version, latest version, and release notes, then prompts for confirmation.
+- [x] AC-3: Answering the prompt with anything other than `y`/`yes` (including a bare Enter) aborts with no changes to the installed binary.
+- [x] AC-4: Answering `y` (or running with `--yes`) downloads the correct platform asset, verifies its checksum against `checksums.txt`, and replaces the running binary such that a subsequent `fledge version` reports the new version.
+- [x] AC-5: If the downloaded asset's SHA-256 does not match `checksums.txt`, the command aborts with an error and the pre-existing binary is provably unchanged (e.g. unchanged file mtime/checksum).
+- [x] AC-6: `fledge update --json` outputs valid JSON containing current version, latest version, up-to-date boolean, and release notes, and never downloads or replaces the binary, whether or not an update is available.
 
 ## Out of Scope
 - Any background/automatic update checking on other commands — `fledge update` only runs a network check when explicitly invoked.
