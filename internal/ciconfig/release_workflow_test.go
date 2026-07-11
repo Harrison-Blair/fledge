@@ -110,13 +110,77 @@ func TestReleaseWorkflow_BuildsLinuxAmd64AndReleases(t *testing.T) {
 	doc := loadReleaseWorkflow(t)
 	cmds := allRunCommands(doc)
 
-	if !containsSubstring(cmds, "GOOS=linux") || !containsSubstring(cmds, "GOARCH=amd64") {
-		t.Errorf("no step builds with GOOS=linux GOARCH=amd64; commands seen: %v", cmds)
+	if !containsSubstring(cmds, "GOOS=") || !containsSubstring(cmds, "GOARCH=") {
+		t.Errorf("no step builds with a GOOS/GOARCH pair; commands seen: %v", cmds)
+	}
+	if !containsSubstring(cmds, "fledge_linux_amd64") {
+		t.Errorf("no step references a fledge_linux_amd64 archive; commands seen: %v", cmds)
 	}
 	if !containsSubstring(cmds, "gh release create") {
 		t.Errorf("no step runs `gh release create`; commands seen: %v", cmds)
 	}
 	if !containsSubstring(cmds, "--generate-notes") {
 		t.Errorf("no step passes `--generate-notes` to the release-creation command; commands seen: %v", cmds)
+	}
+}
+
+// matrixIncludePairs finds the first job with a `strategy.matrix.include`
+// list and returns its {goos, goarch} entries.
+func matrixIncludePairs(t *testing.T, doc map[string]any) []map[string]any {
+	t.Helper()
+	jobs, _ := doc["jobs"].(map[string]any)
+	for _, j := range jobs {
+		job, ok := j.(map[string]any)
+		if !ok {
+			continue
+		}
+		strategy, ok := job["strategy"].(map[string]any)
+		if !ok {
+			continue
+		}
+		matrix, ok := strategy["matrix"].(map[string]any)
+		if !ok {
+			continue
+		}
+		include, ok := matrix["include"].([]any)
+		if !ok {
+			continue
+		}
+		var pairs []map[string]any
+		for _, e := range include {
+			entry, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			pairs = append(pairs, entry)
+		}
+		return pairs
+	}
+	return nil
+}
+
+func TestReleaseWorkflow_BuildsAllFivePlatforms(t *testing.T) {
+	doc := loadReleaseWorkflow(t)
+	pairs := matrixIncludePairs(t, doc)
+
+	want := []string{
+		"linux/amd64",
+		"linux/arm64",
+		"darwin/amd64",
+		"darwin/arm64",
+		"windows/amd64",
+	}
+
+	got := make(map[string]bool)
+	for _, p := range pairs {
+		goos, _ := p["goos"].(string)
+		goarch, _ := p["goarch"].(string)
+		got[goos+"/"+goarch] = true
+	}
+
+	for _, w := range want {
+		if !got[w] {
+			t.Errorf("matrix.include missing %q; entries seen: %#v", w, pairs)
+		}
 	}
 }

@@ -28,6 +28,6 @@ Same as FTHR-023: `.github/workflows/release.yml` (extends the existing build st
 - Real-world evidence: since FTHR-023 already establishes the discipline of only cutting real, intended releases (never throwaway tags), this feather's evidence is gathered from the next real `VERSION`-bumping release after this feather merges — inspect that release's assets and confirm all 5 expected archives plus a `checksums.txt` covering all 5 are attached, and spot-check at least the `linux_amd64` and one other platform's binary (e.g. `darwin_arm64`, if a Mac is available, or verify via `file`/checksum inspection alone if not) reports the correct version.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation (matrix incomplete) and pass after (all 5 entries present).
+- [x] AC-1: The tests listed above were observed failing before implementation (matrix incomplete) and pass after (all 5 entries present).
 - [ ] AC-2: The next real `VERSION`-bumping release after this feather merges attaches exactly 5 binary archives (`linux_amd64`, `linux_arm64`, `darwin_amd64`, `darwin_arm64`, `windows_amd64`) plus one `checksums.txt` covering all 5 (satisfies PLM-012 AC-4 fully).
 - [ ] AC-3: Each archive's checksum in `checksums.txt` matches its actual downloaded content (satisfies PLM-012 AC-5, at least for the platforms practically runnable during review).
