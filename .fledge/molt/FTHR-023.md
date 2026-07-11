@@ -69,3 +69,9 @@ This is a live-GitHub action outside this brooder's authority to perform autonom
 ## AC-5
 
 **Not yet gathered** — depends on exercising the workflow's safety-net-failure path on the real repo (or is assessed by code review of the job dependency graph: `release` job `needs: detect-version`, which in turn `needs: safety-net`, so a safety-net failure short-circuits the whole chain before `detect-version` or `release` can run). Structural verification: see `.github/workflows/release.yml` job graph (`safety-net` → `detect-version` → `release`).
+
+## Live verification (post-merge, orchestrator, 2026-07-11)
+- AC-2 (no release when VERSION unchanged): push of merge to main, Release run 29142889316 → safety-net + detect-version green, Build-and-release SKIPPED, `gh release list` empty.
+- AC-5 (safety-net failure blocks release): v0.5.0 push, run 29143033866 → `go test` FAILED (stamp_warning fixture), release NOT cut.
+- AC-3 (release on VERSION change): v0.5.1 push, run 29143130884 → all three jobs green, release v0.5.1 created.
+- AC-4 (binary reports correct version): downloaded fledge_linux_amd64.tar.gz from v0.5.1, checksums.txt verified OK, extracted binary reports `fledge 0.5.1`.

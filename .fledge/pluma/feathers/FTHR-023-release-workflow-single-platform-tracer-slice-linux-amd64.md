@@ -38,7 +38,7 @@ Per `.fledge/nest/entry-points.md` (`VERSION` file, ldflag version injection pat
 
 ## Acceptance Criteria
 - [x] AC-1: The tests listed above were observed failing before implementation (workflow file missing) and pass after.
-- [ ] AC-2: A real merge to `main` that does not change `VERSION` produces no new GitHub Release or tag (satisfies PLM-012 AC-3).
-- [ ] AC-3: The actual next intended real merge to `main` that changes `VERSION` produces a GitHub Release tagged `v<VERSION>` with auto-generated notes and one `linux_amd64` binary archive plus a `checksums.txt` (partially satisfies PLM-012 AC-4 — full 5-platform coverage is FTHR-c's job).
-- [ ] AC-4: The released `linux_amd64` binary, downloaded and run, reports the correct version via `fledge version` (partially satisfies PLM-012 AC-5).
-- [ ] AC-5: If the safety-net lint/build/test re-run fails, no release/tag is created even if `VERSION` changed (satisfies PLM-012 AC-6, FC-7).
+- [x] AC-2: A real merge to `main` that does not change `VERSION` produces no new GitHub Release or tag (satisfies PLM-012 AC-3).
+- [x] AC-3: The actual next intended real merge to `main` that changes `VERSION` produces a GitHub Release tagged `v<VERSION>` with auto-generated notes and one `linux_amd64` binary archive plus a `checksums.txt` (partially satisfies PLM-012 AC-4 — full 5-platform coverage is FTHR-c's job).
+- [x] AC-4: The released `linux_amd64` binary, downloaded and run, reports the correct version via `fledge version` (partially satisfies PLM-012 AC-5).
+- [x] AC-5: If the safety-net lint/build/test re-run fails, no release/tag is created even if `VERSION` changed (satisfies PLM-012 AC-6, FC-7).

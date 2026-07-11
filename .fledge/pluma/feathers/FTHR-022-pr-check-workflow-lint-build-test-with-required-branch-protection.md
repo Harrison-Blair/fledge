@@ -34,6 +34,6 @@ Per `.fledge/nest/entry-points.md` (build/test commands) and `.fledge/nest/conve
 
 ## Acceptance Criteria
 - [x] AC-1: The tests listed above were observed failing before implementation (workflow file missing) and pass after (workflow file present with correct trigger/steps).
-- [ ] AC-2: A real scratch PR with an unformatted `.go` file is blocked from merging by this workflow's required status check (satisfies PLM-012 AC-1).
-- [ ] AC-3: The same scratch PR, once its formatting is fixed (and assuming vet/build/test are clean), shows the check passing (satisfies PLM-012 AC-2).
+- [x] AC-2: A real scratch PR with an unformatted `.go` file is blocked from merging by this workflow's required status check (satisfies PLM-012 AC-1).
+- [x] AC-3: The same scratch PR, once its formatting is fixed (and assuming vet/build/test are clean), shows the check passing (satisfies PLM-012 AC-2).
 - [ ] AC-4: `gh api repos/:owner/:repo/branches/main/protection` shows this workflow's job(s) listed under required status checks (satisfies PLM-012 FC-2).

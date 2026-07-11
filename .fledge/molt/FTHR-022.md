@@ -65,3 +65,9 @@ ok  	github.com/Harrison-Blair/fledge/internal/spec	0.002s
 Per the brooder's spawn instructions, no live-GitHub mutation was performed
 autonomously. This has been escalated to the orchestrator for user go-ahead
 before proceeding.
+
+## Live verification (post-merge, orchestrator, 2026-07-11)
+- AC-2 (red on unformatted PR): scratch PR #1, PR Check run 29142976458 → `lint-build-test` FAILED (gofmt) in 9s.
+- AC-3 (green when fixed): same PR after `gofmt -w`, run 29143001019 → `lint-build-test` PASSED in 15s.
+- AC-4 (branch protection required): WAIVED by maintainer (single maintainer; triggers wanted over enforcement). FC-2/AC-4 removed from scope 2026-07-11.
+- Scratch PR/branch cleaned up (closed, branch deleted).
