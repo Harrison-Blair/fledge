@@ -1,44 +1,39 @@
 ---
-generated: 2026-07-10T20:53:53Z
-commit: f28efebd76d6aa135adb0956a3337a40a8d98351
+generated: 2026-07-11T01:58:32Z
+commit: 96a3ac38bc843217824d6d6886c49906053bf686
 agent: fledge-forager
-fledge_version: 0.3.0
+fledge_version: 0.3.4
 ---
 
 # Dependencies
 
-External (non-stdlib) dependencies actually used by the fledge codebase, deduplicated across modules, with usage notes. (`go.mod` at repo root is the source of truth for versions.)
+External dependencies used by fledge, deduplicated across modules with usage notes.
 
-## Direct dependencies
+## Go module dependencies (`go.mod`)
 
-- **`github.com/goccy/go-yaml v1.19.2`** — YAML parsing/marshaling. Used in two places: `internal/spec/frontmatter.go` (plumage/feather frontmatter parse+render, canonical key order, `YAMLScalar` quoting rules) and `internal/bootstrap/registry.go` (parsing each adapter's `manifest.yaml`).
-- **`github.com/rogpeppe/go-internal v1.15.0`** (specifically its `testscript` subpackage) — the txtar-based CLI acceptance test framework. Used exclusively in `cmd/fledge/main_test.go` (`TestMain` registers the `fledge` command as a testscript command; `TestScripts` runs every `cmd/fledge/testdata/*.txtar` fixture). Not used anywhere in production code.
+- **`github.com/goccy/go-yaml` v1.19.2** — YAML parsing/unmarshaling for spec frontmatter (`internal/spec/frontmatter.go`) and for adapter `manifest.yaml` files (`internal/bootstrap/registry.go`, validated in `registry_test.go`), and for `internal/nest`'s `RefreshDoc()` frontmatter rewriting.
+- **`github.com/rogpeppe/go-internal` v1.15.0** — specifically its `testscript` subpackage; drives the entire CLI acceptance-test suite (`cmd/fledge/main_test.go:TestScripts`) against `.txtar` fixtures in `cmd/fledge/testdata/`.
 
-## Indirect dependencies
+## Go standard library (representative, not exhaustive)
 
-- **`golang.org/x/sys v0.26.0`** — transitive, system interface calls (pulled in by one of the above).
-- **`golang.org/x/tools v0.26.0`** — transitive, tooling support.
+- `flag`, `os`, `path/filepath`, `strings`, `bufio`, `syscall`, `time`, `sort`, `slices`, `encoding/json` — CLI arg parsing and I/O (`internal/cli`).
+- `crypto/sha256`, `io/fs`, `text/template`, `bytes` — scaffold hashing and template rendering (`internal/bootstrap`).
+- `regexp`, `embed`, `errors`, `sync` — validation regex, embedded templates, misc (`internal/check`, `internal/nest`).
 
-## Standard library (heavy use, worth noting)
+## External tools invoked as subprocesses
 
-- **`embed`** — `internal/bootstrap/bootstrap.go` embeds the entire `core/` and `adapters/` trees at compile time (`//go:embed core adapters`); this is how `fledge init` scaffolds without touching the filesystem for its source content.
-- **`crypto/sha256`** — content hashing for `.fledge/scaffold.json` stamp entries, drift detection.
-- **`encoding/json`** — all `--json` CLI output (`emitJSON()`), brood `Record` marshaling, stamp serialization (`json.MarshalIndent` with sorted keys for determinism).
-- **`os/exec`** — shells out to `git` for repository operations: `git rev-parse --show-toplevel` (repo discovery, `internal/repo/repo.go:Find`), `git ls-files` (tracked+untracked file listing, `internal/scan/scan.go`, `-z` null-delimited), `git check-ignore` (`.fledgeignore` filtering, respects `core.excludesFile`), `git rev-parse HEAD` (commit SHA for nest frontmatter).
-- **`text/template`** — renders `generate`/`primitive_map` manifest files (e.g. each harness's `fledge-adapter.md` primitive-map table) in `internal/bootstrap/registry.go`.
-- **`flag`** — every CLI command builds its own `flag.FlagSet(name, flag.ContinueOnError)`.
-- **`testing`** — all unit tests; no third-party assertion library (no testify) — plain `t.Errorf`/`t.Fatal`, table-driven style throughout.
+- **`git`** — `git rev-parse` (repo root detection, `internal/repo/repo.go:Find`; HEAD sha, `Repo.Head()`), `git ls-files`/`git check-ignore` (file inventory and `.fledgeignore` filtering, `internal/scan/scan.go`).
 
-## Runtime/environment dependencies
+## Runtime/toolchain
 
-- **git** — required at runtime for `fledge scan`, `fledge repo` discovery, and `fledge version`'s commit reporting; not vendored, invoked via `os/exec`.
-- **tmux** — referenced in `internal/bootstrap/adapters/claude/team-loop.md` as part of Tier C's harness piping (teammate display); a Claude Code runtime concern, not a Go build dependency.
+- **Go 1.26.4** (or later compatible) — language runtime; no Makefile, build via `go build`/`go install` directly.
 
-## Notes on `docs/` — not real dependencies of this codebase
+## Documented-but-not-yet-adopted dependencies (from `docs/`)
 
-`docs/google_ai_mode_response.md` references external services/models (OpenCode Go/Zen, DeepSeek V4-Pro, Claude Sonnet, GLM-5.2, etc.) and a Python `requests`-based sketch — these are NOT dependencies of the fledge Go codebase; the file is an unrelated infrastructure-design exploration with no evident connection to fledge's implementation (see Open Questions in `architecture.md`).
+These appear only in planning documents, not in current Go code — do not treat as active dependencies:
+- Agent Skills standard (load mechanism shared by Claude Code, pi, Codex) — referenced in `docs/generalization-plan.md` as the mechanism multi-harness skill loading relies on.
+- OpenCode Go / OpenCode Zen APIs, local inference servers (vLLM, SGLang, Ollama) — proposed in `docs/google_ai_mode_response.md`; unclear adoption status (see Open Questions).
 
 ## Open Questions
 
-None survive synthesis — dependency set is small and unambiguous across scout reports.
-</content>
+- Whether the infrastructure-tiering proposal in `docs/google_ai_mode_response.md` (OpenCode Go/Zen, local inference) is adopted, exploratory, or rejected — no code in `internal/` references any of it, and no other scouted file links it to the fledge roadmap.

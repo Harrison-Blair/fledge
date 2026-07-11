@@ -1,57 +1,58 @@
 ---
-generated: 2026-07-10T20:53:53Z
-commit: f28efebd76d6aa135adb0956a3337a40a8d98351
+generated: 2026-07-11T01:58:32Z
+commit: 96a3ac38bc843217824d6d6886c49906053bf686
 agent: fledge-forager
-fledge_version: 0.3.0
+fledge_version: 0.3.4
 ---
 
 # Conventions
 
-Coding, naming, and process conventions observed across the repo, reconciled across all seven scout reports.
+Coding, naming, and process conventions observed across the codebase and its specs, reconciled from all scouted modules.
 
-## Spec/CLI conventions (repo-wide)
+## Naming & terminology
 
-- **Deterministic spec mutation only**: IDs (`PLM-###`, `FTHR-###`) and frontmatter are always CLI-allocated (`fledge new`, `status`, `set`, `criteria`, `brood`) — never hand-edited. `internal/cli/status.go`, `criteria.go`, `brood.go` all route through `internal/spec` and `internal/lock`, never touch YAML directly.
-- **Acceptance criteria**: checkbox lists only (`- [x] AC-N: ...`), mutated one byte at a time (space↔`x`) via `internal/spec/criteria.go:SetCriterion` — idempotent, byte-preserving, never re-serializes the rest of the body.
-- **Body preservation**: markdown body after the closing `---` frontmatter delimiter is read as-is and re-emitted unchanged; round-trips are byte-idempotent (`internal/spec/frontmatter.go`).
-- **Filenames**: `<ID>-<kebab-case-title>.md`, e.g. `PLM-004-agent-detection.md`; slugs generated via `internal/spec/ids.go:Kebab`.
-- **Status lifecycles**: feathers `egg → pipping → hatching → fledged`; plumages `egg → hatched → fledged` (no pipping/hatching — that's feather-only). Legal transitions enforced by `taskTransitions`/`reqTransitions` maps in `internal/cli/status.go`, overridable with `--force`.
-- **Frontmatter key order is fixed per type**: Requirement (`id, title, status, priority, authored, agent, fledge_version`); Task adds `plumage, depends_on` before `authored`, with `oversight` omitted when empty. Canonical YAML quoting via `spec.YAMLScalar` (empty/`""`/boolean-keyword/numeric/unsafe-char values get quoted).
+- Bird-themed vocabulary throughout, documented in `README.md`: plumage, feather, nest, brood, preen, molt, forager, scout, skua, colony, ready, vee. See `domain.md` for the full glossary — match it in new code and prose (`CLAUDE.md`).
+- Exported Go functions are action verbs (`Acquire`, `Release`, `Run`, `Find`, `DeriveTier`); unexported helpers use a `check*` prefix in `internal/check` (`checkRequired`, `checkEnum`, `checkAuthored`).
+- IDs are CLI-allocated, never hand-invented: `PLM-###` (`internal/spec/ids.go:NextID`), `FTHR-###`. Filenames use kebab-case titles (`internal/spec/ids.go:Kebab`).
 
-## Bird terminology (match in all new code/prose)
+## CLI command pattern
 
-plumage (requirement), feather (task), nest (repo knowledge dir), brood (feather claim), preen (validate), molt (evidence dir), vee (dependency graph viz), colony (status summary), forager (context-gathering orchestrator), scout (context reader), brooder (implementor), skua (reviewer). See `README.md` for the full glossary; `domain.md` in this doc set for definitions.
+- Every command file self-registers: `init()` calls `register(name, run, usage)` (`internal/cli/cli.go`); `commandOrder` is the single list controlling usage text, dispatch validation, and generated allow-lists — there is no central switch statement.
+- Shared exit codes: `ExitOK`/`Fail`/`Usage`/`Env` = 0/1/2/3 (`internal/cli/cli.go`).
+- Flag convention: `--json` for machine-readable output (not `--output=json`); `--force` to override confirmation gates.
+- Positional + flag parsing goes through `parseMixed()` so `--flag` can appear before or after positional args (`internal/cli/cli.go`).
+- Shared error helpers `fail()`, `usageErr()`, `envErr()` prefix messages with `"fledge: "` and return the matching exit code.
+- Sorting is always deterministic: by ID (with priority tie-break in `ready`/`unfledged`), byte-sorted file lists in `scan`, feather-ID order in `lock.List`.
 
-## Go/CLI code conventions (`internal/cli`, `internal/bootstrap`, `internal/*`)
+## File I/O & data safety
 
-- **Command registration**: each command file has its own `init()` calling `register(name, runFunc, "usage: ...")` exactly once; `commandOrder []string` in `cli.go` controls usage-listing order and feeds bootstrap's allow-list generation.
-- **Error helpers**: `fail(format, ...)` → stderr `"fledge: "`-prefixed + `ExitFail`; `usageErr(...)` → `ExitUsage`; `envErr(...)` → `ExitEnv`. All CLI error strings are `"fledge: "`-prefixed for consistency.
-- **Flag parsing**: each command owns a `flag.FlagSet("name", flag.ContinueOnError)`; several commands use a shared `parseMixed(fs, args)` helper to allow positional args before flags.
-- **Shared state loading**: `internal/cli/specload.go:loadSet()` centralizes repo discovery + spec loading + lock listing; called once per command that needs specs.
-- **Output**: text to stdout with no prefix; `--json` via `emitJSON()` (indented `encoding/json`, `ExitOK` on success else `ExitFail`); paths displayed relative via `relPath(root, p)`.
-- **Atomic writes**: `spec.WriteFileAtomic` (temp file + rename in same dir, no partial reads); `internal/bootstrap`'s `writeIfChanged()` skips writes when bytes are unchanged, keeping scaffolding byte-idempotent.
-- **Error wrapping**: contextual `fmt.Errorf("read %s: %w", ...)` style throughout `internal/bootstrap`.
-- **Testing style**: table-driven tests, `t.TempDir()` for isolation, no explicit cleanup (OS handles temp dirs), small local helpers (`makeHash`, `writeTestFile`, `write`, `initRepo`) for DRY setup. No third-party assertion library (`testify` not used) — plain `t.Errorf`/`t.Fatal`.
-- **Alphabetical ordering**: unknown-field lists, brood lists, module names sort alphabetically for deterministic output.
+- **Atomic writes everywhere**: `spec.WriteFileAtomic` (temp file + `os.Rename`), `lock.Acquire` (`os.O_CREATE|os.O_EXCL` to prevent race conditions), `internal/bootstrap`'s `writeIfChanged()` (byte comparison before write, enabling idempotent `init` re-runs and deterministic test fixtures).
+- **Byte preservation**: spec markdown bodies are read/written exactly as-is (`internal/spec/frontmatter.go`); `internal/nest`'s `RefreshDoc()` preserves body while refreshing only frontmatter fields.
+- **YAML safety**: `spec.YAMLScalar()` quotes strings that are empty, numeric-like, boolean-keyword-like, or contain unsafe characters — reused by `internal/nest` frontmatter rendering.
+- **Silent, collected errors**: `spec.Load()` collects per-file parse errors into `Set.Errors`/`UnknownFields` rather than failing the whole load, so one bad spec file doesn't block every command.
+- Path normalization: manifests use slash-separated paths; `filepath.FromSlash()`/`ToSlash()` convert at the OS boundary (`internal/bootstrap`).
 
-## Bootstrap/adapter conventions
+## Spec lifecycle & governance
 
-- **File write policy semantics** (`internal/bootstrap/registry.go`): `overwrite` = fledge-managed, always repaired; default (skip-if-exists) = user may customize, preserved on plain `init`; `symlink` = never copied, always managed, must point at declared target; `append_if_missing` = additive only, never destructive.
-- **Hash-based preserve/prune**: on `--refresh`, disk hash vs. old stamp hash distinguishes user edits (preserved unless `--force`) from provably-unedited files (silently rewritten).
-- **Embed path convention**: `core/` content maps to `.fledge/<rel>` in the target repo; `adapters/<harness>/` content maps to harness-native paths (e.g. `.claude/...`).
-- **Scout report structure** (`internal/bootstrap/core/skills/fledge-orchestrate/templates/scout-report.md`): fixed section order — Purpose, Structure & Key Files, Entry Points & Public Interfaces, Data Types, External Dependencies, Conventions Observed, Tests, Domain Terms, Open Questions. Sections with nothing to report say `"None observed."` — never omitted.
-- **Frontmatter stamping**: only the CLI (`fledge nest scaffold`, `fledge nest stamp`) writes nest/scout frontmatter; agent prompts never hand-edit it.
+- Feather lifecycle: `egg → pipping → hatching → fledged`. Plumage lifecycle: `egg → hatched → fledged`. Acceptance criteria are checkbox lists (`AC-N`) checked *only* via `fledge criteria check` — never hand-edited.
+- Frontmatter is CLI-owned; hand-editing is discouraged by doctrine (`CLAUDE.md`) and structurally enforced by the fact that `fledge new`/`set`/`status`/`criteria` are the only supported mutation paths.
+- Spec section order is fixed: feathers use Description → Affected Modules → Approach → Tests → Acceptance Criteria; plumage uses Context → User Stories → Functional Criteria → Acceptance Criteria → Out of Scope → Open Questions.
+- Test-first discipline is a written convention in feather specs themselves, not just an aspiration: specs describe writing a failing test first, then implementing.
 
-## Test fixture conventions (`cmd/fledge/testdata/*.txtar`)
+## Scaffolding conventions (`internal/bootstrap`)
 
-- testscript/txtar format (`github.com/rogpeppe/go-internal/testscript`); one script per command/feature area.
-- Git config isolation: `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_SYSTEM=/dev/null`, fixed author/committer identity for determinism.
-- Both human-readable and `--json` output shapes asserted per fixture; error cases use `! exec fledge <cmd>` plus stderr grep assertions.
-- Fixture repo state (`.fledge/.gitkeep`, `pluma/` dirs) simulated inline via txtar `-- <path> --` blocks.
-- **Must-update rule**: whenever `internal/bootstrap/core/` or `internal/bootstrap/adapters/` content changes, `init.txtar`, `init_agents.txtar`, and `agents.txtar` need matching updates — they assert on exact scaffolded output.
+- **Manifest-as-source**: every adapter's behavior is declared in YAML (`manifest.yaml`); adding a harness requires zero Go code changes.
+- **Write policies are mutually exclusive** and classified in priority order: `primitive_map` > `generate` > `overwrite` > `symlink` > `append` > default (copy, skip-if-exists).
+- **Stamp-then-drift**: `.fledge/scaffold.json` (written by `Stamp.Write`) records exactly what fledge wrote; `DriftReport()` compares on-disk vs. expected (freshly rendered) vs. stamped (for stale detection) — there is no drift classification without a prior stamp.
+- Error wrapping: `fmt.Errorf("context: %w", err)` throughout `internal/bootstrap`.
+
+## Build & versioning
+
+- Go 1.26, no Makefile — use `go` directly (`go build ./...`, `go test ./...`, `go vet ./...`).
+- Binary version is ldflag-injected from `VERSION`; `version_test.go` (`internal/cli`) pins the binary's version constant to the repo's `VERSION` file at test time to catch drift.
+- `warnStampMismatch()` (`internal/cli`) emits a stderr advisory when a scaffolded repo's stamped `fledge_version` diverges from the running binary's version — skipped only for `init` and `version` themselves.
 
 ## Open Questions
 
-- `internal/cli/init.go` and `internal/cli/preen.go` both define a local `baseScaffoldEntries()`-style helper — duplicated rather than shared from `internal/bootstrap` or `internal/spec`; unclear if intentional. (internal-cli scout)
-- `tierLabel()` in `init.go` returns a Unicode en-dash "—" for empty tier — styling choice or portability concern not documented. (internal-cli scout)
-</content>
+- Whether Claude Code supports a `skills` array in `settings.json` (like pi) or requires the `.claude/skills/` symlink fallback currently used — flagged as critical in `docs/generalization-plan.md` but unresolved as of this scout pass.
+- Exact Codex/Cursor/opencode skill-discovery layout (`AGENTS.md` auto-load, `.cursor/rules/*.mdc`, `opencode.json` vs `.opencode/`) — all deferred per `docs/generalization-plan.md` §12.
