@@ -15,7 +15,7 @@ Author: planning session with pi (interrogation transcript preserved inline as Q
 
 fledge is two layers:
 
-1. **The `fledge` CLI** (`cmd/fledge`, `internal/*` except `internal/bootstrap/`) — already fully agent-agnostic. It manages specs on disk (`.fledge/`, `pluma/`), allocates IDs, validates, locks, renders JSON. Zero agent references outside `init.go`'s hardcoded `.claude` destination.
+1. **The `fledge` CLI** (`cmd/fledge`, `internal/*` except `internal/bootstrap/`) — already fully agent-agnostic. It manages specs on disk (`.fledge/`, `.fledge/pluma/`), allocates IDs, validates, locks, renders JSON. Zero agent references outside `init.go`'s hardcoded `.claude` destination.
 2. **The orchestration layer** (`internal/bootstrap/`, scaffolded by `fledge init`) — currently Claude-Code-only. It tells an agent *how to drive* the CLI.
 
 Generalizing means making layer 2 portable across agent harnesses **without forking the workflow logic per harness**. The linchpin: the **Agent Skills standard** (`SKILL.md` + sibling files), which Claude Code, Codex, and pi all load natively; fledge's existing skill already conforms to it.

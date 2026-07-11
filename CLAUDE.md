@@ -5,15 +5,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this repo is
 
 fledge is a Go CLI (`cmd/fledge`) that brings spec-driven development to
-agent-assisted repos. It keeps feature intent (**plumages**, `pluma/plumage/PLM-###`)
-and implementable tasks (**feathers**, `pluma/feathers/FTHR-###`) as validated
+agent-assisted repos. It keeps feature intent (**plumages**, `.fledge/pluma/plumage/PLM-###`)
+and implementable tasks (**feathers**, `.fledge/pluma/feathers/FTHR-###`) as validated
 markdown specs on disk, and scaffolds one agent-neutral orchestration workflow
 into any harness (Claude Code, pi, Codex) so every agent drives the same
 process.
 
 **This repository is itself fledge-managed** — it dogfoods its own tool. It has
 a `.fledge/` directory (repo knowledge in `.fledge/nest/`, feather claims in
-`.fledge/broods/`), specs under `pluma/`, and a scaffolded Claude adapter under
+`.fledge/broods/`), specs under `.fledge/pluma/`, and a scaffolded Claude adapter under
 `.claude/`. The `fledge` binary at the repo root is a build artifact.
 
 ### When the user asks for feature/spec/implementation work → use the workflow
