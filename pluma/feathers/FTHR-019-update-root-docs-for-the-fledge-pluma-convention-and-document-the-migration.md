@@ -2,7 +2,7 @@
 id: FTHR-019
 title: Update root docs for the .fledge/pluma/ convention and document the migration
 plumage: PLM-011
-status: hatching
+status: fledged
 priority: P2
 depends_on: []
 authored: 2026-07-11T02:27:04Z
