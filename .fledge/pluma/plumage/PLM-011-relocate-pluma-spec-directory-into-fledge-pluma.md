@@ -1,7 +1,7 @@
 ---
 id: PLM-011
 title: Relocate pluma/ spec directory into .fledge/pluma/
-status: hatched
+status: fledged
 priority: P2
 authored: 2026-07-11T02:14:33Z
 agent: fledge-orchestrate/planning
@@ -24,10 +24,10 @@ fledge keeps its spec files — plumages (`PLM-###`) and feathers (`FTHR-###`) �
 4. FC-4: Every reference to the old `pluma/` path — Go source, txtar + Go unit tests, embedded scaffold prose (`internal/bootstrap/core/**`), and docs (README.md, CLAUDE.md, MIGRATION.md, docs/generalization-plan.md) — is updated to `.fledge/pluma/`.
 
 ## Acceptance Criteria
-- [ ] AC-1: `go build ./...` and `go test ./...` pass with the new convention in place.
-- [ ] AC-2: `fledge preen` reports the scaffold healthy on a freshly-refreshed repo using the new paths.
-- [ ] AC-3: This repo's top-level `pluma/` directory no longer exists; `.fledge/pluma/plumage/` and `.fledge/pluma/feathers/` contain all 26 relocated specs.
-- [ ] AC-4: `MIGRATION.md` documents the manual `git mv pluma .fledge/pluma` step for repos upgrading from the old convention.
+- [x] AC-1: `go build ./...` and `go test ./...` pass with the new convention in place.
+- [x] AC-2: `fledge preen` reports the scaffold healthy on a freshly-refreshed repo using the new paths.
+- [x] AC-3: This repo's top-level `pluma/` directory no longer exists; `.fledge/pluma/plumage/` and `.fledge/pluma/feathers/` contain all 26 relocated specs.
+- [x] AC-4: `MIGRATION.md` documents the manual `git mv pluma .fledge/pluma` step for repos upgrading from the old convention.
 
 ## Out of Scope
 - A per-repo config knob to choose old vs. new spec location — this is a global convention change, not configurable.
