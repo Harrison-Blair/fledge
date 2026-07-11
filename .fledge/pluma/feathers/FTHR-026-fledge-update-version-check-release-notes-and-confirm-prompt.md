@@ -42,8 +42,8 @@ Per `.fledge/nest/entry-points.md` (17-command `commandOrder` self-registration 
 - `TestUpdate_JSONFlagIsDryRun` — `--json`; expect valid JSON with `current`, `latest`, `upToDate`, `notes` fields, and no prompt/action regardless of whether a newer version exists (run once up-to-date, once not). Pins FC-6.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: Running `update` when already on the latest release prints the up-to-date message and exits 0, with no prompt (satisfies PLM-014 AC-1).
-- [ ] AC-3: Running `update` when a newer release exists prints the current version, latest version, and release notes, then prompts for confirmation (satisfies PLM-014 AC-2).
-- [ ] AC-4: Answering the prompt with anything other than `y`/`yes` (including a bare Enter) does not proceed to the confirm-path action (satisfies PLM-014 AC-3, partial — the "no changes to installed binary" half of AC-3 is trivially true here since this feather never touches the binary at all).
-- [ ] AC-5: `--json` outputs valid JSON containing current version, latest version, up-to-date boolean, and release notes, and never prompts, whether or not an update is available (satisfies PLM-014 AC-6).
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: Running `update` when already on the latest release prints the up-to-date message and exits 0, with no prompt (satisfies PLM-014 AC-1).
+- [x] AC-3: Running `update` when a newer release exists prints the current version, latest version, and release notes, then prompts for confirmation (satisfies PLM-014 AC-2).
+- [x] AC-4: Answering the prompt with anything other than `y`/`yes` (including a bare Enter) does not proceed to the confirm-path action (satisfies PLM-014 AC-3, partial — the "no changes to installed binary" half of AC-3 is trivially true here since this feather never touches the binary at all).
+- [x] AC-5: `--json` outputs valid JSON containing current version, latest version, up-to-date boolean, and release notes, and never prompts, whether or not an update is available (satisfies PLM-014 AC-6).
