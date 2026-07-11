@@ -17,13 +17,13 @@ stdout '"waves"'
 stderr 'unknown --format'
 
 # a cycle makes vee fail with the path
-cp cyc/FTHR-004-c1.md pluma/feathers/FTHR-004-c1.md
-cp cyc/FTHR-005-c2.md pluma/feathers/FTHR-005-c2.md
+cp cyc/FTHR-004-c1.md .fledge/pluma/feathers/FTHR-004-c1.md
+cp cyc/FTHR-005-c2.md .fledge/pluma/feathers/FTHR-005-c2.md
 ! exec fledge vee
 stderr 'dependency cycle: FTHR-00'
 
 -- .fledge/.gitkeep --
--- pluma/plumage/PLM-001-a.md --
+-- .fledge/pluma/plumage/PLM-001-a.md --
 ---
 id: PLM-001
 title: A requirement
@@ -39,7 +39,7 @@ x
 x
 ## Acceptance Criteria
 x
--- pluma/feathers/FTHR-001-first.md --
+-- .fledge/pluma/feathers/FTHR-001-first.md --
 ---
 id: FTHR-001
 title: First
@@ -57,7 +57,7 @@ x
 - a test
 ## Acceptance Criteria
 x
--- pluma/feathers/FTHR-002-second.md --
+-- .fledge/pluma/feathers/FTHR-002-second.md --
 ---
 id: FTHR-002
 title: Second
@@ -75,7 +75,7 @@ x
 - a test
 ## Acceptance Criteria
 x
--- pluma/feathers/FTHR-003-third.md --
+-- .fledge/pluma/feathers/FTHR-003-third.md --
 ---
 id: FTHR-003
 title: Third

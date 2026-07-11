@@ -8,25 +8,25 @@ exec fledge preen --json
 stdout '"ok": true'
 
 # introduce a dangling dep + egg plumage reference
-cp bad/FTHR-003-bad.md pluma/feathers/FTHR-003-bad.md
+cp bad/FTHR-003-bad.md .fledge/pluma/feathers/FTHR-003-bad.md
 ! exec fledge preen
-stdout 'ERROR pluma/feathers/FTHR-003-bad.md: plumage PLM-099 does not exist'
-stdout 'ERROR pluma/feathers/FTHR-003-bad.md: depends_on references unknown FTHR-098'
-stdout 'ERROR pluma/feathers/FTHR-003-bad.md: missing or empty "## Tests" section'
+stdout 'ERROR .fledge/pluma/feathers/FTHR-003-bad.md: plumage PLM-099 does not exist'
+stdout 'ERROR .fledge/pluma/feathers/FTHR-003-bad.md: depends_on references unknown FTHR-098'
+stdout 'ERROR .fledge/pluma/feathers/FTHR-003-bad.md: missing or empty "## Tests" section'
 
 ! exec fledge preen --json
 stdout '"ok": false'
 
-rm pluma/feathers/FTHR-003-bad.md
+rm .fledge/pluma/feathers/FTHR-003-bad.md
 
 # fledged feather with unchecked criteria is an error
-cp bad/FTHR-004-done-unchecked.md pluma/feathers/FTHR-004-done-unchecked.md
+cp bad/FTHR-004-done-unchecked.md .fledge/pluma/feathers/FTHR-004-done-unchecked.md
 ! exec fledge preen
-stdout 'ERROR pluma/feathers/FTHR-004-done-unchecked.md: fledged but acceptance criteria unchecked: AC-2'
-rm pluma/feathers/FTHR-004-done-unchecked.md
+stdout 'ERROR .fledge/pluma/feathers/FTHR-004-done-unchecked.md: fledged but acceptance criteria unchecked: AC-2'
+rm .fledge/pluma/feathers/FTHR-004-done-unchecked.md
 
 # checked criteria warn without a matching evidence section
-cp bad/FTHR-005-no-evidence.md pluma/feathers/FTHR-005-no-evidence.md
+cp bad/FTHR-005-no-evidence.md .fledge/pluma/feathers/FTHR-005-no-evidence.md
 exec fledge preen
 stdout 'FTHR-005.md is missing'
 mkdir .fledge/molt
@@ -34,14 +34,14 @@ cp evidence/FTHR-005.md .fledge/molt/FTHR-005.md
 exec fledge preen
 ! stdout 'FTHR-005.md is missing'
 ! stdout 'missing evidence sections'
-rm pluma/feathers/FTHR-005-no-evidence.md
+rm .fledge/pluma/feathers/FTHR-005-no-evidence.md
 
 # clean again, including under --strict
 exec fledge preen
 exec fledge preen --strict
 
 -- .fledge/.gitkeep --
--- pluma/plumage/PLM-001-a.md --
+-- .fledge/pluma/plumage/PLM-001-a.md --
 ---
 id: PLM-001
 title: A requirement
@@ -57,7 +57,7 @@ x
 x
 ## Acceptance Criteria
 x
--- pluma/feathers/FTHR-001-first.md --
+-- .fledge/pluma/feathers/FTHR-001-first.md --
 ---
 id: FTHR-001
 title: First
@@ -75,7 +75,7 @@ x
 - a test
 ## Acceptance Criteria
 x
--- pluma/feathers/FTHR-002-second.md --
+-- .fledge/pluma/feathers/FTHR-002-second.md --
 ---
 id: FTHR-002
 title: Second

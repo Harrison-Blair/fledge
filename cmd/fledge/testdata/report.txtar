@@ -27,14 +27,14 @@ stdout '"orphans": \[\]'
 stderr 'flag provided but not defined'
 
 # populate a repo with two plumages, mixed-status feathers, and an orphan feather
-mkdir -p pluma/plumage
-mkdir -p pluma/feathers
-cp req1.md pluma/plumage/PLM-001-first-requirement.md
-cp req2.md pluma/plumage/PLM-002-second-requirement.md
-cp task1.md pluma/feathers/FTHR-001-first.md
-cp task2.md pluma/feathers/FTHR-002-second.md
-cp task3.md pluma/feathers/FTHR-003-third.md
-cp task4.md pluma/feathers/FTHR-004-orphan.md
+mkdir -p .fledge/pluma/plumage
+mkdir -p .fledge/pluma/feathers
+cp req1.md .fledge/pluma/plumage/PLM-001-first-requirement.md
+cp req2.md .fledge/pluma/plumage/PLM-002-second-requirement.md
+cp task1.md .fledge/pluma/feathers/FTHR-001-first.md
+cp task2.md .fledge/pluma/feathers/FTHR-002-second.md
+cp task3.md .fledge/pluma/feathers/FTHR-003-third.md
+cp task4.md .fledge/pluma/feathers/FTHR-004-orphan.md
 
 exec fledge colony
 stdout 'Feathers: 4 total \(egg: 1, pipping: 2, hatching: 0, fledged: 1\)'
@@ -55,9 +55,9 @@ stdout '"plumage": "PLM-999"'
 
 # egg detail: a dep chain with one fledged dep, one unfledged dep, and one
 # dangling dep -> the egg feather line names exactly its unmet dep IDs (FC-4)
-cp task101.md pluma/feathers/FTHR-101-done-dep.md
-cp task102.md pluma/feathers/FTHR-102-notdone-dep.md
-cp task103.md pluma/feathers/FTHR-103-blocked-detail.md
+cp task101.md .fledge/pluma/feathers/FTHR-101-done-dep.md
+cp task102.md .fledge/pluma/feathers/FTHR-102-notdone-dep.md
+cp task103.md .fledge/pluma/feathers/FTHR-103-blocked-detail.md
 
 exec fledge colony
 stdout 'FTHR-103  Blocked detail task  \(unmet: FTHR-102, FTHR-999\)'
@@ -71,12 +71,12 @@ stdout '  FTHR-102  alice'
 # degraded data: a file with broken frontmatter plus dangling refs (FTHR-004's
 # dangling plumage, FTHR-103's dangling depends_on) -> colony still exits 0,
 # names the parse failure and dangling refs, and still summarizes parsed specs (FC-7)
-cp badfrontmatter.md pluma/feathers/FTHR-105-broken.md
+cp badfrontmatter.md .fledge/pluma/feathers/FTHR-105-broken.md
 
 exec fledge colony
 stdout 'Feathers: 7 total \(egg: 2, pipping: 2, hatching: 1, fledged: 2\)'
 stdout 'Issues:'
-stdout 'pluma/feathers/FTHR-105-broken\.md: unterminated frontmatter'
+stdout '.fledge/pluma/feathers/FTHR-105-broken\.md: unterminated frontmatter'
 stdout 'FTHR-004 plumage PLM-999 not found'
 stdout 'FTHR-103 depends_on FTHR-999 not found'
 

@@ -10,7 +10,7 @@ stderr 'illegal transition'
 
 exec fledge status FTHR-001 hatching
 exec fledge status FTHR-001 fledged
-grep 'status: fledged' pluma/feathers/FTHR-001-first.md
+grep 'status: fledged' .fledge/pluma/feathers/FTHR-001-first.md
 
 # invalid enum is refused even with --force
 ! exec fledge status FTHR-002 nonsense --force
@@ -18,14 +18,14 @@ stderr 'not one of'
 
 # --force bypasses transition legality
 exec fledge status FTHR-002 fledged --force
-grep 'status: fledged' pluma/feathers/FTHR-002-second.md
+grep 'status: fledged' .fledge/pluma/feathers/FTHR-002-second.md
 
 # plumage lifecycle
 exec fledge status PLM-001
 stdout 'PLM-001: egg'
 exec fledge status PLM-001 hatched
 exec fledge status PLM-001 fledged
-grep 'status: fledged' pluma/plumage/PLM-001-a.md
+grep 'status: fledged' .fledge/pluma/plumage/PLM-001-a.md
 
 # unknown ID
 ! exec fledge status FTHR-099
@@ -34,16 +34,16 @@ stderr 'not found'
 # plumage fledged is gated on checked acceptance criteria
 ! exec fledge status PLM-002 fledged
 stderr 'AC-1'
-grep 'status: hatched' pluma/plumage/PLM-002-gated.md
+grep 'status: hatched' .fledge/pluma/plumage/PLM-002-gated.md
 exec fledge criteria check PLM-002 1
 exec fledge status PLM-002 fledged
-grep 'status: fledged' pluma/plumage/PLM-002-gated.md
+grep 'status: fledged' .fledge/pluma/plumage/PLM-002-gated.md
 
 # body is preserved byte-for-byte through rewrites
-grep 'sentinel body line' pluma/feathers/FTHR-001-first.md
+grep 'sentinel body line' .fledge/pluma/feathers/FTHR-001-first.md
 
 -- .fledge/.gitkeep --
--- pluma/plumage/PLM-001-a.md --
+-- .fledge/pluma/plumage/PLM-001-a.md --
 ---
 id: PLM-001
 title: A requirement
@@ -59,7 +59,7 @@ x
 x
 ## Acceptance Criteria
 x
--- pluma/feathers/FTHR-001-first.md --
+-- .fledge/pluma/feathers/FTHR-001-first.md --
 ---
 id: FTHR-001
 title: First
@@ -77,7 +77,7 @@ sentinel body line
 - a test
 ## Acceptance Criteria
 x
--- pluma/feathers/FTHR-002-second.md --
+-- .fledge/pluma/feathers/FTHR-002-second.md --
 ---
 id: FTHR-002
 title: Second
@@ -95,7 +95,7 @@ x
 - a test
 ## Acceptance Criteria
 x
--- pluma/plumage/PLM-002-gated.md --
+-- .fledge/pluma/plumage/PLM-002-gated.md --
 ---
 id: PLM-002
 title: Gated requirement

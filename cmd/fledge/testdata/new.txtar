@@ -2,13 +2,13 @@
 exec git init -q .
 
 exec fledge new plumage --title 'Deterministic CLI' --priority P0
-stdout 'pluma/plumage/PLM-001-deterministic-cli.md'
-exists pluma/plumage/PLM-001-deterministic-cli.md
-grep 'status: egg' pluma/plumage/PLM-001-deterministic-cli.md
-grep 'priority: P0' pluma/plumage/PLM-001-deterministic-cli.md
-grep '# PLM-001: Deterministic CLI' pluma/plumage/PLM-001-deterministic-cli.md
-grep '\- \[ \] AC-1:' pluma/plumage/PLM-001-deterministic-cli.md
-grep '1. FC-1:' pluma/plumage/PLM-001-deterministic-cli.md
+stdout '.fledge/pluma/plumage/PLM-001-deterministic-cli.md'
+exists .fledge/pluma/plumage/PLM-001-deterministic-cli.md
+grep 'status: egg' .fledge/pluma/plumage/PLM-001-deterministic-cli.md
+grep 'priority: P0' .fledge/pluma/plumage/PLM-001-deterministic-cli.md
+grep '# PLM-001: Deterministic CLI' .fledge/pluma/plumage/PLM-001-deterministic-cli.md
+grep '\- \[ \] AC-1:' .fledge/pluma/plumage/PLM-001-deterministic-cli.md
+grep '1. FC-1:' .fledge/pluma/plumage/PLM-001-deterministic-cli.md
 
 # a feather against a egg plumage is refused without --force
 ! exec fledge new feather --title 'First task' --plumage PLM-001
@@ -16,17 +16,17 @@ stderr 'egg'
 
 exec fledge status PLM-001 hatched
 exec fledge new feather --title 'First task' --plumage PLM-001
-stdout 'pluma/feathers/FTHR-001-first-task.md'
-grep 'status: pipping' pluma/feathers/FTHR-001-first-task.md
-grep 'depends_on: \[\]' pluma/feathers/FTHR-001-first-task.md
-grep '\- \[ \] AC-1: The tests listed above were observed failing before implementation and pass after' pluma/feathers/FTHR-001-first-task.md
-grep '\- \[ \] AC-2:' pluma/feathers/FTHR-001-first-task.md
+stdout '.fledge/pluma/feathers/FTHR-001-first-task.md'
+grep 'status: pipping' .fledge/pluma/feathers/FTHR-001-first-task.md
+grep 'depends_on: \[\]' .fledge/pluma/feathers/FTHR-001-first-task.md
+grep '\- \[ \] AC-1: The tests listed above were observed failing before implementation and pass after' .fledge/pluma/feathers/FTHR-001-first-task.md
+grep '\- \[ \] AC-2:' .fledge/pluma/feathers/FTHR-001-first-task.md
 
 # dependent feather starts egg; oversight recorded
 exec fledge new feather --title 'Second' --plumage PLM-001 --depends-on FTHR-001 --oversight merge
-grep 'status: egg' pluma/feathers/FTHR-002-second.md
-grep 'depends_on: \[FTHR-001\]' pluma/feathers/FTHR-002-second.md
-grep 'oversight: merge' pluma/feathers/FTHR-002-second.md
+grep 'status: egg' .fledge/pluma/feathers/FTHR-002-second.md
+grep 'depends_on: \[FTHR-001\]' .fledge/pluma/feathers/FTHR-002-second.md
+grep 'oversight: merge' .fledge/pluma/feathers/FTHR-002-second.md
 
 # dangling dependency and unknown plumage are refused
 ! exec fledge new feather --title 'Bad' --plumage PLM-001 --depends-on FTHR-099
