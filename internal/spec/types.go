@@ -23,7 +23,7 @@ var (
 	OversightValues = []string{"merge", "during"}
 )
 
-// Requirement is one pluma/plumage/PLM-###-<kebab>.md file.
+// Requirement is one .fledge/pluma/plumage/PLM-###-<kebab>.md file.
 type Requirement struct {
 	ID            string
 	Title         string
@@ -37,7 +37,7 @@ type Requirement struct {
 	Body []byte // everything after the closing ---, byte-preserved
 }
 
-// Task is one pluma/feathers/FTHR-###-<kebab>.md file.
+// Task is one .fledge/pluma/feathers/FTHR-###-<kebab>.md file.
 type Task struct {
 	ID            string
 	Title         string
