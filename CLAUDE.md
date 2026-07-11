@@ -87,6 +87,18 @@ terminal and refuses otherwise (rerun with `--force` to skip the confirmation);
 edits are recoverable via git. `fledge preen` reports the scaffold healthy when
 the stamp is present and consistent.
 
+### Local git hooks
+
+A `pre-commit` hook at `scripts/hooks/pre-commit` runs the same lint checks
+as CI (`gofmt -l .`, then `go vet ./...`) before a commit is created, so
+formatting or vet problems are caught locally instead of on a pushed PR. It
+is optional/opt-in — not installed by `fledge init` or `scripts/install.sh`
+— and is a one-time, per-clone, manual setup step:
+
+```sh
+git config core.hooksPath scripts/hooks
+```
+
 ## Architecture
 
 Two layers, deliberately separated:
