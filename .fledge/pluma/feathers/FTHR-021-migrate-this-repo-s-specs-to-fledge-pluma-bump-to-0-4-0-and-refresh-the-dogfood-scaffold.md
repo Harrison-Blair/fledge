@@ -37,9 +37,9 @@ Per `.fledge/nest/entry-points.md` and FTHR-013's precedent (PLM-009):
 - Full `go test ./...` — pins AC-1 of the parent plumage.
 
 ## Acceptance Criteria
-- [ ] AC-1: The version_test.go failing/passing sequence (per Tests) was observed and captured.
-- [ ] AC-2: `VERSION` and `binaryVersion` both read `0.4.0`.
-- [ ] AC-3: This repo's `pluma/` directory no longer exists at root; `.fledge/pluma/plumage/` and `.fledge/pluma/feathers/` contain all pre-existing specs plus this plumage's own (satisfies PLM-011 AC-3, FC-3).
-- [ ] AC-4: `fledge init --refresh` regenerates `.fledge/scaffold.json` cleanly (no unexpected prunes/kept-as-edited) and `fledge preen` reports the scaffold healthy (satisfies PLM-011 AC-2).
-- [ ] AC-5: `fledge status`, `fledge vee`, `fledge ready`, and `fledge unfledged` all correctly resolve the relocated specs.
-- [ ] AC-6: Full `go build ./...` and `go test ./...` pass at 0.4.0 (satisfies PLM-011 AC-1).
+- [x] AC-1: The version_test.go failing/passing sequence (per Tests) was observed and captured.
+- [x] AC-2: `VERSION` and `binaryVersion` both read `0.4.0`.
+- [x] AC-3: This repo's `pluma/` directory no longer exists at root; `.fledge/pluma/plumage/` and `.fledge/pluma/feathers/` contain all pre-existing specs plus this plumage's own (satisfies PLM-011 AC-3, FC-3).
+- [x] AC-4: `fledge init --refresh` regenerates `.fledge/scaffold.json` cleanly (no unexpected prunes/kept-as-edited) and `fledge preen` reports the scaffold healthy (satisfies PLM-011 AC-2).
+- [x] AC-5: `fledge status`, `fledge vee`, `fledge ready`, and `fledge unfledged` all correctly resolve the relocated specs.
+- [x] AC-6: Full `go build ./...` and `go test ./...` pass at 0.4.0 (satisfies PLM-011 AC-1).
