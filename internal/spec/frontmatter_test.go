@@ -90,7 +90,7 @@ extra_key: surprise
 ## Description
 body text
 `
-	task, unknown, err := ParseTaskFile("pluma/feathers/FTHR-003-wire-graph.md", []byte(in))
+	task, unknown, err := ParseTaskFile(".fledge/pluma/feathers/FTHR-003-wire-graph.md", []byte(in))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ fledge_version: 0.1.0
 ---
 ## Context
 `
-	req, unknown, err := ParseRequirementFile("pluma/plumage/PLM-001-deterministic-cli.md", []byte(in))
+	req, unknown, err := ParseRequirementFile(".fledge/pluma/plumage/PLM-001-deterministic-cli.md", []byte(in))
 	if err != nil {
 		t.Fatal(err)
 	}

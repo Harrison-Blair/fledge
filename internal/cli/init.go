@@ -140,8 +140,8 @@ func runInit(args []string) int {
 		{".fledge/nest/raw/.gitkeep", nil},
 		{".fledge/broods/.gitkeep", nil},
 		{".fledgeignore", defaultScanIgnore},
-		{"pluma/plumage/.gitkeep", nil},
-		{"pluma/feathers/.gitkeep", nil},
+		{".fledge/pluma/plumage/.gitkeep", nil},
+		{".fledge/pluma/feathers/.gitkeep", nil},
 	}
 	for _, f := range baseFiles {
 		path := filepath.Join(r.Root, f.rel)
@@ -384,8 +384,8 @@ func baseScaffoldEntries() map[string]bootstrap.StampEntry {
 		{".fledge/nest/raw/.gitkeep", nil},
 		{".fledge/broods/.gitkeep", nil},
 		{".fledgeignore", defaultScanIgnore},
-		{"pluma/plumage/.gitkeep", nil},
-		{"pluma/feathers/.gitkeep", nil},
+		{".fledge/pluma/plumage/.gitkeep", nil},
+		{".fledge/pluma/feathers/.gitkeep", nil},
 	} {
 		h := sha256.Sum256(f.content)
 		out[f.rel] = bootstrap.StampEntry{
