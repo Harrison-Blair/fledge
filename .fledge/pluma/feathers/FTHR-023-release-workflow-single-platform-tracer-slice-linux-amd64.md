@@ -2,7 +2,7 @@
 id: FTHR-023
 title: "Release workflow — single-platform tracer slice (linux/amd64)"
 plumage: PLM-012
-status: pipping
+status: hatching
 priority: P1
 depends_on: []
 oversight: merge

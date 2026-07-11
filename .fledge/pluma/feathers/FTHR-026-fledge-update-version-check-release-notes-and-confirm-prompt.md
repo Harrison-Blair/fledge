@@ -2,7 +2,7 @@
 id: FTHR-026
 title: "fledge update — version check, release notes, and confirm prompt"
 plumage: PLM-014
-status: pipping
+status: hatching
 priority: P1
 depends_on: []
 authored: 2026-07-11T06:04:51Z

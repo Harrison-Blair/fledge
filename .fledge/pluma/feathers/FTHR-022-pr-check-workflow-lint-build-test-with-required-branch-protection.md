@@ -2,7 +2,7 @@
 id: FTHR-022
 title: PR check workflow (lint/build/test) with required branch protection
 plumage: PLM-012
-status: pipping
+status: hatching
 priority: P1
 depends_on: []
 oversight: merge

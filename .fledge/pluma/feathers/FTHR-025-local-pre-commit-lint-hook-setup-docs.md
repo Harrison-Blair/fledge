@@ -2,7 +2,7 @@
 id: FTHR-025
 title: "Local pre-commit lint hook + setup docs"
 plumage: PLM-013
-status: pipping
+status: hatching
 priority: P2
 depends_on: []
 authored: 2026-07-11T06:01:41Z
