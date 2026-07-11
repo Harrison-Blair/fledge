@@ -70,8 +70,14 @@ This is a live-GitHub action outside this brooder's authority to perform autonom
 
 **Not yet gathered** — depends on exercising the workflow's safety-net-failure path on the real repo (or is assessed by code review of the job dependency graph: `release` job `needs: detect-version`, which in turn `needs: safety-net`, so a safety-net failure short-circuits the whole chain before `detect-version` or `release` can run). Structural verification: see `.github/workflows/release.yml` job graph (`safety-net` → `detect-version` → `release`).
 
-## Live verification (post-merge, orchestrator, 2026-07-11)
-- AC-2 (no release when VERSION unchanged): push of merge to main, Release run 29142889316 → safety-net + detect-version green, Build-and-release SKIPPED, `gh release list` empty.
-- AC-5 (safety-net failure blocks release): v0.5.0 push, run 29143033866 → `go test` FAILED (stamp_warning fixture), release NOT cut.
-- AC-3 (release on VERSION change): v0.5.1 push, run 29143130884 → all three jobs green, release v0.5.1 created.
-- AC-4 (binary reports correct version): downloaded fledge_linux_amd64.tar.gz from v0.5.1, checksums.txt verified OK, extracted binary reports `fledge 0.5.1`.
+## AC-2
+Live: push of the FTHR-023 merge to main, Release run 29142889316 → safety-net + detect-version green, Build-and-release SKIPPED (VERSION unchanged at 0.4.0), `gh release list` empty. Confirms no release when VERSION does not change. (PLM-012 AC-3.)
+
+## AC-3
+Live: v0.5.1 push (VERSION 0.5.0→0.5.1), Release run 29143130884 → safety-net, detect-version, and Build-and-release all green; GitHub Release v0.5.1 created with auto-generated notes, one `fledge_linux_amd64.tar.gz`, and `checksums.txt`. Confirms release on VERSION change. (PLM-012 AC-4, single-platform slice.)
+
+## AC-4
+Live: downloaded v0.5.1 assets; `sha256sum -c checksums.txt` → OK; extracted binary runs and reports `fledge 0.5.1` (ldflag-injected, matches the release VERSION). (PLM-012 AC-5, linux/amd64.)
+
+## AC-5
+Live: v0.5.0 push, Release run 29143033866 → `go test` in the safety-net FAILED (stamp_warning fixture referenced the old version); Build-and-release did NOT run and no release/tag was created. Confirms a safety-net failure blocks the release even when VERSION changed. (PLM-012 AC-6, FC-7.)
