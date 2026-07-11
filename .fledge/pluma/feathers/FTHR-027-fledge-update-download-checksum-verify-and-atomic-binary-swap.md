@@ -37,7 +37,7 @@ Extending `internal/cli/update_test.go` (or a new file), using `httptest.NewServ
 - `TestUpdate_NetworkFailureDuringDownload_AbortsWithoutSwap` — server closed/unreachable mid-flow; assert non-zero exit, target path untouched. Pins FC-9.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: Confirming an update (prompt-yes or `--yes`) downloads the correct platform asset, verifies its checksum, and replaces the target binary such that its content is the newly downloaded one (satisfies PLM-014 AC-4).
-- [ ] AC-3: A checksum mismatch aborts with an error and leaves the target binary provably unchanged (satisfies PLM-014 AC-5).
-- [ ] AC-4: Any failure before the final rename (missing platform asset, network failure) aborts with a non-zero exit and leaves the target binary unchanged (satisfies PLM-014 FC-9).
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: Confirming an update (prompt-yes or `--yes`) downloads the correct platform asset, verifies its checksum, and replaces the target binary such that its content is the newly downloaded one (satisfies PLM-014 AC-4).
+- [x] AC-3: A checksum mismatch aborts with an error and leaves the target binary provably unchanged (satisfies PLM-014 AC-5).
+- [x] AC-4: Any failure before the final rename (missing platform asset, network failure) aborts with a non-zero exit and leaves the target binary unchanged (satisfies PLM-014 FC-9).
