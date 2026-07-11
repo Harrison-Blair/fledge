@@ -105,3 +105,12 @@ exists:
 - AC-3: download and verify each archive's checksum against `checksums.txt`
   (`sha256sum -c checksums.txt`), and spot-check at least `linux_amd64` and one
   other platform's binary reports the correct version.
+
+## Live verification (post-merge, orchestrator, 2026-07-11)
+Scope amendment during live verification: `windows/amd64` was dropped (fledge is Unix-only — brood.go `pidAlive` uses `syscall.Kill`, which fails to cross-compile to Windows). Matrix reduced to 4 Unix targets; structural test updated to `TestReleaseWorkflow_BuildsAllFourPlatforms` (pins exactly the 4, asserts windows absent) — captured failing against the 5-platform workflow, passing after. Two workflow bugs the first live release exposed were fixed: (a) release job `needs: build` omitted `detect-version` → empty `$VERSION` → mis-tagged `v`; fixed to `needs: [detect-version, build]` and pinned by `TestReleaseWorkflow_ReleaseJobNeedsDetectVersion` (verified: fails on the broken wiring, passes when fixed); (b) per-platform `checksums.txt` collided on `merge-multiple` download → combined held one line; fixed to per-platform `fledge_<goos>_<goarch>.sha256` merged into one `checksums.txt`.
+
+## AC-2
+Live: v0.5.4 release, Release run 29143842530 → all 4 builds green + Create GitHub Release green. `gh release view v0.5.4` attaches exactly 4 archives (`fledge_linux_amd64.tar.gz`, `fledge_linux_arm64.tar.gz`, `fledge_darwin_amd64.tar.gz`, `fledge_darwin_arm64.tar.gz`) plus one `checksums.txt` — and checksums.txt contains all 4 lines (verified after the merge-bug fix). (PLM-012 AC-4, 4 Unix targets.)
+
+## AC-3
+Live: downloaded all v0.5.4 assets; `sha256sum -c checksums.txt` → all 4 OK; extracted linux/amd64 binary runs and reports `fledge 0.5.4` (ldflag-injected, matches release VERSION). (PLM-012 AC-5.)
