@@ -2,7 +2,7 @@
 id: FTHR-024
 title: "Release workflow — widen to full 5-platform build matrix"
 plumage: PLM-012
-status: egg
+status: hatching
 priority: P2
 depends_on: [FTHR-023]
 authored: 2026-07-11T05:58:44Z
