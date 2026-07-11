@@ -2,7 +2,7 @@
 id: FTHR-021
 title: "Migrate this repo's specs to .fledge/pluma/, bump to 0.4.0, and refresh the dogfood scaffold"
 plumage: PLM-011
-status: egg
+status: hatching
 priority: P2
 depends_on: [FTHR-017, FTHR-018, FTHR-020]
 authored: 2026-07-11T02:33:00Z
