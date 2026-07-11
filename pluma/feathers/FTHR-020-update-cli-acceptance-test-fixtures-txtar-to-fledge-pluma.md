@@ -2,7 +2,7 @@
 id: FTHR-020
 title: Update CLI acceptance test fixtures (txtar) to .fledge/pluma/
 plumage: PLM-011
-status: hatching
+status: fledged
 priority: P2
 depends_on: [FTHR-017]
 authored: 2026-07-11T02:32:39Z
