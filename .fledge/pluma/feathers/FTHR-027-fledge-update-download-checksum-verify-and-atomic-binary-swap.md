@@ -2,7 +2,7 @@
 id: FTHR-027
 title: "fledge update — download, checksum verify, and atomic binary swap"
 plumage: PLM-014
-status: hatching
+status: fledged
 priority: P1
 depends_on: [FTHR-026]
 authored: 2026-07-11T06:06:56Z
