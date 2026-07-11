@@ -3,7 +3,7 @@
 Implemented solo by the orchestrator (fledge-orchestrator), test-first, in worktree
 `.../scratchpad/FTHR-021` on branch `feather/FTHR-021-migrate-specs-and-bump`.
 
-## AC-1: version_test failing → passing
+## AC-1
 
 Pre-implementation (bumped VERSION to 0.4.0, binaryVersion still 0.3.4):
 
@@ -21,7 +21,7 @@ $ go test ./internal/cli -run TestBinaryVersionMatchesVersionFile
 ok  	github.com/Harrison-Blair/fledge/internal/cli
 ```
 
-## AC-2: VERSION and binaryVersion both 0.4.0
+## AC-2
 
 ```
 $ cat VERSION            → 0.4.0
@@ -29,7 +29,7 @@ $ ./fledge-local version → fledge 0.4.0
 internal/cli/version.go:10  var binaryVersion = "0.4.0"
 ```
 
-## AC-3: root pluma/ gone; .fledge/pluma/ holds all specs
+## AC-3
 
 `git mv pluma .fledge/pluma` (rename-detected, no content change). After:
 
@@ -40,7 +40,7 @@ $ ls .fledge/pluma/plumage | wc -l → 11
 $ ls .fledge/pluma/feathers | wc -l → 21   (16 pre-existing + FTHR-017..021)
 ```
 
-## AC-4: init --refresh clean + scaffold healthy
+## AC-4
 
 `./fledge-local init --refresh` regenerated `.fledge/scaffold.json` and resynced the two
 skill-mirror files still carrying old paths (`templates/plumage.md`, `worker-protocols.md`);
@@ -50,7 +50,7 @@ skill-mirror files still carrying old paths (`templates/plumage.md`, `worker-pro
 — an artifact of the claim lock living in the main working tree, not the worktree; verified
 clean on main post-merge with the lock present.)
 
-## AC-5: status/vee/ready/unfledged resolve relocated specs
+## AC-5
 
 ```
 $ ./fledge-local unfledged --feathers | grep FTHR-021
@@ -58,7 +58,7 @@ $ ./fledge-local unfledged --feathers | grep FTHR-021
 $ ./fledge-local vee --json | grep -c FTHR-0   → 58 (all feathers resolved at new location)
 ```
 
-## AC-6: full go build + go test ./... green at 0.4.0
+## AC-6
 
 The 0.4.0 bump broke one version assertion — `cmd/fledge/testdata/stamp_warning.txtar`
 hard-coded `binary is 0.3.4` in its expected stderr. Updated it to `0.4.0` (a direct
