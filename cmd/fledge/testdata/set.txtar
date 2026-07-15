@@ -6,6 +6,13 @@ grep 'priority: P0' .fledge/pluma/feathers/FTHR-002-second.md
 ! exec fledge set FTHR-002 priority P7
 stderr 'not one of'
 
+# --json emits {id, field, value} for a driven mutation
+exec fledge set FTHR-001 priority P2 --json
+stdout '"id": "FTHR-001"'
+stdout '"field": "priority"'
+stdout '"value": "P2"'
+grep 'priority: P2' .fledge/pluma/feathers/FTHR-001-first.md
+
 exec fledge set FTHR-002 oversight during
 grep 'oversight: during' .fledge/pluma/feathers/FTHR-002-second.md
 exec fledge set FTHR-002 oversight none
