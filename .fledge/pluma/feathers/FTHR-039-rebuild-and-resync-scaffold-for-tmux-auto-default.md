@@ -2,7 +2,7 @@
 id: FTHR-039
 title: Rebuild and resync scaffold for tmux auto-default
 plumage: PLM-019
-status: hatching
+status: fledged
 priority: P2
 depends_on: [FTHR-038]
 authored: 2026-07-15T19:02:04Z
