@@ -4,7 +4,8 @@ Test-only feather: extends `cmd/fledge/testdata/lock.txtar` with stale-PID
 detection assertions and `--json` shape assertions for `brood`/`broods`/`abandon`.
 No production code changed (net diff: only `lock.txtar`).
 
-## AC-1: stale-PID detection (text + `broods --json`), live claim asserted alive
+## AC-1
+_stale-PID detection (text + `broods --json`), live claim asserted alive_
 
 Seeded two raw `.brood` fixtures directly in the txtar archive (a live PID
 claim assembled via `fledge brood` turned out to be unusable for the "alive"
@@ -72,7 +73,8 @@ FTHR-006  skua  since 2026-07-01T00:00:00Z  branch main
 ```
 (full output captured in the AC-4 `go test` run below)
 
-## AC-2: `--json` shapes of `brood`, `broods`, `abandon`
+## AC-2
+_`--json` shapes of `brood`, `broods`, `abandon`_
 
 Assertions added (`lock.txtar` lines 74-93):
 ```
@@ -113,7 +115,8 @@ Actual stdout observed for the two abandon calls (from the `go test -v` run):
 ```
 This exercises both branches of the null-vs-string `status` key.
 
-## AC-3: perturbation proof
+## AC-3
+_perturbation proof_
 
 Perturbed `internal/cli/brood.go`'s `pidAlive` to invert its sense:
 ```diff
@@ -141,7 +144,8 @@ PASS
 ok  	github.com/Harrison-Blair/fledge/cmd/fledge	(cached)
 ```
 
-## AC-4: full suite + preen
+## AC-4
+_full suite + preen_
 
 ```
 $ go test ./cmd/fledge -run TestScripts/lock -v

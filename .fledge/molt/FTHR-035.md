@@ -1,6 +1,7 @@
 # FTHR-035 evidence: Test status and set --json output shapes
 
-## AC-1: `status.txtar` asserts `status --json` emits `{id, from, to}` with correct values
+## AC-1
+_`status.txtar` asserts `status --json` emits `{id, from, to}` with correct values_
 
 Added to `cmd/fledge/testdata/status.txtar` (appended at end, driving
 `FTHR-002` back to `pipping` via `--force` then forward to `hatching` with
@@ -70,7 +71,8 @@ ok  	github.com/Harrison-Blair/fledge/cmd/fledge	0.027s
 `git diff --stat` after revert showed only the two `testdata/*.txtar` files
 changed — no production code left modified.
 
-## AC-2: `set.txtar` asserts `set --json` emits `{id, field, value}` with correct values
+## AC-2
+_`set.txtar` asserts `set --json` emits `{id, field, value}` with correct values_
 
 Added to `cmd/fledge/testdata/set.txtar` (appended after the existing
 `priority` checks, driving a fresh mutation on `FTHR-001` with `--json`):
@@ -91,7 +93,8 @@ $ go test ./cmd/fledge -run 'TestScripts/set'
 ok  	github.com/Harrison-Blair/fledge/cmd/fledge	0.020s
 ```
 
-## AC-3: recorded perturbation makes the new assertions fail; revert restores green
+## AC-3
+_recorded perturbation makes the new assertions fail; revert restores green_
 
 Same procedure applied to `set.go`'s `emitJSON` call in `runSet`
 (`field`/`value` -> `fieldX`/`valueX`):
@@ -139,7 +142,8 @@ Both perturbations (status.go and set.go) were applied and reverted one at a
 time, never left in place together; `git diff` after each revert showed only
 the txtar files changed.
 
-## AC-4: `fledge preen` passes; targeted and full test suites are green
+## AC-4
+_`fledge preen` passes; targeted and full test suites are green_
 
 ```
 $ go build -o /tmp/fledge_preen ./cmd/fledge && /tmp/fledge_preen preen; echo "exit=$?"

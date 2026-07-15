@@ -1,6 +1,7 @@
 # FTHR-033 evidence
 
-## AC-1: Tests observed failing (hang / no timeout) before implementation, passing after
+## AC-1
+_Tests observed failing (hang / no timeout) before implementation, passing after_
 
 Pre-implementation: `updateHTTPTimeout` existed as an unused seam (not yet
 wired to any HTTP client), so `fetchLatestRelease`/`downloadBytes` still used
@@ -45,7 +46,8 @@ the still-sleeping handler goroutine to finish, not the client call itself —
 the assertions inside each test confirm the client returned a timeout error
 well within the 100ms budget, bounded by a `< 1s` elapsed check.)
 
-## AC-2: Both fetch paths go through a client that bounds a stalled peer, timeout injectable
+## AC-2
+_Both fetch paths go through a client that bounds a stalled peer, timeout injectable_
 
 `internal/cli/update.go`:
 - `updateHTTPTimeout` (package var, default 10s) is the injectable timeout
@@ -62,7 +64,8 @@ well within the 100ms budget, bounded by a `< 1s` elapsed check.)
 this: a peer that accepts the connection but never writes headers is failed
 within the injected timeout, for both call sites.
 
-## AC-3: No change to download/checksum/swap behavior; a healthy progressing download is not truncated
+## AC-3
+_No change to download/checksum/swap behavior; a healthy progressing download is not truncated_
 
 No lines in `checksumFor`, `extractBinary`/`extractFromTarGz`/`extractFromZip`,
 `swapBinary`, or `performUpdate` were touched — only the HTTP call sites in
@@ -89,7 +92,8 @@ i.e. the per-request budget is far shorter than the total transfer time, yet
 bounds the wait for the first response byte, not the body read, and
 `Client.Timeout` (a wall-clock cap on the whole request) is never set.
 
-## AC-4: `fledge preen` passes and `go test ./...` is green
+## AC-4
+_`fledge preen` passes and `go test ./...` is green_
 
 ```
 $ go test ./... 2>&1 | tail -20

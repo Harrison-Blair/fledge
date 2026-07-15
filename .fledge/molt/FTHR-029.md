@@ -1,6 +1,7 @@
 # FTHR-029 evidence
 
-## AC-1: tests observed failing before implementation, passing after
+## AC-1
+_tests observed failing before implementation, passing after_
 
 Test file: `internal/doctest/docs_test.go` (new package, test-first).
 
@@ -65,7 +66,8 @@ PASS
 ok  	github.com/Harrison-Blair/fledge/internal/doctest	0.001s
 ```
 
-## AC-2: README Commands table + Upgrading section cover `fledge update`
+## AC-2
+_README Commands table + Upgrading section cover `fledge update`_
 
 - `README.md` §Commands: added row
   `| \`fledge update\` | check for and install a newer \`fledge\` binary (dry-run by default; \`--yes\` to apply) |`.
@@ -75,7 +77,8 @@ ok  	github.com/Harrison-Blair/fledge/internal/doctest	0.001s
 - Verified by `TestReadmeDocumentsUpdateCommand` (passing run above), and by
   reading the rendered section (see `git diff README.md` on the branch).
 
-## AC-3: RELEASING.md documents version-bump steps + refresh/commit-stamp requirement
+## AC-3
+_RELEASING.md documents version-bump steps + refresh/commit-stamp requirement_
 
 - New `RELEASING.md` at repo root, verified against the actual repo rather
   than guessed:
@@ -94,7 +97,8 @@ ok  	github.com/Harrison-Blair/fledge/internal/doctest	0.001s
 - Cross-linked from `README.md` §Upgrading (`[RELEASING.md](RELEASING.md)`).
 - Verified by `TestReleasingDocCoversScaffoldRefresh` (passing run above).
 
-## AC-4: `fledge preen` passes and `go test ./...` is green
+## AC-4
+_`fledge preen` passes and `go test ./...` is green_
 
 ```
 $ go build ./... && go vet ./... && go test ./...

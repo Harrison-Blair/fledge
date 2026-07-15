@@ -1,6 +1,7 @@
 # FTHR-032 evidence — Atomic brood-file writes and corrupt-file-resilient broods listing
 
-## AC-1: Tests observed failing before implementation, passing after
+## AC-1
+_Tests observed failing before implementation, passing after_
 
 The spec's two named tests (`TestListSkipsCorruptBroodFile`, `TestAcquireWritesAtomically`)
 require `lock.List` to report which `.brood` files it skipped, which the pre-change
@@ -52,7 +53,8 @@ PASS
 ok  	github.com/Harrison-Blair/fledge/internal/lock	1.035s
 ```
 
-## AC-2: List surfaces (does not swallow) corrupt/partial `.brood` files; `broods` warns
+## AC-2
+_List surfaces (does not swallow) corrupt/partial `.brood` files; `broods` warns_
 
 `internal/lock/lock.go` `List` now skips a `.brood` file that fails `Get` (bad JSON or
 zero-length) and appends its filename to a `skipped []string` return instead of
@@ -80,7 +82,8 @@ The healthy claim (`FTHR-100`) is listed and the corrupt one (`FTHR-999`) is nam
 warning rather than aborting the command (old behavior: `fledge broods` would have
 failed with `corrupt brood file for FTHR-999: ...` and shown nothing).
 
-## AC-3: Acquire writes atomically; still returns `*HeldError`; no partial file observable
+## AC-3
+_Acquire writes atomically; still returns `*HeldError`; no partial file observable_
 
 `internal/lock/lock.go` `Acquire` now marshals the record, writes it to a temp file
 created via `os.CreateTemp(dir, ".fledge-tmp-*")`, closes it, then places it at the
@@ -102,7 +105,8 @@ is under AC-1 (`-race -count=3`, all iterations clean).
 to pass, confirming the `*HeldError` contract and exactly-one-winner-under-contention
 semantics survived the rewrite — see the AC-1 run above.
 
-## AC-4: `fledge preen` passes and `go test ./...` is green
+## AC-4
+_`fledge preen` passes and `go test ./...` is green_
 
 ```
 $ go vet ./...
