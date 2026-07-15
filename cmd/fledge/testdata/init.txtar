@@ -26,6 +26,7 @@ exists .claude/skills/fledge-interrogate/SKILL.md
 grep '.fledge/nest/raw/' .gitignore
 grep '.fledge/broods/' .gitignore
 grep 'fledge nest' .claude/settings.local.json
+grep 'Bash\(fledge update \*\)' .claude/settings.local.json
 grep 'fledge nest scaffold' .claude/agents/fledge-forager.md
 grep 'fledge nest scout --module' .claude/agents/fledge-context-scout.md
 grep 'owns the planning phase end to end' .claude/agents/fledge-incubator.md

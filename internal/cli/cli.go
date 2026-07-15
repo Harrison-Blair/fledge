@@ -105,6 +105,7 @@ func printUsage(w *os.File) {
 var commandOrder = []string{
 	"init", "agents", "scan", "new", "nest", "preen", "ready", "vee", "colony",
 	"unfledged", "status", "set", "criteria", "brood", "abandon", "broods", "version",
+	"update",
 }
 
 // emitJSON writes v as indented JSON to stdout.
