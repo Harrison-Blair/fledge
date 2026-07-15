@@ -2,7 +2,7 @@
 id: FTHR-040
 title: Harden forager wait-contract prose and regenerate scaffold
 plumage: PLM-020
-status: pipping
+status: fledged
 priority: P1
 depends_on: []
 authored: 2026-07-15T22:00:13Z
