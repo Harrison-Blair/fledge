@@ -42,6 +42,13 @@ grep 'status: fledged' .fledge/pluma/plumage/PLM-002-gated.md
 # body is preserved byte-for-byte through rewrites
 grep 'sentinel body line' .fledge/pluma/feathers/FTHR-001-first.md
 
+# --json emits {id, from, to} for a driven transition
+exec fledge status FTHR-002 pipping --force
+exec fledge status FTHR-002 hatching --json
+stdout '"id": "FTHR-002"'
+stdout '"from": "pipping"'
+stdout '"to": "hatching"'
+
 -- .fledge/.gitkeep --
 -- .fledge/pluma/plumage/PLM-001-a.md --
 ---
