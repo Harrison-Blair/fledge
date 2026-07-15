@@ -62,7 +62,7 @@ reading the files from the repo root; keep assertions minimal (substring/section
 not full-content snapshots, so ordinary prose edits don't break them.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: `README.md`'s Commands table includes a `fledge update` row and the Upgrading section covers binary self-update (FC-5).
-- [ ] AC-3: `RELEASING.md` exists at the repo root and documents the version-bump steps plus the `fledge init --refresh` + commit-stamp requirement (FC-6).
-- [ ] AC-4: `fledge preen` passes and `go test ./...` is green.
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: `README.md`'s Commands table includes a `fledge update` row and the Upgrading section covers binary self-update (FC-5).
+- [x] AC-3: `RELEASING.md` exists at the repo root and documents the version-bump steps plus the `fledge init --refresh` + commit-stamp requirement (FC-6).
+- [x] AC-4: `fledge preen` passes and `go test ./...` is green.
