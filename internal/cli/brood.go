@@ -165,9 +165,12 @@ func runLocks(args []string) int {
 	if err := r.RequireFledge(); err != nil {
 		return envErr("%v", err)
 	}
-	recs, err := lock.List(r.LocksDir())
+	recs, skipped, err := lock.List(r.LocksDir())
 	if err != nil {
 		return fail("%v", err)
+	}
+	for _, s := range skipped {
+		fmt.Fprintf(os.Stderr, "warning: skipping corrupt brood file %s\n", s)
 	}
 	type lockOut struct {
 		lock.Record

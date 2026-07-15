@@ -151,7 +151,7 @@ func buildReport(r *repo.Repo, set *spec.Set) report {
 	}
 	sort.Strings(rep.Issues.ParseErrors)
 
-	if recs, err := lock.List(r.LocksDir()); err == nil {
+	if recs, _, err := lock.List(r.LocksDir()); err == nil {
 		for _, rec := range recs {
 			rep.Locks = append(rep.Locks, lockEntry{Task: rec.Task, Owner: rec.Owner})
 		}
