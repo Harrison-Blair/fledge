@@ -2,7 +2,7 @@
 id: FTHR-028
 title: Add update to commandOrder and bidirectional command-parity guard test
 plumage: PLM-015
-status: pipping
+status: hatching
 priority: P1
 depends_on: []
 authored: 2026-07-15T14:58:06Z

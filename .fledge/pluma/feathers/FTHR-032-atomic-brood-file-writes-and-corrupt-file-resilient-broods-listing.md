@@ -2,7 +2,7 @@
 id: FTHR-032
 title: Atomic brood-file writes and corrupt-file-resilient broods listing
 plumage: PLM-016
-status: pipping
+status: hatching
 priority: P1
 depends_on: []
 authored: 2026-07-15T15:13:39Z

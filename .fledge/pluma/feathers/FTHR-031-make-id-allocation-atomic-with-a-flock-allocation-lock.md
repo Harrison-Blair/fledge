@@ -2,7 +2,7 @@
 id: FTHR-031
 title: Make ID allocation atomic with a flock allocation lock
 plumage: PLM-016
-status: pipping
+status: hatching
 priority: P1
 depends_on: []
 authored: 2026-07-15T15:13:39Z
