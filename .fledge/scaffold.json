@@ -82,7 +82,7 @@
     },
     ".fledge/skills/fledge-orchestrate/planning.md": {
       "policy": "core",
-      "sha256": "d13839d90cf477b1c59a7c44bd70ccfb1c3d83838752b3ba24a0eb9c997f77c0"
+      "sha256": "74cbd3694f00348e98a5debd3700453086d23d6756bbad1d1b408173c6f40cc4"
     },
     ".fledge/skills/fledge-orchestrate/templates/context-doc.md": {
       "policy": "core",
@@ -102,7 +102,7 @@
     },
     ".fledge/skills/fledge-orchestrate/worker-protocols.md": {
       "policy": "core",
-      "sha256": "98d2bb2fdf71b1b47707f8b231c26f86843be88e742b089eafda3460211f9b03"
+      "sha256": "e0e79ffb93956eb049b72ca80ef6e33bf3fe58a0a3d685b47d30c1491a97a0ac"
     },
     ".fledgeignore": {
       "policy": "default",

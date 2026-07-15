@@ -38,8 +38,8 @@ Rewrite the two orchestrator/incubator-facing source-of-truth files — `interna
 - Write this test first against the current (unedited) source, run `go test ./cmd/fledge -run TestScripts/forager_contract`, and confirm it FAILS for the expected reason (forbidden strings present, required strings absent) — capture that output. Then make the source edit and confirm the same test passes.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: `worker-protocols.md` § Incubator and `planning.md` §2 state the two-input contract (final message = done; prolonged silence = suspected stall → existing escalation) and explicitly state on-disk `.fledge/nest/` state is never an input (satisfies PLM-020 FC-1, FC-2).
-- [ ] AC-3: Neither file contains forager-internal pipeline-stage or stall-failure-mode language (satisfies PLM-020 FC-3), per `forager_contract.txtar`'s forbidden-string assertions.
-- [ ] AC-4: The suspected-stall escalation mechanics (≤3 queries, ~2 min apart, `confirm-gate` escalation) are unchanged in substance, verified by reading the rewritten paragraphs against the original (satisfies PLM-020 FC-4).
-- [ ] AC-5: `fledge init --refresh` was run in this repo after reinstalling, the regenerated scaffold reflects the new prose, and `go test ./cmd/fledge -run TestScripts` plus `go vet ./...` pass in full, including any other txtar fixture updated for the removed language (satisfies PLM-020 AC-4).
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: `worker-protocols.md` § Incubator and `planning.md` §2 state the two-input contract (final message = done; prolonged silence = suspected stall → existing escalation) and explicitly state on-disk `.fledge/nest/` state is never an input (satisfies PLM-020 FC-1, FC-2).
+- [x] AC-3: Neither file contains forager-internal pipeline-stage or stall-failure-mode language (satisfies PLM-020 FC-3), per `forager_contract.txtar`'s forbidden-string assertions.
+- [x] AC-4: The suspected-stall escalation mechanics (≤3 queries, ~2 min apart, `confirm-gate` escalation) are unchanged in substance, verified by reading the rewritten paragraphs against the original (satisfies PLM-020 FC-4).
+- [x] AC-5: `fledge init --refresh` was run in this repo after reinstalling, the regenerated scaffold reflects the new prose, and `go test ./cmd/fledge -run TestScripts` plus `go vet ./...` pass in full, including any other txtar fixture updated for the removed language (satisfies PLM-020 AC-4).
