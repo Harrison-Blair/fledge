@@ -14,6 +14,14 @@ exec fledge broods
 stdout 'FTHR-001'
 stdout 'adelie'
 
+# stale-PID detection: a seeded claim with a not-alive PID is marked, a
+# seeded claim with a live PID (pid 1, always alive) is not
+stdout '(?m)^FTHR-006\s+skua\s+since\s+\S+\s+branch\s+\S+$'
+stdout '(?m)^FTHR-005\s+weddell\s+since\s+\S+\s+branch\s+\S+\s+\(pid not alive\)$'
+exec fledge broods --json
+stdout '(?s)"feather": "FTHR-005".*?"pid_alive": false'
+stdout '(?s)"feather": "FTHR-006".*?"pid_alive": true'
+
 # brooded feather is excluded from pipping
 exec fledge ready
 stdout 'no pipping feathers'
@@ -62,6 +70,27 @@ exec fledge brood FTHR-004 --owner king
 exec fledge criteria check FTHR-004 1
 exec fledge abandon FTHR-004 --fledged
 grep 'status: fledged' .fledge/pluma/feathers/FTHR-004-gated2.md
+
+# brood --json emits the claim record shape
+exec fledge brood FTHR-002 --owner weddell --json
+stdout '"feather": "FTHR-002"'
+stdout '"owner": "weddell"'
+stdout '"pid": [0-9]+'
+stdout '"created": "'
+stdout '"branch": "'
+
+# broods --json includes pid_alive alongside the record fields
+exec fledge broods --json
+stdout '(?s)"feather": "FTHR-002".*?"pid_alive"'
+
+# abandon --json without --fledged: status is JSON null
+exec fledge abandon FTHR-002 --json
+stdout '"status": null'
+
+# abandon --fledged --json: status is the terminal string
+exec fledge brood FTHR-002 --owner weddell
+exec fledge abandon FTHR-002 --fledged --json
+stdout '"status": "fledged"'
 
 -- .fledge/.gitkeep --
 -- .fledge/pluma/plumage/PLM-001-a.md --
@@ -153,3 +182,43 @@ x
 - a test
 ## Acceptance Criteria
 - [ ] AC-1: the only criterion
+-- .fledge/pluma/feathers/FTHR-005-stale.md --
+---
+id: FTHR-005
+title: Stale
+plumage: PLM-001
+status: hatching
+priority: P1
+depends_on: [FTHR-001]
+authored: 2026-07-06T12:00:00Z
+agent: t
+fledge_version: 0.1.0
+---
+## Description
+x
+## Tests
+- a test
+## Acceptance Criteria
+x
+-- .fledge/broods/FTHR-005.brood --
+{"feather":"FTHR-005","owner":"weddell","pid":2147483647,"created":"2026-07-01T00:00:00Z","branch":"main"}
+-- .fledge/pluma/feathers/FTHR-006-live.md --
+---
+id: FTHR-006
+title: Live
+plumage: PLM-001
+status: hatching
+priority: P1
+depends_on: [FTHR-001]
+authored: 2026-07-06T12:00:00Z
+agent: t
+fledge_version: 0.1.0
+---
+## Description
+x
+## Tests
+- a test
+## Acceptance Criteria
+x
+-- .fledge/broods/FTHR-006.brood --
+{"feather":"FTHR-006","owner":"skua","pid":1,"created":"2026-07-01T00:00:00Z","branch":"main"}
