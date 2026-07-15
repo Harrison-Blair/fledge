@@ -56,7 +56,7 @@ Use the injected short timeout so the test is fast and deterministic; assert on 
 elapsed time and an error, not on an exact message.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests above were observed failing (hang / no timeout) before implementation and pass after.
-- [ ] AC-2: Both `fetchLatestRelease` and `downloadBytes` issue requests through a client that fails a stalled peer within a bounded time (FC-4), with the timeout injectable for tests.
-- [ ] AC-3: No change to the download/checksum/swap behavior; a healthy (progressing) download is not truncated by a wall-clock cap.
-- [ ] AC-4: `fledge preen` passes and `go test ./...` is green.
+- [x] AC-1: The tests above were observed failing (hang / no timeout) before implementation and pass after.
+- [x] AC-2: Both `fetchLatestRelease` and `downloadBytes` issue requests through a client that fails a stalled peer within a bounded time (FC-4), with the timeout injectable for tests.
+- [x] AC-3: No change to the download/checksum/swap behavior; a healthy (progressing) download is not truncated by a wall-clock cap.
+- [x] AC-4: `fledge preen` passes and `go test ./...` is green.

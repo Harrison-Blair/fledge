@@ -11,16 +11,41 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // updateAPIBaseURL is the GitHub API base URL queried for the latest
 // release. Overridable in tests.
 var updateAPIBaseURL = "https://api.github.com"
+
+// updateHTTPTimeout bounds how long fetchLatestRelease and downloadBytes
+// wait for a peer to connect, complete a TLS handshake, or send response
+// headers before failing. It does not bound the time spent reading a
+// response body, so a large but progressing download is not truncated.
+// Overridable in tests.
+var updateHTTPTimeout = 10 * time.Second
+
+// updateHTTPClient builds the client used for a fledge-update network
+// request. Its Transport fails a connect-but-stalled peer within
+// updateHTTPTimeout without capping the total time of a healthy,
+// in-progress download (Client.Timeout is deliberately left unset).
+func updateHTTPClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout: updateHTTPTimeout,
+			}).DialContext,
+			TLSHandshakeTimeout:   updateHTTPTimeout,
+			ResponseHeaderTimeout: updateHTTPTimeout,
+		},
+	}
+}
 
 // updateExecutablePath resolves the path of the running binary. It is the
 // target-path seam: overridable in tests to point at a throwaway temp file
@@ -112,7 +137,7 @@ func runUpdateWith(args []string, in io.Reader, out io.Writer) int {
 // {baseURL}/repos/Harrison-Blair/fledge/releases/latest.
 func fetchLatestRelease(baseURL string) (*githubRelease, error) {
 	url := fmt.Sprintf("%s/repos/Harrison-Blair/fledge/releases/latest", baseURL)
-	resp, err := http.Get(url)
+	resp, err := updateHTTPClient().Get(url)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +180,7 @@ func findReleaseAsset(rel *githubRelease, name string) string {
 
 // downloadBytes GETs url and returns the full response body.
 func downloadBytes(url string) ([]byte, error) {
-	resp, err := http.Get(url)
+	resp, err := updateHTTPClient().Get(url)
 	if err != nil {
 		return nil, err
 	}

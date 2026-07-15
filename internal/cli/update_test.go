@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // newUpdateTestServer starts an httptest server serving a canned GitHub
@@ -162,5 +163,53 @@ func TestUpdate_JSONFlagIsDryRun(t *testing.T) {
 	}
 	if strings.Contains(out2.String(), "[y/N]") {
 		t.Errorf("output = %q, --json must never prompt", out2.String())
+	}
+}
+
+// withUpdateHTTPTimeout installs a short timeout for the update package's
+// HTTP client for the duration of the test, restoring the previous value
+// afterward.
+func withUpdateHTTPTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := updateHTTPTimeout
+	updateHTTPTimeout = d
+	t.Cleanup(func() { updateHTTPTimeout = prev })
+}
+
+func TestFetchLatestReleaseTimesOut(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second)
+	}))
+	defer srv.Close()
+	withUpdateHTTPTimeout(t, 100*time.Millisecond)
+
+	start := time.Now()
+	_, err := fetchLatestRelease(srv.URL)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("fetchLatestRelease succeeded, want timeout error")
+	}
+	if elapsed > time.Second {
+		t.Fatalf("fetchLatestRelease took %v, want it to time out within ~%v", elapsed, 100*time.Millisecond)
+	}
+}
+
+func TestDownloadBytesTimesOut(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second)
+	}))
+	defer srv.Close()
+	withUpdateHTTPTimeout(t, 100*time.Millisecond)
+
+	start := time.Now()
+	_, err := downloadBytes(srv.URL)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("downloadBytes succeeded, want timeout error")
+	}
+	if elapsed > time.Second {
+		t.Fatalf("downloadBytes took %v, want it to time out within ~%v", elapsed, 100*time.Millisecond)
 	}
 }
