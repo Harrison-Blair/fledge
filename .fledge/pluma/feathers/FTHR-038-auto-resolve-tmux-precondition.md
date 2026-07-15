@@ -2,7 +2,7 @@
 id: FTHR-038
 title: Auto-resolve tmux precondition
 plumage: PLM-019
-status: pipping
+status: hatching
 priority: P2
 depends_on: []
 authored: 2026-07-15T19:00:49Z

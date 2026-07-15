@@ -2,7 +2,7 @@
 id: FTHR-036
 title: Harden skua review protocol prose
 plumage: PLM-018
-status: pipping
+status: hatching
 priority: P2
 depends_on: []
 authored: 2026-07-15T18:47:12Z
