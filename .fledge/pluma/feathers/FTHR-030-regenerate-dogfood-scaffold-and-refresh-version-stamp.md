@@ -65,7 +65,7 @@ test-first discipline is honored via before/after capture:
 - The existing suite (`go test ./...`) must remain green after the regen.
 
 ## Acceptance Criteria
-- [ ] AC-1: The before/after evidence above was captured — the `Bash(fledge update *)` entry absent before the refresh, present after.
-- [ ] AC-2: This repo's `.claude/settings.local.json` contains a `Bash(fledge update *)` allow-list entry after regeneration (FC-4).
-- [ ] AC-3: `.fledge/scaffold.json` remains consistent (stamp already current at the binary version) and no `fledge` command in this repo prints a stamp-mismatch warning.
-- [ ] AC-4: `fledge preen` passes and `go test ./...` is green after the regenerated files are committed.
+- [x] AC-1: The before/after evidence above was captured — the `Bash(fledge update *)` entry absent before the refresh, present after.
+- [x] AC-2: This repo's `.claude/settings.local.json` contains a `Bash(fledge update *)` allow-list entry after regeneration (FC-4).
+- [x] AC-3: `.fledge/scaffold.json` remains consistent (stamp already current at the binary version) and no `fledge` command in this repo prints a stamp-mismatch warning.
+- [x] AC-4: `fledge preen` passes and `go test ./...` is green after the regenerated files are committed.
