@@ -80,12 +80,18 @@ provides — never declared:
 | `fledge status` / `fledge set` / `fledge criteria` | update lifecycle, fields, acceptance criteria |
 | `fledge brood` / `fledge abandon` / `fledge broods` | claim, release, list feather claims |
 | `fledge version` | CLI + repo spec version |
+| `fledge update` | check for and install a newer `fledge` binary (dry-run by default; `--yes` to apply) |
 
 Every command takes `--json`. Feather lifecycle: `egg → pipping → hatching →
 fledged`.
 
 ## Upgrading
 
+- Two different things upgrade separately: the `fledge` **binary itself**
+  (`fledge update` — dry-run by default, surfaces the available version and
+  release notes; `--yes` to apply) vs. the **scaffold files** it wrote into
+  your repo (`fledge init --refresh`, below). See
+  [RELEASING.md](RELEASING.md) for how a new binary version gets published.
 - Core skill files under `.fledge/skills/` and adapter agent files (e.g.
   `.claude/agents/*.md`) are yours after init (skip-if-exists); `fledge init
   --refresh` resets all fledge-owned files to the shipped versions. When it
