@@ -2,7 +2,7 @@
 id: FTHR-030
 title: Regenerate dogfood scaffold to add update allow-list entry
 plumage: PLM-015
-status: hatching
+status: fledged
 priority: P1
 depends_on: [FTHR-028]
 authored: 2026-07-15T14:58:14Z
