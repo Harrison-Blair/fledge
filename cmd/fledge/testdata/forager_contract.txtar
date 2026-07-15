@@ -1,0 +1,27 @@
+# forager wait-contract: scaffolded planning.md and worker-protocols.md must
+# state the strict two-input state machine (final message = done; prolonged
+# silence = suspected stall) and must not leak forager-internal pipeline-stage
+# or stall-failure-mode vocabulary. See PLM-020 / FTHR-040.
+exec git init -q .
+
+exec fledge init
+
+# forbidden: pipeline-stage / failure-mode leakage
+! grep 'step-4→step-5' .fledge/skills/fledge-orchestrate/planning.md
+! grep 'synthesis boundary' .fledge/skills/fledge-orchestrate/planning.md
+! grep 'half-filled nest' .fledge/skills/fledge-orchestrate/planning.md
+! grep 'mid-pipeline' .fledge/skills/fledge-orchestrate/planning.md
+! grep 'see `foraging.md` for what that expected intermediate state looks like' .fledge/skills/fledge-orchestrate/planning.md
+
+! grep 'step-4→step-5' .fledge/skills/fledge-orchestrate/worker-protocols.md
+! grep 'synthesis boundary' .fledge/skills/fledge-orchestrate/worker-protocols.md
+! grep 'half-filled nest' .fledge/skills/fledge-orchestrate/worker-protocols.md
+! grep 'mid-pipeline' .fledge/skills/fledge-orchestrate/worker-protocols.md
+! grep 'see `foraging.md` for what that expected intermediate state looks like' .fledge/skills/fledge-orchestrate/worker-protocols.md
+
+# required: hardened two-input framing present in both files
+grep 'only\*\* signal that it is done is its explicit final message' .fledge/skills/fledge-orchestrate/planning.md
+grep 'never an input' .fledge/skills/fledge-orchestrate/planning.md
+
+grep 'only\*\* signal that it is done is its explicit final message' .fledge/skills/fledge-orchestrate/worker-protocols.md
+grep 'never an input' .fledge/skills/fledge-orchestrate/worker-protocols.md
