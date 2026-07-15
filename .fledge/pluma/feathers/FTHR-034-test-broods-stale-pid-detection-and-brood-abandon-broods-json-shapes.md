@@ -61,7 +61,7 @@ to bite before they are relied on:
   revert and confirm they pass. Record the failing output in the evidence file.
 
 ## Acceptance Criteria
-- [ ] AC-1: `lock.txtar` seeds a not-alive-PID claim and asserts both the `(pid not alive)` text and `"pid_alive": false` (`broods --json`), plus a live-PID claim asserted alive (FC-1).
-- [ ] AC-2: `lock.txtar` asserts the `--json` shapes of `brood`, `broods`, and `abandon`, including `abandon`'s `status` null (no `--fledged`) vs `"fledged"` (with `--fledged`) branch (FC-2, broods family).
-- [ ] AC-3: A recorded perturbation (inverted liveness check or renamed key) makes the new assertions fail; reverting restores green (satisfies PLM-017 AC-3 for these commands).
-- [ ] AC-4: `fledge preen` passes and `go test ./cmd/fledge -run TestScripts/lock` and `go test ./...` are green.
+- [x] AC-1: `lock.txtar` seeds a not-alive-PID claim and asserts both the `(pid not alive)` text and `"pid_alive": false` (`broods --json`), plus a live-PID claim asserted alive (FC-1).
+- [x] AC-2: `lock.txtar` asserts the `--json` shapes of `brood`, `broods`, and `abandon`, including `abandon`'s `status` null (no `--fledged`) vs `"fledged"` (with `--fledged`) branch (FC-2, broods family).
+- [x] AC-3: A recorded perturbation (inverted liveness check or renamed key) makes the new assertions fail; reverting restores green (satisfies PLM-017 AC-3 for these commands).
+- [x] AC-4: `fledge preen` passes and `go test ./cmd/fledge -run TestScripts/lock` and `go test ./...` are green.
