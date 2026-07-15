@@ -29,12 +29,37 @@ func (e *HeldError) Error() string {
 func lockPath(dir, task string) string { return filepath.Join(dir, task+".brood") }
 
 // Acquire atomically creates the brood file; *HeldError if already held.
+//
+// The record is written to a temp file in dir and placed via os.Link, which
+// fails with EEXIST when the claim is already held (preserving the previous
+// O_EXCL exclusivity guard) and otherwise makes the fully-written file appear
+// in one atomic step, so a reader never observes a partial or zero-length
+// .brood file.
 func Acquire(dir string, rec Record) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(lockPath(dir, rec.Task), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	data, err := json.Marshal(rec)
 	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".fledge-tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := func() { os.Remove(tmpName) }
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := os.Link(tmpName, lockPath(dir, rec.Task)); err != nil {
+		cleanup()
 		if os.IsExist(err) {
 			if existing, gerr := Get(dir, rec.Task); gerr == nil {
 				return &HeldError{Existing: *existing}
@@ -43,13 +68,8 @@ func Acquire(dir string, rec Record) error {
 		}
 		return err
 	}
-	enc := json.NewEncoder(f)
-	if err := enc.Encode(rec); err != nil {
-		f.Close()
-		os.Remove(lockPath(dir, rec.Task))
-		return err
-	}
-	return f.Close()
+	cleanup()
+	return nil
 }
 
 // Release removes the brood file; errors if not held.
@@ -74,26 +94,30 @@ func Get(dir, task string) (*Record, error) {
 	return &rec, nil
 }
 
-// List returns all held broods sorted by feather ID; empty when dir is missing.
-func List(dir string) ([]Record, error) {
+// List returns all held broods sorted by feather ID; empty when dir is
+// missing. An individual .brood file that fails to parse is skipped rather
+// than aborting the whole listing; its filename is returned in skipped
+// (sorted) so callers can surface the corruption instead of swallowing it.
+func List(dir string) (out []Record, skipped []string, err error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, err
+		return nil, nil, err
 	}
-	var out []Record
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".brood") {
 			continue
 		}
-		rec, err := Get(dir, strings.TrimSuffix(e.Name(), ".brood"))
-		if err != nil {
-			return nil, err
+		rec, gerr := Get(dir, strings.TrimSuffix(e.Name(), ".brood"))
+		if gerr != nil {
+			skipped = append(skipped, e.Name())
+			continue
 		}
 		out = append(out, *rec)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Task < out[j].Task })
-	return out, nil
+	sort.Strings(skipped)
+	return out, skipped, nil
 }
