@@ -63,7 +63,7 @@ Written test-first, failing before, passing after:
   it fails against the current streaming write where the seam differs.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests above were observed failing before implementation and pass after.
-- [ ] AC-2: `List` returns all healthy claims and surfaces (does not swallow) an individual corrupt/partial `.brood`, instead of aborting; `broods` prints a warning naming skipped files (FC-2).
-- [ ] AC-3: `Acquire` writes the claim atomically (temp + link/rename) and still returns `*HeldError` when the claim is already held; no partial file is observable in place of a valid one (FC-3).
-- [ ] AC-4: `fledge preen` passes and `go test ./...` is green.
+- [x] AC-1: The tests above were observed failing before implementation and pass after.
+- [x] AC-2: `List` returns all healthy claims and surfaces (does not swallow) an individual corrupt/partial `.brood`, instead of aborting; `broods` prints a warning naming skipped files (FC-2).
+- [x] AC-3: `Acquire` writes the claim atomically (temp + link/rename) and still returns `*HeldError` when the claim is already held; no partial file is observable in place of a valid one (FC-3).
+- [x] AC-4: `fledge preen` passes and `go test ./...` is green.
