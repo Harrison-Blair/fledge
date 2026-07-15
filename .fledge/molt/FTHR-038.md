@@ -61,7 +61,7 @@ file says which), and scopes "never silently proceed" to preconditions the
 piping file says to gate — no longer a blanket statement covering tmux.
 `TestImplementationPreconditionCarveOut` passes post-implementation.
 
-## AC-5 / AC-6
+## AC-5
 
 `team-loop.md`'s permission-mode paragraph (in "## Spawning and addressing
 teammates") and every other section of both files are unchanged — verified
@@ -78,6 +78,8 @@ $ git diff --stat internal/bootstrap/adapters/claude/team-loop.md internal/boots
 
 Each file shows exactly one changed line (the targeted paragraph), confirming
 no other section changed (PLM-019 FC-6).
+
+## AC-6
 
 Full post-implementation test run:
 
