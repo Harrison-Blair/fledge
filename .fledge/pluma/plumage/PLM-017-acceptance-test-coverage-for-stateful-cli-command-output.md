@@ -1,7 +1,7 @@
 ---
 id: PLM-017
 title: Acceptance-test coverage for stateful CLI command output
-status: hatched
+status: fledged
 priority: P2
 authored: 2026-07-15T15:23:05Z
 agent: fledge-orchestrate/planning
@@ -49,17 +49,17 @@ unnoticed. It adds test coverage only — no production behavior changes.
    being null without `--fledged` and the terminal state with it.
 
 ## Acceptance Criteria
-- [ ] AC-1: A test drives `broods`/`broods --json` against a claim with a not-alive PID and
+- [x] AC-1: A test drives `broods`/`broods --json` against a claim with a not-alive PID and
   asserts both the `(pid not alive)` text and `"pid_alive": false`; verified failing against
   the current fixtures (which never seed a dead PID) in the sense that no such assertion
   exists, and passing once added.
-- [ ] AC-2: Tests assert the documented `--json` shape of `brood`, `abandon`, `broods`,
+- [x] AC-2: Tests assert the documented `--json` shape of `brood`, `abandon`, `broods`,
   `status`, and `set`, including `abandon`'s null-vs-string `status` branch; each assertion
   would fail if the corresponding key/field/branch were changed.
-- [ ] AC-3: A deliberate perturbation confirms the tests bite — e.g. temporarily inverting
+- [x] AC-3: A deliberate perturbation confirms the tests bite — e.g. temporarily inverting
   the liveness check or renaming a JSON key makes the new tests fail (recorded as evidence),
   then reverted.
-- [ ] AC-4: `fledge preen` passes and the full test suite is green.
+- [x] AC-4: `fledge preen` passes and the full test suite is green.
 
 ## Out of Scope
 - Any change to the commands' behavior or output shape — this plumage pins existing

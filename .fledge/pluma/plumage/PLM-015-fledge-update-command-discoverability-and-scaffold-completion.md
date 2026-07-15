@@ -1,7 +1,7 @@
 ---
 id: PLM-015
 title: fledge update command discoverability and scaffold completion
-status: hatched
+status: fledged
 priority: P1
 authored: 2026-07-15T14:52:25Z
 agent: fledge-orchestrate/planning
@@ -64,19 +64,19 @@ scaffold is kept in sync on future version bumps.
    so the dogfood scaffold is kept in sync on every version bump (preventive).
 
 ## Acceptance Criteria
-- [ ] AC-1: `fledge` with no command lists `update` among its commands, and the
+- [x] AC-1: `fledge` with no command lists `update` among its commands, and the
   generated allow-list contains a `fledge update` pre-approval entry.
-- [ ] AC-2: A test asserts bidirectional parity between the registered command set and
+- [x] AC-2: A test asserts bidirectional parity between the registered command set and
   the ordered command list, and fails if either side gains or loses a command without
   the other; verified failing before the fix (with `update` absent) and passing after.
-- [ ] AC-3: This repository's own `.claude/settings.local.json` is regenerated to contain a
+- [x] AC-3: This repository's own `.claude/settings.local.json` is regenerated to contain a
   `Bash(fledge update *)` entry (the scaffold stamp is already current, so the operative
   change is the added allow-list entry).
-- [ ] AC-4: The README's command reference and upgrading section both cover
+- [x] AC-4: The README's command reference and upgrading section both cover
   `fledge update`.
-- [ ] AC-5: The release process documentation states the scaffold-refresh-and-commit
+- [x] AC-5: The release process documentation states the scaffold-refresh-and-commit
   step required on a version bump.
-- [ ] AC-6: `fledge preen` passes and the full test suite is green after the changes.
+- [x] AC-6: `fledge preen` passes and the full test suite is green after the changes.
 
 ## Out of Scope
 - Any change to what `fledge update` *does* (download, checksum, swap logic) — the

@@ -1,7 +1,7 @@
 ---
 id: PLM-016
 title: Concurrency and robustness hardening of spec and lock operations
-status: hatched
+status: fledged
 priority: P1
 authored: 2026-07-15T15:12:51Z
 agent: fledge-orchestrate/planning
@@ -54,16 +54,16 @@ cannot hang.
    connection but does not make progress, rather than blocking indefinitely.
 
 ## Acceptance Criteria
-- [ ] AC-1: A test drives concurrent ID allocation and asserts all allocated IDs are
+- [x] AC-1: A test drives concurrent ID allocation and asserts all allocated IDs are
   distinct; it fails against the pre-fix code (observed duplicate) and passes after.
-- [ ] AC-2: A test with one corrupt claim file alongside healthy ones asserts the listing
+- [x] AC-2: A test with one corrupt claim file alongside healthy ones asserts the listing
   returns the healthy claims (and signals the bad one) instead of erroring; fails before,
   passes after.
-- [ ] AC-3: Claim-file writes are atomic (temp-then-rename), verified by a test; no partial
+- [x] AC-3: Claim-file writes are atomic (temp-then-rename), verified by a test; no partial
   file is observable in place of a valid claim.
-- [ ] AC-4: A test with a deliberately stalled HTTP peer asserts the self-update fetch
+- [x] AC-4: A test with a deliberately stalled HTTP peer asserts the self-update fetch
   returns an error within a bounded time rather than hanging; fails before, passes after.
-- [ ] AC-5: `fledge preen` passes and the full test suite is green after the changes.
+- [x] AC-5: `fledge preen` passes and the full test suite is green after the changes.
 
 ## Out of Scope
 - Broader locking of spec *mutation* (status/set/criteria) — this plumage covers ID
