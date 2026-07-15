@@ -1,8 +1,10 @@
 package spec
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -44,6 +46,61 @@ func TestNextIDMissingDir(t *testing.T) {
 	}
 	if got != "PLM-001" {
 		t.Errorf("NextID = %q, want PLM-001", got)
+	}
+}
+
+// TestConcurrentAllocationYieldsDistinctIDs launches N goroutines that all
+// call AllocateAndCreate against one shared dir, released simultaneously via
+// a start barrier to force contention. Without serialization, two goroutines
+// can both scan the dir before either creates a file and allocate the same
+// ID. It loops several rounds so the race is deterministic.
+func TestConcurrentAllocationYieldsDistinctIDs(t *testing.T) {
+	const n = 20
+	const rounds = 5
+
+	for round := 0; round < rounds; round++ {
+		dir := t.TempDir()
+
+		var ready sync.WaitGroup
+		ready.Add(n)
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		ids := make([]string, n)
+		errs := make([]error, n)
+
+		for i := 0; i < n; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				ready.Done()
+				<-start
+				id, _, err := AllocateAndCreate(dir, "FTHR", func(id string) (string, []byte) {
+					return filepath.Join(dir, fmt.Sprintf("%s-worker-%d.md", id, i)), []byte("x")
+				})
+				ids[i] = id
+				errs[i] = err
+			}(i)
+		}
+
+		ready.Wait()
+		close(start)
+		wg.Wait()
+
+		seen := make(map[string]int)
+		for i, err := range errs {
+			if err != nil {
+				t.Fatalf("round %d: goroutine %d: AllocateAndCreate: %v", round, i, err)
+			}
+			seen[ids[i]]++
+		}
+		for id, count := range seen {
+			if count > 1 {
+				t.Fatalf("round %d: id %s allocated %d times, want distinct IDs (ids: %v)", round, id, count, ids)
+			}
+		}
+		if len(seen) != n {
+			t.Fatalf("round %d: got %d distinct ids, want %d (ids: %v)", round, len(seen), n, ids)
+		}
 	}
 }
 
