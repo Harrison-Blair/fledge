@@ -5,10 +5,10 @@ exec fledge init
 exists .fledge/skills/fledge-orchestrate/planning.md
 exists .fledge/skills/fledge-orchestrate/foraging.md
 
-# delegation markers: pin the delegated-planner branch and the draft-then-gate
+# delegation markers: pin the delegated-planner branch and the create-then-gate
 # invariant in planning.md
 grep 'Spawn a .fledge-incubator. worker' .fledge/skills/fledge-orchestrate/planning.md
-grep 'No spec is mutated until its gate returns .Accept.' .fledge/skills/fledge-orchestrate/planning.md
+grep 'until its gate returns .Accept.' .fledge/skills/fledge-orchestrate/planning.md
 
 # empty-nest marker: pins the expected-intermediate-state clarification in foraging.md
 grep 'expected intermediate after scaffolding' .fledge/skills/fledge-orchestrate/foraging.md

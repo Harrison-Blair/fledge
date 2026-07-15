@@ -21,6 +21,6 @@ For team-loop runtime behavior, see `{{.PipingFile}}`.{{end}}
 ## Notes
 
 - Spec mutation goes through `run-fledge` (Codex shell running `fledge …`); never hand-edit spec frontmatter the CLI can write.
-- `confirm-gate` (review): present the full material, then ask the user in chat for a structured "Accept" / "Make changes" choice; loop on "Make changes" until "Accept".
+- `confirm-gate` (review): present the material under review — for a spec-body draft, a summary plus the on-disk file path to open (and a diff on each revision), never the pasted body — then ask the user in chat for a structured "Accept" / "Make changes" choice; loop on "Make changes" until "Accept".
 - See `.fledge/skills/fledge-orchestrate/SKILL.md` for routing and ground rules. With this Tier A profile, planning foraging and implementation both run solo (in-session) per `planning.md` step 2 and `implementation.md` §2.
 - Codex auto-loads `AGENTS.md` at the repo root; `fledge init` adds a one-line pointer there (additively — it never overwrites your existing `AGENTS.md`).
