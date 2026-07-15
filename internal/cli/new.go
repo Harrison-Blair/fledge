@@ -3,7 +3,6 @@ package cli
 import (
 	"flag"
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -56,21 +55,22 @@ func runNew(args []string) int {
 	version := r.Version(binaryVersion)
 
 	var id, path string
-	var content []byte
+	var err error
 	switch kind {
 	case "plumage":
 		dir := r.RequirementsDir()
-		var err error
-		if id, err = spec.NextID(dir, "PLM"); err != nil {
+		id, path, err = spec.AllocateAndCreate(dir, "PLM", func(id string) (string, []byte) {
+			path := filepath.Join(dir, fmt.Sprintf("%s-%s.md", id, spec.Kebab(*title)))
+			req := &spec.Requirement{
+				ID: id, Title: *title, Status: spec.ReqEgg, Priority: *priority,
+				Authored: authored, Agent: *agent, FledgeVersion: version,
+				Body: spec.RequirementBody(id, *title),
+			}
+			return path, req.Render()
+		})
+		if err != nil {
 			return fail("%v", err)
 		}
-		path = filepath.Join(dir, fmt.Sprintf("%s-%s.md", id, spec.Kebab(*title)))
-		req := &spec.Requirement{
-			ID: id, Title: *title, Status: spec.ReqEgg, Priority: *priority,
-			Authored: authored, Agent: *agent, FledgeVersion: version,
-			Body: spec.RequirementBody(id, *title),
-		}
-		content = req.Render()
 	case "feather":
 		if *reqID == "" {
 			return usageErr("--plumage is required for feathers")
@@ -103,34 +103,19 @@ func runNew(args []string) int {
 			status = spec.TaskPipping
 		}
 		dir := r.TasksDir()
-		var err error
-		if id, err = spec.NextID(dir, "FTHR"); err != nil {
+		id, path, err = spec.AllocateAndCreate(dir, "FTHR", func(id string) (string, []byte) {
+			path := filepath.Join(dir, fmt.Sprintf("%s-%s.md", id, spec.Kebab(*title)))
+			task := &spec.Task{
+				ID: id, Title: *title, Requirement: *reqID, Status: status,
+				Priority: *priority, DependsOn: deps, Oversight: *oversight,
+				Authored: authored, Agent: *agent, FledgeVersion: version,
+				Body: spec.TaskBody(id, *title, *reqID),
+			}
+			return path, task.Render()
+		})
+		if err != nil {
 			return fail("%v", err)
 		}
-		path = filepath.Join(dir, fmt.Sprintf("%s-%s.md", id, spec.Kebab(*title)))
-		task := &spec.Task{
-			ID: id, Title: *title, Requirement: *reqID, Status: status,
-			Priority: *priority, DependsOn: deps, Oversight: *oversight,
-			Authored: authored, Agent: *agent, FledgeVersion: version,
-			Body: spec.TaskBody(id, *title, *reqID),
-		}
-		content = task.Render()
-	}
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fail("%v", err)
-	}
-	// O_EXCL: a concurrent allocation of the same ID fails loudly.
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fail("%v", err)
-	}
-	if _, err := f.Write(content); err != nil {
-		f.Close()
-		return fail("%v", err)
-	}
-	if err := f.Close(); err != nil {
-		return fail("%v", err)
 	}
 
 	rel := relPath(r.Root, path)
