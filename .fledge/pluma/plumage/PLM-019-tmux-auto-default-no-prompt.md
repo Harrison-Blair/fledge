@@ -1,7 +1,7 @@
 ---
 id: PLM-019
 title: Tmux auto-default (no prompt)
-status: hatched
+status: fledged
 priority: P2
 authored: 2026-07-15T18:58:15Z
 agent: fledge-orchestrate/planning
@@ -26,12 +26,12 @@ Fledge's Tier C team loop (Claude Code) runs teammates in tmux panes so the orch
 6. FC-6: No other `team-loop.md` or `implementation.md` behavior changes — communication topology, spawning, shutdown, planning delegation, team task list, skill loading, and recovery sections are untouched.
 
 ## Acceptance Criteria
-- [ ] AC-1: `team-loop.md` § Teammate display (tmux) states the auto-resolve behavior (FC-1, FC-2) with no confirm-gate language remaining for this precondition.
-- [ ] AC-2: `team-loop.md` § Teammate display (tmux) (or `implementation.md` §1, wherever it's most natural) documents the non-blocking notice (FC-3).
-- [ ] AC-3: `implementation.md` §1's "never silently proceed" sentence is scoped so it no longer applies to the tmux precondition (FC-4), verified by re-reading the full §1 precondition paragraph in context.
-- [ ] AC-4: `team-loop.md`'s permission-mode subsection and confirm-gate wording are verified byte-unchanged (FC-5).
-- [ ] AC-5: `internal/bootstrap/core/skills/fledge-orchestrate/implementation.md` and `internal/bootstrap/adapters/claude/team-loop.md` (source of truth) and their regenerated/resynced copies (`.fledge/skills/fledge-orchestrate/implementation.md` and `.claude/team-loop.md`) are updated and consistent, via rebuild (`go install ./cmd/fledge`) + `fledge init --refresh`, with `.fledge/scaffold.json` reflecting the new content hashes.
-- [ ] AC-6: `cmd/fledge/testdata/*.txtar` fixtures and any other assertions on the changed prose are confirmed passing (updated if the new wording trips an existing assertion) — `go test ./...` is green.
+- [x] AC-1: `team-loop.md` § Teammate display (tmux) states the auto-resolve behavior (FC-1, FC-2) with no confirm-gate language remaining for this precondition.
+- [x] AC-2: `team-loop.md` § Teammate display (tmux) (or `implementation.md` §1, wherever it's most natural) documents the non-blocking notice (FC-3).
+- [x] AC-3: `implementation.md` §1's "never silently proceed" sentence is scoped so it no longer applies to the tmux precondition (FC-4), verified by re-reading the full §1 precondition paragraph in context.
+- [x] AC-4: `team-loop.md`'s permission-mode subsection and confirm-gate wording are verified byte-unchanged (FC-5).
+- [x] AC-5: `internal/bootstrap/core/skills/fledge-orchestrate/implementation.md` and `internal/bootstrap/adapters/claude/team-loop.md` (source of truth) and their regenerated/resynced copies (`.fledge/skills/fledge-orchestrate/implementation.md` and `.claude/team-loop.md`) are updated and consistent, via rebuild (`go install ./cmd/fledge`) + `fledge init --refresh`, with `.fledge/scaffold.json` reflecting the new content hashes.
+- [x] AC-6: `cmd/fledge/testdata/*.txtar` fixtures and any other assertions on the changed prose are confirmed passing (updated if the new wording trips an existing assertion) — `go test ./...` is green.
 
 ## Out of Scope
 - Any change to the permission-mode precondition, its confirm-gate, or its fallback wording (FC-5).

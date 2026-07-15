@@ -1,7 +1,7 @@
 ---
 id: PLM-018
 title: Adversarial skua review
-status: hatched
+status: fledged
 priority: P2
 authored: 2026-07-15T18:37:27Z
 agent: fledge-orchestrate/planning
@@ -29,12 +29,12 @@ The fledge implementation loop pairs each brooder with a skua that reviews its w
 8. FC-8: The brooder's protocol and behavior are unchanged by this plumage — it remains a pure implementer with the same "do not argue past one round" rule on its side of the fix loop.
 
 ## Acceptance Criteria
-- [ ] AC-1: `worker-protocols.md` § Skua § Verdict states the hardened concession rule (FC-1, FC-2): a finding withdraws only on independently re-verified disproof, never on a bare counter-assertion.
-- [ ] AC-2: `worker-protocols.md` § Skua's evidence-audit check states the guilty-until-proven default (FC-3, FC-4): ambiguous/incomplete/terse evidence is not proof and leaves the box unchecked with a finding filed.
-- [ ] AC-3: `worker-protocols.md` § Skua § Reviewing a feather gains an explicit red-team checklist item (FC-5, FC-6) that runs every cycle and produces findings only, never fixes.
-- [ ] AC-4: The 3-rejection escalation rule (FC-7) and the brooder's protocol (FC-8) are verified unchanged (or, if any incidental wording needed adjustment for consistency with the above, it stays a wording-only change with no behavioral shift).
-- [ ] AC-5: `internal/bootstrap/core/skills/fledge-orchestrate/worker-protocols.md` (source of truth) and its regenerated copy at `.fledge/skills/fledge-orchestrate/worker-protocols.md` are both updated and identical, via rebuild (`go install ./cmd/fledge`) + `fledge init --refresh`, with `.fledge/scaffold.json` reflecting the new content hash.
-- [ ] AC-6: `cmd/fledge/testdata/*.txtar` fixtures (`init.txtar`, `init_agents.txtar`, `agents.txtar`) and any other assertions on the changed prose are confirmed passing (updated if the new wording trips an existing assertion) — `go test ./...` is green.
+- [x] AC-1: `worker-protocols.md` § Skua § Verdict states the hardened concession rule (FC-1, FC-2): a finding withdraws only on independently re-verified disproof, never on a bare counter-assertion.
+- [x] AC-2: `worker-protocols.md` § Skua's evidence-audit check states the guilty-until-proven default (FC-3, FC-4): ambiguous/incomplete/terse evidence is not proof and leaves the box unchecked with a finding filed.
+- [x] AC-3: `worker-protocols.md` § Skua § Reviewing a feather gains an explicit red-team checklist item (FC-5, FC-6) that runs every cycle and produces findings only, never fixes.
+- [x] AC-4: The 3-rejection escalation rule (FC-7) and the brooder's protocol (FC-8) are verified unchanged (or, if any incidental wording needed adjustment for consistency with the above, it stays a wording-only change with no behavioral shift).
+- [x] AC-5: `internal/bootstrap/core/skills/fledge-orchestrate/worker-protocols.md` (source of truth) and its regenerated copy at `.fledge/skills/fledge-orchestrate/worker-protocols.md` are both updated and identical, via rebuild (`go install ./cmd/fledge`) + `fledge init --refresh`, with `.fledge/scaffold.json` reflecting the new content hash.
+- [x] AC-6: `cmd/fledge/testdata/*.txtar` fixtures (`init.txtar`, `init_agents.txtar`, `agents.txtar`) and any other assertions on the changed prose are confirmed passing (updated if the new wording trips an existing assertion) — `go test ./...` is green.
 
 ## Out of Scope
 - Any change to the brooder's protocol, behavior, or hard constraints (it remains a pure implementer; FC-8).
