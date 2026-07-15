@@ -1,51 +1,77 @@
 ---
-generated: 2026-07-11T01:58:32Z
-commit: 96a3ac38bc843217824d6d6886c49906053bf686
+generated: 2026-07-15T18:14:39Z
+commit: 5728c29953a7c218c923ce20333dbffebb00623f
 agent: fledge-forager
-fledge_version: 0.3.4
+fledge_version: 0.5.4
 ---
 
 # Data Model
 
-Core types and on-disk schemas across the codebase, organized by the domain they model rather than by source file.
+The core Go types and on-disk schemas fledge operates over: specs, locks, drift/scaffold state, and CLI JSON output shapes.
 
 ## Spec types (`internal/spec/types.go`)
 
-- **`Requirement`** (a plumage/PLM spec): `ID`, `Title`, `Status` (`egg`|`hatched`|`fledged`), `Priority`, `Authored`, `Agent`, `FledgeVersion`, `Path`, `Body` (raw preserved bytes).
-- **`Task`** (a feather/FTHR spec): `ID`, `Title`, `Requirement` (parent PLM ref), `Status` (`egg`|`pipping`|`hatching`|`fledged`), `Priority` (`P1`|`P2`), `DependsOn` ([]string of FTHR IDs), `Oversight` (optional, e.g. `merge`), `Authored`, `Agent`, `FledgeVersion`, `Path`, `Body`.
-- **`Criterion`** — one acceptance-criteria checkbox: `N`, `Label` (`AC-N`), `Checked`, `Text`, `boxOff` (byte offset used for single-byte state mutation via `SetCriterion`).
-- **`Set`** — bulk-load container: `Reqs []*Requirement`, `Tasks []*Task`, `Errors []FileError`, `UnknownFields map[string][]string`. Built by `Load(reqDir, taskDir)`; collects per-file errors instead of failing the whole load.
-- **`FileError`** — `{Path, Err}` pair for one failed parse in a `Set`.
-- Frontmatter is YAML, bounded by `---` delimiters, fixed key order, rendered/parsed in `internal/spec/frontmatter.go` (`SplitFrontmatter`, `Frontmatter()`, `Render()`).
+- `Requirement` (PLM-###, "plumage"): `ID, Title, Status, Priority, Authored, Agent, FledgeVersion, Path, Body`. Status enum: `ReqEgg`, `ReqHatched`, `ReqFledged`.
+- `Task` (FTHR-###, "feather"): `ID, Title, Requirement (plumage ref), Status, Priority, DependsOn ([]string), Oversight, Authored, Agent, FledgeVersion, Path, Body`. Status enum: `TaskEgg`, `TaskPipping`, `TaskHatching`, `TaskFledged`. `Oversight` ∈ `{"merge", "during"}`, omitted = fully autonomous.
+- Priority constants: `P0, P1, P2, P3`.
+- `Criterion` (`internal/spec/criteria.go`): `{N, Label, Checked, Text, boxOff}` — `boxOff` is an internal byte offset enabling single-byte checkbox toggles without full-file rewrite.
+- `Set` (`internal/spec/load.go`): `{Reqs []Requirement, Tasks []Task, Errors []FileError, UnknownFields map[path][]string}` — the fully-loaded, error-tolerant view of all specs in a repo.
+- Frontmatter is canonical YAML with a fixed key order per doc kind, rendered via `goccy/go-yaml`; body is preserved byte-for-byte after the `---\n` fence.
 
-## Dependency & lock types
+## Lock / brood (`internal/lock/lock.go`)
 
-- **`Graph`** (`internal/graph/graph.go`) — wraps `tasks []*spec.Task` + `byID map[string]*spec.Task`; methods `Cycle()` (DFS cycle detection), `Waves()` (topological layers), `Ready()` (unstarted tasks with satisfied `DependsOn`).
-- **`Record`** (`internal/lock/lock.go`) — a brood claim: `Task`, `Owner`, `PID` (int), `Created` (RFC3339), `Branch`. JSON-encoded into `.fledge/broods/*.brood` files.
-- **`HeldError`** — wraps an existing `Record`; returned by `Acquire()` on lock contention.
+- `Record`: `{Task, Owner, PID, Created, Branch}` (JSON) — one `.fledge/broods/<FTHR-ID>.brood` file per active claim.
+- `HeldError`: wraps an existing `Record` for user-friendly "already held" messaging.
+- Acquired via atomic hard-link creation (race-safe); `Lock.List()` skips corrupt `.brood` files rather than failing (open question: resilience choice, not documented in code).
 
-## Nest/context doc types
+## Context documents (`internal/nest/`)
 
-- **`Doc`** (`internal/nest/nest.go`) — `Kind` (`"concern"`|`"scout"`), plus `Generated`/`Commit` (concern docs) or `Module`/`Authored`/`Agent` (scout reports), `FledgeVersion`, `Body`.
-- `ConcernDocs` (`internal/nest/docs.go`) — the closed, ordered set of 9 known concern docs: architecture, modules, conventions, data-model, dependencies, entry-points, testing, domain, index. `IsKnownDoc()`/`Title()` back this registry; scout reports (module-named) are an open set by contrast.
+- `Doc`: `{Kind, Module/Authored (scout) | Generated/Commit (concern), Agent, FledgeVersion, Body}`. `Kind` ∈ `{"concern", "scout"}` — each kind has a distinct frontmatter key order (concern: `generated, commit, agent, fledge_version`; scout: `module, authored, agent, fledge_version`).
+- Eight fixed concern-doc names known to `internal/nest/docs.go` (architecture, modules, conventions, data-model, dependencies, entry-points, testing, domain) plus `index.md`.
+- `RefreshDoc` updates frontmatter only, preserving body — what `fledge nest stamp <file>` calls.
 
-## Validation & scan types
+## Scan (`internal/scan/scan.go`)
 
-- **`Finding`** (`internal/check/check.go`) — `{File, Rule, Severity, Message}`; `Severity` is `"error"`|`"warning"`.
-- **`Module`** / **`Result`** (`internal/scan/scan.go`) — `Module{Name, Files []string, Count, Bytes int64}`; `Result{Commit, ShortCommit, Modules []Module}` — this is the schema `fledge scan --json` emits and the forager's authoritative work list.
-- **`Repo`** (`internal/repo/repo.go`) — `{Root string}`, with derived path accessors (`FledgeDir`, `LocksDir`, `ContextDir`, `EvidenceDir`, `RequirementsDir`, `TasksDir`, `ScanIgnorePath`).
+- `Module`: `{Name, Files []string, Count int, Bytes int}`.
+- `Result`: `{Commit, ShortCommit, Modules []Module}` — the shape emitted by `fledge scan --json`, and the authoritative work list a forager plans scout splits against.
 
-## CLI-layer report types (`internal/cli`)
+## Scaffold / bootstrap types (`internal/bootstrap/`)
 
-These are output-shaping structs, not persisted state: `reportCounts` (colony status counts), `reqCompletion` (per-plumage completion), `orphanTask`/`blockedTask`/`lockEntry` (colony report items), `adapterInfo` (agents command), `criterionJSON`, `unfledgedReport`, `readyTask`, `graphNode` (vee), `scaffoldJSONOut`/`scaffoldEntry` (preen drift), `initJSON`, `lockOut`.
+- `Manifest` (`registry.go`): `{Name, Detector ManifestDetector, TierPrimitives map[string]string, Files []ManifestFile, PipingFile string, dir}`. Loaded from `adapters/<harness>/manifest.yaml`.
+- `ManifestDetector`: `{Exists string}` — repo-relative marker path (e.g. `.claude/`) used to auto-detect an adapter.
+- `ManifestFile`: `{Src, Dst, Generate bool, PrimitiveMap bool, Overwrite bool, AppendIfMissing string, Symlink string}` — six write policies encoded as booleans/strings on one struct.
+- `Stamp` (`.fledge/scaffold.json`, `stamp.go`): `{FledgeVersion, Agents []string, Files map[string]StampEntry}`.
+- `StampEntry`: `{Policy string ("core"|"default"|"generate"|"primitive_map"|"overwrite"|"symlink"|"append"), Sha256, Target (symlinks), Lines []string (append entries)}`.
+- `DriftStatus` (`drift.go`): enum `StatusUpToDate | StatusStale | StatusModified | StatusMissing | StatusObsolete`.
+- `Drift`: `{Path, Status DriftStatus, Policy string}`.
+- Primitive/tier types (`primitives.go`): `PrimitiveOrder []string` (canonical 6), `TierPrimitives map[string][]string` (tier → required primitives), `primitiveTier map[string]string`, `primitiveDesc map[string]string`.
+- Template-rendering context (`registry.go`): `renderContext {Adapter, Tier, Rows []primitiveRow, Provided, NotProvided, PipingFile, CommandOrder}`; `primitiveRow {Name, Desc, Mechanism, Provided bool, Tier}` — feeds the generated `fledge-adapter.md` primitive-map table per harness.
 
-## Scaffold/bootstrap types (`internal/bootstrap`)
+## CLI JSON output shapes (`internal/cli/*.go`)
 
-- **`Manifest`** (`registry.go`) — `{Name, Detector{Exists}, TierPrimitives map[string]string, Files []ManifestFile, PipingFile, dir}` — one per harness adapter, the single source of truth for what gets scaffolded.
-- **`ManifestFile`** — `{Src, Dst, Generate, PrimitiveMap, Overwrite, AppendIfMissing, Symlink}` — six write-policy booleans, classified by `filePolicy()`.
-- **`Stamp`** / **`StampEntry`** (`stamp.go`) — `Stamp{FledgeVersion, Agents []string, Files map[string]StampEntry}`; `StampEntry{Policy, Sha256, Target, Lines}` (exactly one of Sha256/Target/Lines populated depending on policy). Persisted as `.fledge/scaffold.json`.
-- **`DriftStatus`** enum (`drift.go`) — `StatusUpToDate | StatusStale | StatusModified | StatusMissing | StatusObsolete`; **`Drift`** — `{Path, Status, Policy}`.
+- `initJSON {Created, Skipped, Updated, Agents, Removed}`.
+- `adapterInfo {Name, Tier, Detector, Scaffolded}` (`agents` command).
+- `criterionJSON {N, Label, Checked, Text}` (`criteria --json`).
+- `graphNode {ID, Title, Status, Requirement, DependsOn}` (`vee --json`).
+- `readyTask {ID, Title, Priority, Requirement, Oversight, Path}`.
+- `reportCounts, reqCompletion, orphanTask, blockedTask, lockEntry, report` (`colony --json`).
+- `unfledgedItem, unfledgedReport` (`unfledged --json`).
+- `updateJSON {Current, Latest, UpToDate, Notes}` (`update --json` dry-run).
+- `command {run, usage}` — internal dispatch-table entry, not user-facing JSON.
+
+## Validation findings (`internal/check/check.go`)
+
+- `Finding`: `{File, Rule, Severity, Message}` (JSON-marshalled). `Severity` ∈ `{"error", "warning"}`. Rules include parse, duplicate-id, schema, dangling-ref, criteria-incomplete, cycles, brood-consistency.
+
+## Dependency graph (`internal/graph/graph.go`)
+
+- `Graph`: wraps a task slice, exposes cycle detection (DFS), `Waves()` (topological layers — same-wave tasks can run in parallel), and `Ready()` (unstarted tasks whose deps are all fledged). Dangling `depends_on` references are tolerated by the graph (skipped for cycle/wave computation) but flagged separately by `check` — open question on whether this split is deliberate.
+
+## Repository (`internal/repo/repo.go`)
+
+- `Repo`: `{Root string}` — git worktree absolute path, discovered via `git rev-parse --show-toplevel`; accessor methods resolve `.fledge`, `broods`, `nest`, `molt`, `pluma/plumage`, `pluma/feathers`, `.fledgeignore`, `.fledge/scaffold.json`.
 
 ## Open Questions
 
-None observed — all data types above were directly read from source across scouted modules.
+- Is `Criterion.boxOff` (byte-offset cache) load-bearing for performance, or would on-demand computation suffice? (internal-domain scout, unresolved from code alone.)
+- Whether `graph`'s tolerance of dangling `depends_on` is deliberate defense-in-depth (since `check` catches it separately) or an oversight is unconfirmed.
