@@ -15,7 +15,7 @@ import (
 
 func init() {
 	register("nest", runNest,
-		"fledge nest new <doc> | scaffold | scout --module <m> | stamp <file> [flags]")
+		"fledge nest new <doc> | scaffold | scout --module <m> | stamp <file> | status [flags]")
 }
 
 func runNest(args []string) int {
@@ -32,8 +32,10 @@ func runNest(args []string) int {
 		return runNestScout(args[1:])
 	case "stamp":
 		return runNestStamp(args[1:])
+	case "status":
+		return runNestStatus(args[1:])
 	default:
-		return usageErr("fledge nest: unknown verb %q (available: new, scaffold, scout, stamp)", verb)
+		return usageErr("fledge nest: unknown verb %q (available: new, scaffold, scout, stamp, status)", verb)
 	}
 }
 
@@ -233,6 +235,52 @@ func runNestStamp(args []string) int {
 	}
 	fmt.Printf("stamped %s\n", relStr)
 	return ExitOK
+}
+
+// runNestStatus reports whether .fledge/nest/ holds a completed synthesis. It is
+// the deterministic done-check the forager gates its final message on and the
+// commissioner uses to distinguish a stall from a finished-but-unannounced
+// forager. Exit code: ExitOK when complete, ExitFail when incomplete.
+func runNestStatus(args []string) int {
+	fs := flag.NewFlagSet("nest status", flag.ContinueOnError)
+	jsonOut := fs.Bool("json", false, "machine-readable output")
+	if _, err := parseMixed(fs, args); err != nil {
+		return ExitUsage
+	}
+
+	r, err := repo.Find()
+	if err != nil {
+		return envErr("%v", err)
+	}
+	if err := r.RequireFledge(); err != nil {
+		return envErr("%v", err)
+	}
+
+	res := nest.Status(r.ContextDir(), r.Head())
+
+	if *jsonOut {
+		if code := emitJSON(res); code != ExitOK {
+			return code
+		}
+	} else if res.Complete {
+		fmt.Println("nest complete: all concern docs synthesized, index stamped to HEAD")
+	} else {
+		fmt.Println("nest incomplete:")
+		if len(res.MissingDocs) > 0 {
+			fmt.Printf("  missing: %s\n", strings.Join(res.MissingDocs, ", "))
+		}
+		if len(res.StubDocs) > 0 {
+			fmt.Printf("  not synthesized (still template stubs): %s\n", strings.Join(res.StubDocs, ", "))
+		}
+		if !res.IndexCommitMatches {
+			fmt.Printf("  index stale: index commit %q != HEAD %q\n", res.IndexCommit, res.Head)
+		}
+	}
+
+	if res.Complete {
+		return ExitOK
+	}
+	return ExitFail
 }
 
 func runNestNew(args []string) int {
