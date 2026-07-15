@@ -102,7 +102,7 @@
     },
     ".fledge/skills/fledge-orchestrate/worker-protocols.md": {
       "policy": "core",
-      "sha256": "88e70904f3ef26ba652704f78c2eb1835c68b14dc397951b0af1683b621bb287"
+      "sha256": "98d2bb2fdf71b1b47707f8b231c26f86843be88e742b089eafda3460211f9b03"
     },
     ".fledgeignore": {
       "policy": "default",
