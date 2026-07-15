@@ -66,8 +66,8 @@ Written test-first, run failing before the fix, passing after:
   pre-fix binary (no update entry) and passes after.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: `fledge` run with no command lists `update` among its commands (FC-1) — captured from the built binary.
-- [ ] AC-3: The generated `.claude/settings.local.json` produced by `fledge init` contains a `Bash(fledge update *)` allow-list entry, asserted by the updated `init.txtar` fixture (FC-2).
-- [ ] AC-4: `TestCommandOrderMatchesRegistrations` enforces bidirectional parity and fails if either the registered set or `commandOrder` gains/loses a command without the other (FC-3).
-- [ ] AC-5: `fledge preen` passes and `go test ./...` is green.
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: `fledge` run with no command lists `update` among its commands (FC-1) — captured from the built binary.
+- [x] AC-3: The generated `.claude/settings.local.json` produced by `fledge init` contains a `Bash(fledge update *)` allow-list entry, asserted by the updated `init.txtar` fixture (FC-2).
+- [x] AC-4: `TestCommandOrderMatchesRegistrations` enforces bidirectional parity and fails if either the registered set or `commandOrder` gains/loses a command without the other (FC-3).
+- [x] AC-5: `fledge preen` passes and `go test ./...` is green.
