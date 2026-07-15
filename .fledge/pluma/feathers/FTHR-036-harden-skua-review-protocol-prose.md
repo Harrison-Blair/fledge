@@ -40,9 +40,9 @@ New file `internal/bootstrap/worker_protocols_test.go`, package `bootstrap`, rea
 Implementation order: write all four tests first, run `go test ./internal/bootstrap -run TestSkua`, capture them **failing** against the unmodified file (the "absent" assertions in `TestSkuaConcessionHardened` will actually pass, but the "present" assertions in all four will fail — expected reason: new language doesn't exist yet), then rewrite the section per Approach until all four pass.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation (new-language assertions) and pass after.
-- [ ] AC-2: `### Reviewing a feather`'s criteria-audit item states the guilty-until-proven default (satisfies PLM-018 FC-3, FC-4) — `TestSkuaEvidenceGuiltyUntilProven` passes.
-- [ ] AC-3: `### Reviewing a feather` has a red-team checklist item positioned after "Diff vs. spec" and before "Scope and simplicity," running every cycle, findings-only (satisfies PLM-018 FC-5, FC-6) — `TestSkuaRedTeamPass` passes.
-- [ ] AC-4: `### Verdict`'s concession paragraph requires independently re-verified disproof to withdraw a finding (satisfies PLM-018 FC-1, FC-2) — `TestSkuaConcessionHardened` passes.
-- [ ] AC-5: The 3-rejection sentence and the cited `## Brooder` sentence are unchanged verbatim (satisfies PLM-018 FC-7, FC-8) — `TestSkuaUnchangedInvariants` passes.
-- [ ] AC-6: `go vet ./...` and `go test ./internal/bootstrap/...` pass with the new tests included.
+- [x] AC-1: The tests listed above were observed failing before implementation (new-language assertions) and pass after.
+- [x] AC-2: `### Reviewing a feather`'s criteria-audit item states the guilty-until-proven default (satisfies PLM-018 FC-3, FC-4) — `TestSkuaEvidenceGuiltyUntilProven` passes.
+- [x] AC-3: `### Reviewing a feather` has a red-team checklist item positioned after "Diff vs. spec" and before "Scope and simplicity," running every cycle, findings-only (satisfies PLM-018 FC-5, FC-6) — `TestSkuaRedTeamPass` passes.
+- [x] AC-4: `### Verdict`'s concession paragraph requires independently re-verified disproof to withdraw a finding (satisfies PLM-018 FC-1, FC-2) — `TestSkuaConcessionHardened` passes.
+- [x] AC-5: The 3-rejection sentence and the cited `## Brooder` sentence are unchanged verbatim (satisfies PLM-018 FC-7, FC-8) — `TestSkuaUnchangedInvariants` passes.
+- [x] AC-6: `go vet ./...` and `go test ./internal/bootstrap/...` pass with the new tests included.
