@@ -2,7 +2,7 @@
 id: FTHR-034
 title: Test broods stale-PID detection and brood abandon broods --json shapes
 plumage: PLM-017
-status: hatching
+status: fledged
 priority: P2
 depends_on: []
 authored: 2026-07-15T15:24:33Z
