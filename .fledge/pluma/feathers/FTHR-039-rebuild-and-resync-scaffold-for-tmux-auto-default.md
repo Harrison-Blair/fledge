@@ -42,7 +42,7 @@ This feather's "tests" are the `fledge preen -strict` drift check itself, used a
 - **Regression guard:** `go test ./...` full-suite output, captured under `## AC-2`, showing all packages pass including `cmd/fledge` (`TestScripts`).
 
 ## Acceptance Criteria
-- [ ] AC-1: `fledge preen -strict` was observed flagging both `.claude/team-loop.md` and `.fledge/skills/fledge-orchestrate/implementation.md` as stale immediately after rebuild (before refresh), and passing clean after `fledge init --refresh`.
-- [ ] AC-2: `go test ./...` and `go vet ./...` pass, including all `cmd/fledge/testdata/*.txtar` scripts; any fixture that needed updating for the new prose was updated (satisfies PLM-019 AC-6).
-- [ ] AC-3: `.claude/team-loop.md` is byte-identical to `internal/bootstrap/adapters/claude/team-loop.md`, `.fledge/skills/fledge-orchestrate/implementation.md` is byte-identical to `internal/bootstrap/core/skills/fledge-orchestrate/implementation.md`, and `.fledge/scaffold.json` reflects both new content hashes (satisfies PLM-019 AC-5).
-- [ ] AC-4: `git status` shows only the expected files changed (the two regenerated copies, the scaffold stamp, and any updated txtar fixture) — no unrelated drift.
+- [x] AC-1: `fledge preen -strict` was observed flagging both `.claude/team-loop.md` and `.fledge/skills/fledge-orchestrate/implementation.md` as stale immediately after rebuild (before refresh), and passing clean after `fledge init --refresh`.
+- [x] AC-2: `go test ./...` and `go vet ./...` pass, including all `cmd/fledge/testdata/*.txtar` scripts; any fixture that needed updating for the new prose was updated (satisfies PLM-019 AC-6).
+- [x] AC-3: `.claude/team-loop.md` is byte-identical to `internal/bootstrap/adapters/claude/team-loop.md`, `.fledge/skills/fledge-orchestrate/implementation.md` is byte-identical to `internal/bootstrap/core/skills/fledge-orchestrate/implementation.md`, and `.fledge/scaffold.json` reflects both new content hashes (satisfies PLM-019 AC-5).
+- [x] AC-4: `git status` shows only the expected files changed (the two regenerated copies, the scaffold stamp, and any updated txtar fixture) — no unrelated drift.
