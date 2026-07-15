@@ -197,6 +197,120 @@ func TestStampPreservesBodyAndDropsUnknownKeys(t *testing.T) {
 	}
 }
 
+// writeDoc renders a concern doc with the given body and commit into dir.
+func writeDoc(t *testing.T, dir, name, commit string, body []byte) {
+	t.Helper()
+	d := &nest.Doc{
+		Kind:          nest.Concern,
+		Generated:     "2026-01-01T00:00:00Z",
+		Commit:        commit,
+		Agent:         "fledge-forager",
+		FledgeVersion: "0.5.4",
+		Body:          body,
+	}
+	if err := os.WriteFile(filepath.Join(dir, name+".md"), d.Render(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// scaffold writes every concern doc as its template stub, stamped to commit.
+func scaffold(t *testing.T, dir, commit string) {
+	t.Helper()
+	for _, name := range nest.ConcernDocs {
+		if name == "index" {
+			writeDoc(t, dir, name, commit, nest.IndexBody())
+		} else {
+			writeDoc(t, dir, name, commit, nest.ConcernBody(nest.Title(name)))
+		}
+	}
+}
+
+func TestIsStub(t *testing.T) {
+	if !nest.IsStub("architecture", nest.ConcernBody(nest.Title("architecture"))) {
+		t.Error("freshly rendered concern body must be detected as a stub")
+	}
+	if !nest.IsStub("index", nest.IndexBody()) {
+		t.Error("freshly rendered index body must be detected as a stub")
+	}
+	if nest.IsStub("architecture", []byte("\n# Architecture\n\nReal synthesized content.\n")) {
+		t.Error("filled-in body must not be detected as a stub")
+	}
+	// A concern body under the wrong doc name is not that doc's stub.
+	if nest.IsStub("modules", nest.ConcernBody(nest.Title("architecture"))) {
+		t.Error("architecture stub must not count as the modules stub")
+	}
+}
+
+func TestStatus(t *testing.T) {
+	const head = "abc123def456"
+
+	// Fresh scaffold: every doc is a stub, index stamped to HEAD → incomplete.
+	dir := t.TempDir()
+	scaffold(t, dir, head)
+	res := nest.Status(dir, head)
+	if res.Complete {
+		t.Errorf("freshly scaffolded nest must be incomplete: %+v", res)
+	}
+	if len(res.StubDocs) != len(nest.ConcernDocs) {
+		t.Errorf("all %d docs should be stubs, got %v", len(nest.ConcernDocs), res.StubDocs)
+	}
+	if !res.IndexCommitMatches {
+		t.Errorf("scaffolded index is stamped to HEAD, want IndexCommitMatches=true: %+v", res)
+	}
+
+	// Fill every doc with real content, index stamped to HEAD → complete.
+	dir = t.TempDir()
+	for _, name := range nest.ConcernDocs {
+		writeDoc(t, dir, name, head, []byte("\n# "+nest.Title(name)+"\n\nReal synthesized content.\n"))
+	}
+	res = nest.Status(dir, head)
+	if !res.Complete {
+		t.Errorf("fully synthesized nest must be complete: %+v", res)
+	}
+	if len(res.StubDocs) != 0 || len(res.MissingDocs) != 0 {
+		t.Errorf("no stubs/missing expected: %+v", res)
+	}
+
+	// Filled docs but index stamped to an old commit → incomplete via freshness.
+	dir = t.TempDir()
+	for _, name := range nest.ConcernDocs {
+		commit := head
+		if name == "index" {
+			commit = "staleSHA"
+		}
+		writeDoc(t, dir, name, commit, []byte("\n# "+nest.Title(name)+"\n\nReal content.\n"))
+	}
+	res = nest.Status(dir, head)
+	if res.Complete {
+		t.Errorf("stale index must make the nest incomplete: %+v", res)
+	}
+	if res.IndexCommitMatches {
+		t.Errorf("stale index commit must not match HEAD: %+v", res)
+	}
+
+	// Missing concern doc → listed in MissingDocs, incomplete.
+	dir = t.TempDir()
+	for _, name := range nest.ConcernDocs {
+		if name == "domain" {
+			continue // omit one doc
+		}
+		writeDoc(t, dir, name, head, []byte("\n# "+nest.Title(name)+"\n\nReal content.\n"))
+	}
+	res = nest.Status(dir, head)
+	if res.Complete {
+		t.Errorf("missing doc must make the nest incomplete: %+v", res)
+	}
+	found := false
+	for _, m := range res.MissingDocs {
+		if m == "domain" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("domain should be reported missing: %+v", res)
+	}
+}
+
 func TestYAMLScalarQuoting(t *testing.T) {
 	tests := []struct {
 		input      string

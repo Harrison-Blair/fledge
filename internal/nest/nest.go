@@ -100,6 +100,73 @@ func ScoutBody(module string) []byte {
 	return []byte(s)
 }
 
+// StatusResult is the verdict of Status: whether .fledge/nest/ holds a
+// completed context synthesis rather than a half-written or stale one.
+type StatusResult struct {
+	Complete           bool     `json:"complete"`
+	IndexCommitMatches bool     `json:"index_commit_matches"`
+	Head               string   `json:"head"`
+	IndexCommit        string   `json:"index_commit"`
+	MissingDocs        []string `json:"missing_docs"`
+	StubDocs           []string `json:"stub_docs"`
+}
+
+// IsStub reports whether body is the untouched scaffold stub for the named
+// concern doc (name is a member of ConcernDocs, including "index"). A stub is
+// the exact rendered template body that `nest scaffold` writes; the forager
+// replaces it with synthesized content, so byte-inequality means "filled in".
+func IsStub(name string, body []byte) bool {
+	if name == "index" {
+		return bytes.Equal(body, IndexBody())
+	}
+	return bytes.Equal(body, ConcernBody(Title(name)))
+}
+
+// Status inspects contextDir and reports whether it holds a completed synthesis:
+// every concern doc (and index) present and non-stub, and index stamped to head.
+// MissingDocs and StubDocs are returned in ConcernDocs order. It reads only the
+// nest; it never writes.
+func Status(contextDir, head string) StatusResult {
+	res := StatusResult{Head: head, MissingDocs: []string{}, StubDocs: []string{}}
+	for _, name := range ConcernDocs {
+		path := filepath.Join(contextDir, name+".md")
+		b, err := os.ReadFile(path)
+		if err != nil {
+			res.MissingDocs = append(res.MissingDocs, name)
+			continue
+		}
+		_, body, err := spec.SplitFrontmatter(b)
+		if err != nil {
+			// Malformed file — not a valid synthesized doc; count it as a stub.
+			res.StubDocs = append(res.StubDocs, name)
+			continue
+		}
+		if IsStub(name, body) {
+			res.StubDocs = append(res.StubDocs, name)
+		}
+		if name == "index" {
+			res.IndexCommit = frontmatterField(b, "commit")
+		}
+	}
+	res.IndexCommitMatches = res.IndexCommit != "" && res.IndexCommit == head
+	res.Complete = len(res.MissingDocs) == 0 && len(res.StubDocs) == 0 && res.IndexCommitMatches
+	return res
+}
+
+// frontmatterField parses the frontmatter of b and returns the named string
+// field, or "" if the file is malformed or the key is absent.
+func frontmatterField(b []byte, key string) string {
+	fm, _, err := spec.SplitFrontmatter(b)
+	if err != nil {
+		return ""
+	}
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal(fm, &parsed); err != nil {
+		return ""
+	}
+	return strFromMap(parsed, key)
+}
+
 // ClearNest removes all .md files directly under contextDir and the entire
 // raw/ subdirectory, then recreates raw/. contextDir itself is not removed.
 func ClearNest(contextDir string) error {
