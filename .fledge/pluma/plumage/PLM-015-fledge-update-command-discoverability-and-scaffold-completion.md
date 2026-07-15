@@ -24,14 +24,15 @@ effectively invisible to the audience fledge is built for:
 
 The omission shipped green because nothing tests that the ordered command list stays in
 sync with the set of registered commands — a manual invariant enforced only by a code
-comment. Separately, this repo dogfoods fledge, and its own scaffold version stamp was
-never refreshed across the `0.4.0 → 0.5.4` bumps, so every `fledge` invocation here
-prints a stamp-mismatch warning. Regenerating the scaffold to pick up the new allow-list
-entry also clears that stale stamp.
+comment. Because this repo dogfoods fledge, its own generated allow-list
+(`.claude/settings.local.json`) is likewise missing the `fledge update` entry and must be
+regenerated once the command is added. (The scaffold version *stamp* here is already
+current — this is only about the missing allow-list entry.)
 
 This plumage makes the `update` command fully discoverable across every surface, adds an
-automated guard so this class of drift cannot recur silently, and codifies the scaffold
-refresh into the release process so the dogfood stamp stays current.
+automated guard so this class of drift cannot recur silently, and — as a preventive
+measure — documents the scaffold-refresh step in the release process so the dogfood
+scaffold is kept in sync on future version bumps.
 
 ## User Stories
 - As an agent operating a fledge repo, I want `fledge update` to be pre-approved in my
@@ -42,8 +43,9 @@ refresh into the release process so the dogfood stamp stays current.
 - As a fledge maintainer, I want a test that fails the moment a registered command is
   missing from the ordered command list (or vice-versa), so that a shipped command can
   never again be silently absent from help and the generated allow-list.
-- As a maintainer cutting a release, I want the scaffold-stamp refresh to be part of the
-  documented release steps, so that the dogfood repo never drifts to a stale stamp again.
+- As a maintainer cutting a release, I want the scaffold-refresh step to be part of the
+  documented release steps, so that the dogfood scaffold cannot drift out of sync on a
+  future version bump.
 
 ## Functional Criteria
 1. FC-1: `fledge update` appears in the top-level usage/command listing emitted when
@@ -53,13 +55,13 @@ refresh into the release process so the dogfood stamp stays current.
 3. FC-3: A test fails whenever the registered command set and the ordered command list
    diverge in either direction — a registered command absent from the ordered list, or
    an ordered-list entry that resolves to no registered command.
-4. FC-4: Running any `fledge` command in this repository emits no scaffold
-   stamp-mismatch warning (the repo's own scaffold stamp matches the current binary
-   version).
+4. FC-4: This repository's own generated allow-list (`.claude/settings.local.json`) is
+   regenerated to include the `fledge update` pre-approval entry once the command is added
+   to the ordered list.
 5. FC-5: The README documents `fledge update` in its command reference and in the
    upgrading guidance.
 6. FC-6: The release process documentation includes the scaffold-refresh-and-commit step
-   so the dogfood stamp is kept current on every version bump.
+   so the dogfood scaffold is kept in sync on every version bump (preventive).
 
 ## Acceptance Criteria
 - [ ] AC-1: `fledge` with no command lists `update` among its commands, and the
@@ -67,8 +69,9 @@ refresh into the release process so the dogfood stamp stays current.
 - [ ] AC-2: A test asserts bidirectional parity between the registered command set and
   the ordered command list, and fails if either side gains or loses a command without
   the other; verified failing before the fix (with `update` absent) and passing after.
-- [ ] AC-3: No `fledge` command run in this repository prints a scaffold stamp-mismatch
-  warning.
+- [ ] AC-3: This repository's own `.claude/settings.local.json` is regenerated to contain a
+  `Bash(fledge update *)` entry (the scaffold stamp is already current, so the operative
+  change is the added allow-list entry).
 - [ ] AC-4: The README's command reference and upgrading section both cover
   `fledge update`.
 - [ ] AC-5: The release process documentation states the scaffold-refresh-and-commit

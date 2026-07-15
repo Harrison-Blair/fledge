@@ -14,9 +14,10 @@ fledge_version: 0.5.4
 
 ## Description
 Make `fledge update` discoverable in the human-facing docs and give the release process a
-single documented home that includes the scaffold-refresh step, so the dogfood stamp can't
-silently go stale on a version bump again. Independent of the source change — touches only
-docs — so it can be implemented in parallel with FTHR-028.
+single documented home that includes the scaffold-refresh step, so the dogfood scaffold
+stays in sync on future version bumps. This is preventive — the scaffold is currently in
+sync; the step codifies the practice so it can't drift. Independent of the source change —
+touches only docs — so it can be implemented in parallel with FTHR-028.
 
 Satisfies PLM-015 FC-5 (README) and FC-6 (release-process doc).
 
