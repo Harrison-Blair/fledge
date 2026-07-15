@@ -63,7 +63,7 @@ Written test-first, failing before the fix, passing after:
   the barrier a handful of times so the failure is deterministic.
 
 ## Acceptance Criteria
-- [ ] AC-1: The test above was observed failing before implementation (duplicate ID under concurrency) and passes after.
-- [ ] AC-2: Concurrent allocate-then-create is serialized by an exclusive flock so no two specs share an ID (FC-1); plumage and feather allocation use separate locks and do not block each other.
-- [ ] AC-3: The `new.go:123` comment accurately describes the flock guarantee; `fledge preen` passes with the `.alloc.lock` dotfile present.
-- [ ] AC-4: `fledge preen` passes and `go test ./...` is green.
+- [x] AC-1: The test above was observed failing before implementation (duplicate ID under concurrency) and passes after.
+- [x] AC-2: Concurrent allocate-then-create is serialized by an exclusive flock so no two specs share an ID (FC-1); plumage and feather allocation use separate locks and do not block each other.
+- [x] AC-3: The `new.go:123` comment accurately describes the flock guarantee; `fledge preen` passes with the `.alloc.lock` dotfile present.
+- [x] AC-4: `fledge preen` passes and `go test ./...` is green.
