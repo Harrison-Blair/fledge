@@ -2,7 +2,7 @@
 id: FTHR-037
 title: Rebuild and resync scaffold for hardened skua prose
 plumage: PLM-018
-status: egg
+status: hatching
 priority: P2
 depends_on: [FTHR-036]
 authored: 2026-07-15T18:48:30Z
