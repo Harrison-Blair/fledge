@@ -51,7 +51,7 @@ This feather is test authoring; the assertions are shown to bite before being re
   confirm they pass. Record the failing output in the evidence file.
 
 ## Acceptance Criteria
-- [ ] AC-1: `status.txtar` asserts `status --json` emits `{id, from, to}` with the correct values for a driven transition (FC-2, status).
-- [ ] AC-2: `set.txtar` asserts `set --json` emits `{id, field, value}` with the correct values for a driven mutation (FC-2, set).
-- [ ] AC-3: A recorded perturbation (renamed JSON key in `status.go`/`set.go`) makes the new assertions fail; reverting restores green (satisfies PLM-017 AC-3 for these commands).
-- [ ] AC-4: `fledge preen` passes and `go test ./cmd/fledge -run TestScripts/status`, `.../set`, and `go test ./...` are green.
+- [x] AC-1: `status.txtar` asserts `status --json` emits `{id, from, to}` with the correct values for a driven transition (FC-2, status).
+- [x] AC-2: `set.txtar` asserts `set --json` emits `{id, field, value}` with the correct values for a driven mutation (FC-2, set).
+- [x] AC-3: A recorded perturbation (renamed JSON key in `status.go`/`set.go`) makes the new assertions fail; reverting restores green (satisfies PLM-017 AC-3 for these commands).
+- [x] AC-4: `fledge preen` passes and `go test ./cmd/fledge -run TestScripts/status`, `.../set`, and `go test ./...` are green.
