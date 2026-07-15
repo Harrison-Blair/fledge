@@ -37,9 +37,9 @@ New file `internal/bootstrap/tmux_autodefault_test.go`, package `bootstrap`, rea
 Implementation order: write all three tests first, run `go test ./internal/bootstrap -run "TestTmux|TestImplementationPrecondition|TestPermissionModeUnchanged"`, capture them **failing** against the unmodified files (the "absent" assertions pass, but the "present"-new-wording assertions fail — expected reason: new language doesn't exist yet), then rewrite the two sections per Approach until all three pass.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation (new-language assertions) and pass after.
-- [ ] AC-2: `team-loop.md` § Teammate display (tmux) states the auto-resolve behavior with no confirm-gate language remaining for this precondition (satisfies PLM-019 FC-1, FC-2) — `TestTmuxPreconditionAutoResolves` passes.
-- [ ] AC-3: `team-loop.md` documents the non-blocking notice for both paths (satisfies PLM-019 FC-3) — covered by `TestTmuxPreconditionAutoResolves`.
-- [ ] AC-4: `implementation.md` §1's precondition bullet is scoped so "never silently proceed" no longer applies to the tmux precondition (satisfies PLM-019 FC-4) — `TestImplementationPreconditionCarveOut` passes.
-- [ ] AC-5: The permission-mode paragraph and confirm-gate wording are unchanged verbatim (satisfies PLM-019 FC-5), and no other section of either file changed (satisfies PLM-019 FC-6, verified via `git diff` scoped to the two edited paragraphs only) — `TestPermissionModeUnchanged` passes.
-- [ ] AC-6: `go vet ./...` and `go test ./internal/bootstrap/...` pass with the new tests included.
+- [x] AC-1: The tests listed above were observed failing before implementation (new-language assertions) and pass after.
+- [x] AC-2: `team-loop.md` § Teammate display (tmux) states the auto-resolve behavior with no confirm-gate language remaining for this precondition (satisfies PLM-019 FC-1, FC-2) — `TestTmuxPreconditionAutoResolves` passes.
+- [x] AC-3: `team-loop.md` documents the non-blocking notice for both paths (satisfies PLM-019 FC-3) — covered by `TestTmuxPreconditionAutoResolves`.
+- [x] AC-4: `implementation.md` §1's precondition bullet is scoped so "never silently proceed" no longer applies to the tmux precondition (satisfies PLM-019 FC-4) — `TestImplementationPreconditionCarveOut` passes.
+- [x] AC-5: The permission-mode paragraph and confirm-gate wording are unchanged verbatim (satisfies PLM-019 FC-5), and no other section of either file changed (satisfies PLM-019 FC-6, verified via `git diff` scoped to the two edited paragraphs only) — `TestPermissionModeUnchanged` passes.
+- [x] AC-6: `go vet ./...` and `go test ./internal/bootstrap/...` pass with the new tests included.
