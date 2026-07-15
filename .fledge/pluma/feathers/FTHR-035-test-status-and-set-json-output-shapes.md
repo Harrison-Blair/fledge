@@ -2,7 +2,7 @@
 id: FTHR-035
 title: Test status and set --json output shapes
 plumage: PLM-017
-status: pipping
+status: hatching
 priority: P2
 depends_on: []
 authored: 2026-07-15T15:24:33Z

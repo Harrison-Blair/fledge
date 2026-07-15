@@ -2,7 +2,7 @@
 id: FTHR-033
 title: Add HTTP timeouts to fledge update network fetches
 plumage: PLM-016
-status: pipping
+status: hatching
 priority: P2
 depends_on: []
 authored: 2026-07-15T15:13:39Z
