@@ -1,7 +1,7 @@
 ---
 id: PLM-020
 title: Harden forager wait-contract as request-response state machine
-status: hatched
+status: fledged
 priority: P1
 authored: 2026-07-15T21:58:11Z
 agent: fledge-orchestrate/planning
@@ -32,10 +32,10 @@ This plumage hardens the contract so the commissioner has no pipeline-stage mode
 5. FC-5: A committed automated test (`cmd/fledge/testdata/forager_contract.txtar`) asserts, against the generated scaffold output, that the pipeline-stage/stall-failure-mode leakage strings are absent and the two-input/never-an-input framing is present in both files.
 
 ## Acceptance Criteria
-- [ ] AC-1: `worker-protocols.md` §Incubator and `planning.md` §2 are rewritten in place (no new heading) to state the two-input contract (FC-1) and the "on-disk state is never an input" statement (FC-2), verified by reading the source files.
-- [ ] AC-2: The rewritten files contain no forager-internal pipeline-stage or failure-mode language (FC-3), verified by `forager_contract.txtar`'s forbidden-string assertions passing.
-- [ ] AC-3: `forager_contract.txtar` exists, was confirmed to fail against the pre-edit prose for the expected reason, and passes against the post-edit prose (FC-5).
-- [ ] AC-4: This repo's own scaffold is regenerated (`fledge init --refresh`) and any other txtar fixtures pinning the changed paragraphs are updated so `go test ./cmd/fledge -run TestScripts` and `go vet ./...` pass.
+- [x] AC-1: `worker-protocols.md` §Incubator and `planning.md` §2 are rewritten in place (no new heading) to state the two-input contract (FC-1) and the "on-disk state is never an input" statement (FC-2), verified by reading the source files.
+- [x] AC-2: The rewritten files contain no forager-internal pipeline-stage or failure-mode language (FC-3), verified by `forager_contract.txtar`'s forbidden-string assertions passing.
+- [x] AC-3: `forager_contract.txtar` exists, was confirmed to fail against the pre-edit prose for the expected reason, and passes against the post-edit prose (FC-5).
+- [x] AC-4: This repo's own scaffold is regenerated (`fledge init --refresh`) and any other txtar fixtures pinning the changed paragraphs are updated so `go test ./cmd/fledge -run TestScripts` and `go vet ./...` pass.
 
 ## Out of Scope
 - The forager's own pipeline description in `foraging.md` § Forager and its Claude agent definition (`internal/bootstrap/adapters/claude/agents/fledge-forager.md`) — these are forager-facing, correctly retain internal detail, and are not edited.
