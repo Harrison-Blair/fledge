@@ -2,7 +2,7 @@
 id: FTHR-029
 title: Document fledge update in README and codify scaffold refresh in release process
 plumage: PLM-015
-status: hatching
+status: fledged
 priority: P2
 depends_on: []
 authored: 2026-07-15T14:58:06Z
