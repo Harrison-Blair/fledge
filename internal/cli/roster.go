@@ -11,7 +11,7 @@ import (
 
 func init() {
 	register("roster", runRoster,
-		"fledge roster [--json] | roster assign --feather FTHR-### [--pair] [--json] | roster release <name> [--json]")
+		"fledge roster [--json] | roster assign (--feather FTHR-### [--pair] | --for <purpose>) [--json] | roster release <name> [--json]")
 }
 
 // runRoster dispatches on the first positional argument: assign, release, or —
@@ -33,14 +33,25 @@ func runRoster(args []string) int {
 
 func runRosterAssign(args []string) int {
 	fs := flag.NewFlagSet("roster assign", flag.ContinueOnError)
-	feather := fs.String("feather", "", "feather ID the allocation is for (required)")
+	feather := fs.String("feather", "", "feather ID the allocation is for")
+	forPurpose := fs.String("for", "", "purpose of a solo planning-phase allocation (e.g. planning, foraging)")
 	pair := fs.Bool("pair", false, "allocate a brooder+skua pair sharing one species")
 	jsonOut := fs.Bool("json", false, "machine-readable output")
 	if _, err := parseMixed(fs, args); err != nil {
 		return ExitUsage
 	}
-	if *feather == "" {
-		return usageErr("fledge roster assign: --feather is required")
+	if *feather == "" && *forPurpose == "" {
+		return usageErr("fledge roster assign: one of --feather or --for is required")
+	}
+	if *feather != "" && *forPurpose != "" {
+		return usageErr("fledge roster assign: --feather and --for are mutually exclusive")
+	}
+	if *pair && *feather == "" {
+		return usageErr("fledge roster assign: --pair requires --feather")
+	}
+	purpose := *feather
+	if purpose == "" {
+		purpose = *forPurpose
 	}
 
 	r, err := repo.Find()
@@ -51,7 +62,7 @@ func runRosterAssign(args []string) int {
 		return envErr("%v", err)
 	}
 
-	tokens, err := roster.Assign(r.RosterDir(), *feather, *pair)
+	tokens, err := roster.Assign(r.RosterDir(), purpose, *pair)
 	if err != nil {
 		return fail("%v", err)
 	}
@@ -133,10 +144,10 @@ func runRosterList(args []string) int {
 	return ExitOK
 }
 
-// rolePrefixes are the fixed <role>- prefixes composed onto a shared species for
-// a pair. speciesToken strips one so `roster release fledge-brooder-adelie`
-// reaches internal/roster's species-token space.
-var rolePrefixes = []string{"fledge-brooder-", "fledge-skua-"}
+// rolePrefixes are the fixed <role>- prefixes composed onto a species token.
+// speciesToken strips one so `roster release fledge-brooder-adelie` (or a solo
+// worker's full name) reaches internal/roster's species-token space.
+var rolePrefixes = []string{"fledge-brooder-", "fledge-skua-", "fledge-forager-", "fledge-incubator-"}
 
 // composeNames builds the caller-facing name(s) from the allocated species
 // token(s). A pair is always brooder+skua sharing the one species; a solo

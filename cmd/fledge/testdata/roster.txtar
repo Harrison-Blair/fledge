@@ -74,6 +74,39 @@ stdout 'adelie'
 ! exec fledge roster release nosuch
 stderr 'nosuch'
 
+# --- solo planning-phase allocation via --for (no feather exists yet) ---
+
+# reset state
+rm .fledge/roster/roster.json
+
+# --for reserves a species and records the purpose in the feather column
+exec fledge roster assign --for foraging --json
+stdout 'adelie'
+exec fledge roster --json
+stdout 'foraging'
+
+# neither --feather nor --for → usage error (exit 2)
+! exec fledge roster assign
+stderr 'one of --feather or --for is required'
+
+# both --feather and --for → usage error (exit 2)
+! exec fledge roster assign --feather FTHR-001 --for planning
+stderr 'mutually exclusive'
+
+# --pair is feather-bound; --for is solo-only → usage error (exit 2)
+! exec fledge roster assign --for planning --pair
+stderr '--pair requires --feather'
+
+# releasing by full worker name strips the forager/incubator role prefix
+exec fledge roster release fledge-forager-adelie
+exec fledge roster --json
+! stdout 'adelie'
+exec fledge roster assign --for planning --json
+stdout 'adelie'
+exec fledge roster release fledge-incubator-adelie
+exec fledge roster --json
+! stdout 'adelie'
+
 # unknown subcommand → usage error (exit 2)
 ! exec fledge roster bogus
 stderr 'bogus'

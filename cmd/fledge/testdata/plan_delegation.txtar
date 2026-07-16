@@ -15,4 +15,7 @@ grep 'expected intermediate after scaffolding' .fledge/skills/fledge-orchestrate
 
 # force-terminate backstop (FTHR-041 AC-4): planning.md's incubator-release
 # (§0) and forager-release (§2) steps both reference it
-grep -count=2 'force-terminating it if it does not exit promptly' .fledge/skills/fledge-orchestrate/planning.md
+grep -count=1 'force-terminating it if it does not exit promptly' .fledge/skills/fledge-orchestrate/planning.md
+# the forager backstop names the party holding the kill primitive (the
+# incubator holds none): the orchestrator force-terminates when delegated
+grep 'kill primitive .the orchestrator, when planning is delegated. force-terminates it' .fledge/skills/fledge-orchestrate/planning.md

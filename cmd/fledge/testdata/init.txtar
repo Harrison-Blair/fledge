@@ -97,7 +97,8 @@ grep -count=2 'fledge colony --json' .fledge/skills/fledge-orchestrate/implement
 # instead of orchestrator-context bookkeeping, referencing internal/roster's
 # species list by package name rather than an unenumerated count (PLM-026 FC-5)
 grep 'fledge roster assign --feather FTHR-### --pair' .fledge/skills/fledge-orchestrate/implementation.md
-grep 'without `--pair`' .fledge/skills/fledge-orchestrate/implementation.md
+grep 'fledge roster assign --for planning' .fledge/skills/fledge-orchestrate/implementation.md
+grep 'fledge roster assign --for foraging' .fledge/skills/fledge-orchestrate/implementation.md
 grep 'internal/roster' .fledge/skills/fledge-orchestrate/implementation.md
 grep 'fledge roster release <name>' .fledge/skills/fledge-orchestrate/implementation.md
 grep 'to read the current name' .fledge/skills/fledge-orchestrate/implementation.md
