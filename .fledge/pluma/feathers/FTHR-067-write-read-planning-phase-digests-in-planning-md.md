@@ -2,7 +2,7 @@
 id: FTHR-067
 title: Write/read planning-phase digests in planning.md
 plumage: PLM-029
-status: egg
+status: fledged
 priority: P2
 depends_on: [FTHR-065]
 authored: 2026-07-16T16:38:10Z
