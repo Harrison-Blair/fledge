@@ -2,7 +2,7 @@
 id: FTHR-065
 title: Reference scratchpad batching in planning.md steps 3 and 4
 plumage: PLM-028
-status: egg
+status: fledged
 priority: P2
 depends_on: [FTHR-058]
 authored: 2026-07-16T16:25:35Z
