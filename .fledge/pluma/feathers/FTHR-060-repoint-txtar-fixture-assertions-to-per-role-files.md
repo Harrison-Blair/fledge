@@ -31,7 +31,7 @@ The tests ARE the txtar scripts themselves (testscript acceptance fixtures, run 
 - Edit the two txtar files per Approach, then confirm both scripts PASS.
 
 ## Acceptance Criteria
-- [ ] AC-1: `go test ./cmd/fledge -run TestScripts/forager_contract` and `TestScripts/init_agents` were observed failing (against post-FTHR-057, pre-this-feather state) and pass after this feather's edits.
-- [ ] AC-2: `forager_contract.txtar`'s forbidden/required-phrase blocks (formerly lines 16-20, 26-27) target `incubator.md` instead of `worker-protocols.md`; the `planning.md`/`foraging.md` blocks are unchanged (satisfies PLM-027 FC-6).
-- [ ] AC-3: `init_agents.txtar`'s force-terminate lifecycle assertion checks all three of `incubator.md`, `brooder.md`, `skua.md` (one occurrence each) instead of a 3x-count on `worker-protocols.md` (satisfies PLM-027 FC-6).
-- [ ] AC-4: `go test ./cmd/fledge -run TestScripts` passes in full (no other fixture regresses).
+- [x] AC-1: `go test ./cmd/fledge -run TestScripts/forager_contract` and `TestScripts/init_agents` were observed failing (against post-FTHR-057, pre-this-feather state) and pass after this feather's edits.
+- [x] AC-2: `forager_contract.txtar`'s forbidden/required-phrase blocks (formerly lines 16-20, 26-27) target `incubator.md` instead of `worker-protocols.md`; the `planning.md`/`foraging.md` blocks are unchanged (satisfies PLM-027 FC-6).
+- [x] AC-3: `init_agents.txtar`'s force-terminate lifecycle assertion checks all three of `incubator.md`, `brooder.md`, `skua.md` (one occurrence each) instead of a 3x-count on `worker-protocols.md` (satisfies PLM-027 FC-6).
+- [x] AC-4: `go test ./cmd/fledge -run TestScripts` passes in full (no other fixture regresses).
