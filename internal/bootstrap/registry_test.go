@@ -423,6 +423,33 @@ func TestClaudeIncubatorWired(t *testing.T) {
 	}
 }
 
+// TestClaudeAgentDefsRepointToRoleFiles: each Claude adapter worker-role agent
+// definition cites its own per-role protocol file (incubator.md / brooder.md /
+// skua.md) rather than a section of the old worker-protocols.md.
+func TestClaudeAgentDefsRepointToRoleFiles(t *testing.T) {
+	cases := []struct {
+		file string
+		want string
+	}{
+		{"adapters/claude/agents/fledge-incubator.md", ".fledge/skills/fledge-orchestrate/incubator.md"},
+		{"adapters/claude/agents/fledge-brooder.md", ".fledge/skills/fledge-orchestrate/brooder.md"},
+		{"adapters/claude/agents/fledge-skua.md", ".fledge/skills/fledge-orchestrate/skua.md"},
+	}
+	for _, c := range cases {
+		b, err := FS.ReadFile(c.file)
+		if err != nil {
+			t.Fatalf("%s: %v", c.file, err)
+		}
+		s := string(b)
+		if !strings.Contains(s, c.want) {
+			t.Errorf("%s: missing reference to %s", c.file, c.want)
+		}
+		if strings.Contains(s, "worker-protocols.md") {
+			t.Errorf("%s: still references worker-protocols.md", c.file)
+		}
+	}
+}
+
 // TestClaudeAllowListGenerated: the generated Claude settings.local.json embeds
 // a Bash(fledge …) allow entry per CLI command fed via commandOrder (Q23).
 func TestClaudeAllowListGenerated(t *testing.T) {
