@@ -36,8 +36,8 @@ Note: this feather touches only `internal/bootstrap/core/...` (the embedded sour
 - Implementation order: write these four tests against the *unchanged* repo first — they fail (missing files / old structure) for the expected reason — then perform the split and confirm they pass.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: `incubator.md`, `brooder.md`, `skua.md` exist under `internal/bootstrap/core/skills/fledge-orchestrate/`, and a diff of each against the corresponding pre-split section of `worker-protocols.md` shows no content changes beyond the heading-level demotion (satisfies PLM-027 AC-1, FC-2).
-- [ ] AC-3: `worker-protocols.md` contains only the intro paragraph and links to the three new files — no `## Incubator`/`## Brooder`/`## Skua` headings remain (satisfies PLM-027 AC-2, FC-3).
-- [ ] AC-4: `internal/bootstrap/worker_protocols_test.go` no longer exists; `incubator_test.go`/`brooder_test.go`/`skua_test.go` exist and pass (satisfies PLM-027 AC-4, FC-5).
-- [ ] AC-5: `go test ./internal/bootstrap/...` passes.
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: `incubator.md`, `brooder.md`, `skua.md` exist under `internal/bootstrap/core/skills/fledge-orchestrate/`, and a diff of each against the corresponding pre-split section of `worker-protocols.md` shows no content changes beyond the heading-level demotion (satisfies PLM-027 AC-1, FC-2).
+- [x] AC-3: `worker-protocols.md` contains only the intro paragraph and links to the three new files — no `## Incubator`/`## Brooder`/`## Skua` headings remain (satisfies PLM-027 AC-2, FC-3).
+- [x] AC-4: `internal/bootstrap/worker_protocols_test.go` no longer exists; `incubator_test.go`/`brooder_test.go`/`skua_test.go` exist and pass (satisfies PLM-027 AC-4, FC-5).
+- [x] AC-5: `go test ./internal/bootstrap/...` passes.
