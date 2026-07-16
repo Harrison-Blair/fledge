@@ -35,6 +35,6 @@ Do not touch any other line in these three files (spawn-prompt field lists, comm
 - Implementation order: write the test against the unchanged repo (fails — old phrasing still present), then make the edits, confirm it passes.
 
 ## Acceptance Criteria
-- [ ] AC-1: The test listed above was observed failing before implementation and passes after.
-- [ ] AC-2: `fledge-incubator.md`, `fledge-brooder.md`, `fledge-skua.md` each reference their own new per-role file instead of a `worker-protocols.md` section (satisfies PLM-027 FC-4, AC-3 — Claude-adapter half).
-- [ ] AC-3: `go test ./internal/bootstrap/...` passes.
+- [x] AC-1: The test listed above was observed failing before implementation and passes after.
+- [x] AC-2: `fledge-incubator.md`, `fledge-brooder.md`, `fledge-skua.md` each reference their own new per-role file instead of a `worker-protocols.md` section (satisfies PLM-027 FC-4, AC-3 — Claude-adapter half).
+- [x] AC-3: `go test ./internal/bootstrap/...` passes.
