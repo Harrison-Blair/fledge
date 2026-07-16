@@ -78,7 +78,7 @@
     },
     ".fledge/skills/fledge-orchestrate/implementation.md": {
       "policy": "core",
-      "sha256": "ba9a439b86434c31dfdb50e2d546c0044879d6b408d2992c3c0770d210b7aa98"
+      "sha256": "d7ef0b794b462cd221d85b8c706345e879279a4f2e0e3a0fb7d8c5c08da546dd"
     },
     ".fledge/skills/fledge-orchestrate/planning.md": {
       "policy": "core",
