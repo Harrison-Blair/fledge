@@ -28,6 +28,6 @@ Add `".fledge/scratch/"` to the `gitignoreLines` slice in `internal/cli/init.go:
 - Implementation order: add the new `grep` line to `init.txtar` first and run `go test ./cmd/fledge -run TestScripts/init` against the unchanged `gitignoreLines` — it fails (the pattern isn't in `.gitignore` yet) — then add the entry to `gitignoreLines` and confirm the test passes.
 
 ## Acceptance Criteria
-- [ ] AC-1: The test listed above was observed failing before implementation and passes after.
-- [ ] AC-2: `fledge init` on a fresh repo writes a `.gitignore` containing `.fledge/scratch/` (satisfies PLM-028 FC-1, AC-1).
-- [ ] AC-3: `go test ./cmd/fledge -run TestScripts/init` passes.
+- [x] AC-1: The test listed above was observed failing before implementation and passes after.
+- [x] AC-2: `fledge init` on a fresh repo writes a `.gitignore` containing `.fledge/scratch/` (satisfies PLM-028 FC-1, AC-1).
+- [x] AC-3: `go test ./cmd/fledge -run TestScripts/init` passes.
