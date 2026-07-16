@@ -5,40 +5,24 @@ import (
 	"testing"
 )
 
-// workerProtocolsDoc returns the embedded worker-protocols.md contents.
-func workerProtocolsDoc(t *testing.T) string {
+// skuaDoc returns the embedded skua.md contents.
+func skuaDoc(t *testing.T) string {
 	t.Helper()
-	data, err := FS.ReadFile("core/skills/fledge-orchestrate/worker-protocols.md")
+	data, err := FS.ReadFile("core/skills/fledge-orchestrate/skua.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 	return string(data)
 }
 
-// skuaSection extracts the "## Skua" section body (up to the next top-level
-// "## " heading or EOF).
-func skuaSection(t *testing.T, doc string) string {
+// skuaReviewingSection extracts the "### Reviewing a feather" subsection body.
+func skuaReviewingSection(t *testing.T, doc string) string {
 	t.Helper()
-	idx := strings.Index(doc, "## Skua")
+	idx := strings.Index(doc, "### Reviewing a feather")
 	if idx == -1 {
-		t.Fatal("worker-protocols.md: no \"## Skua\" section found")
+		t.Fatal("skua.md: no \"### Reviewing a feather\" subsection found")
 	}
-	rest := doc[idx+len("## Skua"):]
-	end := strings.Index(rest, "\n## ")
-	if end == -1 {
-		return rest
-	}
-	return rest[:end]
-}
-
-// reviewingSection extracts the "### Reviewing a feather" subsection body.
-func reviewingSection(t *testing.T, skua string) string {
-	t.Helper()
-	idx := strings.Index(skua, "### Reviewing a feather")
-	if idx == -1 {
-		t.Fatal("Skua section: no \"### Reviewing a feather\" subsection found")
-	}
-	rest := skua[idx+len("### Reviewing a feather"):]
+	rest := doc[idx+len("### Reviewing a feather"):]
 	end := strings.Index(rest, "\n### ")
 	if end == -1 {
 		return rest
@@ -46,28 +30,57 @@ func reviewingSection(t *testing.T, skua string) string {
 	return rest[:end]
 }
 
-// verdictSection extracts the "### Verdict" subsection body.
-func verdictSection(t *testing.T, skua string) string {
+// skuaVerdictSection extracts the "### Verdict" subsection body.
+func skuaVerdictSection(t *testing.T, doc string) string {
 	t.Helper()
-	idx := strings.Index(skua, "### Verdict")
+	idx := strings.Index(doc, "### Verdict")
 	if idx == -1 {
-		t.Fatal("Skua section: no \"### Verdict\" subsection found")
+		t.Fatal("skua.md: no \"### Verdict\" subsection found")
 	}
-	rest := skua[idx+len("### Verdict"):]
+	rest := doc[idx+len("### Verdict"):]
 	end := strings.Index(rest, "\n### ")
 	if end == -1 {
 		return rest
 	}
 	return rest[:end]
+}
+
+// TestSkuaDocSections: skua.md is titled "# Skua" and contains its four
+// subsection headings, plus the third-rejection and pass-signal key phrases.
+func TestSkuaDocSections(t *testing.T) {
+	doc := skuaDoc(t)
+
+	if !strings.HasPrefix(doc, "# Skua") {
+		t.Errorf("skua.md must start with \"# Skua\", got %q", firstLine(doc))
+	}
+
+	for _, heading := range []string{
+		"### Communication rules",
+		"### Reviewing a feather",
+		"### Verdict",
+		"### Lifecycle",
+	} {
+		if !strings.Contains(doc, heading) {
+			t.Errorf("skua.md must contain the %q subsection heading", heading)
+		}
+	}
+
+	thirdRejection := "if a feather fails review 3 times, do NOT start a fourth cycle"
+	if !strings.Contains(doc, thirdRejection) {
+		t.Errorf("skua.md must still contain the third-rejection sentence verbatim: %q", thirdRejection)
+	}
+
+	passSignal := "the only merge signal"
+	if !strings.Contains(doc, passSignal) {
+		t.Errorf("skua.md must still contain the pass-signal phrasing: %q", passSignal)
+	}
 }
 
 // TestSkuaConcessionHardened: the concession rule in ### Verdict must require
 // independently re-verified disproof before a finding withdraws, and must no
 // longer contain the old lenient bare-assertion sentence.
 func TestSkuaConcessionHardened(t *testing.T) {
-	doc := workerProtocolsDoc(t)
-	skua := skuaSection(t, doc)
-	verdict := verdictSection(t, skua)
+	verdict := skuaVerdictSection(t, skuaDoc(t))
 
 	oldSentence := "If a brooder pushes back on a finding with a fact verified to be correct, withdraw the finding"
 	if strings.Contains(verdict, oldSentence) {
@@ -88,9 +101,7 @@ func TestSkuaConcessionHardened(t *testing.T) {
 // TestSkuaEvidenceGuiltyUntilProven: the criteria-audit item in
 // ### Reviewing a feather must make the guilty-until-proven default explicit.
 func TestSkuaEvidenceGuiltyUntilProven(t *testing.T) {
-	doc := workerProtocolsDoc(t)
-	skua := skuaSection(t, doc)
-	reviewing := reviewingSection(t, skua)
+	reviewing := skuaReviewingSection(t, skuaDoc(t))
 
 	if !strings.Contains(reviewing, "Criteria audit") {
 		t.Fatal("### Reviewing a feather: no \"Criteria audit\" item found")
@@ -111,9 +122,7 @@ func TestSkuaEvidenceGuiltyUntilProven(t *testing.T) {
 // after "Diff vs. spec" and before the "Scope and simplicity" item, and must
 // direct the skua to report gaps as findings only, never fixing/committing.
 func TestSkuaRedTeamPass(t *testing.T) {
-	doc := workerProtocolsDoc(t)
-	skua := skuaSection(t, doc)
-	reviewing := reviewingSection(t, skua)
+	reviewing := skuaReviewingSection(t, skuaDoc(t))
 
 	diffIdx := strings.Index(reviewing, "Diff vs. spec")
 	if diffIdx == -1 {
@@ -140,21 +149,5 @@ func TestSkuaRedTeamPass(t *testing.T) {
 	}
 	if !strings.Contains(redTeamText, "reported as") && !strings.Contains(redTeamText, "findings only") && !strings.Contains(redTeamText, "never fix") {
 		t.Errorf("Red-team pass item must state gaps are reported as findings only, never fixed/committed by the skua")
-	}
-}
-
-// TestSkuaUnchangedInvariants: guards the 3-rejection sentence and the cited
-// ## Brooder fix-loop sentence against incidental change (FC-7/FC-8).
-func TestSkuaUnchangedInvariants(t *testing.T) {
-	doc := workerProtocolsDoc(t)
-
-	thirdRejection := "if a feather fails review 3 times, do NOT start a fourth cycle"
-	if !strings.Contains(doc, thirdRejection) {
-		t.Errorf("worker-protocols.md must still contain the third-rejection sentence verbatim: %q", thirdRejection)
-	}
-
-	brooderFixLoop := "Do not argue a finding with the skua past one round of clarification"
-	if !strings.Contains(doc, brooderFixLoop) {
-		t.Errorf("worker-protocols.md must still contain the Brooder fix-loop sentence verbatim: %q", brooderFixLoop)
 	}
 }
