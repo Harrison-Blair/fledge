@@ -16,7 +16,7 @@ import (
 )
 
 func init() {
-	register("brood", runLock, "fledge brood FTHR-### --owner <name> [--branch <b>] [--json]")
+	register("brood", runLock, "fledge brood FTHR-### --owner <name> [--branch <b>] [--worktree <path>] [--json]")
 	register("abandon", runUnlock, "fledge abandon FTHR-### [--fledged] [--force] [--json]")
 	register("broods", runLocks, "fledge broods [--json]")
 }
@@ -41,6 +41,7 @@ func runLock(args []string) int {
 	fs := flag.NewFlagSet("brood", flag.ContinueOnError)
 	owner := fs.String("owner", "", "brood holder name (required)")
 	branch := fs.String("branch", "", "feather branch (default: current git branch)")
+	worktree := fs.String("worktree", "", "feather worktree path (default: empty)")
 	jsonOut := fs.Bool("json", false, "machine-readable output")
 	positional, err := parseMixed(fs, args)
 	if err != nil {
@@ -74,6 +75,7 @@ func runLock(args []string) int {
 	rec := lock.Record{
 		Task: id, Owner: *owner, PID: os.Getpid(),
 		Created: time.Now().UTC().Format(time.RFC3339), Branch: *branch,
+		Worktree: *worktree,
 	}
 	if err := lock.Acquire(r.LocksDir(), rec); err != nil {
 		var held *lock.HeldError

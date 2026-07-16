@@ -12,11 +12,12 @@ import (
 
 // Record is the JSON content of one .fledge/broods/<FTHR-ID>.brood file.
 type Record struct {
-	Task    string `json:"feather"`
-	Owner   string `json:"owner"`
-	PID     int    `json:"pid"`
-	Created string `json:"created"`
-	Branch  string `json:"branch"`
+	Task     string `json:"feather"`
+	Owner    string `json:"owner"`
+	PID      int    `json:"pid"`
+	Created  string `json:"created"`
+	Branch   string `json:"branch"`
+	Worktree string `json:"worktree"`
 }
 
 // HeldError reports an acquisition conflict with the current holder.
