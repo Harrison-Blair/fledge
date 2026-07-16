@@ -289,7 +289,7 @@ func checkCriteriaEvidence(add addFunc, t *spec.Task, evidenceDir string) {
 		}
 	}
 	if len(missing) > 0 {
-		add(t.Path, "criteria-evidence", Warning, "checked criteria missing evidence sections in %s: %s", evPath, strings.Join(missing, ", "))
+		add(t.Path, "criteria-evidence", Warning, "checked criteria missing evidence sections in %s: %s (heading must be the bare form \"## AC-N\", not \"## AC-N: <label>\")", evPath, strings.Join(missing, ", "))
 	}
 }
 

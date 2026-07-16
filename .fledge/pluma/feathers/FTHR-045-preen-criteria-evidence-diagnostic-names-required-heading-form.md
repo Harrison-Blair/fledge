@@ -45,7 +45,7 @@ No change to `hasSection`'s matching behavior — only the diagnostic text.
 
 ## Acceptance Criteria
 Checkbox list, one `- [ ] AC-N: …` line per criterion — authored unchecked; checked only via `fledge criteria check`, with per-criterion evidence in `.fledge/molt/FTHR-045.md`. Reference the parent plumage's criteria where applicable (e.g. "satisfies PLM-023 FC-2"). AC-1 is always:
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after; evidence captured verbatim.
-- [ ] AC-2: `checkCriteriaEvidence`'s emitted message names the exact required
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after; evidence captured verbatim.
+- [x] AC-2: `checkCriteriaEvidence`'s emitted message names the exact required
   `## AC-N` heading form as part of its text (satisfies PLM-023 FC-4, AC-4).
-- [ ] AC-3: `go test ./internal/check/...` passes.
+- [x] AC-3: `go test ./internal/check/...` passes.

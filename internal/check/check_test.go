@@ -324,6 +324,34 @@ func TestCriteriaEvidence(t *testing.T) {
 	}
 }
 
+func TestCriteriaEvidenceLabeledHeadingMessage(t *testing.T) {
+	dir := t.TempDir()
+	labeled := task("FTHR-001", "PLM-001", "hatching")
+	labeled.Body = []byte("## Description\nx\n## Tests\n- a test\n## Acceptance Criteria\n- [x] AC-1: verified\n")
+
+	// Evidence file uses a labeled heading instead of the bare "## AC-1"
+	// form, so the checked criterion is reported as missing evidence.
+	if err := os.WriteFile(filepath.Join(dir, "FTHR-001.md"),
+		[]byte("# Evidence\n## AC-1: failing test capture\noutput\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newSet([]*spec.Requirement{req("PLM-001", "hatched")}, []*spec.Task{labeled})
+	fs := Run(s, []string{"FTHR-001"}, dir)
+	var msg string
+	for _, f := range fs {
+		if f.Rule == "criteria-evidence" && f.Severity == Warning {
+			msg = f.Message
+		}
+	}
+	if msg == "" {
+		t.Fatalf("want a criteria-evidence warning, got %v", fs)
+	}
+	if !strings.Contains(msg, `"## AC-N"`) {
+		t.Errorf("message should name the required bare heading form %q, got: %s", `"## AC-N"`, msg)
+	}
+}
+
 func TestHasErrors(t *testing.T) {
 	if HasErrors([]Finding{{Severity: Warning}}) {
 		t.Error("warnings alone are not errors")
