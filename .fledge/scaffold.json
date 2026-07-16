@@ -74,7 +74,7 @@
     },
     ".fledge/skills/fledge-orchestrate/foraging.md": {
       "policy": "core",
-      "sha256": "aae6469dde20d1f71a8ee2dabce545eb42aa4f7695a4369c5be3127376cc4571"
+      "sha256": "e45270352fc0849c1d8739b4e404b0c3f7d21cc85e19dfc599a079c52cf883a1"
     },
     ".fledge/skills/fledge-orchestrate/implementation.md": {
       "policy": "core",

@@ -79,6 +79,7 @@ A scout's prompt assigns a module name and an explicit list of files. Its entire
 - Follow the section order in `templates/scout-report.md` in this skill's directory exactly — every section present, in order. Write `None observed.` under any section with nothing to report; never omit a section.
 - Frontmatter is stamped by `fledge nest scout`; refresh it with `fledge nest stamp <file>` if needed.
 - Report facts you observed, with file paths. Do not speculate about code you did not read; put uncertainties under Open Questions.
+- Any count, total, or enumerated size you state (e.g. "N commands," "N fixtures," "N files in module X") must come from an exact computation run at write time — a `grep -c`, a `find`/glob count, `wc -l`, or equivalent — never estimated by eye or recalled from memory. Cite or show the command that produced it so the count is re-derivable by a later reader, not merely asserted. This applies equally to counts carried into any synthesized doc.
 - Be dense: bullet points, file references, identifier names. No prose padding.
 
 ### Final message
