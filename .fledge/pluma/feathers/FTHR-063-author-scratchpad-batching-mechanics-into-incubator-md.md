@@ -2,7 +2,7 @@
 id: FTHR-063
 title: Author scratchpad batching mechanics into incubator.md
 plumage: PLM-028
-status: egg
+status: fledged
 priority: P2
 depends_on: [FTHR-057]
 authored: 2026-07-16T16:25:35Z
