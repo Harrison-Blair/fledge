@@ -52,5 +52,5 @@ style ("bump cmd/fledge/testdata/stamp_warning.txtar").
 
 ## Acceptance Criteria
 Checkbox list, one `- [ ] AC-N: …` line per criterion — authored unchecked; checked only via `fledge criteria check`, with per-criterion evidence in `.fledge/molt/FTHR-043.md`. Reference the parent plumage's criteria where applicable (e.g. "satisfies PLM-023 FC-2"). AC-1 is always:
-- [ ] AC-1: The tests listed above were observed failing before implementation (via the deliberate-divergence step) and pass after; evidence captured verbatim.
-- [ ] AC-2: `go test ./internal/cli/...` passes, including the new test, at rest (fixture reverted to its correct pinned version) (satisfies PLM-023 FC-1, AC-1).
+- [x] AC-1: The tests listed above were observed failing before implementation (via the deliberate-divergence step) and pass after; evidence captured verbatim.
+- [x] AC-2: `go test ./internal/cli/...` passes, including the new test, at rest (fixture reverted to its correct pinned version) (satisfies PLM-023 FC-1, AC-1).
