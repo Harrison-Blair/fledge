@@ -25,6 +25,7 @@ exists .claude/skills/fledge-orchestrate/SKILL.md
 exists .claude/skills/fledge-interrogate/SKILL.md
 grep '.fledge/nest/raw/' .gitignore
 grep '.fledge/broods/' .gitignore
+grep '.fledge/roster/' .gitignore
 grep '.alloc.lock' .gitignore
 grep 'fledge nest' .claude/settings.local.json
 grep 'Bash\(fledge update \*\)' .claude/settings.local.json
