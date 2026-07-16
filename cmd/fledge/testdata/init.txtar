@@ -103,3 +103,16 @@ grep 'to read the current name' .fledge/skills/fledge-orchestrate/implementation
 ! grep '18 extant penguin species' .fledge/skills/fledge-orchestrate/implementation.md
 ! grep 'mapping internally' .fledge/skills/fledge-orchestrate/implementation.md
 ! grep 'clear the roster' .fledge/skills/fledge-orchestrate/implementation.md
+
+# recovery-step rewrite (FTHR-052): §6 step 2 classifies stale locks via
+# `fledge broods --stale` directly instead of hand-correlating `git worktree
+# list` against `fledge broods`, resumes on `worktree_exists: true`, and states
+# the legacy empty-worktree-path re-check caveat (PLM-025 FC-4, AC-4). The old
+# hand-correlation phrasing is gone; `git worktree list` survives only as the
+# tool for the manual legacy re-check.
+grep 'fledge broods --stale' .fledge/skills/fledge-orchestrate/implementation.md
+grep 'worktree_exists: true' .fledge/skills/fledge-orchestrate/implementation.md
+grep 'before force-releasing' .fledge/skills/fledge-orchestrate/implementation.md
+grep 'predates FTHR-050' .fledge/skills/fledge-orchestrate/implementation.md
+grep 'git worktree list' .fledge/skills/fledge-orchestrate/implementation.md
+! grep 'has no surviving worktree are stale' .fledge/skills/fledge-orchestrate/implementation.md

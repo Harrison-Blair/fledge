@@ -58,10 +58,10 @@ primary classification mechanism.
 
 ## Acceptance Criteria
 Checkbox list, one `- [ ] AC-N: …` line per criterion — authored unchecked; checked only via `fledge criteria check`, with per-criterion evidence in `.fledge/molt/FTHR-052.md`. Reference the parent plumage's criteria where applicable (e.g. "satisfies PLM-025 FC-2"). AC-1 is always:
-- [ ] AC-1: The test listed above was observed failing before implementation
+- [x] AC-1: The test listed above was observed failing before implementation
   and passes after; evidence captured verbatim.
-- [ ] AC-2: `implementation.md`'s §6 recovery step instructs `fledge broods
+- [x] AC-2: `implementation.md`'s §6 recovery step instructs `fledge broods
   --stale` for classification and states the legacy-empty-path re-check
   caveat (satisfies PLM-025 FC-4, AC-4).
-- [ ] AC-3: `fledge init --refresh` regenerates this repo's scaffolded copy to
+- [x] AC-3: `fledge init --refresh` regenerates this repo's scaffolded copy to
   match, and `go test ./cmd/fledge -run TestScripts` passes.
