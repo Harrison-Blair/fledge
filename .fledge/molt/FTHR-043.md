@@ -3,7 +3,9 @@
 Feather: `.fledge/pluma/feathers/FTHR-043-version-consistency-test-covers-stamp-warning-txtar.md`
 Branch: `feather/FTHR-043-version-consistency-stamp-warning`
 
-## AC-1: Tests observed failing before implementation (deliberate-divergence step) and pass after; evidence captured verbatim
+## AC-1
+
+_Tests observed failing before implementation (deliberate-divergence step) and pass after; evidence captured verbatim_
 
 New test: `TestStampWarningTxtarVersionMatchesBinary` in `internal/cli/version_test.go`.
 
@@ -47,7 +49,9 @@ $ git status --short
  M internal/cli/version_test.go
 ```
 
-## AC-2: `go test ./internal/cli/...` passes, including the new test, at rest (fixture reverted) — satisfies PLM-023 FC-1, AC-1
+## AC-2
+
+_`go test ./internal/cli/...` passes, including the new test, at rest (fixture reverted) — satisfies PLM-023 FC-1, AC-1_
 
 ```
 $ go test ./internal/cli/...

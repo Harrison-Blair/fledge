@@ -1,6 +1,8 @@
 # FTHR-044 evidence — Forager/scout exact-computation rule for reported counts
 
-## AC-1: Tests observed failing before implementation, passing after
+## AC-1
+
+_Tests observed failing before implementation, passing after_
 
 ### Test added (test-first)
 
@@ -50,7 +52,9 @@ Output:
 ok  	github.com/Harrison-Blair/fledge/cmd/fledge	0.006s
 ```
 
-## AC-2: foraging.md core source states the rule as a generic authoring requirement
+## AC-2
+
+_foraging.md core source states the rule as a generic authoring requirement_
 
 Added to the Scout section's Rules in the core source
 `internal/bootstrap/core/skills/fledge-orchestrate/foraging.md` (generic — no
@@ -67,7 +71,9 @@ $ grep -n 'exact computation run at write time' internal/bootstrap/core/skills/f
 82:- Any count, total, or enumerated size you state (e.g. "N commands," ...
 ```
 
-## AC-3: fledge init --refresh regenerates scaffold; TestScripts passes
+## AC-3
+
+_fledge init --refresh regenerates scaffold; TestScripts passes_
 
 Rebuilt/reinstalled the binary from worktree source, then refreshed:
 
