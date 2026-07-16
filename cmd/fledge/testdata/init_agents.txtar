@@ -148,6 +148,17 @@ stdout '"agents": \['
 stdout '"pi"'
 ! stdout '"claude"'
 
+# incubator force-terminate backstop (FTHR-041 AC-2): worker-protocols.md's
+# Incubator Lifecycle section mirrors the existing Brooder/Skua Lifecycle
+# force-terminate sentence (pin the exact phrase 3x, not just the word, which
+# already appears twice for Brooder/Skua)
+cd $WORK
+mkdir ftbackstop-repo
+cd ftbackstop-repo
+exec git init -q .
+exec fledge init
+grep -count=3 'force-terminate you if you do not exit promptly, since acknowledging a shutdown request is not the same as ending your session' .fledge/skills/fledge-orchestrate/worker-protocols.md
+
 -- custom-skill.md --
 my local edit
 -- seed-claude.md --

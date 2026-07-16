@@ -25,3 +25,8 @@ grep 'never an input' .fledge/skills/fledge-orchestrate/planning.md
 
 grep 'only\*\* signal that it is done is its explicit final message' .fledge/skills/fledge-orchestrate/worker-protocols.md
 grep 'never an input' .fledge/skills/fledge-orchestrate/worker-protocols.md
+
+# forager force-terminate backstop (FTHR-041 AC-3): both the Forager Lifecycle
+# section and the Commissioner's "verify and release" step document it
+grep 'expect it to force-terminate you if you do not exit promptly' .fledge/skills/fledge-orchestrate/foraging.md
+grep 'force-terminating it if it does not exit promptly' .fledge/skills/fledge-orchestrate/foraging.md

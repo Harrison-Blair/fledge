@@ -23,3 +23,6 @@ stdout '"tier": "C"'
 exec fledge init --agent claude
 exists .claude/agents/fledge-incubator.md
 grep 'owns the planning phase end to end' .claude/agents/fledge-incubator.md
+
+# fledge-forager.md's dropped self-verification bullet is restored (FTHR-041 AC-7)
+grep 'Gate your final message on \`fledge nest status\`' .claude/agents/fledge-forager.md

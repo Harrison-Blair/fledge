@@ -24,8 +24,8 @@ This is the Claude Code realization of the core skill's teammate teardown (`impl
 
 - **A `SendMessage` shutdown request does not, by itself, terminate a teammate.** Named teammates do not self-exit — a request can only prompt an acknowledgement and leave the teammate idle in its pane. Idle is not gone.
 - **`TaskStop <name>` is what actually terminates a teammate.** Use it as the real teardown mechanism, not merely an escalation.
-- **Procedure per worker** (do this for the brooder *and* its paired skua at green teardown): first `SendMessage` the graceful shutdown request by name (lets it finish an in-flight commit or reply and reach quiescence), then `TaskStop <name>` to actually terminate it. Issue the `TaskStop` regardless of whether the teammate acked — do not wait indefinitely for a reply.
-- **Confirmed shutdown** = the teammate no longer appears in the team roster and its tmux pane has closed. That observed absence — not the teammate's acknowledgement — is what frees its species for reuse (`implementation.md` §3.1). If a teammate does not quiesce, `TaskStop` it anyway and confirm it is gone.
+- **Procedure per worker** (do this for all four teammate roles — brooder, skua, forager, incubator — at that role's teardown moment: green teardown for a brooder/skua pair per `implementation.md` §3.2, phase close for an incubator per `planning.md` §0, and nest-status verification for a forager per `foraging.md` §Commissioner): first `SendMessage` the graceful shutdown request by name (lets it finish an in-flight commit or reply and reach quiescence), then `TaskStop <name>` to actually terminate it. Issue the `TaskStop` regardless of whether the teammate acked — do not wait indefinitely for a reply.
+- **Confirmed shutdown** = the teammate no longer appears in the team roster and, if it was given a pane, that pane has closed (no-tmux/degraded sessions have no pane to check — roster absence alone suffices there). That observed absence — not the teammate's acknowledgement — is what frees its species for reuse (`implementation.md` §3.1). If a teammate does not quiesce, `TaskStop` it anyway and confirm it is gone.
 
 ## Planning delegation
 
