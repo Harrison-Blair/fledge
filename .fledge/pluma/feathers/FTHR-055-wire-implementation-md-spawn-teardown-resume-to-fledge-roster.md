@@ -2,7 +2,7 @@
 id: FTHR-055
 title: Wire implementation.md spawn/teardown/resume to fledge roster
 plumage: PLM-026
-status: egg
+status: fledged
 priority: P3
 depends_on: [FTHR-054]
 authored: 2026-07-16T02:06:38Z
