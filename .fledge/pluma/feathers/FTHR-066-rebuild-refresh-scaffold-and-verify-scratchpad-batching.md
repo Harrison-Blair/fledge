@@ -2,7 +2,7 @@
 id: FTHR-066
 title: "Rebuild, refresh scaffold, and verify scratchpad batching"
 plumage: PLM-028
-status: egg
+status: fledged
 priority: P2
 depends_on: [FTHR-062, FTHR-063, FTHR-064, FTHR-065]
 authored: 2026-07-16T16:28:28Z
