@@ -2,7 +2,7 @@
 id: FTHR-061
 title: Refresh scaffold and verify worker-protocols split
 plumage: PLM-027
-status: egg
+status: fledged
 priority: P1
 depends_on: [FTHR-058, FTHR-059, FTHR-060]
 authored: 2026-07-16T16:21:11Z
