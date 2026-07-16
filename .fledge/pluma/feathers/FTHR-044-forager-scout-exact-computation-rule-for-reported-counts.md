@@ -2,7 +2,7 @@
 id: FTHR-044
 title: Forager/scout exact-computation rule for reported counts
 plumage: PLM-023
-status: pipping
+status: fledged
 priority: P1
 depends_on: []
 authored: 2026-07-16T01:55:16Z
