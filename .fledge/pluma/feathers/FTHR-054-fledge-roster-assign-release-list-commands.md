@@ -62,14 +62,14 @@ unknown command) and confirmed to FAIL, then implemented until they pass
 
 ## Acceptance Criteria
 Checkbox list, one `- [ ] AC-N: …` line per criterion — authored unchecked; checked only via `fledge criteria check`, with per-criterion evidence in `.fledge/molt/FTHR-054.md`. Reference the parent plumage's criteria where applicable (e.g. "satisfies PLM-026 FC-2"). AC-1 is always:
-- [ ] AC-1: The tests listed above were observed failing before implementation
+- [x] AC-1: The tests listed above were observed failing before implementation
   and pass after; evidence captured verbatim.
-- [ ] AC-2: `fledge roster assign --feather FTHR-### --pair` allocates and
+- [x] AC-2: `fledge roster assign --feather FTHR-### --pair` allocates and
   returns species/names as specified, with numeric-suffix overflow past 18
   (satisfies PLM-026 FC-1, AC-1).
-- [ ] AC-3: `fledge roster release <name>` frees a species only once every
+- [x] AC-3: `fledge roster release <name>` frees a species only once every
   member sharing it is released (satisfies PLM-026 FC-2, AC-2).
-- [ ] AC-4: `fledge roster [--json]` lists current name→feather assignments,
+- [x] AC-4: `fledge roster [--json]` lists current name→feather assignments,
   omitting fully-released species (satisfies PLM-026 FC-3, AC-3).
-- [ ] AC-5: `go test ./internal/cli/... ./cmd/fledge -run TestScripts`
+- [x] AC-5: `go test ./internal/cli/... ./cmd/fledge -run TestScripts`
   passes.
