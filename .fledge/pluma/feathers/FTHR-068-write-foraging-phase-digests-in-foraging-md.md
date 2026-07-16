@@ -26,6 +26,6 @@ Immediately after "...confirm the result with `fledge nest status`... relay the 
 - Implementation order: write the test against `foraging.md` as FTHR-058 leaves it (fails — no digest language yet), add the instruction, confirm it passes.
 
 ## Acceptance Criteria
-- [ ] AC-1: The test listed above was observed failing before implementation and passes after.
-- [ ] AC-2: `foraging.md`'s verify-and-release step documents writing `digest-foraging.md`, attributed to the commissioner, with the FC-3 content shape (satisfies PLM-029 AC-1).
-- [ ] AC-3: `go test ./internal/bootstrap/...` passes.
+- [x] AC-1: The test listed above was observed failing before implementation and passes after.
+- [x] AC-2: `foraging.md`'s verify-and-release step documents writing `digest-foraging.md`, attributed to the commissioner, with the FC-3 content shape (satisfies PLM-029 AC-1).
+- [x] AC-3: `go test ./internal/bootstrap/...` passes.
