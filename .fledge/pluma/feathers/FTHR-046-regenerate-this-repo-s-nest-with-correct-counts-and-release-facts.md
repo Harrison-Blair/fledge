@@ -2,7 +2,7 @@
 id: FTHR-046
 title: "Regenerate this repo's nest with correct counts and release facts"
 plumage: PLM-023
-status: egg
+status: fledged
 priority: P1
 depends_on: [FTHR-044]
 oversight: during
@@ -17,8 +17,9 @@ fledge_version: 0.5.5
 Once FTHR-044's exact-computation-for-counts rule is in the core forager/scout
 prose, this feather runs a fresh forager against this repo to regenerate
 `.fledge/nest/`, and verifies the regenerated docs state the correct ground
-truth: 18 commands (not 24) in `entry-points.md`/`modules.md`/`index.md`, 22
-txtar fixtures (not 23) in `testing.md`/`modules.md`/`dependencies.md`, and
+truth: 19 commands (the pre-regeneration nest states 18) in
+`entry-points.md`/`modules.md`/`index.md`, 25 txtar fixtures (the
+pre-regeneration nest states 23) in `testing.md`/`modules.md`/`dependencies.md`, and
 `conventions.md`'s "Versioning & release" section naming all three
 must-move-together files (`VERSION`, `internal/cli/version.go`
 `binaryVersion`, `cmd/fledge/testdata/stamp_warning.txtar`) rather than
@@ -40,7 +41,7 @@ merge.
   `.fledge/nest/modules.md` → bootstrap; these are the concern docs the
   finding's ground truth was checked against).
 - Ground truth sources the regeneration must agree with: `internal/cli/cli.go`
-  `commandOrder` (18 commands), `cmd/fledge/testdata/*.txtar` (22 files),
+  `commandOrder` (19 commands), `cmd/fledge/testdata/*.txtar` (25 files),
   `VERSION` / `internal/cli/version.go` / `cmd/fledge/testdata/stamp_warning.txtar`
   (the three release files, per FTHR-043).
 
@@ -49,7 +50,7 @@ Obtain a fresh forager per `foraging.md`'s Commissioner protocol (a new
 species, one-shot) to regenerate `.fledge/nest/`. Because FTHR-044 has
 already landed, the scout/forager prose now requires counts to be derived
 from an exact computation rather than eyeballed, so the regenerated
-`entry-points.md`/`testing.md`/etc. should state 18 and 22 correctly; verify
+`entry-points.md`/`testing.md`/etc. should state 19 and 25 correctly; verify
 this explicitly rather than assuming. Also verify `conventions.md` lists all
 three release files. If the regeneration still gets a fact wrong despite
 FTHR-044 landing, treat that as a defect to fix in this feather's scope
@@ -61,9 +62,9 @@ Structural (grep/count) assertions against the regenerated `.fledge/nest/`
 docs, run after regeneration and recorded as this feather's verification
 evidence:
 - `grep -c` / exact-match assertions that `entry-points.md`, `modules.md`,
-  and `index.md` state "18" (commands) and not "24".
+  and `index.md` state "19" (commands) and not "18".
 - Assertions that `testing.md`, `modules.md`, and `dependencies.md` state
-  "22" (txtar fixtures) and not "23".
+  "25" (txtar fixtures) and not "23".
 - An assertion that `conventions.md`'s "Versioning & release" section
   mentions `stamp_warning.txtar` alongside `VERSION` and `version.go`.
 - `fledge nest status` reports complete, with `index.md`'s `commit` at HEAD.
@@ -71,19 +72,19 @@ Since this feather's product is regenerated prose rather than new code, these
 are structural checks run and recorded (not a `go test` suite), per the
 plumage's original verification-first framing for this feather. Run them
 first against the *current* (wrong) nest content to confirm they FAIL for the
-expected reason (states 24/23/two-files), then regenerate and re-run until
+expected reason (states 18/23/two-files), then regenerate and re-run until
 they pass (satisfies PLM-023 FC-3, AC-1).
 
 ## Acceptance Criteria
 Checkbox list, one `- [ ] AC-N: …` line per criterion — authored unchecked; checked only via `fledge criteria check`, with per-criterion evidence in `.fledge/molt/FTHR-046.md`. Reference the parent plumage's criteria where applicable (e.g. "satisfies PLM-023 FC-2"). AC-1 is always:
-- [ ] AC-1: The structural checks listed above were observed failing against
+- [x] AC-1: The structural checks listed above were observed failing against
   the pre-regeneration nest content, and pass against the regenerated
   content; evidence captured verbatim.
-- [ ] AC-2: `entry-points.md`, `modules.md`, and `index.md` state 18 commands
+- [x] AC-2: `entry-points.md`, `modules.md`, and `index.md` state 19 commands
   (satisfies PLM-023 FC-3, AC-3).
-- [ ] AC-3: `testing.md`, `modules.md`, and `dependencies.md` state 22 txtar
+- [x] AC-3: `testing.md`, `modules.md`, and `dependencies.md` state 25 txtar
   fixtures (satisfies PLM-023 FC-3, AC-3).
-- [ ] AC-4: `conventions.md`'s "Versioning & release" section names all three
+- [x] AC-4: `conventions.md`'s "Versioning & release" section names all three
   must-move-together files (satisfies PLM-023 AC-5).
-- [ ] AC-5: `fledge nest status` reports complete and stamped to HEAD after
+- [x] AC-5: `fledge nest status` reports complete and stamped to HEAD after
   regeneration.

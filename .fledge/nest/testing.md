@@ -1,50 +1,72 @@
 ---
-generated: 2026-07-16T02:20:48Z
-commit: 407b91e70b53764944447dae5829d2076fb852c5
+generated: 2026-07-16T04:02:08Z
+commit: 154510fc963e7071b2f09297ecfeba2b6710e85e
 agent: fledge-forager
-fledge_version: 0.5.5
+fledge_version: 0.5.8
 ---
 
 # Testing
 
-Frameworks, how to run tests, and what each layer of the test suite actually covers.
+Frameworks, how to run tests, and coverage patterns across the repo.
 
-## Frameworks
+## Two test layers
 
-- **Standard `testing` package** for all unit tests, colocated beside their package (`internal/spec/*_test.go`, `internal/check/check_test.go`, `internal/graph/graph_test.go`, `internal/lock/lock_test.go`, `internal/bootstrap/*_test.go`, `internal/cli/*_test.go`, etc.). Use `t.TempDir()` for filesystem isolation; no external mocking library beyond stdlib `net/http/httptest` (only `internal/cli/update_test.go` needs it, for the GitHub-release fetch).
-- **`testscript`** (`github.com/rogpeppe/go-internal/testscript`) for CLI acceptance tests: `cmd/fledge/main_test.go:TestMain`/`TestScripts` run every `cmd/fledge/testdata/*.txtar` file. Each txtar is a self-contained scenario: file markers (`-- path --`), `exec`/`! exec` command assertions, `stdout`/`stderr` regex checks, `exists`/`! exists`/`grep`/`! grep` file predicates. Every test gets a fresh `git init -q .` with deterministic identity (`GIT_AUTHOR_NAME=test`, `test@example.invalid`) for hermeticity.
+1. **Acceptance tests** — `cmd/fledge/testdata/*.txtar`, run via `go test ./cmd/fledge -run TestScripts`. Uses `github.com/rogpeppe/go-internal/testscript`: each `.txtar` file is a text archive encoding an initial filesystem snapshot, `exec`/`!exec` shell-like commands, and `stdout`/`stderr`/`exists` assertions. `cmd/fledge/main_test.go`'s `TestMain` registers the CLI function itself (not a compiled binary) so fixtures run in-process. **Exact fixture count: `ls cmd/fledge/testdata/*.txtar | wc -l` = 25.**
+2. **Unit tests** — standard `go test`, live beside their package (`internal/<pkg>/*_test.go`). No external assertion library; table-driven style with `t.Run` subtests is the norm. Concurrency-sensitive packages (`lock`, `roster`, `spec/ids.go`) use goroutine-barrier patterns (e.g. 16–20 goroutines × several rounds) to test allocation/claim races.
 
-## How to run
+## Acceptance fixture map (25 total)
+
+| Fixture | Covers |
+|---|---|
+| agents.txtar | `fledge agents` — adapter inventory, tier derivation, scaffold status |
+| broods_stale.txtar | `fledge broods` — worktree_exists field, `--stale` filter |
+| check.txtar | `fledge preen` — dangling deps, missing sections, unchecked criteria |
+| criteria.txtar | `fledge criteria` — list/check/uncheck, idempotence, bare-number + AC-label syntax |
+| e2e.txtar | Full lifecycle: init→new→status→preen→vee→ready→brood→broods→abandon |
+| forager_contract.txtar | Scaffolded planning.md/worker-protocols.md contract text (grep-based) |
+| freshness_gate.txtar | planning.md's `fledge nest status --json` freshness gate wiring |
+| graph.txtar | `fledge vee` — wave order, `--format dot`, cycle detection |
+| init.txtar | `fledge init` scaffolding, idempotence (2nd run byte-identical) |
+| init_agents.txtar | `--list-agents`, `--agent`, auto-detect via harness marker dirs |
+| lock.txtar | `fledge brood`/`abandon`/`broods` — claim creation, holder name, PID-alive |
+| nest.txtar | `fledge nest new` — concern-doc creation, unknown-doc rejection, `--force` |
+| nest_status.txtar | `fledge nest scaffold` + `nest status` — completeness gate (all 9 docs past stub, index stamped to HEAD) |
+| new.txtar | `fledge new plumage\|feather` — ID allocation, template instantiation, field validation |
+| plan_delegation.txtar | Delegation-to-incubator branch text in planning.md/foraging.md |
+| preen_scaffold.txtar | Scaffold drift detection — modified/stale/missing/obsolete, `--strict` exit code |
+| ready.txtar | `fledge ready` — dependency unlock, brood exclusion |
+| refresh_scaffold.txtar | `fledge init --refresh` — reset, prune, TTY confirm, `--force` bypass |
+| report.txtar | `fledge colony` — status counts, per-plumage breakdown, orphans |
+| roster.txtar | `fledge roster assign/release` — 18-species list, `-2` overflow |
+| scan.txtar | `fledge scan` — module grouping, `.fledgeignore` filtering |
+| set.txtar | `fledge set` — frontmatter mutation, enum/ref/acyclicity validation |
+| stamp_warning.txtar | Version-mismatch warning (scaffold.json version < binary version) |
+| status.txtar | `fledge status` — legal lifecycle transitions, `--force` bypass |
+| unfledged.txtar | `fledge unfledged` — non-fledged listing, sort order |
+
+## Notable unit-test suites
+
+- `internal/check/check_test.go` — 19 tests covering all 13 preen validation rules.
+- `internal/spec/{frontmatter,ids,criteria,load}_test.go` — round-trip parsing/rendering, byte-preservation of spec bodies, concurrent ID allocation (20 goroutines × 5 rounds), CRLF handling.
+- `internal/lock/lock_test.go` — 8 tests incl. 16-goroutine contention test, atomic-write-no-partial-files test.
+- `internal/roster/roster_test.go` — 5 tests incl. exact 18-species order assertion, concurrent assignment (18 goroutines × 5 rounds).
+- `internal/bootstrap/{registry,drift,stamp}_test.go` — scaffold write/refresh/drift classification across all 5 `DriftStatus` states; `TestPrimitiveCoverage` pins derived tiers (`claude:C, codex:A, pi:A`).
+- `internal/cli/version_test.go` — `TestBinaryVersionMatchesVersionFile` and `TestStampWarningTxtarVersionMatchesBinary`: the two automated guards on the release-version-consistency convention (see conventions.md).
+- `internal/ciconfig/*_test.go`, `internal/doctest/docs_test.go`, `internal/hooktest/precommit_test.go` — meta-tests: assert CI workflow YAML structure, README/RELEASING.md content, and pre-commit hook behavior in real temp git repos, respectively.
+
+## Running tests
 
 ```sh
-go test ./...                                  # everything
-go test ./cmd/fledge -run TestScripts          # all 23 txtar acceptance tests
-go test ./cmd/fledge -run TestScripts/init     # one script (init.txtar), add -v for script trace
-go test ./internal/spec -run TestAllocateID    # one unit test
-go vet ./...
-gofmt -l .                                     # formatting check (CI + optional pre-commit gate)
+go test ./...                                 # everything
+go test ./cmd/fledge -run TestScripts         # all 25 acceptance fixtures
+go test ./cmd/fledge -run TestScripts/init    # one fixture, add -v for script trace
+go test ./internal/spec -run TestAllocateID   # one unit test
 ```
 
-## What's covered, by layer
+## CI enforcement
 
-**Acceptance (`cmd/fledge/testdata/*.txtar`, 23 files, ~2300 lines)** — one file per command or cross-command scenario: `init` (idempotency, scaffolding), `new` (ID allocation/templates), `status` (lifecycle transitions), `check`/`preen_scaffold` (validation + drift classification), `lock` (brood/abandon/broods, stale-PID detection), `nest`/`nest_status` (concern-doc scaffolding + completeness gate — directly exercises the pipeline this forager runs), `graph` (vee waves/cycles/dot output), `criteria` (checkbox mutation), `ready` (pipping computation), `set` (frontmatter mutation + cycle detection), `scan` (module grouping/`.fledgeignore`), `report` (colony counts), `agents` (adapter inventory/tiers), `e2e` (full init→fledged lifecycle chain), `forager_contract` (prose-leak guard: planning.md/worker-protocols.md must not leak internal pipeline vocabulary), `init_agents` (multi-agent flags), `unfledged`, `stamp_warning` (version-mismatch warning fires from subdirectories, not on init/version), `refresh_scaffold` (prune/confirm/force/recreate).
+Both `.github/workflows/pr-check.yml` (every PR to main) and `release.yml`'s safety-net job run `gofmt -l .`, `go vet ./...`, `go build ./...`, `go test ./...`. The optional local `scripts/hooks/pre-commit` (opt-in via `git config core.hooksPath scripts/hooks`) mirrors the gofmt+vet gate before a commit is even created.
 
-**Unit — spec (`internal/spec`)**: frontmatter round-trip byte-identity, CRLF/LF tolerance, unknown-key detection, concurrent ID allocation (20 goroutines × 5 rounds racing on the same `.alloc.lock`), Unicode-aware kebab slugging, checkbox parse/mutate idempotency.
+## Open Questions
 
-**Unit — check (`internal/check`)**: ~20 rules individually tested (schema, duplicate-id, dangling-ref ×3 shapes, cycle, criteria-incomplete, criteria-evidence, lock-consistency, stale-pipping-hint, etc.).
-
-**Unit — graph (`internal/graph`)**: 3-wave topological sort, cycle detection (5 scenarios including dangling-dep-is-not-a-cycle), ready-set computation.
-
-**Unit — lock (`internal/lock`)**: acquire/release/get, held-conflict error, 16-way concurrent-acquire contention (exactly one winner), atomic-write verification (500 iterations, no partial file ever observed by a racing reader), corrupt-brood-file skip-and-continue.
-
-**Unit — nest (`internal/nest`)**: fixed frontmatter key order for both doc kinds, body-preservation round-trip, stub detection (`IsStub`), and `Status()` (the exact logic behind `fledge nest status`'s complete/incomplete verdict this forager run is gated on).
-
-**Unit — bootstrap (`internal/bootstrap`)**: every adapter manifest parses and its file sources exist; primitive-coverage matches expected tier per adapter (claude=C, codex=A, pi=A); core prose is harness-neutral (`TestCoreNeutral` — no `.claude/`/`.pi/`/`.codex/`/`.cursor/` mentions) and references every primitive (no dead contract); write-policy classification (fresh/refresh/no-refresh/edited) for both `WriteCore` and `WriteAdapter`; drift classification across all 5 states; skill-symlink idempotency and duplicate-skill guard; prose-invariant tests pinning exact wording in `team-loop.md`/`implementation.md`/skua protocol text.
-
-**Unit — cli (`internal/cli`)**: `commandOrder` ↔ registered-commands parity (prevents silent usage/allow-list omission), binary-version-matches-VERSION-file pin, lock-rollback-on-write-failure, GitHub-release update flow (mocked HTTP, tar.gz build/extract, checksum match, atomic swap).
-
-**"Docs/CI-as-tests"** (`internal/ciconfig`, `internal/doctest`, `internal/hooktest`) — these packages hold no runtime code, only tests that parse `.github/workflows/*.yml` and assert on job/trigger/matrix shape, assert README/RELEASING mention specific commands, and run the actual `scripts/hooks/pre-commit` script end-to-end against real temp git repos (blocks unformatted/vet-failing commits, no-ops when `core.hooksPath` isn't configured).
-
-## Determinism guarantees
-
-Git environment isolation in every txtar test; byte-identical marshaling for `.fledge/scaffold.json` (sorted JSON keys); `writeIfChanged()` byte-comparison before any scaffold write — together these make repeated `fledge init --refresh` runs and the acceptance suite reproducible across machines.
+None observed beyond conventions.md's note on `ciconfig`'s two-file split.
