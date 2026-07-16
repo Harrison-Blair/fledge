@@ -37,6 +37,49 @@ func TestAcquireReleaseGet(t *testing.T) {
 	}
 }
 
+// TestWorktreeRoundTrip pins that a non-empty Worktree survives the JSON
+// marshal/unmarshal through Acquire/Get/List.
+func TestWorktreeRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	in := rec("FTHR-050", "adelie")
+	in.Worktree = "/tmp/wt/FTHR-050"
+	if err := Acquire(dir, in); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Get(dir, "FTHR-050")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Worktree != "/tmp/wt/FTHR-050" {
+		t.Errorf("Get Worktree = %q, want /tmp/wt/FTHR-050", got.Worktree)
+	}
+	recs, _, err := List(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 || recs[0].Worktree != "/tmp/wt/FTHR-050" {
+		t.Errorf("List Worktree = %+v, want /tmp/wt/FTHR-050", recs)
+	}
+}
+
+// TestWorktreeBackwardCompat pins that a .brood file written before this
+// change (JSON with no "worktree" key) still unmarshals cleanly with an empty
+// Worktree.
+func TestWorktreeBackwardCompat(t *testing.T) {
+	dir := t.TempDir()
+	legacy := `{"feather":"FTHR-001","owner":"adelie","pid":1,"created":"2026-07-06T12:00:00Z","branch":"main"}`
+	if err := os.WriteFile(filepath.Join(dir, "FTHR-001.brood"), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Get(dir, "FTHR-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Worktree != "" {
+		t.Errorf("legacy record Worktree = %q, want empty", got.Worktree)
+	}
+}
+
 func TestAcquireHeld(t *testing.T) {
 	dir := t.TempDir()
 	if err := Acquire(dir, rec("FTHR-001", "adelie")); err != nil {

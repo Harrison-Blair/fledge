@@ -78,6 +78,17 @@ stdout '"owner": "weddell"'
 stdout '"pid": [0-9]+'
 stdout '"created": "'
 stdout '"branch": "'
+# --worktree omitted: worktree is empty
+stdout '"worktree": ""'
+exec fledge abandon FTHR-002 --force
+
+# brood --worktree stores the path in the claim record
+exec fledge brood FTHR-002 --owner weddell --worktree /some/path --json
+stdout '"worktree": "/some/path"'
+exec fledge abandon FTHR-002 --force
+
+# re-claim FTHR-002 (no worktree) so the pid_alive/abandon flow below continues
+exec fledge brood FTHR-002 --owner weddell
 
 # broods --json includes pid_alive alongside the record fields
 exec fledge broods --json

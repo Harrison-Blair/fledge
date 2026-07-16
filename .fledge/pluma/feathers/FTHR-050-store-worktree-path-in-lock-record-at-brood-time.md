@@ -63,12 +63,12 @@ then implemented until they pass (satisfies PLM-025 FC-1, AC-1).
 
 ## Acceptance Criteria
 Checkbox list, one `- [ ] AC-N: …` line per criterion — authored unchecked; checked only via `fledge criteria check`, with per-criterion evidence in `.fledge/molt/FTHR-050.md`. Reference the parent plumage's criteria where applicable (e.g. "satisfies PLM-025 FC-2"). AC-1 is always:
-- [ ] AC-1: The tests listed above were observed failing before implementation
+- [x] AC-1: The tests listed above were observed failing before implementation
   and pass after; evidence captured verbatim.
-- [ ] AC-2: `lock.Record` has a `Worktree` field, populated by `fledge brood
+- [x] AC-2: `lock.Record` has a `Worktree` field, populated by `fledge brood
   --worktree <path>` at claim time, defaulting to empty when omitted
   (satisfies PLM-025 FC-1, AC-1).
-- [ ] AC-3: `implementation.md`'s §3.1 step 5 claim instruction passes
+- [x] AC-3: `implementation.md`'s §3.1 step 5 claim instruction passes
   `--worktree <path>`; this repo's scaffolded copy is refreshed to match.
-- [ ] AC-4: `go test ./internal/lock/... ./internal/cli/...` passes and
+- [x] AC-4: `go test ./internal/lock/... ./internal/cli/...` passes and
   `go test ./cmd/fledge -run TestScripts` passes.
