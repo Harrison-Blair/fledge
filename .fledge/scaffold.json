@@ -90,7 +90,7 @@
     },
     ".fledge/skills/fledge-orchestrate/planning.md": {
       "policy": "core",
-      "sha256": "7cdbad12606c3070919670f59f54d7f5d2a845d52c19423071eaa1fd26a810a8"
+      "sha256": "c1f0b511e705b9908b474cca942956d96d7c5fd6fa3683bd54d98e0f8b66517e"
     },
     ".fledge/skills/fledge-orchestrate/skua.md": {
       "policy": "core",
