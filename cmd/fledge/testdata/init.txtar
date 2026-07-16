@@ -77,3 +77,10 @@ grep 'never just `name: "adelie"`' .claude/team-loop.md
 grep 'already pass the complete `fledge-incubator-<species>`/`fledge-forager-<species>` string' .claude/team-loop.md
 grep 'consistent with the binding in' .claude/team-loop.md
 grep 'appears in the team roster under that exact full name before proceeding' .claude/team-loop.md
+
+# plumage closeout queries `fledge colony --json` for the last-feather
+# decision instead of the orchestrator mentally tracking it (FTHR-047): both
+# the solo (§2) and team (§3) closeout steps instruct running it, and the old
+# "if that was the last unfinished feather" mental-tracking phrasing is gone
+grep -count=2 'fledge colony --json' .fledge/skills/fledge-orchestrate/implementation.md
+! grep 'last unfinished feather' .fledge/skills/fledge-orchestrate/implementation.md
