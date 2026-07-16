@@ -6,7 +6,7 @@ A spawn prompt is a worker's entire context — it inherits no conversation hist
 
 ## Commissioner
 
-You are the commissioner when you spawn a forager and wait on it: the orchestrator on a standalone context-regeneration request or when planning runs inline, or the incubator when planning is delegated. This section is the single source of truth for how to wait — `planning.md` §2 and `worker-protocols.md` point here. Your entire job while the forager runs is to **wait correctly and cheaply**. The forager does the work; you must not shadow it.
+You are the commissioner when you spawn a forager and wait on it: the orchestrator on a standalone context-regeneration request or when planning runs inline, or the incubator when planning is delegated. This section is the single source of truth for how to wait — `planning.md` §2 and `incubator.md` point here. Your entire job while the forager runs is to **wait correctly and cheaply**. The forager does the work; you must not shadow it.
 
 **Obtain the forager.** Spawn a `fledge-forager` worker (named per the species scheme in `implementation.md` §3.1), or — if you cannot spawn workers yourself — request one via the channel your protocol defines, naming yourself as the party it reports to. Foragers are one-shot: obtain a fresh one for each regeneration. If you provide no `spawn-worker` at all, you have no forager to wait on — run the forager pipeline below yourself, sequentially, instead of reading this section.
 
