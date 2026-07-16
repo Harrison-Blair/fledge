@@ -64,3 +64,16 @@ grep 'all four teammate roles — brooder, skua, forager, incubator' .claude/tea
 ! grep 'do this for the brooder \*and\* its paired skua at green teardown' .claude/team-loop.md
 grep 'roster absence alone suffices there' .claude/team-loop.md
 ! grep 'the teammate no longer appears in the team roster and its tmux pane has closed' .claude/team-loop.md
+
+# spawn name bound to the full role-species prefix (FTHR-042): the spawn
+# tool's `name` argument must be the complete `fledge-<role>-<species>`
+# string, not the bare species (AC-2), the old ambiguous phrasing is gone
+# (AC-2), the planning-delegation callouts cross-reference the binding
+# (AC-3), and a post-spawn roster self-check is present (AC-4)
+grep 'must be the complete `fledge-<role>-<species>` string' .claude/team-loop.md
+grep 'name: "fledge-brooder-adelie"' .claude/team-loop.md
+grep 'never just `name: "adelie"`' .claude/team-loop.md
+! grep 'named per the penguin-species scheme in `implementation.md` §3.1.' .claude/team-loop.md
+grep 'already pass the complete `fledge-incubator-<species>`/`fledge-forager-<species>` string' .claude/team-loop.md
+grep 'consistent with the binding in' .claude/team-loop.md
+grep 'appears in the team roster under that exact full name before proceeding' .claude/team-loop.md

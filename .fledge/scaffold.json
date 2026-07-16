@@ -46,7 +46,7 @@
     },
     ".claude/team-loop.md": {
       "policy": "overwrite",
-      "sha256": "feecb2245d4b82d91de813f2741de092fb43bfe1fd3dadc8dd4096e990ea129b"
+      "sha256": "f34e7f4f42564a4afd6d2fea58682d240370e75c4ca9a13b879e4c4712f38c09"
     },
     ".fledge/broods/.gitkeep": {
       "policy": "default",
