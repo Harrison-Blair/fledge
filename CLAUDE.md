@@ -120,7 +120,7 @@ scaffolds. This is the part to understand before touching init.
 - **`core/`** is the single agent-neutral source: the `fledge-orchestrate` and
   `fledge-interrogate` skills. Written to a repo's `.fledge/skills/` by
   `WriteCore`. This is where the actual workflow prose (planning.md,
-  implementation.md, worker-protocols.md, templates/) lives.
+  implementation.md, worker-protocols.md, incubator.md, brooder.md, skua.md, templates/) lives.
 - **`adapters/<harness>/`** is a thin format-only mapping per harness. Each is
   driven entirely by its **`manifest.yaml`** (`registry.go` → `Manifest`) — the
   detector, the `tier_primitives` map, and a file list with per-file write
