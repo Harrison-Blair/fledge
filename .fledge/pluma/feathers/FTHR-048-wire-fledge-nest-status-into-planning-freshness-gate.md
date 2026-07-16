@@ -60,12 +60,12 @@ reference to describe the same `nest status --json` mechanism instead of
 
 ## Acceptance Criteria
 Checkbox list, one `- [ ] AC-N: …` line per criterion — authored unchecked; checked only via `fledge criteria check`, with per-criterion evidence in `.fledge/molt/FTHR-048.md`. Reference the parent plumage's criteria where applicable (e.g. "satisfies PLM-024 FC-2"). AC-1 is always:
-- [ ] AC-1: The test listed above was observed failing before implementation
+- [x] AC-1: The test listed above was observed failing before implementation
   and passes after; evidence captured verbatim.
-- [ ] AC-2: `planning.md`'s freshness gate reads `index_commit_matches` from
+- [x] AC-2: `planning.md`'s freshness gate reads `index_commit_matches` from
   `fledge nest status --json` for the equality verdict, retains its own
   `git log --oneline` staleness summary for the mismatch case, and
   `implementation.md`'s cross-reference is updated to match (satisfies
   PLM-024 FC-2, AC-2).
-- [ ] AC-3: `fledge init --refresh` regenerates this repo's scaffolded copies
+- [x] AC-3: `fledge init --refresh` regenerates this repo's scaffolded copies
   to match, and `go test ./cmd/fledge -run TestScripts` passes.

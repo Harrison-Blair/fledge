@@ -1,0 +1,28 @@
+# fledge init: planning.md freshness gate reads `fledge nest status --json`
+# (FTHR-048). The §1 gate must delegate the commit==HEAD verdict to the
+# `index_commit_matches` field rather than hand-parsing frontmatter, while
+# keeping its own `git log --oneline` staleness summary for the mismatch case;
+# implementation.md's cross-reference must describe the same mechanism.
+exec git init -q .
+
+exec fledge init
+exists .fledge/skills/fledge-orchestrate/planning.md
+exists .fledge/skills/fledge-orchestrate/implementation.md
+
+# planning.md §1 runs `fledge nest status --json` and branches on the
+# `index_commit_matches` field for the equality verdict.
+grep 'fledge nest status --json' .fledge/skills/fledge-orchestrate/planning.md
+grep 'index_commit_matches' .fledge/skills/fledge-orchestrate/planning.md
+
+# The mismatch case still summarizes staleness with `git log --oneline`,
+# keyed off the JSON's `index_commit` field.
+grep 'git log --oneline <index_commit>..HEAD' .fledge/skills/fledge-orchestrate/planning.md
+
+# The old hand-parse language is gone from the gate.
+! grep 'git rev-parse HEAD' .fledge/skills/fledge-orchestrate/planning.md
+
+# implementation.md's freshness-gate cross-reference describes the same
+# `fledge nest status --json` → `index_commit_matches` mechanism, not the old
+# "compare … commit to HEAD" hand-parse.
+grep 'fledge nest status --json.*index_commit_matches' .fledge/skills/fledge-orchestrate/implementation.md
+! grep 'commit to HEAD' .fledge/skills/fledge-orchestrate/implementation.md

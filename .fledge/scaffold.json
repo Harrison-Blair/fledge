@@ -78,11 +78,11 @@
     },
     ".fledge/skills/fledge-orchestrate/implementation.md": {
       "policy": "core",
-      "sha256": "d7ef0b794b462cd221d85b8c706345e879279a4f2e0e3a0fb7d8c5c08da546dd"
+      "sha256": "71e08562d2285e2ca8c262ed60e957416363bf5a4be26711a4f9848968b1fce0"
     },
     ".fledge/skills/fledge-orchestrate/planning.md": {
       "policy": "core",
-      "sha256": "30e57e998d3b420cbe8687e2586d889106d11314608e44e981652c94f0091011"
+      "sha256": "bf1de77b7f2f8e9281d33b518920bb7aff5fdfda4a879c240e3d0a223dc3eb34"
     },
     ".fledge/skills/fledge-orchestrate/templates/context-doc.md": {
       "policy": "core",

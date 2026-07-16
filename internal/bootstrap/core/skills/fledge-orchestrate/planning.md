@@ -20,9 +20,9 @@ From here on, **"you" means whoever runs the phase**: the incubator when delegat
 ## 1. Freshness gate
 
 - If `.fledge/nest/index.md` does not exist → go to step 2.
-- Otherwise compare the `commit` in its frontmatter to `git rev-parse HEAD`:
-  - Equal → context is fresh; skip to step 3.
-  - Different → summarize the staleness (`git log --oneline <commit>..HEAD`: how many commits, which areas changed) and run a `confirm-gate` (decision): regenerate context, or proceed with existing context. Respect their choice.
+- Otherwise run `fledge nest status --json` and read `index_commit_matches`:
+  - `true` → context is fresh; skip to step 3.
+  - `false` → summarize the staleness (`git log --oneline <index_commit>..HEAD`, where `<index_commit>` is the `index_commit` field from that same JSON: how many commits, which areas changed) and run a `confirm-gate` (decision): regenerate context, or proceed with existing context. Respect their choice.
 
 ## 2. Gather context (when needed)
 
