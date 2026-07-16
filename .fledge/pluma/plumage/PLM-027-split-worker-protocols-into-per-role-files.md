@@ -1,7 +1,7 @@
 ---
 id: PLM-027
 title: Split worker-protocols into per-role files
-status: hatched
+status: fledged
 priority: P1
 authored: 2026-07-16T15:45:08Z
 agent: fledge-orchestrate/planning
@@ -29,12 +29,12 @@ This is a pure mechanical reorganization: content moves verbatim into new files 
 7. FC-7: `fledge init --refresh` on a previously-scaffolded repo removes the obsolete monolithic content and writes the new files cleanly (drift classification treats this as an ordinary content change, not a special case).
 
 ## Acceptance Criteria
-- [ ] AC-1: `incubator.md`, `brooder.md`, `skua.md` exist under `.fledge/skills/fledge-orchestrate/` (and their `internal/bootstrap/core/` source), each containing its role's content verbatim (diff against the pre-split section shows no wording changes beyond the heading level).
-- [ ] AC-2: `worker-protocols.md` contains only the shared spawn-prompt contract paragraph and links to the three new files.
-- [ ] AC-3: A repo-wide search for `worker-protocols.md#` / `worker-protocols.md §` finds zero remaining stale section references; every prior citation now points at the correct per-role file.
-- [ ] AC-4: `internal/bootstrap/worker_protocols_test.go` is replaced by `incubator_test.go`, `brooder_test.go`, `skua_test.go`, each passing against the corresponding new embedded file.
-- [ ] AC-5: `go test ./...` and `go test ./cmd/fledge -run TestScripts` pass, including updated `forager_contract.txtar` and `init_agents.txtar`.
-- [ ] AC-6: `fledge preen` passes on this repo after the split and after running `fledge init --refresh`.
+- [x] AC-1: `incubator.md`, `brooder.md`, `skua.md` exist under `.fledge/skills/fledge-orchestrate/` (and their `internal/bootstrap/core/` source), each containing its role's content verbatim (diff against the pre-split section shows no wording changes beyond the heading level).
+- [x] AC-2: `worker-protocols.md` contains only the shared spawn-prompt contract paragraph and links to the three new files.
+- [x] AC-3: A repo-wide search for `worker-protocols.md#` / `worker-protocols.md §` finds zero remaining stale section references; every prior citation now points at the correct per-role file.
+- [x] AC-4: `internal/bootstrap/worker_protocols_test.go` is replaced by `incubator_test.go`, `brooder_test.go`, `skua_test.go`, each passing against the corresponding new embedded file.
+- [x] AC-5: `go test ./...` and `go test ./cmd/fledge -run TestScripts` pass, including updated `forager_contract.txtar` and `init_agents.txtar`.
+- [x] AC-6: `fledge preen` passes on this repo after the split and after running `fledge init --refresh`.
 
 ## Out of Scope
 - Any wording, structure, or protocol-behavior change to the Incubator/Brooder/Skua content itself — pure move only. (Content changes are carried by PLM-028 and PLM-029, which amend `incubator.md` after this split lands.)
