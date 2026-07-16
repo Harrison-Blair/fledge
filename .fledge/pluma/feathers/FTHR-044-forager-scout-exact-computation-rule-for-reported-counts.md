@@ -59,8 +59,8 @@ numbers) per this plumage's Out of Scope.
 
 ## Acceptance Criteria
 Checkbox list, one `- [ ] AC-N: …` line per criterion — authored unchecked; checked only via `fledge criteria check`, with per-criterion evidence in `.fledge/molt/FTHR-044.md`. Reference the parent plumage's criteria where applicable (e.g. "satisfies PLM-023 FC-2"). AC-1 is always:
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after; evidence captured verbatim.
-- [ ] AC-2: `foraging.md`'s core source states the exact-computation-for-counts
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after; evidence captured verbatim.
+- [x] AC-2: `foraging.md`'s core source states the exact-computation-for-counts
   rule as a generic authoring requirement (satisfies PLM-023 FC-2, AC-2).
-- [ ] AC-3: `fledge init --refresh` regenerates this repo's scaffolded copy to
+- [x] AC-3: `fledge init --refresh` regenerates this repo's scaffolded copy to
   match, and `go test ./cmd/fledge -run TestScripts` passes.
