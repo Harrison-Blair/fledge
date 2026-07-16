@@ -36,8 +36,8 @@ This feather's "tests" are the full verification suite itself, run as a black-bo
 - Test-first framing: before this feather's `--refresh` step runs, `fledge preen` is expected to report the scaffold as stale/drifted against the new `internal/bootstrap/core` content (since B/C/D changed the source but this repo's own `.fledge/skills/` copies haven't been resynced yet) — capture that as the "failing for the expected reason" state, then run `--refresh` and confirm `preen` turns clean.
 
 ## Acceptance Criteria
-- [ ] AC-1: `fledge preen` was observed reporting scaffold drift before `--refresh` (or, if FTHR-058/059/060 already ran `--refresh` incidentally — unlikely per Approach step-ordering but note it if so) and reports clean after.
-- [ ] AC-2: `fledge init --refresh` completes with only the expected file set touched (satisfies PLM-027 FC-7).
-- [ ] AC-3: `fledge preen` passes (satisfies PLM-027 AC-6).
-- [ ] AC-4: `go vet ./...` and `go test ./...` pass (satisfies PLM-027 AC-5).
-- [ ] AC-5: `go test ./cmd/fledge -run TestScripts` passes in full (satisfies PLM-027 AC-5).
+- [x] AC-1: `fledge preen` was observed reporting scaffold drift before `--refresh` (or, if FTHR-058/059/060 already ran `--refresh` incidentally — unlikely per Approach step-ordering but note it if so) and reports clean after.
+- [x] AC-2: `fledge init --refresh` completes with only the expected file set touched (satisfies PLM-027 FC-7).
+- [x] AC-3: `fledge preen` passes (satisfies PLM-027 AC-6).
+- [x] AC-4: `go vet ./...` and `go test ./...` pass (satisfies PLM-027 AC-5).
+- [x] AC-5: `go test ./cmd/fledge -run TestScripts` passes in full (satisfies PLM-027 AC-5).
