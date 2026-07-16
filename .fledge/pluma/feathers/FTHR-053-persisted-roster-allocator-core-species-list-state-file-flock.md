@@ -85,13 +85,13 @@ PLM-026 FC-4, AC-4).
 
 ## Acceptance Criteria
 Checkbox list, one `- [ ] AC-N: …` line per criterion — authored unchecked; checked only via `fledge criteria check`, with per-criterion evidence in `.fledge/molt/FTHR-053.md`. Reference the parent plumage's criteria where applicable (e.g. "satisfies PLM-026 FC-2"). AC-1 is always:
-- [ ] AC-1: The tests listed above were observed failing before implementation
+- [x] AC-1: The tests listed above were observed failing before implementation
   and pass after; evidence captured verbatim.
-- [ ] AC-2: `internal/roster.Species` holds the confirmed 18-species list in
+- [x] AC-2: `internal/roster.Species` holds the confirmed 18-species list in
   the confirmed order.
-- [ ] AC-3: `Assign`/`Release`/`List` behave as specified, including
+- [x] AC-3: `Assign`/`Release`/`List` behave as specified, including
   numeric-suffix overflow past 18 and per-member release tracking (satisfies
   PLM-026 FC-1, FC-2, FC-3 at the package level — CLI exposure is FTHR-054).
-- [ ] AC-4: The concurrency test demonstrates no double-allocation under
+- [x] AC-4: The concurrency test demonstrates no double-allocation under
   simultaneous `Assign` calls (satisfies PLM-026 FC-4, AC-4).
-- [ ] AC-5: `go test ./internal/roster/...` passes.
+- [x] AC-5: `go test ./internal/roster/...` passes.
