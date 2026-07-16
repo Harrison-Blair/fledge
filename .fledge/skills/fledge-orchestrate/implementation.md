@@ -30,6 +30,8 @@ Fledge's workflow is written to six primitives. Your adapter declares which it p
 
 ## 1. Resolve scope
 
+If `.fledge/scratch/digest-planning.md` exists, read it first as grounding context — it is the planning phase's close-out digest (what was decided, what was produced, where to look), written so you don't have to rely on the conversation still holding that detail. Reading it is best-effort: a missing file (e.g. no planning phase has run in this repo yet) means proceed without it.
+
 Map the user's request to a feather set:
 
 - "implement PLM-###" → all of that plumage's feathers.
@@ -122,6 +124,8 @@ When no feathers remain in the set that are unfinished and dispatchable, verify 
 - feathers completed (merged, suite green) vs. blocked or escalated, with reasons
 - merges performed and the final suite status on main
 - any feathers newly unblocked outside the run's scope that could be implemented next
+
+Then write `.fledge/scratch/digest-implementation.md` (`write-file`, overwriting any prior one — only the latest run's outcome matters) containing: the outcome (which feathers merged, the current suite status on main), the key decisions made during escalation triage (§4) if any — the resolved decisions and their rationale, not the full exchange — and pointers to the merged feathers' spec files. It is prose, not a transcript replay; the next phase reads it instead of assuming this conversation is still available.
 
 ## 6. Recovery after resume
 
