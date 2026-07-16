@@ -1,7 +1,7 @@
 ---
 id: PLM-024
 title: Wire deterministic CLI queries into workflow closeout and freshness gates
-status: hatched
+status: fledged
 priority: P2
 authored: 2026-07-16T01:33:22Z
 agent: fledge-orchestrate/planning
@@ -76,23 +76,23 @@ Numbered, testable statements of behavior. Referenced downstream as FC-1, FC-2, 
 
 ## Acceptance Criteria
 Checkbox list of verifiable conditions under which this plumage is considered fledged, one `- [ ] AC-N: …` line each. Authored unchecked; checked only via `fledge criteria check` at plumage closeout.
-- [ ] AC-1: `implementation.md`'s closeout step (both solo and team paths, core
+- [x] AC-1: `implementation.md`'s closeout step (both solo and team paths, core
   source in `internal/bootstrap/core/skills/fledge-orchestrate/`) instructs
   querying `fledge colony --json` and using its `fledged`/`total` counts to
   gate plumage closeout, replacing the prior "was this the last feather"
   mental-tracking language; this repo's scaffolded copy is refreshed to
   match (FC-1).
-- [ ] AC-2: `planning.md`'s freshness gate (core source) instructs running
+- [x] AC-2: `planning.md`'s freshness gate (core source) instructs running
   `fledge nest status --json` and branching on `index_commit_matches`, with
   the existing `git log --oneline` staleness-summary step retained for the
   mismatch case; the `implementation.md` cross-reference is updated; this
   repo's scaffolded copies are refreshed to match (FC-2).
-- [ ] AC-3: `internal/cli/init.go`'s `gitignoreLines` includes `.alloc.lock`;
+- [x] AC-3: `internal/cli/init.go`'s `gitignoreLines` includes `.alloc.lock`;
   a `cmd/fledge` txtar test (e.g. `init.txtar` or `init_agents.txtar`) asserts
   the generated `.gitignore` contains it; this repo's own `.gitignore` is
   refreshed and `git check-ignore` confirms both existing `.alloc.lock` files
   are now ignored (FC-3).
-- [ ] AC-4: `go test ./...` passes and `fledge preen` reports the scaffold
+- [x] AC-4: `go test ./...` passes and `fledge preen` reports the scaffold
   healthy after `fledge init --refresh`.
 
 ## Out of Scope
