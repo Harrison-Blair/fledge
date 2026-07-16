@@ -2,7 +2,7 @@
 id: FTHR-057
 title: Split worker-protocols content into per-role files
 plumage: PLM-027
-status: pipping
+status: fledged
 priority: P1
 depends_on: []
 authored: 2026-07-16T16:15:06Z

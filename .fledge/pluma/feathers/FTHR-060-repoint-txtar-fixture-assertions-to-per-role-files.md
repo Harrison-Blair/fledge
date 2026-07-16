@@ -2,7 +2,7 @@
 id: FTHR-060
 title: Repoint txtar fixture assertions to per-role files
 plumage: PLM-027
-status: egg
+status: fledged
 priority: P1
 depends_on: [FTHR-057]
 authored: 2026-07-16T16:17:46Z
