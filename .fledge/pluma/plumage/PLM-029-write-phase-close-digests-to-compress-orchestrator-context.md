@@ -1,7 +1,7 @@
 ---
 id: PLM-029
 title: Write phase-close digests to compress orchestrator context
-status: hatched
+status: fledged
 priority: P2
 authored: 2026-07-16T16:07:27Z
 agent: fledge-orchestrate/planning
@@ -30,11 +30,11 @@ This plumage introduces a phase-close digest: whoever ran a phase (the incubator
 7. FC-7: Codex/pi adapters (Tier A, solo in-session) are unaffected — they have no orchestrator/worker relay to compress in the first place, so no piping-note change is needed there.
 
 ## Acceptance Criteria
-- [ ] AC-1: `planning.md`'s phase-close step (3.4/4.7 closing report) includes writing `digest-planning.md`; `foraging.md`'s Commissioner section's forager-final-message step includes writing `digest-foraging.md`; `implementation.md`'s closing step includes writing `digest-implementation.md`.
-- [ ] AC-2: Each of the three phase files' opening step references reading its predecessor's digest (if present) as grounding context.
-- [ ] AC-3: `.claude/team-loop.md` (or the correct piping doc) documents the `/compact`-is-safe-now advisory note tied to digest completion.
-- [ ] AC-4: A sample digest file for at least one phase (e.g. this very planning phase's `digest-planning.md`, written when this plumage's own planning phase closes) demonstrates the format: outcome, key decisions, spec pointers — no full Q&A transcript.
-- [ ] AC-5: `fledge preen` passes after the change; `fledge init --refresh` on this repo shows no unexpected drift beyond the intended prose changes.
+- [x] AC-1: `planning.md`'s phase-close step (3.4/4.7 closing report) includes writing `digest-planning.md`; `foraging.md`'s Commissioner section's forager-final-message step includes writing `digest-foraging.md`; `implementation.md`'s closing step includes writing `digest-implementation.md`.
+- [x] AC-2: Each of the three phase files' opening step references reading its predecessor's digest (if present) as grounding context.
+- [x] AC-3: `.claude/team-loop.md` (or the correct piping doc) documents the `/compact`-is-safe-now advisory note tied to digest completion.
+- [x] AC-4: A sample digest file for at least one phase (e.g. this very planning phase's `digest-planning.md`, written when this plumage's own planning phase closes) demonstrates the format: outcome, key decisions, spec pointers — no full Q&A transcript.
+- [x] AC-5: `fledge preen` passes after the change; `fledge init --refresh` on this repo shows no unexpected drift beyond the intended prose changes.
 
 ## Out of Scope
 - Any new `fledge` CLI command for digest read/write (plain file I/O, per FC-1 — consistent with PLM-028's scratchpad mechanism).
