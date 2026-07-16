@@ -61,11 +61,11 @@ change in each is replacing in-context bookkeeping with the corresponding
 
 ## Acceptance Criteria
 Checkbox list, one `- [ ] AC-N: …` line per criterion — authored unchecked; checked only via `fledge criteria check`, with per-criterion evidence in `.fledge/molt/FTHR-055.md`. Reference the parent plumage's criteria where applicable (e.g. "satisfies PLM-026 FC-2"). AC-1 is always:
-- [ ] AC-1: The test listed above was observed failing before implementation
+- [x] AC-1: The test listed above was observed failing before implementation
   and passes after; evidence captured verbatim.
-- [ ] AC-2: `implementation.md`'s §3.1, §3.5, and §6 are rewritten per FC-5
+- [x] AC-2: `implementation.md`'s §3.1, §3.5, and §6 are rewritten per FC-5
   (satisfies PLM-026 FC-5, AC-5).
-- [ ] AC-3: `fledge init --refresh` regenerates this repo's scaffolded copy to
+- [x] AC-3: `fledge init --refresh` regenerates this repo's scaffolded copy to
   match, and `go test ./cmd/fledge -run TestScripts` passes.
-- [ ] AC-4: `go test ./...` passes and `fledge preen` reports the scaffold
+- [x] AC-4: `go test ./...` passes and `fledge preen` reports the scaffold
   healthy after the refresh (satisfies PLM-026 AC-6).
