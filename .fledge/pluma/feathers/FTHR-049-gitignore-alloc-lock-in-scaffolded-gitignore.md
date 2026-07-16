@@ -2,7 +2,7 @@
 id: FTHR-049
 title: Gitignore .alloc.lock in scaffolded .gitignore
 plumage: PLM-024
-status: pipping
+status: fledged
 priority: P2
 depends_on: []
 authored: 2026-07-16T01:57:23Z
