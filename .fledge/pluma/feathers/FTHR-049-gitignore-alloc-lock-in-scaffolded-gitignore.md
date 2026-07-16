@@ -52,13 +52,13 @@ files in this repo after regeneration.
 
 ## Acceptance Criteria
 Checkbox list, one `- [ ] AC-N: …` line per criterion — authored unchecked; checked only via `fledge criteria check`, with per-criterion evidence in `.fledge/molt/FTHR-049.md`. Reference the parent plumage's criteria where applicable (e.g. "satisfies PLM-024 FC-2"). AC-1 is always:
-- [ ] AC-1: The tests listed above were observed failing before implementation
+- [x] AC-1: The tests listed above were observed failing before implementation
   and pass after; evidence captured verbatim.
-- [ ] AC-2: `internal/cli/init.go`'s `gitignoreLines` includes an entry that
+- [x] AC-2: `internal/cli/init.go`'s `gitignoreLines` includes an entry that
   matches `.alloc.lock` at any allocation-directory depth (satisfies PLM-024
   FC-3, AC-3).
-- [ ] AC-3: This repo's own `.gitignore` is refreshed via `fledge init
+- [x] AC-3: This repo's own `.gitignore` is refreshed via `fledge init
   --refresh`, and `git check-ignore .fledge/pluma/plumage/.alloc.lock
   .fledge/pluma/feathers/.alloc.lock` confirms both are ignored (satisfies
   PLM-024 AC-3).
-- [ ] AC-4: `go test ./cmd/fledge -run TestScripts` passes.
+- [x] AC-4: `go test ./cmd/fledge -run TestScripts` passes.
