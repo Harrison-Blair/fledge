@@ -2,7 +2,7 @@
 id: FTHR-070
 title: Document the compact advisory in the Claude piping notes
 plumage: PLM-029
-status: pipping
+status: fledged
 priority: P2
 depends_on: []
 authored: 2026-07-16T16:38:10Z
