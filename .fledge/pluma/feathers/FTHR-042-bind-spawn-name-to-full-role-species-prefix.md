@@ -43,9 +43,9 @@ Written test-first as new `grep`/`! grep` assertions in `cmd/fledge/testdata/*.t
 Order: (1) write T1–T4 against the *current* scaffolded `.claude/team-loop.md` (post FTHR-041's merge, pre this feather's edits) and confirm each new assertion FAILS for the expected reason (new text absent / old text still present); capture that output verbatim as AC-1 evidence. (2) Make the prose edits per Approach. (3) `fledge init --refresh`. (4) Re-run `go test ./cmd/fledge -run TestScripts` until all pass, and run `fledge preen` clean.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above (T1–T4) were observed failing before implementation, for the expected reason, and pass after implementation.
-- [ ] AC-2: `team-loop.md`'s "Spawning and addressing teammates" section states the full-string requirement for the spawn tool's `name` argument with a correct/incorrect example, replacing the old ambiguous phrasing (satisfies PLM-022 FC-1 / AC-1).
-- [ ] AC-3: the "Planning delegation" incubator/forager spawn callouts remain consistent with that explicit binding (satisfies PLM-022 FC-2 / AC-2).
-- [ ] AC-4: `team-loop.md` states the post-spawn roster self-check (satisfies PLM-022 FC-3 / AC-3).
-- [ ] AC-5: the `cmd/fledge` txtar fixtures are updated and `go test ./cmd/fledge -run TestScripts` passes (satisfies PLM-022 AC-4).
-- [ ] AC-6: `fledge init --refresh` regenerates this repo's own scaffold and `fledge preen` passes clean (satisfies PLM-022 AC-5).
+- [x] AC-1: The tests listed above (T1–T4) were observed failing before implementation, for the expected reason, and pass after implementation.
+- [x] AC-2: `team-loop.md`'s "Spawning and addressing teammates" section states the full-string requirement for the spawn tool's `name` argument with a correct/incorrect example, replacing the old ambiguous phrasing (satisfies PLM-022 FC-1 / AC-1).
+- [x] AC-3: the "Planning delegation" incubator/forager spawn callouts remain consistent with that explicit binding (satisfies PLM-022 FC-2 / AC-2).
+- [x] AC-4: `team-loop.md` states the post-spawn roster self-check (satisfies PLM-022 FC-3 / AC-3).
+- [x] AC-5: the `cmd/fledge` txtar fixtures are updated and `go test ./cmd/fledge -run TestScripts` passes (satisfies PLM-022 AC-4).
+- [x] AC-6: `fledge init --refresh` regenerates this repo's own scaffold and `fledge preen` passes clean (satisfies PLM-022 AC-5).
