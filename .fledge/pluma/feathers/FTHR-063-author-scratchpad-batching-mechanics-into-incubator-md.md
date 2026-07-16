@@ -30,7 +30,7 @@ Add a new subsection (e.g. "### Scratchpad batching") under `incubator.md`'s exi
 - Implementation order: write the test against `incubator.md` as FTHR-057 leaves it (fails — none of this content exists yet), then add the subsection, confirm it passes.
 
 ## Acceptance Criteria
-- [ ] AC-1: The test listed above was observed failing before implementation and passes after.
-- [ ] AC-2: `incubator.md` documents the batchable/individual-gate rule, scratchpad naming/lifecycle, and the `GATE review` reuse mechanics (satisfies PLM-028 AC-2).
-- [ ] AC-3: The new subsection states the batching model applies to both plumage and feather interrogation (satisfies PLM-028 FC-9).
-- [ ] AC-4: `go test ./internal/bootstrap/...` passes.
+- [x] AC-1: The test listed above was observed failing before implementation and passes after.
+- [x] AC-2: `incubator.md` documents the batchable/individual-gate rule, scratchpad naming/lifecycle, and the `GATE review` reuse mechanics (satisfies PLM-028 AC-2).
+- [x] AC-3: The new subsection states the batching model applies to both plumage and feather interrogation (satisfies PLM-028 FC-9).
+- [x] AC-4: `go test ./internal/bootstrap/...` passes.

@@ -14,6 +14,14 @@ All user interaction goes through the orchestrator as `message-peer` messages �
 
 Wait for each answer before proceeding — idling while the user decides is normal and is not completion; stay alive and addressable. A relayed refusal pauses the phase cleanly per the confirm-gate ground rule: spec state untouched, report `paused at <gate>, awaiting your direction`, and idle awaiting direction.
 
+### Scratchpad batching
+
+One decision per message does not mean one *question* per message: interrogation questions whose answers are independent leaves may travel as a single batch through a scratchpad file. The rule: a question is batchable when its answer doesn't change what else needs asking — naming, priority, in/out-of-scope calls, test-framework picks, oversight level. A question stays an individually relayed `GATE`/`QUESTION` when it is load-bearing for the rest of the tree: the plumage-breakdown decision and every spec-draft review gate are always individual, never placed in a scratchpad batch.
+
+Mechanics: write the batch — every question with your recommended answer — to `.fledge/scratch/PLM-<slug-or-###>-questions.md` (or `FTHR-<slug-or-###>-questions.md` for a feather), overwriting any prior batch for the same tree (no archiving). Relay exactly one `GATE review` pointing at the file path with the instruction "answer inline, then Accept" — this reuses the existing `GATE review` envelope (material + Accept / Make changes), not a new envelope kind. On "Accept", re-read the file from disk to pick up the inline answers before proceeding; on "Make changes", wait for a re-send of the same gate. Leave the file on disk once consumed — harmless, gitignored, a paper trail.
+
+The same rule governs both plumage interrogation (`planning.md` step 3) and feather interrogation (step 4).
+
 ### Communication rules
 
 An incubator may message, by name: the orchestrator (the harness-assigned name in its spawn prompt) and a forager it commissioned (shutdown request, missing-output query). Never message brooders or skuas — planning and implementation workers share no channels.
