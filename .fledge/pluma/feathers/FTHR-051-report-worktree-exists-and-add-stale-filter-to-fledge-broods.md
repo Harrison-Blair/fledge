@@ -59,12 +59,12 @@ no `--stale` flag) and confirmed to FAIL, then implemented until they pass
 
 ## Acceptance Criteria
 Checkbox list, one `- [ ] AC-N: …` line per criterion — authored unchecked; checked only via `fledge criteria check`, with per-criterion evidence in `.fledge/molt/FTHR-051.md`. Reference the parent plumage's criteria where applicable (e.g. "satisfies PLM-025 FC-2"). AC-1 is always:
-- [ ] AC-1: The tests listed above were observed failing before implementation
+- [x] AC-1: The tests listed above were observed failing before implementation
   and pass after; evidence captured verbatim.
-- [ ] AC-2: `fledge broods --json` reports `worktree_exists` per record,
+- [x] AC-2: `fledge broods --json` reports `worktree_exists` per record,
   `true` only when the stored path exists on disk, `false` for a missing
   path or an empty (legacy) one (satisfies PLM-025 FC-2, AC-2).
-- [ ] AC-3: `fledge broods --stale` filters to `worktree_exists: false`
+- [x] AC-3: `fledge broods --stale` filters to `worktree_exists: false`
   records in both text and `--json` output, and plain `fledge broods` is
   unchanged (satisfies PLM-025 FC-3, AC-3).
-- [ ] AC-4: `go test ./internal/cli/... ./cmd/fledge -run TestScripts` passes.
+- [x] AC-4: `go test ./internal/cli/... ./cmd/fledge -run TestScripts` passes.
