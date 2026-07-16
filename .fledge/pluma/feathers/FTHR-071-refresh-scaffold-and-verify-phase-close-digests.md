@@ -33,8 +33,8 @@ Black-box verification suite, no new unit test:
 - Test-first framing: before `--refresh`, `fledge preen` is expected to show scaffold staleness; capture that as pre-state, confirm clean after.
 
 ## Acceptance Criteria
-- [ ] AC-1: `fledge init --refresh` completes with only the expected file set touched.
-- [ ] AC-2: `fledge preen` passes.
-- [ ] AC-3: `go vet ./...` and `go test ./...` pass (satisfies PLM-029 AC-5).
-- [ ] AC-4: `go test ./cmd/fledge -run TestScripts` passes in full (satisfies PLM-029 AC-5).
+- [x] AC-1: `fledge init --refresh` completes with only the expected file set touched.
+- [x] AC-2: `fledge preen` passes.
+- [x] AC-3: `go vet ./...` and `go test ./...` pass (satisfies PLM-029 AC-5).
+- [x] AC-4: `go test ./cmd/fledge -run TestScripts` passes in full (satisfies PLM-029 AC-5).
 - [ ] AC-5: Once this planning phase's own close-out produces `digest-planning.md`, its content is confirmed to match the FC-3 format (outcome/decisions/pointers, no transcript) — satisfies PLM-029 AC-4.
