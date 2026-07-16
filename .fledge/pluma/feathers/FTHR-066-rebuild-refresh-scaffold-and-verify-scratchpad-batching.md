@@ -34,8 +34,8 @@ Black-box verification suite, no new unit test:
 - Test-first framing: before rebuild+refresh, `fledge preen`/`fledge version` are expected to show the old binary and a stale scaffold; capture that as the pre-state, then confirm clean after.
 
 ## Acceptance Criteria
-- [ ] AC-1: `fledge version` matches `VERSION` after reinstall.
-- [ ] AC-2: `fledge init --refresh` completes with only the expected file set touched.
-- [ ] AC-3: `fledge preen` passes.
-- [ ] AC-4: `go vet ./...` and `go test ./...` pass (satisfies PLM-028 AC-5).
-- [ ] AC-5: `go test ./cmd/fledge -run TestScripts` passes in full, including the new `.fledge/scratch/` gitignore assertion (satisfies PLM-028 AC-1, AC-5).
+- [x] AC-1: `fledge version` matches `VERSION` after reinstall.
+- [x] AC-2: `fledge init --refresh` completes with only the expected file set touched.
+- [x] AC-3: `fledge preen` passes.
+- [x] AC-4: `go vet ./...` and `go test ./...` pass (satisfies PLM-028 AC-5).
+- [x] AC-5: `go test ./cmd/fledge -run TestScripts` passes in full, including the new `.fledge/scratch/` gitignore assertion (satisfies PLM-028 AC-1, AC-5).
