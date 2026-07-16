@@ -2,7 +2,7 @@
 id: FTHR-071
 title: Refresh scaffold and verify phase-close digests
 plumage: PLM-029
-status: egg
+status: fledged
 priority: P2
 depends_on: [FTHR-067, FTHR-068, FTHR-069, FTHR-070]
 authored: 2026-07-16T16:44:19Z
@@ -37,4 +37,4 @@ Black-box verification suite, no new unit test:
 - [x] AC-2: `fledge preen` passes.
 - [x] AC-3: `go vet ./...` and `go test ./...` pass (satisfies PLM-029 AC-5).
 - [x] AC-4: `go test ./cmd/fledge -run TestScripts` passes in full (satisfies PLM-029 AC-5).
-- [ ] AC-5: Once this planning phase's own close-out produces `digest-planning.md`, its content is confirmed to match the FC-3 format (outcome/decisions/pointers, no transcript) — satisfies PLM-029 AC-4.
+- [x] AC-5: Once this planning phase's own close-out produces `digest-planning.md`, its content is confirmed to match the FC-3 format (outcome/decisions/pointers, no transcript) — satisfies PLM-029 AC-4.
