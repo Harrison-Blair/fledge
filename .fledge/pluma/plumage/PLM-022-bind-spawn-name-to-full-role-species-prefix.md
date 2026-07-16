@@ -1,7 +1,7 @@
 ---
 id: PLM-022
 title: Bind spawn name to full role-species prefix
-status: hatched
+status: fledged
 priority: P2
 authored: 2026-07-16T00:14:42Z
 agent: fledge-orchestrate/planning
@@ -27,11 +27,11 @@ Numbered, testable statements of behavior. Referenced downstream as FC-1, FC-2, 
 
 ## Acceptance Criteria
 Checkbox list of verifiable conditions under which this plumage is considered fledged, one `- [ ] AC-N: …` line each. Authored unchecked; checked only via `fledge criteria check` at plumage closeout.
-- [ ] AC-1: `team-loop.md`'s "Spawning and addressing teammates" section states the full-string requirement for the spawn tool's `name` argument with a correct/incorrect example (satisfies FC-1).
-- [ ] AC-2: every named-spawn callout in `team-loop.md` (brooder/skua, incubator, forager) reflects the same explicit binding (satisfies FC-2).
-- [ ] AC-3: `team-loop.md` states the post-spawn roster self-check (satisfies FC-3).
-- [ ] AC-4: the `cmd/fledge` txtar fixtures asserting on `team-loop.md`'s scaffolded content (at least `init.txtar`, `init_agents.txtar`, `agents.txtar`) are updated to match, and `go test ./cmd/fledge -run TestScripts` passes.
-- [ ] AC-5: `fledge init --refresh` regenerates this repo's own scaffold from the new prose and `fledge preen` passes clean afterward.
+- [x] AC-1: `team-loop.md`'s "Spawning and addressing teammates" section states the full-string requirement for the spawn tool's `name` argument with a correct/incorrect example (satisfies FC-1).
+- [x] AC-2: every named-spawn callout in `team-loop.md` (brooder/skua, incubator, forager) reflects the same explicit binding (satisfies FC-2).
+- [x] AC-3: `team-loop.md` states the post-spawn roster self-check (satisfies FC-3).
+- [x] AC-4: the `cmd/fledge` txtar fixtures asserting on `team-loop.md`'s scaffolded content (at least `init.txtar`, `init_agents.txtar`, `agents.txtar`) are updated to match, and `go test ./cmd/fledge -run TestScripts` passes.
+- [x] AC-5: `fledge init --refresh` regenerates this repo's own scaffold from the new prose and `fledge preen` passes clean afterward.
 
 ## Out of Scope
 - Any Go behavior change — naming is chosen entirely by prose-following, not code; this plumage is prose-only.

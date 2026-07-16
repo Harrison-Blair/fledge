@@ -1,7 +1,7 @@
 ---
 id: PLM-021
 title: Force-terminate backstop for forager and incubator teardown
-status: hatched
+status: fledged
 priority: P2
 authored: 2026-07-16T00:09:28Z
 agent: fledge-orchestrate/planning
@@ -34,14 +34,14 @@ Numbered, testable statements of behavior. Referenced downstream as FC-1, FC-2, 
 
 ## Acceptance Criteria
 Checkbox list of verifiable conditions under which this plumage is considered fledged, one `- [ ] AC-N: …` line each. Authored unchecked; checked only via `fledge criteria check` at plumage closeout.
-- [ ] AC-1: `worker-protocols.md`'s Incubator Lifecycle section documents the force-terminate backstop (satisfies FC-1).
-- [ ] AC-2: `foraging.md`'s Forager Lifecycle/Commissioner sections document the force-terminate backstop (satisfies FC-2).
-- [ ] AC-3: `planning.md`'s forager-release (§2) and incubator-release (§0) steps reference the backstop (satisfies FC-3).
-- [ ] AC-4: `team-loop.md`'s "Shutting down teammates" section explicitly covers all four teammate roles — brooder, skua, forager, incubator (satisfies FC-4).
-- [ ] AC-5: `team-loop.md`'s confirmed-shutdown definition explicitly handles the no-tmux/degraded case, applied uniformly across all four roles' teardown wording (satisfies FC-5).
-- [ ] AC-6: `fledge-forager.md`'s dropped self-verification bullet is restored (satisfies FC-6).
-- [ ] AC-7: the `cmd/fledge` txtar fixtures asserting on the affected scaffolded files (at least `init.txtar`, `init_agents.txtar`, `agents.txtar`) are updated to match, and `go test ./cmd/fledge -run TestScripts` passes.
-- [ ] AC-8: `fledge init --refresh` regenerates this repo's own scaffold from the new prose and `fledge preen` passes clean afterward.
+- [x] AC-1: `worker-protocols.md`'s Incubator Lifecycle section documents the force-terminate backstop (satisfies FC-1).
+- [x] AC-2: `foraging.md`'s Forager Lifecycle/Commissioner sections document the force-terminate backstop (satisfies FC-2).
+- [x] AC-3: `planning.md`'s forager-release (§2) and incubator-release (§0) steps reference the backstop (satisfies FC-3).
+- [x] AC-4: `team-loop.md`'s "Shutting down teammates" section explicitly covers all four teammate roles — brooder, skua, forager, incubator (satisfies FC-4).
+- [x] AC-5: `team-loop.md`'s confirmed-shutdown definition explicitly handles the no-tmux/degraded case, applied uniformly across all four roles' teardown wording (satisfies FC-5).
+- [x] AC-6: `fledge-forager.md`'s dropped self-verification bullet is restored (satisfies FC-6).
+- [x] AC-7: the `cmd/fledge` txtar fixtures asserting on the affected scaffolded files (at least `init.txtar`, `init_agents.txtar`, `agents.txtar`) are updated to match, and `go test ./cmd/fledge -run TestScripts` passes.
+- [x] AC-8: `fledge init --refresh` regenerates this repo's own scaffold from the new prose and `fledge preen` passes clean afterward.
 
 ## Out of Scope
 - Any Go behavior change — this plumage is prose-only (core skill docs + Claude adapter docs + one agent-definition file).
