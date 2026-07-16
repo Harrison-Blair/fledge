@@ -90,3 +90,16 @@ grep 'appears in the team roster under that exact full name before proceeding' .
 # "if that was the last unfinished feather" mental-tracking phrasing is gone
 grep -count=2 'fledge colony --json' .fledge/skills/fledge-orchestrate/implementation.md
 ! grep 'last unfinished feather' .fledge/skills/fledge-orchestrate/implementation.md
+
+# roster wiring (FTHR-055): implementation.md drives species allocation (§3.1),
+# release (§3.2), and resume reconstruction (§6) through the `fledge roster` CLI
+# instead of orchestrator-context bookkeeping, referencing internal/roster's
+# species list by package name rather than an unenumerated count (PLM-026 FC-5)
+grep 'fledge roster assign --feather FTHR-### --pair' .fledge/skills/fledge-orchestrate/implementation.md
+grep 'without `--pair`' .fledge/skills/fledge-orchestrate/implementation.md
+grep 'internal/roster' .fledge/skills/fledge-orchestrate/implementation.md
+grep 'fledge roster release <name>' .fledge/skills/fledge-orchestrate/implementation.md
+grep 'to read the current name' .fledge/skills/fledge-orchestrate/implementation.md
+! grep '18 extant penguin species' .fledge/skills/fledge-orchestrate/implementation.md
+! grep 'mapping internally' .fledge/skills/fledge-orchestrate/implementation.md
+! grep 'clear the roster' .fledge/skills/fledge-orchestrate/implementation.md
