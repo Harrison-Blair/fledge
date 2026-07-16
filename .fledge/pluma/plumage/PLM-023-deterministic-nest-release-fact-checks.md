@@ -1,7 +1,7 @@
 ---
 id: PLM-023
 title: "Deterministic nest & release-fact checks"
-status: hatched
+status: fledged
 priority: P1
 authored: 2026-07-16T00:49:27Z
 agent: fledge-orchestrate/planning
@@ -77,21 +77,24 @@ Numbered, testable statements of behavior. Referenced downstream as FC-1, FC-2, 
 
 ## Acceptance Criteria
 Checkbox list of verifiable conditions under which this plumage is considered fledged, one `- [ ] AC-N: …` line each. Authored unchecked; checked only via `fledge criteria check` at plumage closeout.
-- [ ] AC-1: The version-consistency test (FC-1) exists, was confirmed to fail
+- [x] AC-1: The version-consistency test (FC-1) exists, was confirmed to fail
   when one of the three version strings is deliberately diverged, and passes
   at rest; it runs under `go test ./...`.
-- [ ] AC-2: The forager/scout core-skill prose (e.g. `foraging.md` and/or
+- [x] AC-2: The forager/scout core-skill prose (e.g. `foraging.md` and/or
   `templates/scout-report.md`) states the exact-computation-for-counts rule
   (FC-2), and this repo's scaffolded copies are refreshed to match
   (`fledge init --refresh`).
-- [ ] AC-3: This repo's own `.fledge/nest/` is regenerated and
+- [x] AC-3: This repo's own `.fledge/nest/` is regenerated and
   `entry-points.md`, `modules.md`, `index.md`, `testing.md`, and
-  `dependencies.md` show the correct counts (18 commands, 22 txtar
-  fixtures), confirmed by an independent recount against ground truth (FC-3).
-- [ ] AC-4: `fledge preen`'s criteria-evidence diagnostic names the required
+  `dependencies.md` show the correct counts (19 commands, 25 txtar
+  fixtures — the ground truth moved from the 18/22 believed at authoring
+  time once FTHR-054 added the `roster` command and this plumage's own run
+  added acceptance fixtures), confirmed by an independent recount against
+  ground truth (FC-3).
+- [x] AC-4: `fledge preen`'s criteria-evidence diagnostic names the required
   `## AC-N` heading form in its message text (FC-4), confirmed by a test that
   exercises the missing/mislabeled-evidence case and asserts on the message.
-- [ ] AC-5: `conventions.md`'s "Versioning & release" section lists all three
+- [x] AC-5: `conventions.md`'s "Versioning & release" section lists all three
   must-move-together files once regenerated, consistent with FC-1's test.
 
 ## Out of Scope
