@@ -1,60 +1,61 @@
 ---
-generated: 2026-07-15T18:14:39Z
-commit: 5728c29953a7c218c923ce20333dbffebb00623f
+generated: 2026-07-15T23:53:12Z
+commit: a4d02e8187c64ef9f3f1231052990b282207420b
 agent: fledge-forager
-fledge_version: 0.5.4
+fledge_version: 0.5.5
 ---
 
 # Testing
 
-Frameworks, how to run tests, and coverage patterns across the repo.
+Test frameworks used, how to run each kind, and what coverage looks like per area.
 
 ## Frameworks
 
-- **Go `testing`** — standard unit tests, co-located beside every package (`internal/*/*_test.go`). No mocking framework; table-driven tests are the norm, `t.TempDir()` for filesystem isolation.
-- **`testscript`** (`github.com/rogpeppe/go-internal/testscript`) — CLI acceptance tests. `cmd/fledge/main_test.go` registers the `fledge` command and runs every `cmd/fledge/testdata/*.txtar` file via `TestScripts(t *testing.T)`. Git identity/config (`GIT_AUTHOR_*`, `GIT_COMMITTER_*`, global config) is isolated per test for determinism.
+- **Go standard `testing` package** — used everywhere; no third-party assertion libraries observed anywhere in the repo.
+- **`github.com/rogpeppe/go-internal/testscript`** — drives the CLI's black-box acceptance suite from `.txtar` (plaintext archive) fixtures in `cmd/fledge/testdata/`. `cmd/fledge/main_test.go` registers the `fledge` command via `TestMain` and configures deterministic git identity (fixed `GIT_AUTHOR_NAME`/`EMAIL`, global/system git config disabled) in `TestScripts` to prevent flakiness.
+- **`t.TempDir()`** — used throughout unit tests for filesystem isolation; no manual fixture cleanup needed.
+- **`httptest`** — mocks GitHub API/HTTP in `internal/cli/update_test.go`.
 
 ## How to run
 
 ```sh
 go test ./...                                   # everything
-go test ./cmd/fledge -run TestScripts           # all 20 txtar acceptance scripts
-go test ./cmd/fledge -run TestScripts/init      # one script by name (no .txtar suffix)
-go test ./cmd/fledge -run TestScripts/init -v   # verbose, shows the script trace
-go test ./internal/spec -run TestAllocateID     # a single unit test
 go vet ./...
+
+go test ./cmd/fledge -run TestScripts            # all 23 CLI acceptance tests
+go test ./cmd/fledge -run TestScripts/init       # one script
+go test ./cmd/fledge -run TestScripts/init -v    # verbose, shows script trace
+
+go test ./internal/spec -run TestAllocateID      # one unit test in a package
 ```
-
-## Acceptance test coverage (`cmd/fledge/testdata/*.txtar`, 20 files)
-
-Each `.txtar` embeds a literal command sequence plus fixture files and asserts on stdout/stderr (regex/literal), file existence, exit codes, and JSON structure. One file per command/workflow area: `init`, `init_agents` (multi-agent, auto-detect, `--refresh` confirm/force), `agents` (tier derivation, scaffold status), `new` (ID allocation, templates), `status` (state machine), `set` (frontmatter mutation, immutability guards), `check` (validation rules), `criteria` (checkbox ops), `preen_scaffold` (drift detection, `--strict`), `refresh_scaffold` (reset/prune/confirm), `graph` (waves, DOT, cycles), `lock` (brood/abandon, PID liveness, force bypass), `ready`, `nest` (concern docs, scout reports, stamp), `scan`, `report` (colony), `e2e` (full lifecycle), `unfledged`, `plan_delegation` (planning.md delegation markers), `stamp_warning` (version-mismatch warnings).
-
-**These fixtures are the authoritative behavioral spec** — any change to `internal/bootstrap/core/` or `adapters/` content must update `init.txtar`, `init_agents.txtar`, `agents.txtar` alongside it (CLAUDE.md, confirmed across every scout).
 
 ## Unit test coverage by package
 
-- **`internal/bootstrap`**: `registry_test.go` (manifest parsing, primitive coverage, `TestCoreNeutral` — core prose never references harness-native paths, `TestClaudeSkillSymlinks`, `TestWriteAdapterRefresh`, `TestClaudeAllowListGenerated`, `TestEditedOnRefresh`, `TestPruneObsolete`); `stamp_test.go` (round-trip, determinism, `TestExpectedFilesCoversAllPolicies`); `drift_test.go` (table-driven over all 5 `DriftStatus` values, content + symlink + append entries).
-- **`internal/spec`**: `frontmatter_test.go` (CRLF, unterminated frontmatter, unknown keys), `ids_test.go` (gap-aware `NextID`, **20-goroutine × 5-round concurrent allocation race test**), `criteria_test.go` (single-byte checkbox toggle, idempotence), `load_test.go`.
-- **`internal/check`**: schema rules, dangling refs, duplicate IDs, criteria completeness, evidence-file presence, dependency cycles, brood-consistency, stale-pipping hints.
-- **`internal/graph`**: cycle detection (acyclic/self-loop/two-cycle/complex-chain/dangling-not-a-cycle), waves, ready-set.
-- **`internal/lock`**: acquire/release/get lifecycle, `HeldError` on contention, **N-goroutine concurrent contention (exactly one winner)**, corrupt-file-skipping `List()`.
-- **`internal/nest`**: frontmatter key-order-by-kind, body preservation across `Render`, `RefreshDoc` idempotence.
-- **`internal/cli`**: `command_parity_test.go` (`commandOrder` ≡ `commands` map — catches silently-dropped commands from usage), `lock_test.go` (brood rollback on status-write failure), `update_test.go`/`update_swap_test.go` (self-update against a mocked GitHub API test server, archive/checksum swap mechanics), `version_test.go` (binaryVersion pinned to `VERSION` file).
-- **`internal/ciconfig`**: asserts CI workflow YAML structure (`.github/workflows/*.yml` triggers, job/step presence) — code-free, structural tests only.
-- **`internal/doctest`**: asserts root docs (README.md Commands/Upgrading sections, RELEASING.md scaffold-refresh coverage) stay in sync with actual behavior.
-- **`internal/hooktest`**: drives `scripts/hooks/pre-commit` against a real temp git repo, verifies gofmt/vet enforcement and exit codes.
+- **`internal/spec`** (`criteria_test.go`, `frontmatter_test.go`, `ids_test.go`, `load_test.go`): checkbox parsing/mutation (section detection, x/X, CRLF handling, byte-exact single-char toggles), frontmatter split/roundtrip (LF/CRLF, unknown-key detection, title quoting), concurrent ID allocation (20 goroutines racing, flock serialization, width persistence), `Load()` aggregation and per-file error/unknown-field tracking.
+- **`internal/check`** (`check_test.go`, ~335 lines): every validation rule — parse errors, duplicate/mismatched IDs, dangling refs, unhatched-plumage references, dependency cycles, required sections, acceptance-criteria completeness + evidence cross-check, brood/lock consistency, legacy-format warnings.
+- **`internal/graph`** (`graph_test.go`): topological wave layering, cycle detection (acyclic/self-loop/2-cycle/complex/dangling-not-a-cycle), ready-set filtering by status.
+- **`internal/lock`** (`lock_test.go`, ~197 lines): acquire/release/get happy path, `*HeldError` on contention, 16-goroutine concurrent-acquire race (exactly one winner), corrupt-file tolerance in `List()`, 500-cycle atomic-write stress test (no partial/zero-length files, no leftover temp files).
+- **`internal/repo`** (`repo_test.go`): minimal path-accessor agreement tests.
+- **`internal/scan`** (`scan_test.go`): module grouping, byte counting, `.fledgeignore` filtering, empty-repo edge case.
+- **`internal/nest`** (`nest_test.go`): frontmatter key order per doc kind, byte-preserved body rendering, stub detection (byte-equality, doc-name-aware), `RefreshDoc` (drops unknown keys, preserves body, applies agent override), and `Status()` across 4 scenarios — fresh scaffold (all stub → incomplete), all filled + index fresh (complete), filled but stale index (incomplete), missing doc (incomplete + named in `MissingDocs`).
+- **`internal/bootstrap`** (`registry_test.go`, `stamp_test.go`, `drift_test.go`, `tmux_autodefault_test.go`, `worker_protocols_test.go`): manifest parsing/primitive-coverage/tier-derivation correctness, core-prose neutrality (`TestCoreNeutral`), write-classification (created/skip/refresh-updates), symlink wiring for Claude skills, stamp round-trip + determinism, 9-scenario drift classification (up-to-date/stale/modified/missing/obsolete × content/symlink/append), plus prose-invariant tests asserting specific wording survives edits to `team-loop.md`, `implementation.md`, `worker-protocols.md` (e.g. `TestSkuaEvidenceGuiltyUntilProven`, `TestSkuaRedTeamPass`).
+- **`internal/cli`**: `init_test.go` (yes/no prompt parsing), `version_test.go` (binary/VERSION-file sync), `update_test.go` + `update_swap_test.go` (update flow, archive/checksum handling, binary swap), `lock_test.go` (`TestLockRollsBackOnStatusWriteFailure` — atomicity), `command_parity_test.go` (`commandOrder` list stays in sync with the registered-commands map).
 
-## CI enforcement
+## Structural "keep docs/CI honest" tests
 
-- `pr-check.yml` (every PR to main): `gofmt -l .`, `go vet ./...`, `go build ./...`, `go test ./...` on `ubuntu-latest`.
-- `release.yml` (push to main): same safety-net job, plus VERSION-diff detection and conditional 4-platform build/release.
-- Local pre-commit hook (`scripts/hooks/pre-commit`) mirrors the lint gate; opt-in via `git config core.hooksPath scripts/hooks`, never auto-installed.
+Three packages exist purely to assert that non-Go artifacts stay consistent with what the code actually does — no production logic:
+- **`internal/ciconfig`**: parses `.github/workflows/release.yml` and `pr-check.yml` as YAML and asserts on triggers, lint/build/test steps, the 4-platform build matrix, and job dependency ordering.
+- **`internal/doctest`**: reads `README.md`/`RELEASING.md` and asserts they mention `fledge update`, `fledge init --refresh`, and `scaffold.json`.
+- **`internal/hooktest`**: end-to-end tests of `scripts/hooks/pre-commit` in temporary git repos — blocks unformatted code, blocks vet violations, allows clean commits, no-ops without `core.hooksPath` configured, and asserts the hook's lint commands match CI's.
 
-## Notable patterns worth reusing
+## CLI acceptance tests (`cmd/fledge/testdata/*.txtar`, 23 total)
 
-- **Test-first is enforced in the workflow itself**, not just in fledge's own tests: `worker-protocols.md`'s Skua review checklist requires the brooder's AC-1 evidence to be a captured *failing* test run before implementation — this is a project-wide discipline pattern, not just a Go-testing convention.
-- Graceful degradation tests: `colony`/`unfledged` commands are tested to exit 0 even on spec parse errors, surfacing problems under an "Issues"/degraded-data section rather than failing hard.
+Each file exercises one command or behavior area end to end (init scaffolding/idempotence, multi-agent detection/refresh, criteria manipulation, full e2e lifecycle, forager-contract prose hardening, dependency-graph rendering/cycles, feather locking + brood/abandon, nest scaffold/scout/stamp/status, plumage/feather creation + ID allocation, planning-delegation prose markers, scaffold-drift detection, colony status report, `fledge scan`, frontmatter field mutation via `fledge set`, version-mismatch warning behavior, status transitions, unfledged listing). See `entry-points.md`'s command table for the file↔command mapping, and `raw/cmd.md` for the full one-line-per-file breakdown.
+
+## Local pre-commit hook (opt-in)
+
+`scripts/hooks/pre-commit` mirrors the CI lint gate (`gofmt -l .`, `go vet ./...`) before a commit is created. Not installed automatically — one-time setup per clone: `git config core.hooksPath scripts/hooks`. Verified in sync with CI by `internal/hooktest`.
 
 ## Open Questions
 
-None observed.
+None observed — testing conventions were consistent and unambiguous across every scout report.

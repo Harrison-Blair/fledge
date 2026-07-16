@@ -1,77 +1,75 @@
 ---
-generated: 2026-07-15T18:14:39Z
-commit: 5728c29953a7c218c923ce20333dbffebb00623f
+generated: 2026-07-15T23:53:12Z
+commit: a4d02e8187c64ef9f3f1231052990b282207420b
 agent: fledge-forager
-fledge_version: 0.5.4
+fledge_version: 0.5.5
 ---
 
 # Data Model
 
-The core Go types and on-disk schemas fledge operates over: specs, locks, drift/scaffold state, and CLI JSON output shapes.
+Core types, schemas, and on-disk structures defined across the codebase, with file references.
 
-## Spec types (`internal/spec/types.go`)
+## Spec domain (`internal/spec`)
 
-- `Requirement` (PLM-###, "plumage"): `ID, Title, Status, Priority, Authored, Agent, FledgeVersion, Path, Body`. Status enum: `ReqEgg`, `ReqHatched`, `ReqFledged`.
-- `Task` (FTHR-###, "feather"): `ID, Title, Requirement (plumage ref), Status, Priority, DependsOn ([]string), Oversight, Authored, Agent, FledgeVersion, Path, Body`. Status enum: `TaskEgg`, `TaskPipping`, `TaskHatching`, `TaskFledged`. `Oversight` ∈ `{"merge", "during"}`, omitted = fully autonomous.
-- Priority constants: `P0, P1, P2, P3`.
-- `Criterion` (`internal/spec/criteria.go`): `{N, Label, Checked, Text, boxOff}` — `boxOff` is an internal byte offset enabling single-byte checkbox toggles without full-file rewrite.
-- `Set` (`internal/spec/load.go`): `{Reqs []Requirement, Tasks []Task, Errors []FileError, UnknownFields map[path][]string}` — the fully-loaded, error-tolerant view of all specs in a repo.
-- Frontmatter is canonical YAML with a fixed key order per doc kind, rendered via `goccy/go-yaml`; body is preserved byte-for-byte after the `---\n` fence.
+- **`Requirement`** (plumage/PLM file) — `internal/spec/types.go:27`. Fields: `ID`, `Title`, `Status` (`egg`/`hatched`/`fledged`), `Priority`, `Authored`, `Agent`, `FledgeVersion`, `Path`, `Body` (byte-preserved markdown).
+- **`Task`** (feather/FTHR file) — `internal/spec/types.go:41`. Fields: `ID`, `Title`, `Requirement` (parent PLM id), `Status` (`egg`/`pipping`/`hatching`/`fledged`), `Priority`, `DependsOn ([]string)`, `Oversight` (`"merge"`/`"during"`/`""`), `Authored`, `Agent`, `FledgeVersion`, `Path`, `Body`.
+- **`Set`** — `internal/spec/load.go:18`. Loaded collection: `Reqs ([]*Requirement)`, `Tasks ([]*Task)`, `Errors ([]FileError)`, `UnknownFields (map[path][]string)`.
+- **`FileError`** — `internal/spec/load.go:10`. Attributes a parse failure to a file path.
+- **`Criterion`** — `internal/spec/criteria.go:11`. One AC checkbox line: `N` (number), `Label` (`"AC-N"`), `Checked (bool)`, `Text`, `boxOff` (byte offset for single-byte mutation).
+- Priorities: `P0`–`P3` (valid set in `Priorities`). Oversight: `"merge"` (checked at merge gate) | `"during"` (checked during implementation) | `""` (no gate).
 
-## Lock / brood (`internal/lock/lock.go`)
+## Validation findings (`internal/check`)
 
-- `Record`: `{Task, Owner, PID, Created, Branch}` (JSON) — one `.fledge/broods/<FTHR-ID>.brood` file per active claim.
-- `HeldError`: wraps an existing `Record` for user-friendly "already held" messaging.
-- Acquired via atomic hard-link creation (race-safe); `Lock.List()` skips corrupt `.brood` files rather than failing (open question: resilience choice, not documented in code).
+- **`Finding`** — JSON-serializable: `File`, `Rule`, `Severity`, `Message`.
+- **`Severity`** — const enum: `Error`, `Warning`.
 
-## Context documents (`internal/nest/`)
+## Dependency graph (`internal/graph`)
 
-- `Doc`: `{Kind, Module/Authored (scout) | Generated/Commit (concern), Agent, FledgeVersion, Body}`. `Kind` ∈ `{"concern", "scout"}` — each kind has a distinct frontmatter key order (concern: `generated, commit, agent, fledge_version`; scout: `module, authored, agent, fledge_version`).
-- Eight fixed concern-doc names known to `internal/nest/docs.go` (architecture, modules, conventions, data-model, dependencies, entry-points, testing, domain) plus `index.md`.
-- `RefreshDoc` updates frontmatter only, preserving body — what `fledge nest stamp <file>` calls.
+- **`Graph`** — `internal/graph/graph.go`. Tasks slice + `byID` map. Methods: `Cycle()` (DFS), `Waves()` (topological layering), `Ready()` (deps-fledged filter, `egg`/`pipping` only).
 
-## Scan (`internal/scan/scan.go`)
+## Locking (`internal/lock`)
 
-- `Module`: `{Name, Files []string, Count int, Bytes int}`.
-- `Result`: `{Commit, ShortCommit, Modules []Module}` — the shape emitted by `fledge scan --json`, and the authoritative work list a forager plans scout splits against.
+- **`Record`** — JSON-serialized `.brood` file content: `Task` (feather ID), `Owner`, `PID`, `Created` (RFC 3339), `Branch`.
+- **`HeldError`** — wraps a conflicting `Record`; `Error()` formats owner + creation time.
 
-## Scaffold / bootstrap types (`internal/bootstrap/`)
+## Repo/scan (`internal/repo`, `internal/scan`)
 
-- `Manifest` (`registry.go`): `{Name, Detector ManifestDetector, TierPrimitives map[string]string, Files []ManifestFile, PipingFile string, dir}`. Loaded from `adapters/<harness>/manifest.yaml`.
-- `ManifestDetector`: `{Exists string}` — repo-relative marker path (e.g. `.claude/`) used to auto-detect an adapter.
-- `ManifestFile`: `{Src, Dst, Generate bool, PrimitiveMap bool, Overwrite bool, AppendIfMissing string, Symlink string}` — six write policies encoded as booleans/strings on one struct.
-- `Stamp` (`.fledge/scaffold.json`, `stamp.go`): `{FledgeVersion, Agents []string, Files map[string]StampEntry}`.
-- `StampEntry`: `{Policy string ("core"|"default"|"generate"|"primitive_map"|"overwrite"|"symlink"|"append"), Sha256, Target (symlinks), Lines []string (append entries)}`.
-- `DriftStatus` (`drift.go`): enum `StatusUpToDate | StatusStale | StatusModified | StatusMissing | StatusObsolete`.
-- `Drift`: `{Path, Status DriftStatus, Policy string}`.
-- Primitive/tier types (`primitives.go`): `PrimitiveOrder []string` (canonical 6), `TierPrimitives map[string][]string` (tier → required primitives), `primitiveTier map[string]string`, `primitiveDesc map[string]string`.
-- Template-rendering context (`registry.go`): `renderContext {Adapter, Tier, Rows []primitiveRow, Provided, NotProvided, PipingFile, CommandOrder}`; `primitiveRow {Name, Desc, Mechanism, Provided bool, Tier}` — feeds the generated `fledge-adapter.md` primitive-map table per harness.
+- **`Repo`** — `Root string` (absolute path); accessors `FledgeDir()`, `LocksDir()`, `ContextDir()`, `ScanIgnorePath()`, `EvidenceDir()`, `RequirementsDir()`, `TasksDir()`.
+- **`Result`** (scan) — `Commit`, `ShortCommit`, `Modules ([]Module)`.
+- **`Module`** (scan) — `Name` (top-level dir or `"<root>"`), `Files ([]string)`, `Count (int)`, `Bytes (int64)`.
 
-## CLI JSON output shapes (`internal/cli/*.go`)
+## CLI-layer view types (`internal/cli`)
 
-- `initJSON {Created, Skipped, Updated, Agents, Removed}`.
-- `adapterInfo {Name, Tier, Detector, Scaffolded}` (`agents` command).
-- `criterionJSON {N, Label, Checked, Text}` (`criteria --json`).
-- `graphNode {ID, Title, Status, Requirement, DependsOn}` (`vee --json`).
-- `readyTask {ID, Title, Priority, Requirement, Oversight, Path}`.
-- `reportCounts, reqCompletion, orphanTask, blockedTask, lockEntry, report` (`colony --json`).
-- `unfledgedItem, unfledgedReport` (`unfledged --json`).
-- `updateJSON {Current, Latest, UpToDate, Notes}` (`update --json` dry-run).
-- `command {run, usage}` — internal dispatch-table entry, not user-facing JSON.
+Thin request/response shapes for `--json` output and internal dispatch — not persisted, just serialized per-command: `command` (`run func([]string) int`, `usage`), `stringListFlag`, `initJSON` (`Created/Skipped/Updated/Agents/Removed []string`), `adapterInfo` (`Name/Tier/Detector/Scaffolded`), `readyTask`, `graphNode`, `criterionJSON`, `reportCounts`, `reqCompletion`, `orphanTask`/`blockedTask`, `lockEntry`, `issues` (`ParseErrors/DanglingRefs`), `unfledgedItem`/`unfledgedReport`, `updateJSON`, `githubRelease`.
 
-## Validation findings (`internal/check/check.go`)
+## Bootstrap/adapter schema (`internal/bootstrap`)
 
-- `Finding`: `{File, Rule, Severity, Message}` (JSON-marshalled). `Severity` ∈ `{"error", "warning"}`. Rules include parse, duplicate-id, schema, dangling-ref, criteria-incomplete, cycles, brood-consistency.
+- **`Manifest`** — `registry.go`. `Name`, `Detector (ManifestDetector)`, `TierPrimitives (map[string]string)`, `Files ([]ManifestFile)`, `PipingFile`, `dir` (embed FS path).
+- **`ManifestFile`** — `Src`, `Dst`, `Generate (bool)`, `PrimitiveMap (bool, implies Generate)`, `Overwrite (bool)`, `AppendIfMissing (string)`, `Symlink (string)`.
+- **`ManifestDetector`** — `Exists string` (marker path, e.g. `.claude/`).
+- **`Stamp`** — `stamp.go`. `FledgeVersion`, `Agents ([]string)`, `Files (map[string]StampEntry)` — persisted as `.fledge/scaffold.json`.
+- **`StampEntry`** — `Policy` (one of `core`/`default`/`generate`/`primitive_map`/`overwrite`/`symlink`/`append`), `Sha256`, `Target` (symlink dest), `Lines ([]string)` (for append policy). Policy + payload field is mutually exclusive per entry.
+- **`Drift`** — `drift.go`. `Path`, `Status (DriftStatus)`, `Policy`.
+- **`DriftStatus`** — string const enum: `up-to-date`, `stale`, `modified`, `missing`, `obsolete`.
+- **`PrimitiveOrder`** — the 6 primitives in fixed order: `confirm-gate`, `read-only-shell`, `write-file`, `run-fledge`, `spawn-worker`, `message-peer`.
+- **`TierPrimitives`** — map: Tier A → 4 primitives, Tier B → +`spawn-worker`, Tier C → +`message-peer`.
 
-## Dependency graph (`internal/graph/graph.go`)
+## Nest documents (`internal/nest`)
 
-- `Graph`: wraps a task slice, exposes cycle detection (DFS), `Waves()` (topological layers — same-wave tasks can run in parallel), and `Ready()` (unstarted tasks whose deps are all fledged). Dangling `depends_on` references are tolerated by the graph (skipped for cycle/wave computation) but flagged separately by `check` — open question on whether this split is deliberate.
+- **`Kind`** — string const: `Concern` | `Scout`.
+- **`Doc`** — `nest.go:29–47`. `Kind`, `Generated`/`Commit` (Concern only), `Module`/`Authored` (Scout only), `Agent`, `FledgeVersion` (shared), `Body ([]byte`, byte-preserved).
+- **`StatusResult`** — `nest.go:105–112`. `Complete (bool)`, `IndexCommitMatches (bool)`, `Head`/`IndexCommit (string)`, `MissingDocs`/`StubDocs ([]string`, in `ConcernDocs` order).
+- **`ConcernDocs`** — fixed ordered list of the 9 concern-doc names (`architecture`, `modules`, `conventions`, `data-model`, `dependencies`, `entry-points`, `testing`, `domain`, `index`).
 
-## Repository (`internal/repo/repo.go`)
+## On-disk spec frontmatter shapes
 
-- `Repo`: `{Root string}` — git worktree absolute path, discovered via `git rev-parse --show-toplevel`; accessor methods resolve `.fledge`, `broods`, `nest`, `molt`, `pluma/plumage`, `pluma/feathers`, `.fledgeignore`, `.fledge/scaffold.json`.
+- **Plumage frontmatter:** `id` (PLM-###), `title`, `status` (egg\|hatched\|fledged), `priority` (P0–P3), `authored` (UTC ISO 8601), `agent`, `fledge_version`.
+- **Feather frontmatter:** all plumage fields plus `plumage` (parent PLM-###), `depends_on` (list of FTHR-###), `oversight` (optional: merge\|during).
+- **Nest concern-doc frontmatter:** `generated`, `commit`, `agent`, `fledge_version` (fixed key order, enforced by `Doc.Frontmatter()`).
+- **Nest scout-report frontmatter:** `module`, `authored`, `agent`, `fledge_version`.
+- **Evidence file** (`.fledge/molt/FTHR-###.md`, worktree-local): one `## AC-N` section per acceptance criterion; AC-1 always the pre-implementation failing-test capture; commands + verbatim output per criterion.
+- **Brood claim** (`.fledge/broods/FTHR-###.brood`): the `lock.Record` JSON shape above.
 
 ## Open Questions
 
-- Is `Criterion.boxOff` (byte-offset cache) load-bearing for performance, or would on-demand computation suffice? (internal-domain scout, unresolved from code alone.)
-- Whether `graph`'s tolerance of dangling `depends_on` is deliberate defense-in-depth (since `check` catches it separately) or an oversight is unconfirmed.
+None observed — all raw scout reports resolved their module's data types without ambiguity.

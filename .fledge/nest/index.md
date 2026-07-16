@@ -1,45 +1,40 @@
 ---
-generated: 2026-07-15T18:14:39Z
-commit: 5728c29953a7c218c923ce20333dbffebb00623f
+generated: 2026-07-15T23:53:12Z
+commit: a4d02e8187c64ef9f3f1231052990b282207420b
 agent: fledge-forager
-fledge_version: 0.5.4
+fledge_version: 0.5.5
 ---
 
 # Context Index
 
 ## architecture.md
-The two-layer split (deterministic CLI vs. bootstrap/adapter scaffolding), the 6-primitive contract and tier derivation, scaffold write policies/drift, and how the agent-neutral orchestration workflow (planning/implementation phases, worker-protocols.md's Skua review checklist/verdict rules, Claude's team-loop.md tmux precondition/fallback) fits together end to end.
-Read this when: you need the big picture before touching `internal/bootstrap/`, planning changes to the Skua review protocol or the tmux teammate-display fallback, or adding/changing a harness adapter.
+Explains fledge's deliberate two-layer split (deterministic CLI vs. manifest-driven bootstrap/adapter system) and how the small `internal/` domain packages (spec, check, graph, lock, scan, repo, nest) compose behind `internal/cli` to implement every command. Also covers the dogfooding loop (this repo runs fledge on itself).
+Read this when: orienting to the codebase for the first time, deciding which layer a change belongs in, or tracing how a CLI command reaches its underlying package.
 
 ## modules.md
-Repo map from `fledge scan`'s module list: root/CI/scripts, cmd (CLI entry + acceptance tests), docs (superseded design doc + unrelated research briefs), internal/bootstrap split into core-skills and adapters, internal/cli, and internal/domain (spec/check/graph/lock/nest/repo/scan + test-only packages).
-Read this when: you know *what* you need to change but not *which file* — start here to find the right module, then drill into its scout report or the relevant concern doc.
+Repo map, one entry per top-level module (per `fledge scan`'s grouping, including the split subtrees of `internal/bootstrap`): purpose, key files, and "look here for…" per module.
+Read this when: you know *what* you need to change but not *where* it lives, or need the file list for a specific module before editing it.
 
 ## conventions.md
-Go coding conventions (command registration, byte-preservation, atomic writes, concurrency locking), scaffold/bootstrap write-policy conventions, spec lifecycle and CLI-only mutation rules, worker naming/communication topology, and version-sync discipline at release time.
-Read this when: writing new Go code in this repo, adding a CLI command, or deciding how a new worker role should be named/communicate.
+Reconciled naming, lifecycle, layering, error-handling, and process conventions: spec ID/status rules, CLI exit codes and JSON conventions, bird-themed naming, worker-naming scheme, gating/interrogation protocol, test-first discipline, versioning/release rules.
+Read this when: writing new code or specs and need to match existing idiom, or unsure what's CLI-owned vs. hand-editable.
 
 ## data-model.md
-Concrete Go struct definitions for spec types (Requirement/Task/Criterion), lock records, nest Doc/Stamp/Drift types, scan Module/Result, bootstrap Manifest/ManifestFile/StampEntry, and every CLI `--json` output shape.
-Read this when: you need exact field names/types before writing code that parses or produces fledge's JSON, frontmatter, or scaffold-stamp data.
+Every core struct/type with file:line references: `Requirement`/`Task`/`Set` (spec), `Finding` (check), `Graph` (graph), `Record`/`HeldError` (lock), `Manifest`/`ManifestFile`/`Stamp`/`StampEntry`/`Drift` (bootstrap), `Doc`/`StatusResult` (nest), plus the on-disk frontmatter shapes for plumages, feathers, nest docs, evidence files, and brood claims.
+Read this when: adding or modifying a struct, parsing/writing frontmatter, or needing the exact shape of a JSON/YAML artifact.
 
 ## dependencies.md
-Go module dependencies (goccy/go-yaml, rogpeppe/go-internal/testscript) with usage sites, external subprocess tools (git, gofmt, go vet, gh), GitHub Actions dependencies, and per-harness runtime capabilities each adapter assumes (Claude's tmux/SendMessage/TaskStop, Codex's AGENTS.md, Pi's fledge_gate).
-Read this when: auditing what fledge links against or shells out to, or checking what a specific harness (Claude/Codex/Pi) must actually provide to realize a given primitive.
+Deduplicated external dependencies with usage notes: the two direct Go deps (`goccy/go-yaml`, `rogpeppe/go-internal`/testscript) and what uses them, stdlib packages of note (embed, text/template, sha256, os.Link, flock), external CLI tools (git, gofmt, go vet, gh), GitHub Actions, and config-file dependencies (VERSION, .fledgeignore, scaffold.json).
+Read this when: adding a new dependency (check what's already available), or tracing what a package actually calls out to.
 
 ## entry-points.md
-Build/install/test commands, the full CLI dispatch table with the commands most relevant to context/spec work highlighted, the agent-facing SKILL.md entry point, and the internal Go API surface consumed by `cmd/fledge`.
-Read this when: you need the exact command to build, reinstall, or invoke fledge, or you're tracing which Go function a CLI verb calls into.
+The full 24-command CLI table (command → purpose → implementing file), package-level public APIs each command calls into, the binary's `main()` entry point, skill/workflow entry points for agents, and build/test/run commands.
+Read this when: implementing or calling a CLI command, or needing the exact `go build`/`go test`/`fledge init --refresh` incantations.
 
 ## testing.md
-Testscript (txtar) and Go-unit-test frameworks, how to run each, the full acceptance-test file list mapped to what each covers (the authoritative behavioral spec — update alongside any core/adapters change), and notable patterns like the concurrent-allocation race tests and enforced test-first discipline.
-Read this when: adding or changing behavior that needs a txtar fixture update, writing a new unit test, or verifying CI/pre-commit gate coverage.
+Frameworks in use (stdlib `testing`, `testscript`/`.txtar`), how to run each kind, and per-package coverage summaries — including the three structural "keep docs/CI honest" packages (`ciconfig`, `doctest`, `hooktest`) and all 23 CLI acceptance fixtures.
+Read this when: writing a test, deciding unit vs. acceptance-test coverage, or figuring out how an existing behavior is already verified.
 
 ## domain.md
-Full bird-themed glossary: spec artifacts (plumage/feather/AC/molt), repository infrastructure (nest/brood/colony/preen/scaffold/stamp), orchestration primitives and tiers, spawned worker roles (incubator/forager/scout/brooder/skua) with the Skua's exact review-checklist and verdict terms, and process gates (confirm-gate, create-then-gate, escalation).
-Read this when: any prose you're reading or writing uses fledge's bird terminology and you need the precise definition — especially before editing worker-protocols.md's Skua section or team-loop.md's shutdown/species rules.
-
-## Notes for the two upcoming planning efforts
-
-- **Adversarial fledge-skua**: see architecture.md's "Skua review protocol" subsection and domain.md's Skua entry for the current `### Reviewing a feather` checklist and `### Verdict` behavior (findings, third-rejection escalation, pass-to-orchestrator) before designing changes — source is `internal/bootstrap/core/skills/fledge-orchestrate/worker-protocols.md` § Skua and `internal/bootstrap/adapters/claude/agents/fledge-skua.md`.
-- **tmux auto-default**: see architecture.md's "Team-loop mechanics" subsection for the current `test -n "$TMUX"` precondition and its confirm-gated in-process fallback — source is `internal/bootstrap/adapters/claude/team-loop.md` § Teammate display (tmux) and `implementation.md` §1. Remember: any change to this prose requires `go install ./cmd/fledge && fledge init --refresh` in this repo plus updating `cmd/fledge/testdata/init.txtar`/`init_agents.txtar`/`agents.txtar`.
+Full glossary of fledge's bird-themed vocabulary: spec types and lifecycle states (plumage/feather/egg/hatched/pipping/hatching/fledged), storage layout (nest/molt/brood/scaffold/burrows), CLI verbs (preen/molt/colony/vee/unfledged), worker roles (forager/scout/incubator/brooder/skua/orchestrator/commissioner), naming mechanics (species), and orchestration architecture terms (primitive/harness/adapter/manifest/tier/drift).
+Read this when: any unfamiliar bird-themed term appears, or before naming something new (to match the existing metaphor consistently).
