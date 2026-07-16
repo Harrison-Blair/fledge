@@ -1,6 +1,8 @@
 # FTHR-053 — Persisted roster allocator core: evidence
 
-## AC-1: Tests observed failing before implementation, passing after
+## AC-1
+
+_Tests observed failing before implementation, passing after_
 
 ### Before implementation (test-first)
 
@@ -47,7 +49,9 @@ PASS
 ok  	github.com/Harrison-Blair/fledge/internal/roster	0.006s
 ```
 
-## AC-2: Species holds the confirmed 18-species list in confirmed order
+## AC-2
+
+_Species holds the confirmed 18-species list in confirmed order_
 
 `internal/roster/roster.go` declares `var Species = [18]string{...}` with the
 exact confirmed order. `TestSpeciesList` pins both the length (18) and every
@@ -64,7 +68,9 @@ PASS
 ok  	github.com/Harrison-Blair/fledge/internal/roster	0.004s
 ```
 
-## AC-3: Assign/Release/List behave as specified (incl. suffix overflow + per-member release)
+## AC-3
+
+_Assign/Release/List behave as specified (incl. suffix overflow + per-member release)_
 
 - `TestAssignSequentialAndOverflow` — Assign hands out species in canonical
   order (adelie, then emperor), and once all 18 bases are in use the 19th call
@@ -88,7 +94,9 @@ PASS
 ok  	github.com/Harrison-Blair/fledge/internal/roster	0.004s
 ```
 
-## AC-4: Concurrency test demonstrates no double-allocation
+## AC-4
+
+_Concurrency test demonstrates no double-allocation_
 
 `TestConcurrentAssignYieldsDistinctSpecies` launches 18 goroutines that all
 call `Assign` against one shared state dir behind a start barrier, over 5
@@ -112,7 +120,9 @@ $ go test -run TestConcurrentAssignYieldsDistinctSpecies ./roster/   # flock dis
 FAIL
 ```
 
-## AC-5: `go test ./internal/roster/...` passes
+## AC-5
+
+_`go test ./internal/roster/...` passes_
 
 ```
 $ go test ./internal/roster/...

@@ -2,7 +2,7 @@
 id: FTHR-053
 title: "Persisted roster allocator core (species list, state file, flock)"
 plumage: PLM-026
-status: pipping
+status: fledged
 priority: P3
 depends_on: []
 authored: 2026-07-16T02:06:31Z
