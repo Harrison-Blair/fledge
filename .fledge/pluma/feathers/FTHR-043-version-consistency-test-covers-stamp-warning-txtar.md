@@ -2,7 +2,7 @@
 id: FTHR-043
 title: Version-consistency test covers stamp_warning.txtar
 plumage: PLM-023
-status: pipping
+status: fledged
 priority: P1
 depends_on: []
 authored: 2026-07-16T01:52:56Z
