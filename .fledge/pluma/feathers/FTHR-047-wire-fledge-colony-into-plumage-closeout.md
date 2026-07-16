@@ -53,10 +53,10 @@ feather" is decided.
 
 ## Acceptance Criteria
 Checkbox list, one `- [ ] AC-N: …` line per criterion — authored unchecked; checked only via `fledge criteria check`, with per-criterion evidence in `.fledge/molt/FTHR-047.md`. Reference the parent plumage's criteria where applicable (e.g. "satisfies PLM-024 FC-2"). AC-1 is always:
-- [ ] AC-1: The test listed above was observed failing before implementation
+- [x] AC-1: The test listed above was observed failing before implementation
   and passes after; evidence captured verbatim.
-- [ ] AC-2: `implementation.md`'s solo and team closeout steps both instruct
+- [x] AC-2: `implementation.md`'s solo and team closeout steps both instruct
   querying `fledge colony --json` for the last-feather decision (satisfies
   PLM-024 FC-1, AC-1).
-- [ ] AC-3: `fledge init --refresh` regenerates this repo's scaffolded copy to
+- [x] AC-3: `fledge init --refresh` regenerates this repo's scaffolded copy to
   match, and `go test ./cmd/fledge -run TestScripts` passes.
