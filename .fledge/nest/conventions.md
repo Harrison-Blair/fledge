@@ -1,65 +1,55 @@
 ---
-generated: 2026-07-16T04:02:08Z
-commit: 154510fc963e7071b2f09297ecfeba2b6710e85e
+generated: 2026-07-16T21:27:15Z
+commit: a1ed62a38540df7ab1cbdc4c486176a64a762018
 agent: fledge-forager
 fledge_version: 0.5.8
 ---
 
 # Conventions
 
-Naming, error-handling, layering, and process conventions observed across the repo, reconciled across all scouted modules.
+Naming, structural, and process idioms observed consistently across the CLI, bootstrap, and orchestration-prose layers.
 
-## Terminology & naming
+## Go code conventions
 
-- **Bird-themed vocabulary** throughout: plumage, feather, nest, brood, preen, molt, forager, scout, brooder, skua, incubator, roster, colony, vee. Match this in new prose (README.md decodes it).
-- **IDs**: `PLM-###` (plumage/requirement), `FTHR-###` (feather/task) — 3-digit zero-padded, widened only if existing IDs are wider (`internal/spec/ids.go`). Never hand-invented; always CLI-allocated (`fledge new`).
-- **Kebab-case** for derived slugs (`internal/spec.Kebab()`): lowercase, non-alphanumeric runs collapse to one hyphen, Unicode letters/digits preserved.
-- Worker names follow `fledge-<role>-<species>` (e.g. `fledge-brooder-adelie`), drawn from an 18-species bird list with `-2`/`-3` overflow suffixes (`internal/roster`).
+- **Minimal entry-point pattern**: `cmd/fledge/main.go` is 11 lines and delegates everything to `internal/cli.Run` (`cmd/fledge/main.go`).
+- **Command registry pattern**: each `internal/cli/*.go` file registers itself via `init()` calling `register(name, run, usage)`; `commandOrder` in `cli.go` controls usage output and generated allow-lists; `command_parity_test.go:TestCommandOrderMatchesRegistrations` pins the two in sync.
+- **Exit codes are meaningful and shared**: `ExitOK=0`, `ExitFail=1`, `ExitUsage=2`, `ExitEnv=3` (`internal/cli/cli.go`); errors print to stderr prefixed `"fledge: "`; no panics, no silent failures.
+- **`--json` on every command**: marshaled via `emitJSON()` (`internal/cli/cli.go`), 2-space indent, `omitempty` struct tags to avoid null clutter.
+- **Shared setup helper**: most commands call `loadSet()` (`internal/cli/specload.go`) first — loads repo root, spec set, and locked feather IDs, returning a `ok bool` handled-exit-code pattern.
+- **Byte preservation**: spec bodies after the frontmatter `---` are never re-serialized, only round-tripped (`internal/spec/frontmatter.go:SplitFrontmatter`); `SetCriterion` flips exactly one byte and is idempotent (`internal/spec/criteria.go`); CRLF line endings preserved through parsing/mutation (verified by tests with `\r\n`).
+- **Atomic I/O everywhere state matters**: temp-file+rename pattern (`internal/spec/frontmatter.go:WriteFileAtomic`); `os.Link`-based atomic acquire for brood claims (`internal/lock/lock.go`); exclusive `flock` on `.alloc.lock` for ID allocation (`internal/spec/ids.go`) and on `roster.json` for species allocation (`internal/roster/roster.go`) — the same flock pattern reused in both places.
+- **Error aggregation over fail-fast**: `spec.Load()` collects per-file parse errors into `Set.Errors` without stopping iteration (`internal/spec/load.go`); errors always returned to caller, never panicked or logged silently (`internal/repo`, `internal/roster`, `internal/scan`).
+- **Regex-based ID/criterion parsing**: `^<PREFIX>-(\d+)[-.]` for filenames, `^- \[([ xX])\] (AC-(\d+)):` for checkboxes (no indentation tolerated; lowercase `x` written on check) — `internal/spec/ids.go`, `internal/spec/criteria.go`.
+- **Doc/hook assertions by substring, not exact text**: `internal/doctest` and `internal/hooktest` check for section/command presence via substring match so prose edits don't spuriously break tests.
 
-## CLI architecture conventions
+## Scaffold/bootstrap conventions
 
-- Command dispatch: each command file registers via `register(name, run, usage)` in its own `init()`; `internal/cli/cli.go`'s `commandOrder` slice (19 entries, exact order verified via `awk '/commandOrder = /,/^}/' internal/cli/cli.go`) drives both help output and generated allow-lists.
-- Exit codes are a shared, meaningful enum: `ExitOK=0`, `ExitFail=1` (domain error), `ExitUsage=2` (bad args), `ExitEnv=3` (not a git repo / missing `.fledge/`).
-- Every command supports `--json` (indented, deterministic key order via struct tags).
-- Each command uses its own `flag.FlagSet` with `flag.ContinueOnError` (never exits on parse failure directly); `parseMixed()` collects positionals before flags for commands with flexible arg order.
-- Common `loadSet()` (`internal/cli/specload.go`) loads repo + all specs before most command bodies run.
+- **Manifest-driven adapters, zero per-adapter Go code**: all harness-specific behavior is data in `manifest.yaml` (`internal/bootstrap/adapters/*/manifest.yaml`); `registry.go` is the only code that reads them.
+- **Tier is derived, never declared**: `Manifest.Tier()` computes A/B/C from which primitives the manifest's `tier_primitives` map covers (`internal/bootstrap/primitives.go`).
+- **Write-policy vocabulary is fixed and named** in both code and prose: default (copy, skip-if-exists), `overwrite`, `generate`/`primitive_map`, `append_if_missing`, `symlink` (`internal/bootstrap/registry.go`, restated in root `CLAUDE.md`).
+- **Determinism in generated state**: `.fledge/scaffold.json` marshaled with 2-space indent and sorted keys (`internal/bootstrap/stamp.go`); repo-relative paths use forward slashes internally, converted to host OS only at write time.
+- **Core prose stays harness-neutral**: `internal/bootstrap/registry_test.go:TestCoreNeutral` asserts core skill prose never references harness-native paths (`.claude/`, `.pi/`, `.codex/`); harness specifics live only in adapters.
+- **Refresh is a reset, not a merge**: `fledge init --refresh` overwrites every fledge-owned file to the shipped version and prunes obsolete ones; user edits are protected by a confirm-gate on an interactive terminal (skippable with `--force`), recoverable only via git (root `CLAUDE.md`, `RELEASING.md`).
 
-## Spec-file conventions
+## Spec-lifecycle conventions (plumage/feather)
 
-- Frontmatter is YAML between `---` delimiters, snake_case keys, fixed rendering order (Requirement: `id, title, status, priority, authored, agent, fledge_version`; Task adds `plumage, depends_on, oversight`). Body markdown is preserved byte-for-byte — never reparsed/reformatted by CLI mutations.
-- Acceptance criteria: `- [x] AC-N: text` lines under a bare `## Acceptance Criteria` heading; only ever mutated via `fledge criteria check` (never hand-edited); one byte flipped per mutation, preserving all other bytes.
-- Lifecycle states — **Plumage**: `egg → hatched → fledged`. **Feather**: `egg → pipping → hatching → fledged` (verified directly against `internal/spec/types.go` status constants and `internal/cli/status.go` transition rules: task transitions `egg→hatching`, `pipping→hatching`, `hatching→{fledged,pipping}`; requirement transitions `egg→hatched`, `hatched→{fledged,egg}`; `--force` bypasses legality but not enum validity).
-- Deterministic spec operations always go through the CLI (`fledge new`, `status`, `set`, `criteria`, `brood`) — frontmatter is never hand-edited; spec *body* prose is agent-writable.
+- **Lifecycle**: plumage `egg → hatched → fledged`; feather `egg → pipping → hatching → fledged` (consistent across `internal/spec/types.go`, `internal/check/check.go`, root `CLAUDE.md`, and all orchestration prose).
+- **Frontmatter is CLI-owned**: `id`, `authored`, `agent`, `fledge_version` are allocated/written only by the CLI (`fledge new`); agents never hand-edit frontmatter or invent IDs (root `CLAUDE.md`, `internal/spec/ids.go`).
+- **Acceptance criteria only change via `fledge criteria check|uncheck`**: checkbox mutation is byte-preserving and idempotent (`internal/spec/criteria.go:SetCriterion`); hand-editing the checkbox text is out of convention.
+- **AC-1 is always test-first evidence** on feathers (`internal/bootstrap/core/skills/fledge-orchestrate/templates/feather.md`, `brooder.md`): tests written and run against unchanged code first, failure captured verbatim in `.fledge/molt/FTHR-###.md`, then implemented until passing — never weakened to pass.
+- **Evidence file format**: `.fledge/molt/<TaskID>.md`, one `## AC-N` heading per criterion (bare heading, not further labeled) with commands + verbatim output (`internal/check/check.go` criteria-evidence rule; `worker-protocols.md`).
+- **No `Co-Authored-By` trailers** on any commit made by brooders/skuas (`brooder.md`, `skua.md`, and the user's own global instruction).
+- **Brood consistency is bidirectional**: `hatching` status must have a held lock, and a held lock implies `hatching` status — checked both ways by `preen` (`internal/check/check.go`).
 
-## File write / scaffolding conventions
+## Worker/orchestration prose conventions
 
-- `fledge init` write policies (`internal/bootstrap/registry.go`): `generate`/`primitive_map` (template-rendered, always rewritten), `overwrite` (verbatim, always rewritten), `append_if_missing` (additive one-liner, never deletes), `symlink` (OS-level link, e.g. `.claude/skills/*` → `.fledge/skills/*`), and the default (copy, **skip-if-exists** so user edits survive; `--refresh` re-syncs).
-- `.fledge/scaffold.json` is the deterministic stamp (`json.MarshalIndent`, alphabetic key sort, trailing newline) of what fledge owns and at what content hash; `fledge preen` and `fledge init --refresh` both consult it for drift.
-- `writeIfChanged` makes writes byte-idempotent — a second identical run reports files as skipped, not rewritten. The `cmd/fledge` txtar tests (especially `init.txtar`, `init_agents.txtar`, `agents.txtar`) assert on this; update those fixtures whenever embedded `core/`/`adapters/` content changes.
-
-## Error handling
-
-- `check` package surfaces validation problems as `[]Finding{File, Rule, Severity, Message}`, never panics; warnings and errors coexist in one report.
-- `lock` package: atomic claim creation via temp-file + `os.Link` (EEXIST → conflict); corrupt `.brood` files are skipped and reported, not fatal.
-- `spec` package: atomic file writes via temp file (`O_CREATE|O_EXCL`) + rename, `.fledge-tmp-*` pattern, `0o644` permissions.
-
-## Versioning & release
-
-Three files must move together on every release — this is the load-bearing convention this regeneration exists to pin down precisely:
-
-1. **`VERSION`** (repo root) — single-line plain-text source of truth; currently `0.5.8`.
-2. **`internal/cli/version.go`** — the `binaryVersion` constant, injected at build time via ldflags (`-X github.com/Harrison-Blair/fledge/internal/cli.binaryVersion=$VERSION` in both `scripts/install.sh` and `.github/workflows/release.yml`); must match `VERSION` verbatim. `internal/cli/version_test.go`'s `TestBinaryVersionMatchesVersionFile` enforces this.
-3. **`cmd/fledge/testdata/stamp_warning.txtar`** — the acceptance fixture pinning an old/new version pair to test the scaffold-mismatch warning (every command except `init`/`version` warns when `.fledge/scaffold.json`'s recorded version is older than the running binary's version; silent when matched or absent). `TestStampWarningTxtarVersionMatchesBinary` enforces this fixture stays in sync with `binaryVersion`.
-
-Release process (`RELEASING.md`, `.github/workflows/release.yml`): bump all three files → push to `main` → CI's `detect-version` job compares current vs. prior-commit `VERSION` and, if changed, runs the 4-platform build (linux/darwin × amd64/arm64) behind an always-run safety-net (gofmt/vet/build/test) → `gh release create` with per-platform `tar.gz` + `sha256` artifacts → after release, `fledge init --refresh` re-stamps this repo's own scaffold to dogfood the new version. A failed release burns the version number (no automatic retry of the same VERSION value).
-
-## Testing conventions
-
-- Acceptance tests: `testscript`/`.txtar` format (`github.com/rogpeppe/go-internal/testscript`), 25 fixtures under `cmd/fledge/testdata/` (`ls cmd/fledge/testdata/*.txtar | wc -l` = 25); `cmd/fledge/main_test.go` registers the CLI function itself (not a built binary) so tests run in-process.
-- Unit tests live beside their package; table-driven style is common (`t.Run` subtests), with concurrency tests using goroutine-barrier patterns for lock/roster/ID-allocation contention.
-- CI and the optional local `scripts/hooks/pre-commit` hook both gate on `gofmt -l .` (check, not `-w` rewrite) + `go vet ./...`; CI additionally runs `go test ./...`.
+- **Worker naming**: `<role>-<species>` (e.g. `fledge-brooder-adelie`); species drawn from the canonical 18-item penguin list in `internal/roster/roster.go`, allocated via `fledge roster assign`, numeric-suffixed once the base set is exhausted. Scouts are the one exception — unnamed, self-terminating.
+- **Spawn prompt is the entire context**: workers inherit no conversation history; every spawn prompt must be fully self-contained (stated identically in `foraging.md`, `worker-protocols.md`, `implementation.md`).
+- **One-shot lifecycle, explicit final message**: workers are done only at their named final message, never at bare idle; the commissioning party requests shutdown by name and force-terminates if it doesn't exit promptly.
+- **Fixed communication topology**: brooder ↔ skua ↔ orchestrator; incubator ↔ orchestrator; forager → commissioner only. No worker nesting (workers don't spawn further workers) except forager→scout and orchestrator→everything.
+- **Density over prose**: scout/concern-doc conventions and worker protocols alike mandate bullets, file references (`path/to/file.go:Symbol`), and identifiers — "no prose padding" is stated verbatim in `foraging.md` and `templates/context-doc.md`.
 
 ## Open Questions
 
-- Full go/template rendering context for `generate`/`primitive_map` scaffold files not fully traced (see architecture.md).
-- Whether pi/codex adapter prose is fully reconciled with their derived Tier A label everywhere it's mentioned.
+- Exact traceability threshold for skua's "changes not traceable to spec" scope-creep check is undefined (line-by-line vs logical correspondence) — `skua.md` (via `internal-bootstrap-core` scout).
+- Commit-message *content* convention beyond "no trailers" is unspecified — `brooder.md`/`skua.md` (via `internal-bootstrap-core` scout).
