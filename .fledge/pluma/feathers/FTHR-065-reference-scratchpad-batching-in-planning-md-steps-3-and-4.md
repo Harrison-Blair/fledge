@@ -28,7 +28,7 @@ fledge_version: 0.5.8
 - Implementation order: write the test against `planning.md` as FTHR-058 leaves it (fails — no batching reference in either step), add the two clauses, confirm it passes.
 
 ## Acceptance Criteria
-- [ ] AC-1: The test listed above was observed failing before implementation and passes after.
-- [ ] AC-2: `planning.md` step 3 references the scratchpad-batching option for plumage interrogation.
-- [ ] AC-3: `planning.md` step 4.1 references the scratchpad-batching option for feather interrogation (satisfies PLM-028 FC-9, AC-4).
-- [ ] AC-4: `go test ./internal/bootstrap/...` passes.
+- [x] AC-1: The test listed above was observed failing before implementation and passes after.
+- [x] AC-2: `planning.md` step 3 references the scratchpad-batching option for plumage interrogation.
+- [x] AC-3: `planning.md` step 4.1 references the scratchpad-batching option for feather interrogation (satisfies PLM-028 FC-9, AC-4).
+- [x] AC-4: `go test ./internal/bootstrap/...` passes.
