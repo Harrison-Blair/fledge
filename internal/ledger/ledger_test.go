@@ -70,6 +70,92 @@ func TestWriteOverwritesPriorRecord(t *testing.T) {
 	}
 }
 
+// TestWriteRejectsInvalidSubject pins the address-space contract from FC-1:
+// a record always lands at .fledge/ledger/<subject>.<kind>.json and never
+// outside dir. Subjects are rejected, never sanitized into something else.
+func TestWriteRejectsInvalidSubject(t *testing.T) {
+	subjects := map[string]string{
+		"empty":            "",
+		"dotdot":           "..",
+		"parent traversal": "../escaped",
+		"deep traversal":   "../../escaped",
+		"slash":            "a/b",
+		"leading slash":    "/abs",
+		"backslash":        `a\b`,
+		"embedded dotdot":  "a/../../b",
+		"dot":              ".",
+	}
+	for name, subject := range subjects {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, "ledger")
+
+			_, err := Write(dir, subject, KindStatus, StatusRecord{PID: 1, Note: "pwn"})
+			var ise *InvalidSubjectError
+			if !errors.As(err, &ise) {
+				t.Fatalf("Write(subject=%q): want *InvalidSubjectError, got %v (%T)", subject, err, err)
+			}
+
+			// Nothing may be created anywhere under root: not in the ledger
+			// dir, not outside it.
+			var found []string
+			filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+				if err == nil && !d.IsDir() {
+					found = append(found, path)
+				}
+				return nil
+			})
+			if len(found) != 0 {
+				t.Errorf("Write(subject=%q) created files %v, want none", subject, found)
+			}
+		})
+	}
+}
+
+// TestReadRejectsInvalidSubject: Read shares the same address space, so it
+// must refuse to resolve a path outside dir rather than reading a stray file.
+func TestReadRejectsInvalidSubject(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "ledger")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A file that a traversing subject would otherwise reach.
+	outside := filepath.Join(root, "escaped.status.json")
+	if err := os.WriteFile(outside, []byte(`{"subject":"escaped","kind":"status"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, subject := range []string{"", "..", "../escaped", "a/b", "/abs", `a\b`} {
+		_, err := Read(dir, subject, KindStatus)
+		var ise *InvalidSubjectError
+		if !errors.As(err, &ise) {
+			t.Errorf("Read(subject=%q): want *InvalidSubjectError, got %v (%T)", subject, err, err)
+		}
+	}
+}
+
+// TestValidSubjectsAccepted guards the rejection above from over-reach: the
+// worker names this ledger actually addresses must still be accepted.
+func TestValidSubjectsAccepted(t *testing.T) {
+	for _, subject := range []string{
+		"fledge-brooder-adelie",
+		"fledge-skua-emperor2",
+		"team-lead",
+		"FTHR-072",
+		"a.b", // dots are fine; only path elements are not
+	} {
+		dir := t.TempDir()
+		if _, err := Write(dir, subject, KindStatus, StatusRecord{PID: 1}); err != nil {
+			t.Errorf("Write(subject=%q): unexpected error %v", subject, err)
+			continue
+		}
+		if _, err := Read(dir, subject, KindStatus); err != nil {
+			t.Errorf("Read(subject=%q): unexpected error %v", subject, err)
+		}
+	}
+}
+
 func TestReadMissingRecord(t *testing.T) {
 	dir := t.TempDir()
 	_, err := Read(dir, "nobody", KindStatus)

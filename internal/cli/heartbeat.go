@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -42,6 +43,10 @@ func runHeartbeat(args []string) int {
 	}
 	rec, err := ledger.Write(r.LedgerDir(), name, ledger.KindStatus, payload)
 	if err != nil {
+		var invalid *ledger.InvalidSubjectError
+		if errors.As(err, &invalid) {
+			return usageErr("%v", err)
+		}
 		return fail("%v", err)
 	}
 	if *jsonOut {

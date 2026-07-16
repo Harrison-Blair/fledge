@@ -286,3 +286,87 @@ ok  	github.com/Harrison-Blair/fledge/internal/roster	(cached)
 ok  	github.com/Harrison-Blair/fledge/internal/scan	(cached)
 ok  	github.com/Harrison-Blair/fledge/internal/spec	(cached)
 ```
+
+---
+
+# Review cycle 1 — Finding 1: subject validation
+
+Skua finding: `recordPath` never validated `subject`, so `Write` could resolve outside the ledger dir (`fledge heartbeat ../../escaped-by-cli` exited 0 and wrote outside `.fledge/ledger/`). Substantiates **AC-2** (FC-1 address space: a record always lives at `.fledge/ledger/<subject>.<kind>.json`) and **AC-3** (invalid input is `ExitUsage`).
+
+Fix: `validSubject` rejects empty subjects, any subject containing `/` or `\`, and the `.`/`..` path elements, with a typed `*InvalidSubjectError`. Applied in **both** `Write` and `Read` so the guarantee holds for every future caller (FTHR-073 `await` reads through the same address space), not just `heartbeat`. Rejects, never sanitizes — a repaired name would silently address a different record than the caller asked for. `heartbeat` maps the typed error to `ExitUsage`.
+
+### Tests added (written first, run against the unfixed code)
+
+`TestWriteRejectsInvalidSubject` (9 subjects incl. `..`, `../escaped`, `a/b`, `/abs`, `a\b`, `""`; asserts no file is created *anywhere* under the temp root, not merely in the ledger dir), `TestReadRejectsInvalidSubject`, `TestValidSubjectsAccepted` (guards the rejection from over-reach: real worker names like `fledge-brooder-adelie`, `a.b` still work), plus `heartbeat.txtar` cases asserting exit 2 and that nothing is written.
+
+Pre-fix run — the txtar reproduces the finding behaviorally (not just a build error):
+
+```
+$ go test ./cmd/fledge -run TestScripts/heartbeat   # against the unfixed code
+    # a subject that would escape the ledger directory is rejected, not sanitized,
+    # and writes nothing anywhere (0.001s)
+    > ! exec fledge heartbeat ../escape
+    [stdout]
+    heartbeat ../escape at 2026-07-16T23:56:50Z
+    FAIL: testdata/heartbeat.txtar:41: unexpected command success
+
+$ go test ./internal/ledger/ -run Subject           # against the unfixed code
+internal/ledger/ledger_test.go:94:13: undefined: InvalidSubjectError
+FAIL	github.com/Harrison-Blair/fledge/internal/ledger [build failed]
+```
+
+### The skua's own CLI repro, re-run against the fix
+
+```
+$ fledge heartbeat '../../escaped-by-cli' --note pwn
+fledge: invalid ledger subject "../../escaped-by-cli": must not contain a path separator ("/" or "\")
+exit=2
+$ fledge heartbeat '' --json
+fledge: invalid ledger subject "": must not be empty
+exit=2
+$ fledge heartbeat 'a/b'
+fledge: invalid ledger subject "a/b": must not contain a path separator ("/" or "\")
+exit=2
+$ find /tmp/hbrepo -name '*.status.json'
+NONE (correct)
+$ fledge heartbeat fledge-brooder-emperor --note 'still works'
+heartbeat fledge-brooder-emperor at 2026-07-16T23:58:17Z
+exit=0
+$ find /tmp/hbrepo -name '*.status.json'
+/tmp/hbrepo/.fledge/ledger/fledge-brooder-emperor.status.json
+```
+
+### Mutation checks on the new guard (each reverted)
+
+| Mutation | Result |
+| --- | --- |
+| `validSubject` call removed from `Write` | `TestWriteRejectsInvalidSubject` FAILs (`want *InvalidSubjectError, got <nil>`) |
+| separator check neutralized | `TestWriteRejectsInvalidSubject/{deep_traversal,leading_slash,backslash}` FAIL |
+
+Note on process: the separator mutation first reported `ok`, which was a **false negative** — the `perl` substitution had silently failed to match, so the mutation was never applied. Re-run with the edit confirmed applied (`grep` on the mutated line), it fails as expected. An unverified mutation check proves nothing; the table above reflects only mutations verified present in the source.
+
+### Full verification after the fix
+
+```
+$ go test -race -count=1 ./internal/ledger/... ./cmd/fledge/...
+ok  	github.com/Harrison-Blair/fledge/internal/ledger	1.009s
+ok  	github.com/Harrison-Blair/fledge/cmd/fledge	37.330s
+$ go test ./... 2>&1 | grep -v "no test files"
+ok  	github.com/Harrison-Blair/fledge/cmd/fledge	(cached)
+ok  	github.com/Harrison-Blair/fledge/internal/bootstrap	(cached)
+ok  	github.com/Harrison-Blair/fledge/internal/check	(cached)
+ok  	github.com/Harrison-Blair/fledge/internal/ciconfig	(cached)
+ok  	github.com/Harrison-Blair/fledge/internal/cli	(cached)
+ok  	github.com/Harrison-Blair/fledge/internal/doctest	(cached)
+ok  	github.com/Harrison-Blair/fledge/internal/graph	(cached)
+ok  	github.com/Harrison-Blair/fledge/internal/hooktest	(cached)
+ok  	github.com/Harrison-Blair/fledge/internal/ledger	(cached)
+ok  	github.com/Harrison-Blair/fledge/internal/lock	(cached)
+ok  	github.com/Harrison-Blair/fledge/internal/nest	(cached)
+ok  	github.com/Harrison-Blair/fledge/internal/repo	(cached)
+ok  	github.com/Harrison-Blair/fledge/internal/roster	(cached)
+ok  	github.com/Harrison-Blair/fledge/internal/scan	(cached)
+ok  	github.com/Harrison-Blair/fledge/internal/spec	(cached)
+$ go vet ./... && gofmt -l .
+(clean)
+```

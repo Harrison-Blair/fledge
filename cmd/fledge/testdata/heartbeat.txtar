@@ -36,6 +36,18 @@ exists .fledge/ledger/fledge-brooder-adelie.status.json
 ! exec fledge heartbeat
 stderr 'usage'
 
+# a subject that would escape the ledger directory is rejected, not sanitized,
+# and writes nothing anywhere
+! exec fledge heartbeat ../escape
+stderr 'invalid'
+! exists ../escape.status.json
+! exists .fledge/escape.status.json
+! exec fledge heartbeat a/b
+stderr 'invalid'
+! exec fledge heartbeat ''
+stderr 'invalid'
+! exists .fledge/ledger/.status.json
+
 # too many positionals is a usage error too
 ! exec fledge heartbeat one two
 stderr 'usage'

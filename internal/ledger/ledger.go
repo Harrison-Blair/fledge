@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -84,6 +85,32 @@ func (e *CorruptError) Error() string {
 
 func (e *CorruptError) Unwrap() error { return e.Err }
 
+// InvalidSubjectError reports a subject that cannot address a ledger record.
+type InvalidSubjectError struct {
+	Subject string
+	Reason  string
+}
+
+func (e *InvalidSubjectError) Error() string {
+	return fmt.Sprintf("invalid ledger subject %q: %s", e.Subject, e.Reason)
+}
+
+// validSubject enforces the address space: a record always lives at
+// dir/<subject>.<kind>.json and never escapes dir. Subjects are rejected, not
+// sanitized — a repaired name would silently address a different record than
+// the caller asked for.
+func validSubject(subject string) error {
+	switch {
+	case subject == "":
+		return &InvalidSubjectError{subject, "must not be empty"}
+	case strings.ContainsAny(subject, `/\`):
+		return &InvalidSubjectError{subject, `must not contain a path separator ("/" or "\")`}
+	case subject == "." || subject == "..":
+		return &InvalidSubjectError{subject, "must not be a path element"}
+	}
+	return nil
+}
+
 func recordPath(dir, subject, kind string) string {
 	return filepath.Join(dir, subject+"."+kind+".json")
 }
@@ -94,7 +121,11 @@ func recordPath(dir, subject, kind string) string {
 // written to a temp file in dir and moved into place with os.Rename, which
 // replaces the target in one atomic step. A reader therefore never observes a
 // partial, zero-length, or mixed-generation file. Returns the record written.
+// An invalid subject is rejected before anything is created on disk.
 func Write(dir, subject, kind string, payload any) (*Record, error) {
+	if err := validSubject(subject); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
@@ -136,8 +167,12 @@ func Write(dir, subject, kind string, payload any) (*Record, error) {
 
 // Read returns the current record for (subject, kind): *NotFoundError when
 // none has been written (the first-appearance case), *CorruptError when the
-// file exists but does not parse — never a panic.
+// file exists but does not parse, *InvalidSubjectError when the subject could
+// not address a record inside dir — never a panic.
 func Read(dir, subject, kind string) (*Record, error) {
+	if err := validSubject(subject); err != nil {
+		return nil, err
+	}
 	b, err := os.ReadFile(recordPath(dir, subject, kind))
 	if err != nil {
 		if os.IsNotExist(err) {
