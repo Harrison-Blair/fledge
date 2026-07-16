@@ -1,7 +1,7 @@
 ---
 id: PLM-028
 title: "Batch interrogation Q&A via a scratchpad document"
-status: hatched
+status: fledged
 priority: P2
 authored: 2026-07-16T15:55:04Z
 agent: fledge-orchestrate/planning
@@ -32,11 +32,11 @@ This plumage introduces a scratchpad document: for a batch of independent, resol
 9. FC-9: The batching model applies to both plumage interrogation (planning.md step 3) and feather interrogation (step 4) — the same batchable/individual-gate rule governs both.
 
 ## Acceptance Criteria
-- [ ] AC-1: `.fledge/scratch/` is gitignored (verify via `git check-ignore .fledge/scratch/test.md` after `fledge init`/`--refresh`), and `internal/cli/init_test.go` or equivalent asserts the new gitignore line.
-- [ ] AC-2: `incubator.md` (from PLM-027) documents the batchable/individual-gate rule and the scratchpad file mechanics (naming, single `GATE review` envelope, re-read-on-accept, overwrite-per-batch).
-- [ ] AC-3: `fledge-interrogate/SKILL.md` contains the one-line delegated-incubator batching exception.
-- [ ] AC-4: `planning.md` steps 3 and 4 reference the scratchpad batching option where they describe interrogation.
-- [ ] AC-5: `fledge preen` passes after the change, and `fledge init --refresh` on this repo cleanly picks up the new gitignore line with no unexpected drift.
+- [x] AC-1: `.fledge/scratch/` is gitignored (verify via `git check-ignore .fledge/scratch/test.md` after `fledge init`/`--refresh`), and `internal/cli/init_test.go` or equivalent asserts the new gitignore line.
+- [x] AC-2: `incubator.md` (from PLM-027) documents the batchable/individual-gate rule and the scratchpad file mechanics (naming, single `GATE review` envelope, re-read-on-accept, overwrite-per-batch).
+- [x] AC-3: `fledge-interrogate/SKILL.md` contains the one-line delegated-incubator batching exception.
+- [x] AC-4: `planning.md` steps 3 and 4 reference the scratchpad batching option where they describe interrogation.
+- [x] AC-5: `fledge preen` passes after the change, and `fledge init --refresh` on this repo cleanly picks up the new gitignore line with no unexpected drift.
 
 ## Out of Scope
 - Any new `fledge` CLI command or subcommand for scratchpad management (creation/reading is plain file I/O via existing `write-file`/`read-only-shell` primitives — no new primitive, no new CLI verb).
