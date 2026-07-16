@@ -36,6 +36,30 @@ func TestIncubatorDocSections(t *testing.T) {
 	}
 }
 
+// TestIncubatorDocDescribesScratchpadBatching: incubator.md documents the
+// scratchpad-batching mechanism — the batchable rule, the scratchpad path,
+// the single GATE review reuse, and that it covers both plumage and feather
+// interrogation.
+func TestIncubatorDocDescribesScratchpadBatching(t *testing.T) {
+	doc := incubatorDoc(t)
+
+	if !strings.Contains(doc, "### Scratchpad batching") {
+		t.Errorf("incubator.md must contain the %q subsection heading", "### Scratchpad batching")
+	}
+
+	for _, phrase := range []string{
+		"independent leaves",
+		".fledge/scratch/",
+		"one `GATE review`",
+		"plumage interrogation",
+		"feather interrogation",
+	} {
+		if !strings.Contains(doc, phrase) {
+			t.Errorf("incubator.md must contain %q", phrase)
+		}
+	}
+}
+
 // firstLine returns the first line of s, for error messages.
 func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i != -1 {
