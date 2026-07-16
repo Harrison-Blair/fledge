@@ -1,7 +1,7 @@
 ---
 id: PLM-026
 title: Persisted worker roster and species allocator
-status: hatched
+status: fledged
 priority: P3
 authored: 2026-07-16T01:44:09Z
 agent: fledge-orchestrate/planning
@@ -93,23 +93,23 @@ Numbered, testable statements of behavior. Referenced downstream as FC-1, FC-2, 
 
 ## Acceptance Criteria
 Checkbox list of verifiable conditions under which this plumage is considered fledged, one `- [ ] AC-N: …` line each. Authored unchecked; checked only via `fledge criteria check` at plumage closeout.
-- [ ] AC-1: `fledge roster assign --feather FTHR-### --pair` allocates the
+- [x] AC-1: `fledge roster assign --feather FTHR-### --pair` allocates the
   first unused species and returns both role names; a repeated call with all
   18 species in use returns a numeric-suffixed species (e.g. `adelie-2`);
   covered by a `cmd/fledge` txtar test (FC-1).
-- [ ] AC-2: `fledge roster release <name>` marks a member released; the
+- [x] AC-2: `fledge roster release <name>` marks a member released; the
   species is unavailable for reallocation until every member sharing it is
   released, then becomes available again; covered by a txtar test exercising
   a pair where only one member is released first (FC-2).
-- [ ] AC-3: `fledge roster --json` lists current name→feather assignments and
+- [x] AC-3: `fledge roster --json` lists current name→feather assignments and
   omits fully-released (freed) species; covered by a txtar test (FC-3).
-- [ ] AC-4: A unit test in the package implementing the allocator demonstrates
+- [x] AC-4: A unit test in the package implementing the allocator demonstrates
   two concurrent `assign` calls never allocate the same species (mirroring
   the existing `AllocateAndCreate` concurrency test pattern) (FC-4).
-- [ ] AC-5: `implementation.md`'s §3.1, §3.5, and §6 (core source in
+- [x] AC-5: `implementation.md`'s §3.1, §3.5, and §6 (core source in
   `internal/bootstrap/core/skills/fledge-orchestrate/`) are rewritten per
   FC-5; this repo's scaffolded copy is refreshed to match.
-- [ ] AC-6: `go test ./...` passes and `fledge preen` reports the scaffold
+- [x] AC-6: `go test ./...` passes and `fledge preen` reports the scaffold
   healthy after `fledge init --refresh`.
 
 ## Out of Scope
