@@ -39,7 +39,7 @@ Do NOT touch `worker-protocols.md` itself (owned by FTHR-057) or the Claude adap
 - Implementation order: write both tests against the unchanged repo (they fail — the strings aren't there yet / the stale pattern still is), then make the edits, confirm both pass.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: `planning.md`, `implementation.md`, `foraging.md` (embedded core) contain zero occurrences of `worker-protocols.md §` and reference `incubator.md` at each of the sites listed in Approach (satisfies PLM-027 FC-4, AC-3 — core-docs half).
-- [ ] AC-3: `CLAUDE.md` lists `incubator.md`, `brooder.md`, `skua.md` alongside `worker-protocols.md` in its core-files description.
-- [ ] AC-4: `go test ./internal/bootstrap/... ./internal/doctest/...` passes.
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: `planning.md`, `implementation.md`, `foraging.md` (embedded core) contain zero occurrences of `worker-protocols.md §` and reference `incubator.md` at each of the sites listed in Approach (satisfies PLM-027 FC-4, AC-3 — core-docs half).
+- [x] AC-3: `CLAUDE.md` lists `incubator.md`, `brooder.md`, `skua.md` alongside `worker-protocols.md` in its core-files description.
+- [x] AC-4: `go test ./internal/bootstrap/... ./internal/doctest/...` passes.
