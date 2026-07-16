@@ -2,7 +2,7 @@
 id: FTHR-051
 title: Report worktree-exists and add --stale filter to fledge broods
 plumage: PLM-025
-status: egg
+status: fledged
 priority: P2
 depends_on: [FTHR-050]
 authored: 2026-07-16T02:00:39Z
