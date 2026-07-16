@@ -18,7 +18,7 @@ import (
 func init() {
 	register("brood", runLock, "fledge brood FTHR-### --owner <name> [--branch <b>] [--worktree <path>] [--json]")
 	register("abandon", runUnlock, "fledge abandon FTHR-### [--fledged] [--force] [--json]")
-	register("broods", runLocks, "fledge broods [--json]")
+	register("broods", runLocks, "fledge broods [--stale] [--json]")
 }
 
 // parseMixed parses args where positionals may precede flags: leading
@@ -157,6 +157,7 @@ func runUnlock(args []string) int {
 func runLocks(args []string) int {
 	fs := flag.NewFlagSet("broods", flag.ContinueOnError)
 	jsonOut := fs.Bool("json", false, "machine-readable output")
+	staleOnly := fs.Bool("stale", false, "only broods whose worktree is gone")
 	if err := fs.Parse(args); err != nil {
 		return ExitUsage
 	}
@@ -176,11 +177,15 @@ func runLocks(args []string) int {
 	}
 	type lockOut struct {
 		lock.Record
-		PIDAlive bool `json:"pid_alive"`
+		PIDAlive       bool `json:"pid_alive"`
+		WorktreeExists bool `json:"worktree_exists"`
 	}
 	out := make([]lockOut, 0, len(recs))
 	for _, rec := range recs {
-		out = append(out, lockOut{rec, pidAlive(rec.PID)})
+		if *staleOnly && worktreeExists(rec.Worktree) {
+			continue
+		}
+		out = append(out, lockOut{rec, pidAlive(rec.PID), worktreeExists(rec.Worktree)})
 	}
 	if *jsonOut {
 		return emitJSON(out)
@@ -190,13 +195,27 @@ func runLocks(args []string) int {
 		return ExitOK
 	}
 	for _, l := range out {
-		stale := ""
+		annot := ""
 		if !l.PIDAlive {
-			stale = "  (pid not alive)"
+			annot += "  (pid not alive)"
 		}
-		fmt.Printf("%s  %s  since %s  branch %s%s\n", l.Task, l.Owner, l.Created, l.Branch, stale)
+		if !l.WorktreeExists && !*staleOnly {
+			annot += "  (worktree gone)"
+		}
+		fmt.Printf("%s  %s  since %s  branch %s%s\n", l.Task, l.Owner, l.Created, l.Branch, annot)
 	}
 	return ExitOK
+}
+
+// worktreeExists reports whether the stored worktree path still resolves to a
+// directory on disk. An empty path (legacy, pre-FTHR-050 record) reports false.
+// Informational only, like pidAlive: no git-registry cross-check.
+func worktreeExists(path string) bool {
+	if path == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // pidAlive is informational only: pids recycle.
