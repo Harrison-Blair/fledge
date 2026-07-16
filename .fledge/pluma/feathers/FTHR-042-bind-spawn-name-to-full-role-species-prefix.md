@@ -2,7 +2,7 @@
 id: FTHR-042
 title: Bind spawn name to full role-species prefix
 plumage: PLM-022
-status: egg
+status: fledged
 priority: P2
 depends_on: [FTHR-041]
 authored: 2026-07-16T00:19:18Z
