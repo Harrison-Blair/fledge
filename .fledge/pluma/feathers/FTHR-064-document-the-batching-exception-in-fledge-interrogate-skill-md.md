@@ -26,6 +26,6 @@ Immediately after the existing "Ask the questions one at a time... bewildering" 
 - Implementation order: write the test against the unchanged file (fails — no batching exception present yet), add the sentence, confirm it passes.
 
 ## Acceptance Criteria
-- [ ] AC-1: The test listed above was observed failing before implementation and passes after.
-- [ ] AC-2: `fledge-interrogate/SKILL.md` documents the delegated-incubator batching exception referencing `incubator.md`, while its original one-question-at-a-time instruction remains intact for the general case (satisfies PLM-028 AC-3).
-- [ ] AC-3: `go test ./internal/bootstrap/...` passes.
+- [x] AC-1: The test listed above was observed failing before implementation and passes after.
+- [x] AC-2: `fledge-interrogate/SKILL.md` documents the delegated-incubator batching exception referencing `incubator.md`, while its original one-question-at-a-time instruction remains intact for the general case (satisfies PLM-028 AC-3).
+- [x] AC-3: `go test ./internal/bootstrap/...` passes.
