@@ -12,3 +12,7 @@ grep 'until its gate returns .Accept.' .fledge/skills/fledge-orchestrate/plannin
 
 # empty-nest marker: pins the expected-intermediate-state clarification in foraging.md
 grep 'expected intermediate after scaffolding' .fledge/skills/fledge-orchestrate/foraging.md
+
+# force-terminate backstop (FTHR-041 AC-4): planning.md's incubator-release
+# (§0) and forager-release (§2) steps both reference it
+grep -count=2 'force-terminating it if it does not exit promptly' .fledge/skills/fledge-orchestrate/planning.md

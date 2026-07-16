@@ -56,3 +56,11 @@ exec fledge init --json
 stdout '"created": \[\]'
 stdout '"agents": \['
 stdout '"claude"'
+
+# team-loop.md "Shutting down teammates" generalized to all four teammate
+# roles (FTHR-041 AC-5), and its confirmed-shutdown definition handles the
+# no-tmux/degraded case where no pane was ever created (FTHR-041 AC-6)
+grep 'all four teammate roles — brooder, skua, forager, incubator' .claude/team-loop.md
+! grep 'do this for the brooder \*and\* its paired skua at green teardown' .claude/team-loop.md
+grep 'roster absence alone suffices there' .claude/team-loop.md
+! grep 'the teammate no longer appears in the team roster and its tmux pane has closed' .claude/team-loop.md

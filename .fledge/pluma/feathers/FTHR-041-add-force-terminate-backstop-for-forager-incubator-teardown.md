@@ -57,12 +57,12 @@ Written test-first as new/extended `grep`/`! grep` assertions in `cmd/fledge/tes
 Order: (1) write T1–T6 as new assertions against the *current* (unedited) scaffolded output — run `go test ./cmd/fledge -run TestScripts` and confirm each new assertion FAILS for the expected reason (text not present); capture that output verbatim as AC-1 evidence. (2) Make the prose edits per Approach. (3) `fledge init --refresh` to regenerate. (4) Re-run `go test ./cmd/fledge -run TestScripts` until all pass, and run `fledge preen` clean.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above (T1–T6) were observed failing before implementation, for the expected reason (assertion text absent from current scaffolded output), and pass after implementation.
-- [ ] AC-2: `worker-protocols.md`'s Incubator Lifecycle section documents the force-terminate backstop (satisfies PLM-021 FC-1 / AC-1).
-- [ ] AC-3: `foraging.md`'s Forager Lifecycle/Commissioner sections document the force-terminate backstop (satisfies PLM-021 FC-2 / AC-2).
-- [ ] AC-4: `planning.md`'s forager-release (§2) and incubator-release (§0) steps reference the backstop (satisfies PLM-021 FC-3 / AC-3).
-- [ ] AC-5: `team-loop.md`'s "Shutting down teammates" section explicitly covers all four teammate roles (satisfies PLM-021 FC-4 / AC-4).
-- [ ] AC-6: `team-loop.md`'s confirmed-shutdown definition explicitly handles the no-tmux/degraded case (satisfies PLM-021 FC-5 / AC-5).
-- [ ] AC-7: `fledge-forager.md`'s dropped self-verification bullet is restored (satisfies PLM-021 FC-6 / AC-6).
-- [ ] AC-8: the `cmd/fledge` txtar fixtures are updated and `go test ./cmd/fledge -run TestScripts` passes (satisfies PLM-021 AC-7).
-- [ ] AC-9: `fledge init --refresh` regenerates this repo's own scaffold and `fledge preen` passes clean (satisfies PLM-021 AC-8).
+- [x] AC-1: The tests listed above (T1–T6) were observed failing before implementation, for the expected reason (assertion text absent from current scaffolded output), and pass after implementation.
+- [x] AC-2: `worker-protocols.md`'s Incubator Lifecycle section documents the force-terminate backstop (satisfies PLM-021 FC-1 / AC-1).
+- [x] AC-3: `foraging.md`'s Forager Lifecycle/Commissioner sections document the force-terminate backstop (satisfies PLM-021 FC-2 / AC-2).
+- [x] AC-4: `planning.md`'s forager-release (§2) and incubator-release (§0) steps reference the backstop (satisfies PLM-021 FC-3 / AC-3).
+- [x] AC-5: `team-loop.md`'s "Shutting down teammates" section explicitly covers all four teammate roles (satisfies PLM-021 FC-4 / AC-4).
+- [x] AC-6: `team-loop.md`'s confirmed-shutdown definition explicitly handles the no-tmux/degraded case (satisfies PLM-021 FC-5 / AC-5).
+- [x] AC-7: `fledge-forager.md`'s dropped self-verification bullet is restored (satisfies PLM-021 FC-6 / AC-6).
+- [x] AC-8: the `cmd/fledge` txtar fixtures are updated and `go test ./cmd/fledge -run TestScripts` passes (satisfies PLM-021 AC-7).
+- [x] AC-9: `fledge init --refresh` regenerates this repo's own scaffold and `fledge preen` passes clean (satisfies PLM-021 AC-8).
