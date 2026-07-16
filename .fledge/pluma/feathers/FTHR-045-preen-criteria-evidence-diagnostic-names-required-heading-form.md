@@ -2,7 +2,7 @@
 id: FTHR-045
 title: Preen criteria-evidence diagnostic names required heading form
 plumage: PLM-023
-status: pipping
+status: fledged
 priority: P1
 depends_on: []
 authored: 2026-07-16T01:55:16Z
