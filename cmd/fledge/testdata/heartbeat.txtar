@@ -1,0 +1,43 @@
+# fledge heartbeat: write/refresh a worker's status record in the ledger
+exec git init -q .
+
+# happy path: writes one status record for the named subject
+exec fledge heartbeat fledge-brooder-adelie --note 'running tests'
+exists .fledge/ledger/fledge-brooder-adelie.status.json
+stdout 'fledge-brooder-adelie'
+
+# --json emits the written record: subject, kind, note and a pid
+exec fledge heartbeat fledge-brooder-adelie --note 'running tests' --json
+stdout '"subject": "fledge-brooder-adelie"'
+stdout '"kind": "status"'
+stdout '"note": "running tests"'
+stdout '"pid": [0-9]+'
+stdout '"timestamp": "'
+
+# --note is optional
+exec fledge heartbeat fledge-brooder-adelie --json
+stdout '"note": ""'
+
+# repeated heartbeat refreshes the same record file: no duplicates, and the
+# latest note wins
+exec fledge heartbeat fledge-brooder-adelie --note 'still going' --json
+stdout '"note": "still going"'
+exec ls .fledge/ledger
+stdout '^fledge-brooder-adelie.status.json$'
+! stdout 'fledge-brooder-adelie.status.json.*fledge-brooder-adelie.status.json'
+
+# a second subject gets its own record
+exec fledge heartbeat fledge-skua-adelie --json
+stdout '"subject": "fledge-skua-adelie"'
+exists .fledge/ledger/fledge-skua-adelie.status.json
+exists .fledge/ledger/fledge-brooder-adelie.status.json
+
+# malformed input: missing <name> is a usage error (exit 2)
+! exec fledge heartbeat
+stderr 'usage'
+
+# too many positionals is a usage error too
+! exec fledge heartbeat one two
+stderr 'usage'
+
+-- .fledge/.gitkeep --
