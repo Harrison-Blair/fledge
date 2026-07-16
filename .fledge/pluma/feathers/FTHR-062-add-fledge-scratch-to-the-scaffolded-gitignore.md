@@ -2,7 +2,7 @@
 id: FTHR-062
 title: Add .fledge/scratch/ to the scaffolded gitignore
 plumage: PLM-028
-status: pipping
+status: fledged
 priority: P2
 depends_on: []
 authored: 2026-07-16T16:24:56Z
