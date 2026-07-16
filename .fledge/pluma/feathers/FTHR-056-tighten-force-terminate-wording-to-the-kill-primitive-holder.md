@@ -2,7 +2,7 @@
 id: FTHR-056
 title: Tighten force-terminate wording to the kill-primitive holder
 plumage: PLM-021
-status: pipping
+status: fledged
 priority: P2
 depends_on: []
 authored: 2026-07-16T02:06:38Z
