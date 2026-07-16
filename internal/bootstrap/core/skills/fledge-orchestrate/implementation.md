@@ -25,7 +25,7 @@ Fledge's workflow is written to six primitives. Your adapter declares which it p
 **Instructed rules (not primitives — stated here at point of use):**
 - "Never hand-edit spec frontmatter the CLI can write" — all spec mutation goes through `run-fledge`.
 - Role-specific shell constraints: scouts read-only; foragers write-confined to `.fledge/nest/`; brooders work only in their worktree. These are instructed rules; real safety backstop lives in the CLI + git + locks.
-- Communication topology (brooder↔skua↔orchestrator only) is an instructed rule, not the `message-peer` primitive. (The planning phase adds incubator↔orchestrator and forager→incubator channels — see `planning.md` §0 and `worker-protocols.md` §Incubator.)
+- Communication topology (brooder↔skua↔orchestrator only) is an instructed rule, not the `message-peer` primitive. (The planning phase adds incubator↔orchestrator and forager→incubator channels — see `planning.md` §0 and `incubator.md`.)
 - The team task list / roster is orchestrator bookkeeping, not a primitive.
 
 ## 1. Resolve scope
