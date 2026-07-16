@@ -34,7 +34,7 @@
     },
     ".claude/settings.local.json": {
       "policy": "generate",
-      "sha256": "a0de69d0313ebce586cec612f6e13fa4022cd2fb93b01b3d18ed4c67d343b71f"
+      "sha256": "179cbf16f2fd9f1c655aa212cc6248902dfa39b9ec87f9f8f856021b407aa788"
     },
     ".claude/skills/fledge-interrogate": {
       "policy": "symlink",
