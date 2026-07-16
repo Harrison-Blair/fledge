@@ -2,7 +2,7 @@
 id: FTHR-068
 title: Write foraging-phase digests in foraging.md
 plumage: PLM-029
-status: egg
+status: fledged
 priority: P2
 depends_on: [FTHR-058]
 authored: 2026-07-16T16:38:10Z
