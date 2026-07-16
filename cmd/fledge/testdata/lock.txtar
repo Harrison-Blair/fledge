@@ -15,9 +15,11 @@ stdout 'FTHR-001'
 stdout 'adelie'
 
 # stale-PID detection: a seeded claim with a not-alive PID is marked, a
-# seeded claim with a live PID (pid 1, always alive) is not
-stdout '(?m)^FTHR-006\s+skua\s+since\s+\S+\s+branch\s+\S+$'
-stdout '(?m)^FTHR-005\s+weddell\s+since\s+\S+\s+branch\s+\S+\s+\(pid not alive\)$'
+# seeded claim with a live PID (pid 1, always alive) is not. Both seeded
+# records predate FTHR-050 (no worktree field), so both also report
+# (worktree gone) now.
+stdout '(?m)^FTHR-006\s+skua\s+since\s+\S+\s+branch\s+\S+\s+\(worktree gone\)$'
+stdout '(?m)^FTHR-005\s+weddell\s+since\s+\S+\s+branch\s+\S+\s+\(pid not alive\)\s+\(worktree gone\)$'
 exec fledge broods --json
 stdout '(?s)"feather": "FTHR-005".*?"pid_alive": false'
 stdout '(?s)"feather": "FTHR-006".*?"pid_alive": true'
