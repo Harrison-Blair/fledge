@@ -26,6 +26,6 @@ Add a short paragraph (in "## Planning delegation" or a new "## Digest and compa
 - Implementation order: write the test against the unchanged file (fails — no compact mention yet), add the paragraph, confirm it passes.
 
 ## Acceptance Criteria
-- [ ] AC-1: The test listed above was observed failing before implementation and passes after.
-- [ ] AC-2: `team-loop.md` documents the `/compact`-is-safe-now advisory tied to digest completion, explicitly framed as user-facing guidance rather than an automated step (satisfies PLM-029 AC-3).
-- [ ] AC-3: `go test ./internal/bootstrap/...` passes.
+- [x] AC-1: The test listed above was observed failing before implementation and passes after.
+- [x] AC-2: `team-loop.md` documents the `/compact`-is-safe-now advisory tied to digest completion, explicitly framed as user-facing guidance rather than an automated step (satisfies PLM-029 AC-3).
+- [x] AC-3: `go test ./internal/bootstrap/...` passes.
