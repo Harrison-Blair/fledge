@@ -27,7 +27,7 @@ func init() {
 var defaultScanIgnore []byte
 
 // gitignore lines fledge needs; appended as one block when any is missing.
-var gitignoreLines = []string{".fledge/nest/raw/", ".fledge/broods/"}
+var gitignoreLines = []string{".fledge/nest/raw/", ".fledge/broods/", ".alloc.lock"}
 
 // stringListFlag implements flag.Value for a repeatable, comma-separated list.
 type stringListFlag []string

@@ -25,6 +25,7 @@ exists .claude/skills/fledge-orchestrate/SKILL.md
 exists .claude/skills/fledge-interrogate/SKILL.md
 grep '.fledge/nest/raw/' .gitignore
 grep '.fledge/broods/' .gitignore
+grep '.alloc.lock' .gitignore
 grep 'fledge nest' .claude/settings.local.json
 grep 'Bash\(fledge update \*\)' .claude/settings.local.json
 grep 'fledge nest scaffold' .claude/agents/fledge-forager.md
@@ -36,6 +37,10 @@ grep '"fledgeVersion"' .fledge/scaffold.json
 grep '".fledge/skills/fledge-orchestrate/SKILL.md"' .fledge/scaffold.json
 grep '".claude/fledge-adapter.md"' .fledge/scaffold.json
 grep '"claude"' .fledge/scaffold.json
+
+# a bare .alloc.lock pattern must be honored at any allocation-directory depth
+# (runs an exec, so it comes after the fledge-init stdout assertions above)
+exec git check-ignore .fledge/pluma/plumage/.alloc.lock .fledge/pluma/feathers/.alloc.lock
 
 # second run is fully quiet: creates nothing, and byte-identical files
 # (including generated ones) report exists, not updated

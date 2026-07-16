@@ -112,7 +112,8 @@
       "policy": "append",
       "lines": [
         ".fledge/nest/raw/",
-        ".fledge/broods/"
+        ".fledge/broods/",
+        ".alloc.lock"
       ]
     },
     "CLAUDE.md": {
