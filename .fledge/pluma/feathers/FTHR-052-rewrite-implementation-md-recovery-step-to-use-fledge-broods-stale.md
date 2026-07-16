@@ -2,7 +2,7 @@
 id: FTHR-052
 title: Rewrite implementation.md recovery step to use fledge broods --stale
 plumage: PLM-025
-status: egg
+status: fledged
 priority: P2
 depends_on: [FTHR-051]
 authored: 2026-07-16T02:00:41Z
