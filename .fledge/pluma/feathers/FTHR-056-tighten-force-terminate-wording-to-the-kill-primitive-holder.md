@@ -73,14 +73,14 @@ follow-up wording fix rather than a fresh plumage)
 
 ## Acceptance Criteria
 Checkbox list, one `- [ ] AC-N: …` line per criterion — authored unchecked; checked only via `fledge criteria check`, with per-criterion evidence in `.fledge/molt/FTHR-056.md`. Reference the parent plumage's criteria where applicable (e.g. "satisfies PLM-021 FC-2"). AC-1 is always:
-- [ ] AC-1: The test listed above was observed failing before implementation
+- [x] AC-1: The test listed above was observed failing before implementation
   and passes after; evidence captured verbatim.
-- [ ] AC-2: `foraging.md`'s force-terminate wording names the orchestrator as
+- [x] AC-2: `foraging.md`'s force-terminate wording names the orchestrator as
   the kill-primitive holder instead of the "commissioner" disjunction
   (satisfies FC-1).
-- [ ] AC-3: `worker-protocols.md`'s Incubator Lifecycle section is checked
+- [x] AC-3: `worker-protocols.md`'s Incubator Lifecycle section is checked
   for the same phrasing and tightened to match if present.
-- [ ] AC-4: `fledge init --refresh` regenerates this repo's scaffolded copies
+- [x] AC-4: `fledge init --refresh` regenerates this repo's scaffolded copies
   to match, and `go test ./cmd/fledge -run TestScripts` passes.
-- [ ] AC-5: `go test ./...` passes and `fledge preen` reports the scaffold
+- [x] AC-5: `go test ./...` passes and `fledge preen` reports the scaffold
   healthy after the refresh.
