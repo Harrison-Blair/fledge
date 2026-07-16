@@ -2,7 +2,7 @@
 id: FTHR-050
 title: Store worktree path in lock Record at brood time
 plumage: PLM-025
-status: pipping
+status: fledged
 priority: P2
 depends_on: []
 authored: 2026-07-16T02:00:37Z
