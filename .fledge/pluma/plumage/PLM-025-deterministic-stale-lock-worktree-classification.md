@@ -1,7 +1,7 @@
 ---
 id: PLM-025
 title: Deterministic stale-lock worktree classification
-status: hatched
+status: fledged
 priority: P2
 authored: 2026-07-16T01:37:30Z
 agent: fledge-orchestrate/planning
@@ -83,22 +83,22 @@ Numbered, testable statements of behavior. Referenced downstream as FC-1, FC-2, 
 
 ## Acceptance Criteria
 Checkbox list of verifiable conditions under which this plumage is considered fledged, one `- [ ] AC-N: …` line each. Authored unchecked; checked only via `fledge criteria check` at plumage closeout.
-- [ ] AC-1: `lock.Record` has a worktree-path field; `fledge brood` populates
+- [x] AC-1: `lock.Record` has a worktree-path field; `fledge brood` populates
   it at claim time; a unit test in `internal/lock` covers a record written
   with and without the field (round-trip through `Acquire`/`Get`/`List`)
   (FC-1).
-- [ ] AC-2: `fledge broods --json` includes `worktree_exists` per record,
+- [x] AC-2: `fledge broods --json` includes `worktree_exists` per record,
   `true` when the stored path exists on disk, `false` when it doesn't or the
   path is empty; a `cmd/fledge` txtar test covers both a live-path record and
   a missing-path (legacy, empty-path) record (FC-2).
-- [ ] AC-3: `fledge broods --stale` filters to `worktree_exists: false`
+- [x] AC-3: `fledge broods --stale` filters to `worktree_exists: false`
   records only, in both text and `--json` output; a txtar test asserts a
   mixed set of stale and live records is filtered correctly (FC-3).
-- [ ] AC-4: `implementation.md`'s §6 recovery step (core source in
+- [x] AC-4: `implementation.md`'s §6 recovery step (core source in
   `internal/bootstrap/core/skills/fledge-orchestrate/`) is rewritten per FC-4,
   including the legacy-record caveat; this repo's scaffolded copy is
   refreshed to match.
-- [ ] AC-5: `go test ./...` passes and `fledge preen` reports the scaffold
+- [x] AC-5: `go test ./...` passes and `fledge preen` reports the scaffold
   healthy after `fledge init --refresh`.
 
 ## Out of Scope
