@@ -28,7 +28,7 @@ Add digest write/read instructions to `planning.md`: its phase-close step (4.7) 
 - Implementation order: write both tests against `planning.md` as FTHR-065 leaves it (fail — no digest language yet), add the two additions, confirm both pass.
 
 ## Acceptance Criteria
-- [ ] AC-1: Both tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: `planning.md` step 4.7 documents writing `digest-planning.md` with the FC-3 content shape (satisfies PLM-029 AC-1).
-- [ ] AC-3: `planning.md` step 1 documents best-effort reading `digest-implementation.md` if present (satisfies PLM-029 AC-2).
-- [ ] AC-4: `go test ./internal/bootstrap/...` passes.
+- [x] AC-1: Both tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: `planning.md` step 4.7 documents writing `digest-planning.md` with the FC-3 content shape (satisfies PLM-029 AC-1).
+- [x] AC-3: `planning.md` step 1 documents best-effort reading `digest-implementation.md` if present (satisfies PLM-029 AC-2).
+- [x] AC-4: `go test ./internal/bootstrap/...` passes.
