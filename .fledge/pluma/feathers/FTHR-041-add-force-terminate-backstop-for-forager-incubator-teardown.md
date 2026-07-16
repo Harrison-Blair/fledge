@@ -2,7 +2,7 @@
 id: FTHR-041
 title: Add force-terminate backstop for forager/incubator teardown
 plumage: PLM-021
-status: pipping
+status: fledged
 priority: P2
 depends_on: []
 authored: 2026-07-16T00:17:56Z
