@@ -2,7 +2,7 @@
 id: FTHR-054
 title: fledge roster assign/release/list commands
 plumage: PLM-026
-status: egg
+status: fledged
 priority: P3
 depends_on: [FTHR-053]
 authored: 2026-07-16T02:06:34Z
