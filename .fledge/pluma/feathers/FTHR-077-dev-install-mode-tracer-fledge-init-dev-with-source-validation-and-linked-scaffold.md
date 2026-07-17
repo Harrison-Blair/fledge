@@ -125,22 +125,22 @@ implement until they pass.
 
 ## Acceptance Criteria
 
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: `fledge init --dev <path>` writes the agent definitions and core skill
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: `fledge init --dev <path>` writes the agent definitions and core skill
       documents as symlinks into `<path>`, and `readlink` reports the expected absolute
       target for each. Satisfies PLM-031 FC-1, FC-5.
-- [ ] AC-3: An edit saved in the source tree is readable through the consuming repo's
+- [x] AC-3: An edit saved in the source tree is readable through the consuming repo's
       scaffold path with no rebuild, reinstall, or `fledge` command in between. Satisfies
       PLM-031 FC-1 and demonstrates PLM-031 AC-1.
-- [ ] AC-4: Rendered and merged files (`.claude/fledge-adapter.md`,
+- [x] AC-4: Rendered and merged files (`.claude/fledge-adapter.md`,
       `.claude/settings.local.json`, the `CLAUDE.md` line) are produced as they are today
       and are not symlinks. Satisfies PLM-031 FC-5, AC-6.
-- [ ] AC-5: `--dev` against a path whose `go.mod` does not declare the fledge module exits
+- [x] AC-5: `--dev` against a path whose `go.mod` does not declare the fledge module exits
       non-zero with an error naming the path, and no scaffold file is modified. Satisfies
       PLM-031 FC-2, FC-4, AC-3.
-- [ ] AC-6: The scaffold stamp records the absolute dev source path, and each linked entry
+- [x] AC-6: The scaffold stamp records the absolute dev source path, and each linked entry
       records its symlink target rather than a content hash.
-- [ ] AC-7: Re-running the same `fledge init --dev <path>` succeeds and leaves every dev
+- [x] AC-7: Re-running the same `fledge init --dev <path>` succeeds and leaves every dev
       link unchanged.
-- [ ] AC-8: `go test ./...` passes, with `cmd/fledge/testdata/init.txtar` unmodified —
+- [x] AC-8: `go test ./...` passes, with `cmd/fledge/testdata/init.txtar` unmodified —
       non-dev init behavior is unchanged.
