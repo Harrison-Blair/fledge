@@ -1,7 +1,7 @@
 ---
 id: PLM-031
 title: Dev install mode linking scaffold to local fledge source
-status: hatched
+status: fledged
 priority: P1
 authored: 2026-07-17T01:46:28Z
 agent: fledge-orchestrate/planning
@@ -89,32 +89,32 @@ trees, drift detection) and `.fledge/nest/modules.md` (`internal/bootstrap`).
 
 ## Acceptance Criteria
 
-- [ ] AC-1: In a consuming repository, requesting dev mode against a fledge working tree
+- [x] AC-1: In a consuming repository, requesting dev mode against a fledge working tree
       causes an edit saved in that tree to be visible through the repository's scaffold
       with no rebuild, reinstall, or refresh performed in between.
-- [ ] AC-2: Requesting dev mode without a source location succeeds inside a fledge source
+- [x] AC-2: Requesting dev mode without a source location succeeds inside a fledge source
       checkout and fails, with an actionable error, outside one.
-- [ ] AC-3: Requesting dev mode against a path that is not a fledge source tree fails and
+- [x] AC-3: Requesting dev mode against a path that is not a fledge source tree fails and
       leaves every scaffold file byte-identical to its prior state.
-- [ ] AC-4: Requesting dev mode in a repository where a to-be-linked path is tracked by
+- [x] AC-4: Requesting dev mode in a repository where a to-be-linked path is tracked by
       version control fails, names the tracked paths and the remedy, and leaves the
       working tree unmodified.
-- [ ] AC-5: After a successful request, no dev-linked path is reported as a change by
+- [x] AC-5: After a successful request, no dev-linked path is reported as a change by
       version control.
-- [ ] AC-6: Files that are rendered or merged rather than copied are still produced, and
+- [x] AC-6: Files that are rendered or merged rather than copied are still produced, and
       are not links, in a dev-linked repository.
-- [ ] AC-7: A source/binary version mismatch produces a report naming both versions; a
+- [x] AC-7: A source/binary version mismatch produces a report naming both versions; a
       match produces no such report.
-- [ ] AC-8: The status query distinguishes a dev-linked repository from a normally
+- [x] AC-8: The status query distinguishes a dev-linked repository from a normally
       scaffolded one, and reports the source path and linked-file count for the former.
-- [ ] AC-9: With a dev link's target removed, the status query reports that link as
+- [x] AC-9: With a dev link's target removed, the status query reports that link as
       broken and names it.
-- [ ] AC-10: The health check on a dev-linked repository reports no findings attributable
+- [x] AC-10: The health check on a dev-linked repository reports no findings attributable
       to dev mode, and reports the same result when run twice in succession.
-- [ ] AC-11: After a refresh of a dev-linked repository, every dev-linked path is still a
+- [x] AC-11: After a refresh of a dev-linked repository, every dev-linked path is still a
       link to the same source, and an edit saved in the source is still visible through
       the repository's scaffold.
-- [ ] AC-12: A refresh of a dev-linked repository still updates the files dev mode does
+- [x] AC-12: A refresh of a dev-linked repository still updates the files dev mode does
       not cover.
 
 ## Out of Scope
