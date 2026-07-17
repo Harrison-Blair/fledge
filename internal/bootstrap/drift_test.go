@@ -246,6 +246,166 @@ func TestDriftReport(t *testing.T) {
 	}
 }
 
+// TestDriftReportDevLink covers PLM-031/FTHR-080: a dev-linked repo must not
+// report false drift for dev-linked paths, while genuine problems (a
+// dangling target, a clobbered link, or an unrelated user-edited file) are
+// still reported. Unlike TestDriftReport's table (which uses one shared
+// stamp/expected pair with no DevSource), each case here sets stamp.DevSource
+// explicitly since that is exactly the bit DriftReport must switch on.
+func TestDriftReportDevLink(t *testing.T) {
+	shippedContent := []byte("shipped embedded content")
+	shippedHash := makeHash(shippedContent)
+
+	t.Run("up-to-date: dev-linked file whose source differs from shipped bytes", func(t *testing.T) {
+		root := t.TempDir()
+		srcDir := t.TempDir()
+		srcFile := filepath.Join(srcDir, "SKILL.md")
+		if err := os.WriteFile(srcFile, []byte("live source content, deliberately unlike shipped"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		linkPath := filepath.Join(root, ".fledge/skills/fledge-orchestrate/SKILL.md")
+		if err := os.MkdirAll(filepath.Dir(linkPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(srcFile, linkPath); err != nil {
+			t.Fatal(err)
+		}
+
+		stamp := &Stamp{
+			FledgeVersion: "0.2.0",
+			DevSource:     srcDir,
+			Files: map[string]StampEntry{
+				".fledge/skills/fledge-orchestrate/SKILL.md": {Policy: "dev-link", Target: filepath.ToSlash(srcFile)},
+			},
+		}
+		// expected carries the manifest's content expectation — Target empty —
+		// exactly as scaffoldDrift builds it via the non-dev ExpectedFiles.
+		expected := map[string]StampEntry{
+			".fledge/skills/fledge-orchestrate/SKILL.md": {Policy: "core", Sha256: shippedHash},
+		}
+
+		got := DriftReport(root, stamp, expected)
+		if len(got) != 1 || got[0].Status != StatusUpToDate {
+			t.Errorf("dev-linked file with differing source content: got %+v, want a single StatusUpToDate entry", got)
+		}
+	})
+
+	t.Run("missing: dev-linked file with a dangling target", func(t *testing.T) {
+		root := t.TempDir()
+		srcDir := t.TempDir()
+		srcFile := filepath.Join(srcDir, "gone.md") // never created
+		linkPath := filepath.Join(root, ".fledge/skills/fledge-orchestrate/SKILL.md")
+		if err := os.MkdirAll(filepath.Dir(linkPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(srcFile, linkPath); err != nil {
+			t.Fatal(err)
+		}
+
+		stamp := &Stamp{
+			FledgeVersion: "0.2.0",
+			DevSource:     srcDir,
+			Files: map[string]StampEntry{
+				".fledge/skills/fledge-orchestrate/SKILL.md": {Policy: "dev-link", Target: filepath.ToSlash(srcFile)},
+			},
+		}
+		expected := map[string]StampEntry{
+			".fledge/skills/fledge-orchestrate/SKILL.md": {Policy: "core", Sha256: shippedHash},
+		}
+
+		got := DriftReport(root, stamp, expected)
+		if len(got) != 1 || got[0].Status != StatusMissing {
+			t.Errorf("dev-linked file with dangling target: got %+v, want a single StatusMissing entry", got)
+		}
+	})
+
+	t.Run("modified: a regular file sitting where a dev link is expected", func(t *testing.T) {
+		root := t.TempDir()
+		srcDir := t.TempDir()
+		linkPath := filepath.Join(root, ".fledge/skills/fledge-orchestrate/SKILL.md")
+		if err := os.MkdirAll(filepath.Dir(linkPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeTestFile(t, root, ".fledge/skills/fledge-orchestrate/SKILL.md", []byte("clobbered the link"))
+
+		stamp := &Stamp{
+			FledgeVersion: "0.2.0",
+			DevSource:     srcDir,
+			Files: map[string]StampEntry{
+				".fledge/skills/fledge-orchestrate/SKILL.md": {Policy: "dev-link", Target: filepath.Join(srcDir, "SKILL.md")},
+			},
+		}
+		expected := map[string]StampEntry{
+			".fledge/skills/fledge-orchestrate/SKILL.md": {Policy: "core", Sha256: shippedHash},
+		}
+
+		got := DriftReport(root, stamp, expected)
+		if len(got) != 1 || got[0].Status != StatusModified {
+			t.Errorf("regular file clobbering a dev link: got %+v, want a single StatusModified entry", got)
+		}
+	})
+
+	t.Run("non-dev repo: an unrelated genuinely user-edited file still reports modified", func(t *testing.T) {
+		root := t.TempDir()
+		editedContent := []byte("user has edited this file")
+		writeTestFile(t, root, "some/file.md", editedContent)
+
+		// No DevSource on the stamp — the non-dev path.
+		stamp := &Stamp{
+			FledgeVersion: "0.2.0",
+			Files: map[string]StampEntry{
+				"some/file.md": {Policy: "default", Sha256: makeHash([]byte("original content"))},
+			},
+		}
+		expected := map[string]StampEntry{
+			"some/file.md": {Policy: "default", Sha256: shippedHash},
+		}
+
+		got := DriftReport(root, stamp, expected)
+		if len(got) != 1 || got[0].Status != StatusModified {
+			t.Errorf("non-dev genuinely edited file: got %+v, want a single StatusModified entry", got)
+		}
+	})
+}
+
+// TestEditedOnRefreshOmitsDevLinks pins AC-6: a dev-linked repo's dev-linked
+// paths never appear in EditedOnRefresh's output, even when their live
+// source content differs from the shipped bytes — so refresh raises no
+// "will overwrite user-edited file(s)" prompt for them.
+func TestEditedOnRefreshOmitsDevLinks(t *testing.T) {
+	root := t.TempDir()
+	srcDir := t.TempDir()
+	srcFile := filepath.Join(srcDir, "SKILL.md")
+	if err := os.WriteFile(srcFile, []byte("live source content, deliberately unlike shipped"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	linkPath := filepath.Join(root, ".fledge/skills/fledge-orchestrate/SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(linkPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(srcFile, linkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	stamp := &Stamp{
+		FledgeVersion: "0.2.0",
+		DevSource:     srcDir,
+		Files: map[string]StampEntry{
+			".fledge/skills/fledge-orchestrate/SKILL.md": {Policy: "dev-link", Target: filepath.ToSlash(srcFile)},
+		},
+	}
+	expected := map[string]StampEntry{
+		".fledge/skills/fledge-orchestrate/SKILL.md": {Policy: "core", Sha256: makeHash([]byte("shipped embedded content"))},
+	}
+
+	got := EditedOnRefresh(root, stamp, expected)
+	for _, p := range got {
+		if p == ".fledge/skills/fledge-orchestrate/SKILL.md" {
+			t.Errorf("EditedOnRefresh listed dev-linked path %q as user-edited, want it omitted", p)
+		}
+	}
+}
+
 // TestDriftReportNilStampNoObsolete verifies that a nil stamp produces no
 // obsolete entries (the no-stamp sentinel is handled at the call site in preen).
 func TestDriftReportNilStampNoObsolete(t *testing.T) {
