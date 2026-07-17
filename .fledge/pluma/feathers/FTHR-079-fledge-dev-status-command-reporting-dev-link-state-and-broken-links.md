@@ -2,7 +2,7 @@
 id: FTHR-079
 title: fledge dev status command reporting dev-link state and broken links
 plumage: PLM-031
-status: egg
+status: fledged
 priority: P1
 depends_on: [FTHR-077]
 authored: 2026-07-17T02:04:37Z
