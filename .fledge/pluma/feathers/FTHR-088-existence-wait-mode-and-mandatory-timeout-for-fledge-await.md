@@ -2,7 +2,7 @@
 id: FTHR-088
 title: Existence-wait mode and mandatory timeout for fledge await
 plumage: PLM-034
-status: pipping
+status: fledged
 priority: P1
 depends_on: []
 authored: 2026-07-17T04:07:23Z
