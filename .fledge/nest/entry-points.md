@@ -1,78 +1,70 @@
 ---
-generated: 2026-07-17T07:00:54Z
-commit: ee49464adb830bef7189f94a1d3253927d33fb5f
+generated: 2026-07-17T17:48:26Z
+commit: 1c9011d6e6a06f72f96bc98e3b2bd99c408ab79e
 agent: fledge-forager
-fledge_version: 0.6.7
+fledge_version: 0.6.10
 ---
 
 # Entry Points
 
-Where execution enters this codebase, and how to build/run/install it.
+How to build, run, and invoke `fledge`, plus the CLI's full command surface and the orchestration workflow's phase entry points.
 
-## Binary entrypoint
-
-`cmd/fledge/main.go` — a single-function `func main()` that calls `internal/cli.Run(os.Args[1:])` (`cmd/fledge/main.go`) and exits with the returned process exit code. All CLI behavior is implemented behind `internal/cli.Run`.
-
-## CLI dispatch
-
-`func Run(args []string) int` in `internal/cli/cli.go` — dispatches to one of 25 registered subcommands by name (init, agents, scan, new, nest, preen, ready, vee, colony, unfledged, status, set, criteria, brood, abandon, broods, heartbeat, await, verdict, escalate, ledger, roster, version, update, dev). Each command file registers itself via `init() { register(name, runFunc, usage) }`; `commandOrder` in `cli.go` controls both `--help` ordering and generated allow-lists (e.g. Claude Code's `settings.json` permission list, generated from this order).
-
-Every command supports `--json` for machine-readable output alongside human text.
-
-## Build, test, run (from `CLAUDE.md`, verified against `go.mod`)
+## Build & install
 
 ```sh
-go build ./...                         # build everything
-go build -o fledge ./cmd/fledge        # build the CLI binary
-go test ./...                          # run all tests
+go build ./...                 # build everything
+go build -o fledge ./cmd/fledge   # produce the binary at repo root
+go install ./cmd/fledge        # install to $(go env GOPATH)/bin
+```
+
+`scripts/install.sh` automates build + install + version verification, with an optional `--refresh` flag that re-syncs the scaffold via `fledge init --refresh` afterward.
+
+After changing CLI or `internal/bootstrap/...` code: `go install ./cmd/fledge && hash -r && command -v fledge && fledge version` — verify the installed binary matches `VERSION` before relying on it (per CLAUDE.md).
+
+## Binary entry point
+
+`cmd/fledge/main.go` (11 lines): `os.Exit(cli.Run(os.Args[1:]))` — the entire binary is `internal/cli.Run`.
+
+## CLI command surface (26 commands, `internal/cli/cli.go` `commandOrder`)
+
+- **Spec lifecycle**: `new`, `status`, `set`, `criteria`, `unfledged`
+- **Spec validation/inspection**: `preen`, `vee` (dependency graph), `scan`, `ready`, `colony`
+- **Feather claims**: `brood`, `abandon`, `broods`
+- **Worker/ledger coordination**: `heartbeat`, `await`, `pulse`, `verdict`, `escalate`, `ledger` (with `read` subcommand)
+- **Context**: `nest` (with `new`/`status`/`scout`/`scaffold`/`stamp` subcommands), `scan`
+- **Configuration/system**: `init`, `agents`, `roster`, `dev` (with `status` subcommand), `version`, `update`
+
+Every command accepts `--json`. Usage: `fledge <command> [flags]`; `fledge <command> -h` for per-command usage.
+
+## Orchestration workflow entry point (agent-facing)
+
+`.fledge/skills/fledge-orchestrate/SKILL.md` — the routing entry point every agent loads first. Maps a request to one of: Planning, Foraging, Implementation, or "not built yet". CLAUDE.md's routing table sends "plan X" / "write a plumage" / "break into feathers" → Planning; "implement PLM/FTHR-###" / "run the feathers" → Implementation.
+
+- **Planning** → `planning.md` §0 (delegate to incubator or run inline) → §1 (freshness gate) → §2 (context gathering, delegates to `foraging.md` when `spawn-worker` is available) → §3 (plumage interrogation) → §4 (feather interrogation) → phase-close digest.
+- **Foraging** → `foraging.md`: Commissioner spawns Forager; Forager scans (`fledge scan`), plans scout split, scaffolds (`fledge nest scaffold`), fans out Scouts, synthesizes 8 concern docs + index, verifies (`fledge nest status`). *This document set is exactly that pipeline's output.*
+- **Implementation** → `implementation.md` §1 (scope resolution) → §2 (solo, Tier A/B) or §3 (team-loop dispatch, Tier C: brooder+skua pairs) → §4 (escalation triage) → §5 (end-of-run digest) → §6 (resume recovery).
+
+## Harness-specific entry points (post-`fledge init`)
+
+- **Claude Code** (Tier C): `.claude/agents/fledge-{brooder,context-scout,forager,incubator,skua}.md` (agent definitions, symlinks into `internal/bootstrap`); `.claude/settings.json` (`teammateMode: tmux`); teammates spawned via the `spawn-worker` primitive.
+- **Codex** (Tier A): `.codex/fledge-adapter.md` (primitive map), `.codex/skills/fledge-{orchestrate,interrogate}/SKILL.md`.
+- **pi** (Tier A): `.pi/prompts/fledge-{plan,implement}.md` (phase entry prompts), `.pi/settings.json` (points skills to `../.fledge/skills`).
+
+## Test entry points
+
+```sh
+go test ./...                                        # everything
 go vet ./...
-
-go test ./cmd/fledge -run TestScripts               # all CLI acceptance tests (37 txtar fixtures)
-go test ./cmd/fledge -run TestScripts/init           # one script (init.txtar)
-go test ./cmd/fledge -run TestScripts/init -v        # verbose, shows script trace
-
-go test ./internal/spec -run TestAllocateID          # a single unit test
+go test ./cmd/fledge -run TestScripts                 # all txtar acceptance tests
+go test ./cmd/fledge -run TestScripts/init             # one script
+go test ./cmd/fledge -run TestScripts/init -v          # verbose, shows script trace
+go test ./internal/spec -run TestAllocateID            # a single unit test
 ```
 
-Go 1.26.4 (`go.mod`); no Makefile — `go` invoked directly.
+## Release entry point
 
-## Install / reinstall (dogfooding loop)
+`.github/workflows/release.yml` — triggers on every push to main; builds/publishes 4 platform binaries (linux/{amd64,arm64}, darwin/{amd64,arm64}) only if `VERSION` changed since the previous commit. `RELEASING.md` documents the manual version-bump procedure (touches `VERSION` + `internal/cli/version.go` + a third file).
 
-```sh
-go install ./cmd/fledge        # reinstall to $(go env GOPATH)/bin
-hash -r                        # drop shell's cached path to old binary
-command -v fledge              # confirm it resolves to the go/bin copy
-fledge version                 # must match VERSION in repo root
-```
+## Dogfooding entry point (this repo on itself)
 
-`scripts/install.sh` automates build+install+verify, with an optional `--refresh` flag that also re-syncs `.fledge/skills/` and the `.claude/` adapter (`fledge init --refresh`) after install.
-
-## Scaffold regeneration entrypoint
-
-```sh
-fledge init --refresh           # reset fledge-owned files to shipped versions; prunes obsolete ones
-git status                      # review what regeneration changed
-```
-
-Writes/updates `.fledge/scaffold.json` (the stamp). `fledge preen` reports the scaffold healthy when the stamp is present and consistent.
-
-## Public package APIs (entry points into domain logic, for callers other than the CLI)
-
-- `internal/spec`: `Load(reqDir, taskDir) → Set`, `ParseRequirementFile`/`ParseTaskFile`, `AllocateAndCreate`, `ParseCriteria`/`SetCriterion`, `RequirementBody`/`TaskBody` (template skeletons).
-- `internal/check`: `Run(set, lockedTasks, evidenceDir) → []Finding`, `HasErrors(fs) bool`.
-- `internal/graph`: `New(tasks) *Graph`, `.Cycle()`, `.Waves()`, `.Ready()`.
-- `internal/repo`: `Find() (*Repo, error)`, `Repo.RequireFledge()`, `.Version(fallback)`, `.Head()`, and ~10 `.fledge` path accessors.
-- `internal/scan`: `Run(root) (*Result, error)`.
-- `internal/ledger`: `Read`/`Write` records for (subject, kind); `ClassifyLiveness`.
-- `internal/lock`: `Acquire`/`Release`/`Get`/`List`.
-- `internal/nest`: `Status`, `ClearNest`, `RefreshDoc`, `IsStub`, `ConcernBody`/`IndexBody`/`ScoutBody`.
-- `internal/roster`: `Assign`/`Release`/`List`.
-- `internal/bootstrap`: `LoadAdapters()`, `FindAdapter(name)`, `LoadStamp(root)`, `Stamp.Write(root)`, `WriteCore(root, opts)`, `Manifest.WriteAdapter(root, commandOrder, opts)`, `DriftReport(root, stamp, expected)`, `EditedOnRefresh`, `ExpectedFiles`/`ExpectedFilesDev`, `DeriveTier(provided)`, `ValidateDevSource(path)`.
-
-## Agent-facing entry points (for AI harnesses)
-
-`fledge init` scaffolds one agent-neutral orchestration workflow into whichever harness it detects (Claude Code, pi, Codex) — the entrypoint agents should read first is `.fledge/skills/fledge-orchestrate/SKILL.md` (routing to `planning.md` or `implementation.md`), sourced from `internal/bootstrap/core/skills/fledge-orchestrate/SKILL.md`. The Claude-specific primitive map lives at `.fledge/skills`-adjacent `.claude/fledge-adapter.md` (generated from each adapter's `manifest.yaml`).
-
-## Open Questions
-
-None observed — all entry points are documented consistently across `root`, `cmd`, `internal-cli`, and `internal-bootstrap` scout reports.
+This repo has its own `.fledge/` directory: specs at `.fledge/pluma/`, claims at `.fledge/broods/`, context at `.fledge/nest/` (this document set), scaffolded Claude adapter at `.claude/`. `fledge init --refresh` resyncs fledge-owned files after a bootstrap/adapter source change; `fledge preen` validates scaffold-stamp health.

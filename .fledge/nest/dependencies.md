@@ -1,48 +1,50 @@
 ---
-generated: 2026-07-17T07:00:54Z
-commit: ee49464adb830bef7189f94a1d3253927d33fb5f
+generated: 2026-07-17T17:48:26Z
+commit: 1c9011d6e6a06f72f96bc98e3b2bd99c408ab79e
 agent: fledge-forager
-fledge_version: 0.6.7
+fledge_version: 0.6.10
 ---
 
 # Dependencies
 
-External dependencies across the codebase, deduplicated, with usage notes.
+External dependencies for the `fledge` Go module (go.mod), deduplicated with usage notes.
 
-## Go module dependencies (`go.mod`)
+## Go modules (direct)
 
-- **`github.com/goccy/go-yaml`** v1.19.2 — YAML parsing/unmarshaling. Used in two independent places: `internal/spec/frontmatter.go` (spec frontmatter parse/render, `YAMLScalar` safe-quoting) and `internal/bootstrap/registry.go` (adapter `manifest.yaml` parsing). Also used by `internal/nest` and `internal/ledger` (via `internal/spec`'s exported helpers) for their own frontmatter-shaped YAML.
-- **`github.com/rogpeppe/go-internal`** v1.15.0 — provides `testscript`, the txtar-based CLI acceptance-test engine. Drives all 37 fixtures in `cmd/fledge/testdata/*.txtar` via `cmd/fledge/main_test.go`'s `TestScripts`.
-- **`golang.org/x/sys`** v0.26.0 — indirect; syscalls (backs `flock`-based file locking in `internal/spec/ids.go`, `internal/roster/roster.go`).
-- **`golang.org/x/tools`** v0.26.0 — indirect; Go tooling support.
+- **`github.com/goccy/go-yaml v1.19.2`** — YAML parsing/unmarshaling. Used for: spec frontmatter parsing (`internal/spec/frontmatter.go`), adapter `manifest.yaml` parsing (`internal/bootstrap/registry.go`), and YAML validation in `internal/nest`/`internal/ciconfig`/`internal/doctest`.
+- **`github.com/rogpeppe/go-internal v1.15.0`** — provides `testscript`, the txtar-based acceptance-test framework. Used exclusively by `cmd/fledge/main_test.go` to drive all 36 `.txtar` fixtures under `cmd/fledge/testdata/`.
 
-No direct runtime network dependencies — `fledge update` (`internal/cli/update.go`) is the one command that talks to the network (GitHub Releases API) and only at the user's explicit request.
+## Go modules (indirect)
 
-## Standard library usage patterns
+- **`golang.org/x/sys v0.26.0`** — system-level calls (transitively required, e.g. by flock usage patterns).
+- **`golang.org/x/tools v0.26.0`** — Go tooling support (transitively required).
 
-- **`embed`** — `internal/bootstrap/bootstrap.go` embeds the entire `core/` and `adapters/` trees (`//go:embed core adapters`) into the binary; `internal/nest` similarly embeds its own placeholder templates.
-- **`syscall.Flock`** — exclusive file locking for concurrent-safe state: `internal/spec/ids.go` (`.alloc.lock`, ID allocation), `internal/roster/roster.go` (`.roster.lock`, species allocation).
-- **`os.Link`** — exclusivity primitive for feather claims: `internal/lock/lock.go` uses `O_EXCL`-style link semantics (link fails with `EEXIST` if a claim already exists) rather than flock.
-- **`os.Rename`** — atomic replace for record-style state: `internal/ledger/ledger.go` (ledger records), `internal/spec/frontmatter.go` `WriteFileAtomic` (spec file writes) — both use temp-file-then-rename.
-- **`crypto/sha256`** — content hashing for scaffold drift detection (`internal/bootstrap/stamp.go`, `drift.go`).
-- **`text/template`** — rendering generated scaffold files (e.g. `fledge-adapter.md`, `settings.local.json`) from `renderContext`/`primitiveRow` data (`internal/bootstrap/registry.go`).
-- **`net/http`, `archive/tar`, `compress/gzip`** — self-update mechanics in `internal/cli/update.go` (download, verify checksum, extract, atomic binary swap).
-- **`exec`** — git subprocess calls in `internal/repo/repo.go` (`git rev-parse --show-toplevel`, `Head()`), and shelling out in test helpers (`internal/scan`, `internal/hooktest` invoking `scripts/hooks/pre-commit` end-to-end).
+## Go toolchain
 
-## Third-party GitHub Actions (`.github/workflows/*.yml`)
+- **Go 1.26.4** (go.mod). No Makefile anywhere in the repo — `go build`/`go test`/`go vet` invoked directly.
 
-- `actions/checkout@v4`, `actions/setup-go@v5`, `actions/upload-artifact@v4`, `actions/download-artifact@v4` — standard CI plumbing for both `pr-check.yml` (lint/build/test gate) and `release.yml` (cross-platform build + release).
-- **GitHub CLI** (`gh release create`) — used by `release.yml` to publish the release artifact.
+## Standard library (heavy usage, notable packages)
 
-## Test-only dependencies
+- `flag` — every CLI command's argument parsing (`flag.FlagSet` with `ContinueOnError`, custom `parseMixed()` helper for mixed positional/flag args in brood.go).
+- `syscall` (flock) — concurrency serialization in two independent packages: `internal/spec/ids.go` (ID allocation) and `internal/roster/roster.go` (species assignment) — same pattern, not shared code.
+- `crypto/sha256` — content hashing for scaffold drift detection (`internal/bootstrap/stamp.go`) and binary checksum verification (`internal/cli/update.go`).
+- `archive/tar`, `archive/zip`, `compress/gzip` — binary release extraction in `internal/cli/update.go`.
+- `net/http` — GitHub API client for `fledge update`'s latest-release check.
+- `text/template` — renders adapter templates (`fledge-adapter.md` primitive-map docs, `settings.local.json` permission allow-lists) in `internal/bootstrap/registry.go`.
+- `encoding/json` — ledger records, lock/brood records, roster state, scaffold stamp — all persisted as JSON.
+- `os/exec` — shells out to `git` (branch detection in `brood.go`, `init.go`).
 
-- **`net/http/httptest`** — mocks the GitHub API in `internal/cli/update_test.go`/`update_swap_test.go` for self-update testing without real network calls.
-- **`testscript`** (see above) is exercised only from `cmd/fledge/main_test.go`; no other package imports it.
+## External services
 
-## No dependency on
+- **GitHub Actions** — CI/CD, `.github/workflows/pr-check.yml` (every PR: gofmt, vet, build, test) and `.github/workflows/release.yml` (every push to main; safety-net, then 4-platform build+publish if VERSION changed: linux/{amd64,arm64}, darwin/{amd64,arm64}).
+- **GitHub Releases API** (`https://api.github.com`) — polled by `fledge update` to check for a newer release; `release.yml` publishes built binaries and checksums there.
 
-- No web framework, no database/ORM, no third-party CLI-flag library (uses stdlib `flag` directly), no logging framework (plain `fmt`/stdout/stderr).
+## Embedded/no-dependency modules
 
-## Open Questions
+`internal/bootstrap/core/skills/` (the orchestration workflow prose) has **no external dependencies at all** — pure markdown, embedded via `//go:embed` and shipped inside the binary. It is read/tested only via Go's `testing` package asserting on embedded-file content (17 invariant test files in `internal/bootstrap/*_test.go`).
 
-None observed — dependency set is small, stable, and consistently used across all nine scouted modules; `go.mod` fully enumerates direct + indirect dependencies with no undocumented third-party services.
+## Notably absent
+
+- No web framework, no database driver, no ORM — the entire persistence model is flat files (markdown + JSON) under `.fledge/`.
+- No third-party CLI-argument or logging library — `flag` and `fmt`/`os.Stderr` throughout.
+- No third-party test framework beyond `testscript` (acceptance only); all unit tests use bare `testing.T`.

@@ -1,45 +1,45 @@
 ---
-generated: 2026-07-17T07:00:54Z
-commit: ee49464adb830bef7189f94a1d3253927d33fb5f
+generated: 2026-07-17T17:48:26Z
+commit: 1c9011d6e6a06f72f96bc98e3b2bd99c408ab79e
 agent: fledge-forager
-fledge_version: 0.6.7
+fledge_version: 0.6.10
 ---
 
 # Context Index
 
 ## architecture.md
-The two-layer split (deterministic CLI vs. agent-neutral bootstrap/adapter system), the 6-primitive/tier model, and the two subsystems that are new since the last regeneration: the PLM-030 handoff ledger (`await`'s change-wait vs. existence-wait contract, the new `ExitTimeout` exit code) and PLM-031 dev-install mode (dev-linked scaffold files, drift-aware classification).
-Read this when: orienting to the codebase for the first time, planning a change that spans the CLI/bootstrap seam, or needing to understand `fledge await`'s wait semantics or dev-link mode before touching either.
+Two-layer architecture (deterministic `internal/cli` command layer + `internal/bootstrap` scaffolding/adapter system), the 6-primitive/tier-derivation model, and the orchestration-workflow prose layer that both layers exist to serve. Includes cross-module relationships (e.g. how ledger, spec, and nest packages are shared between the CLI and the workflow protocols).
+Read this when: you need the big picture before touching bootstrap/adapter code, changing how a harness is scaffolded, or understanding how the CLI and the workflow prose relate.
 
 ## modules.md
-Repo map: every top-level module from `fledge scan` (root, cmd, docs, `.github`+scripts, and five `internal/` groupings — bootstrap, cli, spec, core-infra, state) with purpose, key files, and file/byte counts.
-Read this when: deciding which module(s) a change touches, or orienting to an unfamiliar part of the tree before diving into source.
+Repo map: every top-level module from `fledge scan` (cmd, internal/cli, internal/bootstrap, internal/spec, the small support packages, root, .agents, .codex, .github, docs, scripts) with purpose, key files, and "look here for" pointers.
+Read this when: you know roughly what you want to change but not which file/package owns it.
 
 ## conventions.md
-Reconciled conventions: the uniform CLI command pattern, spec frontmatter/ID/criteria rules (byte-preserved bodies, single-byte checkbox flips, `fledge set` replaces-not-appends), bootstrap manifest/write-policy/drift rules, ledger atomicity and wait-contract conventions, and the flock/os.Link/atomic-rename concurrency idiom used throughout.
-Read this when: writing new CLI code, a new spec-touching feature, or anything that needs to match existing idiom rather than invent a new one.
+Reconciled coding conventions (command registration, exit codes, atomicity, flock patterns), spec-lifecycle/CLI-only-mutation rules, ID/naming rules, bootstrap/scaffold policies, and worker-coordination discipline (ledger-over-messages, heartbeat, scope discipline, test-first) pulled from both the Go source and the workflow prose.
+Read this when: writing or reviewing any change — CLI command, spec mutation, scaffold policy, or worker protocol — and you need to match existing house style.
 
 ## data-model.md
-Every core struct across the codebase: spec types (`Requirement`, `Task`, `Criterion`, `Set`), the new ledger types (`Record`, `StatusRecord`, `VerdictRecord`, `EscalationRecord`), lock/nest/roster types, and bootstrap/scaffold types (`Manifest`, `Stamp`, `StampEntry`, `Drift`). Also resolves the internal/nest/templates vs. .fledge/skills/templates naming collision (different purposes, not duplicates).
-Read this when: adding a field to a spec/ledger/scaffold type, or needing exact struct shapes before writing code that consumes or produces them.
+Every persisted/in-memory type: spec `Requirement`/`Task`/`Criterion`, ledger `StatusRecord`/`VerdictRecord`/`EscalationRecord`, lock `Record`, roster `Entry`, nest `Doc`/`StatusResult`, bootstrap `Manifest`/`Stamp`/`Drift`, evidence-file structure, and CLI JSON output structs.
+Read this when: you need exact field names/types for a struct, frontmatter schema, or a ledger/lock/stamp file format.
 
 ## dependencies.md
-The small, stable external dependency set (goccy/go-yaml, rogpeppe/go-internal's testscript, golang.org/x/{sys,tools}) plus stdlib usage patterns (flock, os.Link, atomic rename, embed, text/template) and GitHub Actions used in CI.
-Read this when: adding a new dependency (to check whether an existing one already covers the need) or tracing which package pulls in which stdlib/third-party primitive.
+The full go.mod dependency list (goccy/go-yaml, rogpeppe/go-internal/testscript, golang.org/x/{sys,tools}) with usage notes, plus notable stdlib usage (flag, syscall/flock, sha256, text/template) and external services (GitHub Actions, GitHub Releases API).
+Read this when: adding a new dependency, checking what's already available, or tracing what a package import is actually used for.
 
 ## entry-points.md
-The binary entrypoint (`cmd/fledge/main.go` → `internal/cli.Run`), build/test/install commands (including the dogfooding reinstall loop and `fledge init --refresh` regeneration step), and every public package API surface (`internal/spec`, `internal/check`, `internal/graph`, `internal/ledger`, `internal/bootstrap`, etc.).
-Read this when: needing the exact command to build, test, or reinstall fledge, or looking for which function is the public entry into a given package's logic.
+Build/install/test commands, the binary's `main.go`, the full 26-command CLI surface, the workflow's phase entry points (SKILL.md routing → planning/foraging/implementation), and harness-specific entry files per adapter.
+Read this when: running or building fledge, adding a new CLI command, or figuring out where an agent-facing protocol actually starts.
 
 ## testing.md
-Both test layers (37 txtar CLI-acceptance fixtures under `cmd/fledge/testdata/`, and per-package Go unit tests) with counts and coverage highlights per package, including the 8 fixtures new since the last regeneration (await, verdict, escalate, ledger-read, dev_preen, dev_rails, dev_refresh, dev_status).
-Read this when: writing or extending a test, deciding whether a behavior is already covered, or needing the exact `go test` invocation for a specific command or package.
+Test frameworks (stdlib `testing` + `testscript` only), how to run any test subset, an inventory of the 36 txtar acceptance fixtures, per-package unit-test counts/coverage patterns, and the three-layer coverage philosophy (unit / acceptance / prose-and-config invariant tests) unique to this repo's dogfooding structure.
+Read this when: writing a new test, deciding which layer a test belongs in, or running a specific existing test.
 
 ## domain.md
-Full bird-themed glossary — spec vocabulary (plumage, feather, pipping, brood, molt, preen), orchestration vocabulary (nest, forager, scout, skua, brooder, tier, primitive, adapter, dev-link), and the new PLM-030 ledger vocabulary (subject, kind, heartbeat, await's two wait modes, stale).
-Read this when: unsure what a bird-themed term means, or writing prose/specs that need to use this vocabulary correctly and consistently.
+Full bird-themed glossary — spec artifacts (plumage, feather, FC/AC), repo-knowledge artifacts (nest, concern doc, scout report), coordination artifacts (ledger, brood, roster, molt, verdict, escalation), spawned-worker roles (incubator, forager, scout, brooder, skua), and the primitive/tier/adapter vocabulary.
+Read this when: you hit an unfamiliar term anywhere in this repo's code, prose, or commit history and need its precise meaning.
 
-## Open Questions carried forward
+## Open Questions carried into this run
 
-- Windows dev-link fallback behavior is referenced but not fully specified in code comments (see `architecture.md`).
-- Whether `Stamp.DevSource` is written on every `--dev` invocation or only on refresh is unconfirmed from the files read (see `architecture.md`, `data-model.md`).
+- `docs/google_ai_mode_response.md` / `docs/research_prompt.md` (multi-tier AI infrastructure research) don't map onto fledge's core domain — purpose unclear (see domain.md, architecture.md).
+- The exact non-dev-mode relationship between `.agents/skills/` and `.fledge/skills/` wasn't confirmed by any assigned source file (see architecture.md).

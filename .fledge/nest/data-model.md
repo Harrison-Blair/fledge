@@ -1,72 +1,78 @@
 ---
-generated: 2026-07-17T07:00:54Z
-commit: ee49464adb830bef7189f94a1d3253927d33fb5f
+generated: 2026-07-17T17:48:26Z
+commit: 1c9011d6e6a06f72f96bc98e3b2bd99c408ab79e
 agent: fledge-forager
-fledge_version: 0.6.7
+fledge_version: 0.6.10
 ---
 
 # Data Model
 
-Core data types across the codebase: spec types, bootstrap/scaffold types, ledger/lock/nest/roster state types, and CLI report/envelope shapes.
+All persisted and in-memory data types across the CLI, spec files, ledger, and scaffold system.
 
 ## Spec types (`internal/spec/types.go`)
 
-- **`Requirement`** (a plumage): `ID`, `Title`, `Status` (`ReqEgg`/`ReqHatched`/`ReqFledged`), `Priority`, `Authored`, `Agent`, `FledgeVersion`, `Path`, `Body` (byte-preserved).
-- **`Task`** (a feather): `ID`, `Title`, `Requirement` (parent plumage ref), `Status` (`TaskEgg`/`TaskPipping`/`TaskHatching`/`TaskFledged`), `Priority`, `DependsOn ([]string)`, `Oversight` (optional: `"merge"` | `"during"`), `Authored`, `Agent`, `FledgeVersion`, `Path`, `Body` (byte-preserved).
-- **`Criterion`** (`internal/spec/criteria.go`): `N` (int), `Label` (e.g. `"AC-1"`), `Checked` (bool), `Text`, `boxOff` (byte offset of the state character, for single-byte in-place flips).
-- **`Set`** (`internal/spec/load.go`): `Reqs []*Requirement`, `Tasks []*Task`, `Errors []FileError` (per-file parse failures, non-fatal), `UnknownFields map[string][]string` (unrecognized frontmatter keys by path).
-- Priorities: `P0`/`P1`/`P2`/`P3`.
+- **`Requirement`** (plumage, PLM-###): `ID`, `Title`, `Status`, `Priority`, `Authored`, `Agent`, `FledgeVersion`, `Path`, `Body ([]byte)`. Status: `ReqEgg` | `ReqHatched` | `ReqFledged`. Methods: `Frontmatter()`, `Render()`, `Save()`.
+- **`Task`** (feather, FTHR-###): `ID`, `Title`, `Requirement` (plumage link), `Status`, `Priority`, `DependsOn ([]string)`, `Oversight` (optional), `Authored`, `Agent`, `FledgeVersion`, `Path`, `Body`. Status: `TaskEgg` | `TaskPipping` | `TaskHatching` | `TaskFledged`. Same method set.
+- **`Set`**: `Reqs []*Requirement`, `Tasks []*Task`, `Errors []FileError`, `UnknownFields map[string][]string`. Methods: `Req(id)`, `Task(id)`.
+- **`Criterion`**: `N` (AC number), `Label` (e.g. "AC-3"), `Checked bool`, `Text`, plus an unexported `boxOff` byte offset used for single-byte mutation.
+- **`FileError`**: `Path`, `Err`.
+- Priority levels: `P0`–`P3`. Oversight values: `"merge"` | `"during"` (feathers only, optional).
 
-## Ledger types (`internal/ledger/ledger.go`, new — PLM-030)
+## Spec body structure (prose, not Go types)
 
-- **`Record`**: `{Subject, Kind, Timestamp (RFC3339), Payload (json.RawMessage)}`; `Record.Decode(v)` unmarshals the payload into a kind-specific struct.
-- **`StatusRecord`**: `{PID, Note, UpdatedAt}` — heartbeat/liveness.
-- **`VerdictRecord`**: `{Result (pass|fail), Note}` — write-once review outcome.
-- **`EscalationRecord`**: `{Message}` — write-once blocker signal.
-- Error types: `NotFoundError{subject, kind}`, `CorruptError{subject, kind, wrapped err}`, `InvalidSubjectError{subject, reason}` — all typed, assertable via `errors.As`, never panic.
-- Kinds: `KindStatus`, `KindVerdict`, `KindEscalation`. Storage path: `.fledge/ledger/<subject>.<kind>.json`. Liveness: `ClassifyLiveness` compares PID + lease age against `StaleAfter` (5-minute TTL).
+- **Plumage sections**: Context (WHY), User Stories (As-a/I-want/so-that), Functional Criteria (`FC-N`, testable), Acceptance Criteria (`AC-N` checkboxes, unchecked at authoring), Out of Scope, Open Questions.
+- **Feather sections**: Description (WHAT), Affected Modules (files + context citations), Approach (HOW), Tests (test-first list mapped to AC), Acceptance Criteria (`AC-1`…`AC-N`; AC-1 always "tests observed failing before implementation, passing after").
+- Templates: `internal/spec/templates/{plumage,feather}.md`; documented for authors in `core/skills/fledge-orchestrate/templates/{plumage,feather}.md`.
 
-## Lock types (`internal/lock/lock.go`)
+## Frontmatter fields
 
-- **`Record`**: `{Task, Owner, PID, Created (RFC3339), Branch, Worktree}` — one per claimed feather, stored as `<task>.brood` under `.fledge/broods/`.
-- **`HeldError`**: wraps the existing `Record`, reports the current holder to a caller attempting a conflicting claim.
-- Backward-compatible: legacy JSON without a `Worktree` field still parses.
+Common to both: `id`, `title`, `status`, `priority`, `authored` (UTC ISO-8601), `agent` (e.g. `"fledge-orchestrate/planning"`), `fledge_version`. Feather-only: `plumage` (links to PLM-###), `depends_on` (list of FTHR-###), `oversight` (optional).
 
-## Nest types (`internal/nest/nest.go`, `docs.go`)
+`YAMLScalar()` (internal/spec/frontmatter.go) canonically quotes scalars (booleans, numeric strings, empty strings, unsafe chars) idempotently across parse/render cycles.
 
-- **`Doc`**: `{Kind (Concern|Scout), Generated/Commit (concern-doc fields), Module/Authored (scout-report fields), Agent, FledgeVersion, Body ([]byte, preserved)}` — frontmatter key order is fixed per `Kind`.
-- **`StatusResult`** (backs `fledge nest status`): `{Complete, IndexCommitMatches, Head, IndexCommit, MissingDocs, StubDocs}`.
-- 9-document `ConcernDocs` set in fixed order: architecture, modules, conventions, data-model, dependencies, entry-points, testing, domain, index.
-- `internal/nest/templates/{concern-doc,index,scout-report}.md` are placeholder *skeletons* stamped into newly-scaffolded files by `fledge nest scaffold`/`scout` — distinct from `.fledge/skills/fledge-orchestrate/templates/*.md`, which are the *authoring conventions* a forager/scout reads to know what to write into those skeletons. Confirmed by diffing both file pairs at synthesis time: `internal/nest/templates/scout-report.md` is a fill-in-the-blank module report skeleton, while `.fledge/skills/.../templates/scout-report.md` (identical content to `internal/bootstrap/core/skills/.../templates/scout-report.md`) is a one-paragraph description of the scout-report contract plus a section-order reference — not itself a skeleton to be filled in.
+## Ledger records (`internal/ledger/ledger.go`)
 
-## Roster types (`internal/roster/roster.go`)
+- **`Record`**: `Subject`, `Kind`, `Timestamp`, `Payload any`. Kinds: `KindStatus`, `KindVerdict`, `KindEscalation`.
+- **`StatusRecord`**: `Note`, `Expect`, `UpdatedAt` — repeatedly written; heartbeat + liveness + terminal "done" signal all ride the `Note` field.
+- **`VerdictRecord`**: `Result` (pass/fail), `Note` — write-once per feather.
+- **`EscalationRecord`**: `Message` — write-once, blocker text from worker to orchestrator.
+- Error types: `NotFoundError`, `CorruptError`, `InvalidSubjectError`.
+- `StaleAfter = 5 * time.Minute` — TTL constant used by `ClassifyLiveness(lastUpdated, expect, now) (bool, string)`.
+- Stored as JSON under `.fledge/ledger/<subject>.<kind>.json`, atomic write via temp-file + `os.Rename`.
 
-- **`Entry`**: `{Species, Members ([]string), Released ([]bool, per member), Feather}`.
-- **`Species`**: fixed `[18]string` canonical list (penguin species — adelie, emperor, gentoo, chinstrap, ... northernrockhopper); sequential allocation, numeric-suffix overflow (`-2`, `-3`, ...) once exhausted.
+## Lock / brood records (`internal/lock/lock.go`)
 
-## Bootstrap/scaffold types (`internal/bootstrap/`)
+- **`Record`**: `Task`, `Owner`, `Created`, `Branch`, `Worktree`. Error type: `HeldError`.
+- Stored as `.fledge/broods/FTHR-###.brood` (JSON), created via `os.Link` for exclusive-creation semantics. `List()` skips and separately reports corrupt brood files.
 
-- **`Manifest`** (per adapter): `Name`, `Detector` (marker file for auto-sense), `TierPrimitives (map[string]string)` (primitive → mechanism), `Files ([]ManifestFile)`, `PipingFile` (optional).
-- **`ManifestFile`**: `Src`, `Dst`, `Generate`, `PrimitiveMap`, `Overwrite`, `AppendIfMissing`, `Symlink` — policy fields, mutually describing one of: generate, primitive_map, overwrite, append, symlink, default (skip-if-exists).
-- **`Stamp`** (`.fledge/scaffold.json`): `FledgeVersion`, `Agents ([]string)`, `Files (map[string]StampEntry)`, `DevSource` (optional, PLM-031).
-- **`StampEntry`**: `Policy`, `Sha256`, `Target` (symlink target), `Lines` (required append lines).
-- **`Drift`**: `{Path, Status (DriftStatus), Policy}`. **`DriftStatus`** enum: up-to-date, stale, modified, missing, obsolete.
-- **`WriteOpts`**: `Refresh (bool)`, `DevSource (absolute path or empty)`, `SelfLink (bool, PLM-031 FC-3)`.
+## Roster (`internal/roster/roster.go`)
 
-## CLI report/envelope types (`internal/cli/*.go`)
+- **`Entry`**: `Species`, `Members`, `Released`, `Feather`.
+- `Species` constant: 18 canonical penguin names (adelie, emperor, gentoo, … northernrockhopper), stored at `.fledge/roster/roster.json`. Pair release frees only when both brooder+skua release; overflow issues numeric suffixes.
 
-- **`awaitResult`** / **`awaitEnvelope`** (`await.go`): `{record *ledger.Record, timedOut bool}` / JSON shape `{Record, TimedOut}` with `timed_out` omitted on success.
-- **`awaitClock`** (`await.go`): `{now func() time.Time, sleep func(time.Duration)}` — injectable time source for deterministic, sleep-free tests.
-- **`reportCounts`, `reqCompletion`, `orphanTask`, `blockedTask`, `report`** (`colony.go`) — `fledge colony` status/inventory shapes.
-- **`unfledgedItem`, `unfledgedReport`** (`unfledged.go`) — `fledge unfledged` listing shape.
-- **`readyTask`** (`ready.go`) — `fledge ready` dispatch-availability shape.
+## Nest / context-doc types (`internal/nest/nest.go`, `internal/nest/docs.go`)
 
-## Check/graph/scan types (`internal/{check,graph,scan}`)
+- **`Doc`**: `Kind` (`Concern` | `Scout`), `Generated`, `Commit`, `Module`, `Authored`, `Agent`, `FledgeVersion`, `Body`. Methods: `Frontmatter()`, `Render()`.
+- **`StatusResult`** (JSON): `Complete`, `IndexCommitMatches`, `Head`, `IndexCommit`, `MissingDocs`, `StubDocs` — what `fledge nest status` reports and this pipeline gates on.
+- **`ConcernDocs`**: 9-entry string array (architecture, modules, conventions, data-model, dependencies, entry-points, testing, domain, index) — the canonical doc set this very file set belongs to.
 
-- **`Finding`** (`check/check.go`): `{File, Rule, Severity ("error"|"warning"), Message}` — the unit of `fledge preen` output.
-- **`Graph`** (`graph/graph.go`): tasks slice + `byID` map; methods `Cycle() []string`, `Waves() ([][]string, error)`, `Ready() []string`.
-- **`Module`** / **`Result`** (`scan/scan.go`): `{Name, Files ([]string), Count, Bytes}` / `{Commit, ShortCommit, Modules ([]Module)}` — the shape behind `fledge scan --json`, used to plan this very forager's scout split.
+## Scaffold / stamp types (`internal/bootstrap/stamp.go`, `registry.go`, `primitives.go`)
 
-## Open Questions
+- **`Manifest`**: adapter's single source of truth — name, detector marker, `TierPrimitives map[string]string` (primitive→mechanism), file list, piping file, native skills dir, embed-FS dir.
+- **`ManifestFile`**: source→target with write policy (`generate`, `primitive_map`, `overwrite`, `append_if_missing`, `symlink`, default).
+- **`Stamp`**: fledge version, agents list, `map[string]StampEntry`, optional dev-source path — serialized as `.fledge/scaffold.json`.
+- **`StampEntry`**: policy label + exactly one of `Sha256` (content hash), `Target` (symlink target), `Lines` (append lines).
+- **`Drift`**: path, `DriftStatus` (`up-to-date` | `stale` | `modified` | `missing` | `obsolete`), policy.
+- **`WriteOpts`**: `Refresh bool`, `DevSource string`, `SelfLink bool`.
 
-- Whether `DevSource` on `Stamp` is written on every `--dev` invocation or only on refresh (`internal-bootstrap` scout report — not confirmed from files read).
+## Evidence file (`.fledge/molt/FTHR-###.md`)
+
+One `## AC-N` markdown section per acceptance criterion; each holds the commands run and verbatim captured output proving that criterion. AC-1's section must contain pre-implementation failing-test output (test-first proof). Written incrementally by the brooder, audited section-by-section by the paired skua before any box is checked.
+
+## CLI-side output structs (`internal/cli/*.go`, JSON via `--json`)
+
+`graphNode` (vee.go: id, title, status, plumage, depends_on), `readyTask` (ready.go), `unfledgedItem` (unfledged.go), `adapterInfo` (agents.go: name, tier, detector, scaffolded), `criterionJSON` (criteria.go), `pulseReport` (pulse.go: name, stalled, reason, expect, elapsed), `awaitResult` (await.go: record, timedOut), `scaffoldEntry` (preen.go, wraps bootstrap.Drift), plus nested `report`/`reportCounts`/`orphanTask`/`blockedTask`/`lockEntry`/`issues` structs for `colony.go`'s aggregated report.
+
+## Scratch digests (transient, not versioned data types — markdown files)
+
+`.fledge/scratch/digest-planning.md`, `digest-implementation.md`, `digest-foraging.md` — phase-close summaries written by the orchestrating agent, read by whoever resumes.
