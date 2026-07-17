@@ -14,7 +14,6 @@ import (
 type Record struct {
 	Task     string `json:"feather"`
 	Owner    string `json:"owner"`
-	PID      int    `json:"pid"`
 	Created  string `json:"created"`
 	Branch   string `json:"branch"`
 	Worktree string `json:"worktree"`

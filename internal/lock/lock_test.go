@@ -11,7 +11,7 @@ import (
 )
 
 func rec(task, owner string) Record {
-	return Record{Task: task, Owner: owner, PID: 1, Created: "2026-07-06T12:00:00Z", Branch: "main"}
+	return Record{Task: task, Owner: owner, Created: "2026-07-06T12:00:00Z", Branch: "main"}
 }
 
 func TestAcquireReleaseGet(t *testing.T) {

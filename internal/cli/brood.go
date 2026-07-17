@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/lock"
@@ -73,7 +72,7 @@ func runLock(args []string) int {
 		}
 	}
 	rec := lock.Record{
-		Task: id, Owner: *owner, PID: os.Getpid(),
+		Task: id, Owner: *owner,
 		Created: time.Now().UTC().Format(time.RFC3339), Branch: *branch,
 		Worktree: *worktree,
 	}
@@ -177,7 +176,6 @@ func runLocks(args []string) int {
 	}
 	type lockOut struct {
 		lock.Record
-		PIDAlive       bool `json:"pid_alive"`
 		WorktreeExists bool `json:"worktree_exists"`
 	}
 	out := make([]lockOut, 0, len(recs))
@@ -185,7 +183,7 @@ func runLocks(args []string) int {
 		if *staleOnly && worktreeExists(rec.Worktree) {
 			continue
 		}
-		out = append(out, lockOut{rec, pidAlive(rec.PID), worktreeExists(rec.Worktree)})
+		out = append(out, lockOut{rec, worktreeExists(rec.Worktree)})
 	}
 	if *jsonOut {
 		return emitJSON(out)
@@ -196,9 +194,6 @@ func runLocks(args []string) int {
 	}
 	for _, l := range out {
 		annot := ""
-		if !l.PIDAlive {
-			annot += "  (pid not alive)"
-		}
 		if !l.WorktreeExists && !*staleOnly {
 			annot += "  (worktree gone)"
 		}
@@ -209,19 +204,10 @@ func runLocks(args []string) int {
 
 // worktreeExists reports whether the stored worktree path still resolves to a
 // directory on disk. An empty path (legacy, pre-FTHR-050 record) reports false.
-// Informational only, like pidAlive: no git-registry cross-check.
 func worktreeExists(path string) bool {
 	if path == "" {
 		return false
 	}
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
-}
-
-// pidAlive is informational only: pids recycle.
-func pidAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	return syscall.Kill(pid, 0) == nil || errors.Is(syscall.Kill(pid, 0), syscall.EPERM)
 }
