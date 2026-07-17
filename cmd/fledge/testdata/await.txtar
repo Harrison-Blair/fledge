@@ -1,0 +1,25 @@
+# fledge await: block until a ledger record appears/changes, or --timeout elapses
+exec git init -q .
+
+# happy path: await is started against a subject with no record yet, then a
+# heartbeat writes one; await observes the appearance and returns it
+exec fledge await watcher-subject --kind status --json &
+exec fledge heartbeat watcher-subject --note 'now running'
+wait
+stdout '"subject": "watcher-subject"'
+stdout '"note": "now running"'
+! stdout '"timed_out"'
+
+# real-elapsed-time timeout: no record is ever written for this subject, so
+# await must block until --timeout elapses and exit the new ExitTimeout code
+# (4, distinct from ExitFail/1) — asserted precisely via a shell exit check
+# since testscript's `!` prefix only distinguishes zero from non-zero.
+exec sh -c 'fledge await never-appears --kind status --timeout 200ms --json; test $? -eq 4'
+stdout '"timed_out": true'
+stdout '"record": null'
+
+# malformed input: missing --kind is a usage error (exit 2)
+! exec fledge await some-subject
+stderr 'usage'
+
+-- .fledge/.gitkeep --
