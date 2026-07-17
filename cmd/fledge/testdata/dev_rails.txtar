@@ -60,7 +60,7 @@ mkdir skew-repo
 cd skew-repo
 exec git init -q .
 exec fledge init --dev=$WORK/src-skew
-stderr 'dev source is fledge 9\.9\.9, binary is 0\.5\.8'
+stderr 'dev source is fledge 9\.9\.9, binary is 0\.6\.6'
 cd $WORK
 
 # ---- matching versions report no skew note (AC-6 negative half) ----
@@ -113,4 +113,4 @@ module github.com/Harrison-Blair/fledge
 
 go 1.26
 -- src-match/VERSION --
-0.5.8
+0.6.6
