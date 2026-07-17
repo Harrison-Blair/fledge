@@ -78,6 +78,14 @@ func DriftReport(root string, stamp *Stamp, expected map[string]StampEntry) []Dr
 
 		var d Drift
 		switch {
+		case exp.Target == "" && stamp != nil && stamp.DevSource != "" && inStamp && stEntry.Target != "":
+			// PLM-031/FTHR-080: the manifest expects content (exp.Target is
+			// empty) but the repo is dev-linked and the stamp records this
+			// path as a symlink into the dev source. Comparing manifest
+			// content against a dev-linked target's live source bytes is
+			// definitionally always a mismatch, so classify against the
+			// stamp's recorded target instead of the manifest's content hash.
+			d = classifyDevLink(p, disk, stEntry)
 		case exp.Target != "":
 			d = classifySymlink(p, disk, exp, stEntry, inStamp)
 		case exp.Lines != nil:
@@ -176,6 +184,32 @@ func classifySymlink(path, disk string, exp, stamp StampEntry, hasStamp bool) Dr
 		return Drift{Path: path, Status: StatusStale, Policy: exp.Policy}
 	}
 	return Drift{Path: path, Status: StatusModified, Policy: exp.Policy}
+}
+
+// classifyDevLink classifies a dev-linked path (PLM-031): only the stamp's
+// recorded symlink target is authoritative, never the manifest's content
+// expectation. Mirrors classifySymlink's failure modes — a non-symlink where
+// a link is expected, or the symlink itself absent — but additionally treats
+// a dangling target (the dev source file no longer exists) as missing, since
+// a stale recorded target that no longer resolves is a genuine finding, not
+// something classifySymlink's own-target comparison would catch.
+func classifyDevLink(path, disk string, stamp StampEntry) Drift {
+	cur, err := os.Readlink(disk)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Drift{Path: path, Status: StatusMissing, Policy: stamp.Policy}
+		}
+		// Regular file or directory where a dev link is expected → modified.
+		return Drift{Path: path, Status: StatusModified, Policy: stamp.Policy}
+	}
+	if filepath.ToSlash(cur) != stamp.Target {
+		return Drift{Path: path, Status: StatusModified, Policy: stamp.Policy}
+	}
+	if _, err := os.Stat(disk); err != nil {
+		// Link resolves to the recorded target, but the target itself is gone.
+		return Drift{Path: path, Status: StatusMissing, Policy: stamp.Policy}
+	}
+	return Drift{Path: path, Status: StatusUpToDate, Policy: stamp.Policy}
 }
 
 // classifyAppend classifies an append_if_missing entry by checking whether all
