@@ -1,7 +1,7 @@
 ---
 name: fledge-incubator
 description: Delegated planning agent for fledge. Spawned as a teammate by the orchestrator with a feature request; owns the planning phase end to end — context gathering, interrogation, spec drafting, and the planning-phase fledge CLI mutations — relaying every user decision through the team lead. Not intended for direct use.
-model: sonnet
+model: inherit
 color: orange
 ---
 
