@@ -28,6 +28,7 @@ grep '.fledge/broods/' .gitignore
 grep '.fledge/roster/' .gitignore
 grep '.fledge/scratch/' .gitignore
 grep '.alloc.lock' .gitignore
+grep '.fledge/ledger/' .gitignore
 grep 'fledge nest' .claude/settings.local.json
 grep 'Bash\(fledge update \*\)' .claude/settings.local.json
 grep 'Bash\(fledge roster \*\)' .claude/settings.local.json
@@ -55,6 +56,7 @@ stdout 'exists .claude/fledge-adapter.md'
 stdout 'exists .fledge/skills/fledge-orchestrate/SKILL.md'
 stdout 'exists .fledge/scaffold.json'
 grep -count=1 '.fledge/broods/' .gitignore
+grep -count=1 '.fledge/ledger/' .gitignore
 
 # the scaffold is immediately usable
 exec fledge preen
