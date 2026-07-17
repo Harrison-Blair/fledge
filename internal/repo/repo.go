@@ -28,6 +28,7 @@ func Find() (*Repo, error) {
 func (r *Repo) FledgeDir() string       { return filepath.Join(r.Root, ".fledge") }
 func (r *Repo) LocksDir() string        { return filepath.Join(r.FledgeDir(), "broods") }
 func (r *Repo) RosterDir() string       { return filepath.Join(r.FledgeDir(), "roster") }
+func (r *Repo) LedgerDir() string       { return filepath.Join(r.FledgeDir(), "ledger") }
 func (r *Repo) ContextDir() string      { return filepath.Join(r.FledgeDir(), "nest") }
 func (r *Repo) ScanIgnorePath() string  { return filepath.Join(r.Root, ".fledgeignore") }
 func (r *Repo) EvidenceDir() string     { return filepath.Join(r.FledgeDir(), "molt") }

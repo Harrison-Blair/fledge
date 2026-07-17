@@ -44,8 +44,8 @@ Introduces `internal/ledger`, the new package underlying PLM-030's whole handoff
 - Implementation order fixed per template: write all tests above first, run `go test ./internal/ledger/... ./cmd/fledge/...` and confirm they fail for the expected reason (package/command don't exist yet), then implement until green.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: `internal/ledger` provides atomic `Write`/`Read` for `status`, `verdict`, and `escalation` record kinds with latest-value-only semantics, satisfying PLM-030 FC-1 and FC-2.
-- [ ] AC-3: `fledge heartbeat <name> [--note]` writes/refreshes a `status` record and supports `--json`, satisfying PLM-030 FC-3 and FC-6.
-- [ ] AC-4: `ClassifyLiveness` correctly classifies both failure directions (dead PID; live PID + stale lease) against a fixed 5-minute TTL, satisfying PLM-030 FC-4 and AC-4.
-- [ ] AC-5: `go test ./internal/ledger/... ./cmd/fledge/...` passes with no data races (`-race`).
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: `internal/ledger` provides atomic `Write`/`Read` for `status`, `verdict`, and `escalation` record kinds with latest-value-only semantics, satisfying PLM-030 FC-1 and FC-2.
+- [x] AC-3: `fledge heartbeat <name> [--note]` writes/refreshes a `status` record and supports `--json`, satisfying PLM-030 FC-3 and FC-6.
+- [x] AC-4: `ClassifyLiveness` correctly classifies both failure directions (dead PID; live PID + stale lease) against a fixed 5-minute TTL, satisfying PLM-030 FC-4 and AC-4.
+- [x] AC-5: `go test ./internal/ledger/... ./cmd/fledge/...` passes with no data races (`-race`).
