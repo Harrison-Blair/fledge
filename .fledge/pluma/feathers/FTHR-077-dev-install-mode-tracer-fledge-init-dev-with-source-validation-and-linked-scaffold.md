@@ -2,7 +2,7 @@
 id: FTHR-077
 title: "Dev install mode tracer: fledge init --dev with source validation and linked scaffold"
 plumage: PLM-031
-status: pipping
+status: fledged
 priority: P1
 depends_on: []
 authored: 2026-07-17T01:56:17Z
