@@ -1,0 +1,116 @@
+# FTHR-078: dev mode init rails — bare --dev, git hygiene, version skew
+# (PLM-031 FC-3, FC-6, FC-7). Builds on FTHR-077's dev.txtar (cross-repo
+# --dev=<path> linking, source validation). Dev-linking never reads its
+# symlink target (only creates the link), so fixture source trees below only
+# need a valid go.mod (and a VERSION file where a test cares about skew).
+
+# ---- bare --dev inside a fledge source checkout self-links relatively (AC-2) ----
+cd srcrepo
+exec git init -q .
+exec fledge init --dev
+stdout 'created .claude/agents/fledge-brooder.md'
+stdout 'created .fledge/skills/fledge-orchestrate/SKILL.md'
+exec readlink .claude/agents/fledge-brooder.md
+stdout '^\.\./\.\./internal/bootstrap/adapters/claude/agents/fledge-brooder\.md$'
+exec readlink .fledge/skills/fledge-orchestrate/SKILL.md
+stdout '^\.\./\.\./\.\./internal/bootstrap/core/skills/fledge-orchestrate/SKILL\.md$'
+cd $WORK
+
+# ---- bare --dev outside a source checkout fails (AC-3) ----
+mkdir plain
+cd plain
+exec git init -q .
+! exec fledge init --dev
+stderr 'requires a source path'
+! exists .claude
+! exists .fledge/scaffold.json
+cd $WORK
+
+# ---- --dev refuses when a target path is already tracked (AC-4) ----
+mkdir tracked-repo
+cd tracked-repo
+exec git init -q .
+exec fledge init
+exec git add -A
+exec git commit -q -m 'track the scaffold'
+! exec fledge init --dev=$WORK/src
+stderr 'already tracked'
+stderr '\.claude/agents/fledge-brooder\.md'
+stderr 'git rm --cached'
+exec git status --porcelain
+cmp stdout $WORK/empty.txt
+! exec readlink .claude/agents/fledge-brooder.md
+cd $WORK
+
+# ---- --dev writes ignore rules and leaves no git-visible dev-linked paths (AC-5) ----
+mkdir clean-repo
+cd clean-repo
+exec git init -q .
+exec fledge init --dev=$WORK/src
+grep 'fledge dev mode' .gitignore
+grep '^\.claude/agents/fledge-brooder\.md$' .gitignore
+grep '^\.fledge/skills/fledge-orchestrate/SKILL\.md$' .gitignore
+exec readlink .claude/agents/fledge-brooder.md
+exec git status --porcelain -- .claude/agents .fledge/skills
+cmp stdout $WORK/empty.txt
+cd $WORK
+
+# ---- version skew is reported on mismatch, exit still succeeds (AC-6) ----
+mkdir skew-repo
+cd skew-repo
+exec git init -q .
+exec fledge init --dev=$WORK/src-skew
+stderr 'dev source is fledge 9\.9\.9, binary is 0\.5\.8'
+cd $WORK
+
+# ---- matching versions report no skew note (AC-6 negative half) ----
+mkdir match-repo
+cd match-repo
+exec git init -q .
+exec fledge init --dev=$WORK/src-match
+! stderr 'dev source is fledge'
+cd $WORK
+
+# ---- space form is rejected inside a checkout, not silently mis-linked (AC-8) ----
+cd srcrepo2
+exec git init -q .
+! exec fledge init --dev $WORK/src
+stderr 'unexpected argument'
+stderr '\-\-dev='
+! exec readlink .claude/agents/fledge-brooder.md
+! exists .fledge/scaffold.json
+cd $WORK
+
+# ---- stray positional is rejected outside a checkout too (AC-8) ----
+mkdir positional-repo
+cd positional-repo
+exec git init -q .
+! exec fledge init somearg
+stderr 'unexpected argument'
+cd $WORK
+
+-- empty.txt --
+-- srcrepo/go.mod --
+module github.com/Harrison-Blair/fledge
+
+go 1.26
+-- srcrepo2/go.mod --
+module github.com/Harrison-Blair/fledge
+
+go 1.26
+-- src/go.mod --
+module github.com/Harrison-Blair/fledge
+
+go 1.26
+-- src-skew/go.mod --
+module github.com/Harrison-Blair/fledge
+
+go 1.26
+-- src-skew/VERSION --
+9.9.9
+-- src-match/go.mod --
+module github.com/Harrison-Blair/fledge
+
+go 1.26
+-- src-match/VERSION --
+0.5.8
