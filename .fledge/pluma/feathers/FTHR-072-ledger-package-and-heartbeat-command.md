@@ -2,7 +2,7 @@
 id: FTHR-072
 title: Ledger package and heartbeat command
 plumage: PLM-030
-status: pipping
+status: fledged
 priority: P1
 depends_on: []
 authored: 2026-07-16T22:20:15Z
