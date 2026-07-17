@@ -1,0 +1,101 @@
+# fledge init --dev: source validation and linked scaffold (FTHR-077)
+# The fake source tree lives at $WORK/src: a go.mod declaring the fledge
+# module, plus one core skill file and one adapter agent file at the exact
+# paths their embedded counterparts occupy inside internal/bootstrap/. Only
+# those two files need real content — everything else dev-links to a path
+# that need not exist, since creating a symlink never reads its target.
+
+# links copy-type scaffold to source (AC-2: FC-1, FC-5)
+mkdir repo
+cd repo
+exec git init -q .
+exec fledge init --dev=$WORK/src
+stdout 'created .claude/agents/fledge-brooder.md'
+stdout 'created .fledge/skills/fledge-orchestrate/SKILL.md'
+exec readlink .claude/agents/fledge-brooder.md
+stdout $WORK/src/internal/bootstrap/adapters/claude/agents/fledge-brooder.md
+exec readlink .fledge/skills/fledge-orchestrate/SKILL.md
+stdout $WORK/src/internal/bootstrap/core/skills/fledge-orchestrate/SKILL.md
+
+# source edits are live (AC-3, PLM-031 AC-1): no fledge command runs between
+# the source edit and reading it back through the consuming repo.
+cp $WORK/updated-skill.md $WORK/src/internal/bootstrap/core/skills/fledge-orchestrate/SKILL.md
+exec cat .fledge/skills/fledge-orchestrate/SKILL.md
+stdout 'edited directly in the source tree'
+
+# rendered/merged files are not links (AC-4: PLM-031 FC-5, AC-6)
+exists .claude/fledge-adapter.md
+exists .claude/settings.local.json
+! exec readlink .claude/fledge-adapter.md
+! exec readlink .claude/settings.local.json
+grep 'tier' .claude/fledge-adapter.md
+grep 'fledge: load and follow .fledge/skills/fledge-orchestrate/SKILL.md' CLAUDE.md
+
+# dev state recorded in stamp (AC-6): the source path, and linked entries
+# carrying symlink targets rather than content hashes.
+grep '"devSource": ' .fledge/scaffold.json
+grep $WORK/src .fledge/scaffold.json
+grep '"policy": "dev-link"' .fledge/scaffold.json
+! grep '"policy": "core"' .fledge/scaffold.json
+
+# re-running --dev is idempotent (AC-7): no new writes, links unchanged.
+exec fledge init --dev=$WORK/src
+! stdout 'created'
+! stdout 'updated'
+stdout 'exists .claude/agents/fledge-brooder.md'
+exec readlink .claude/agents/fledge-brooder.md
+stdout $WORK/src/internal/bootstrap/adapters/claude/agents/fledge-brooder.md
+
+# invalid source is rejected before any write (AC-5: FC-4, PLM-031 AC-3)
+cd $WORK
+mkdir repo2
+cd repo2
+exec git init -q .
+exec fledge init
+cp .fledge/scaffold.json $WORK/before-scaffold.json
+cp .claude/agents/fledge-brooder.md $WORK/before-brooder.md
+! exec fledge init --dev=$WORK/bad-src
+stderr 'not a fledge source tree'
+stderr 'bad-src'
+cmp .fledge/scaffold.json $WORK/before-scaffold.json
+cmp .claude/agents/fledge-brooder.md $WORK/before-brooder.md
+! exec readlink .claude/agents/fledge-brooder.md
+
+# a nonexistent source path is rejected the same way, naming the path
+! exec fledge init --dev=$WORK/does-not-exist
+stderr 'not a fledge source tree'
+stderr 'does-not-exist'
+cmp .fledge/scaffold.json $WORK/before-scaffold.json
+
+# the space-separated form parses as bare --dev plus a stray positional
+# argument; it must error rather than silently link nothing or the wrong
+# thing (interrogation-pinned failure mode).
+! exec fledge init --dev $WORK/src
+stderr 'unexpected argument'
+! exec readlink .claude/agents/fledge-brooder.md
+cmp .fledge/scaffold.json $WORK/before-scaffold.json
+
+# bare --dev (no path at all) is not yet supported outside a source checkout
+# (that inference is FTHR-078's FC-3) and must error clearly, not guess.
+cd $WORK
+mkdir repo3
+cd repo3
+exec git init -q .
+! exec fledge init --dev
+stderr 'requires a source path'
+! exists .claude
+
+-- src/go.mod --
+module github.com/Harrison-Blair/fledge
+
+go 1.26
+-- src/internal/bootstrap/core/skills/fledge-orchestrate/SKILL.md --
+placeholder core skill content
+-- src/internal/bootstrap/adapters/claude/agents/fledge-brooder.md --
+placeholder brooder agent content
+-- updated-skill.md --
+edited directly in the source tree
+-- bad-src/go.mod --
+module example.com/not-fledge
+
+go 1.26

@@ -20,7 +20,29 @@ import (
 
 func init() {
 	register("init", runInit,
-		"fledge init [--agent <name>]... [--refresh] [--force] [--list-agents] [--json]")
+		"fledge init [--agent <name>]... [--dev=<path>] [--refresh] [--force] [--list-agents] [--json]")
+}
+
+// devFlag implements flag.Value and the boolFlag interface (IsBoolFlag) so
+// both `--dev=<path>` and a bare `--dev` parse without an explicit "=value" —
+// required for a bare `--dev` to eventually infer its source from a checkout
+// (PLM-031 FC-3). That inference is FTHR-078's job; here a bare --dev
+// (Set("true")) is recorded and rejected with a clear error rather than
+// guessing, and Set never accepts a stray "true" as a literal directory name.
+type devFlag struct {
+	path string
+	bare bool
+}
+
+func (d *devFlag) String() string   { return d.path }
+func (d *devFlag) IsBoolFlag() bool { return true }
+func (d *devFlag) Set(v string) error {
+	if v == "true" {
+		d.bare = true
+		return nil
+	}
+	d.path = v
+	return nil
 }
 
 //go:embed fledgeignore.default
@@ -46,6 +68,8 @@ func runInit(args []string) int {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	var agents stringListFlag
 	fs.Var(&agents, "agent", "agent harness to scaffold (repeatable, comma-separated)")
+	var dev devFlag
+	fs.Var(&dev, "dev", "scaffold copy-type files as symlinks into a local fledge source tree (--dev=<path>)")
 	refresh := fs.Bool("refresh", false, "reset all fledge-owned files to the shipped versions (confirms before overwriting user-edited files)")
 	force := fs.Bool("force", false, "with --refresh: skip the confirmation prompt and overwrite user-edited files")
 	listAgents := fs.Bool("list-agents", false, "list available agent adapters and exit")
@@ -56,6 +80,29 @@ func runInit(args []string) int {
 
 	if *listAgents {
 		return listAdapters(false, *jsonOut)
+	}
+
+	// --dev: resolve and validate the source before touching anything else.
+	// A bare --dev (no "=path") is not yet supported — inferring the source
+	// from a checkout is PLM-031 FC-3, scoped to FTHR-078 — so it must error
+	// rather than silently doing nothing useful. Likewise the space-separated
+	// form (`--dev <path>`) parses as a bare --dev plus a stray positional
+	// argument; leaving that unchecked would silently link nothing while
+	// looking like it worked, exactly the failure mode this plumage exists to
+	// eliminate, so any leftover positional argument is also an error.
+	if dev.bare {
+		if fs.NArg() > 0 {
+			return usageErr("unexpected argument %q after a bare --dev — use --dev=%s, not --dev %s", fs.Arg(0), fs.Arg(0), fs.Arg(0))
+		}
+		return usageErr("--dev requires a source path: --dev=<path> (inferring the source from inside a checkout is not yet supported)")
+	}
+	var devSource string
+	if dev.path != "" {
+		abs, vErr := bootstrap.ValidateDevSource(dev.path)
+		if vErr != nil {
+			return fail("%v", vErr)
+		}
+		devSource = abs
 	}
 
 	r, err := repo.Find()
@@ -86,7 +133,7 @@ func runInit(args []string) int {
 			return usageErr("unknown agent %q (run `fledge init --list-agents`)", name)
 		}
 		manifests = append(manifests, m)
-		ef, efErr := bootstrap.ExpectedFiles(m, commandOrder)
+		ef, efErr := bootstrap.ExpectedFilesDev(m, commandOrder, devSource)
 		if efErr != nil {
 			return fail("build expected files for %s: %v", name, efErr)
 		}
@@ -180,7 +227,7 @@ func runInit(args []string) int {
 	}
 
 	// Core skill: agent-neutral, written to .fledge/skills/ (Q2).
-	opts := bootstrap.WriteOpts{Refresh: *refresh}
+	opts := bootstrap.WriteOpts{Refresh: *refresh, DevSource: devSource}
 	cCreated, cUpdated, cSkipped, err := bootstrap.WriteCore(r.Root, opts)
 	if err != nil {
 		return fail("%v", err)
@@ -225,6 +272,7 @@ func runInit(args []string) int {
 		FledgeVersion: binaryVersion,
 		Agents:        stampAgents,
 		Files:         allFiles,
+		DevSource:     devSource,
 	}
 	stampWrote, sErr := stamp.Write(r.Root)
 	if sErr != nil {
