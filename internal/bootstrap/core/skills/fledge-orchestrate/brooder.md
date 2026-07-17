@@ -24,7 +24,7 @@ Two hard prohibitions:
 
 ### When stuck
 
-If the spec is ambiguous, a dependency's interface isn't what the spec promised, or tests can't be made to pass after genuine effort: STOP and message the orchestrator with a concrete blocker — what was tried, what was found, what is needed (a fact, a decision, or a spec correction). Stay alive and paused; the orchestrator will answer or surface the decision to the user.
+If the spec is ambiguous, a dependency's interface isn't what the spec promised, or tests can't be made to pass after genuine effort: STOP and record the blocker with `fledge escalate <own-name> --message "<what was tried, what was found, what is needed — a fact, a decision, or a spec correction>"`, then send the orchestrator a stateless `message-peer` nudge that you've escalated — the blocker's substance lives in the escalation record, not the nudge. The orchestrator (or whoever tracks you) detects the escalation deterministically with `fledge await <own-name> --kind escalation --exists --timeout <duration>` (write-once record, per `worker-protocols.md`), recovering an exit-4 timeout with `fledge pulse <own-name>` exactly as that section specifies. Stay alive and paused; the orchestrator will answer or surface the decision to the user.
 
 ### Lifecycle
 
