@@ -51,14 +51,14 @@ Test-first, and **the failing-first observation must be behavioral, not a build 
 - Order: write the txtar assertions first and capture their behavioral failures verbatim in `.fledge/molt/FTHR-089.md`; then the unit tests; then implement.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: At least one failing-test observation is **behavioral** — captured from the txtar layer (e.g. `flag provided but not defined: -expect`), not a compilation or arity error — and is recorded verbatim in `.fledge/molt/FTHR-089.md`. Evidence consisting solely of build breakage does not satisfy AC-1 (satisfies PLM-035 AC-2).
-- [ ] AC-3: A worker whose lease is fresh classifies as **not stalled**, proven by a test that fails against the current code — the condition misclassified today (satisfies PLM-035 FC-1, AC-3).
-- [ ] AC-4: `StatusRecord` carries no PID field, and `fledge heartbeat`'s human-readable and `--json` output contain no PID, proven by an assertion on its absence (satisfies PLM-035 FC-2, and the status-record half of PLM-035 AC-4 — **FTHR-090 closes the feather-claim half; neither feather closes PLM-035 AC-4 alone**).
-- [ ] AC-5: `ClassifyLiveness` takes no PID parameter, and no PID-liveness check remains in `internal/ledger` (satisfies PLM-035 FC-1).
-- [ ] AC-6: A lease declaring a period longer than five minutes classifies **not stalled** past the old five-minute threshold, and **stalled** once the declared period elapses — both directions proven (satisfies PLM-035 FC-3, FC-5, AC-5).
-- [ ] AC-7: A lease declaring nothing classifies stalled after five minutes, exactly as today — proving the default preserves existing behavior for every current call site (satisfies PLM-035 FC-3, AC-6).
-- [ ] AC-8: The declared period is stored as a **duration** alongside `updated_at`, and both are readable from the record; no absolute deadline field is introduced (satisfies PLM-035 FC-4, AC-7).
-- [ ] AC-9: A declared period well beyond any plausible default is accepted rather than rejected or clamped, proving no cap was introduced (satisfies PLM-035 FC-6).
-- [ ] AC-10: An unparseable `--expect` value is a usage error exiting `ExitUsage` (2) with a message naming the flag.
-- [ ] AC-11: `go test ./...` is green, `go vet ./...` and `gofmt -l .` are clean, and `fledge preen` reports no errors on the branch (satisfies PLM-035 AC-13).
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: At least one failing-test observation is **behavioral** — captured from the txtar layer (e.g. `flag provided but not defined: -expect`), not a compilation or arity error — and is recorded verbatim in `.fledge/molt/FTHR-089.md`. Evidence consisting solely of build breakage does not satisfy AC-1 (satisfies PLM-035 AC-2).
+- [x] AC-3: A worker whose lease is fresh classifies as **not stalled**, proven by a test that fails against the current code — the condition misclassified today (satisfies PLM-035 FC-1, AC-3).
+- [x] AC-4: `StatusRecord` carries no PID field, and `fledge heartbeat`'s human-readable and `--json` output contain no PID, proven by an assertion on its absence (satisfies PLM-035 FC-2, and the status-record half of PLM-035 AC-4 — **FTHR-090 closes the feather-claim half; neither feather closes PLM-035 AC-4 alone**).
+- [x] AC-5: `ClassifyLiveness` takes no PID parameter, and no PID-liveness check remains in `internal/ledger` (satisfies PLM-035 FC-1).
+- [x] AC-6: A lease declaring a period longer than five minutes classifies **not stalled** past the old five-minute threshold, and **stalled** once the declared period elapses — both directions proven (satisfies PLM-035 FC-3, FC-5, AC-5).
+- [x] AC-7: A lease declaring nothing classifies stalled after five minutes, exactly as today — proving the default preserves existing behavior for every current call site (satisfies PLM-035 FC-3, AC-6).
+- [x] AC-8: The declared period is stored as a **duration** alongside `updated_at`, and both are readable from the record; no absolute deadline field is introduced (satisfies PLM-035 FC-4, AC-7).
+- [x] AC-9: A declared period well beyond any plausible default is accepted rather than rejected or clamped, proving no cap was introduced (satisfies PLM-035 FC-6).
+- [x] AC-10: An unparseable `--expect` value is a usage error exiting `ExitUsage` (2) with a message naming the flag.
+- [x] AC-11: `go test ./...` is green, `go vet ./...` and `gofmt -l .` are clean, and `fledge preen` reports no errors on the branch (satisfies PLM-035 AC-13).
