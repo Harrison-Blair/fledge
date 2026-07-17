@@ -1,6 +1,7 @@
 name: codex
 detector:
   exists: .codex/
+native_skills_dir: .agents/skills
 tier_primitives:
   confirm-gate: chat
   read-only-shell: shell (read-only)
@@ -11,5 +12,11 @@ files:
     dst: .codex/fledge-adapter.md
     generate: true
     primitive_map: true
+  - src: skills/fledge-orchestrate/SKILL.md
+    dst: .agents/skills/fledge-orchestrate/SKILL.md
+    overwrite: true
+  - src: skills/fledge-interrogate/SKILL.md
+    dst: .agents/skills/fledge-interrogate/SKILL.md
+    overwrite: true
   - dst: AGENTS.md
     append_if_missing: "> fledge: load and follow .fledge/skills/fledge-orchestrate/SKILL.md — primitive map at .codex/fledge-adapter.md"

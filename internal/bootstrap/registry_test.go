@@ -31,6 +31,9 @@ func TestAdapterManifests(t *testing.T) {
 		if m.Detector.Exists == "" {
 			t.Errorf("%s: no detector (auto-detect would never select it)", m.Name)
 		}
+		if m.NativeSkillsDir == "" {
+			t.Errorf("%s: no native_skills_dir (duplicate guard would be disabled)", m.Name)
+		}
 		dsts := map[string]bool{}
 		for _, f := range m.Files {
 			dsts[f.Dst] = true
@@ -323,6 +326,62 @@ func TestClaudeSkillSymlinks(t *testing.T) {
 	}
 	if err := CheckDuplicateSkills(root); err == nil {
 		t.Error("guard accepted a real skill copy")
+	}
+}
+
+// TestCodexSkillStubs verifies Codex discovers physical .agents/skills bridge
+// files that load the canonical core skills, while real copies are rejected.
+func TestCodexSkillStubs(t *testing.T) {
+	m, err := FindAdapter("codex")
+	if err != nil || m == nil {
+		t.Fatalf("codex adapter: %v", err)
+	}
+	root := t.TempDir()
+	if _, _, _, err := WriteCore(root, WriteOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	created, _, _, err := m.WriteAdapter(root, nil, WriteOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names, err := CoreSkillNames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, skill := range names {
+		stub := filepath.Join(root, ".agents", "skills", skill, "SKILL.md")
+		if fi, err := os.Lstat(stub); err != nil || !fi.Mode().IsRegular() {
+			t.Fatalf("%s: not a physical SKILL.md (err=%v); created=%v", stub, err, created)
+		}
+		data, err := os.ReadFile(stub)
+		if err != nil || !strings.Contains(string(data), ".fledge/skills/"+skill+"/SKILL.md") {
+			t.Errorf("%s: does not forward to canonical core skill: %v", stub, err)
+		}
+	}
+	if err := CheckDuplicateSkills(root); err != nil {
+		t.Errorf("guard rejected managed stub: %v", err)
+	}
+	_, updated, skipped, err := m.WriteAdapter(root, nil, WriteOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, skill := range names {
+		dst := path.Join(".agents/skills", skill, "SKILL.md")
+		if !contains(skipped, dst) || contains(updated, dst) {
+			t.Errorf("re-run: %s not skipped (updated=%v skipped=%v)", dst, updated, skipped)
+		}
+	}
+	realDir := filepath.Join(root, ".agents", "skills", names[0])
+	if err := os.Remove(filepath.Join(realDir, "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realDir, "SKILL.md"), []byte("copy"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckDuplicateSkills(root); err == nil {
+		t.Error("guard accepted a real Codex skill copy")
+	} else if !strings.Contains(err.Error(), ".agents/skills/") {
+		t.Errorf("guard error %q does not identify Codex's native skill directory", err)
 	}
 }
 

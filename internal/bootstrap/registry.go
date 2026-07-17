@@ -37,11 +37,12 @@ type WriteOpts struct {
 // and the optional harness piping file. Stays in the binary; never clutters the
 // target repo. Adding a new harness = adding a manifest.yaml, zero Go code.
 type Manifest struct {
-	Name           string            `yaml:"name"`
-	Detector       ManifestDetector  `yaml:"detector"`
-	TierPrimitives map[string]string `yaml:"tier_primitives"`
-	Files          []ManifestFile    `yaml:"files"`
-	PipingFile     string            `yaml:"piping_file"`
+	Name            string            `yaml:"name"`
+	Detector        ManifestDetector  `yaml:"detector"`
+	TierPrimitives  map[string]string `yaml:"tier_primitives"`
+	Files           []ManifestFile    `yaml:"files"`
+	PipingFile      string            `yaml:"piping_file"`
+	NativeSkillsDir string            `yaml:"native_skills_dir"`
 
 	// dir is the adapter's directory in the embed FS (e.g. "adapters/claude").
 	dir string
@@ -247,14 +248,22 @@ func (m *Manifest) Scaffolded(root string) bool {
 	return false
 }
 
-// nativeSkillsDir is the harness's native skills directory derived from the
-// detector marker (e.g. ".claude/" → ".claude/skills"), used by the duplicate
-// guard.
+// nativeSkillsDir is the harness's declared native skills directory, used by
+// the duplicate guard. It is manifest metadata rather than an inference from
+// the detector because a harness's configuration marker and skill discovery
+// directory need not share a parent.
 func (m *Manifest) nativeSkillsDir() string {
-	if m.Detector.Exists == "" {
-		return ""
+	return m.NativeSkillsDir
+}
+
+// isNativeSkillStub reports whether f is this adapter's managed discovery
+// bridge for a core skill. Codex needs physical SKILL.md files in .agents even
+// though the substantive workflow remains canonical under .fledge/skills.
+func (m *Manifest) isNativeSkillStub(f ManifestFile) bool {
+	if m.NativeSkillsDir == "" || f.Src == "" || !strings.HasPrefix(f.Dst, m.NativeSkillsDir+"/") {
+		return false
 	}
-	return strings.TrimSuffix(m.Detector.Exists, "/") + "/skills"
+	return path.Base(f.Dst) == "SKILL.md"
 }
 
 // CoreSkillNames lists the core skill directory names (immediate subdirs of
@@ -276,8 +285,8 @@ func CoreSkillNames() ([]string, error) {
 
 // CheckDuplicateSkills implements the Q10 duplicate guard: for every core
 // skill, refuse if a same-name skill already lives in any adapter's native
-// skills directory (e.g. a leftover .claude/skills/fledge-orchestrate/ from
-// 0.1.0). Returns the first conflict as an error.
+// skills directory (e.g. a leftover native skill copy). Returns the first
+// conflict as an error.
 func CheckDuplicateSkills(root string) error {
 	adapters, err := LoadAdapters()
 	if err != nil {
@@ -298,12 +307,31 @@ func CheckDuplicateSkills(root string) error {
 				// The sanctioned pointer to the core skill, not a copy.
 				continue
 			}
+			if m.managedNativeSkillStub(root, skill) {
+				continue
+			}
 			if pathIsFile(filepath.Join(skillDir, "SKILL.md")) {
 				return fmt.Errorf("duplicate skill %q at %s — remove the old copy first; see MIGRATION.md", skill, filepath.ToSlash(skillDir))
 			}
 		}
 	}
 	return nil
+}
+
+func (m *Manifest) managedNativeSkillStub(root, skill string) bool {
+	wantDst := path.Join(m.NativeSkillsDir, skill, "SKILL.md")
+	for _, f := range m.Files {
+		if f.Dst != wantDst || !m.isNativeSkillStub(f) {
+			continue
+		}
+		want, err := renderEntry(m, f, m.renderContext(nil))
+		if err != nil {
+			return false
+		}
+		got, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(wantDst)))
+		return err == nil && bytes.Equal(got, want)
+	}
+	return false
 }
 
 // pathIsFile reports whether p exists and is a regular file (not a directory).
@@ -503,6 +531,16 @@ func (m *Manifest) WriteAdapter(root string, commandOrder []string, opts WriteOp
 
 func (m *Manifest) writeFileEntry(root string, f ManifestFile, ctx renderContext, opts WriteOpts) (created, updated, skipped []string, err error) {
 	dst := filepath.Join(root, filepath.FromSlash(f.Dst))
+	// Replace a legacy managed directory symlink with the physical discovery
+	// directory Codex currently requires before writing its SKILL.md bridge.
+	if m.isNativeSkillStub(f) {
+		parent := filepath.Dir(dst)
+		if fi, lErr := os.Lstat(parent); lErr == nil && fi.Mode()&os.ModeSymlink != 0 {
+			if rmErr := os.Remove(parent); rmErr != nil {
+				return nil, nil, nil, rmErr
+			}
+		}
+	}
 	exists := fileExists(dst)
 
 	// Symlink: dst points at target; created or repointed, never copied.

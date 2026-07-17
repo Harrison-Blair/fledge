@@ -1,6 +1,7 @@
 name: claude
 detector:
   exists: .claude/
+native_skills_dir: .claude/skills
 tier_primitives:
   confirm-gate: AskUserQuestion
   read-only-shell: Bash

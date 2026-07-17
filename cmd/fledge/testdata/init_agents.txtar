@@ -48,6 +48,12 @@ exists .pi/fledge-adapter.md
 exec fledge init --agent codex
 stdout 'scaffolded agents: codex'
 exists .codex/fledge-adapter.md
+! exec test -L .agents/skills/fledge-orchestrate
+exists .agents/skills/fledge-orchestrate/SKILL.md
+grep 'fledge-orchestrate/SKILL.md' .agents/skills/fledge-orchestrate/SKILL.md
+! exec test -L .agents/skills/fledge-interrogate
+exists .agents/skills/fledge-interrogate/SKILL.md
+grep 'fledge-interrogate/SKILL.md' .agents/skills/fledge-interrogate/SKILL.md
 grep 'fledge-orchestrate/SKILL.md' AGENTS.md
 exists .claude/fledge-adapter.md
 exists .pi/fledge-adapter.md

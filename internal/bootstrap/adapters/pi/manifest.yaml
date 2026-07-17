@@ -1,6 +1,7 @@
 name: pi
 detector:
   exists: .pi/
+native_skills_dir: .pi/skills
 tier_primitives:
   confirm-gate: chat (TUI) / ctx.ui.select|confirm (extension)
   read-only-shell: bash tool
