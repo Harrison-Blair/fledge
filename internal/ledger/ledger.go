@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -21,8 +20,8 @@ const (
 	KindEscalation = "escalation"
 )
 
-// StaleAfter is the fixed lease TTL: a status record not refreshed within this
-// window is stalled even when its PID is still alive.
+// StaleAfter is the default lease TTL: a status record that declares no
+// quiet period of its own is stalled if not refreshed within this window.
 const StaleAfter = 5 * time.Minute
 
 // Record is the JSON content of one .fledge/ledger/<subject>.<kind>.json file:
@@ -44,9 +43,12 @@ func (r *Record) Decode(v any) error {
 }
 
 // StatusRecord is the payload of a status record: a worker's liveness lease.
+// Expect is the declared quiet period, a time.ParseDuration-compatible
+// string anchored to UpdatedAt — not an absolute deadline — so the record
+// stays self-describing: what was claimed, and when.
 type StatusRecord struct {
-	PID       int    `json:"pid"`
 	Note      string `json:"note"`
+	Expect    string `json:"expect"`
 	UpdatedAt string `json:"updated_at"`
 }
 
@@ -188,28 +190,16 @@ func Read(dir, subject, kind string) (*Record, error) {
 }
 
 // ClassifyLiveness reports whether a worker holding a status record is
-// stalled, and why. Pure: it inspects no ledger files. A dead PID is decisive
-// — the worker is gone regardless of how fresh its lease is. A live PID whose
-// lease has not been refreshed within StaleAfter is stalled too: the process
-// exists but is no longer reporting, which pids alone cannot distinguish
-// (they recycle).
-func ClassifyLiveness(pid int, lastUpdated, now time.Time) (stalled bool, reason string) {
-	if !pidAlive(pid) {
-		return true, fmt.Sprintf("pid %d is not alive", pid)
+// stalled, and why. Pure: it inspects no ledger files. Liveness consults
+// only lease freshness against the worker's own declared quiet period
+// (expect): a worker is stalled when the present moment is past its lease's
+// update timestamp plus expect. There is no PID input — a recorded PID
+// cannot answer this question (see PLM-035's Context) and a permanently
+// misleading field is worse than none.
+func ClassifyLiveness(lastUpdated time.Time, expect time.Duration, now time.Time) (stalled bool, reason string) {
+	age := now.Sub(lastUpdated)
+	if age > expect {
+		return true, fmt.Sprintf("lease is %s old, past its declared %s quiet period", age.Round(time.Second), expect)
 	}
-	if age := now.Sub(lastUpdated); age > StaleAfter {
-		return true, fmt.Sprintf("pid %d is alive but its lease is %s old (older than %s)",
-			pid, age.Round(time.Second), StaleAfter)
-	}
-	return false, fmt.Sprintf("pid %d is alive and its lease is fresh", pid)
-}
-
-// pidAlive reports whether a process with pid exists. Informational only:
-// pids recycle, which is why the lease TTL exists alongside it.
-func pidAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	err := syscall.Kill(pid, 0)
-	return err == nil || err == syscall.EPERM
+	return false, fmt.Sprintf("lease is %s old, within its declared %s quiet period", age.Round(time.Second), expect)
 }
