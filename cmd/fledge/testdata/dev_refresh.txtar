@@ -34,13 +34,15 @@ stdout 'edited directly in the source tree'
 
 # ---------------------------------------------------------------
 # dev source survives in the rewritten stamp (AC-3): guards the
-# evaporate-one-refresh-later failure. `fledge dev status` (FTHR-079) is not
-# on this feather's dependency chain yet, so the stamp assertion below is
-# the currently-testable half of AC-3.
+# evaporate-one-refresh-later failure.
 # ---------------------------------------------------------------
 grep '"devSource": ' .fledge/scaffold.json
 grep $WORK/src .fledge/scaffold.json
 grep '"policy": "dev-link"' .fledge/scaffold.json
+exec fledge dev status
+stdout 'dev-linked'
+stdout 'source=.*/src'
+! stdout 'broken links'
 
 # ---------------------------------------------------------------
 # rendered files still refresh under dev mode (AC-4, PLM-031 AC-12): a
@@ -99,8 +101,40 @@ module github.com/Harrison-Blair/fledge
 go 1.26
 -- src/internal/bootstrap/core/skills/fledge-orchestrate/SKILL.md --
 placeholder core skill content
+-- src/internal/bootstrap/core/skills/fledge-orchestrate/brooder.md --
+placeholder brooder.md content
+-- src/internal/bootstrap/core/skills/fledge-orchestrate/foraging.md --
+placeholder foraging.md content
+-- src/internal/bootstrap/core/skills/fledge-orchestrate/implementation.md --
+placeholder implementation.md content
+-- src/internal/bootstrap/core/skills/fledge-orchestrate/incubator.md --
+placeholder incubator.md content
+-- src/internal/bootstrap/core/skills/fledge-orchestrate/planning.md --
+placeholder planning.md content
+-- src/internal/bootstrap/core/skills/fledge-orchestrate/skua.md --
+placeholder skua.md content
+-- src/internal/bootstrap/core/skills/fledge-orchestrate/worker-protocols.md --
+placeholder worker-protocols.md content
+-- src/internal/bootstrap/core/skills/fledge-orchestrate/templates/context-doc.md --
+placeholder context-doc.md content
+-- src/internal/bootstrap/core/skills/fledge-orchestrate/templates/feather.md --
+placeholder feather.md content
+-- src/internal/bootstrap/core/skills/fledge-orchestrate/templates/plumage.md --
+placeholder plumage.md content
+-- src/internal/bootstrap/core/skills/fledge-orchestrate/templates/scout-report.md --
+placeholder scout-report.md content
+-- src/internal/bootstrap/core/skills/fledge-interrogate/SKILL.md --
+placeholder interrogate SKILL.md content
 -- src/internal/bootstrap/adapters/claude/agents/fledge-brooder.md --
 placeholder brooder agent content
+-- src/internal/bootstrap/adapters/claude/agents/fledge-context-scout.md --
+placeholder context-scout agent content
+-- src/internal/bootstrap/adapters/claude/agents/fledge-forager.md --
+placeholder forager agent content
+-- src/internal/bootstrap/adapters/claude/agents/fledge-incubator.md --
+placeholder incubator agent content
+-- src/internal/bootstrap/adapters/claude/agents/fledge-skua.md --
+placeholder skua agent content
 -- updated-skill.md --
 edited directly in the source tree
 -- stale-adapter.md --
