@@ -1,44 +1,50 @@
 ---
-generated: 2026-07-16T21:27:15Z
-commit: a1ed62a38540df7ab1cbdc4c486176a64a762018
+generated: 2026-07-17T02:54:09Z
+commit: e7a6d4969f861ed3f03af7833b750a7cd703a7a8
 agent: fledge-forager
 fledge_version: 0.5.8
 ---
 
 # Dependencies
 
-External libraries, tools, and services the repo build, test, and release pipeline relies on. Go standard library usage is noted only where load-bearing (crypto, embed, flock); routine stdlib (fmt, strings, sort, ...) is omitted.
+External (third-party) dependencies used across the repo, deduplicated, with usage notes. fledge intentionally has a minimal dependency footprint.
 
-## Go module dependencies (`go.mod`)
+## Go module dependencies (`go.mod`, Go 1.26.4)
 
-Module: `github.com/Harrison-Blair/fledge`. Go **1.26.4** minimum.
+- **`github.com/goccy/go-yaml`** (v1.19.2) — the only YAML library used, everywhere YAML is parsed or rendered:
+  - `internal/spec/frontmatter.go` — spec frontmatter parse/render (`parseFrontmatterMap`)
+  - `internal/nest/nest.go` — nest doc frontmatter
+  - `internal/bootstrap/registry.go` — adapter `manifest.yaml` parsing
+  - `internal/ciconfig/*_test.go` — parses `.github/workflows/*.yml` for meta-tests
+- **`github.com/rogpeppe/go-internal`** (v1.15.0) — provides the `testscript` package, the framework behind every `cmd/fledge/testdata/*.txtar` acceptance test (`cmd/fledge/main_test.go`).
 
-- **`github.com/goccy/go-yaml` v1.19.2** (direct) — YAML parsing throughout: adapter `manifest.yaml` loading (`internal/bootstrap/registry.go`), spec frontmatter unmarshaling (`internal/spec/frontmatter.go`), nest frontmatter (`internal/nest/nest.go`), and `internal/ciconfig` test assertions on GitHub Actions workflow YAML (decoded generically as `map[string]any`, no struct unmarshal).
-- **`github.com/rogpeppe/go-internal` v1.15.0** (direct) — `testscript` package; drives all 25 `.txtar` acceptance-test fixtures under `cmd/fledge/testdata/` (`cmd/fledge/main_test.go`).
-- **`golang.org/x/sys` v0.26.0** (indirect, via rogpeppe) — syscall support.
-- **`golang.org/x/tools` v0.26.0** (indirect, via rogpeppe) — Go tooling support.
+No other third-party Go packages are imported anywhere in the repo.
 
-## Load-bearing standard library usage
+## Go standard library (notable, by area)
 
-- **`os/exec`** — shells out to `git` throughout: `internal/repo` (`git rev-parse --show-toplevel`), `internal/scan` (`git ls-files -z --cached --others --exclude-standard`, `git check-ignore --stdin`), `internal/cli/brood.go` (current-branch detection).
-- **`syscall`** (Flock) — exclusive-lock pattern reused in two places: `internal/spec/ids.go` (`.alloc.lock`, race-free ID allocation) and `internal/roster/roster.go` (`roster.json`, concurrent species assignment).
-- **`crypto/sha256`** — content hashing for scaffold drift detection and the `.fledge/scaffold.json` stamp (`internal/bootstrap/{drift,stamp}.go`); also binary checksum verification in `fledge update` (`internal/cli/update.go`).
-- **`embed`** (`//go:embed`) — embeds `core/` and `adapters/` trees into the fledge binary (`internal/bootstrap/bootstrap.go`), and spec templates (`internal/spec/templates.go`), and nest templates (`internal/nest` `templates/`).
-- **`text/template`** — renders `generate`-policy scaffold files: `fledge-adapter.md`, `settings.local.json` (`internal/bootstrap/registry.go`).
-- **`archive/tar`, `archive/zip`, `compress/gzip`** — release-archive extraction in `fledge update` (`internal/cli/update.go`).
-- **`net/http`** — GitHub Releases API polling in `fledge update` (`internal/cli/update.go`).
+- **File/spec I/O**: `os`, `path/filepath`, `bytes`, `embed` (spec + nest templates, bootstrap core/adapters trees)
+- **Concurrency/locking**: `syscall` (`Flock` — spec ID allocation, roster state file, brood-adjacent locking patterns), `sync` (WaitGroup/Mutex in concurrency tests)
+- **Hashing**: `crypto/sha256`, `encoding/hex` — scaffold stamp content hashes, update-binary checksum verification
+- **Templating**: `text/template` — bootstrap `generate`/`primitive_map` file rendering
+- **Networking**: `net`, `net/http` — `fledge update`'s GitHub Releases API fetch
+- **Archive extraction**: `archive/tar`, `archive/zip`, `compress/gzip` — `fledge update`'s release-asset unpacking
+- **JSON**: `encoding/json` — all `--json` command output, ledger records, lock/roster/scaffold state files
+- **Time**: RFC3339 timestamps used uniformly for `authored` frontmatter fields and ledger records
 
-## External services / tools
+## Runtime / process dependencies (not Go packages)
 
-- **GitHub Actions** — CI/CD: `.github/workflows/pr-check.yml` (lint/build/test gate on PRs to main), `.github/workflows/release.yml` (detects VERSION change on push to main, cross-compiles 4 platform binaries, publishes a GitHub Release). Actions used: `actions/checkout@v4`, `actions/setup-go@v5`, `actions/upload-artifact@v4`, `actions/download-artifact@v4`.
-- **`gh` (GitHub CLI)** — release creation (`gh release create`) in the release workflow.
-- **Git** — version control and the mechanism `internal/repo`/`internal/scan` shell out to; also required at runtime by CLI commands that read repo state.
-- **`git` pre-commit hook** (`scripts/hooks/pre-commit`, opt-in via `git config core.hooksPath scripts/hooks`) — runs `gofmt -l .` and `go vet ./...` locally, mirroring the CI lint gate exactly (asserted by `internal/hooktest`).
+- **`git`** — required at runtime, not vendored. Used by: `internal/repo` (root resolution via `git rev-parse --show-toplevel`, HEAD SHA), `internal/scan` (`git ls-files -z --cached --others --exclude-standard`, `git check-ignore --stdin -z` for `.fledgeignore` filtering), `cmd/fledge/testdata` acceptance tests (isolated via `GIT_CONFIG_GLOBAL=/dev/null` and fixed `GIT_AUTHOR_NAME`/etc. for determinism).
+- **GitHub Releases API + GitHub Actions** — `fledge update` fetches release metadata/binaries from GitHub; `.github/workflows/release.yml` builds and publishes them (4 Unix platform binaries: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64).
+- **Harness-specific tools** (only relevant to the scaffolded/embedded `core`+`adapters` prose, not fledge's own build): Claude Code's `tmux` (teammate panes), `Bash`/`Write`/`AskUserQuestion`/`SendMessage`/`Task` tools; Codex CLI's shell/apply_patch; pi's bash/write tools + optional M4 extension (`fledge_gate`, `fledge_spawn`, not yet implemented).
 
-## Agent-Skills standard (design-level dependency, not code)
+## Dependency direction (internal)
 
-Per `docs/generalization-plan.md` and the bootstrap adapter design: fledge's `core/skills/` conforms to the cross-harness "Agent Skills" format (frontmatter with `name`/`description`) so pi, Claude Code, and Codex can all load it natively without translation.
+- `internal/cli` depends on every domain package (`spec`, `check`, `graph`, `lock`, `repo`, `scan`, `nest`, `roster`, `ledger`, `bootstrap`) — never the reverse.
+- `internal/check` and `internal/graph` both depend on `internal/spec` (shared `Requirement`/`Task` types).
+- `internal/nest` depends on `internal/spec` (reuses `spec.YAMLScalar` for safe frontmatter quoting, `SplitFrontmatter`).
+- `internal/bootstrap` is self-contained apart from `goccy/go-yaml` and stdlib — it does not import other `internal/` packages.
+- `cmd/fledge` depends only on `internal/cli`.
 
 ## Open Questions
 
-- `docs/google_ai_mode_response.md` references external inference infrastructure (OpenCode Go/Zen APIs, local vLLM/SGLang/Ollama servers, Google Gemini) — unclear whether this is a live fledge integration target or standalone research unrelated to the current codebase (flagged by the `docs` scout).
+None observed — the dependency footprint is small and consistent across all scouted modules.

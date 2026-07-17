@@ -1,51 +1,46 @@
 ---
-generated: 2026-07-16T21:27:15Z
-commit: a1ed62a38540df7ab1cbdc4c486176a64a762018
+generated: 2026-07-17T02:54:09Z
+commit: e7a6d4969f861ed3f03af7833b750a7cd703a7a8
 agent: fledge-forager
 fledge_version: 0.5.8
 ---
 
 # Architecture
 
-How fledge's two layers — the deterministic CLI and the agent-neutral orchestration/scaffold system — fit together, and how the repo's own `.fledge/` directory dogfoods that system.
+fledge is a Go CLI that keeps feature intent (plumages) and implementable tasks (feathers) as validated markdown specs on disk, and scaffolds one agent-neutral orchestration workflow into any coding-agent harness. This document covers the two-layer system design and how its major packages relate.
 
-## Two layers, deliberately separated
+## Two-layer design
 
-1. **The CLI** (`internal/cli` + domain packages) — deterministic, agent-agnostic spec operations. `cli.go:Run` dispatches subcommands via a registry (`internal/cli/cli.go`); each command file (`new.go`, `set.go`, `status.go`, `criteria.go`, `brood.go`, `nest.go`, `preen.go`, `vee.go`, `scan.go`, `ready.go`, `colony.go`, `unfledged.go`, `roster.go`, `agents.go`, `version.go`, `update.go`, `init.go`) registers itself in `init()`. Exit codes are shared and meaningful: `ExitOK=0`, `ExitFail=1`, `ExitUsage=2`, `ExitEnv=3` (`internal/cli/cli.go`). Domain logic lives in focused packages the CLI composes: `internal/spec` (frontmatter/ID/template/load), `internal/check` (validation = `preen`), `internal/graph` (dependency graph = `vee`), `internal/lock` (feather claims = `brood`), `internal/scan` (module discovery), `internal/repo` (repo-root/dir resolution), `internal/roster` (worker species allocation), `internal/nest` (context-doc scaffold/scout/status).
-2. **The bootstrap/adapter system** (`internal/bootstrap`) — what `fledge init` scaffolds into a target repo. `bootstrap.go` embeds two trees via `//go:embed core adapters` into a single `FS`. `core/skills/{fledge-orchestrate,fledge-interrogate}/*` is the single agent-neutral source of the orchestration workflow (`internal/bootstrap/core/skills/fledge-orchestrate/{SKILL,planning,implementation,foraging,incubator,brooder,skua,worker-protocols}.md` + `templates/`), written verbatim into a target repo's `.fledge/skills/` by `WriteCore` (`internal/bootstrap/registry.go`). `adapters/<harness>/` (claude, codex, pi) is a thin format-only mapping, each driven entirely by its `manifest.yaml` (`internal/bootstrap/registry.go:Manifest`) — detector, `tier_primitives` map, and a `files` list with per-file write policies. Adding a harness is editing a manifest, not writing Go.
+1. **CLI layer** (`internal/cli` + domain packages) — deterministic, agent-agnostic spec operations. `internal/cli/cli.go:Run` dispatches to 19 registered subcommands (`commandOrder`), each delegating to a focused domain package:
+   - `internal/spec` — spec file I/O: frontmatter parse/render, ID allocation, criteria checkboxes, templates (`internal/spec/frontmatter.go`, `ids.go`, `criteria.go`, `templates.go`, `types.go`)
+   - `internal/check` — spec validation, backs `fledge preen` (`internal/check/check.go:Run`)
+   - `internal/graph` — dependency graph/cycle detection/waves, backs `fledge vee` (`internal/graph/graph.go:New`)
+   - `internal/lock` — feather claim (`.brood`) files, backs `fledge brood`/`abandon`/`broods` (`internal/lock/lock.go:Acquire`)
+   - `internal/scan` — repo file/module enumeration, backs `fledge scan` (`internal/scan/scan.go:Run`)
+   - `internal/repo` — git-root resolution and standard `.fledge/` subdirectory paths (`internal/repo/repo.go:Find`)
+   - `internal/nest` — schemas/templates/status for `.fledge/nest/` context docs, backs `fledge nest` (`internal/nest/nest.go`, `internal/nest/docs.go`)
+   - `internal/roster` — worker species-name allocation, backs `fledge roster` (`internal/roster/roster.go`)
+   - `internal/ledger` — agent handoff/liveness records under `.fledge/ledger/`, backs `fledge heartbeat` (`internal/ledger/ledger.go`)
 
-`cmd/fledge/main.go` is an 11-line wrapper: `main()` calls `cli.Run(os.Args[1:])` and exits with its status code. All logic lives below `internal/`.
-
-## The 6 primitives and tier derivation
-
-Six fixed orchestration primitives (`internal/bootstrap/primitives.go:PrimitiveOrder`): `confirm-gate`, `read-only-shell`, `write-file`, `run-fledge`, `spawn-worker`, `message-peer`. Each adapter's `manifest.yaml` declares, per primitive, the harness-native mechanism that realizes it (e.g. Claude: `confirm-gate`→AskUserQuestion, `spawn-worker`→teammate-spawn, `message-peer`→SendMessage; Codex/pi: only the first 4, no team primitives). An adapter's **tier** (A/B/C) is *derived* from that coverage by `Manifest.Tier()` (`internal/bootstrap/primitives.go` DeriveTier logic), never declared directly — Tier A = 4 primitives (solo), Tier B = +`spawn-worker` (foraging with scouts), Tier C = +`message-peer` (full team loop with brooder/skua pairs). Claude Code is Tier C; Codex and pi are Tier A (`internal/bootstrap/adapters/{codex,pi}/manifest.yaml`).
-
-## Scaffold write policies and drift
-
-`registry.go` implements 6 file write policies per `ManifestFile` entry: default (copy, skip-if-exists — user edits survive), `overwrite` (always rewrite, e.g. `team-loop.md`, `settings.json`), `generate`/`primitive_map` (render via `text/template`, e.g. `fledge-adapter.md`, `settings.local.json`), `append_if_missing` (additive line, e.g. `AGENTS.md`/`CLAUDE.md` pointer), `symlink` (e.g. `.claude/skills/fledge-orchestrate` → `.fledge/skills/fledge-orchestrate`). `drift.go` compares on-disk state to the expected manifest (SHA256 content hash, symlink targets, append-lines) and classifies each file as up-to-date/stale/modified/missing/obsolete. `stamp.go` persists this expected-file manifest as `.fledge/scaffold.json` (`Stamp{FledgeVersion, Agents, Files map[string]StampEntry}`), written by `fledge init --refresh`; `fledge preen` validates the stamp is present and consistent (`internal/cli/preen.go`, calling into `drift.go`).
-
-## Orchestration workflow: planning → foraging → implementation
-
-The `core/skills/fledge-orchestrate` prose (mirrored live in this repo at `.fledge/skills/fledge-orchestrate/`) defines three phases an agent routes into based on user request (`SKILL.md`):
-- **Planning** (`planning.md`) — plumage interrogation, foraging trigger, feather decomposition into tracer bullets, spec creation via `fledge new`, gated review, close-out digest. Can run inline (orchestrator does it) or delegated to a spawned `fledge-incubator-<species>` worker.
-- **Foraging** (`foraging.md`) — the protocol this forager itself is executing: scan → plan scout split → `fledge nest scaffold` → fan out `fledge-context-scout` workers per module → synthesize 8 concern docs + `index.md` → verify via `fledge nest status`.
-- **Implementation** (`implementation.md`) — dispatch logic branches on harness tier: Tier A solo, Tier B foraging+solo, Tier C team loop with `fledge-brooder-<species>`/`fledge-skua-<species>` pairs spawned per feather, test-first evidence recorded to `.fledge/molt/FTHR-###.md`, review gate, green teardown (merge, suite run, `fledge abandon --fledged`, worktree/lock cleanup).
-
-Worker roles (`incubator.md`, `brooder.md`, `skua.md`, `worker-protocols.md`) are one-shot: spawned with a fully self-contained prompt (no inherited conversation history), communicate only with their commissioning orchestrator/peer, and end on an explicit final message — never bare idle.
+2. **Bootstrap/adapter layer** (`internal/bootstrap`) — what `fledge init` scaffolds into a target repo.
+   - `internal/bootstrap/bootstrap.go` embeds two trees via `//go:embed core adapters`.
+   - `internal/bootstrap/core/skills/` is the single agent-neutral source of the orchestration workflow prose (`fledge-orchestrate`, `fledge-interrogate` skills — planning.md, implementation.md, foraging.md, incubator.md, brooder.md, skua.md, worker-protocols.md, templates/). Written to a repo's `.fledge/skills/` by `WriteCore`.
+   - `internal/bootstrap/adapters/<harness>/` (claude, codex, pi) are thin, format-only per-harness mappings, each driven entirely by a `manifest.yaml` (detector, `tier_primitives` map, file list with write policies). Adding a harness is a manifest edit, not Go code.
+   - `internal/bootstrap/primitives.go` defines the 6 primitives (`confirm-gate`, `read-only-shell`, `write-file`, `run-fledge`, `spawn-worker`, `message-peer`) and derives an adapter's tier (A/B/C) from its declared coverage — tier is never declared directly.
+   - `internal/bootstrap/registry.go` (`Manifest`, `WriteCore`, `WriteAdapter`) implements the file write policies: `generate`/`primitive_map` (render a `text/template`), `overwrite` (always rewritten), `append_if_missing` (additive), `symlink` (managed repoint, e.g. `.claude/skills/...` → `.fledge/skills/...`), and default (copy, skip-if-exists so user edits survive; `init --refresh` re-syncs).
+   - `internal/bootstrap/stamp.go` (new, PLM-031 dev install mode) implements `Stamp`/`StampEntry` and `.fledge/scaffold.json` — the record of every fledge-owned file, its content hash/symlink-target/append-lines, and (new) an optional `DevSource` for `--dev` symlink-based installs. `internal/bootstrap/drift.go` classifies on-disk state against that stamp (up-to-date/stale/modified/missing/obsolete) for `fledge preen`.
 
 ## Cross-module relationships
 
-- `cmd/fledge/main.go` → `internal/cli.Run` → per-command files → domain packages (`spec`, `check`, `graph`, `lock`, `scan`, `repo`, `roster`, `nest`, `bootstrap`).
-- `internal/cli/init.go` → `internal/bootstrap.{LoadAdapters, WriteCore, Manifest.WriteAdapter}` → embedded `core/`/`adapters/` trees.
-- `internal/cli/nest.go` → `internal/nest.{ClearNest, ScoutBody, ConcernBody, IndexBody, Status, RefreshDoc}` — implements exactly the `fledge nest scaffold|scout|status|stamp` commands this forager pipeline depends on.
-- `internal/cli/preen.go` → `internal/check.Run` (spec validation) + `internal/bootstrap` drift detection (scaffold health).
-- `internal/cli/brood.go` → `internal/lock.{Acquire,Release,List}` (feather claim files under `.fledge/broods/`).
-- `internal/cli/set.go`/`status.go` → `internal/graph` (cycle detection before accepting `depends_on` mutations).
-- `internal/cli/scan.go` → `internal/scan.Run` — produces exactly the module/file-list JSON this forager consumed as its authoritative work list.
-- Scaffolded `core/` prose (`internal/bootstrap/core/skills/fledge-orchestrate/foraging.md` etc.) is the literal source this forager is following; the copy at this repo's own `.fledge/skills/fledge-orchestrate/foraging.md` is scaffolded output of that source — changes to fledge's own behavior are made in `internal/bootstrap/core/...`, never by hand-editing the scaffolded copy (CLAUDE.md).
+- `cmd/fledge/main.go` is the sole binary entry point; it calls `internal/cli.Run(os.Args[1:])` and does nothing else (see `entry-points.md`).
+- Every `internal/cli/*.go` command file is a thin adapter between argument parsing and one (or a few) domain packages; domain packages never import `internal/cli` (one-directional dependency).
+- `internal/spec` is the shared data model: `internal/check`, `internal/graph`, and `internal/cli` (new/set/criteria/status/brood) all operate on `spec.Requirement`/`spec.Task` loaded via `spec.Load`.
+- `internal/lock` (broods) and `internal/spec` (status field) are coordinated by `internal/cli/brood.go`: acquiring a lock also flips feather status to `hatching`; releasing flips to `fledged` before unlocking, so a crash mid-transition leaves a detectable stale-brood state that `fledge preen`/`fledge colony` surface.
+- `internal/nest` (context doc schemas) is used both by `fledge nest` (CLI command, scaffolds/status-checks `.fledge/nest/`) and — conceptually — by the `fledge-forager`/`fledge-context-scout` workflow roles documented in `internal/bootstrap/core/skills/fledge-orchestrate/foraging.md`, which is the process this very document set was produced by.
+- `internal/bootstrap` and `internal/cli/init.go` are tightly coupled: `init.go` calls `bootstrap.LoadAdapters`, `bootstrap.WriteCore`, `Manifest.WriteAdapter`, and `bootstrap.Stamp.Write`; `internal/cli/preen.go` calls `bootstrap.DriftReport` for scaffold health.
+- The **core/** skill prose (bootstrap-core) is agent-neutral and describes worker roles (incubator, forager/scout, brooder/skua) and phases (planning, foraging, implementation) that only become concrete via a harness's primitive coverage (adapters). Tier A harnesses (Codex, pi) run planning/implementation solo, in-session; Tier C (Claude Code) can spawn workers and run the team loop.
 
 ## Open Questions
 
-- How does `text/template` rendering in `fledge-adapter.md`/`settings.local.json` precisely work — what struct is `.` in the template context, and which fields are populated? (`internal/bootstrap/adapters/*` scout)
-- The `piping_file` manifest field appears only on the Claude adapter — are Codex/pi team loops unsupported, or handled differently? (`internal/bootstrap/adapters/*` scout)
-- Current implementation status of `docs/generalization-plan.md` milestones M0–M5 (authored ~2026-01, "locked design" status; progress since unclear) — and whether the `spawn-pool` primitive removal (amendment 2026-07) is fully reconciled with that doc, which still references a "persistent skua pool" sizing formula.
+- Whether feather implementation across multiple plumages can dispatch in parallel, or is strictly sequenced, is not fully specified in `planning.md`/`implementation.md` prose (see `bootstrap-core` scout report).
+- No machinery is described for detecting broken cross-references when a concern doc or skill section is renamed/removed — relies on editorial discipline during synthesis (this document included).

@@ -1,60 +1,66 @@
 ---
-generated: 2026-07-16T21:27:15Z
-commit: a1ed62a38540df7ab1cbdc4c486176a64a762018
+generated: 2026-07-17T02:54:09Z
+commit: e7a6d4969f861ed3f03af7833b750a7cd703a7a8
 agent: fledge-forager
 fledge_version: 0.5.8
 ---
 
 # Domain
 
-Glossary of fledge's bird-themed vocabulary and orchestration concepts. Terms are grouped by theme, not alphabetically, since many are defined relative to each other.
+Glossary of fledge's bird-themed domain vocabulary, business concepts, and workflow roles. `README.md` is the canonical public decoder; this document is the exhaustive, source-grounded version.
 
-## Spec artifacts and their lifecycle
+## Spec artifacts
 
-- **Plumage** (`PLM-###`): a feature/requirement spec — the WHAT and WHY, no implementation detail. Lifecycle: `egg` (authoring) → `hatched` (user sign-off) → `fledged` (all its feathers fledged, boxes checked). Body sections: Context, User Stories, Functional Criteria (FC-N), Acceptance Criteria, Out of Scope, Open Questions.
-- **Feather** (`FTHR-###`): one implementable task under a plumage. Lifecycle: `egg` (not started) → `pipping` (all `depends_on` fledged, unclaimed — ready to dispatch) → `hatching` (claimed/in progress) → `fledged` (done: AC boxes checked, merged, suite green). Body sections: Description, Affected Modules, Approach, Tests, Acceptance Criteria (AC-N, AC-1 always test-first evidence).
-- **Acceptance Criteria (AC-N)**: checkbox list on a spec; changed *only* via `fledge criteria check|uncheck`, never hand-edited. All must be checked before a feather/plumage can be `fledged`.
-- **Functional Criteria (FC-N)**: numbered testable behavior statement in a plumage; feathers' AC entries reference these.
-- **Brooding**: claiming a feather for implementation — a lock (`fledge brood`) plus the status transition to `hatching`.
-- **Molting**: the evidence file (`.fledge/molt/FTHR-###.md`) recording per-criterion command+output evidence.
-- **Fledging**: marking a feather/plumage complete.
-- **Depends_on**: array of upstream feather IDs a feather blocks on; must all be `fledged` before the feather becomes `pipping`.
-- **Oversight**: user-participation mode on a feather — `"during"` (user confirms readiness before the worker spawns, decisions relayed via orchestrator), `"merge"` (user signs off on diff + verdict before merge), or omitted (fully autonomous).
-- **Tracer bullet**: the first feather(s) in a decomposition — a thin, minimal, real, verifiable end-to-end slice through all layers; later feathers widen from there.
-- **Colony**: portfolio summary view — counts of plumages/feathers by status, orphans, blocked tasks, held locks (`fledge colony`).
+- **Plumage** (`PLM-###`) — a requirement/feature spec; the top-level unit of feature intent; no implementation detail. Lifecycle: `egg` (authoring) → `hatched` (ready for feather decomposition) → `fledged` (all feathers done, closeout verified). Lives at `.fledge/pluma/plumage/`.
+- **Feather** (`FTHR-###`) — one implementable task belonging to exactly one plumage; may `depends_on` other feathers. Lifecycle: `egg` → `pipping` (dependencies met, unclaimed) → `hatching` (claimed, in implementation) → `fledged` (merged + verified). Lives at `.fledge/pluma/feathers/`.
+- **Functional Criteria (FC-N)** — numbered, testable behavior statements in a plumage body.
+- **Acceptance Criteria (AC-N)** — checkbox list defining verifiable done conditions, on both plumages and feathers; only ever toggled via `fledge criteria check|uncheck`.
+- **Frontmatter** — the YAML metadata block bounded by `---` fences at the top of every spec file; CLI-managed, never hand-edited.
+- **Oversight** — optional feather field: `"merge"` (hold merge pending user sign-off) or `"during"` (confirm readiness before spawn).
 
-## Repository structures
+## fledge CLI operations
 
-- **Nest** (`.fledge/nest/`): distilled repository context — the 8 concern docs + `index.md` this forager writes, plus `raw/` scout reports.
-- **Scaffold**: the set of fledge-owned files written into a repo by `fledge init` (`.fledge/skills/`, `.claude/` or other harness dirs, `.fledge/scaffold.json`).
-- **Stamp** (`.fledge/scaffold.json`): content-hash manifest of every scaffold file fledge owns; enables drift detection and safe pruning on `--refresh`.
-- **Preen**: the validation command (`fledge preen`) — checks spec schema, frontmatter, dependency graph, acceptance-criteria state, brood consistency, and scaffold drift.
-- **Roster**: persistent name↔assignment mapping for worker species (`fledge roster assign|release`).
-- **Species**: one of 18 canonical penguin names (adelie, emperor, gentoo, …) used as the second half of a worker's identity.
+- **Preen** — `fledge preen`; validates spec frontmatter, references, acceptance-criteria structure, and scaffold drift.
+- **Molt** — (a) the evidence directory/file (`.fledge/molt/FTHR-###.md`) capturing per-AC test proof during implementation; (b) generically, an acceptance-criteria/field update.
+- **Vee** — `fledge vee`; computes the feather dependency graph (cycles, topological waves).
+- **Brood** / **Broods** — a claim (lock) a worker holds on a feather while implementing it (`fledge brood` acquires, `fledge abandon` releases, `fledge broods` lists); stored as `.fledge/broods/<FTHR-ID>.brood`.
+- **Colony** — `fledge colony`; a full status report (counts by lifecycle stage, orphans, blocked feathers, active locks, parse errors).
+- **Scaffold** — the set of files `fledge init` writes into a target repo (`.fledge/skills/`, harness adapter files); tracked in `.fledge/scaffold.json`.
+- **Nest** — `.fledge/nest/`; distilled repository knowledge. Raw scout reports live at `.fledge/nest/raw/<module>.md`; synthesized concern docs (this document set) live at `.fledge/nest/*.md`.
+- **Ledger** — `.fledge/ledger/`; deterministic agent-handoff records (status/verdict/escalation), addressed by `(subject, kind)`.
+- **Roster** — `.fledge/roster/`; the worker-name allocation pool (18 canonical species tokens).
 
-## Orchestration roles
+## Worker roles (spawned, context-free per spawn prompt)
 
-- **Orchestrator**: the main-session dispatcher; role name `fledge-orchestrator`, harness-specific address (`team-lead` on Claude Code).
-- **Forager**: orchestrates scouts, synthesizes the 8 concern docs + index from their reports. Write-confined to `.fledge/nest/`; never touches source code. (This document was written by one.)
-- **Scout** (`fledge-context-scout`): reads only its assigned file list, writes exactly one raw report to `.fledge/nest/raw/<module>.md`. Unnamed, self-terminating.
-- **Incubator**: delegated planner — owns the planning phase end-to-end when spawned (interrogation, spec drafting, planning-phase CLI mutations), relays every user decision through the orchestrator.
-- **Brooder**: implementer — test-first, works only in its worktree, evidence per criterion, hands off to its paired skua.
-- **Skua**: reviewer — audits a brooder's evidence and diff against spec, re-runs tests, red-teams uncovered inputs, checks/unchecks AC boxes on verdict, never merges or modifies code itself.
+- **Incubator** — delegated planner; owns the planning phase end-to-end (freshness gate, foraging, plumage/feather interrogation, authoring); relays gates/questions/decisions verbatim to the user.
+- **Forager** — context-regeneration orchestrator; spawns scouts per module, synthesizes the 8 concern docs + index from their raw reports (this document's own role).
+- **Scout** (context-scout) — reads only its assigned module's files, writes one raw report to `.fledge/nest/raw/<module>.md`; unnamed (no species), self-terminates on a one-line confirmation.
+- **Brooder** — feather implementer; test-first, evidence file per AC, works in a dedicated git worktree, hands off to its paired skua.
+- **Skua** — feather reviewer paired with one brooder; re-runs tests, audits evidence as guilty-until-proven, red-teams for weak tests, checks AC boxes once verified; caps at 3 rejection cycles before escalating.
+- **Orchestrator** — the implementation-phase dispatcher (on Claude Code, `team-lead`); sole writer of the team task list, sole holder of the spawn/kill primitive, manages gates and roster.
+- **Commissioner** — whichever party (orchestrator or incubator) spawned and waits on a forager, per the forager wait contract in `foraging.md`.
 
-## Orchestration mechanics
+## Workflow phases
 
-- **Primitive**: one of 6 fixed orchestration capabilities a harness may provide — `confirm-gate`, `read-only-shell`, `write-file`, `run-fledge`, `spawn-worker`, `message-peer`.
-- **Tier**: capability level derived (never declared) from primitive coverage — Tier A (4 primitives, solo workflow only), Tier B (+`spawn-worker`, enables foraging), Tier C (+`message-peer`, full team loop with brooder/skua pairs). Claude Code is Tier C; Codex and pi are Tier A.
-- **Adapter**: per-harness thin mapping layer (`.claude/`, `.codex/`, `.pi/`) realizing the 6 primitives via harness-native mechanisms; fully described by a `manifest.yaml`, zero harness-specific Go code.
-- **Manifest**: the YAML file (one per adapter) declaring detector, `tier_primitives` map, and scaffolded-file list with write policies.
-- **Detector**: the condition (e.g. `exists:.claude/`) `fledge init`/`fledge agents` uses to decide whether an adapter applies to a repo.
-- **Harness**: an agent execution platform — Claude Code, pi, Codex CLI (and design docs mention Cursor/opencode as future targets).
-- **Foraging**: the context-gathering phase (this pipeline) — scan, scout fan-out, synthesis, verification.
-- **Interrogate**: the `fledge-interrogate` skill — a decision-forcing, one-question-at-a-time interview protocol used during plumage/feather authoring.
-- **Relay envelope**: the message format an incubator uses toward its orchestrator — `GATE review`, `GATE decision`, `QUESTION`, `SPAWN-REQUEST`, `PHASE-CLOSE`.
-- **Digest**: a phase's close-out summary file (`digest-planning.md`, `digest-implementation.md`, `digest-foraging.md` under `.fledge/scratch/`).
-- **Green teardown**: the required Tier-C sequence after a feather's skua approval — merge, run full suite, verify criteria landed, `fledge abandon --fledged`, release locks, remove worktree, delete branch.
+- **Planning** — feature request → interrogation → hatched plumages + authored feathers.
+- **Foraging** — context regeneration; produces the `.fledge/nest/` document set (architecture, modules, conventions, data-model, dependencies, entry-points, testing, domain + index).
+- **Implementation** — feathers → merged + verified; solo (Tier A/B, orchestrator implements directly) or team loop (Tier C, brooder/skua pairs).
+
+## Primitives, tiers, adapters, harnesses
+
+- **Primitive** — one of 6 agent-neutral orchestration capabilities: `confirm-gate`, `read-only-shell`, `write-file`, `run-fledge`, `spawn-worker`, `message-peer`.
+- **Harness** — the agent execution environment (Claude Code, Codex CLI, pi).
+- **Adapter** — a harness's thin, format-only mapping of the 6 primitives to concrete mechanisms, driven by that harness's `manifest.yaml`.
+- **Tier** — capability level derived (never declared) from primitive coverage: **A** (solo — `confirm-gate`+`read-only-shell`+`write-file`+`run-fledge`; Codex, pi), **B** (A + `spawn-worker` — forager/scout fan-out), **C** (B + `message-peer` — full team loop; Claude Code only).
+- **Species** — a unique worker-name token (e.g. `adelie`, `emperor`) drawn from a fixed pool of 18; brooder+skua pairs share one species.
+
+## Documentation & handoff artifacts
+
+- **Concern doc** — one of the 8 synthesized documents this forager writes (architecture, modules, conventions, data-model, dependencies, entry-points, testing, domain).
+- **Scout report** — a raw, per-module report a scout writes to `.fledge/nest/raw/<module>.md`, with 9 fixed sections.
+- **Digest** — `.fledge/scratch/digest-{planning,implementation,foraging}.md`; inter-phase handoff notes so the next phase doesn't assume conversation history.
+- **Scratchpad batching** — the incubator mechanism for batching independent interrogation questions into one file/gate review.
 
 ## Open Questions
 
-- Whether "Agent Skills standard" (cross-harness skill frontmatter format referenced in `docs/generalization-plan.md`) is an external standard fledge conforms to, or fledge-internal terminology — not independently confirmed against code in this pass.
+None observed — domain vocabulary was consistent across all 10 scout reports.

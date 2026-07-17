@@ -1,69 +1,140 @@
 ---
-generated: 2026-07-16T21:27:15Z
-commit: a1ed62a38540df7ab1cbdc4c486176a64a762018
+generated: 2026-07-17T02:54:09Z
+commit: e7a6d4969f861ed3f03af7833b750a7cd703a7a8
 agent: fledge-forager
 fledge_version: 0.5.8
 ---
 
 # Data Model
 
-Core types across the spec system, CLI output shapes, the bootstrap/scaffold system, and the nest/context-doc system.
+Core data types across the repo: spec files (plumage/feather), the scaffold stamp, and the supporting on-disk record formats (brood locks, roster, ledger). Precision matters here — this document backs planning decisions about spec layout and lifecycle.
 
-## Spec types (`internal/spec/types.go`)
+## Spec files (`internal/spec`) — the on-disk plumage/feather format
 
-- **`Requirement`** (plumage, PLM-###): `ID`, `Title`, `Status` (`ReqEgg`|`ReqHatched`|`ReqFledged`), `Priority`, `Authored`, `Agent`, `FledgeVersion`, `Path`, `Body []byte`.
-- **`Task`** (feather, FTHR-###): `ID`, `Title`, `Requirement` (parent PLM link), `Status` (`TaskEgg`|`TaskPipping`|`TaskHatching`|`TaskFledged`), `Priority`, `DependsOn []string`, `Oversight`, `Authored`, `Agent`, `FledgeVersion`, `Path`, `Body []byte`.
-- **`Criterion`**: `N int`, `Label`, `Checked bool`, `Text`, `boxOff` (byte offset in body — enables in-place byte-preserving mutation via `internal/spec/criteria.go:SetCriterion`).
-- **`Set`**: loaded collection — `Reqs`, `Tasks` slices, `Errors []FileError`, `UnknownFields map[path][]string`; lookup via `Set.Req(id)`/`Set.Task(id)`.
-- **`FileError`**: `Path`, `Err` — one per file that failed to parse; aggregated, never fail-fast (`internal/spec/load.go:Load`).
-- **Constants**: `Priorities = [P0,P1,P2,P3]`; `OversightValues = [merge, during]` — note root `CLAUDE.md`/orchestration prose additionally treat an omitted `oversight` field as a third ("autonomous") mode.
+Both spec types share the format: `---\n<YAML frontmatter>\n---\n<body>`, with body bytes preserved byte-for-byte except for the single-byte AC checkbox toggle. Detects both LF and CRLF line endings.
 
-## Lock/claim types (`internal/lock/lock.go`)
+### Requirement (plumage, `internal/spec/types.go:27-38`)
 
-- **`Record`** (JSON, one file per held brood under `.fledge/broods/`): `Task`, `Owner`, `PID`, `Created`, `Branch`, `Worktree` (Worktree is a later addition — `lock_test.go` verifies backward compat with pre-Worktree JSON).
-- **`HeldError`**: wraps the existing `Record` on an `Acquire()` conflict; implements the `error` interface.
+| Field | Type | Notes |
+|---|---|---|
+| `ID` | string | `PLM-###`, CLI-allocated |
+| `Title` | string | user-visible name |
+| `Status` | string | one of `ReqEgg`="egg", `ReqHatched`="hatched", `ReqFledged`="fledged" |
+| `Priority` | string | one of `P0`,`P1`,`P2`,`P3` |
+| `Authored` | string | RFC3339 timestamp |
+| `Agent` | string | authoring agent id |
+| `FledgeVersion` | string | fledge binary version at creation |
+| `Path` | string | file path as loaded; empty if unsaved |
+| `Body` | []byte | markdown after the closing `---` fence, byte-preserved |
 
-## Validation types (`internal/check/check.go`)
+Frontmatter field render order (7 fields, all required): `id, title, status, priority, authored, agent, fledge_version`.
 
-- **`Finding`**: `File`, `Rule`, `Severity`, `Message` — one validation result.
-- **`Severity`**: `Error` | `Warning` constants.
+Plumage body sections (per `internal/spec/templates/plumage.md`): Context, User Stories, Functional Criteria (FC-N), Acceptance Criteria (AC-N checkboxes), Out of Scope, Open Questions.
 
-## Graph types (`internal/graph/graph.go`)
+### Task (feather, `internal/spec/types.go:41-55`)
 
-- **`Graph`**: internal `tasks`/`byID` map; methods `Cycle() []string` (DFS, unvisited/inStack/finished state machine), `Waves() ([][]string, error)` (topological layers, greedy per-layer selection), `Ready() []string` (egg/pipping tasks with all deps fledged, input order preserved).
+| Field | Type | Notes |
+|---|---|---|
+| `ID` | string | `FTHR-###`, CLI-allocated |
+| `Title` | string | |
+| `Requirement` | string | parent plumage ID; YAML key `plumage` |
+| `Status` | string | one of `TaskEgg`="egg", `TaskPipping`="pipping", `TaskHatching`="hatching", `TaskFledged`="fledged" |
+| `Priority` | string | `P0`–`P3` |
+| `DependsOn` | []string | YAML `depends_on`; other FTHR-### IDs blocking this one; may be empty |
+| `Oversight` | string | YAML `oversight`, optional: `""`, `"merge"`, or `"during"` |
+| `Authored` | string | RFC3339 |
+| `Agent` | string | |
+| `FledgeVersion` | string | |
+| `Path` | string | |
+| `Body` | []byte | byte-preserved |
 
-## CLI output shapes (`internal/cli/*.go`, mostly JSON-marshaled)
+Frontmatter field render order (9 or 10 fields; `oversight` omitted entirely when empty): `id, title, plumage, status, priority, depends_on, [oversight], authored, agent, fledge_version`.
 
-- `initJSON` (init.go), `adapterInfo` (agents.go), `readyTask`/`unfledgedItem`/`unfledgedReport` (ready.go/unfledged.go), `reportCounts`/`reqCompletion`/`orphanTask`/`blockedTask`/`lockEntry`/`report` (colony.go — portfolio view), `criterionJSON` (criteria.go), `graphNode` (vee.go), `githubRelease`/`updateJSON` (update.go), `scaffoldJSONOut`/`scaffoldEntry` (preen.go — drift findings).
-- `scan.Module`: `Name`, `Files []string`, `Count`, `Bytes`. `scan.Result`: `Commit`, `ShortCommit`, `Modules []Module` — this is the exact shape `fledge scan --json` emits and this forager consumed as its work list.
+Feather body sections (per `internal/spec/templates/feather.md`): Description, Affected Modules, Approach, Tests (test names mapped to ACs; test-first), Acceptance Criteria (AC-1 always "tests observed FAIL before, pass after"; evidence recorded in `.fledge/molt/FTHR-###.md`).
 
-## Bootstrap/scaffold types (`internal/bootstrap/{registry,primitives,drift,stamp}.go`)
+### Status lifecycle (authoritative, from `internal/spec/types.go`)
 
-- **`Manifest`**: `Name` (claude|codex|pi), `Detector` (`ManifestDetector{Exists path}`), `TierPrimitives map[string]string` (6 primitive names → mechanism string), `Files []ManifestFile`, `PipingFile` (optional, Claude only).
-- **`ManifestFile`**: `Src`, `Dst`, `Generate bool`, `PrimitiveMap bool`, `Overwrite bool`, `AppendIfMissing string`, `Symlink string` — write-policy fields, mutually distinguishing the 6 policies described in conventions.md.
-- **`PrimitiveOrder`**: canonical `[]string` of the 6 primitives. **`TierPrimitives`**: `map[Tier][]string` of required primitives per tier.
-- **`DriftStatus`**: enum `StatusUpToDate`|`StatusStale`|`StatusModified`|`StatusMissing`|`StatusObsolete`. **`Drift`**: `Path`, `Status`, `Policy`.
-- **`Stamp`** (`.fledge/scaffold.json`): `FledgeVersion`, `Agents []string`, `Files map[string]StampEntry`. **`StampEntry`**: `Policy`, `Sha256` (hex), `Target` (symlink), `Lines` (append_if_missing).
+- **Plumage**: `egg` (authoring) → `hatched` (ready for feather decomposition) → `fledged` (all feathers done, closeout verified).
+- **Feather**: `egg` (authoring/blocked) → `pipping` (all `depends_on` fledged, not yet claimed) → `hatching` (actively claimed/implemented, brood held) → `fledged` (merged, verified, all AC boxes checked).
+- These 4 states (feather) / 3 states (plumage) are the *only* CLI-recognized frontmatter values. Runtime sub-states some orchestration prose mentions (claimed, dispatched, in-review, green-on-main) are never written to frontmatter — orchestrator-only bookkeeping.
 
-## Nest/context-doc types (`internal/nest/{nest,docs}.go`)
+### Criterion (`internal/spec/criteria.go:10-18`)
 
-- **`Kind`**: string enum `Concern` | `Scout`.
-- **`Doc`**: concern fields `Generated` (RFC3339), `Commit` (git SHA); scout fields `Module`, `Authored` (RFC3339); shared `Agent`, `FledgeVersion`, `Body []byte`.
-- **`StatusResult`**: `Complete bool`, `IndexCommitMatches`, `Head`, `IndexCommit`, `MissingDocs []string`, `StubDocs []string` — the exact struct `fledge nest status` reports, and what this forager's step 7 gate checks.
-- **`ConcernDocs`**: 9-member ordered closed set — `architecture, modules, conventions, data-model, dependencies, entry-points, testing, domain, index`.
+One acceptance-criteria checkbox line, parsed from a case-sensitive `## Acceptance Criteria` heading, pattern `- [xX] AC-N: text` at column 0 (uppercase/lowercase `x` both read; write always lowercase):
 
-## Roster/repo types (`internal/roster/roster.go`, `internal/repo/repo.go`)
+| Field | Type | Notes |
+|---|---|---|
+| `N` | int | numeric part of "AC-N" |
+| `Label` | string | full "AC-N" string |
+| `Checked` | bool | space vs x/X in box |
+| `Text` | string | content after the colon |
+| `boxOff` | int | internal byte offset for the toggle |
 
-- **`roster.Entry`**: `Species`, `Members []string` (pair-share support), `Released []bool` (per-member), `Feather` (originating feather ID reference).
-- **`roster.Species`**: fixed `[18]string` — adelie, emperor, gentoo, king, chinstrap, little, african, humboldt, magellanic, galapagos, yelloweyed, fiordland, snares, erectcrested, rockhopper, royal, macaroni, northernrockhopper.
-- **`repo.Repo`**: single `Root string` field; accessor methods (`FledgeDir()`, `LocksDir()`, `RosterDir()`, `ContextDir()`, `EvidenceDir()`, `RequirementsDir()`, `TasksDir()`, `ScanIgnorePath()`) derive all `.fledge/` subpaths from it.
+### Set / FileError (`internal/spec/load.go`)
 
-## Domain-prose data shapes (not code — conventions asserted in `internal/bootstrap/core/skills/fledge-orchestrate/templates/*.md`)
+- `Set`: `Reqs []*Requirement`, `Tasks []*Task`, `Errors []FileError`, `UnknownFields map[string][]string` (unrecognized YAML keys keyed by file path — collected, not fatal).
+- `FileError`: `{Path string, Err error}`.
 
-- **Evidence file** (`.fledge/molt/FTHR-###.md`): `## AC-N` sections, each holding command(s) + verbatim captured output.
-- **Relay envelope** (incubator↔orchestrator messages): `GATE review`, `GATE decision`, `QUESTION`, `SPAWN-REQUEST`, `PHASE-CLOSE`.
-- **Dispatch status fields** (implementation.md §3.1): `owner`, `branch`, `worktree` path, `worktree_exists` boolean.
+## Spec directory layout
+
+- `.fledge/pluma/plumage/PLM-###-<kebab-title>.md`
+- `.fledge/pluma/feathers/FTHR-###-<kebab-title>.md`
+- ID allocation is per-directory: `.alloc.lock` flock file lives in each dir so plumage and feather allocation never block each other.
+
+## Nest context docs (`internal/nest`, this document set's own schema)
+
+- `Doc` struct: `Kind` (`Concern` | `Scout`), plus kind-specific fields — Concern: `Generated`, `Commit`; Scout: `Module`, `Authored` — plus shared `Agent`, `FledgeVersion`, `Body []byte`.
+- Frontmatter key order fixed per kind: Concern = `generated, commit, agent, fledge_version`; Scout = `module, authored, agent, fledge_version`.
+- `ConcernDocs`: 9 known doc names (the 8 concern docs + `index`).
+- `StatusResult`: `Complete`, `IndexCommitMatches` bools; `Head`, `IndexCommit` strings; `MissingDocs`, `StubDocs []string`.
+
+## Scaffold stamp (`internal/bootstrap`) — `.fledge/scaffold.json`
+
+- `Stamp` (`stamp.go:20`): `FledgeVersion string`, `Agents []string` (accretive list of every adapter scaffolded so far), `Files map[string]StampEntry`, `DevSource string` (empty when not dev-linked).
+- `StampEntry` (`stamp.go:36`): `Policy string`, plus exactly one of `Sha256` (content hash, for copied/generated/overwrite files), `Target` (symlink target), `Lines` (append_if_missing content) — set per the file's write policy.
+- Marshaled as 2-space-indented JSON with a trailing newline, deterministic (Go map keys sorted) — `marshalStamp`.
+- `DriftStatus` (`drift.go:14`): one of `"up-to-date"`, `"stale"` (unedited, binary moved — refresh-safe), `"modified"` (user-edited, differs from both stamp and expected), `"missing"`, `"obsolete"` (in stamp, no longer shipped).
+- `Drift` (`drift.go:33`): `{Path, Status, Policy}`.
+- `Manifest` (`registry.go:34`): `Name`, `Detector` (`{Exists string}`), `TierPrimitives map[string]string`, `Files []ManifestFile`, `PipingFile`, `dir` (embed path).
+- `ManifestFile` (`registry.go:58`): `Src`, `Dst`, `Generate`, `PrimitiveMap`, `Overwrite`, `AppendIfMissing`, `Symlink` bools — mutually-exclusive policy flags.
+- `WriteOpts` (`registry.go:25`): `Refresh bool`, `DevSource string` (absolute path, PLM-031 dev-install mode).
+
+## Brood (feather claim) record (`internal/lock/lock.go`)
+
+- `.fledge/broods/<FTHR-ID>.brood` — JSON file, written atomically via `os.Link` (temp file + hardlink; `EEXIST` on Link gives exclusivity).
+- `Record`: `{Task, Owner, PID int, Created, Branch, Worktree string}` — JSON-serializable; `Worktree` field added later, backward-compatible (absent key → empty string on unmarshal).
+- `HeldError`: `{Existing Record}` — returned by `Acquire` when already claimed.
+
+## Roster entry (`internal/roster/roster.go`)
+
+- `Entry`: `{Species string, Members []string, Released []bool, Feather string}`.
+- `Species`: fixed `[18]string` array of canonical bird-name tokens (adelie, emperor, gentoo, ... northernrockhopper); overflow uses numeric suffixes (`adelie-2`).
+- State persisted to a flock-guarded `roster.json` in `.fledge/roster/`.
+
+## Ledger record (`internal/ledger/ledger.go`, new package)
+
+- `Record`: `{Subject, Kind string, Timestamp time.Time (RFC3339), Payload json.RawMessage}`.
+- Three kinds, one file per `(subject, kind)` pair — `.fledge/ledger/<subject>.<kind>.json`:
+  - `StatusRecord`: `{PID int, Note string, UpdatedAt time.Time}` — liveness lease; stalled if PID dead or `UpdatedAt` older than `StaleAfter` (5 minutes).
+  - `VerdictRecord`: `{Result, Note string}`.
+  - `EscalationRecord`: `{Message string}`.
+- Errors: `NotFoundError{Subject, Kind}`, `CorruptError{Subject, Kind, Err}`, `InvalidSubjectError{Subject, Reason}`.
+- Latest-value-only semantics: no history, atomic temp-file+rename writes.
+
+## Scan result (`internal/scan/scan.go`)
+
+- `Module`: `{Name string, Files []string, Count int, Bytes int64}`.
+- `Result`: `{Commit, ShortCommit string, Modules []Module}`.
+- Modules are grouped by top-level path component; root-level files group under the literal name `"<root>"`.
+
+## Manifest-driven CLI output types (`internal/cli`, selected)
+
+- `adapterInfo` (agents.go): `{Name, Tier, Detector, Scaffolded bool}`.
+- `readyTask` (ready.go): `{ID, Title, Priority, Requirement, Oversight, Path}`.
+- `graphNode` (vee.go): `{ID, Title, Status, Requirement, DependsOn []string}`.
+- `report`/`reportCounts` (colony.go): status counts keyed `egg`/`pipping`/`hatching`/`fledged` in JSON.
+- `scaffoldJSONOut`/`scaffoldEntry` (preen.go): `{StampVersion, BinaryVersion string, Files []{Path, Status DriftStatus, Policy string}}`.
 
 ## Open Questions
 
-None observed — every type above traces to a concrete struct definition or documented schema in a scout report.
+- Whether the ledger's shared `(subject, kind)` namespace is coordinated at the CLI layer to prevent two agents writing semantically-incompatible verdicts for the same subject is not addressed in the `internal/ledger` source (scout-flagged).
