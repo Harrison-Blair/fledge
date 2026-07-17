@@ -116,15 +116,15 @@ expected reason (`unknown command "dev"`), then implement until they pass.
 
 ## Acceptance Criteria
 
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: `fledge dev status` in a repo that is not dev-linked — including one with no
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: `fledge dev status` in a repo that is not dev-linked — including one with no
       scaffold stamp at all — exits zero and reports that plainly.
-- [ ] AC-3: `fledge dev status` in a dev-linked repo reports the absolute source path and
+- [x] AC-3: `fledge dev status` in a dev-linked repo reports the absolute source path and
       the number of linked files. Satisfies PLM-031 FC-8, AC-8.
-- [ ] AC-4: With a dev link's target removed or the source tree moved, `fledge dev status`
+- [x] AC-4: With a dev link's target removed or the source tree moved, `fledge dev status`
       exits non-zero and names every broken link, not merely the first. Satisfies PLM-031
       FC-9, AC-9.
-- [ ] AC-5: `fledge dev status --json` emits machine-readable output carrying at least
+- [x] AC-5: `fledge dev status --json` emits machine-readable output carrying at least
       linked, source, file count, and broken paths, per the CLI's `--json` convention.
-- [ ] AC-6: `go test ./...` passes with `init.txtar` unmodified; `"dev"` appears in
+- [x] AC-6: `go test ./...` passes with `init.txtar` unmodified; `"dev"` appears in
       `commandOrder` and in `fledge` usage output.
