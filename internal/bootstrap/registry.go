@@ -16,9 +16,15 @@ import (
 // WriteOpts controls the behavior of WriteCore and WriteAdapter. Refresh
 // resets every fledge-owned file to the shipped version (the CLI confirms
 // with the user before calling when user-edited files would be overwritten —
-// see EditedOnRefresh); without it, existing files are skipped.
+// see EditedOnRefresh); without it, existing files are skipped. DevSource, when
+// non-empty, is the absolute path to a validated fledge source checkout
+// (ValidateDevSource); every copy-type file (core skill docs, default-policy
+// adapter files) is written as a symlink into DevSource instead of a copy —
+// PLM-031 dev install mode. Files that are generated, merged, or already
+// symlinked are unaffected.
 type WriteOpts struct {
-	Refresh bool
+	Refresh   bool
+	DevSource string
 }
 
 // Manifest is an adapter's single source of truth: detector, the 6-row
@@ -308,6 +314,91 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
+// devModulePath is the module identity a --dev source tree's go.mod must
+// declare (interrogation Q2: go.mod identity, not a compiled-in path or an
+// environment variable — PLM-031 FC-2).
+const devModulePath = "github.com/Harrison-Blair/fledge"
+
+// ValidateDevSource resolves path to an absolute directory and confirms it is
+// a usable fledge source tree: its go.mod declares the fledge module. It must
+// be called, and must succeed, before any scaffold file is written (PLM-031
+// FC-4/AC-3 — a bad path leaves the scaffold untouched). The returned path is
+// absolute so symlink targets never depend on the process's working
+// directory.
+func ValidateDevSource(sourcePath string) (string, error) {
+	abs, err := filepath.Abs(sourcePath)
+	if err != nil {
+		return "", fmt.Errorf("resolve dev source %q: %w", sourcePath, err)
+	}
+	data, err := os.ReadFile(filepath.Join(abs, "go.mod"))
+	if err != nil {
+		return "", fmt.Errorf("%s is not a fledge source tree (could not read go.mod): %w", abs, err)
+	}
+	want := "module " + devModulePath
+	found := false
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == want {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return "", fmt.Errorf("%s is not a fledge source tree (go.mod does not declare module %s)", abs, devModulePath)
+	}
+	return abs, nil
+}
+
+// devLinkResult classifies the outcome of writeDevLink.
+type devLinkResult int
+
+const (
+	devLinkCreated devLinkResult = iota
+	devLinkUpdated
+	devLinkUnchanged
+)
+
+// writeDevLink ensures dst is a symlink to the absolute path target, creating
+// parent directories as needed. Always managed, like the manifest's symlink
+// policy: an existing regular file/dir or a symlink pointing elsewhere is
+// replaced (os.Symlink fails on an existing path, so removal comes first) —
+// this makes re-running --dev idempotent (PLM-031 AC-7 test) rather than an
+// error, and lets --dev convert a previously-copied file to a link.
+func writeDevLink(dst, target string) (devLinkResult, error) {
+	if fi, lErr := os.Lstat(dst); lErr == nil {
+		if fi.Mode()&os.ModeSymlink != 0 {
+			if cur, rlErr := os.Readlink(dst); rlErr == nil && cur == target {
+				return devLinkUnchanged, nil
+			}
+		}
+		if rmErr := os.Remove(dst); rmErr != nil {
+			return devLinkUnchanged, rmErr
+		}
+		if slErr := makeSymlink(target, dst); slErr != nil {
+			return devLinkUnchanged, slErr
+		}
+		return devLinkUpdated, nil
+	}
+	if slErr := makeSymlink(target, dst); slErr != nil {
+		return devLinkUnchanged, slErr
+	}
+	return devLinkCreated, nil
+}
+
+// devCoreTarget returns the absolute dev-source path a core skill file at
+// core-relative rel (e.g. "skills/fledge-orchestrate/SKILL.md") should link
+// to.
+func devCoreTarget(devSource, rel string) string {
+	return filepath.ToSlash(filepath.Join(devSource, "internal", "bootstrap", "core", filepath.FromSlash(rel)))
+}
+
+// devAdapterTarget returns the absolute dev-source path an adapter file entry
+// should link to, given the adapter's embed-FS directory (e.g.
+// "adapters/claude") and its manifest-relative src (e.g.
+// "agents/fledge-brooder.md").
+func devAdapterTarget(devSource, adapterDir, src string) string {
+	return filepath.ToSlash(filepath.Join(devSource, "internal", "bootstrap", filepath.FromSlash(adapterDir), filepath.FromSlash(src)))
+}
+
 // WriteCore writes the embedded core/skills tree into root/.fledge/skills/.
 // Without refresh, existing files are skipped. With refresh, every file is
 // reset to the shipped version. Returns created/updated/skipped repo-relative
@@ -322,8 +413,25 @@ func WriteCore(root string, opts WriteOpts) (created, updated, skipped []string,
 		}
 		rel := strings.TrimPrefix(p, "core/")      // skills/fledge-…/SKILL.md
 		dst := filepath.Join(root, ".fledge", rel) // .fledge/skills/…
-		exists := fileExists(dst)
 		relRepo := filepath.ToSlash(filepath.Join(".fledge", rel))
+
+		if opts.DevSource != "" {
+			state, dErr := writeDevLink(dst, devCoreTarget(opts.DevSource, rel))
+			if dErr != nil {
+				return dErr
+			}
+			switch state {
+			case devLinkCreated:
+				created = append(created, relRepo)
+			case devLinkUpdated:
+				updated = append(updated, relRepo)
+			default:
+				skipped = append(skipped, relRepo)
+			}
+			return nil
+		}
+
+		exists := fileExists(dst)
 		if exists && !opts.Refresh {
 			skipped = append(skipped, relRepo)
 			return nil
@@ -432,6 +540,24 @@ func (m *Manifest) writeFileEntry(root string, f ManifestFile, ctx renderContext
 			return nil, nil, nil, rErr
 		}
 		return classifyWrite(dst, f.Dst, data, exists)
+	}
+
+	// Default policy, dev mode: this is the copy-type file set dev mode
+	// overrides (PLM-031 FC-5) — link into the source tree instead of
+	// copying. Always managed, like the symlink policy above.
+	if opts.DevSource != "" {
+		state, dErr := writeDevLink(dst, devAdapterTarget(opts.DevSource, m.dir, f.Src))
+		if dErr != nil {
+			return nil, nil, nil, dErr
+		}
+		switch state {
+		case devLinkCreated:
+			return []string{f.Dst}, nil, nil, nil
+		case devLinkUpdated:
+			return nil, []string{f.Dst}, nil, nil
+		default:
+			return nil, nil, []string{f.Dst}, nil
+		}
 	}
 
 	// Default policy: copy verbatim, skip-if-exists (user may customize);

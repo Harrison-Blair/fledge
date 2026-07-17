@@ -21,6 +21,11 @@ type Stamp struct {
 	FledgeVersion string                `json:"fledgeVersion"`
 	Agents        []string              `json:"agents"`
 	Files         map[string]StampEntry `json:"files"`
+	// DevSource is the absolute path to the fledge source tree this repo is
+	// dev-linked against (PLM-031), present only when dev mode is active.
+	// This is the contract FTHR-079 (dev status), FTHR-080 (preen) and
+	// FTHR-081 (refresh) read to recognize and act on a dev-linked repo.
+	DevSource string `json:"devSource,omitempty"`
 }
 
 // StampEntry is one file's record in the scaffold manifest.
@@ -137,6 +142,19 @@ func filePolicy(f ManifestFile) string {
 // This is the shared surface that FTHR-011 (preen drift) and FTHR-012 (refresh
 // preserve/prune) build on.
 func ExpectedFiles(m *Manifest, commandOrder []string) (map[string]StampEntry, error) {
+	return ExpectedFilesDev(m, commandOrder, "")
+}
+
+// ExpectedFilesDev is ExpectedFiles, with PLM-031 dev-mode support: when
+// devSource is non-empty (an absolute path already validated by
+// ValidateDevSource), every copy-type entry — core skill docs and
+// default-policy adapter files — is recorded as a "dev-link" entry pointing
+// into devSource (Target) instead of a content hash, so the existing symlink
+// drift comparison (classifySymlink) applies to it. ExpectedFiles(m,
+// commandOrder) == ExpectedFilesDev(m, commandOrder, "") — kept as two
+// functions, rather than changing ExpectedFiles' signature, so this feather's
+// change to init.go does not ripple into drift.go's callers.
+func ExpectedFilesDev(m *Manifest, commandOrder []string, devSource string) (map[string]StampEntry, error) {
 	out := make(map[string]StampEntry)
 
 	// Core files: embedded under core/ → written to .fledge/<rel>.
@@ -146,6 +164,10 @@ func ExpectedFiles(m *Manifest, commandOrder []string) (map[string]StampEntry, e
 		}
 		rel := strings.TrimPrefix(p, "core/")
 		repoPath := ".fledge/" + rel
+		if devSource != "" {
+			out[repoPath] = StampEntry{Policy: "dev-link", Target: devCoreTarget(devSource, rel)}
+			return nil
+		}
 		data, err := FS.ReadFile(p)
 		if err != nil {
 			return err
@@ -175,6 +197,8 @@ func ExpectedFiles(m *Manifest, commandOrder []string) (map[string]StampEntry, e
 			out[f.Dst] = StampEntry{Policy: "symlink", Target: f.Symlink}
 		case f.AppendIfMissing != "" || (f.Src == "" && f.Dst != ""):
 			appendLines[f.Dst] = append(appendLines[f.Dst], f.AppendIfMissing)
+		case devSource != "" && !f.Generate && !f.PrimitiveMap && !f.Overwrite:
+			out[f.Dst] = StampEntry{Policy: "dev-link", Target: devAdapterTarget(devSource, m.dir, f.Src)}
 		default:
 			data, err := renderEntry(m, f, ctx)
 			if err != nil {
