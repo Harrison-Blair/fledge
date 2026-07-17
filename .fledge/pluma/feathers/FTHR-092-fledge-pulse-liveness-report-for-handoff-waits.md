@@ -57,14 +57,14 @@ Test-first, with the failing-first observation **behavioral** (PLM-035 AC-2). Na
 - Order: write `pulse.txtar` first, capture its verbatim behavioral failure in `.fledge/molt/FTHR-092.md`, then the unit tests, then implement.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: At least one failing-test observation is **behavioral** — captured from `pulse.txtar` (e.g. an unknown-command error), not a compilation error — and recorded verbatim in `.fledge/molt/FTHR-092.md` (satisfies PLM-035 AC-2).
-- [ ] AC-3: `fledge pulse <name>` reports `stalled` and `reason` mirroring `ClassifyLiveness`'s return, in both human-readable and `--json` output (satisfies PLM-035 FC-7).
-- [ ] AC-4: The output includes the declared quiet period **and** the elapsed time against it, proven by a test asserting both appear (satisfies PLM-035 FC-7, AC-8).
-- [ ] AC-5: A worker with no status record reports as a **distinct state** — not stalled, with a reason naming the absence — and exits `ExitOK` (satisfies PLM-035 FC-8, FC-9, AC-9).
-- [ ] AC-6: `fledge pulse` on a **stalled** worker exits `ExitOK`, proving the classification is carried in the output and not encoded in the exit code (satisfies PLM-035 FC-9).
-- [ ] AC-7: A worker whose lease declared a period longer than the default reports **not stalled** past the old five-minute threshold, proven by a test — the behavior that was impossible before PLM-035 (satisfies PLM-035 FC-5, FC-7).
-- [ ] AC-8: `pulse` contains no liveness logic of its own — the classification comes from `internal/ledger` — keeping one tested decision procedure with one home (satisfies PLM-035 FC-1).
-- [ ] AC-9: `--json` is supported, consistent with every other `fledge` command (satisfies PLM-030 FC-6).
-- [ ] AC-10: A missing name is `ExitUsage` (2), and a subject that would escape the ledger directory is rejected rather than sanitized, consistent with `heartbeat` and `ledger read`.
-- [ ] AC-11: `go test ./...` is green, `go vet ./...` and `gofmt -l .` are clean, and `fledge preen` reports no errors on the branch (satisfies PLM-035 AC-13).
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: At least one failing-test observation is **behavioral** — captured from `pulse.txtar` (e.g. an unknown-command error), not a compilation error — and recorded verbatim in `.fledge/molt/FTHR-092.md` (satisfies PLM-035 AC-2).
+- [x] AC-3: `fledge pulse <name>` reports `stalled` and `reason` mirroring `ClassifyLiveness`'s return, in both human-readable and `--json` output (satisfies PLM-035 FC-7).
+- [x] AC-4: The output includes the declared quiet period **and** the elapsed time against it, proven by a test asserting both appear (satisfies PLM-035 FC-7, AC-8).
+- [x] AC-5: A worker with no status record reports as a **distinct state** — not stalled, with a reason naming the absence — and exits `ExitOK` (satisfies PLM-035 FC-8, FC-9, AC-9).
+- [x] AC-6: `fledge pulse` on a **stalled** worker exits `ExitOK`, proving the classification is carried in the output and not encoded in the exit code (satisfies PLM-035 FC-9).
+- [x] AC-7: A worker whose lease declared a period longer than the default reports **not stalled** past the old five-minute threshold, proven by a test — the behavior that was impossible before PLM-035 (satisfies PLM-035 FC-5, FC-7).
+- [x] AC-8: `pulse` contains no liveness logic of its own — the classification comes from `internal/ledger` — keeping one tested decision procedure with one home (satisfies PLM-035 FC-1).
+- [x] AC-9: `--json` is supported, consistent with every other `fledge` command (satisfies PLM-030 FC-6).
+- [x] AC-10: A missing name is `ExitUsage` (2), and a subject that would escape the ledger directory is rejected rather than sanitized, consistent with `heartbeat` and `ledger read`.
+- [x] AC-11: `go test ./...` is green, `go vet ./...` and `gofmt -l .` are clean, and `fledge preen` reports no errors on the branch (satisfies PLM-035 AC-13).
