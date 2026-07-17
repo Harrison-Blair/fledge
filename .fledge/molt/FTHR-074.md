@@ -486,3 +486,77 @@ ok  	github.com/Harrison-Blair/fledge/internal/roster	0.008s
 ok  	github.com/Harrison-Blair/fledge/internal/scan	0.010s
 ok  	github.com/Harrison-Blair/fledge/internal/spec	0.008s
 ```
+
+## Review fix: `--kind` path-traversal guard (skua finding)
+
+The skua found that `runLedgerRead` (`internal/cli/ledger.go`) passed
+`--kind` straight through to `ledger.Read` without validating it against the
+three-kind enum the usage string documents. `ledger.Read`'s `recordPath` is
+`filepath.Join(dir, subject+"."+kind+".json")`, and only `subject` is
+sanitized by `internal/ledger`'s `validSubject` — `kind` was not. A `--kind`
+value with enough leading `../` segments escapes `.fledge/ledger` (and the
+repo entirely) and reads an arbitrary JSON file on disk, exiting 0.
+
+Fix: `runLedgerRead` now validates `*kind` is exactly one of
+`ledger.KindStatus`/`ledger.KindVerdict`/`ledger.KindEscalation` before
+calling `ledger.Read`, returning a usage error otherwise — mirroring how
+`runVerdict` validates `--result`. No changes to `internal/ledger`.
+
+Test-first: added `TestLedgerReadRejectsInvalidKind`
+(`internal/cli/ledgerread_test.go`) and two `ledger-read.txtar` cases before
+applying the fix. Reverted the fix (`git stash`) and ran the new test against
+the vulnerable code first to confirm it reproduces the traversal and fails
+for the expected reason, then restored the fix and confirmed it passes.
+
+Command (unfixed code, `git stash` covering only the `ledger.go` validation):
+```
+go test ./internal/cli/... -run TestLedgerReadRejectsInvalidKind -v
+```
+Verbatim output (failing — traversal succeeds, exit 0, leaked file's content printed):
+```
+=== RUN   TestLedgerReadRejectsInvalidKind
+LEAKED LEAKED at : null
+    ledgerread_test.go:71: ledger read --kind "../../../../../../../../../../../../../../../../../../../../tmp/TestLedgerReadRejectsInvalidKind2939872939/002/leaked" exit = 0, want 2 (ExitUsage) — a non-enum --kind must be rejected, not passed through to ledger.Read
+--- FAIL: TestLedgerReadRejectsInvalidKind (0.00s)
+FAIL
+FAIL	github.com/Harrison-Blair/fledge/internal/cli	0.003s
+FAIL
+```
+
+Command (fix restored):
+```
+go test ./internal/cli/... -run TestLedgerReadRejectsInvalidKind -v
+go test ./cmd/fledge/... -run TestScripts/ledger-read -v
+```
+Verbatim output (passing):
+```
+=== RUN   TestLedgerReadRejectsInvalidKind
+fledge: usage: fledge ledger read <subject> --kind status|verdict|escalation: got --kind "../../../../../../../../../../../../../../../../../../../../tmp/TestLedgerReadRejectsInvalidKind783033862/002/leaked"
+fledge: usage: fledge ledger read <subject> --kind status|verdict|escalation: got --kind "bogus"
+--- PASS: TestLedgerReadRejectsInvalidKind (0.00s)
+PASS
+ok  	github.com/Harrison-Blair/fledge/internal/cli	0.002s
+
+...
+        # malformed input: a --kind value outside the enum is a usage error (exit 2),
+        # not passed through unchecked to the ledger reader (path traversal guard) (0.002s)
+        > ! exec fledge ledger read watcher --kind bogus
+        [stderr]
+        fledge: usage: fledge ledger read <subject> --kind status|verdict|escalation: got --kind "bogus"
+        [exit status 2]
+        > stderr 'usage'
+        > ! exec fledge ledger read watcher --kind ../../../../etc/passwd
+        [stderr]
+        fledge: usage: fledge ledger read <subject> --kind status|verdict|escalation: got --kind "../../../../etc/passwd"
+        [exit status 2]
+        > stderr 'usage'
+        PASS
+
+--- PASS: TestScripts (0.00s)
+    --- PASS: TestScripts/ledger-read (0.01s)
+PASS
+ok  	github.com/Harrison-Blair/fledge/cmd/fledge	0.016s
+```
+
+Full `go test ./...` re-confirmed green after the fix (all packages `ok`,
+same as the AC-6 run above).

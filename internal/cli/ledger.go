@@ -38,6 +38,11 @@ func runLedgerRead(args []string) int {
 	if len(positional) != 1 || *kind == "" {
 		return usageErr("usage: fledge ledger read <subject> --kind status|verdict|escalation")
 	}
+	switch *kind {
+	case ledger.KindStatus, ledger.KindVerdict, ledger.KindEscalation:
+	default:
+		return usageErr("usage: fledge ledger read <subject> --kind status|verdict|escalation: got --kind %q", *kind)
+	}
 	subject := positional[0]
 
 	r, err := repo.Find()

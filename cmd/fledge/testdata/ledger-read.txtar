@@ -31,4 +31,11 @@ stderr 'not found|no status record'
 ! exec fledge ledger read watcher
 stderr 'usage'
 
+# malformed input: a --kind value outside the enum is a usage error (exit 2),
+# not passed through unchecked to the ledger reader (path traversal guard)
+! exec fledge ledger read watcher --kind bogus
+stderr 'usage'
+! exec fledge ledger read watcher --kind ../../../../etc/passwd
+stderr 'usage'
+
 -- .fledge/.gitkeep --
