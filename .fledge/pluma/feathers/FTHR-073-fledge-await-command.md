@@ -42,8 +42,8 @@ Delivers `fledge await <subject> --kind <kind> [--timeout <duration>]`, the bloc
 - Implementation order fixed: write all tests first, confirm they fail (command doesn't exist / `ExitTimeout` undefined), then implement.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: `fledge await` blocks until the target record appears or changes, or a `--timeout` elapses, satisfying PLM-030 FC-5.
-- [ ] AC-3: The timeout path exits the new dedicated `ExitTimeout` code (distinct from `ExitFail`) and is proven by a real-elapsed-time txtar test, satisfying PLM-030 AC-3.
-- [ ] AC-4: `fledge await --json` output includes the record (or `null`) and an explicit `timed_out` field on the timeout path, satisfying PLM-030 FC-6.
-- [ ] AC-5: `go test ./internal/cli/... ./cmd/fledge/...` passes.
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: `fledge await` blocks until the target record appears or changes, or a `--timeout` elapses, satisfying PLM-030 FC-5.
+- [x] AC-3: The timeout path exits the new dedicated `ExitTimeout` code (distinct from `ExitFail`) and is proven by a real-elapsed-time txtar test, satisfying PLM-030 AC-3.
+- [x] AC-4: `fledge await --json` output includes the record (or `null`) and an explicit `timed_out` field on the timeout path, satisfying PLM-030 FC-6.
+- [x] AC-5: `go test ./internal/cli/... ./cmd/fledge/...` passes.

@@ -13,10 +13,11 @@ import (
 
 // Exit codes shared by all commands.
 const (
-	ExitOK    = 0 // success
-	ExitFail  = 1 // domain failure: check findings, lock held, illegal transition, cycle
-	ExitUsage = 2 // usage error
-	ExitEnv   = 3 // environment error: not a git repo, no .fledge/ where required
+	ExitOK      = 0 // success
+	ExitFail    = 1 // domain failure: check findings, lock held, illegal transition, cycle
+	ExitUsage   = 2 // usage error
+	ExitEnv     = 3 // environment error: not a git repo, no .fledge/ where required
+	ExitTimeout = 4 // fledge await: --timeout elapsed with no appearance/change
 )
 
 type command struct {
@@ -104,7 +105,7 @@ func printUsage(w *os.File) {
 // commandOrder controls usage listing; keep in sync with registrations.
 var commandOrder = []string{
 	"init", "agents", "scan", "new", "nest", "preen", "ready", "vee", "colony",
-	"unfledged", "status", "set", "criteria", "brood", "abandon", "broods", "heartbeat", "roster", "version",
+	"unfledged", "status", "set", "criteria", "brood", "abandon", "broods", "heartbeat", "await", "roster", "version",
 	"update",
 }
 
