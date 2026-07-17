@@ -159,23 +159,23 @@ implement until they pass.
 
 ## Acceptance Criteria
 
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: Bare `fledge init --dev` inside a fledge source checkout links that checkout
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: Bare `fledge init --dev` inside a fledge source checkout links that checkout
       to its own source using relative symlink targets. Satisfies PLM-031 FC-3.
-- [ ] AC-3: Bare `fledge init --dev` outside a fledge source checkout exits non-zero with
+- [x] AC-3: Bare `fledge init --dev` outside a fledge source checkout exits non-zero with
       an error stating a source path is required, and modifies no scaffold file. Satisfies
       PLM-031 FC-3, AC-2.
-- [ ] AC-4: `--dev` refuses when any to-be-linked path is tracked by git, naming the
+- [x] AC-4: `--dev` refuses when any to-be-linked path is tracked by git, naming the
       tracked paths and the `git rm --cached` remedy, and leaves the working tree
       unmodified. Satisfies PLM-031 FC-6, AC-4.
-- [ ] AC-5: After a successful `--dev`, the repo's ignore rules cover every dev-linked
+- [x] AC-5: After a successful `--dev`, the repo's ignore rules cover every dev-linked
       path and git reports no dev-linked path as a change. Satisfies PLM-031 FC-6, AC-5.
-- [ ] AC-6: A source/binary `VERSION` mismatch prints a note to stderr naming both
+- [x] AC-6: A source/binary `VERSION` mismatch prints a note to stderr naming both
       versions without failing the command; matching versions print no such note.
       Satisfies PLM-031 FC-7, AC-7.
-- [ ] AC-7: `go test ./...` passes, including `init.txtar` unmodified and FTHR-077's dev
+- [x] AC-7: `go test ./...` passes, including `init.txtar` unmodified and FTHR-077's dev
       tests.
-- [ ] AC-8: `fledge init --dev <path>` written with a space exits non-zero with an error
+- [x] AC-8: `fledge init --dev <path>` written with a space exits non-zero with an error
       naming `--dev=<path>` as the correct form, and creates no links — including inside a
       fledge source checkout, where bare `--dev` would otherwise silently link to the cwd
       instead of the named path. `fledge init` rejects stray positional arguments
