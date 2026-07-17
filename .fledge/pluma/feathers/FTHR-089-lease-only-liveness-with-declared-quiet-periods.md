@@ -2,7 +2,7 @@
 id: FTHR-089
 title: Lease-only liveness with declared quiet periods
 plumage: PLM-035
-status: pipping
+status: hatching
 priority: P1
 depends_on: []
 authored: 2026-07-17T07:59:05Z

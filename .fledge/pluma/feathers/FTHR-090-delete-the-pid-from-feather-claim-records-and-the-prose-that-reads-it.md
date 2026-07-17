@@ -2,7 +2,7 @@
 id: FTHR-090
 title: Delete the PID from feather-claim records and the prose that reads it
 plumage: PLM-035
-status: pipping
+status: fledged
 priority: P1
 depends_on: []
 authored: 2026-07-17T07:59:05Z
