@@ -1,0 +1,101 @@
+# fledge dev status: reports dev-link state and broken links (FTHR-079)
+
+# not dev-linked reports plainly, after a normal fledge init (AC-2)
+mkdir repo
+cd repo
+exec git init -q .
+exec fledge init
+exec fledge dev status
+stdout 'not dev-linked'
+cd ..
+
+# no stamp at all is not an error (AC-2): a repo with no .fledge/scaffold.json,
+# because fledge init never ran, still exits zero and reports not dev-linked.
+mkdir bare
+cd bare
+exec git init -q .
+exec fledge dev status
+stdout 'not dev-linked'
+cd ..
+
+# dev-linked reports source and count (AC-3, PLM-031 AC-8)
+mkdir linked
+cd linked
+exec git init -q .
+exec fledge init --dev=$WORK/src
+exec fledge dev status
+stdout 'dev-linked'
+stdout 'source=.*/src'
+stdout 'files=[0-9]+'
+! stdout 'broken links'
+
+# broken link is detected and named (AC-4, PLM-031 AC-9): delete one file
+# from the fake source, then dev status must exit non-zero and name it.
+rm $WORK/src/internal/bootstrap/core/skills/fledge-orchestrate/SKILL.md
+! exec fledge dev status
+stdout '.fledge/skills/fledge-orchestrate/SKILL.md'
+
+# a moved source reports every broken link, not just the first (AC-4): rename
+# the whole fake source directory so every dev-linked path dangles at once.
+mv $WORK/src $WORK/src-moved
+! exec fledge dev status
+stdout '.fledge/skills/fledge-orchestrate/SKILL.md'
+stdout '.claude/agents/fledge-brooder.md'
+mv $WORK/src-moved $WORK/src
+cd ..
+
+# --json emits the documented shape (AC-5)
+cp $WORK/updated-skill.md $WORK/src/internal/bootstrap/core/skills/fledge-orchestrate/SKILL.md
+mkdir jsonrepo
+cd jsonrepo
+exec git init -q .
+exec fledge init --dev=$WORK/src
+exec fledge dev status --json
+stdout '"linked": true'
+stdout '"source": '
+stdout '"count": [0-9]+'
+stdout '"broken": \[\]'
+cd ..
+
+-- src/go.mod --
+module github.com/Harrison-Blair/fledge
+
+go 1.26
+-- src/internal/bootstrap/core/skills/fledge-orchestrate/SKILL.md --
+placeholder SKILL.md content
+-- src/internal/bootstrap/core/skills/fledge-orchestrate/brooder.md --
+placeholder brooder.md content
+-- src/internal/bootstrap/core/skills/fledge-orchestrate/foraging.md --
+placeholder foraging.md content
+-- src/internal/bootstrap/core/skills/fledge-orchestrate/implementation.md --
+placeholder implementation.md content
+-- src/internal/bootstrap/core/skills/fledge-orchestrate/incubator.md --
+placeholder incubator.md content
+-- src/internal/bootstrap/core/skills/fledge-orchestrate/planning.md --
+placeholder planning.md content
+-- src/internal/bootstrap/core/skills/fledge-orchestrate/skua.md --
+placeholder skua.md content
+-- src/internal/bootstrap/core/skills/fledge-orchestrate/worker-protocols.md --
+placeholder worker-protocols.md content
+-- src/internal/bootstrap/core/skills/fledge-orchestrate/templates/context-doc.md --
+placeholder context-doc.md content
+-- src/internal/bootstrap/core/skills/fledge-orchestrate/templates/feather.md --
+placeholder feather.md content
+-- src/internal/bootstrap/core/skills/fledge-orchestrate/templates/plumage.md --
+placeholder plumage.md content
+-- src/internal/bootstrap/core/skills/fledge-orchestrate/templates/scout-report.md --
+placeholder scout-report.md content
+-- src/internal/bootstrap/core/skills/fledge-interrogate/SKILL.md --
+placeholder interrogate SKILL.md content
+-- src/internal/bootstrap/adapters/claude/agents/fledge-brooder.md --
+placeholder brooder agent content
+-- src/internal/bootstrap/adapters/claude/agents/fledge-context-scout.md --
+placeholder context-scout agent content
+-- src/internal/bootstrap/adapters/claude/agents/fledge-forager.md --
+placeholder forager agent content
+-- src/internal/bootstrap/adapters/claude/agents/fledge-incubator.md --
+placeholder incubator agent content
+-- src/internal/bootstrap/adapters/claude/agents/fledge-skua.md --
+placeholder skua agent content
+-- updated-skill.md --
+restored SKILL.md content
