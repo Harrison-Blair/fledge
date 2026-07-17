@@ -1,0 +1,34 @@
+# fledge ledger read: generic reader across all three ledger record kinds
+exec git init -q .
+
+# round-trip: write via heartbeat/verdict/escalate, read back via `ledger read`
+exec fledge heartbeat watcher --note 'running' --json
+exec fledge ledger read watcher --kind status
+stdout 'watcher status'
+stdout 'running'
+
+exec fledge verdict watcher --result pass --note 'ok' --json
+exec fledge ledger read watcher --kind verdict
+stdout 'watcher verdict'
+stdout '"result":"pass"'
+
+exec fledge escalate watcher --message 'help' --json
+exec fledge ledger read watcher --kind escalation
+stdout 'watcher escalation'
+stdout 'help'
+
+# --json shape
+exec fledge ledger read watcher --kind status --json
+stdout '"subject": "watcher"'
+stdout '"kind": "status"'
+
+# not-found: reading a subject/kind never written reports a clean failure,
+# not a panic
+! exec fledge ledger read never-written --kind status
+stderr 'not found|no status record'
+
+# malformed input: missing --kind is a usage error (exit 2)
+! exec fledge ledger read watcher
+stderr 'usage'
+
+-- .fledge/.gitkeep --
