@@ -80,14 +80,14 @@ go test ./cmd/fledge -run 'TestScripts/await' -count=20 -timeout 120s
 
 ## Acceptance Criteria
 
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after, with the pre-implementation FAIL output captured verbatim in `.fledge/molt/FTHR-088.md`.
-- [ ] AC-2: `fledge await <subject> --kind <kind> --exists --timeout <d>` returns successfully and immediately when the record already exists at call time — the exact condition that deadlocks today — proven by a test that fails against the current code (satisfies PLM-034 FC-1, AC-2).
-- [ ] AC-3: `--exists` returns successfully when the record is absent at call time and appears while blocking (PLM-034 FC-1, AC-3).
-- [ ] AC-4: `--exists` is immune to the identical-payload rewrite defect and never consults the payload (PLM-034 FC-1, AC-4).
-- [ ] AC-5: Change-wait remains the default and its behavior is unchanged from FTHR-073 for the `status` kind, including detection of a payload change from the call-time baseline (PLM-034 FC-2, AC-5).
-- [ ] AC-6: Omitting `--timeout` is a usage error exiting `ExitUsage` (2) with a message naming the flag, proven separately on both the existence-wait and change-wait paths (PLM-034 FC-3, AC-6).
-- [ ] AC-7: The timeout path exits `ExitTimeout` (4) with `timed_out: true` and the last-known record (or `null`) under `--json`, proven for both modes with a real elapsed-time test, not mocked away (PLM-034 FC-4, AC-7).
-- [ ] AC-8: `cmd/fledge/testdata/await.txtar` contains no `&` backgrounding and no `wait`, restoring the property that no file in the txtar suite races two processes. Cheaply checkable: `grep -nE '(^|[[:space:]])&[[:space:]]*$|^wait$' cmd/fledge/testdata/await.txtar` returns nothing (PLM-034 FC-6, AC-8).
-- [ ] AC-9: The flake is demonstrated gone by 20 consecutive green runs of the reworked script (`go test ./cmd/fledge -run 'TestScripts/await' -count=20 -timeout 120s`), output captured verbatim in the evidence file, **accompanied by a structural argument** naming why the race is eliminated by construction rather than merely unlikely. The argument carries the claim; the runs are the backstop. (A single green run proves nothing: at the measured ~1-in-3 hang rate it would pass ~67% of the time with the bug fully intact.) (PLM-034 AC-9)
-- [ ] AC-10: `fledge await`'s usage/help text states the correct wait mode per record kind, asserted by a test so the guidance cannot silently drift from the behavior it describes (PLM-034 FC-7, AC-10).
-- [ ] AC-11: `go test ./...` is green, `go vet ./...` and `gofmt -l .` are clean, and `fledge preen` passes (PLM-034 AC-11).
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after, with the pre-implementation FAIL output captured verbatim in `.fledge/molt/FTHR-088.md`.
+- [x] AC-2: `fledge await <subject> --kind <kind> --exists --timeout <d>` returns successfully and immediately when the record already exists at call time — the exact condition that deadlocks today — proven by a test that fails against the current code (satisfies PLM-034 FC-1, AC-2).
+- [x] AC-3: `--exists` returns successfully when the record is absent at call time and appears while blocking (PLM-034 FC-1, AC-3).
+- [x] AC-4: `--exists` is immune to the identical-payload rewrite defect and never consults the payload (PLM-034 FC-1, AC-4).
+- [x] AC-5: Change-wait remains the default and its behavior is unchanged from FTHR-073 for the `status` kind, including detection of a payload change from the call-time baseline (PLM-034 FC-2, AC-5).
+- [x] AC-6: Omitting `--timeout` is a usage error exiting `ExitUsage` (2) with a message naming the flag, proven separately on both the existence-wait and change-wait paths (PLM-034 FC-3, AC-6).
+- [x] AC-7: The timeout path exits `ExitTimeout` (4) with `timed_out: true` and the last-known record (or `null`) under `--json`, proven for both modes with a real elapsed-time test, not mocked away (PLM-034 FC-4, AC-7).
+- [x] AC-8: `cmd/fledge/testdata/await.txtar` contains no `&` backgrounding and no `wait`, restoring the property that no file in the txtar suite races two processes. Cheaply checkable: `grep -nE '(^|[[:space:]])&[[:space:]]*$|^wait$' cmd/fledge/testdata/await.txtar` returns nothing (PLM-034 FC-6, AC-8).
+- [x] AC-9: The flake is demonstrated gone by 20 consecutive green runs of the reworked script (`go test ./cmd/fledge -run 'TestScripts/await' -count=20 -timeout 120s`), output captured verbatim in the evidence file, **accompanied by a structural argument** naming why the race is eliminated by construction rather than merely unlikely. The argument carries the claim; the runs are the backstop. (A single green run proves nothing: at the measured ~1-in-3 hang rate it would pass ~67% of the time with the bug fully intact.) (PLM-034 AC-9)
+- [x] AC-10: `fledge await`'s usage/help text states the correct wait mode per record kind, asserted by a test so the guidance cannot silently drift from the behavior it describes (PLM-034 FC-7, AC-10).
+- [x] AC-11: `go test ./...` is green, `go vet ./...` and `gofmt -l .` are clean, and `fledge preen` passes (PLM-034 AC-11).
