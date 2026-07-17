@@ -15,7 +15,11 @@ func TestForagingDocDescribesDigestWrite(t *testing.T) {
 	}
 	body := string(data)
 
-	marker := "**On the final message, verify and release.**"
+	// FTHR-075 changed the gating signal from the forager's final message to
+	// its ledger `status` record reaching "done", so the paragraph marker
+	// changed to match — the digest-write duty itself (asserted below) is
+	// unchanged.
+	marker := "**On done, verify and release.**"
 	idx := strings.Index(body, marker)
 	if idx == -1 {
 		t.Fatalf("foraging.md missing verify-and-release paragraph marker %q", marker)
