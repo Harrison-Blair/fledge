@@ -2,7 +2,7 @@
 id: FTHR-078
 title: "Dev mode init rails: bare --dev, git hygiene, and version skew reporting"
 plumage: PLM-031
-status: egg
+status: fledged
 priority: P1
 depends_on: [FTHR-077]
 authored: 2026-07-17T01:59:26Z
