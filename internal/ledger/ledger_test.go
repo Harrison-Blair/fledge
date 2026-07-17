@@ -3,6 +3,7 @@ package ledger
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -11,13 +12,9 @@ import (
 	"time"
 )
 
-// deadPID is a pid that is never alive in the test environment (above the
-// kernel's default pid_max), mirroring the seeded stale claim in lock.txtar.
-const deadPID = 2147483647
-
 func TestWriteReadRoundtrip(t *testing.T) {
 	dir := t.TempDir() + "/ledger" // Write must create the dir
-	in := StatusRecord{PID: 4242, Note: "running tests", UpdatedAt: "2026-07-16T12:00:00Z"}
+	in := StatusRecord{Note: "running tests", Expect: "5m0s", UpdatedAt: "2026-07-16T12:00:00Z"}
 	if _, err := Write(dir, "fledge-brooder-adelie", KindStatus, in); err != nil {
 		t.Fatal(err)
 	}
@@ -44,10 +41,10 @@ func TestWriteReadRoundtrip(t *testing.T) {
 // file per (subject, kind), no history.
 func TestWriteOverwritesPriorRecord(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := Write(dir, "adelie", KindStatus, StatusRecord{PID: 1, Note: "first"}); err != nil {
+	if _, err := Write(dir, "adelie", KindStatus, StatusRecord{Note: "first"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Write(dir, "adelie", KindStatus, StatusRecord{PID: 2, Note: "second"}); err != nil {
+	if _, err := Write(dir, "adelie", KindStatus, StatusRecord{Note: "second"}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := Read(dir, "adelie", KindStatus)
@@ -58,8 +55,8 @@ func TestWriteOverwritesPriorRecord(t *testing.T) {
 	if err := got.Decode(&out); err != nil {
 		t.Fatal(err)
 	}
-	if out.Note != "second" || out.PID != 2 {
-		t.Errorf("payload = %+v, want the latest write (pid 2, note second)", out)
+	if out.Note != "second" {
+		t.Errorf("payload = %+v, want the latest write (note second)", out)
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -90,7 +87,7 @@ func TestWriteRejectsInvalidSubject(t *testing.T) {
 			root := t.TempDir()
 			dir := filepath.Join(root, "ledger")
 
-			_, err := Write(dir, subject, KindStatus, StatusRecord{PID: 1, Note: "pwn"})
+			_, err := Write(dir, subject, KindStatus, StatusRecord{Note: "pwn"})
 			var ise *InvalidSubjectError
 			if !errors.As(err, &ise) {
 				t.Fatalf("Write(subject=%q): want *InvalidSubjectError, got %v (%T)", subject, err, err)
@@ -146,7 +143,7 @@ func TestValidSubjectsAccepted(t *testing.T) {
 		"a.b", // dots are fine; only path elements are not
 	} {
 		dir := t.TempDir()
-		if _, err := Write(dir, subject, KindStatus, StatusRecord{PID: 1}); err != nil {
+		if _, err := Write(dir, subject, KindStatus, StatusRecord{Note: "n"}); err != nil {
 			t.Errorf("Write(subject=%q): unexpected error %v", subject, err)
 			continue
 		}
@@ -199,7 +196,7 @@ func TestConcurrentWrites(t *testing.T) {
 	path := filepath.Join(dir, "adelie.status.json")
 
 	// Seed so the readers below always have a file to observe.
-	if _, err := Write(dir, "adelie", KindStatus, StatusRecord{PID: 0, Note: "seed"}); err != nil {
+	if _, err := Write(dir, "adelie", KindStatus, StatusRecord{Note: "seed"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -228,7 +225,7 @@ func TestConcurrentWrites(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			if _, err := Write(dir, "adelie", KindStatus, StatusRecord{PID: i, Note: "racer"}); err != nil {
+			if _, err := Write(dir, "adelie", KindStatus, StatusRecord{Note: fmt.Sprintf("racer-%d", i)}); err != nil {
 				t.Errorf("writer %d: %v", i, err)
 			}
 		}(i)
@@ -249,7 +246,8 @@ func TestConcurrentWrites(t *testing.T) {
 	if err := got.Decode(&out); err != nil {
 		t.Fatal(err)
 	}
-	if out.PID < 1 || out.PID > n || out.Note != "racer" {
+	var racer int
+	if _, err := fmt.Sscanf(out.Note, "racer-%d", &racer); err != nil || racer < 1 || racer > n {
 		t.Errorf("final record = %+v, want exactly one of the %d written values", out, n)
 	}
 
@@ -266,7 +264,7 @@ func TestConcurrentWrites(t *testing.T) {
 // through the same envelope, each addressed independently.
 func TestWriteAllKinds(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := Write(dir, "adelie", KindStatus, StatusRecord{PID: 7, Note: "n"}); err != nil {
+	if _, err := Write(dir, "adelie", KindStatus, StatusRecord{Note: "n"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Write(dir, "adelie", KindVerdict, VerdictRecord{Result: "approved", Note: "lgtm"}); err != nil {
@@ -309,36 +307,43 @@ func TestWriteAllKinds(t *testing.T) {
 	if err := rec.Decode(&s); err != nil {
 		t.Fatal(err)
 	}
-	if s.PID != 7 {
-		t.Errorf("status = %+v, want pid 7 unaffected by the other kinds", s)
+	if s.Note != "n" {
+		t.Errorf("status = %+v, want note %q unaffected by the other kinds", s, "n")
 	}
 }
 
-// TestClassifyLiveness pins PLM-030 AC-4: both failure directions are caught
-// against the fixed 5-minute TTL.
+// TestClassifyLiveness pins PLM-035 FC-1/FC-3/FC-5: classification consults
+// only lease freshness against the worker's own declared quiet period, with
+// StaleAfter as the default for a lease that declares nothing. There is no
+// PID input (FC-1) — the dead-PID rows PLM-030's version of this test carried
+// cease to exist entirely: that failure direction is gone, not merely
+// untested.
 func TestClassifyLiveness(t *testing.T) {
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
-	live := os.Getpid()
 
 	tests := []struct {
 		name        string
-		pid         int
 		lastUpdated time.Time
+		expect      time.Duration
 		wantStalled bool
 	}{
-		{"dead pid, fresh lease", deadPID, now.Add(-time.Second), true},
-		{"dead pid, stale lease", deadPID, now.Add(-time.Hour), true},
-		{"live pid, fresh lease", live, now.Add(-time.Second), false},
-		{"live pid, lease just inside ttl", live, now.Add(-4 * time.Minute), false},
-		{"live pid, lease past ttl", live, now.Add(-6 * time.Minute), true},
-		{"live pid, lease far past ttl", live, now.Add(-time.Hour), true},
+		{"fresh lease, default expect", now.Add(-time.Second), StaleAfter, false},
+		{"lease just inside default expect", now.Add(-4 * time.Minute), StaleAfter, false},
+		{"lease past default expect", now.Add(-6 * time.Minute), StaleAfter, true},
+		{"lease far past default expect", now.Add(-time.Hour), StaleAfter, true},
+		// The case PLM-035 exists for: a lease at 6 minutes, past the old
+		// fixed 5-minute TTL, but well inside a 30-minute declared period —
+		// impossible for the old classifier to express, let alone return
+		// not-stalled for.
+		{"lease past old ttl but inside a long declared period", now.Add(-6 * time.Minute), 30 * time.Minute, false},
+		{"lease past a long declared period", now.Add(-31 * time.Minute), 30 * time.Minute, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			stalled, reason := ClassifyLiveness(tc.pid, tc.lastUpdated, now)
+			stalled, reason := ClassifyLiveness(tc.lastUpdated, tc.expect, now)
 			if stalled != tc.wantStalled {
-				t.Errorf("ClassifyLiveness(%d, %v, %v) stalled = %v, want %v (reason %q)",
-					tc.pid, tc.lastUpdated, now, stalled, tc.wantStalled, reason)
+				t.Errorf("ClassifyLiveness(%v, %v, %v) stalled = %v, want %v (reason %q)",
+					tc.lastUpdated, tc.expect, now, stalled, tc.wantStalled, reason)
 			}
 			if reason == "" {
 				t.Error("reason must always be non-empty")

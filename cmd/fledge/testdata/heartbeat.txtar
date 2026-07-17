@@ -6,13 +6,29 @@ exec fledge heartbeat fledge-brooder-adelie --note 'running tests'
 exists .fledge/ledger/fledge-brooder-adelie.status.json
 stdout 'fledge-brooder-adelie'
 
-# --json emits the written record: subject, kind, note and a pid
+# --json emits the written record: subject, kind, note, and no pid
 exec fledge heartbeat fledge-brooder-adelie --note 'running tests' --json
 stdout '"subject": "fledge-brooder-adelie"'
 stdout '"kind": "status"'
 stdout '"note": "running tests"'
-stdout '"pid": [0-9]+'
+! stdout '"pid"'
 stdout '"timestamp": "'
+
+# --expect declares a quiet period, stored as a duration
+exec fledge heartbeat fledge-brooder-adelie --expect 12m --json
+stdout '"expect": "12m"'
+
+# --expect omitted defaults to the 5m StaleAfter default
+exec fledge heartbeat fledge-brooder-adelie --json
+stdout '"expect": "5m0s"'
+
+# an unparseable --expect is a usage error naming the flag
+! exec fledge heartbeat fledge-brooder-adelie --expect nonsense
+stderr 'expect'
+
+# no cap: a declared period well beyond the default is accepted
+exec fledge heartbeat fledge-brooder-adelie --expect 90m --json
+stdout '"expect": "90m"'
 
 # --note is optional
 exec fledge heartbeat fledge-brooder-adelie --json
