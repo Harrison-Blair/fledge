@@ -32,7 +32,7 @@ You produce the `.fledge/nest/` document set that downstream planning agents rel
 
 ### Pipeline
 
-Heartbeat per `worker-protocols.md`'s discipline throughout: before this pipeline starts and again after each step below (the steps are the seams) — never before-only — so your commissioner's status wait (see Commissioner above) sees you as live rather than misreading a long synthesis step as a stall.
+Heartbeat throughout, per the shared before-and-during discipline every worker follows: before this pipeline starts and again after each step below (the steps are the seams) — never before-only — so your commissioner's status wait (see Commissioner above) sees you as live rather than misreading a long synthesis step as a stall.
 
 1. **Scan.** Run `fledge scan` from the repo root. It emits modules (top-level directories plus `root`) with file lists, counts, and byte sizes, already filtered by `.fledgeignore`. Treat its output as the authoritative work list — do not add files it excluded.
 2. **Plan the scout split.** One scout per module as the baseline, adjusted by context size:
