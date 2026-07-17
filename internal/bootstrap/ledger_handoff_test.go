@@ -31,50 +31,71 @@ func readOrchestrateDoc(t *testing.T, name string) string {
 	return string(data)
 }
 
-// findAwaitExistsViolations scans doc line by line for a `fledge await`
-// invocation naming the write-once `--kind verdict` or `--kind escalation`
-// without `--exists` on the same line. Per PLM-034 FC-1/FC-2, verdict and
-// escalation records are written once: a change-wait (no --exists) on them
-// deadlocks whenever the record lands before the waiter asks.
+// inlineCodeSpans extracts the content of every backtick-delimited inline
+// code span in doc (e.g. "`fledge await X --kind status --timeout 5m`" ->
+// "fledge await X --kind status --timeout 5m"). Command shapes are checked
+// only inside actual code spans, not prose that merely mentions a flag name
+// in passing (e.g. "omitting --exists here waits for...") — checking whole
+// lines produces false positives on exactly that kind of explanatory prose.
+func inlineCodeSpans(doc string) []string {
+	var spans []string
+	parts := strings.Split(doc, "`")
+	// parts[1], parts[3], parts[5], ... are inside backticks.
+	for i := 1; i < len(parts); i += 2 {
+		spans = append(spans, parts[i])
+	}
+	return spans
+}
+
+// findAwaitExistsViolations scans doc's inline code spans for a `fledge
+// await` invocation naming the write-once `--kind verdict` or `--kind
+// escalation` without `--exists` in the same span. Per PLM-034 FC-1/FC-2,
+// verdict and escalation records are written once: a change-wait (no
+// --exists) on them deadlocks whenever the record lands before the waiter
+// asks.
 func findAwaitExistsViolations(doc string) []string {
 	var violations []string
-	for i, line := range strings.Split(doc, "\n") {
-		if !strings.Contains(line, "fledge await") {
+	for _, span := range inlineCodeSpans(doc) {
+		if !strings.Contains(span, "fledge await") {
 			continue
 		}
 		for _, kind := range []string{"--kind verdict", "--kind escalation"} {
-			if strings.Contains(line, kind) && !strings.Contains(line, "--exists") {
-				violations = append(violations, fmt.Sprintf("line %d: %s (%q without --exists)", i+1, strings.TrimSpace(line), kind))
+			if strings.Contains(span, kind) && !strings.Contains(span, "--exists") {
+				violations = append(violations, fmt.Sprintf("%q (%q without --exists)", span, kind))
 			}
 		}
 	}
 	return violations
 }
 
-// findAwaitStatusExistsViolations scans doc for a `fledge await ... --kind
-// status` invocation that incorrectly carries `--exists`. status is
-// repeatedly written (FC-1), so an existence-wait on it returns on the
-// subject's very first heartbeat, long before the terminal value the waiter
-// actually wants.
+// findAwaitStatusExistsViolations scans doc's inline code spans for a
+// `fledge await ... --kind status` invocation that incorrectly carries
+// `--exists`. status is repeatedly written (FC-1), so an existence-wait on
+// it returns on the subject's very first heartbeat, long before the
+// terminal value the waiter actually wants.
 func findAwaitStatusExistsViolations(doc string) []string {
 	var violations []string
-	for i, line := range strings.Split(doc, "\n") {
-		if strings.Contains(line, "fledge await") && strings.Contains(line, "--kind status") && strings.Contains(line, "--exists") {
-			violations = append(violations, fmt.Sprintf("line %d: %s (--kind status must never carry --exists)", i+1, strings.TrimSpace(line)))
+	for _, span := range inlineCodeSpans(doc) {
+		if strings.Contains(span, "fledge await") && strings.Contains(span, "--kind status") && strings.Contains(span, "--exists") {
+			violations = append(violations, fmt.Sprintf("%q (--kind status must never carry --exists)", span))
 		}
 	}
 	return violations
 }
 
-// findAwaitMissingTimeout scans doc for a `fledge await` invocation with no
-// `--timeout` on the same line. --timeout is mandatory in the shipped binary
-// (PLM-034 FC-3): a prose example omitting it is a usage error against the
-// real CLI, not merely a style gap.
+// findAwaitMissingTimeout scans doc's inline code spans for a `fledge await`
+// invocation with no `--timeout` in the same span. --timeout is mandatory in
+// the shipped binary (PLM-034 FC-3): a prose example omitting it is a usage
+// error against the real CLI, not merely a style gap. A span that merely
+// names the bare command with no flags at all (e.g. a cross-reference like
+// "worker-protocols.md's `fledge await` pattern") is not a command example
+// and is exempt — only spans that already carry a `--kind` (i.e. are
+// presented as a concrete invocation) are checked.
 func findAwaitMissingTimeout(doc string) []string {
 	var violations []string
-	for i, line := range strings.Split(doc, "\n") {
-		if strings.Contains(line, "fledge await") && !strings.Contains(line, "--timeout") {
-			violations = append(violations, fmt.Sprintf("line %d: %s (no --timeout)", i+1, strings.TrimSpace(line)))
+	for _, span := range inlineCodeSpans(doc) {
+		if strings.Contains(span, "fledge await") && strings.Contains(span, "--kind") && !strings.Contains(span, "--timeout") {
+			violations = append(violations, fmt.Sprintf("%q (no --timeout)", span))
 		}
 	}
 	return violations
