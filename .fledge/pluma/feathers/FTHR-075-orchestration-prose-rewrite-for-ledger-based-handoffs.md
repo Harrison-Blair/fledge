@@ -4,7 +4,7 @@ title: Orchestration prose rewrite for ledger-based handoffs
 plumage: PLM-030
 status: egg
 priority: P1
-depends_on: [FTHR-073, FTHR-074]
+depends_on: [FTHR-073, FTHR-074, FTHR-088]
 authored: 2026-07-16T22:24:20Z
 agent: fledge-orchestrate/planning
 fledge_version: 0.5.8
