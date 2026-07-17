@@ -52,12 +52,12 @@ Test-first, with the failing-first observation **behavioral** (PLM-035 AC-2). Th
 - Order: write the txtar and guard assertions first, capture their behavioral failures verbatim in `.fledge/molt/FTHR-090.md`, then implement.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: At least one failing-test observation is **behavioral** — captured from the txtar or guard-test layer, not a compilation error — and recorded verbatim in `.fledge/molt/FTHR-090.md` (satisfies PLM-035 AC-2).
-- [ ] AC-3: `lock.Record` carries no PID field, and `fledge brood` no longer records one (satisfies PLM-035 FC-2).
-- [ ] AC-4: `fledge broods` reports no PID in either its printed or `--json` output — no `pid_alive` field, no `(pid not alive)` annotation — proven by assertions on their absence (satisfies PLM-035 FC-2, and the feather-claim half of PLM-035 AC-4 — **FTHR-089 closes the status-record half; neither feather closes PLM-035 AC-4 alone**).
-- [ ] AC-5: `fledge broods --stale` continues to key on worktree existence and its behavior is unchanged, proven by the existing `--stale`/`worktree_exists` assertions passing unmodified — the force-release path feeding `fledge abandon --force` was sound before and remains so (satisfies PLM-035 FC-2, AC-10).
-- [ ] AC-6: No file under `internal/bootstrap/core/skills/` references PID liveness, proven by a guard test that fails against the current prose (satisfies PLM-035 FC-11, AC-12).
-- [ ] AC-7: `implementation.md` is otherwise unmodified — only the pid-alive clause changed — so FTHR-075's later rewrite of this file has no conflict to resolve.
-- [ ] AC-8: No orphaned `pidAlive` helper or unused import remains in `internal/cli` as a result of this change.
-- [ ] AC-9: `go test ./...` is green, `go vet ./...` and `gofmt -l .` are clean, and `fledge preen` reports no errors on the branch (satisfies PLM-035 AC-13).
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: At least one failing-test observation is **behavioral** — captured from the txtar or guard-test layer, not a compilation error — and recorded verbatim in `.fledge/molt/FTHR-090.md` (satisfies PLM-035 AC-2).
+- [x] AC-3: `lock.Record` carries no PID field, and `fledge brood` no longer records one (satisfies PLM-035 FC-2).
+- [x] AC-4: `fledge broods` reports no PID in either its printed or `--json` output — no `pid_alive` field, no `(pid not alive)` annotation — proven by assertions on their absence (satisfies PLM-035 FC-2, and the feather-claim half of PLM-035 AC-4 — **FTHR-089 closes the status-record half; neither feather closes PLM-035 AC-4 alone**).
+- [x] AC-5: `fledge broods --stale` continues to key on worktree existence and its behavior is unchanged, proven by the existing `--stale`/`worktree_exists` assertions passing unmodified — the force-release path feeding `fledge abandon --force` was sound before and remains so (satisfies PLM-035 FC-2, AC-10).
+- [x] AC-6: No file under `internal/bootstrap/core/skills/` references PID liveness, proven by a guard test that fails against the current prose (satisfies PLM-035 FC-11, AC-12).
+- [x] AC-7: `implementation.md` is otherwise unmodified — only the pid-alive clause changed — so FTHR-075's later rewrite of this file has no conflict to resolve.
+- [x] AC-8: No orphaned `pidAlive` helper or unused import remains in `internal/cli` as a result of this change.
+- [x] AC-9: `go test ./...` is green, `go vet ./...` and `gofmt -l .` are clean, and `fledge preen` reports no errors on the branch (satisfies PLM-035 AC-13).

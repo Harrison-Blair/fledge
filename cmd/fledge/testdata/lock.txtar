@@ -14,15 +14,13 @@ exec fledge broods
 stdout 'FTHR-001'
 stdout 'adelie'
 
-# stale-PID detection: a seeded claim with a not-alive PID is marked, a
-# seeded claim with a live PID (pid 1, always alive) is not. Both seeded
-# records predate FTHR-050 (no worktree field), so both also report
-# (worktree gone) now.
+# FTHR-090: no PID reporting. Both seeded records predate FTHR-050 (no
+# worktree field), so both report (worktree gone).
 stdout '(?m)^FTHR-006\s+skua\s+since\s+\S+\s+branch\s+\S+\s+\(worktree gone\)$'
-stdout '(?m)^FTHR-005\s+weddell\s+since\s+\S+\s+branch\s+\S+\s+\(pid not alive\)\s+\(worktree gone\)$'
+stdout '(?m)^FTHR-005\s+weddell\s+since\s+\S+\s+branch\s+\S+\s+\(worktree gone\)$'
+! stdout 'pid not alive'
 exec fledge broods --json
-stdout '(?s)"feather": "FTHR-005".*?"pid_alive": false'
-stdout '(?s)"feather": "FTHR-006".*?"pid_alive": true'
+! stdout 'pid_alive'
 
 # brooded feather is excluded from pipping
 exec fledge ready
@@ -77,7 +75,7 @@ grep 'status: fledged' .fledge/pluma/feathers/FTHR-004-gated2.md
 exec fledge brood FTHR-002 --owner weddell --json
 stdout '"feather": "FTHR-002"'
 stdout '"owner": "weddell"'
-stdout '"pid": [0-9]+'
+! stdout '"pid"'
 stdout '"created": "'
 stdout '"branch": "'
 # --worktree omitted: worktree is empty
@@ -89,12 +87,13 @@ exec fledge brood FTHR-002 --owner weddell --worktree /some/path --json
 stdout '"worktree": "/some/path"'
 exec fledge abandon FTHR-002 --force
 
-# re-claim FTHR-002 (no worktree) so the pid_alive/abandon flow below continues
+# re-claim FTHR-002 (no worktree) so the abandon flow below continues
 exec fledge brood FTHR-002 --owner weddell
 
-# broods --json includes pid_alive alongside the record fields
+# broods --json includes worktree_exists alongside the record fields, no pid_alive
 exec fledge broods --json
-stdout '(?s)"feather": "FTHR-002".*?"pid_alive"'
+stdout '(?s)"feather": "FTHR-002".*?"worktree_exists"'
+! stdout 'pid_alive'
 
 # abandon --json without --fledged: status is JSON null
 exec fledge abandon FTHR-002 --json
