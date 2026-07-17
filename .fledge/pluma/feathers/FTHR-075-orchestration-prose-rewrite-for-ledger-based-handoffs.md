@@ -2,7 +2,7 @@
 id: FTHR-075
 title: Orchestration prose rewrite for ledger-based handoffs
 plumage: PLM-030
-status: egg
+status: fledged
 priority: P1
 depends_on: [FTHR-073, FTHR-074, FTHR-088, FTHR-089, FTHR-090, FTHR-092]
 authored: 2026-07-16T22:24:20Z
