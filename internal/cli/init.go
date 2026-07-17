@@ -103,6 +103,10 @@ func runInit(args []string) int {
 		return envErr("%v", err)
 	}
 
+	// Load old stamp now: refresh detection, the stamp's agents union, and
+	// dev-source recovery just below all need it.
+	oldStamp, _ := bootstrap.LoadStamp(r.Root)
+
 	// --dev: resolve and validate the source before touching anything else.
 	// A bare --dev infers the source from the current repo, which must itself
 	// be a fledge source checkout (PLM-031 FC-3); outside one it fails rather
@@ -123,6 +127,23 @@ func runInit(args []string) int {
 			return fail("%v", vErr)
 		}
 		devSource = abs
+	default:
+		// No explicit --dev on this run: recover dev mode from the old stamp
+		// (PLM-031 FC-11) so a bare `fledge init --refresh` cannot silently
+		// un-dev the repo — an explicit --dev above always wins re-pointing.
+		// Fail loudly rather than falling back to copies when the recorded
+		// source no longer validates (moved or deleted): silent reversion is
+		// indistinguishable from the feature working, which is the exact
+		// failure this guards against. There is deliberately no off-switch to
+		// name here — re-pointing with --dev=<path> is the only remedy.
+		if oldStamp != nil && oldStamp.DevSource != "" {
+			abs, vErr := bootstrap.ValidateDevSource(oldStamp.DevSource)
+			if vErr != nil {
+				return fail("dev source %s (recorded in .fledge/scaffold.json) is no longer a valid fledge source tree: %v — re-point with --dev=<path>", oldStamp.DevSource, vErr)
+			}
+			devSource = abs
+			selfLink = abs == r.Root
+		}
 	}
 
 	// Version skew (PLM-031 FC-7): a report, not a gate — say nothing when the
@@ -132,9 +153,6 @@ func runInit(args []string) int {
 			fmt.Fprintf(os.Stderr, "fledge: dev source is fledge %s, binary is %s — linked skill/agent prose may reference CLI behavior this binary lacks\n", srcVersion, binaryVersion)
 		}
 	}
-
-	// Load old stamp now: refresh detection and the stamp's agents union need it.
-	oldStamp, _ := bootstrap.LoadStamp(r.Root)
 
 	// Resolve which adapters to scaffold (Q7).
 	selected, defaulted, err := resolveAgents(r.Root, agents)

@@ -134,20 +134,20 @@ then implement until they pass.
 
 ## Acceptance Criteria
 
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: `fledge init --refresh` with no `--dev` flag in a dev-linked repository leaves
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: `fledge init --refresh` with no `--dev` flag in a dev-linked repository leaves
       every dev-linked path a symlink to the same source, and an edit saved in the source
       afterwards is still visible through the repository's scaffold. Satisfies PLM-031
       FC-11, AC-11.
-- [ ] AC-3: After a refresh, the scaffold stamp still records the dev source and
+- [x] AC-3: After a refresh, the scaffold stamp still records the dev source and
       `fledge dev status` still reports the repository as dev-linked.
-- [ ] AC-4: A refresh of a dev-linked repository still updates the files dev mode does not
+- [x] AC-4: A refresh of a dev-linked repository still updates the files dev mode does not
       cover (rendered and appended files). Satisfies PLM-031 FC-11, AC-12.
-- [ ] AC-5: A refresh whose recorded dev source no longer validates exits non-zero naming
+- [x] AC-5: A refresh whose recorded dev source no longer validates exits non-zero naming
       that path, and does not silently replace dev links with copies.
-- [ ] AC-6: `fledge init --refresh --dev=<path>` re-points an already-dev-linked repository
+- [x] AC-6: `fledge init --refresh --dev=<path>` re-points an already-dev-linked repository
       at `<path>` and records it in the stamp.
-- [ ] AC-7: Two successive refreshes of a dev-linked repository leave identical link
+- [x] AC-7: Two successive refreshes of a dev-linked repository leave identical link
       targets.
-- [ ] AC-8: `go test ./...` passes with `init.txtar` unmodified — non-dev refresh behavior
+- [x] AC-8: `go test ./...` passes with `init.txtar` unmodified — non-dev refresh behavior
       is unchanged.
