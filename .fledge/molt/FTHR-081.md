@@ -2,19 +2,26 @@
 
 ## AC-1
 
+**Recaptured per skua review finding 1.** The first capture below was taken against an
+earlier, minimal (2-file) version of the `dev_refresh.txtar` fixture that predates the
+"AC-3/AC-6 strengthening" commit (`c150800`), which fleshed the fixture out to the full
+scaffolded file list. Against that earlier fixture, the unfixed code crashed immediately at
+the bare `--refresh` step. Against the *final, tracked* fixture, the unfixed code's bare
+`--refresh` step does not crash — it "succeeds" (exit 0, reports `updated` for every
+dev-linked path) while silently writing embedded shipped content *through the still-intact
+symlink* into the fake dev source tree, corrupting it; the test then fails two blocks later,
+at the AC-3 `devSource` grep, because the rewritten stamp has no `devSource` key. That is a
+more severe manifestation of the same bug (real corruption of the developer's source
+checkout, not just a crash) and is what the recapture below shows.
+
 Command:
 
 ```
 go test ./cmd/fledge -run TestScripts/dev_refresh -v
 ```
 
-Pre-implementation run (unchanged FTHR-078 code), captured verbatim — fails at the second
-`fledge init --refresh` (bare, no `--dev`) in a dev-linked repo, exactly the regression
-this feather exists to close: refresh drops `devSource`, so `ExpectedFilesDev` reverts
-every dev-linked path to a content-hash expectation, and `EditedOnRefresh`'s drift
-comparison then tries to read disk content through what is still (on disk) a dangling
-symlink to a nonexistent embedded path, and errors out instead of silently overwriting —
-either way, dev mode is broken by the refresh:
+Pre-implementation run, reverting only `internal/cli/init.go` to its pre-FTHR-081 state
+(`10e3183~1`) and keeping the current tracked `dev_refresh.txtar` as-is, captured verbatim:
 
 ```
 === RUN   TestScripts
@@ -72,21 +79,110 @@ either way, dev mode is broken by the refresh:
         # ---------------------------------------------------------------
         # bare --refresh preserves dev links, no --dev given (AC-2, PLM-031 AC-11):
         # every dev-linked path is still a symlink to the same source afterwards.
-        # --------------------------------------------------------------- (0.002s)
+        # --------------------------------------------------------------- (0.003s)
         > exec fledge init --refresh
+        [stdout]
+        updated .fledge/skills/fledge-interrogate/SKILL.md
+        updated .fledge/skills/fledge-orchestrate/SKILL.md
+        updated .fledge/skills/fledge-orchestrate/brooder.md
+        updated .fledge/skills/fledge-orchestrate/foraging.md
+        updated .fledge/skills/fledge-orchestrate/implementation.md
+        updated .fledge/skills/fledge-orchestrate/incubator.md
+        updated .fledge/skills/fledge-orchestrate/planning.md
+        updated .fledge/skills/fledge-orchestrate/skua.md
+        updated .fledge/skills/fledge-orchestrate/templates/context-doc.md
+        updated .fledge/skills/fledge-orchestrate/templates/feather.md
+        updated .fledge/skills/fledge-orchestrate/templates/plumage.md
+        updated .fledge/skills/fledge-orchestrate/templates/scout-report.md
+        updated .fledge/skills/fledge-orchestrate/worker-protocols.md
+        updated .claude/agents/fledge-brooder.md
+        updated .claude/agents/fledge-forager.md
+        updated .claude/agents/fledge-context-scout.md
+        updated .claude/agents/fledge-skua.md
+        updated .claude/agents/fledge-incubator.md
+        updated .fledge/scaffold.json
+        exists .fledge/nest/raw/.gitkeep
+        exists .fledge/broods/.gitkeep
+        exists .fledgeignore
+        exists .fledge/pluma/plumage/.gitkeep
+        exists .fledge/pluma/feathers/.gitkeep
+        exists .gitignore
+        exists .claude/settings.json
+        exists .claude/settings.local.json
+        exists .claude/team-loop.md
+        exists .claude/fledge-adapter.md
+        exists .claude/skills/fledge-orchestrate
+        exists .claude/skills/fledge-interrogate
+        exists CLAUDE.md
+        scaffolded agents: claude
         [stderr]
-        fledge: open $WORK/repo/.fledge/skills/fledge-interrogate/SKILL.md: no such file or directory
-        [exit status 1]
-        FAIL: testdata/dev_refresh.txtar:22: unexpected command failure
+        note: refreshed 19 file(s) to the shipped versions — `git diff` to review; your edits are recoverable via git.
+        > exec readlink .claude/agents/fledge-brooder.md
+        [stdout]
+        $WORK/src/internal/bootstrap/adapters/claude/agents/fledge-brooder.md
+        > stdout $WORK/src/internal/bootstrap/adapters/claude/agents/fledge-brooder.md
+        > exec readlink .fledge/skills/fledge-orchestrate/SKILL.md
+        [stdout]
+        $WORK/src/internal/bootstrap/core/skills/fledge-orchestrate/SKILL.md
+        > stdout $WORK/src/internal/bootstrap/core/skills/fledge-orchestrate/SKILL.md
+        # source edits saved after the refresh are still live through the repo's
+        # scaffold path (AC-2, PLM-031 AC-11) — proves the links are functional,
+        # not merely present. (0.000s)
+        > cp $WORK/updated-skill.md $WORK/src/internal/bootstrap/core/skills/fledge-orchestrate/SKILL.md
+        > exec cat .fledge/skills/fledge-orchestrate/SKILL.md
+        [stdout]
+        edited directly in the source tree
+        > stdout 'edited directly in the source tree'
+        # ---------------------------------------------------------------
+        # dev source survives in the rewritten stamp (AC-3): guards the
+        # evaporate-one-refresh-later failure.
+        # --------------------------------------------------------------- (0.000s)
+        > grep '"devSource": ' .fledge/scaffold.json
+        [.fledge/scaffold.json]
+        {
+          "fledgeVersion": "0.5.8",
+          "agents": [
+            "claude"
+          ],
+          "files": {
+            ... (every entry reverted to a plain content hash — "policy": "default" /
+            "core" / etc. — no "policy": "dev-link" entries survive; devSource is absent
+            entirely)
+          }
+        }
+
+        FAIL: testdata/dev_refresh.txtar:39: no match for `"devSource": ` found in .fledge/scaffold.json
 
 --- FAIL: TestScripts (0.00s)
     --- FAIL: TestScripts/dev_refresh (0.01s)
 FAIL
-FAIL	github.com/Harrison-Blair/fledge/cmd/fledge	0.009s
+FAIL	github.com/Harrison-Blair/fledge/cmd/fledge	0.010s
 FAIL
 ```
 
-Post-implementation run, full suite, all green:
+Note the `updated .fledge/skills/fledge-interrogate/SKILL.md` etc. lines during the bare
+`--refresh`: with the unfixed code, `ExpectedFilesDev` is called with `devSource=""`, so
+every dev-linked path is expected as a content hash again. Since the on-disk path is a
+symlink whose target now differs from that hash, `writeFileEntry` follows the symlink and
+overwrites the *target file in the fake dev source tree* with the embedded shipped content
+— i.e. the unfixed refresh silently corrupts the developer's actual source checkout through
+the still-live symlink, not just the repo's own scaffold. The `readlink` right after still
+shows the same target (the symlink itself is untouched), which is precisely why this
+corruption would go unnoticed by only checking `readlink` post-refresh, and precisely why
+this feather's tests assert on stamp/content rather than link presence alone.
+
+After restoring the fix (`internal/cli/init.go` back to its current, committed state):
+
+```
+go test ./cmd/fledge -run TestScripts/dev_refresh -v
+...
+--- PASS: TestScripts (0.00s)
+    --- PASS: TestScripts/dev_refresh (0.02s)
+PASS
+ok  	github.com/Harrison-Blair/fledge/cmd/fledge	(cached)
+```
+
+Full suite, all green:
 
 ```
 $ go test ./... 2>&1 | tail
