@@ -22,9 +22,14 @@ import (
 // adapter files) is written as a symlink into DevSource instead of a copy —
 // PLM-031 dev install mode. Files that are generated, merged, or already
 // symlinked are unaffected.
+// SelfLink marks a bare `--dev` (PLM-031 FC-3): DevSource is the same repo
+// being scaffolded, so dev-link targets are written as relative symlinks
+// (computed with filepath.Rel) instead of DevSource-absolute ones, and
+// survive the tree being moved or cloned.
 type WriteOpts struct {
 	Refresh   bool
 	DevSource string
+	SelfLink  bool
 }
 
 // Manifest is an adapter's single source of truth: detector, the 6-row
@@ -399,6 +404,20 @@ func devAdapterTarget(devSource, adapterDir, src string) string {
 	return filepath.ToSlash(filepath.Join(devSource, "internal", "bootstrap", filepath.FromSlash(adapterDir), filepath.FromSlash(src)))
 }
 
+// relDevTarget expresses the absolute dev-link target abs as a path relative
+// to the directory of the linked file at repoRelDst (repo-relative), for a
+// self-link (bare --dev, PLM-031 FC-3) so the link survives the tree being
+// moved or cloned. Only valid when devSource is the on-disk repo root itself
+// (i.e. opts.SelfLink), which relDevTarget's callers guarantee.
+func relDevTarget(devSource, repoRelDst, abs string) (string, error) {
+	dst := filepath.Join(devSource, filepath.FromSlash(repoRelDst))
+	rel, err := filepath.Rel(filepath.Dir(dst), abs)
+	if err != nil {
+		return "", err
+	}
+	return filepath.ToSlash(rel), nil
+}
+
 // WriteCore writes the embedded core/skills tree into root/.fledge/skills/.
 // Without refresh, existing files are skipped. With refresh, every file is
 // reset to the shipped version. Returns created/updated/skipped repo-relative
@@ -416,7 +435,15 @@ func WriteCore(root string, opts WriteOpts) (created, updated, skipped []string,
 		relRepo := filepath.ToSlash(filepath.Join(".fledge", rel))
 
 		if opts.DevSource != "" {
-			state, dErr := writeDevLink(dst, devCoreTarget(opts.DevSource, rel))
+			target := devCoreTarget(opts.DevSource, rel)
+			if opts.SelfLink {
+				rt, rErr := relDevTarget(opts.DevSource, relRepo, target)
+				if rErr != nil {
+					return rErr
+				}
+				target = rt
+			}
+			state, dErr := writeDevLink(dst, target)
 			if dErr != nil {
 				return dErr
 			}
@@ -546,7 +573,15 @@ func (m *Manifest) writeFileEntry(root string, f ManifestFile, ctx renderContext
 	// overrides (PLM-031 FC-5) — link into the source tree instead of
 	// copying. Always managed, like the symlink policy above.
 	if opts.DevSource != "" {
-		state, dErr := writeDevLink(dst, devAdapterTarget(opts.DevSource, m.dir, f.Src))
+		target := devAdapterTarget(opts.DevSource, m.dir, f.Src)
+		if opts.SelfLink {
+			rt, rErr := relDevTarget(opts.DevSource, f.Dst, target)
+			if rErr != nil {
+				return nil, nil, nil, rErr
+			}
+			target = rt
+		}
+		state, dErr := writeDevLink(dst, target)
 		if dErr != nil {
 			return nil, nil, nil, dErr
 		}

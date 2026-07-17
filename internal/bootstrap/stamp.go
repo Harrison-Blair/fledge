@@ -142,7 +142,7 @@ func filePolicy(f ManifestFile) string {
 // This is the shared surface that FTHR-011 (preen drift) and FTHR-012 (refresh
 // preserve/prune) build on.
 func ExpectedFiles(m *Manifest, commandOrder []string) (map[string]StampEntry, error) {
-	return ExpectedFilesDev(m, commandOrder, "")
+	return ExpectedFilesDev(m, commandOrder, "", false)
 }
 
 // ExpectedFilesDev is ExpectedFiles, with PLM-031 dev-mode support: when
@@ -150,11 +150,15 @@ func ExpectedFiles(m *Manifest, commandOrder []string) (map[string]StampEntry, e
 // ValidateDevSource), every copy-type entry — core skill docs and
 // default-policy adapter files — is recorded as a "dev-link" entry pointing
 // into devSource (Target) instead of a content hash, so the existing symlink
-// drift comparison (classifySymlink) applies to it. ExpectedFiles(m,
-// commandOrder) == ExpectedFilesDev(m, commandOrder, "") — kept as two
-// functions, rather than changing ExpectedFiles' signature, so this feather's
-// change to init.go does not ripple into drift.go's callers.
-func ExpectedFilesDev(m *Manifest, commandOrder []string, devSource string) (map[string]StampEntry, error) {
+// drift comparison (classifySymlink) applies to it. selfLink mirrors
+// WriteOpts.SelfLink (FC-3's bare --dev): when true, devSource is the on-disk
+// repo root itself and Target is recorded relative rather than
+// devSource-absolute, matching what WriteCore/WriteAdapter actually write to
+// disk. ExpectedFiles(m, commandOrder) == ExpectedFilesDev(m, commandOrder,
+// "", false) — kept as two functions, rather than changing ExpectedFiles'
+// signature, so this feather's change to init.go does not ripple into
+// drift.go's callers.
+func ExpectedFilesDev(m *Manifest, commandOrder []string, devSource string, selfLink bool) (map[string]StampEntry, error) {
 	out := make(map[string]StampEntry)
 
 	// Core files: embedded under core/ → written to .fledge/<rel>.
@@ -165,7 +169,13 @@ func ExpectedFilesDev(m *Manifest, commandOrder []string, devSource string) (map
 		rel := strings.TrimPrefix(p, "core/")
 		repoPath := ".fledge/" + rel
 		if devSource != "" {
-			out[repoPath] = StampEntry{Policy: "dev-link", Target: devCoreTarget(devSource, rel)}
+			target := devCoreTarget(devSource, rel)
+			if selfLink {
+				if rt, rErr := relDevTarget(devSource, repoPath, target); rErr == nil {
+					target = rt
+				}
+			}
+			out[repoPath] = StampEntry{Policy: "dev-link", Target: target}
 			return nil
 		}
 		data, err := FS.ReadFile(p)
@@ -198,7 +208,13 @@ func ExpectedFilesDev(m *Manifest, commandOrder []string, devSource string) (map
 		case f.AppendIfMissing != "" || (f.Src == "" && f.Dst != ""):
 			appendLines[f.Dst] = append(appendLines[f.Dst], f.AppendIfMissing)
 		case devSource != "" && !f.Generate && !f.PrimitiveMap && !f.Overwrite:
-			out[f.Dst] = StampEntry{Policy: "dev-link", Target: devAdapterTarget(devSource, m.dir, f.Src)}
+			target := devAdapterTarget(devSource, m.dir, f.Src)
+			if selfLink {
+				if rt, rErr := relDevTarget(devSource, f.Dst, target); rErr == nil {
+					target = rt
+				}
+			}
+			out[f.Dst] = StampEntry{Policy: "dev-link", Target: target}
 		default:
 			data, err := renderEntry(m, f, ctx)
 			if err != nil {

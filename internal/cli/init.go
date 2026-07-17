@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -20,15 +21,16 @@ import (
 
 func init() {
 	register("init", runInit,
-		"fledge init [--agent <name>]... [--dev=<path>] [--refresh] [--force] [--list-agents] [--json]")
+		"fledge init [--agent <name>]... [--dev[=<path>]] [--refresh] [--force] [--list-agents] [--json]")
 }
 
 // devFlag implements flag.Value and the boolFlag interface (IsBoolFlag) so
-// both `--dev=<path>` and a bare `--dev` parse without an explicit "=value" —
-// required for a bare `--dev` to eventually infer its source from a checkout
-// (PLM-031 FC-3). That inference is FTHR-078's job; here a bare --dev
-// (Set("true")) is recorded and rejected with a clear error rather than
-// guessing, and Set never accepts a stray "true" as a literal directory name.
+// both `--dev=<path>` and a bare `--dev` parse without an explicit "=value".
+// A bare --dev (Set("true")) infers its source from the current repo, which
+// must itself be a fledge source checkout (PLM-031 FC-3); Set never accepts a
+// stray "true" as a literal directory name. The space-separated form
+// (`--dev <path>`) parses as bare --dev plus a stray positional argument,
+// which runInit rejects via fs.NArg().
 type devFlag struct {
 	path string
 	bare bool
@@ -69,7 +71,7 @@ func runInit(args []string) int {
 	var agents stringListFlag
 	fs.Var(&agents, "agent", "agent harness to scaffold (repeatable, comma-separated)")
 	var dev devFlag
-	fs.Var(&dev, "dev", "scaffold copy-type files as symlinks into a local fledge source tree (--dev=<path>)")
+	fs.Var(&dev, "dev", "scaffold copy-type files as symlinks into a local fledge source tree (--dev=<path>, or bare --dev inside a fledge source checkout)")
 	refresh := fs.Bool("refresh", false, "reset all fledge-owned files to the shipped versions (confirms before overwriting user-edited files)")
 	force := fs.Bool("force", false, "with --refresh: skip the confirmation prompt and overwrite user-edited files")
 	listAgents := fs.Bool("list-agents", false, "list available agent adapters and exit")
@@ -82,22 +84,40 @@ func runInit(args []string) int {
 		return listAdapters(false, *jsonOut)
 	}
 
-	// --dev: resolve and validate the source before touching anything else.
-	// A bare --dev (no "=path") is not yet supported — inferring the source
-	// from a checkout is PLM-031 FC-3, scoped to FTHR-078 — so it must error
-	// rather than silently doing nothing useful. Likewise the space-separated
-	// form (`--dev <path>`) parses as a bare --dev plus a stray positional
-	// argument; leaving that unchecked would silently link nothing while
-	// looking like it worked, exactly the failure mode this plumage exists to
-	// eliminate, so any leftover positional argument is also an error.
-	if dev.bare {
-		if fs.NArg() > 0 {
+	// fs.NArg() > 0: fledge init takes no positional arguments. This matters
+	// most for --dev, an IsBoolFlag: the natural-looking space form
+	// (`--dev <path>`) parses as bare --dev plus a stray positional, which
+	// would otherwise silently link the wrong target inside a source checkout
+	// (bare --dev now self-links) rather than erroring. Name the likely cause
+	// when --dev was given bare; a generic usage error otherwise (PLM-031
+	// FC-3 footgun guard).
+	if fs.NArg() > 0 {
+		if dev.bare {
 			return usageErr("unexpected argument %q after a bare --dev — use --dev=%s, not --dev %s", fs.Arg(0), fs.Arg(0), fs.Arg(0))
 		}
-		return usageErr("--dev requires a source path: --dev=<path> (inferring the source from inside a checkout is not yet supported)")
+		return usageErr("unexpected argument %q", fs.Arg(0))
 	}
+
+	r, err := repo.Find()
+	if err != nil {
+		return envErr("%v", err)
+	}
+
+	// --dev: resolve and validate the source before touching anything else.
+	// A bare --dev infers the source from the current repo, which must itself
+	// be a fledge source checkout (PLM-031 FC-3); outside one it fails rather
+	// than guessing.
 	var devSource string
-	if dev.path != "" {
+	selfLink := false
+	switch {
+	case dev.bare:
+		abs, vErr := bootstrap.ValidateDevSource(r.Root)
+		if vErr != nil {
+			return fail("--dev requires a source path outside a fledge source checkout: %v", vErr)
+		}
+		devSource = abs
+		selfLink = true
+	case dev.path != "":
 		abs, vErr := bootstrap.ValidateDevSource(dev.path)
 		if vErr != nil {
 			return fail("%v", vErr)
@@ -105,9 +125,12 @@ func runInit(args []string) int {
 		devSource = abs
 	}
 
-	r, err := repo.Find()
-	if err != nil {
-		return envErr("%v", err)
+	// Version skew (PLM-031 FC-7): a report, not a gate — say nothing when the
+	// source has no VERSION file (unknown) or matches the running binary.
+	if devSource != "" {
+		if srcVersion := (&repo.Repo{Root: devSource}).Version(""); srcVersion != "" && srcVersion != binaryVersion {
+			fmt.Fprintf(os.Stderr, "fledge: dev source is fledge %s, binary is %s — linked skill/agent prose may reference CLI behavior this binary lacks\n", srcVersion, binaryVersion)
+		}
 	}
 
 	// Load old stamp now: refresh detection and the stamp's agents union need it.
@@ -133,7 +156,7 @@ func runInit(args []string) int {
 			return usageErr("unknown agent %q (run `fledge init --list-agents`)", name)
 		}
 		manifests = append(manifests, m)
-		ef, efErr := bootstrap.ExpectedFilesDev(m, commandOrder, devSource)
+		ef, efErr := bootstrap.ExpectedFilesDev(m, commandOrder, devSource, selfLink)
 		if efErr != nil {
 			return fail("build expected files for %s: %v", name, efErr)
 		}
@@ -145,6 +168,29 @@ func runInit(args []string) int {
 	// Duplicate guard (Q10): refuse a broken state before writing anything.
 	if err := bootstrap.CheckDuplicateSkills(r.Root); err != nil {
 		return fail("%v", err)
+	}
+
+	// Git hygiene (PLM-031 FC-6): refuse outright, before any write, if a
+	// dev-linked path is already tracked by git — the whole point of a
+	// refusal is that it leaves the tree exactly as found.
+	var devLinkedPaths []string
+	if devSource != "" {
+		for p, e := range allFiles {
+			if e.Policy == "dev-link" {
+				devLinkedPaths = append(devLinkedPaths, p)
+			}
+		}
+		sort.Strings(devLinkedPaths)
+	}
+	if len(devLinkedPaths) > 0 {
+		if tracked := trackedDevPaths(r.Root, devLinkedPaths); len(tracked) > 0 {
+			fmt.Fprintln(os.Stderr, "refusing --dev: the following dev-linked path(s) are already tracked by git:")
+			for _, p := range tracked {
+				fmt.Fprintf(os.Stderr, "  %s\n", p)
+			}
+			fmt.Fprintf(os.Stderr, "untrack them first: git rm --cached %s\n", strings.Join(tracked, " "))
+			return ExitFail
+		}
 	}
 
 	// Refresh is a reset-to-shipped: confirm before overwriting user edits.
@@ -216,18 +262,25 @@ func runInit(args []string) int {
 		}
 	}
 
-	changed, err := ensureGitignore(filepath.Join(r.Root, ".gitignore"))
+	gitignoreChanged, err := ensureGitignore(filepath.Join(r.Root, ".gitignore"))
 	if err != nil {
 		return fail("%v", err)
 	}
-	if changed {
+	if len(devLinkedPaths) > 0 {
+		devChanged, dErr := ensureDevGitignore(filepath.Join(r.Root, ".gitignore"), devLinkedPaths)
+		if dErr != nil {
+			return fail("%v", dErr)
+		}
+		gitignoreChanged = gitignoreChanged || devChanged
+	}
+	if gitignoreChanged {
 		note(".gitignore", 0)
 	} else {
 		note(".gitignore", 1)
 	}
 
 	// Core skill: agent-neutral, written to .fledge/skills/ (Q2).
-	opts := bootstrap.WriteOpts{Refresh: *refresh, DevSource: devSource}
+	opts := bootstrap.WriteOpts{Refresh: *refresh, DevSource: devSource, SelfLink: selfLink}
 	cCreated, cUpdated, cSkipped, err := bootstrap.WriteCore(r.Root, opts)
 	if err != nil {
 		return fail("%v", err)
@@ -507,6 +560,22 @@ func tierLabel(t string) string {
 
 // ensureGitignore appends fledge's ignore lines when missing; reports change.
 func ensureGitignore(path string) (bool, error) {
+	return ensureGitignoreBlock(path, "# fledge — per-run intermediates, regenerable", gitignoreLines)
+}
+
+// ensureDevGitignore appends devPaths (PLM-031 FC-6) as their own, separate,
+// conditional block — present only in a dev-linked repo — unlike
+// ensureGitignore's unconditional block. Writes path patterns, not
+// machine-specific locations, so the block is valid for any clone; the actual
+// dev-source location is recorded only in .fledge/scaffold.json's devSource.
+func ensureDevGitignore(path string, devPaths []string) (bool, error) {
+	return ensureGitignoreBlock(path, "# fledge dev mode — symlinked into a local fledge source checkout (fledge init --dev)", devPaths)
+}
+
+// ensureGitignoreBlock appends any of lines missing from path as one labeled
+// block, idempotently; reports whether it wrote anything. Shared by
+// ensureGitignore (always-on) and ensureDevGitignore (dev-mode only).
+func ensureGitignoreBlock(path, header string, lines []string) (bool, error) {
 	existing, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return false, err
@@ -516,7 +585,7 @@ func ensureGitignore(path string) (bool, error) {
 		have[strings.TrimSpace(l)] = true
 	}
 	var missing []string
-	for _, l := range gitignoreLines {
+	for _, l := range lines {
 		if !have[l] {
 			missing = append(missing, l)
 		}
@@ -529,9 +598,28 @@ func ensureGitignore(path string) (bool, error) {
 	if len(existing) > 0 && !strings.HasSuffix(string(existing), "\n") {
 		b.WriteByte('\n')
 	}
-	b.WriteString("# fledge — per-run intermediates, regenerable\n")
+	b.WriteString(header + "\n")
 	for _, l := range missing {
 		b.WriteString(l + "\n")
 	}
 	return true, spec.WriteFileAtomic(path, []byte(b.String()))
+}
+
+// trackedDevPaths returns which of paths are already tracked by git in the
+// repo at root (PLM-031 FC-6): a dev-linked path must not already be a
+// tracked file, or --dev would silently turn a real tracked file into an
+// untracked symlink. Not-a-git-repo or no git binary is not an error state
+// for fledge generally, so any failure degrades to "none tracked" rather than
+// aborting the command.
+func trackedDevPaths(root string, paths []string) []string {
+	args := append([]string{"-C", root, "ls-files", "--"}, paths...)
+	out, err := exec.Command("git", args...).Output()
+	if err != nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(string(out))
+	if trimmed == "" {
+		return nil
+	}
+	return strings.Split(trimmed, "\n")
 }
