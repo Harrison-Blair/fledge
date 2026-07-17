@@ -2,7 +2,7 @@
 id: FTHR-074
 title: Verdict and escalation commands with generic ledger read
 plumage: PLM-030
-status: egg
+status: fledged
 priority: P1
 depends_on: [FTHR-072]
 authored: 2026-07-16T22:22:50Z
