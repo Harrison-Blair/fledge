@@ -39,6 +39,12 @@ stdout 'FTHR-001'
 stdout 'FTHR-002'
 stdout 'FTHR-005'
 
+# FTHR-090 AC-4: no PID reporting anywhere in broods output
+exec fledge broods --json
+! stdout 'pid_alive'
+exec fledge broods
+! stdout 'pid not alive'
+
 -- .fledge/.gitkeep --
 -- .fledge/pluma/plumage/PLM-001-a.md --
 ---
