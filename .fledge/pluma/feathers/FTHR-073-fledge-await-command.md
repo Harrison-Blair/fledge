@@ -2,7 +2,7 @@
 id: FTHR-073
 title: fledge await command
 plumage: PLM-030
-status: egg
+status: fledged
 priority: P1
 depends_on: [FTHR-072]
 authored: 2026-07-16T22:21:37Z
