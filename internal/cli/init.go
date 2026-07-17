@@ -51,7 +51,7 @@ func (d *devFlag) Set(v string) error {
 var defaultScanIgnore []byte
 
 // gitignore lines fledge needs; appended as one block when any is missing.
-var gitignoreLines = []string{".fledge/nest/raw/", ".fledge/broods/", ".fledge/roster/", ".fledge/scratch/", ".alloc.lock"}
+var gitignoreLines = []string{".fledge/nest/raw/", ".fledge/broods/", ".fledge/roster/", ".fledge/scratch/", ".alloc.lock", ".fledge/ledger/"}
 
 // stringListFlag implements flag.Value for a repeatable, comma-separated list.
 type stringListFlag []string

@@ -44,9 +44,9 @@ Test-first, with the failing-first observation **behavioral** (PLM-035 AC-2). St
 - Order: write the assertion, capture its verbatim behavioral failure in `.fledge/molt/FTHR-091.md`, then add the line.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: The failing-test observation is **behavioral** — captured from `init.txtar` running against a fresh repo, not a compilation error — and recorded verbatim in `.fledge/molt/FTHR-091.md` (satisfies PLM-035 AC-2).
-- [ ] AC-3: A freshly initialized repository's `.gitignore` contains `.fledge/ledger/`, proven by a test that fails against the current code (satisfies PLM-035 FC-10, AC-11).
-- [ ] AC-4: Re-running `fledge init` does not duplicate the ledger entry, proven by a count assertion mirroring the existing one for `.fledge/broods/`.
-- [ ] AC-5: Every gitignore entry written before this feather is still written, proven by the existing assertions passing unmodified.
-- [ ] AC-6: `go test ./...` is green, `go vet ./...` and `gofmt -l .` are clean, and `fledge preen` reports no errors on the branch (satisfies PLM-035 AC-13).
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: The failing-test observation is **behavioral** — captured from `init.txtar` running against a fresh repo, not a compilation error — and recorded verbatim in `.fledge/molt/FTHR-091.md` (satisfies PLM-035 AC-2).
+- [x] AC-3: A freshly initialized repository's `.gitignore` contains `.fledge/ledger/`, proven by a test that fails against the current code (satisfies PLM-035 FC-10, AC-11).
+- [x] AC-4: Re-running `fledge init` does not duplicate the ledger entry, proven by a count assertion mirroring the existing one for `.fledge/broods/`.
+- [x] AC-5: Every gitignore entry written before this feather is still written, proven by the existing assertions passing unmodified.
+- [x] AC-6: `go test ./...` is green, `go vet ./...` and `gofmt -l .` are clean, and `fledge preen` reports no errors on the branch (satisfies PLM-035 AC-13).
