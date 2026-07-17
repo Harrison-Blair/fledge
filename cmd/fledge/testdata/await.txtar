@@ -1,25 +1,39 @@
-# fledge await: block until a ledger record appears/changes, or --timeout elapses
+# fledge await: existence-wait or change-wait on a ledger record, or --timeout elapsing
 exec git init -q .
 
-# happy path: await is started against a subject with no record yet, then a
-# heartbeat writes one; await observes the appearance and returns it
-exec fledge await watcher-subject --kind status --json &
+# happy path (existence-wait): the record is written first via heartbeat,
+# then await --exists returns it immediately against the already-existing
+# record — race-free by construction: one process at a time, no
+# backgrounding, no wait.
 exec fledge heartbeat watcher-subject --note 'now running'
-wait
+exec fledge await watcher-subject --kind status --exists --timeout 5s --json
 stdout '"subject": "watcher-subject"'
 stdout '"note": "now running"'
 ! stdout '"timed_out"'
 
-# real-elapsed-time timeout: no record is ever written for this subject, so
-# await must block until --timeout elapses and exit the new ExitTimeout code
-# (4, distinct from ExitFail/1) — asserted precisely via a shell exit check
-# since testscript's `!` prefix only distinguishes zero from non-zero.
-exec sh -c 'fledge await never-appears --kind status --timeout 200ms --json; test $? -eq 4'
+# real-elapsed-time timeout, existence-wait: no record is ever written for
+# this subject, so await must block until --timeout elapses and exit the
+# ExitTimeout code (4, distinct from ExitFail/1) — asserted precisely via a
+# shell exit check since testscript's `!` prefix only distinguishes zero from
+# non-zero.
+exec sh -c 'fledge await never-appears --kind verdict --exists --timeout 200ms --json; test $? -eq 4'
+stdout '"timed_out": true'
+stdout '"record": null'
+
+# real-elapsed-time timeout, change-wait: same assertion without --exists
+exec sh -c 'fledge await never-appears-2 --kind status --timeout 200ms --json; test $? -eq 4'
 stdout '"timed_out": true'
 stdout '"record": null'
 
 # malformed input: missing --kind is a usage error (exit 2)
 ! exec fledge await some-subject
+stderr 'usage'
+
+# malformed input: missing --timeout is a usage error (exit 2), proven
+# separately on both the change-wait and existence-wait paths
+! exec fledge await some-subject --kind status
+stderr 'usage'
+! exec fledge await some-subject --kind verdict --exists
 stderr 'usage'
 
 -- .fledge/.gitkeep --
