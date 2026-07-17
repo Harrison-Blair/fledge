@@ -1,7 +1,7 @@
 ---
 id: PLM-030
 title: Deterministic agent handoff ledger
-status: hatched
+status: fledged
 priority: P1
 authored: 2026-07-16T22:14:29Z
 agent: fledge-orchestrate/planning
@@ -33,12 +33,12 @@ fledge already has a proven building block for exactly this class of problem: `i
 8. FC-8: `fledge preen` gains no new validation obligations toward ledger records in this plumage (the ledger has no cross-record consistency invariant analogous to brood/hatching-status bidirectionality) — but a feather may add basic corruption tolerance (skip-and-report, mirroring `lock.List`'s handling of an unparseable `.brood` file) if the interrogation for that feather surfaces the need.
 
 ## Acceptance Criteria
-- [ ] AC-1: `internal/ledger` (or equivalent new package) exists with `status`, `verdict`, and `escalation` record types, atomic write/read functions, and unit tests covering concurrent-write safety and corrupt-file handling, independent of any CLI command.
-- [ ] AC-2: `fledge heartbeat`, `fledge await`, and the read/write commands needed to record a `verdict` and an `escalation` are implemented, each supporting `--json`, exercised by CLI acceptance tests (testscript/txtar) covering the happy path, the timeout path, and at least one malformed-input path per command.
-- [ ] AC-3: `fledge await`'s timeout path is proven with a real elapsed-time test (not mocked away) exiting the new dedicated timeout exit code, distinct from `ExitFail`.
-- [ ] AC-4: The stalled-vs-busy classification (lease-freshness against the worker's declared quiet period, not idle notifications) is implemented and unit-tested against both directions: a lease within its declared period classifies not-stalled, and a lease aged past it classifies stalled. **Superseded by PLM-035:** as originally authored this criterion required a PID check ("dead-PID worker with a fresh lease, live-PID worker with a stale lease"); PLM-035 (FTHR-089/090) deleted PID liveness entirely — the recorded PID was the CLI's own, dead the instant the command returned, so it classified every healthy worker as stalled — and replaced it with the lease-only rule verified here.
-- [ ] AC-5: `worker-protocols.md`, `incubator.md`, `brooder.md`, `skua.md`, `foraging.md`, `implementation.md`, and `planning.md` are updated to describe handoffs in terms of ledger records and `fledge await`/`fledge heartbeat`, with `message-peer` reduced to a stateless nudge role in that prose, and this repo's own `.fledge/skills/` scaffold refreshed to match (`fledge init --refresh`) with `fledge preen` passing.
-- [ ] AC-6: `go test ./...` is green and `fledge preen` passes on the branch that closes this plumage.
+- [x] AC-1: `internal/ledger` (or equivalent new package) exists with `status`, `verdict`, and `escalation` record types, atomic write/read functions, and unit tests covering concurrent-write safety and corrupt-file handling, independent of any CLI command.
+- [x] AC-2: `fledge heartbeat`, `fledge await`, and the read/write commands needed to record a `verdict` and an `escalation` are implemented, each supporting `--json`, exercised by CLI acceptance tests (testscript/txtar) covering the happy path, the timeout path, and at least one malformed-input path per command.
+- [x] AC-3: `fledge await`'s timeout path is proven with a real elapsed-time test (not mocked away) exiting the new dedicated timeout exit code, distinct from `ExitFail`.
+- [x] AC-4: The stalled-vs-busy classification (lease-freshness against the worker's declared quiet period, not idle notifications) is implemented and unit-tested against both directions: a lease within its declared period classifies not-stalled, and a lease aged past it classifies stalled. **Superseded by PLM-035:** as originally authored this criterion required a PID check ("dead-PID worker with a fresh lease, live-PID worker with a stale lease"); PLM-035 (FTHR-089/090) deleted PID liveness entirely — the recorded PID was the CLI's own, dead the instant the command returned, so it classified every healthy worker as stalled — and replaced it with the lease-only rule verified here.
+- [x] AC-5: `worker-protocols.md`, `incubator.md`, `brooder.md`, `skua.md`, `foraging.md`, `implementation.md`, and `planning.md` are updated to describe handoffs in terms of ledger records and `fledge await`/`fledge heartbeat`, with `message-peer` reduced to a stateless nudge role in that prose, and this repo's own `.fledge/skills/` scaffold refreshed to match (`fledge init --refresh`) with `fledge preen` passing.
+- [x] AC-6: `go test ./...` is green and `fledge preen` passes on the branch that closes this plumage.
 
 ## Out of Scope
 - An append-only history/audit log for ledger records — latest-value-only records, no replay of past handoff state.

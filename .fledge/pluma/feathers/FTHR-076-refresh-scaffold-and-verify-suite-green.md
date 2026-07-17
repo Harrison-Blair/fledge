@@ -2,7 +2,7 @@
 id: FTHR-076
 title: Refresh scaffold and verify suite green
 plumage: PLM-030
-status: egg
+status: fledged
 priority: P1
 depends_on: [FTHR-075]
 authored: 2026-07-16T22:26:24Z
@@ -36,9 +36,9 @@ Black-box verification suite, no new unit test:
 - Test-first framing: before rebuild+refresh, `fledge preen`/`fledge version` are expected to show the old binary and a stale scaffold; capture that as the pre-state, then confirm clean after.
 
 ## Acceptance Criteria
-- [ ] AC-1: `fledge version` matches `VERSION` after reinstall.
-- [ ] AC-2: `fledge init --refresh` completes with only the expected file set touched.
-- [ ] AC-3: `fledge preen` passes.
-- [ ] AC-4: `go vet ./...` and `go test ./... -race` pass, satisfying PLM-030 AC-6.
-- [ ] AC-5: `go test ./cmd/fledge -run TestScripts` passes in full, including every new ledger-related txtar fixture, satisfying PLM-030 AC-2/AC-3/AC-5/AC-6.
-- [ ] AC-6: All five new commands (`heartbeat`, `await`, `verdict`, `escalate`, `ledger read`) resolve `--help` on the freshly reinstalled binary.
+- [x] AC-1: `fledge version` matches `VERSION` after reinstall.
+- [x] AC-2: `fledge init --refresh` completes with only the expected file set touched.
+- [x] AC-3: `fledge preen` passes.
+- [x] AC-4: `go vet ./...` and `go test ./... -race` pass, satisfying PLM-030 AC-6.
+- [x] AC-5: `go test ./cmd/fledge -run TestScripts` passes in full, including every new ledger-related txtar fixture, satisfying PLM-030 AC-2/AC-3/AC-5/AC-6.
+- [x] AC-6: All five new commands (`heartbeat`, `await`, `verdict`, `escalate`, `ledger read`) resolve `--help` on the freshly reinstalled binary.
