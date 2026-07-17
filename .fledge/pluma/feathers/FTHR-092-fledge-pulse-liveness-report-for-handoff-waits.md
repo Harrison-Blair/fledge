@@ -2,7 +2,7 @@
 id: FTHR-092
 title: "fledge pulse: liveness report for handoff waits"
 plumage: PLM-035
-status: egg
+status: fledged
 priority: P1
 depends_on: [FTHR-089]
 authored: 2026-07-17T07:59:11Z
