@@ -2,7 +2,7 @@
 id: FTHR-081
 title: Refresh preserves dev links instead of resetting them to copies
 plumage: PLM-031
-status: egg
+status: fledged
 priority: P1
 depends_on: [FTHR-077, FTHR-078]
 authored: 2026-07-17T02:11:04Z
