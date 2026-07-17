@@ -1,78 +1,68 @@
 ---
-generated: 2026-07-17T02:54:09Z
-commit: e7a6d4969f861ed3f03af7833b750a7cd703a7a8
+generated: 2026-07-17T07:00:54Z
+commit: ee49464adb830bef7189f94a1d3253927d33fb5f
 agent: fledge-forager
-fledge_version: 0.5.8
+fledge_version: 0.6.7
 ---
 
 # Modules
 
-Repo map: each module, its purpose, key files, and where to look for what.
+Repo map: every top-level module (per `fledge scan`), its purpose, key files, and where to look for what.
 
-## root (repo root files, `.github/`, `docs/`, `scripts/`)
+## `<root>` (8 files, 56050 bytes)
 
-Purpose: repo-level docs, CI workflows, release scripts, and design-history material; not Go source.
-Key files: `CLAUDE.md` (agent guidance), `README.md` (public overview, terminology decoder), `RELEASING.md` (release process), `MIGRATION.md` (upgrade paths 0.1.0→0.4.0), `VERSION`, `go.mod` (Go 1.26, deps: `goccy/go-yaml`, `rogpeppe/go-internal`), `.github/workflows/pr-check.yml` and `release.yml`, `scripts/hooks/pre-commit`, `scripts/install.sh`, `docs/generalization-plan.md` (locked multi-agent design decisions).
-Look here for: build/release process, terminology definitions, CI gate behavior, historical design rationale (docs/).
+Repo-level scaffolding and docs. `VERSION` (0.6.7, source of truth for the release ceremony); `go.mod` (module `github.com/Harrison-Blair/fledge`, Go 1.26.4); `CLAUDE.md` (primary dev guide); `README.md` (feature overview, 6-primitive contract, CLI command table); `MIGRATION.md` (3 sequential upgrade paths: 0.1.0→0.2.0 skill relocation, 0.2.x→0.3.0 scaffold stamp, 0.3.x→0.4.0 `pluma/`→`.fledge/pluma/`); `RELEASING.md` (version-bump ceremony: 3 files sync — `VERSION`, `internal/cli/version.go`, `cmd/fledge/testdata/stamp_warning.txtar`); `LICENSE` (AGPLv3); `.gitignore` (ignores build artifacts, per-run intermediates, dev-link symlinks, `.claude/settings.local.json`).
 
-## cmd (`cmd/fledge/`)
+Look here for: version/release ceremony, licensing, module path, top-level upgrade history, bird-terminology glossary (README.md).
 
-Purpose: the CLI binary's sole entry point plus its acceptance test suite.
-Key files: `cmd/fledge/main.go` (11 lines — `main()` → `cli.Run(os.Args[1:])`), `cmd/fledge/main_test.go` (testscript harness registration), `cmd/fledge/testdata/*.txtar` (27 acceptance test scripts, one per command/scenario).
-Look here for: how the binary starts, the full acceptance-test suite (testscript/txtar) covering every CLI command end-to-end.
+## `cmd` (37 files, 105255 bytes)
 
-## internal/cli (`internal/cli/`)
+CLI entrypoint + acceptance-test suite. `cmd/fledge/main.go` (single-function entrypoint calling `internal/cli.Run`); `cmd/fledge/main_test.go` (testscript harness, git-identity isolation); `cmd/fledge/testdata/*.txtar` — 37 fixtures (`ls cmd/fledge/testdata/*.txtar | wc -l` = 37), one per command/feature path, including recent additions `await.txtar`, `verdict.txtar`, `escalate.txtar`, `ledger-read.txtar`, `dev_preen.txtar`, `dev_rails.txtar`, `dev_refresh.txtar`, `dev_status.txtar`.
 
-Purpose: command dispatch layer — argument parsing, subcommand routing, exit codes, `--json` output. 19 commands, each a thin file delegating to a domain package.
-Key files: `cli.go` (`Run`, `command` registration, `commandOrder`, exit codes), `init.go` (538 lines — `fledge init`, scaffold/dev-mode/refresh), `nest.go` (364 lines — `fledge nest` family), `update.go` (341 lines — self-update via GitHub releases), `brood.go`, `preen.go`, `vee.go`, `colony.go`, `criteria.go`, `set.go`, `new.go`, `status.go`, `roster.go`, `heartbeat.go`, `scan.go`, `agents.go`, `ready.go`, `unfledged.go`, `version.go`, `specload.go` (shared helpers), `fledgeignore.default`.
-Look here for: the full CLI command surface, exit code conventions, flag conventions (`--json`, `--force`, `--strict`), how commands compose domain packages.
+Look here for: how any specific CLI command is expected to behave (flags, exit codes, JSON shape) — each `.txtar` is a runnable spec; run via `go test ./cmd/fledge -run TestScripts` (all) or `.../TestScripts/<name>` (one).
 
-## internal/spec (`internal/spec/`)
+## `docs` (3 files, 37084 bytes)
 
-Purpose: the on-disk spec file format — YAML frontmatter + byte-preserved markdown body — for plumages (PLM-###) and feathers (FTHR-###). ID allocation, lifecycle status constants, acceptance-criteria checkbox parsing, and the embedded spec templates all live here. **Critical for data-model.md and conventions.md accuracy.**
-Key files: `types.go` (Requirement/Task structs, status constants), `frontmatter.go` (250 lines — parse/render/atomic write), `ids.go` (125 lines — `NextID`, `AllocateAndCreate` with flock), `criteria.go` (89 lines — AC checkbox parse/toggle), `load.go` (batch loading into `Set`), `templates.go` + `templates/feather.md`, `templates/plumage.md`.
-Look here for: exact frontmatter field lists, valid status values, ID allocation scheme, acceptance-criteria format rules.
+Standalone planning/research prose, not wired into the build. `docs/generalization-plan.md` — locked 0.2.0 multi-agent generalization design (23 resolved decisions Q1–Q23, milestones M0–M5); status: "ready to become a plumage," not yet converted. `docs/google_ai_mode_response.md` and `docs/research_prompt.md` — unrelated multi-tier AI-routing infrastructure proposal and its research-prompt template; not referenced anywhere in fledge code or specs.
 
-## internal/bootstrap (core skills) (`internal/bootstrap/core/skills/`)
+Look here for: historical design rationale behind the multi-harness generalization (adapters, primitives, tiers) predating their current implementation; do not treat as current-state documentation without cross-checking `internal/bootstrap`.
 
-Purpose: the single agent-neutral source of the orchestration workflow prose — what gets embedded and scaffolded to `.fledge/skills/` in every target repo. Defines the fledge-orchestrate and fledge-interrogate skills, planning/implementation/foraging phases, and worker-role protocols (incubator, brooder, skua, forager/scout).
-Key files: `skills/fledge-orchestrate/SKILL.md` (router), `planning.md`, `implementation.md`, `foraging.md`, `incubator.md`, `brooder.md`, `skua.md`, `worker-protocols.md` (now a stub pointing to the three per-role files), `templates/{plumage,feather,context-doc,scout-report}.md`, `skills/fledge-interrogate/SKILL.md`.
-Look here for: the actual planning/implementation/foraging process steps, worker spawn-prompt contracts, gate/message envelope semantics, digest file conventions.
+## `.github` + `scripts` (merged small modules: 2+2 files, 3900+2282 bytes)
 
-## internal/bootstrap (adapters) (`internal/bootstrap/adapters/`)
+CI/CD and local dev tooling. `.github/workflows/pr-check.yml` (lint/build/test gate on PRs to main); `.github/workflows/release.yml` (VERSION-change-gated cross-platform release: linux/darwin × amd64/arm64, 4 targets, no Windows, tar.gz + sha256, `gh release create`); `scripts/hooks/pre-commit` (optional local hook mirroring CI lint — gofmt, go vet — opt-in via `git config core.hooksPath scripts/hooks`); `scripts/install.sh` (build/install/verify fledge binary, optional `--refresh` re-syncs scaffold).
 
-Purpose: thin, format-only per-harness mappings (claude, codex, pi) of the 6 primitives to concrete harness mechanisms. No workflow logic lives here — only manifests and format glue.
-Key files: `claude/manifest.yaml` + `claude/agents/*.md` (5 agent definitions) + `claude/settings.json`/`settings.local.json` + `claude/team-loop.md` (Tier C, full team support); `codex/manifest.yaml` (Tier A, solo); `pi/manifest.yaml` + `pi/prompts/{fledge-plan,fledge-implement}.md` + `pi/settings.json` (Tier A, solo).
-Look here for: how a given harness realizes `confirm-gate`/`spawn-worker`/etc., what files `fledge init` writes into `.claude/`, `.codex/`, `.pi/`, and their write policies.
+Look here for: release process mechanics, CI gate contents, the pre-commit hook's exact commands.
 
-## internal/bootstrap (Go implementation) (`internal/bootstrap/*.go`)
+## `internal/bootstrap` (50 files, 218346 bytes)
 
-Purpose: the Go code that embeds core/adapters (`//go:embed`), loads manifests, derives tiers, writes/refreshes scaffolded files, detects drift, and (new, PLM-031) stamps `.fledge/scaffold.json` including dev-install symlink mode.
-Key files: `bootstrap.go` (embed FS), `primitives.go` (`PrimitiveOrder`, `DeriveTier`), `registry.go` (`Manifest`, `WriteCore`, `WriteAdapter`, file write policies, `WriteOpts`), `drift.go` (`DriftStatus`, `DriftReport`, `EditedOnRefresh`), `stamp.go` (new — `Stamp`, `StampEntry`, `LoadStamp`, `Write`, `ExpectedFiles`/`ExpectedFilesDev`, `ValidateDevSource`, `writeDevLink`), plus 15 test files covering contract/expected-files/drift/refresh/prose invariants.
-Look here for: exactly how scaffolding, drift detection, and dev-mode (`fledge init --dev`) are implemented; the source of truth for `.fledge/scaffold.json`'s shape.
+The scaffolding/orchestration engine. `bootstrap.go` (embed.FS of `core/` + `adapters/`); `primitives.go` (6-primitive model, tier derivation); `registry.go` (manifest loading, `WriteCore`/`WriteAdapter`, dev-link write path); `stamp.go` (`Stamp`/`StampEntry`, `ExpectedFiles`/`ExpectedFilesDev`); `drift.go` (5-status drift classification, dev-link-aware). `core/skills/fledge-orchestrate/` and `core/skills/fledge-interrogate/` hold the actual agent-neutral workflow prose (this is the source of truth — the repo's own `.fledge/skills/` is dev-linked output). `adapters/{claude,pi,codex}/` hold per-harness `manifest.yaml` + prompts + settings.
 
-## internal/check, internal/graph, internal/ciconfig, internal/doctest, internal/hooktest (small internal packages, merged scout)
+Look here for: how `fledge init`/`fledge agents`/`fledge dev` scaffold a repo, the 6-primitive/tier model, per-harness differences, drift/refresh semantics, and the canonical prose behind `.fledge/skills/fledge-orchestrate/*.md` (edit here, not the scaffolded copy).
 
-Purpose:
-- `internal/check` — spec validation, backs `fledge preen` (`check.go:Run`, `Finding`, `Severity`; 15 named rules e.g. `dangling-ref`, `cycle`, `criteria-incomplete`)
-- `internal/graph` — dependency graph/cycle detection/topological waves, backs `fledge vee` (`graph.go:New`, `Cycle`, `Waves`, `Ready`)
-- `internal/ciconfig` — test-only; asserts CI workflow YAML structure (release.yml, pr-check.yml) matches expectations
-- `internal/doctest` — test-only; asserts README.md/RELEASING.md/CLAUDE.md cross-references stay accurate
-- `internal/hooktest` — test-only; end-to-end tests of `scripts/hooks/pre-commit` against real git repos
-Look here for: validation rule definitions (`check`), dependency-cycle/readiness logic (`graph`), and the meta-tests that keep CI config and docs honest (`ciconfig`/`doctest`/`hooktest`).
+## `internal/cli` (36 files, 143315 bytes)
 
-## internal/ledger, internal/nest, internal/repo, internal/roster, internal/scan (small internal packages, merged scout)
+Command-dispatch layer: 25 registered subcommands. `cli.go` (registry, exit codes `ExitOK/Fail/Usage/Env/Timeout` = 0/1/2/3/4); `await.go`/`verdict.go`/`escalate.go`/`ledger.go`/`heartbeat.go` (PLM-030 ledger commands); `dev.go` (PLM-031 dev-link status); `init.go` (scaffold/refresh/prune); `new.go`/`status.go`/`set.go`/`criteria.go` (spec mutation); `brood.go` (feather claims); `colony.go`/`unfledged.go`/`ready.go`/`vee.go`/`scan.go`/`preen.go` (reporting/validation); `nest.go` (concern-doc scaffolding); `update.go` (self-update); `roster.go`/`agents.go` (agent assignment).
 
-Purpose:
-- `internal/ledger` (new) — deterministic agent-handoff ledger under `.fledge/ledger/`; atomic (subject, kind)-addressed records (status/verdict/escalation), backs `fledge heartbeat`
-- `internal/nest` — schemas, embedded templates, and status-checking for `.fledge/nest/` context docs (concern docs + `raw/` scout reports); backs `fledge nest`
-- `internal/repo` — git-root resolution and standardized `.fledge/` subdirectory path accessors
-- `internal/roster` — worker species-name allocation (18 canonical names) with pair/overflow semantics, backs `fledge roster`
-- `internal/scan` — repo file/module enumeration via `git ls-files` + `.fledgeignore`, backs `fledge scan`
-Look here for: the ledger record schema (`ledger.go`), the nest doc/status schema this very document set conforms to (`nest.go`, `docs.go`), `.fledge/` path conventions (`repo.go`), species-name allocation rules (`roster.go`), and module/file-listing rules (`scan.go`).
+Look here for: exact CLI flag/behavior/exit-code contracts for any command, especially `await`'s change-wait-vs-existence-wait semantics (`await.go`).
 
-## internal/lock (`internal/lock/`)
+## `internal/spec` (12 files, 35658 bytes)
 
-Purpose: advisory feather-claim (brood) files under `.fledge/broods/`; atomic exclusive-claim mechanism via `os.Link`, backs `fledge brood`/`abandon`/`broods`.
-Key files: `lock.go` (`Record`, `Acquire`, `Release`, `Get`, `List`, `HeldError`), `lock_test.go` (8 tests incl. concurrency/corruption resilience).
-Look here for: brood file format (`<FTHR-ID>.brood`), atomicity guarantees, how a claim maps to feather ownership.
+Spec (plumage/feather) parsing, ID allocation, criteria. `types.go` (`Requirement`, `Task`, lifecycle constants); `frontmatter.go` (YAML parse/render, byte-preserved body, `WriteFileAtomic`); `criteria.go` (AC-N checkbox regex parsing, single-byte checked-state flip); `ids.go` (`NextID`, flock-serialized `AllocateAndCreate`, `Kebab`); `load.go` (bulk `Load`, resilient to per-file parse errors); `templates.go` + `templates/{plumage,feather}.md` (new-spec skeletons).
+
+Look here for: frontmatter schema/key order, ID-allocation algorithm, how acceptance-criteria checkboxes are parsed/flipped, spec template skeletons.
+
+## `internal/{check,ciconfig,doctest,graph,hooktest,repo,scan}` (merged small modules: 13 files, 54301 bytes)
+
+Foundational single-purpose packages. `check/check.go` (`fledge preen` validation, `Finding` type, hyphenated rule names). `graph/graph.go` (`fledge vee`: `Cycle`, `Waves`, `Ready`). `repo/repo.go` (git-root discovery, `.fledge` path accessors, `RequireFledge`). `scan/scan.go` (`fledge scan`: module grouping, `.fledgeignore` filtering). `ciconfig/*_test.go`, `doctest/*_test.go`, `hooktest/precommit_test.go` — test-only packages that pin the shape of `.github/workflows/*.yml`, `README.md`/`CLAUDE.md`/`RELEASING.md` sections, and `scripts/hooks/pre-commit` respectively, so those non-Go artifacts stay consistent with what's documented.
+
+Look here for: validation rule names/behavior (`check`), dependency-graph/readiness semantics (`graph`), `.fledge` path layout (`repo`), scan/module-grouping logic (`scan`); and — for ciconfig/doctest/hooktest — the tests that will fail if CI workflows, key docs, or the pre-commit hook drift from what's asserted.
+
+## `internal/{ledger,lock,nest,roster}` (merged small modules: 12 files, 57563 bytes)
+
+State-backing packages beneath the CLI. `ledger/ledger.go` (new PLM-030 package: `Record`/`StatusRecord`/`VerdictRecord`/`EscalationRecord`, atomic temp-then-rename writes, subject-path-traversal rejection, `ClassifyLiveness` against a 5-minute `StaleAfter` TTL). `lock/lock.go` (`fledge brood` backing: exclusive `os.Link`-based claim acquisition, corruption-tolerant `List`). `nest/nest.go` + `docs.go` + `templates/` (backs `fledge nest scaffold/scout/stamp/status` — the very machinery that produced this document set; embeds its own placeholder templates, distinct in purpose from `.fledge/skills/fledge-orchestrate/templates/`, see Open Questions in `architecture.md`). `roster/roster.go` (`fledge roster`: 18-species token table, flock-guarded, overflow to numeric suffixes).
+
+Look here for: ledger record shapes/liveness rules, brood-lock exclusivity mechanics, how nest concern-doc/scout-report scaffolding and stub/completion detection work, roster species-allocation algorithm.
+
+## Open Questions
+
+None carried forward at the module-map level; see `architecture.md` and `data-model.md` for unresolved scout questions on specific subsystems.

@@ -1,40 +1,45 @@
 ---
-generated: 2026-07-17T02:54:09Z
-commit: e7a6d4969f861ed3f03af7833b750a7cd703a7a8
+generated: 2026-07-17T07:00:54Z
+commit: ee49464adb830bef7189f94a1d3253927d33fb5f
 agent: fledge-forager
-fledge_version: 0.5.8
+fledge_version: 0.6.7
 ---
 
 # Context Index
 
 ## architecture.md
-Explains fledge's two-layer design (deterministic `internal/cli` + domain packages vs. the `internal/bootstrap` scaffolding/adapter system), how the two layers are wired together (`init.go` ↔ `bootstrap`, `preen.go` ↔ `DriftReport`), and how the embedded core-skill prose relates to per-harness adapters and tiers.
-Read this when: you need the big picture before touching either the CLI dispatch layer or the bootstrap/scaffold system, or need to understand why a change in one ripples into the other.
+The two-layer split (deterministic CLI vs. agent-neutral bootstrap/adapter system), the 6-primitive/tier model, and the two subsystems that are new since the last regeneration: the PLM-030 handoff ledger (`await`'s change-wait vs. existence-wait contract, the new `ExitTimeout` exit code) and PLM-031 dev-install mode (dev-linked scaffold files, drift-aware classification).
+Read this when: orienting to the codebase for the first time, planning a change that spans the CLI/bootstrap seam, or needing to understand `fledge await`'s wait semantics or dev-link mode before touching either.
 
 ## modules.md
-A repo map: every top-level Go package and doc/config module, its purpose, key files, and a "look here for" pointer, including the merged small packages (check/graph/ciconfig/doctest/hooktest and ledger/nest/repo/roster/scan).
-Read this when: you know roughly what you want to change but need to find which package/file owns it.
+Repo map: every top-level module from `fledge scan` (root, cmd, docs, `.github`+scripts, and five `internal/` groupings — bootstrap, cli, spec, core-infra, state) with purpose, key files, and file/byte counts.
+Read this when: deciding which module(s) a change touches, or orienting to an unfamiliar part of the tree before diving into source.
 
 ## conventions.md
-Reconciled conventions across the repo: spec/ID lifecycle rules, CLI exit-code/flag/registration conventions, Go build/lint gates, bootstrap file-write-policy conventions, test conventions, and code-style/scope-discipline rules from the orchestration prose.
-Read this when: writing new code or specs and need to match existing patterns (naming, error handling, flag conventions, write policies) rather than reinvent them.
+Reconciled conventions: the uniform CLI command pattern, spec frontmatter/ID/criteria rules (byte-preserved bodies, single-byte checkbox flips, `fledge set` replaces-not-appends), bootstrap manifest/write-policy/drift rules, ledger atomicity and wait-contract conventions, and the flock/os.Link/atomic-rename concurrency idiom used throughout.
+Read this when: writing new CLI code, a new spec-touching feature, or anything that needs to match existing idiom rather than invent a new one.
 
 ## data-model.md
-Exact field-by-field data types: `Requirement`/`Task` structs and frontmatter field order (`internal/spec/types.go`), the full status lifecycle enums, the scaffold `Stamp`/`StampEntry`/`Manifest` types (`internal/bootstrap`), and the brood/roster/ledger/nest/scan record formats.
-Read this when: authoring or validating anything that touches spec frontmatter, the scaffold stamp, or any on-disk record format — this is the most precision-critical doc for planning work on spec layout or lifecycle.
+Every core struct across the codebase: spec types (`Requirement`, `Task`, `Criterion`, `Set`), the new ledger types (`Record`, `StatusRecord`, `VerdictRecord`, `EscalationRecord`), lock/nest/roster types, and bootstrap/scaffold types (`Manifest`, `Stamp`, `StampEntry`, `Drift`). Also resolves the internal/nest/templates vs. .fledge/skills/templates naming collision (different purposes, not duplicates).
+Read this when: adding a field to a spec/ledger/scaffold type, or needing exact struct shapes before writing code that consumes or produces them.
 
 ## dependencies.md
-The full external dependency list (two Go modules: `goccy/go-yaml`, `rogpeppe/go-internal`/testscript), stdlib usage by area, runtime dependencies (git, GitHub Releases API), and internal package dependency direction.
-Read this when: adding a new dependency (check if one already covers the need) or tracing what a package pulls in.
+The small, stable external dependency set (goccy/go-yaml, rogpeppe/go-internal's testscript, golang.org/x/{sys,tools}) plus stdlib usage patterns (flock, os.Link, atomic rename, embed, text/template) and GitHub Actions used in CI.
+Read this when: adding a new dependency (to check whether an existing one already covers the need) or tracing which package pulls in which stdlib/third-party primitive.
 
 ## entry-points.md
-Build/install commands, the full 19-command CLI surface with flags, the nest-command detail (the process that generated this document set), key public package APIs, and CI/git-hook entry points.
-Read this when: you need to invoke fledge (as a user or from a script), add/modify a CLI command, or understand what CI runs.
+The binary entrypoint (`cmd/fledge/main.go` → `internal/cli.Run`), build/test/install commands (including the dogfooding reinstall loop and `fledge init --refresh` regeneration step), and every public package API surface (`internal/spec`, `internal/check`, `internal/graph`, `internal/ledger`, `internal/bootstrap`, etc.).
+Read this when: needing the exact command to build, test, or reinstall fledge, or looking for which function is the public entry into a given package's logic.
 
 ## testing.md
-How to run tests at every level (unit, acceptance/txtar, meta-tests), the full breakdown of what each of the 27 acceptance-test files and each package's unit tests cover, and the test-first evidence discipline used during feather implementation.
-Read this when: writing or debugging tests, deciding where a new test belongs, or verifying a change didn't break existing coverage.
+Both test layers (37 txtar CLI-acceptance fixtures under `cmd/fledge/testdata/`, and per-package Go unit tests) with counts and coverage highlights per package, including the 8 fixtures new since the last regeneration (await, verdict, escalate, ledger-read, dev_preen, dev_rails, dev_refresh, dev_status).
+Read this when: writing or extending a test, deciding whether a behavior is already covered, or needing the exact `go test` invocation for a specific command or package.
 
 ## domain.md
-Glossary of fledge's bird-themed vocabulary — spec artifacts (plumage/feather/AC/FC), CLI operations (preen/vee/brood/molt/colony), worker roles (incubator/forager/scout/brooder/skua), workflow phases, and the primitive/tier/adapter/harness model.
-Read this when: unfamiliar terminology appears in a spec, prose doc, or conversation and you need the precise, source-grounded definition.
+Full bird-themed glossary — spec vocabulary (plumage, feather, pipping, brood, molt, preen), orchestration vocabulary (nest, forager, scout, skua, brooder, tier, primitive, adapter, dev-link), and the new PLM-030 ledger vocabulary (subject, kind, heartbeat, await's two wait modes, stale).
+Read this when: unsure what a bird-themed term means, or writing prose/specs that need to use this vocabulary correctly and consistently.
+
+## Open Questions carried forward
+
+- Windows dev-link fallback behavior is referenced but not fully specified in code comments (see `architecture.md`).
+- Whether `Stamp.DevSource` is written on every `--dev` invocation or only on refresh is unconfirmed from the files read (see `architecture.md`, `data-model.md`).
