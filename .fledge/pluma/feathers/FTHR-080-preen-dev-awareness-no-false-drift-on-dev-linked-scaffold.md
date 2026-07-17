@@ -2,7 +2,7 @@
 id: FTHR-080
 title: "Preen dev-awareness: no false drift on dev-linked scaffold"
 plumage: PLM-031
-status: egg
+status: fledged
 priority: P1
 depends_on: [FTHR-077]
 authored: 2026-07-17T02:07:05Z
