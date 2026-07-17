@@ -1,1 +1,0 @@
-../../internal/bootstrap/adapters/claude/agents/fledge-skua.md
