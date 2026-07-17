@@ -130,18 +130,18 @@ expected reason (dev-linked files classify as `modified`), then implement until 
 
 ## Acceptance Criteria
 
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: In a dev-linked repository whose source content differs from the shipped bytes,
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: In a dev-linked repository whose source content differs from the shipped bytes,
       no dev-linked path is reported as modified, drifted, or user-edited. Satisfies
       PLM-031 FC-10, AC-10.
-- [ ] AC-3: Genuine problems with dev-linked paths are still reported — a dangling target
+- [x] AC-3: Genuine problems with dev-linked paths are still reported — a dangling target
       reports missing, and a regular file where a link is expected reports modified.
       Findings are not blanket-suppressed for dev-linked paths.
-- [ ] AC-4: Running `fledge preen` twice in succession on a dev-linked repository produces
+- [x] AC-4: Running `fledge preen` twice in succession on a dev-linked repository produces
       identical output, and every dev link still resolves to the same target afterwards.
       Satisfies PLM-031 FC-10, AC-10.
-- [ ] AC-5: Drift classification in a non-dev repository is unchanged, including a
+- [x] AC-5: Drift classification in a non-dev repository is unchanged, including a
       genuinely user-edited scaffold file still reporting as modified.
-- [ ] AC-6: `EditedOnRefresh` does not list dev-linked paths, so a refresh raises no
+- [x] AC-6: `EditedOnRefresh` does not list dev-linked paths, so a refresh raises no
       "will overwrite user-edited file(s)" prompt for them.
-- [ ] AC-7: `go test ./...` passes with existing fixtures unmodified.
+- [x] AC-7: `go test ./...` passes with existing fixtures unmodified.
