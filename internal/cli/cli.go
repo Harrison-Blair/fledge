@@ -105,7 +105,7 @@ func printUsage(w *os.File) {
 // commandOrder controls usage listing; keep in sync with registrations.
 var commandOrder = []string{
 	"init", "agents", "scan", "new", "nest", "preen", "ready", "vee", "colony",
-	"unfledged", "status", "set", "criteria", "brood", "abandon", "broods", "heartbeat", "await", "roster", "version",
+	"unfledged", "status", "set", "criteria", "brood", "abandon", "broods", "heartbeat", "await", "verdict", "escalate", "ledger", "roster", "version",
 	"update", "dev",
 }
 

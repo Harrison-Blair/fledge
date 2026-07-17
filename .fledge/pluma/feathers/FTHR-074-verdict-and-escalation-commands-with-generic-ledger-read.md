@@ -39,9 +39,9 @@ Delivers the remaining two dedicated write commands from PLM-030's record-kind s
 - Implementation order fixed: write all tests first, confirm failing, then implement.
 
 ## Acceptance Criteria
-- [ ] AC-1: The tests listed above were observed failing before implementation and pass after.
-- [ ] AC-2: `fledge verdict` writes a valid `pass`/`fail` verdict record and rejects invalid `--result` values, satisfying part of PLM-030 FC-1.
-- [ ] AC-3: `fledge escalate` writes an escalation record, satisfying part of PLM-030 FC-1.
-- [ ] AC-4: `fledge ledger read` reads any of the three record kinds and reports a clean not-found outcome when absent.
-- [ ] AC-5: All three commands support `--json`, satisfying PLM-030 FC-6.
-- [ ] AC-6: `go test ./internal/cli/... ./cmd/fledge/...` passes.
+- [x] AC-1: The tests listed above were observed failing before implementation and pass after.
+- [x] AC-2: `fledge verdict` writes a valid `pass`/`fail` verdict record and rejects invalid `--result` values, satisfying part of PLM-030 FC-1.
+- [x] AC-3: `fledge escalate` writes an escalation record, satisfying part of PLM-030 FC-1.
+- [x] AC-4: `fledge ledger read` reads any of the three record kinds and reports a clean not-found outcome when absent.
+- [x] AC-5: All three commands support `--json`, satisfying PLM-030 FC-6.
+- [x] AC-6: `go test ./internal/cli/... ./cmd/fledge/...` passes.
