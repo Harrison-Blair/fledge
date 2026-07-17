@@ -1,7 +1,7 @@
 ---
 id: PLM-035
 title: "Sound liveness: lease-based classification with declared quiet periods"
-status: hatched
+status: fledged
 priority: P1
 authored: 2026-07-17T07:36:18Z
 agent: fledge-orchestrate/planning
@@ -86,19 +86,19 @@ FTHR-072/073/074, FTHR-088, and their `.fledge/molt/` evidence are **left untouc
 
 ## Acceptance Criteria
 
-- [ ] AC-1: Tests for every criterion below are written first, run against the unchanged code, and observed FAILING for the expected reason, with the failing output captured verbatim in `.fledge/molt/` evidence before any implementation is written.
-- [ ] AC-2: At least one failing-test observation per criterion is **behavioral** — an assertion about observable command behavior, not a compilation or arity error — sourced from the CLI acceptance layer. Evidence consisting solely of build breakage does not satisfy AC-1: the classifier's signature changes twice here, and a build break would otherwise make every test in the package vacuously "fail".
-- [ ] AC-3: A worker whose lease is fresh classifies as not stalled, proven by a test that **fails against the current code** — the exact condition misclassified today (satisfies FC-1).
-- [ ] AC-4: No PID field remains in either record shape or in any command's human-readable or JSON output, proven by a search asserting its absence (satisfies FC-2).
-- [ ] AC-5: A heartbeat declaring an expected quiet period longer than the default keeps its worker classified not-stalled past the old five-minute threshold, and stalled once the declared period elapses — both directions proven (satisfies FC-3, FC-5).
-- [ ] AC-6: A heartbeat with no declared period stalls after five minutes exactly as today, proving the default preserves existing behavior for every current call site (satisfies FC-3).
-- [ ] AC-7: The declared period is stored as a duration alongside the update timestamp, and both are readable from the record (satisfies FC-4).
-- [ ] AC-8: The liveness report includes the declared period and the elapsed time against it, proven by a test asserting both appear (satisfies FC-7).
-- [ ] AC-9: A worker with no status record reports as a distinct state, is **not** reported as stalled, and exits zero (satisfies FC-8, FC-9).
-- [ ] AC-10: `fledge broods --stale` continues to key on worktree existence and is unaffected by the PID deletion, proven by a test — the force-release path was sound before this plumage and must remain so (satisfies FC-2).
-- [ ] AC-11: A freshly initialized repository ignores the ledger directory in version control (satisfies FC-10).
-- [ ] AC-12: No shipped prose references PID liveness, proven by a search returning nothing (satisfies FC-11).
-- [ ] AC-13: `go test ./...` is green and `fledge preen` passes on the branch that closes this plumage.
+- [x] AC-1: Tests for every criterion below are written first, run against the unchanged code, and observed FAILING for the expected reason, with the failing output captured verbatim in `.fledge/molt/` evidence before any implementation is written.
+- [x] AC-2: At least one failing-test observation per criterion is **behavioral** — an assertion about observable command behavior, not a compilation or arity error — sourced from the CLI acceptance layer. Evidence consisting solely of build breakage does not satisfy AC-1: the classifier's signature changes twice here, and a build break would otherwise make every test in the package vacuously "fail".
+- [x] AC-3: A worker whose lease is fresh classifies as not stalled, proven by a test that **fails against the current code** — the exact condition misclassified today (satisfies FC-1).
+- [x] AC-4: No PID field remains in either record shape or in any command's human-readable or JSON output, proven by a search asserting its absence (satisfies FC-2).
+- [x] AC-5: A heartbeat declaring an expected quiet period longer than the default keeps its worker classified not-stalled past the old five-minute threshold, and stalled once the declared period elapses — both directions proven (satisfies FC-3, FC-5).
+- [x] AC-6: A heartbeat with no declared period stalls after five minutes exactly as today, proving the default preserves existing behavior for every current call site (satisfies FC-3).
+- [x] AC-7: The declared period is stored as a duration alongside the update timestamp, and both are readable from the record (satisfies FC-4).
+- [x] AC-8: The liveness report includes the declared period and the elapsed time against it, proven by a test asserting both appear (satisfies FC-7).
+- [x] AC-9: A worker with no status record reports as a distinct state, is **not** reported as stalled, and exits zero (satisfies FC-8, FC-9).
+- [x] AC-10: `fledge broods --stale` continues to key on worktree existence and is unaffected by the PID deletion, proven by a test — the force-release path was sound before this plumage and must remain so (satisfies FC-2).
+- [x] AC-11: A freshly initialized repository ignores the ledger directory in version control (satisfies FC-10).
+- [x] AC-12: No shipped prose references PID liveness, proven by a search returning nothing (satisfies FC-11).
+- [x] AC-13: `go test ./...` is green and `fledge preen` passes on the branch that closes this plumage.
 
 ## Out of Scope
 
