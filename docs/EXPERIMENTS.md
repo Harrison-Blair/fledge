@@ -220,4 +220,53 @@ only). Fields per run: date, versions, n, raw observations (per-pane
 time-to-first-throttle, hook captures), verdict.
 
 <!-- BEGIN RESULTS EXP3 -->
+#### Run 2026-07-18 03:02 UTC — exp3-ratelimit
+
+- Version — Herdr: 0.7.4 (protocol v16)
+- Raw observations:
+  - config: n=2 poll=30s max duration=6h0m0s hook-capture="/tmp/fledge-exp3-hooks.jsonl"
+  - exp3-w1: spawned pane w5:p5 at t=1s
+  - exp3-w2: spawned pane w5:p6 at t=7s
+  - w1: FIRST THROTTLE SIGNAL "ratelimit" in pane output at t=37s
+  - w2: FIRST THROTTLE SIGNAL "ratelimit" in pane output at t=1m37s
+  - summary: w1 (pane w5:p5) first throttle at t=37s
+  - summary: w2 (pane w5:p6) first throttle at t=1m37s
+- Verdict: **INVALID — false positive, no real throttle at n=2.** The panes ran
+  with cwd inside this repo, whose text contains the detector's trigger
+  substrings (`ratelimit`, `rate limit`, `429`, `overloaded`, … — 38 occurrences
+  across the docs and `cmd/exp3-ratelimit`); as Claude read/discussed those
+  files its pane output matched the loose regex at t=37s/1m37s. The
+  authoritative `StopFailure`/`rate_limit` hook never fired
+  (`/tmp/fledge-exp3-hooks.jsonl` was not created), so **no actual rate limit
+  occurred**. Methodology fixed afterward: throttle regex tightened to
+  reached/error forms, and re-runs use a neutral cwd (`~/exp3-scratch`) with
+  throttle-free tasks (`exp3-tasks.txt`). Re-run n=2 before trusting any ceiling.
+
+#### Run 2026-07-18 ~03:14 UTC — exp3-ratelimit, n=2 (manual entry)
+
+Operator-run with the fixed methodology; recorded by hand because the watch
+was `Ctrl-C`'d before the harness's `--report` step (see note).
+
+- Version — Herdr: 0.7.4 (protocol 16); Claude Code: 2.1.214.
+- Config: n=2, neutral cwd `~/exp3-scratch`, tightened throttle regex, panes
+  spawned `claude --permission-mode bypassPermissions "<task>"` (unattended),
+  hook-capture `/tmp/fledge-exp3-hooks.jsonl`.
+- Raw observations:
+  - Both panes spawned and ran their tasks to completion with no approval
+    prompts. Work products in `~/exp3-scratch`: `lru.go`+`lru_test.go`,
+    `sudoku.py`+`test_sudoku.py` (with `__pycache__`/`.pytest_cache` — tests
+    were run). Confirms real work in a neutral cwd (no repo self-reference).
+  - No throttle signal in pane output (tightened regex); the
+    `StopFailure`/`rate_limit` hook never fired (no capture file) → **no real
+    rate limit occurred**.
+  - Operator `Ctrl-C`'d after the panes finished: the watch loop keeps polling
+    for throttle up to `--duration` (6h default) with no heartbeat output and
+    does not detect task completion, so it appeared hung.
+- Verdict: **n=2 did NOT throttle.** Two concurrent Claude panes completed
+  representative coding tasks with no rate-limit signal. **Caveat:** the tasks
+  are finite (~minutes each), so this exercises two short concurrent bursts,
+  not sustained hours-long load — it is a *lower bound* (≥2 concurrent is safe
+  for burst work), not the true ceiling. Finding the actual ceiling (ADR-014)
+  needs sustained/looping load at n=3, n=4, which costs real pooled quota.
+
 <!-- END RESULTS EXP3 -->
