@@ -100,13 +100,21 @@ the threshold that resolves them.
 
 ## ADR-014 — EXP3 (rate limits): max concurrent Claude panes
 
-- **Date:** 2026-07-17 · **Status:** open
-- **Decision pending:** maximum concurrent Claude panes = one below the
-  concurrency where sustained throttling first appears on the operator's
-  actual Max plan.
-- **Flip threshold:** run `cmd/exp3-ratelimit` at n=2, 3, 4 per the
-  `docs/EXPERIMENTS.md` protocol (human-executed only, ADR-009); set the cap
-  from the first n showing sustained throttling.
+- **Date:** 2026-07-17 · **Resolved:** 2026-07-18 · **Status:** accepted
+- **Decision:** **no fixed concurrent-pane cap.** Rate limits are handled
+  *reactively* — the `StopFailure`/`rate_limit` hook is the authoritative
+  throttle signal — rather than by pre-limiting fan-out. fledge may spawn as
+  many concurrent Claude agent panes as the work needs.
+- **Evidence:** EXP3 found no throttling at n=2 (burst) and none at n=3 under
+  sustained `--sustain` re-fed load (`docs/EXPERIMENTS.md §EXP3`). The operator
+  aborted the ceiling hunt early, satisfied that pooled subscription bandwidth
+  comfortably exceeds fledge's practical concurrency needs. The absolute
+  account-wide ceiling was not driven to failure; it sits above what fledge
+  requires, so no cap is warranted.
+- **Revisit if:** sustained throttling is observed in real use (the hook fires
+  routinely) — then reintroduce a reactive backoff/cap informed by where it
+  bites. The `cmd/exp3-ratelimit --sustain` harness remains available to
+  re-probe at higher n.
 
 ## ADR-013 — EXP2 (interactive input): drive Claude interactively or headless
 

@@ -269,4 +269,27 @@ was `Ctrl-C`'d before the harness's `--report` step (see note).
   for burst work), not the true ceiling. Finding the actual ceiling (ADR-014)
   needs sustained/looping load at n=3, n=4, which costs real pooled quota.
 
+#### Run 2026-07-18 — exp3-ratelimit, n=3 `--sustain` (operator-reported)
+
+Sustained-load run: `--sustain` re-feeds idle panes the next task (cycling
+`exp3-tasks.txt`) via `pane.send_input`, keeping all panes under continuous
+load rather than stopping when tasks finish. Operator-reported; aborted early
+by design.
+
+- Config: n=3, `--sustain`, neutral cwd `~/exp3-scratch`, tightened throttle
+  regex, panes unattended (`bypassPermissions`), hook-capture
+  `/tmp/fledge-exp3-hooks.jsonl`.
+- Raw observations:
+  - Three concurrent panes ran under sustained (re-fed) load with **no throttle
+    signal** in pane output and the `StopFailure`/`rate_limit` hook never fired.
+  - Operator `Ctrl-C`'d early, satisfied there is ample pooled bandwidth to run
+    as many concurrent Claude agent panes as fledge needs.
+- Verdict: **No practical concurrency ceiling for fledge's purposes.** Under
+  sustained load at n=3, throttling did not appear before the operator judged
+  headroom sufficient and stopped. The absolute account-wide ceiling was not
+  driven to failure (the run was deliberately cut short), but it sits above
+  fledge's practical fan-out needs. **Operational conclusion: do not impose a
+  fixed concurrent-pane cap; treat rate limits reactively** (the hook is the
+  authoritative signal) rather than pre-limiting concurrency. See ADR-014.
+
 <!-- END RESULTS EXP3 -->
