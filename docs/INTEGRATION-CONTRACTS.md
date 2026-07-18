@@ -11,36 +11,54 @@ research-snapshot claim until then. Discrepancies go to `docs/DECISIONS.md`.
 
 ---
 
-## Herdr — pinned v0.7.4, socket protocol v15
+## Herdr — pinned v0.7.4, socket protocol 16
 
-**Last verified:** NOT yet verified against a live binary (2026-07-18 — no
-Herdr install available in the Stage 0 environment; see ADR-015). Update
-this line after running `scripts/gen-herdr-types.sh` on a machine with
-Herdr v0.7.4.
+**Last verified:** 2026-07-17 against live Herdr v0.7.4 (protocol **16**, not
+the v15 originally pinned) — `scripts/gen-herdr-types.sh` run, schema dump
+committed (`internal/herdrclient/herdr-schema.json`), client reconciled, and
+EXP1/EXP2 executed. Corrections recorded in `docs/DECISIONS.md` ADR-017
+(wire/shape drift), ADR-012 (EXP1), ADR-013 (EXP2).
 
 ### Surface Fledge uses
 
-- **Transport:** newline-delimited JSON, one request per line, over a Unix
-  domain socket (named pipe on Windows). Socket resolution order: explicit
-  `--session <name>` › `HERDR_SOCKET_PATH` › `HERDR_SESSION=<name>`
-  (`sessions/<name>/herdr.sock`) › default session socket. Herdr injects
-  `HERDR_SOCKET_PATH`, `HERDR_ENV=1`, `HERDR_WORKSPACE_ID`, `HERDR_TAB_ID`,
-  `HERDR_PANE_ID` into managed panes; Herdr-managed vars beat caller env.
+- **Transport:** newline-delimited JSON, over a Unix domain socket (named
+  pipe on Windows). **One request per connection** (verified): the server
+  reads one request line, writes one response line, and closes — there is no
+  multiplexing or keep-alive on the RPC path, so a client dials a fresh
+  connection per call. Only `events.subscribe` holds a connection open to
+  stream events. **Every request MUST carry a `params` field** (an empty
+  object `{}` when the method takes no args); omitting it returns
+  `invalid_request: missing field params` and drops the connection. Envelope:
+  `{"id","method","params"}` request, `{"id","result"|"error"}` response;
+  results are wrapped by kind (`session.snapshot → {snapshot:…}`,
+  `agent.start`/`agent.get → {agent:…}`, `pane.read → {read:…}`). Socket
+  resolution order: explicit `--session <name>` › `HERDR_SOCKET_PATH` ›
+  `HERDR_SESSION=<name>` (`sessions/<name>/herdr.sock`) › default session
+  socket. Herdr injects `HERDR_SOCKET_PATH`, `HERDR_ENV=1`,
+  `HERDR_WORKSPACE_ID`, `HERDR_TAB_ID`, `HERDR_PANE_ID` into managed panes;
+  Herdr-managed vars beat caller env.
 - **Bootstrap:** `session.snapshot` once (version/protocol metadata, focus,
   workspace/tab/pane/agent records), then `events.subscribe` and update a
   local cache from events; re-snapshot on reconnect.
-- **Lifecycle:** `agent.start` (named, waitable agent pane), `pane.split`,
-  `pane.read --source visible|recent|recent-unwrapped|detection`,
+- **Lifecycle:** `agent.start` (named, waitable agent pane; command vector is
+  `argv`, and the spawned pane id is at `result.agent.pane_id`), `pane.split`,
+  `pane.read --source visible|recent|recent_unwrapped|detection` (note the
+  underscore — protocol 16 rejects the hyphenated `recent-unwrapped`),
   `pane.send_input` (text + encoded keypresses in one request — the
   "text + real Enter" path), `pane.send_text`, `pane.send_keys`,
   `pane.wait_for_output`, `pane.close`, `worktree.create`.
 - **Authority:** `pane.report_agent` (source `custom:*` seizes lifecycle
-  authority and suppresses screen-manifest detection for that pane),
-  `pane.report_metadata` (display-only, never seizes authority),
-  `pane.clear_agent_authority` (fallback detection resumes),
+  authority on panes Herdr does not natively detect — **but native detection
+  takes precedence**: on a natively-detected Claude pane the custom report is
+  accepted yet does NOT suppress screen-manifest detection or change state,
+  per EXP1/ADR-012), `pane.report_metadata` (display-only, never seizes
+  authority), `pane.clear_agent_authority` (fallback detection resumes),
   `pane.release_agent` (clean-exit: drop agent identity immediately),
-  `agent.explain` (reports `screen_detection_skip_reason` when screen rules
-  are non-authoritative).
+  `agent.explain` (target-addressed; returns an open, server-defined `explain`
+  payload). The typed screen-detection signal is the boolean
+  `screen_detection_skipped` on the agent record (`agent.get`), which replaced
+  the v15 `screen_detection_skip_reason`. Note: `agent.explain`/`agent.get`
+  address the pane via `target`, not `pane_id`.
 - **Sequencing:** `pane.report_agent` takes an optional `seq`; for the same
   source, reports with seq ≤ the last accepted are accepted by the API but
   ignored by pane state — keep a monotonic counter per source.
@@ -53,11 +71,11 @@ Herdr v0.7.4.
 
 ```sh
 herdr agent start impl-1 --cwd ~/proj --split right -- pi
-herdr pane read w1:p2 --source recent-unwrapped --lines 120
+herdr pane read w1:p2 --source recent_unwrapped --lines 120
 herdr wait agent-status w1:p1 --status blocked
 herdr pane report-agent w1:p1 --source custom:relay --agent impl-1 --state working --seq 42
 herdr pane report-metadata w1:p1 --source user:title --token summary=refactor
-herdr agent explain w1:p1 --json      # check screen_detection_skip_reason
+herdr agent explain w1:p1 --json      # open explain payload; typed signal is agent.get → screen_detection_skipped
 herdr api schema --json               # self-describing schema → generated types
 ```
 
@@ -70,15 +88,19 @@ herdr api schema --json               # self-describing schema → generated typ
   clients can reattach. Upgrade runbook: upgrade Herdr → restart/handoff the
   server → run `scripts/gen-herdr-types.sh` → commit the regenerated schema
   dump and any type updates.
-- **`pane.clear_agent_authority` / `pane.release_agent` semantics are sourced
-  from Herdr's bundled `SOCKET_API.md`** (via a fork mirror), not the live
-  docs. `gen-herdr-types.sh` checks whether the v0.7.4 schema dump documents
-  them; record the finding in `docs/DECISIONS.md` (ADR-015).
+- **`pane.clear_agent_authority` / `pane.release_agent` are now confirmed
+  first-class in the live v0.7.4 schema dump** (ADR-015/ADR-017), no longer
+  `SOCKET_API.md`-only. One live quirk to re-check at Stage 1: after
+  `report_agent` set a non-detected pane to `working`, `clear_agent_authority`
+  did **not** revert it (see ADR-012 note) — clear-vs-`release_agent` reset
+  behavior is not yet pinned.
 - **The 32-distinct-source lifetime cap** is documented for sequenced
   token/metadata reports; whether it applies to `report_agent` state reports
   is **undocumented**. Keep source identifiers few and stable.
-- Arbitration when a custom source *and* a native session hook both report on
-  one Claude pane is not spelled out beyond "one authority per pane."
+- Arbitration when a custom source *and* native detection both apply to one
+  Claude pane is now observed (EXP1/ADR-012): **native Claude screen-manifest
+  detection wins** — a `custom:*` `report_agent` is accepted but neither
+  suppresses screen detection nor overrides the pane's state.
 - `agent.explain` availability depends on server age; Windows support is
   preview (no `--remote`).
 
@@ -141,8 +163,10 @@ Wait for `{"type":"agent_settled"}` before advancing the FSM.
 
 ## Claude Code — pinned ≥ v2.1.212
 
-**Last verified:** NOT yet verified against a live binary (2026-07-18 —
-research snapshot only). Update after EXP1/EXP2 run.
+**Last verified:** 2026-07-17 against Claude Code **2.1.214** via EXP1/EXP2 in
+Herdr session `fledge-exp`. Interactive input confirmed reliable (EXP2/ADR-013)
+and authority-precedence confirmed (EXP1/ADR-012). Rate-limit ceiling (EXP3)
+remains human-executed and unrun.
 
 ### Surface Fledge uses
 
@@ -193,7 +217,9 @@ claude -p --resume "$sid" "now write tests"
 - **Ink Enter-submit limitation** (issue #15553): the interactive TUI does
   not treat programmatic `\r`/`\n` as submit — text must be followed by a
   real Enter keypress; trust/`--dangerously-skip-permissions` dialogs need
-  `Down`+`Enter`. Reliability is EXP2's question.
+  `Down`+`Enter`. **EXP2/ADR-013 confirmed** `pane.send_input {text,
+  keys:["enter"]}` submits reliably (3/3), so Claude workers run in visible
+  panes.
 - **Self-permission-change guard (v2.1.200+):** Claude Code blocks an agent
   sending keystrokes to its own tmux/pane to change its own permissions —
   aggressive input injection can trip it, which is why EXP2's sends are

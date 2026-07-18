@@ -57,7 +57,7 @@ func main() {
 		cctx, cancel := context.WithTimeout(ctx, *timeout)
 		defer cancel()
 		res, resp, err := c.PaneRead(cctx, herdrclient.ReadParams{
-			PaneID: *paneID, Source: "recent-unwrapped", Lines: 15,
+			PaneID: *paneID, Source: "recent_unwrapped", Lines: 15,
 		})
 		if err != nil {
 			r.obs("%s: pane.read FAILED: %v", label, err)
@@ -73,7 +73,7 @@ func main() {
 	if *spawn && gate("spawn Claude pane in fledge-exp: agent.start exp2-claude -- "+*claudeCmd) {
 		cctx, cancel := context.WithTimeout(ctx, *timeout)
 		res, resp, err := c.AgentStart(cctx, herdrclient.AgentStartParams{
-			Name: "exp2-claude", Cwd: *cwd, Split: "right", Command: []string{*claudeCmd},
+			Name: "exp2-claude", Cwd: *cwd, Split: "right", Argv: []string{*claudeCmd},
 		})
 		cancel()
 		if err != nil {

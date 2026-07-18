@@ -48,22 +48,33 @@ func main() {
 	}
 
 	explain := func(label string) {
+		// Pivotal ADR-012 signal: protocol 16 exposes screen-detection
+		// suppression as the boolean screen_detection_skipped on the agent
+		// record (agent.get), replacing v15's screen_detection_skip_reason.
 		cctx, cancel := context.WithTimeout(ctx, *timeout)
-		defer cancel()
-		e, resp, err := c.AgentExplainPane(cctx, *paneID)
-		if err != nil {
-			r.obs("%s: agent.explain FAILED: %v", label, err)
-			return
+		if info, _, err := c.AgentGet(cctx, *paneID); err != nil {
+			r.obs("%s: agent.get FAILED: %v", label, err)
+		} else {
+			r.obs("%s: agent=%q agent_status=%q screen_detection_skipped=%v",
+				label, info.Agent, info.AgentStatus, info.ScreenDetectionSkipped)
 		}
-		r.obs("%s: state=%q authority=%q source=%q screen_detection_skip_reason=%q",
-			label, e.State, e.Authority, e.Source, e.ScreenDetectionSkipReason)
-		r.obs("%s: raw explain: %s", label, resp.Raw)
+		cancel()
+
+		// Full authority explanation, recorded raw for the operator/report
+		// (the v16 explain payload is server-defined and untyped).
+		cctx, cancel = context.WithTimeout(ctx, *timeout)
+		defer cancel()
+		if _, resp, err := c.AgentExplainPane(cctx, *paneID); err != nil {
+			r.obs("%s: agent.explain FAILED: %v", label, err)
+		} else {
+			r.obs("%s: raw explain: %s", label, resp.Raw)
+		}
 	}
 
 	if *spawn && gate("spawn Claude pane in fledge-exp: agent.start exp1-claude -- "+*claudeCmd) {
 		cctx, cancel := context.WithTimeout(ctx, *timeout)
 		res, resp, err := c.AgentStart(cctx, herdrclient.AgentStartParams{
-			Name: "exp1-claude", Cwd: *cwd, Split: "right", Command: []string{*claudeCmd},
+			Name: "exp1-claude", Cwd: *cwd, Split: "right", Argv: []string{*claudeCmd},
 		})
 		cancel()
 		if err != nil {

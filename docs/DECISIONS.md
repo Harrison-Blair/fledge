@@ -10,9 +10,57 @@ the threshold that resolves them.
 
 ---
 
+## ADR-017 — herdrclient reconciled against live Herdr v0.7.4 / protocol 16
+
+- **Date:** 2026-07-17 · **Status:** accepted (supersedes ADR-015, ADR-016)
+- **Context:** the Stage 0 experiment harnesses failed at startup on the
+  operator's machine. Root-caused against the live binary (`herdr api schema
+  --json`, committed as `internal/herdrclient/herdr-schema.json`, and direct
+  socket probes on session `fledge-exp`). The hand-authored client targeted
+  protocol **v15**; the live server is protocol **16**, and several shapes
+  differ from the reference snapshot.
+- **Findings (all re-verified live, per ground rule 4):**
+  1. **Protocol is 16, not 15.** `session.snapshot` reports
+     `"protocol":16`. The gen-script pin is bumped to 16.
+  2. **`params` is mandatory on every method.** Omitting it (the client used
+     `json:"params,omitempty"`) yields `invalid_request: missing field
+     params`, and the error echoes `id:""` (uncorrelatable) as the server
+     drops the connection. Fix: always emit `params` (`{}` when empty).
+  3. **Transport is one-request-per-connection.** The server writes one
+     response and closes; there is no multiplexing or keep-alive on the RPC
+     path. The client's single persistent connection + readLoop + pending-map
+     model was wrong (call #1 worked, call #2 hit a dead socket — which is
+     why `agent.start` reported `herdrclient: closed`). Fix: `Call` dials a
+     fresh connection per request; only `events.subscribe` holds one open.
+  4. **Results are wrapped by kind:** `session.snapshot → {snapshot:{…}}`,
+     `agent.start`/`agent.get → {agent:{…}}`, `pane.read → {read:{…}}`. The
+     flat-decode assumption returned zero values.
+  5. **Field/enum drift:** `agent.start` takes `argv` (not `command`) and
+     returns the pane at `result.agent.pane_id`; `agent.explain`/`agent.get`
+     key the pane as `target` (not `pane_id`); snapshot uses `protocol` (not
+     `protocol_version`); `pane.read` source is `recent_unwrapped` (underscore,
+     not the reference doc's `recent-unwrapped`).
+  6. **Screen-detection signal changed.** There is no
+     `screen_detection_skip_reason`; the typed signal is the boolean
+     `screen_detection_skipped` on the agent record (`agent.get`).
+     `agent.explain` returns an open, server-defined `explain` payload
+     (untyped in the schema) — captured raw. EXP1's harness now records
+     `screen_detection_skipped` as the pivotal ADR-012 measurement plus the
+     raw explain blob.
+- **Resolution status:** `client.go` transport rewritten, `types.go`
+  reconciled, and the three harnesses updated (`argv`, `recent_unwrapped`,
+  EXP1 measurement). Verified end-to-end against `fledge-exp`:
+  `session.snapshot`, `agent.start`, `pane.read`, `agent.get`, `pane.close`
+  and multi-call reuse all pass. **Not yet verified:** `agent.explain`'s full
+  success payload (needs a Herdr-detected Claude pane — the supervised EXP1
+  run) and the `events.subscribe` streaming path (unused by Stage 0
+  experiments).
+
 ## ADR-016 — Wire-envelope and socket-path shapes are documented assumptions
 
-- **Date:** 2026-07-18 · **Status:** open
+- **Date:** 2026-07-18 · **Status:** superseded by ADR-017 (envelope confirmed
+  against the live binary: `{"id","method","params"}` with `params` mandatory;
+  RPC is one-shot per connection, not id-multiplexed)
 - **Decision:** `internal/herdrclient` assumes request lines of
   `{"id","method","params"}`, response correlation by `id`, event lines as
   non-correlated JSON, and a config-dir fallback of `HERDR_CONFIG_DIR` else
@@ -27,7 +75,12 @@ the threshold that resolves them.
 
 ## ADR-015 — Herdr types hand-authored pending live regeneration
 
-- **Date:** 2026-07-18 · **Status:** open
+- **Date:** 2026-07-18 · **Status:** superseded by ADR-017 — resolved
+  2026-07-17. `scripts/gen-herdr-types.sh` ran clean against live Herdr
+  v0.7.4; the schema dump is committed and the types reconciled (ADR-017).
+  **Handoff §7 sub-question answered:** the v0.7.4 schema dump **documents
+  both `pane.clear_agent_authority` and `pane.release_agent` as first-class
+  methods** — their semantics are no longer SOCKET_API.md-only.
 - **Decision:** the committed types in `internal/herdrclient/types.go` are
   hand-authored from the reference snapshot (stamped in the file header),
   not generated from a live binary. `scripts/gen-herdr-types.sh` is the
@@ -57,30 +110,45 @@ the threshold that resolves them.
 
 ## ADR-013 — EXP2 (interactive input): drive Claude interactively or headless
 
-- **Date:** 2026-07-17 · **Status:** open
-- **Decision pending:** if `pane.send_input {text, keys:["enter"]}` reliably
-  submits to interactive Claude, Claude workers run in visible panes; if
-  flaky, fall back to `-p`/stream-json workers with panes for visibility
-  only.
-- **Flip threshold:** EXP2 submit-reliability sample (see
-  `docs/EXPERIMENTS.md`).
-- **Annotation (2026-07-18):** not executable in the Stage 0 session — no
-  Herdr available in the remote environment, and the supervised-run
-  requirement (operator watching, in-session approval) could not be met.
-  Pending an operator-run session; harness `cmd/exp2-input` is ready.
+- **Date:** 2026-07-17 · **Status:** RESOLVED 2026-07-17 → interactive panes.
+- **Decision:** `pane.send_input {text, keys:["enter"]}` reliably submits to
+  an interactive Claude pane, so **Claude workers run in visible panes** (no
+  fallback to `-p`/stream-json needed).
+- **Evidence:** supervised EXP2 run against `fledge-exp` (Herdr 0.7.4 /
+  protocol 16, Claude Code 2.1.214) — submit reliability **3/3** gated sends;
+  rounds 2–3 show the prompt echoed and a `● pong` response. Recorded in
+  `docs/EXPERIMENTS.md` §EXP2. (The Ink `\r`-not-submit limitation is real;
+  the explicit `keys:["enter"]` is what makes it submit.)
 
 ## ADR-012 — EXP1 (authority override): is metadata-only forced?
 
-- **Date:** 2026-07-17 · **Status:** open
-- **Decision pending:** if `report_agent --source custom:*` does **not**
-  suppress screen detection on a Claude pane, dual-reporting is safe and the
-  metadata-only rule (ADR-004) can be relaxed; if it does (expected),
-  metadata-only stands.
-- **Flip threshold:** EXP1 observation of `screen_detection_skip_reason`
-  and sidebar behavior (see `docs/EXPERIMENTS.md`).
-- **Annotation (2026-07-18):** not executable in the Stage 0 session (same
-  constraint as ADR-013). Pending an operator-run session; harness
-  `cmd/exp1-authority` is ready.
+- **Date:** 2026-07-17 · **Status:** RESOLVED 2026-07-17 → override does NOT
+  suppress screen detection on Claude panes (native detection wins).
+- **Decision:** a `pane.report_agent --source custom:*` report on a
+  natively-detected Claude pane does **not** suppress Herdr's screen-manifest
+  detection and does **not** change the pane's state. Native Claude detection
+  takes precedence. Therefore custom reports on Claude panes are **safe**
+  (they cannot break Herdr's `blocked` detection), so **metadata-only
+  (ADR-004) holds as safe and may be relaxed** — with the caveat that pushing
+  custom lifecycle *state* onto a Claude pane is harmless-but-ineffective,
+  since native detection overrides it.
+- **Evidence:** supervised EXP1 run (`docs/EXPERIMENTS.md` §EXP1) — across
+  baseline / after `report_agent {custom:test, working, seq 1}` / after
+  `clear_agent_authority`, the pane held `screen_detection_skipped=false`,
+  `agent_status="blocked"`, `agent="claude"`, `matched_rule=
+  legacy_no_prompt_blocker` (byte-identical explain each phase); operator
+  confirmed the sidebar stayed `blocked` throughout. **Control** (unopposed):
+  the same `report_agent` on a plain shell pane Herdr does not detect flipped
+  it `agent=null→"probe"`, `agent_status=unknown→"working"` — proving the call
+  seizes authority when nothing native competes, so the Claude-pane no-op is
+  precedence, not a broken call.
+- **Note (Stage 1):** `pane.clear_agent_authority {source:custom:test}` did
+  **not** revert the shell pane's reported `working` back to `unknown` — clear
+  vs. `release_agent` semantics need a live check (the schema documents both;
+  ADR-017). The metadata-only path (ADR-004) does not depend on this.
+- **Note:** the flip threshold originally keyed on
+  `screen_detection_skip_reason`; protocol 16 renamed the signal to the
+  boolean `screen_detection_skipped` (ADR-017), which is what was measured.
 
 ## ADR-011 — Reference docs relocated into `docs/reference/`
 
@@ -149,7 +217,8 @@ the threshold that resolves them.
 
 ## ADR-004 — Claude panes get metadata only; no authority seizure
 
-- **Date:** 2026-07-17 · **Status:** accepted (pending EXP1 → ADR-012)
+- **Date:** 2026-07-17 · **Status:** accepted (EXP1/ADR-012 resolved
+  2026-07-17 — confirmed safe; see below)
 - **Decision:** Fledge uses `pane.report_metadata` (display-only) on Claude
   panes and does not seize lifecycle authority with
   `pane.report_agent --source custom:*`. Seizure is reserved for panes Herdr
@@ -158,6 +227,11 @@ the threshold that resolves them.
 - **Rationale:** Claude Code is intentionally not a lifecycle authority in
   Herdr; screen-manifest detection is what surfaces permission prompts as
   `blocked`, which Fledge wants to keep for human-escalation routing.
+- **EXP1 outcome (ADR-012):** confirmed that native Claude detection *outranks*
+  a custom `report_agent`, so this rule is safe rather than forced — even a
+  custom report cannot break `blocked` detection. Metadata-only stays the
+  design; the rule *may* be relaxed to dual-report if ever useful, though
+  custom state on Claude panes is overridden by native detection anyway.
 
 ## ADR-003 — Pi's native lifecycle authority is trusted
 

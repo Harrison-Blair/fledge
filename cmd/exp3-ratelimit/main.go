@@ -93,7 +93,7 @@ func main() {
 		cctx, cancel := context.WithTimeout(ctx, *timeout)
 		res, _, err := c.AgentStart(cctx, herdrclient.AgentStartParams{
 			Name: name, Cwd: *cwd, Split: "right",
-			Command: []string{*claudeCmd, tasks[i]},
+			Argv: []string{*claudeCmd, tasks[i]},
 		})
 		cancel()
 		if err != nil {
@@ -123,7 +123,7 @@ func main() {
 			}
 			cctx, cancel := context.WithTimeout(ctx, *timeout)
 			res, resp, err := c.PaneRead(cctx, herdrclient.ReadParams{
-				PaneID: paneID, Source: "recent-unwrapped", Lines: 60,
+				PaneID: paneID, Source: "recent_unwrapped", Lines: 60,
 			})
 			cancel()
 			if err != nil {

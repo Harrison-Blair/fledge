@@ -1,17 +1,19 @@
-// Herdr socket API types — target Herdr v0.7.4, socket protocol v15.
+// Herdr socket API types — target Herdr v0.7.4, socket protocol v16.
 //
-// PROVENANCE: hand-authored from docs/reference/integration-surfaces.md
-// (research snapshot 2026-07-17). NOT yet regenerated from a live binary:
-// the Stage 0 build environment had no Herdr install and no network route to
-// its distribution points (docs/DECISIONS.md). Regenerate/verify with:
+// PROVENANCE: reconciled against the live binary's `herdr api schema --json`
+// (committed as herdr-schema.json) on 2026-07-17, superseding the original
+// hand-authored v15 snapshot. Key protocol-16 facts baked in here and recorded
+// in docs/DECISIONS.md (ADR-015):
+//   - Every request carries a mandatory `params` (see client.go).
+//   - Results are wrapped by kind: session.snapshot -> {snapshot:{...}},
+//     agent.start/agent.get -> {agent:{...}}, pane.read -> {read:{...}}.
+//   - agent.start/agent.get params key the pane as `target`, and agent.start
+//     takes `argv` (not `command`).
+//   - The screen-detection signal is the boolean `screen_detection_skipped`
+//     on the agent record (there is no `screen_detection_skip_reason`).
 //
-//	scripts/gen-herdr-types.sh
-//
-// which dumps `herdr api schema --json`, checks every method named below
-// against the dump, and records the clear_agent_authority/release_agent
-// schema-coverage finding. Until that has run, treat exact field names as
-// unverified; unknown fields pass through generically per Herdr's own
-// compatibility guidance.
+// Regenerate/verify on every Herdr upgrade with scripts/gen-herdr-types.sh.
+// Unknown fields pass through generically per Herdr's compatibility guidance.
 package herdrclient
 
 import (
@@ -19,9 +21,9 @@ import (
 	"encoding/json"
 )
 
-// Method names (dot notation), from the documented v0.7.4 surface. Only the
-// methods Fledge needs are typed first-class; the rest of the surface can be
-// reached via Client.Call directly.
+// Method names (dot notation), verified present in the v16 schema dump. Only
+// the methods Fledge needs are typed first-class; the rest of the surface can
+// be reached via Client.Call directly.
 const (
 	MethodPing            = "ping"
 	MethodSessionSnapshot = "session.snapshot"
@@ -66,12 +68,17 @@ const (
 	EventLayoutUpdated          = "layout.updated"
 )
 
-// Snapshot is the session.snapshot bootstrap: version/protocol metadata,
-// focus, and resource records. Records are kept raw; consumers decode what
-// they need and ignore the rest.
+// snapshotResult wraps session.snapshot's {type, snapshot:{...}} envelope.
+type snapshotResult struct {
+	Snapshot Snapshot `json:"snapshot"`
+}
+
+// Snapshot is the session.snapshot bootstrap: version/protocol metadata, focus,
+// and resource records. Records are kept raw; consumers decode what they need
+// and ignore the rest.
 type Snapshot struct {
 	Version         string            `json:"version"`
-	ProtocolVersion int               `json:"protocol_version"`
+	ProtocolVersion int               `json:"protocol"`
 	FocusedPane     string            `json:"focused_pane_id"`
 	Workspaces      []json.RawMessage `json:"workspaces"`
 	Tabs            []json.RawMessage `json:"tabs"`
@@ -79,25 +86,31 @@ type Snapshot struct {
 	Agents          []json.RawMessage `json:"agents"`
 }
 
-// AgentInfo is the subset of an agent/pane record the harnesses read.
+// AgentInfo is the typed agent/pane record (result type agent_info), returned
+// by agent.get and embedded under `agent` in agent.start and session.snapshot.
+// The pivotal EXP1 field is ScreenDetectionSkipped: true means a lifecycle
+// authority has made screen rules non-authoritative for the pane.
 type AgentInfo struct {
-	PaneID  string `json:"pane_id"`
-	Name    string `json:"name"`
-	Agent   string `json:"agent"`
-	State   string `json:"state"`
-	Source  string `json:"source"`
-	Session string `json:"session_id"`
+	PaneID                 string `json:"pane_id"`
+	Name                   string `json:"name"`
+	Agent                  string `json:"agent"`
+	AgentStatus            string `json:"agent_status"`
+	ScreenDetectionSkipped bool   `json:"screen_detection_skipped"`
+	DisplayAgent           string `json:"display_agent"`
+	Revision               int    `json:"revision"`
 }
 
-// AgentExplain is the per-pane authority explanation. The pivotal field for
-// EXP1 is ScreenDetectionSkipReason: non-empty means a lifecycle authority
-// has made screen rules non-authoritative for the pane.
+// agentResult wraps the {type, agent:{...}} envelope of agent.get/agent.start.
+type agentResult struct {
+	Agent AgentInfo `json:"agent"`
+}
+
+// AgentExplain is agent.explain's result. In v16 the `explain` payload is an
+// open, server-defined object (untyped in the schema), so it is captured raw;
+// harnesses record it verbatim and the operator interprets it alongside the
+// typed AgentInfo.ScreenDetectionSkipped signal.
 type AgentExplain struct {
-	PaneID                    string `json:"pane_id"`
-	State                     string `json:"state"`
-	Authority                 string `json:"authority"`
-	Source                    string `json:"source"`
-	ScreenDetectionSkipReason string `json:"screen_detection_skip_reason"`
+	Explain json.RawMessage `json:"explain"`
 }
 
 // ReportAgentParams — pane.report_agent seizes lifecycle authority for the
@@ -144,39 +157,48 @@ type SendInputParams struct {
 	Keys   []string `json:"keys,omitempty"`
 }
 
-// ReadParams — pane.read. Source: visible | recent | recent-unwrapped |
-// detection (the exact bottom-buffer snapshot screen detection uses).
+// ReadParams — pane.read. Source: visible | recent | recent_unwrapped |
+// detection (the exact bottom-buffer snapshot screen detection uses). Note the
+// underscore: protocol 16 rejects the reference doc's hyphenated form.
 type ReadParams struct {
 	PaneID string `json:"pane_id"`
 	Source string `json:"source,omitempty"`
 	Lines  int    `json:"lines,omitempty"`
 }
 
-// ReadResult holds pane text output.
+// readResult wraps pane.read's {type, read:{...}} envelope.
+type readResult struct {
+	Read ReadResult `json:"read"`
+}
+
+// ReadResult holds pane text output (v16 returns text plus a truncation flag;
+// there is no per-line array).
 type ReadResult struct {
-	Text  string   `json:"text"`
-	Lines []string `json:"lines"`
+	Text      string `json:"text"`
+	Truncated bool   `json:"truncated"`
 }
 
 // AgentStartParams — agent.start: run a command in a new pane as a named,
-// waitable agent target.
+// waitable agent target. The command vector is `argv` (protocol 16).
 type AgentStartParams struct {
-	Name    string   `json:"name"`
-	Cwd     string   `json:"cwd,omitempty"`
-	Split   string   `json:"split,omitempty"`
-	Command []string `json:"command"`
+	Name  string   `json:"name"`
+	Cwd   string   `json:"cwd,omitempty"`
+	Split string   `json:"split,omitempty"`
+	Argv  []string `json:"argv"`
 }
 
-// AgentStartResult — the spawned pane/agent identifiers.
+// AgentStartResult — the spawned pane/agent identifiers, lifted from the
+// nested `agent` record.
 type AgentStartResult struct {
-	PaneID string `json:"pane_id"`
-	Name   string `json:"name"`
+	PaneID string
+	Name   string
 }
 
 // SubscribeParams — events.subscribe; the connection stays open and event
-// lines follow on the same socket.
+// lines follow on the same socket. Subscriptions is the v16 array of match
+// objects; passed through raw since Fledge does not yet type the match surface.
 type SubscribeParams struct {
-	Topics []string `json:"topics,omitempty"`
+	Subscriptions []json.RawMessage `json:"subscriptions"`
 }
 
 // Typed convenience wrappers over Client.Call.
@@ -191,17 +213,18 @@ func (c *Client) SessionSnapshot(ctx context.Context) (*Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	var s Snapshot
-	if err := resp.Decode(&s); err != nil {
+	var w snapshotResult
+	if err := resp.Decode(&w); err != nil {
 		return nil, err
 	}
-	return &s, nil
+	return &w.Snapshot, nil
 }
 
-// EventsSubscribe registers for events; consume them via Events().
-func (c *Client) EventsSubscribe(ctx context.Context, topics ...string) error {
-	_, err := c.Call(ctx, MethodEventsSubscribe, SubscribeParams{Topics: topics})
-	return err
+// EventsSubscribe opens the streaming connection and registers the given raw
+// subscription match objects; consume events via Events(). (Unexercised by the
+// Stage 0 experiments; streaming semantics re-verify at Stage 1.)
+func (c *Client) EventsSubscribe(ctx context.Context, subscriptions ...json.RawMessage) error {
+	return c.subscribe(ctx, MethodEventsSubscribe, SubscribeParams{Subscriptions: subscriptions})
 }
 
 func (c *Client) PaneRead(ctx context.Context, p ReadParams) (*ReadResult, *Response, error) {
@@ -209,11 +232,11 @@ func (c *Client) PaneRead(ctx context.Context, p ReadParams) (*ReadResult, *Resp
 	if err != nil {
 		return nil, resp, err
 	}
-	var r ReadResult
-	if err := resp.Decode(&r); err != nil {
+	var w readResult
+	if err := resp.Decode(&w); err != nil {
 		return nil, resp, err
 	}
-	return &r, resp, nil
+	return &w.Read, resp, nil
 }
 
 func (c *Client) PaneSendInput(ctx context.Context, p SendInputParams) error {
@@ -256,17 +279,18 @@ func (c *Client) AgentStart(ctx context.Context, p AgentStartParams) (*AgentStar
 	if err != nil {
 		return nil, resp, err
 	}
-	var r AgentStartResult
-	if err := resp.Decode(&r); err != nil {
+	var w agentResult
+	if err := resp.Decode(&w); err != nil {
 		return nil, resp, err
 	}
-	return &r, resp, nil
+	return &AgentStartResult{PaneID: w.Agent.PaneID, Name: w.Agent.Name}, resp, nil
 }
 
-// AgentExplainPane returns the authority explanation plus the raw response
-// (the raw line is what experiment reports record verbatim).
+// AgentExplainPane returns the (open) authority explanation plus the raw
+// response; the raw line is what experiment reports record verbatim. The pane
+// is addressed as `target` in protocol 16.
 func (c *Client) AgentExplainPane(ctx context.Context, paneID string) (*AgentExplain, *Response, error) {
-	resp, err := c.Call(ctx, MethodAgentExplain, map[string]string{"pane_id": paneID})
+	resp, err := c.Call(ctx, MethodAgentExplain, map[string]string{"target": paneID})
 	if err != nil {
 		return nil, resp, err
 	}
@@ -277,14 +301,16 @@ func (c *Client) AgentExplainPane(ctx context.Context, paneID string) (*AgentExp
 	return &e, resp, nil
 }
 
+// AgentGet returns the typed agent record for a pane (addressed as `target`).
+// AgentInfo.ScreenDetectionSkipped is the pivotal EXP1 signal.
 func (c *Client) AgentGet(ctx context.Context, paneID string) (*AgentInfo, *Response, error) {
-	resp, err := c.Call(ctx, MethodAgentGet, map[string]string{"pane_id": paneID})
+	resp, err := c.Call(ctx, MethodAgentGet, map[string]string{"target": paneID})
 	if err != nil {
 		return nil, resp, err
 	}
-	var a AgentInfo
-	if err := resp.Decode(&a); err != nil {
+	var w agentResult
+	if err := resp.Decode(&w); err != nil {
 		return nil, resp, err
 	}
-	return &a, resp, nil
+	return &w.Agent, resp, nil
 }

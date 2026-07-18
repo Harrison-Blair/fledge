@@ -18,7 +18,7 @@
 set -euo pipefail
 
 PINNED_VERSION="0.7.4"
-PINNED_PROTOCOL="15"
+PINNED_PROTOCOL="16"
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 schema_out="$repo_root/internal/herdrclient/herdr-schema.json"
