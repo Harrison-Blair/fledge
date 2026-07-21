@@ -42,6 +42,12 @@ const ignoreTemplate = `# Paths fledge ignores, one glob per line.
 // package for DirName, so the constant cannot live there without a cycle.
 const AgentsName = "agents.json"
 
+// catalogName must stay equal to agentcfg.CatalogName, mirrored here for the
+// same cycle reason as AgentsName. The scaffold never writes the catalog —
+// init regenerates it wholesale from the installed integrations — but it is
+// per-machine state, so it belongs in .gitignore with the other runtime paths.
+const catalogName = "catalog.json"
+
 // agentsTemplate ships one illustrative entry rather than a comment, which
 // JSON has no room for. The operator edits or replaces it.
 const agentsTemplate = `{
@@ -87,6 +93,7 @@ func Ensure(root string) (existed bool, err error) {
 var GitignoreEntries = []string{
 	DirName + "/locks/",
 	DirName + "/flocks/",
+	DirName + "/" + catalogName,
 }
 
 // gitignoreHeader titles the block of GitignoreEntries in a .gitignore, and
@@ -114,7 +121,16 @@ func EnsureGitignore(root string) ([]string, error) {
 
 	var added []string
 	for _, entry := range GitignoreEntries {
-		if !ignoredAsDir(m, strings.TrimSuffix(entry, "/")) {
+		p := strings.TrimSuffix(entry, "/")
+		covered := false
+		if strings.HasSuffix(entry, "/") {
+			covered = ignoredAsDir(m, p)
+		} else {
+			// A file entry is covered by an exact match or by any ignored
+			// ancestor directory.
+			covered = m.Match(p, false) || ignoredAsDir(m, path.Dir(p))
+		}
+		if !covered {
 			added = append(added, entry)
 		}
 	}

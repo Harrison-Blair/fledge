@@ -1,27 +1,3 @@
 {
-  "opus48": {"integration": "claude", "model": "claude-opus-4-8"},
-  "sonnet5": {"integration": "claude", "model": "claude-sonnet-5"},
-  "haiku45": {"integration": "claude", "model": "claude-haiku-4-5"},
-  "fable5": {"integration": "claude", "model": "claude-fable-5"},
 
-  "gpt55": {"integration": "pi", "provider": "openai-codex", "model": "gpt-5.5"},
-  "gpt54": {"integration": "pi", "provider": "openai-codex", "model": "gpt-5.4"},
-  "gpt54mini": {"integration": "pi", "provider": "openai-codex", "model": "gpt-5.4-mini"},
-  "codexspark": {"integration": "pi", "provider": "openai-codex", "model": "gpt-5.3-codex-spark"},
-
-  "deepseekflash": {"integration": "pi", "provider": "opencode-go", "model": "deepseek-v4-flash"},
-  "deepseekpro": {"integration": "pi", "provider": "opencode-go", "model": "deepseek-v4-pro"},
-  "glm51": {"integration": "pi", "provider": "opencode-go", "model": "glm-5.1"},
-  "glm52": {"integration": "pi", "provider": "opencode-go", "model": "glm-5.2"},
-  "grok45": {"integration": "pi", "provider": "opencode-go", "model": "grok-4.5"},
-  "kimi26": {"integration": "pi", "provider": "opencode-go", "model": "kimi-k2.6"},
-  "kimi27code": {"integration": "pi", "provider": "opencode-go", "model": "kimi-k2.7-code"},
-  "kimi3": {"integration": "pi", "provider": "opencode-go", "model": "kimi-k3"},
-  "mimo25": {"integration": "pi", "provider": "opencode-go", "model": "mimo-v2.5"},
-  "mimo25pro": {"integration": "pi", "provider": "opencode-go", "model": "mimo-v2.5-pro"},
-  "minimax27": {"integration": "pi", "provider": "opencode-go", "model": "minimax-m2.7"},
-  "minimax3": {"integration": "pi", "provider": "opencode-go", "model": "minimax-m3"},
-  "qwen36plus": {"integration": "pi", "provider": "opencode-go", "model": "qwen3.6-plus"},
-  "qwen37max": {"integration": "pi", "provider": "opencode-go", "model": "qwen3.7-max"},
-  "qwen37plus": {"integration": "pi", "provider": "opencode-go", "model": "qwen3.7-plus"}
 }

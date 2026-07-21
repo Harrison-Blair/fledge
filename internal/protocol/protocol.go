@@ -46,7 +46,11 @@ type Request struct {
 	Config   string `json:"config,omitempty"`
 	Model    string `json:"model,omitempty"`
 	Provider string `json:"provider,omitempty"`
-	Cwd      string `json:"cwd,omitempty"`
+	// Integration overrides the routed integration for a Model spawn — the
+	// same model id can run under pi or codex. Never set with Config, which
+	// names its integration itself.
+	Integration string `json:"integration,omitempty"`
+	Cwd         string `json:"cwd,omitempty"`
 	// Split places a pane-hosted agent by splitting the focused pane
 	// ("right" or "down"). Ignored by pi agents, which have no pane.
 	Split string `json:"split,omitempty"`
@@ -86,7 +90,7 @@ type Agent struct {
 	Alive   bool   `json:"alive"`
 
 	// Spawned agents only; all empty for self-registered agents.
-	Integration string `json:"integration,omitempty"` // "claude" | "pi"
+	Integration string `json:"integration,omitempty"` // "claude" | "pi" | "codex"
 	Model       string `json:"model,omitempty"`
 	Config      string `json:"config,omitempty"` // agents.json entry it came from
 	PaneID      string `json:"pane_id,omitempty"`

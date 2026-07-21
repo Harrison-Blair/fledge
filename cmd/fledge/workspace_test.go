@@ -446,6 +446,7 @@ func TestStartCreatesWorkspaceAtRoot(t *testing.T) {
 }
 
 func TestInitWarnsWhenNestedInsideWorkspace(t *testing.T) {
+	stubDiscovery(t)
 	parent := t.TempDir()
 	if _, err := scaffold.Ensure(parent); err != nil {
 		t.Fatal(err)

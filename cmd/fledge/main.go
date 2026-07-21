@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/agentcfg"
+	"github.com/Harrison-Blair/fledge/internal/catalog"
 	"github.com/Harrison-Blair/fledge/internal/client"
 	"github.com/Harrison-Blair/fledge/internal/daemon"
 	"github.com/Harrison-Blair/fledge/internal/flock"
@@ -1015,6 +1016,10 @@ func runAgentSpawn(args []string) error {
 	if err != nil {
 		return usageErrorFor("agent spawn", err)
 	}
+	integration, args, err := takeFlag(args, "--integration", "-I")
+	if err != nil {
+		return usageErrorFor("agent spawn", err)
+	}
 	cwd, args, err := takeFlag(args, "--cwd", "-C")
 	if err != nil {
 		return usageErrorFor("agent spawn", err)
@@ -1038,7 +1043,7 @@ func runAgentSpawn(args []string) error {
 	// Requiring provider to be empty too keeps --provider without --model the
 	// error it has always been, and a non-terminal stdin falls through to the
 	// same error scripted callers already get.
-	if config == "" && model == "" && provider == "" && stdinIsTerminal() {
+	if config == "" && model == "" && provider == "" && integration == "" && stdinIsTerminal() {
 		root, err := workspaceRoot()
 		if err != nil {
 			return err
@@ -1061,6 +1066,9 @@ func runAgentSpawn(args []string) error {
 	if (config == "") == (model == "") {
 		return usageErrorf("agent spawn", "agent spawn: want exactly one of a config name or --model")
 	}
+	if integration != "" && model == "" {
+		return usageErrorf("agent spawn", "agent spawn: --integration overrides routing for --model; a config names its integration")
+	}
 
 	flockName, err := flock.FromEnv()
 	if err != nil {
@@ -1071,12 +1079,13 @@ func runAgentSpawn(args []string) error {
 		return err
 	}
 	resp, err := client.Do(root, flockName, protocol.Request{
-		Op:       protocol.OpSpawn,
-		Config:   config,
-		Model:    model,
-		Provider: provider,
-		Cwd:      cwd,
-		Species:  slug,
+		Op:          protocol.OpSpawn,
+		Config:      config,
+		Model:       model,
+		Provider:    provider,
+		Integration: integration,
+		Cwd:         cwd,
+		Species:     slug,
 	})
 	if err != nil {
 		return err
@@ -1301,6 +1310,7 @@ func runInit(args []string) error {
 	if hasHelpFlag(args) {
 		return printHelp("init")
 	}
+	asJSON, args := takeBoolFlag(args, "--json", "-J")
 	if err := rejectFlags("init", args); err != nil {
 		return usageErrorFor("init", err)
 	}
@@ -1318,11 +1328,12 @@ func runInit(args []string) error {
 		return err
 	}
 
+	var notes []string
 	// Checked from the parent so re-initializing a workspace does not warn
 	// about itself. A nested workspace shadows the enclosing one for every
 	// command run beneath it, which is worth doing only on purpose.
 	if parent, err := workspace.FindRoot(filepath.Dir(abs)); err == nil {
-		fmt.Printf("note: nested inside workspace at %s\n", parent)
+		notes = append(notes, fmt.Sprintf("nested inside workspace at %s", parent))
 	}
 
 	existed, err := scaffold.Ensure(root)
@@ -1335,6 +1346,34 @@ func runInit(args []string) error {
 		return err
 	}
 
+	configs, discoveryNotes := catalog.Discover()
+	for _, n := range discoveryNotes {
+		notes = append(notes, n.Detail)
+	}
+	models := map[string]int{}
+	for _, c := range configs {
+		models[c.Integration]++
+	}
+	// An empty discovery keeps whatever catalog the last init wrote: a broken
+	// PATH is not "no models".
+	if len(configs) > 0 {
+		if err := catalog.Write(root, configs); err != nil {
+			return err
+		}
+	}
+	notes = append(notes, "claude models are configured by hand in "+scaffold.DirName+"/"+agentcfg.FileName)
+
+	if asJSON {
+		return encodeJSON(initSummary{
+			Root:           abs,
+			Existed:        existed,
+			GitignoreAdded: ignored,
+			CatalogWritten: len(configs) > 0,
+			Models:         models,
+			Notes:          notes,
+		})
+	}
+
 	if existed {
 		fmt.Printf("fledge re-initialized in %s\n", abs)
 	} else {
@@ -1343,7 +1382,34 @@ func runInit(args []string) error {
 	if len(ignored) > 0 {
 		fmt.Printf("added %s to .gitignore\n", strings.Join(ignored, ", "))
 	}
+	if len(configs) > 0 {
+		integrations := make([]string, 0, len(models))
+		for integration := range models {
+			integrations = append(integrations, integration)
+		}
+		sort.Strings(integrations)
+		counts := make([]string, 0, len(integrations))
+		for _, integration := range integrations {
+			counts = append(counts, fmt.Sprintf("%d from %s", models[integration], integration))
+		}
+		fmt.Printf("wrote %s/%s (%s)\n", scaffold.DirName, agentcfg.CatalogName, strings.Join(counts, ", "))
+	} else {
+		fmt.Printf("no integration answered discovery; %s/%s left as it was\n", scaffold.DirName, agentcfg.CatalogName)
+	}
+	for _, note := range notes {
+		fmt.Printf("note: %s\n", note)
+	}
 	return nil
+}
+
+// initSummary is init's --json shape.
+type initSummary struct {
+	Root           string         `json:"root"`
+	Existed        bool           `json:"existed"`
+	GitignoreAdded []string       `json:"gitignore_added,omitempty"`
+	CatalogWritten bool           `json:"catalog_written"`
+	Models         map[string]int `json:"models,omitempty"`
+	Notes          []string       `json:"notes,omitempty"`
 }
 
 // runDeinit is init's inverse: it lists the .fledge tree, asks for
@@ -1441,13 +1507,16 @@ func runDeinit(args []string) error {
 	return nil
 }
 
-// configProvider names the vendor a config talks to. The claude integration
-// carries no provider of its own — the field is pi-only, since it is a pi
-// flag — but the claude CLI reaches exactly one vendor, so the catalog can say
-// which without the config storing it.
+// configProvider names the vendor a config talks to. The claude and codex
+// integrations carry no provider of their own — the field is pi-only, since it
+// is a pi flag — but each CLI reaches exactly one vendor, so the catalog can
+// say which without the config storing it.
 func configProvider(c agentcfg.Config) string {
-	if c.Integration == "claude" {
+	switch c.Integration {
+	case "claude":
 		return "anthropic"
+	case "codex":
+		return "openai"
 	}
 	return c.Provider
 }

@@ -68,8 +68,8 @@ func (d *Daemon) spawn(req *protocol.Request) (protocol.Response, error) {
 	if err := validType(agentType); err != nil {
 		return protocol.Response{}, err
 	}
-	if cfg.Integration == "claude" && d.session.SocketPath == "" {
-		return protocol.Response{}, errors.New("flock is not bound to a herdr session; claude agents need a pane")
+	if agentcfg.PaneHosted(cfg.Integration) && d.session.SocketPath == "" {
+		return protocol.Response{}, fmt.Errorf("flock is not bound to a herdr session; %s agents need a pane", cfg.Integration)
 	}
 
 	cwd, err := d.spawnCwd(cfg, req)
@@ -153,6 +153,9 @@ func (d *Daemon) resolveSpawn(req *protocol.Request) (agentcfg.Config, string, e
 		agentType string
 	)
 	if req.Config != "" {
+		if req.Integration != "" {
+			return cfg, "", errors.New("integration override applies to --model spawns; a config names its integration")
+		}
 		configs, err := agentcfg.Load(d.root)
 		if err != nil {
 			return cfg, "", err
@@ -170,12 +173,25 @@ func (d *Daemon) resolveSpawn(req *protocol.Request) (agentcfg.Config, string, e
 		if err != nil {
 			return cfg, "", err
 		}
+		if req.Integration != "" && req.Integration != integration {
+			// The routed provider is pi's; under any other integration it
+			// would be a field ValidateFields rejects below.
+			integration = req.Integration
+			if integration != "pi" {
+				provider = ""
+			}
+		}
 		cfg = agentcfg.Config{Integration: integration, Model: req.Model, Provider: provider}
 		agentType = integration
 	}
 
 	if req.Provider != "" {
 		cfg.Provider = req.Provider
+	}
+	// An override or a provider flag can assemble a combination no config file
+	// would have passed, so the assembled config takes the same field checks.
+	if err := cfg.ValidateFields(); err != nil {
+		return cfg, "", err
 	}
 	return cfg, agentType, nil
 }
@@ -317,15 +333,20 @@ type launched struct {
 // launch starts the agent process. It runs without d.mu held: a Herdr call or a
 // process start can take seconds, and a spawn must not stall the whole flock.
 func (d *Daemon) launch(name, cwd string, cfg agentcfg.Config, split string) (launched, error) {
-	if cfg.Integration == "claude" {
-		return d.launchClaude(name, cwd, cfg, split)
+	if agentcfg.PaneHosted(cfg.Integration) {
+		return d.launchPane(name, cwd, cfg, split)
 	}
 	// A pi agent is a subprocess with no pane, so there is nothing to split.
 	return d.launchPi(name, cwd, cfg)
 }
 
-func (d *Daemon) launchClaude(name, cwd string, cfg agentcfg.Config, split string) (launched, error) {
-	sessionID := agentcfg.NewSessionID()
+func (d *Daemon) launchPane(name, cwd string, cfg agentcfg.Config, split string) (launched, error) {
+	// Only claude takes a session id; codex persists its own sessions and has
+	// no equivalent flag, so its journal line must not carry a fake one.
+	var sessionID string
+	if cfg.Integration == "claude" {
+		sessionID = agentcfg.NewSessionID()
+	}
 
 	env := make(map[string]string, len(cfg.Env)+1)
 	for k, v := range cfg.Env {
@@ -498,7 +519,7 @@ func (d *Daemon) stop(req *protocol.Request) (protocol.Response, error) {
 	delete(d.runners, req.Name)
 	d.mu.Unlock()
 
-	if agent.Integration == "claude" {
+	if agentcfg.PaneHosted(agent.Integration) {
 		if err := herdrwire.PaneClose(d.session.SocketPath, agent.PaneID); err != nil {
 			return protocol.Response{}, err
 		}
@@ -530,7 +551,7 @@ func bridged(a protocol.Agent) bool {
 // bridge hands a message straight to a spawned agent. Called without d.mu:
 // a Herdr call can block for seconds.
 func (d *Daemon) bridge(to protocol.Agent, runner *pirpc.Runner, msg protocol.Message) error {
-	if to.Integration == "claude" {
+	if agentcfg.PaneHosted(to.Integration) {
 		return herdrwire.SendInput(d.session.SocketPath, to.PaneID, msg.Body, true)
 	}
 	if runner == nil {

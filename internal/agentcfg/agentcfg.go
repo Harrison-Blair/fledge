@@ -20,6 +20,12 @@ import (
 // FileName is the agent config file, relative to the .fledge directory.
 const FileName = "agents.json"
 
+// CatalogName is the generated model catalog, relative to the .fledge
+// directory. fledge init regenerates it wholesale from the installed
+// integrations; it is never hand-edited, and an agents.json entry shadows a
+// catalog entry of the same name.
+const CatalogName = "catalog.json"
+
 // Config describes one launchable agent.
 type Config struct {
 	Integration    string            `json:"integration"`
@@ -27,14 +33,34 @@ type Config struct {
 	Provider       string            `json:"provider,omitempty"`
 	Cwd            string            `json:"cwd,omitempty"`
 	PermissionMode string            `json:"permission_mode,omitempty"`
+	Sandbox        string            `json:"sandbox,omitempty"`
 	Argv           []string          `json:"argv,omitempty"`
 	Env            map[string]string `json:"env,omitempty"`
 }
 
-// Load reads the agent configs under root. A missing file is not an error: it
-// yields an empty map, since configs are optional until an operator writes one.
+// Load reads the agent configs under root: the generated catalog first, then
+// the user file over it, so an agents.json entry shadows a catalog entry of
+// the same name. A missing file is not an error — either is optional until
+// init discovers models or an operator writes a config.
 func Load(root string) (map[string]Config, error) {
-	data, err := os.ReadFile(filepath.Join(root, scaffold.DirName, FileName))
+	configs, err := loadFile(root, CatalogName)
+	if err != nil {
+		return nil, err
+	}
+	user, err := loadFile(root, FileName)
+	if err != nil {
+		return nil, err
+	}
+	for name, cfg := range user {
+		configs[name] = cfg
+	}
+	return configs, nil
+}
+
+// loadFile reads one config file under root's .fledge directory; a missing
+// file yields an empty map.
+func loadFile(root, file string) (map[string]Config, error) {
+	data, err := os.ReadFile(filepath.Join(root, scaffold.DirName, file))
 	if errors.Is(err, fs.ErrNotExist) {
 		return map[string]Config{}, nil
 	}
@@ -44,7 +70,7 @@ func Load(root string) (map[string]Config, error) {
 
 	configs := map[string]Config{}
 	if err := json.Unmarshal(data, &configs); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", FileName, err)
+		return nil, fmt.Errorf("parse %s: %w", file, err)
 	}
 	return configs, nil
 }
@@ -78,19 +104,51 @@ func (c Config) Validate(name string) error {
 	if err := validName(name); err != nil {
 		return err
 	}
+	if err := c.ValidateFields(); err != nil {
+		return fmt.Errorf("agent %q: %w", name, err)
+	}
+	return nil
+}
+
+// ValidateFields cross-checks integration-specific fields without a name, so
+// the daemon can run the same checks on a config assembled from spawn flags.
+// permission_mode and sandbox stay separate fields: claude's vocabulary (plan,
+// acceptEdits, …) and codex's (read-only, workspace-write, …) don't map 1:1.
+func (c Config) ValidateFields() error {
 	switch c.Integration {
 	case "claude":
 		if c.Provider != "" {
-			return fmt.Errorf("agent %q: provider is pi-only", name)
+			return errors.New("provider is pi-only")
+		}
+		if c.Sandbox != "" {
+			return errors.New("sandbox is codex-only")
 		}
 	case "pi":
 		if c.PermissionMode != "" {
-			return fmt.Errorf("agent %q: permission_mode is claude-only", name)
+			return errors.New("permission_mode is claude-only")
+		}
+		if c.Sandbox != "" {
+			return errors.New("sandbox is codex-only")
+		}
+	case "codex":
+		if c.Provider != "" {
+			return errors.New("provider is pi-only")
+		}
+		if c.PermissionMode != "" {
+			return errors.New("permission_mode is claude-only")
 		}
 	default:
-		return fmt.Errorf("agent %q: invalid integration %q: use \"claude\" or \"pi\"", name, c.Integration)
+		return fmt.Errorf("invalid integration %q: use \"claude\", \"pi\" or \"codex\"", c.Integration)
 	}
 	return nil
+}
+
+// PaneHosted reports whether the integration runs in a visible herdr pane
+// rather than as a supervised subprocess. Pane-hosted agents need the flock
+// bound to a herdr session; their input goes through pane.send_input and their
+// stop is pane.close.
+func PaneHosted(integration string) bool {
+	return integration == "claude" || integration == "codex"
 }
 
 // ReservedOrchestrator is the single name exempt from the agent naming rule.
@@ -133,6 +191,11 @@ func (c Config) CommandArgv(sessionID string) []string {
 		argv = []string{"pi", "--mode", "rpc"}
 		if c.Provider != "" {
 			argv = append(argv, "--provider", c.Provider)
+		}
+	case "codex":
+		argv = []string{"codex"}
+		if c.Sandbox != "" {
+			argv = append(argv, "--sandbox", c.Sandbox)
 		}
 	default:
 		return nil

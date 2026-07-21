@@ -18,6 +18,18 @@ func TestAgentsNameMatchesAgentcfg(t *testing.T) {
 	}
 }
 
+// The catalog is gitignored under scaffold's mirrored name and read under
+// agentcfg's, so the entry must track agentcfg.CatalogName.
+func TestGitignoreCatalogEntryMatchesAgentcfg(t *testing.T) {
+	want := scaffold.DirName + "/" + agentcfg.CatalogName
+	for _, entry := range scaffold.GitignoreEntries {
+		if entry == want {
+			return
+		}
+	}
+	t.Errorf("GitignoreEntries = %v, missing %q", scaffold.GitignoreEntries, want)
+}
+
 func TestAgentsStubLoadsAndValidates(t *testing.T) {
 	root := t.TempDir()
 	if _, err := scaffold.Ensure(root); err != nil {

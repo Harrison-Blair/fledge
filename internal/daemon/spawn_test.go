@@ -348,6 +348,55 @@ func slicesContains(list []string, want string) bool {
 	return false
 }
 
+func TestSpawnCodexByConfig(t *testing.T) {
+	f := serveHerdr(t, map[string]string{
+		"agent.start":       paneStartedReply,
+		"pane.process_info": `{"id":"1","result":{"process_info":{"shell_pid":4242}}}`,
+	})
+	d := boundDaemon(t, f)
+	writeAgents(t, d.root, map[string]agentcfg.Config{
+		"worker": {
+			Integration: "codex",
+			Model:       "gpt-5.6-sol",
+			Sandbox:     "workspace-write",
+		},
+	})
+
+	resp, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Config: "worker"})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if resp.Name != "worker-emperor" || resp.PaneID != "w1:p2" {
+		t.Fatalf("spawn = %+v, want worker-emperor in w1:p2", resp)
+	}
+
+	argv := strs(t, f.params("agent.start")["argv"])
+	if argv[0] != "codex" {
+		t.Fatalf("argv %v does not launch codex", argv)
+	}
+	for _, want := range []string{"--sandbox", "workspace-write", "--model", "gpt-5.6-sol"} {
+		if !slicesContains(argv, want) {
+			t.Fatalf("argv %v is missing %q", argv, want)
+		}
+	}
+	// codex has no --session-id equivalent; a claude flag leaking in would be
+	// passed to a binary that does not know it.
+	if slicesContains(argv, "--session-id") {
+		t.Fatalf("argv %v carries claude's --session-id", argv)
+	}
+	if _, ok := f.call("pane.report_metadata"); !ok {
+		t.Fatal("no pane.report_metadata; the pane was never titled")
+	}
+
+	spawned := findEvent(t, d, evSpawned, "worker-emperor")
+	if spawned.Integration != "codex" || spawned.PaneID != "w1:p2" {
+		t.Fatalf("agent.spawned = %+v", spawned)
+	}
+	if spawned.SessionID != "" {
+		t.Fatalf("codex journal line carries session id %q; codex owns its sessions", spawned.SessionID)
+	}
+}
+
 func TestSpawnPiByModel(t *testing.T) {
 	piStub(t)
 	d := boundDaemon(t, nil)
@@ -881,6 +930,85 @@ func TestSpawnClaudeNeedsBoundSession(t *testing.T) {
 	}
 }
 
+func TestSpawnCodexNeedsBoundSession(t *testing.T) {
+	d := boundDaemon(t, nil)
+	writeAgents(t, d.root, map[string]agentcfg.Config{"worker": {Integration: "codex"}})
+
+	_, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Config: "worker"})
+	if err == nil {
+		t.Fatal("codex spawned on an unbound daemon; it has no session to open a pane in")
+	}
+	// The refusal must name codex: it is the operator's clue about which
+	// config needs the pane.
+	if !strings.Contains(err.Error(), "not bound") || !strings.Contains(err.Error(), "codex") {
+		t.Fatalf("error = %v, want the unbound-session refusal naming codex", err)
+	}
+}
+
+func TestResolveSpawnIntegrationOverride(t *testing.T) {
+	d := boundDaemon(t, nil)
+	tests := []struct {
+		desc        string
+		req         protocol.Request
+		integration string
+		provider    string
+		wantErr     bool
+	}{
+		{
+			desc:        "codex override drops the routed pi provider",
+			req:         protocol.Request{Model: "gpt-5.6-sol", Integration: "codex"},
+			integration: "codex",
+		},
+		{
+			desc:        "pi override matching the route keeps its provider",
+			req:         protocol.Request{Model: "gpt-5.5", Integration: "pi"},
+			integration: "pi",
+			provider:    "openai-codex",
+		},
+		{desc: "override with a config", req: protocol.Request{Config: "worker", Integration: "codex"}, wantErr: true},
+		{desc: "provider with a codex override", req: protocol.Request{Model: "gpt-5.5", Integration: "codex", Provider: "openai"}, wantErr: true},
+		{desc: "unknown override", req: protocol.Request{Model: "gpt-5.5", Integration: "goose"}, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		tt.req.Op = protocol.OpSpawn
+		cfg, agentType, err := d.resolveSpawn(&tt.req)
+		if tt.wantErr {
+			if err == nil {
+				t.Errorf("%s: resolved to %+v, want error", tt.desc, cfg)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: %v", tt.desc, err)
+			continue
+		}
+		if cfg.Integration != tt.integration || cfg.Provider != tt.provider {
+			t.Errorf("%s: cfg = %+v, want integration %q provider %q", tt.desc, cfg, tt.integration, tt.provider)
+		}
+		if agentType != tt.integration {
+			t.Errorf("%s: agent type = %q, want the overriding integration %q", tt.desc, agentType, tt.integration)
+		}
+	}
+}
+
+func TestSpawnCodexByModelOverride(t *testing.T) {
+	f := serveHerdr(t, map[string]string{"agent.start": paneStartedReply})
+	d := boundDaemon(t, f)
+
+	resp, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Model: "gpt-5.6-sol", Integration: "codex"})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if resp.Name != "codex-emperor" {
+		t.Fatalf("name = %q, want codex-emperor: the override names the pool", resp.Name)
+	}
+	argv := strs(t, f.params("agent.start")["argv"])
+	if argv[0] != "codex" || !slicesContains(argv, "gpt-5.6-sol") {
+		t.Fatalf("argv = %v, want a codex launch of gpt-5.6-sol", argv)
+	}
+}
+
 func TestSpawnRejectsUnknownConfigAndModel(t *testing.T) {
 	d := boundDaemon(t, nil)
 
@@ -910,6 +1038,52 @@ func TestSpawnRejectsConfigAndModelTogether(t *testing.T) {
 	// Both selectors are individually valid, so only the guard can refuse this.
 	if _, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Config: "worker", Model: "gpt-x"}); err == nil {
 		t.Fatal("spawn accepted both a config and a model")
+	}
+}
+
+func TestSendToCodexAgentGoesToItsPane(t *testing.T) {
+	f := serveHerdr(t, map[string]string{"agent.start": paneStartedReply})
+	d := boundDaemon(t, f)
+	writeAgents(t, d.root, map[string]agentcfg.Config{"worker": {Integration: "codex"}})
+
+	if _, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Config: "worker"}); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	sender, err := d.register(&protocol.Request{Op: protocol.OpRegister, Type: "lead", PID: os.Getpid()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := d.send(&protocol.Request{Op: protocol.OpSend, From: sender.Name, To: "worker-emperor", Body: "do the thing"}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	input := f.params("pane.send_input")
+	if input["text"] != "do the thing" {
+		t.Fatalf("pane text = %v", input["text"])
+	}
+	if keys := strs(t, input["keys"]); len(keys) != 1 || keys[0] != "enter" {
+		t.Fatalf("pane keys = %v, want [enter]", keys)
+	}
+}
+
+func TestStopCodexClosesItsPane(t *testing.T) {
+	f := serveHerdr(t, map[string]string{"agent.start": paneStartedReply})
+	d := boundDaemon(t, f)
+	writeAgents(t, d.root, map[string]agentcfg.Config{"worker": {Integration: "codex"}})
+
+	if _, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Config: "worker"}); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if _, err := d.stop(&protocol.Request{Op: protocol.OpStop, Name: "worker-emperor"}); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+
+	if closed := f.params("pane.close"); closed["pane_id"] != "w1:p2" {
+		t.Fatalf("pane.close pane_id = %v, want w1:p2", closed["pane_id"])
+	}
+	if got := agentState(d, "worker-emperor"); got != stateStopped {
+		t.Fatalf("state = %q, want stopped", got)
 	}
 }
 

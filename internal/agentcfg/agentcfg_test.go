@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/Harrison-Blair/fledge/internal/scaffold"
@@ -59,15 +60,21 @@ func TestValidate(t *testing.T) {
 	}{
 		{desc: "claude ok", name: "worker", cfg: Config{Integration: "claude"}},
 		{desc: "pi ok", name: "worker2", cfg: Config{Integration: "pi"}},
+		{desc: "codex ok", name: "worker3", cfg: Config{Integration: "codex"}},
 		{desc: "claude with permission mode", name: "worker", cfg: Config{Integration: "claude", PermissionMode: "acceptEdits"}},
 		{desc: "pi with provider", name: "worker", cfg: Config{Integration: "pi", Provider: "openai"}},
+		{desc: "codex with sandbox", name: "worker", cfg: Config{Integration: "codex", Sandbox: "workspace-write"}},
 		{desc: "empty name", name: "", cfg: Config{Integration: "claude"}, wantErr: true},
 		{desc: "uppercase name", name: "Worker", cfg: Config{Integration: "claude"}, wantErr: true},
 		{desc: "hyphenated name", name: "code-worker", cfg: Config{Integration: "claude"}, wantErr: true},
 		{desc: "empty integration", name: "worker", cfg: Config{}, wantErr: true},
-		{desc: "unknown integration", name: "worker", cfg: Config{Integration: "codex"}, wantErr: true},
+		{desc: "unknown integration", name: "worker", cfg: Config{Integration: "goose"}, wantErr: true},
 		{desc: "provider on claude", name: "worker", cfg: Config{Integration: "claude", Provider: "openai"}, wantErr: true},
+		{desc: "provider on codex", name: "worker", cfg: Config{Integration: "codex", Provider: "openai"}, wantErr: true},
 		{desc: "permission mode on pi", name: "worker", cfg: Config{Integration: "pi", PermissionMode: "acceptEdits"}, wantErr: true},
+		{desc: "permission mode on codex", name: "worker", cfg: Config{Integration: "codex", PermissionMode: "acceptEdits"}, wantErr: true},
+		{desc: "sandbox on claude", name: "worker", cfg: Config{Integration: "claude", Sandbox: "read-only"}, wantErr: true},
+		{desc: "sandbox on pi", name: "worker", cfg: Config{Integration: "pi", Sandbox: "read-only"}, wantErr: true},
 		{desc: "reserved orchestrator name", name: ReservedOrchestrator, cfg: Config{Integration: "claude"}},
 	}
 
@@ -116,8 +123,23 @@ func TestCommandArgv(t *testing.T) {
 			want: []string{"pi", "--mode", "rpc", "--provider", "openai", "--model", "o3", "--trace"},
 		},
 		{
+			desc: "codex bare ignores session id",
+			cfg:  Config{Integration: "codex"},
+			want: []string{"codex"},
+		},
+		{
+			desc: "codex full",
+			cfg: Config{
+				Integration: "codex",
+				Model:       "gpt-5.6-sol",
+				Sandbox:     "workspace-write",
+				Argv:        []string{"--profile", "work"},
+			},
+			want: []string{"codex", "--sandbox", "workspace-write", "--model", "gpt-5.6-sol", "--profile", "work"},
+		},
+		{
 			desc: "unknown integration is not launchable",
-			cfg:  Config{Integration: "codex", Model: "gpt-5"},
+			cfg:  Config{Integration: "goose", Model: "gpt-5"},
 			want: nil,
 		},
 	}
@@ -125,6 +147,24 @@ func TestCommandArgv(t *testing.T) {
 	for _, tt := range tests {
 		if got := tt.cfg.CommandArgv("sid"); !slices.Equal(got, tt.want) {
 			t.Errorf("%s: CommandArgv() = %v, want %v", tt.desc, got, tt.want)
+		}
+	}
+}
+
+func TestPaneHosted(t *testing.T) {
+	tests := []struct {
+		integration string
+		want        bool
+	}{
+		{integration: "claude", want: true},
+		{integration: "codex", want: true},
+		{integration: "pi", want: false},
+		{integration: "", want: false},
+		{integration: "goose", want: false},
+	}
+	for _, tt := range tests {
+		if got := PaneHosted(tt.integration); got != tt.want {
+			t.Errorf("PaneHosted(%q) = %v, want %v", tt.integration, got, tt.want)
 		}
 	}
 }
@@ -173,17 +213,72 @@ func TestLoadMalformed(t *testing.T) {
 	}
 }
 
+func TestLoadCatalogOnly(t *testing.T) {
+	root := t.TempDir()
+	writeConfigFile(t, root, CatalogName, `{"gpt56solcx": {"integration": "codex", "model": "gpt-5.6-sol"}}`)
+
+	configs, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := configs["gpt56solcx"]; got.Integration != "codex" || got.Model != "gpt-5.6-sol" {
+		t.Errorf("catalog entry = %+v", got)
+	}
+}
+
+func TestLoadUserShadowsCatalog(t *testing.T) {
+	root := t.TempDir()
+	writeConfigFile(t, root, CatalogName, `{
+		"gpt55pi": {"integration": "pi", "provider": "openai-codex", "model": "gpt-5.5"},
+		"gpt56solcx": {"integration": "codex", "model": "gpt-5.6-sol"}
+	}`)
+	writeConfigFile(t, root, FileName, `{
+		"gpt56solcx": {"integration": "codex", "model": "gpt-5.6-sol", "sandbox": "workspace-write"}
+	}`)
+
+	configs, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(configs) != 2 {
+		t.Fatalf("Load returned %d configs, want 2 (merged)", len(configs))
+	}
+	if got := configs["gpt56solcx"]; got.Sandbox != "workspace-write" {
+		t.Errorf("user entry did not shadow the catalog: %+v", got)
+	}
+	if got := configs["gpt55pi"]; got.Provider != "openai-codex" {
+		t.Errorf("unshadowed catalog entry lost: %+v", got)
+	}
+}
+
+func TestLoadMalformedCatalogNamesItsFile(t *testing.T) {
+	root := t.TempDir()
+	writeConfigFile(t, root, CatalogName, `{"broken": `)
+	_, err := Load(root)
+	if err == nil {
+		t.Fatal("Load of malformed catalog succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), CatalogName) {
+		t.Errorf("error = %v, want it to name %s", err, CatalogName)
+	}
+}
+
 func writeConfig(t *testing.T, body string) string {
 	t.Helper()
 	root := t.TempDir()
+	writeConfigFile(t, root, FileName, body)
+	return root
+}
+
+func writeConfigFile(t *testing.T, root, file, body string) {
+	t.Helper()
 	dir := filepath.Join(root, scaffold.DirName)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, file), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return root
 }
 
 func TestNewSessionID(t *testing.T) {

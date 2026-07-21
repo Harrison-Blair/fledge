@@ -114,17 +114,17 @@ func TestEnsureGitignore(t *testing.T) {
 		}
 	})
 
-	t.Run("appends both entries", func(t *testing.T) {
+	t.Run("appends all entries", func(t *testing.T) {
 		root := t.TempDir()
 		name := write(t, root, "bin/\n")
 		added, err := EnsureGitignore(root)
 		if err != nil {
 			t.Fatalf("EnsureGitignore: %v", err)
 		}
-		if len(added) != 2 {
-			t.Fatalf("added = %v, want both entries", added)
+		if len(added) != len(GitignoreEntries) {
+			t.Fatalf("added = %v, want every entry", added)
 		}
-		if got, want := read(t, name), "bin/\n\n# fledge\n.fledge/locks/\n.fledge/flocks/\n"; got != want {
+		if got, want := read(t, name), "bin/\n\n# fledge\n.fledge/locks/\n.fledge/flocks/\n.fledge/catalog.json\n"; got != want {
 			t.Errorf("got %q, want %q", got, want)
 		}
 	})
@@ -135,7 +135,7 @@ func TestEnsureGitignore(t *testing.T) {
 		if _, err := EnsureGitignore(root); err != nil {
 			t.Fatalf("EnsureGitignore: %v", err)
 		}
-		if got, want := read(t, name), "bin/\n\n# fledge\n.fledge/locks/\n.fledge/flocks/\n"; got != want {
+		if got, want := read(t, name), "bin/\n\n# fledge\n.fledge/locks/\n.fledge/flocks/\n.fledge/catalog.json\n"; got != want {
 			t.Errorf("got %q, want %q", got, want)
 		}
 	})
@@ -147,11 +147,23 @@ func TestEnsureGitignore(t *testing.T) {
 		if err != nil {
 			t.Fatalf("EnsureGitignore: %v", err)
 		}
-		if len(added) != 1 || added[0] != ".fledge/flocks/" {
-			t.Errorf("added = %v, want only .fledge/flocks/", added)
+		if len(added) != 2 || added[0] != ".fledge/flocks/" || added[1] != ".fledge/catalog.json" {
+			t.Errorf("added = %v, want the flocks and catalog entries", added)
 		}
-		if got, want := read(t, name), ".fledge/locks/\n\n# fledge\n.fledge/flocks/\n"; got != want {
+		if got, want := read(t, name), ".fledge/locks/\n\n# fledge\n.fledge/flocks/\n.fledge/catalog.json\n"; got != want {
 			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("skips a catalog entry already present", func(t *testing.T) {
+		root := t.TempDir()
+		write(t, root, ".fledge/catalog.json\n")
+		added, err := EnsureGitignore(root)
+		if err != nil {
+			t.Fatalf("EnsureGitignore: %v", err)
+		}
+		if len(added) != 2 || added[0] != ".fledge/locks/" || added[1] != ".fledge/flocks/" {
+			t.Errorf("added = %v, want only the directory entries", added)
 		}
 	})
 
@@ -176,7 +188,7 @@ func TestEnsureGitignore(t *testing.T) {
 		if _, err := EnsureGitignore(root); err != nil {
 			t.Fatalf("EnsureGitignore: %v", err)
 		}
-		if got, want := read(t, name), "bin/\n\n# fledge\n.fledge/locks/\n.fledge/flocks/\n"; got != want {
+		if got, want := read(t, name), "bin/\n\n# fledge\n.fledge/locks/\n.fledge/flocks/\n.fledge/catalog.json\n"; got != want {
 			t.Errorf("got %q, want %q", got, want)
 		}
 	})
@@ -187,7 +199,7 @@ func TestEnsureGitignore(t *testing.T) {
 		if _, err := EnsureGitignore(root); err != nil {
 			t.Fatalf("EnsureGitignore: %v", err)
 		}
-		if got, want := read(t, name), "# fledge\n.fledge/locks/\n.fledge/flocks/\n"; got != want {
+		if got, want := read(t, name), "# fledge\n.fledge/locks/\n.fledge/flocks/\n.fledge/catalog.json\n"; got != want {
 			t.Errorf("got %q, want %q", got, want)
 		}
 	})
@@ -198,7 +210,7 @@ func TestEnsureGitignore(t *testing.T) {
 		if _, err := EnsureGitignore(root); err != nil {
 			t.Fatalf("EnsureGitignore: %v", err)
 		}
-		if got, want := read(t, name), "# fledge\n.fledge/locks/\n.fledge/flocks/\n\nbin/\n"; got != want {
+		if got, want := read(t, name), "# fledge\n.fledge/locks/\n.fledge/flocks/\n.fledge/catalog.json\n\nbin/\n"; got != want {
 			t.Errorf("got %q, want %q", got, want)
 		}
 	})

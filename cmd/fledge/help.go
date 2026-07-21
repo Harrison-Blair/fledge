@@ -33,7 +33,13 @@ var helpPages = map[string]string{
 create or refresh the .fledge directory without replacing existing files.
 dir defaults to the current directory.
 
+also discovers the models the installed integrations can launch (pi
+--list-models, codex debug models) and regenerates .fledge/catalog.json
+from them. agents.json is the operator's file and wins on name collisions;
+claude models have no list command and stay hand-written there.
+
 flags:
+  --json, -J   emit a JSON summary instead of text
   --help, -H   print this help
 `,
 	"deinit": `usage:
@@ -177,11 +183,13 @@ or model id. Given neither on a terminal, it prints a numbered menu of the
 configured agents and spawns the one picked.
 
 flags:
-  --model, -M <id>       model id to launch instead of a config name
-  --provider, -D <name>  pi provider override
-  --cwd, -C <dir>        working directory (default: workspace root)
-  --species, -S <slug>   request a specific species slug
-  --help, -H             print this help
+  --model, -M <id>         model id to launch instead of a config name
+  --provider, -D <name>    pi provider override
+  --integration, -I <name> run the model under this integration
+                           (claude, pi or codex; default: routed by prefix)
+  --cwd, -C <dir>          working directory (default: workspace root)
+  --species, -S <slug>     request a specific species slug
+  --help, -H               print this help
 `,
 	"agent stop": `usage:
   fledge agent stop <name>
@@ -203,7 +211,8 @@ flags:
 	"agent models": `usage:
   fledge agent models [flags]
 
-list spawnable models from .fledge/agents.json, grouped by provider.
+list spawnable models from .fledge/catalog.json and .fledge/agents.json
+(agents.json wins on name collisions), grouped by provider.
 This command needs no flock context or running daemon.
 
 flags:

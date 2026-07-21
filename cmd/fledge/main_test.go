@@ -637,6 +637,35 @@ func TestAgentSpawnProviderWithoutModelSkipsPicker(t *testing.T) {
 	}
 }
 
+// --integration without --model has nothing to override; like --provider it
+// skips the picker and keeps the usage error.
+func TestAgentSpawnIntegrationWithoutModelSkipsPicker(t *testing.T) {
+	writePickerWorkspace(t, pickerFixture())
+	stubStdinTerminal(t)
+	withStdin(t, "1\n")
+	out, err := captureRun(t, "agent", "spawn", "--integration", "codex")
+	if err == nil {
+		t.Fatal("agent spawn --integration without --model succeeded")
+	}
+	if !strings.Contains(err.Error(), "want exactly one of a config name or --model") {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if strings.Contains(out, "Configured agents:") {
+		t.Errorf("menu shown for --integration without --model:\n%s", out)
+	}
+}
+
+func TestAgentSpawnIntegrationWithConfigRejected(t *testing.T) {
+	writePickerWorkspace(t, pickerFixture())
+	_, err := captureRun(t, "agent", "spawn", "opus48", "--integration", "codex")
+	if err == nil {
+		t.Fatal("agent spawn <config> --integration succeeded")
+	}
+	if !strings.Contains(err.Error(), "--integration overrides routing for --model") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
 func assertRows(t *testing.T, got, want []string) {
 	t.Helper()
 	if len(got) != len(want) {
@@ -654,20 +683,23 @@ func assertRows(t *testing.T, got, want []string) {
 // CLI reaches exactly one vendor, so a blank column would read as unknown.
 func TestModelRowsGroupsByProvider(t *testing.T) {
 	rows := modelRows(map[string]agentcfg.Config{
-		"glm52":  {Integration: "pi", Provider: "opencode-go", Model: "glm-5.2"},
-		"opus48": {Integration: "claude", Model: "claude-opus-4-8"},
-		"bare":   {Integration: "claude"},
-		"gpt55":  {Integration: "pi", Provider: "openai-codex", Model: "gpt-5.5"},
+		"glm52":   {Integration: "pi", Provider: "opencode-go", Model: "glm-5.2"},
+		"opus48":  {Integration: "claude", Model: "claude-opus-4-8"},
+		"bare":    {Integration: "claude"},
+		"gpt55":   {Integration: "pi", Provider: "openai-codex", Model: "gpt-5.5"},
+		"sol56cx": {Integration: "codex", Model: "gpt-5.6-sol"},
 	})
 
 	want := []string{
-		"NAME    INTEGRATION  PROVIDER      MODEL",
-		"bare    claude       anthropic",
-		"opus48  claude       anthropic     claude-opus-4-8",
+		"NAME     INTEGRATION  PROVIDER      MODEL",
+		"bare     claude       anthropic",
+		"opus48   claude       anthropic     claude-opus-4-8",
 		"",
-		"gpt55   pi           openai-codex  gpt-5.5",
+		"sol56cx  codex        openai        gpt-5.6-sol",
 		"",
-		"glm52   pi           opencode-go   glm-5.2",
+		"gpt55    pi           openai-codex  gpt-5.5",
+		"",
+		"glm52    pi           opencode-go   glm-5.2",
 	}
 	assertRows(t, rows, want)
 }
@@ -676,13 +708,15 @@ func TestModelRowsGroupsByProvider(t *testing.T) {
 // shows, so the two renderings never disagree about what a model is.
 func TestModelEntriesMatchTableOrderAndProvider(t *testing.T) {
 	entries := modelEntries(map[string]agentcfg.Config{
-		"glm52":  {Integration: "pi", Provider: "opencode-go", Model: "glm-5.2"},
-		"opus48": {Integration: "claude", Model: "claude-opus-4-8"},
-		"gpt55":  {Integration: "pi", Provider: "openai-codex", Model: "gpt-5.5"},
+		"glm52":   {Integration: "pi", Provider: "opencode-go", Model: "glm-5.2"},
+		"opus48":  {Integration: "claude", Model: "claude-opus-4-8"},
+		"gpt55":   {Integration: "pi", Provider: "openai-codex", Model: "gpt-5.5"},
+		"sol56cx": {Integration: "codex", Model: "gpt-5.6-sol"},
 	})
 
 	want := []modelEntry{
 		{Name: "opus48", Integration: "claude", Provider: "anthropic", Model: "claude-opus-4-8"},
+		{Name: "sol56cx", Integration: "codex", Provider: "openai", Model: "gpt-5.6-sol"},
 		{Name: "gpt55", Integration: "pi", Provider: "openai-codex", Model: "gpt-5.5"},
 		{Name: "glm52", Integration: "pi", Provider: "opencode-go", Model: "glm-5.2"},
 	}
@@ -890,7 +924,26 @@ func TestReservedOrchestratorListsLikeAnyConfig(t *testing.T) {
 	}
 }
 
+// stubDiscovery pins init's model discovery to fake pi and codex binaries
+// with small constant catalogs, so init tests neither exec the real ones nor
+// depend on what the machine has installed.
+func stubDiscovery(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	scripts := map[string]string{
+		"pi":    "#!/bin/sh\ncat <<'EOF'\nprovider model\nopenai-codex gpt-5.5\nEOF\n",
+		"codex": "#!/bin/sh\ncat <<'EOF'\n{\"models\":[{\"slug\":\"gpt-5.6-sol\",\"visibility\":\"list\"}]}\nEOF\n",
+	}
+	for name, body := range scripts {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 func TestInitAppendsToGitignore(t *testing.T) {
+	stubDiscovery(t)
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("bin/\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -900,7 +953,7 @@ func TestInitAppendsToGitignore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	if !strings.Contains(out, "added .fledge/locks/, .fledge/flocks/ to .gitignore") {
+	if !strings.Contains(out, "added .fledge/locks/, .fledge/flocks/, .fledge/catalog.json to .gitignore") {
 		t.Errorf("output missing gitignore log line: %q", out)
 	}
 
@@ -910,5 +963,89 @@ func TestInitAppendsToGitignore(t *testing.T) {
 	}
 	if strings.Contains(out, ".gitignore") {
 		t.Errorf("re-init logged a gitignore append with nothing to add: %q", out)
+	}
+}
+
+func TestInitWritesCatalog(t *testing.T) {
+	stubDiscovery(t)
+	dir := t.TempDir()
+
+	out, err := captureRun(t, "init", dir)
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if !strings.Contains(out, "wrote .fledge/catalog.json (1 from codex, 1 from pi)") {
+		t.Errorf("output missing catalog log line: %q", out)
+	}
+
+	configs, err := agentcfg.Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := configs["gpt56solcx"]; got.Integration != "codex" || got.Model != "gpt-5.6-sol" {
+		t.Errorf("gpt56solcx = %+v", got)
+	}
+	if got := configs["gpt55pi"]; got.Integration != "pi" || got.Provider != "openai-codex" {
+		t.Errorf("gpt55pi = %+v", got)
+	}
+	// Discovery writes the catalog, never the operator's file: the stub entry
+	// must still be the whole of agents.json.
+	if _, ok := configs["example"]; !ok {
+		t.Errorf("agents.json stub lost: %+v", configs)
+	}
+}
+
+func TestInitKeepsCatalogWhenNothingAnswers(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := scaffold.Ensure(dir); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := `{"kept": {"integration": "codex", "model": "gpt-5.6-sol"}}`
+	catalogPath := filepath.Join(dir, scaffold.DirName, "catalog.json")
+	if err := os.WriteFile(catalogPath, []byte(sentinel), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A PATH with no pi and no codex: discovery must skip both, not fail init.
+	t.Setenv("PATH", t.TempDir())
+
+	out, err := captureRun(t, "init", dir)
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if !strings.Contains(out, "left as it was") {
+		t.Errorf("output missing the kept-catalog line: %q", out)
+	}
+	got, err := os.ReadFile(catalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != sentinel {
+		t.Errorf("empty discovery clobbered the catalog: %q", got)
+	}
+}
+
+func TestInitJSON(t *testing.T) {
+	stubDiscovery(t)
+	dir := t.TempDir()
+
+	out, err := captureRun(t, "init", dir, "--json")
+	if err != nil {
+		t.Fatalf("init --json: %v", err)
+	}
+	var summary struct {
+		Root           string         `json:"root"`
+		Existed        bool           `json:"existed"`
+		CatalogWritten bool           `json:"catalog_written"`
+		Models         map[string]int `json:"models"`
+		Notes          []string       `json:"notes"`
+	}
+	if err := json.Unmarshal([]byte(out), &summary); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out)
+	}
+	if !summary.CatalogWritten || summary.Models["codex"] != 1 || summary.Models["pi"] != 1 {
+		t.Errorf("summary = %+v", summary)
+	}
+	if summary.Existed {
+		t.Errorf("fresh init reported existed = true")
 	}
 }
