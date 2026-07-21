@@ -1,5 +1,12 @@
 # Experiments
 
+> **LEGACY — completed experiment.** All three experiments have been run and
+> resolved; their verdicts are recorded in the Results sections and summarized
+> in `CLAUDE.md`. The procedures, preconditions, and supervision rules below are
+> historical — the harnesses they invoke (`cmd/exp1-authority`, `cmd/exp2-input`,
+> `cmd/exp3-ratelimit`) and `scripts/exp-session-*.sh` no longer exist. Kept for
+> the findings and the raw observations behind them.
+
 > Distilled from `docs/reference/integration-surfaces.md` (Stage 0
 > recommendations), snapshot 2026-07-17; re-verify version-specific claims at
 > build time.

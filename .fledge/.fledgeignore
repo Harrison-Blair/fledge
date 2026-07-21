@@ -1,0 +1,14 @@
+# Paths fledge ignores, one glob per line.
+# Syntax follows .gitignore conventions.
+#
+# "#include <path>" splices another ignore file in at that point, resolved
+# from this workspace root.
+#include .gitignore
+.gitignore
+.fledge/
+.claude/
+.codex/
+.git/
+CLAUDE.md
+LICENSE
+README.md

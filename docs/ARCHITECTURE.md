@@ -1,5 +1,11 @@
 # Fledge Architecture
 
+> **LEGACY — completed experiment.** This document belongs to the Stage 0
+> exploration, which has been run to completion and concluded. The staged
+> roadmap and "Repo layout" section below describe code that was deleted in
+> `bf69715 teardown for re-write`. Read the invariants as carried-forward
+> findings; read everything else as history. See `CLAUDE.md`.
+
 > Distilled from `docs/reference/integration-surfaces.md` and
 > `docs/reference/ai-sdlc-scan.md`, research snapshot 2026-07-17; re-verify
 > version-specific claims at build time.
@@ -126,6 +132,3 @@ cmd/exp3-ratelimit/         EXP3 harness (rate limits — NEVER agent-run)
 scripts/                    gen-herdr-types.sh, exp-session-up.sh,
                             exp-session-down.sh
 ```
-
-`CLAUDE.md` is human-authored and out of bounds for agents (see
-`docs/DECISIONS.md`).

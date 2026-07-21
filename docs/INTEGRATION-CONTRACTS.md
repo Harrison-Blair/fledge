@@ -1,5 +1,11 @@
 # Integration Contracts
 
+> **LEGACY — completed experiment.** Written during the Stage 0 exploration,
+> which has concluded. The pinned surface facts below still carry forward as the
+> best available notes on Herdr / Pi / Claude Code, but they are a 2026-07-17
+> snapshot of pre-1.0 surfaces — re-verify against the live binaries before
+> building on any of it. See `CLAUDE.md`.
+
 > Distilled from `docs/reference/integration-surfaces.md` (with in-window
 > version data from `docs/reference/ai-sdlc-scan.md`), research snapshot
 > 2026-07-17; re-verify version-specific claims at build time.

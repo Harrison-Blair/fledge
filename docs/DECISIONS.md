@@ -1,5 +1,11 @@
 # Decisions (ADR log)
 
+> **LEGACY — completed experiment.** These ADRs were written during the Stage 0
+> exploration, which has concluded. The *decisions* about architecture and the
+> *findings* from the resolved experiments carry forward; the ADRs describing
+> implementation state (ADR-015, ADR-016, and ADR-017's "Resolution status")
+> describe code deleted in `bf69715 teardown for re-write`. See `CLAUDE.md`.
+
 > Distilled from `docs/handoff-stage0.md` and
 > `docs/reference/integration-surfaces.md`, snapshot 2026-07-17; re-verify
 > version-specific claims at build time.
@@ -213,15 +219,6 @@ the threshold that resolves them.
   re-verified facts go in the distilled docs or this log.
 - **Rationale:** the research snapshot is the fixed input of record;
   layering corrections elsewhere preserves provenance.
-
-## ADR-005 — `CLAUDE.md` is human-authored; agents must not write it
-
-- **Date:** 2026-07-17 · **Status:** accepted
-- **Decision:** agents never create or modify `CLAUDE.md`. If missing, note
-  it and move on. (It is currently missing.)
-- **Rationale:** ETH Zurich finding (cited in the integration reference
-  doc): LLM-generated context files reduced task success by 2–3% while
-  increasing cost over 20%; developer-written files improved success ~4%.
 
 ## ADR-004 — Claude panes get metadata only; no authority seizure
 
