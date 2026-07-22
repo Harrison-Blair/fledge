@@ -407,11 +407,49 @@ func (d *Daemon) serveFileRequests() {
 		for _, p := range pending {
 			p := p
 			go func() {
-				resp := d.dispatch(&p.Request, nil)
+				// A bridge wait has no connection to watch, so give it a
+				// liveness signal built from the exchange's accepted marker: a
+				// client that gives up removes it via Cleanup. Without this a
+				// killed sandboxed `agent msg wait` (which sends no timeout)
+				// would park in d.waiters forever and swallow the next message.
+				var gone chan struct{}
+				if p.Request.Op == protocol.OpWait {
+					gone = make(chan struct{})
+					done := make(chan struct{})
+					defer close(done)
+					go d.watchBridgeWaiter(p.ID, gone, done)
+				}
+				resp := d.dispatch(&p.Request, gone)
 				if err := filebridge.Respond(d.root, d.flockName, p.ID, resp); err != nil {
 					d.debug.Printf("file RPC response %s: %v", p.ID, err)
 				}
 			}()
+		}
+	}
+}
+
+// watchBridgeWaiter closes gone once the bridge client abandons exchange id,
+// determined by filebridge.Awaiting: the accepted marker is gone (graceful
+// Cleanup) or the client pid stamped in it no longer runs (a killed client
+// that ran no defer). This mirrors the socket path's connection-death signal
+// so an abandoned bridge wait is dropped instead of swallowing the next
+// message. The probe is cheap; the poll is kept short to narrow the window in
+// which a send can still be handed to an already-dead waiter (the accepted,
+// gone-branch-tolerated crash window). Returns when done or d.done close.
+func (d *Daemon) watchBridgeWaiter(id string, gone chan struct{}, done <-chan struct{}) {
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-d.done:
+			return
+		case <-ticker.C:
+			if !filebridge.Awaiting(d.root, d.flockName, id) {
+				close(gone)
+				return
+			}
 		}
 	}
 }

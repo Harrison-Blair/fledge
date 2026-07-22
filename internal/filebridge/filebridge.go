@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/flock"
@@ -23,6 +25,11 @@ const dirName = ".rpc"
 type pending struct {
 	ID      string           `json:"id"`
 	Request protocol.Request `json:"request"`
+	// PID is the client process that published this request and is blocked in
+	// Await. The daemon stamps it into the accepted marker so a waiter's
+	// liveness can be probed by signal 0 rather than trusting the client to
+	// clean up after itself — a killed client runs no deferred Cleanup.
+	PID int `json:"pid"`
 }
 
 // Pending is a claimed request awaiting dispatch by the daemon.
@@ -76,13 +83,45 @@ func Available(root, flockName string) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
+// Awaiting reports whether exchange id is still live: the daemon's accepted
+// marker is present AND the client process stamped in it is still running. It
+// is the bridge equivalent of a socket wait's connection. A graceful client
+// removes the marker via Cleanup; a killed client removes nothing, so the
+// signal-0 probe is what detects it. When this goes false the daemon can drop
+// a parked waiter and skip writing a response nobody will read.
+func Awaiting(root, flockName, id string) bool {
+	if !validID(id) {
+		return false
+	}
+	data, err := os.ReadFile(filepath.Join(acceptedDir(root, flockName), id))
+	if err != nil {
+		return false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return false
+	}
+	return alive(pid)
+}
+
+// alive reports whether pid names a running process. EPERM means the process
+// exists but is not ours to signal, which still counts as alive. Mirrors the
+// daemon's own liveness probe.
+func alive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	return err == nil || err == syscall.EPERM
+}
+
 // Submit atomically publishes one request and returns its exchange id.
 func Submit(root, flockName string, req protocol.Request) (string, error) {
 	id, err := newID()
 	if err != nil {
 		return "", err
 	}
-	data, err := json.Marshal(pending{ID: id, Request: req})
+	data, err := json.Marshal(pending{ID: id, Request: req, PID: os.Getpid()})
 	if err != nil {
 		return "", err
 	}
@@ -135,11 +174,18 @@ func Take(root, flockName string) ([]Pending, error) {
 			continue
 		}
 		var p pending
-		if err := json.Unmarshal(data, &p); err != nil || !validID(p.ID) || entry.Name() != p.ID+".json" {
+		// PID <= 0 means a pre-pid client binary published this (new daemon,
+		// old client during an upgrade): its waiter would be unprobeable, so
+		// reject it here and let the client's accept wait time out fast rather
+		// than park forever with responseTimeout=0.
+		if err := json.Unmarshal(data, &p); err != nil || !validID(p.ID) || entry.Name() != p.ID+".json" || p.PID <= 0 {
 			os.Remove(path)
 			continue
 		}
-		if err := os.WriteFile(filepath.Join(acceptedDir(root, flockName), p.ID), nil, 0o600); err != nil {
+		// Stamp the client pid into the marker so a parked waiter's liveness is
+		// probeable by signal 0; write atomically so a probe never reads a
+		// half-written marker.
+		if err := writeAtomic(acceptedDir(root, flockName), p.ID, []byte(strconv.Itoa(p.PID))); err != nil {
 			return out, err
 		}
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -150,13 +196,23 @@ func Take(root, flockName string) ([]Pending, error) {
 	return out, nil
 }
 
-// Respond atomically publishes a daemon response.
+// Respond atomically publishes a daemon response. If the client has already
+// abandoned the exchange — its Await removed the accepted marker on give-up —
+// the response is swept immediately so responses/ does not accumulate orphans
+// for the daemon's lifetime. The client removes the marker only after reading,
+// so this never drops a response a live client still needs.
 func Respond(root, flockName, id string, resp protocol.Response) error {
 	data, err := json.Marshal(resp)
 	if err != nil {
 		return err
 	}
-	return writeAtomic(responseDir(root, flockName), id+".json", data)
+	if err := writeAtomic(responseDir(root, flockName), id+".json", data); err != nil {
+		return err
+	}
+	if !Awaiting(root, flockName, id) {
+		os.Remove(filepath.Join(responseDir(root, flockName), id+".json"))
+	}
+	return nil
 }
 
 // Cleanup removes one exchange's files.

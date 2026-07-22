@@ -3,14 +3,18 @@ package daemon_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/client"
 	"github.com/Harrison-Blair/fledge/internal/daemon"
+	"github.com/Harrison-Blair/fledge/internal/filebridge"
 	"github.com/Harrison-Blair/fledge/internal/protocol"
 	"github.com/Harrison-Blair/fledge/internal/scaffold"
 )
@@ -522,4 +526,151 @@ func TestAbandonedWaiterDoesNotSwallowMessages(t *testing.T) {
 	if got.Message == nil || got.Message.ID != sent.ID {
 		t.Fatalf("delivered %+v, want %s", got.Message, sent.ID)
 	}
+}
+
+// TestAbandonedBridgeWaiterDoesNotSwallowMessages mirrors the socket case for
+// the file-bridge path: a sandboxed `agent msg wait` (no timeout) that is
+// abandoned must have its waiter dropped, not swallow the next message.
+func TestAbandonedBridgeWaiterDoesNotSwallowMessages(t *testing.T) {
+	root := workspace(t)
+	defer start(t, root, testFlock)()
+
+	a := register(t, root, testFlock, "engineer")
+	b := register(t, root, testFlock, "reviewer")
+
+	// Park a wait over the file bridge the way a sandboxed client does: submit
+	// an OpWait with no timeout and let the daemon take and park it.
+	id, err := filebridge.Submit(root, testFlock, protocol.Request{Op: protocol.OpWait, As: b})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for !filebridge.Awaiting(root, testFlock, id) {
+		if time.Now().After(deadline) {
+			t.Fatal("daemon never accepted the bridge wait")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// Let the daemon register the waiter, then abandon: a client that gives up
+	// removes its exchange files via Cleanup.
+	time.Sleep(100 * time.Millisecond)
+	filebridge.Cleanup(root, testFlock, id)
+	// Wait past a liveness-poll tick (250ms) so the waiter is dropped.
+	time.Sleep(600 * time.Millisecond)
+
+	// The message must not be handed to the dead bridge waiter; a live wait gets it.
+	sent, err := client.Do(root, testFlock, protocol.Request{Op: protocol.OpSend, From: a, To: b, Body: "for the living"})
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	got, err := client.Do(root, testFlock, protocol.Request{Op: protocol.OpWait, As: b, TimeoutMS: 2000})
+	if err != nil {
+		t.Fatalf("wait after abandoned bridge waiter: %v", err)
+	}
+	if got.Message == nil || got.Message.ID != sent.ID {
+		t.Fatalf("delivered %+v, want %s", got.Message, sent.ID)
+	}
+}
+
+// TestKilledBridgeWaiterDoesNotSwallowMessages is the non-cooperative case: a
+// real client process parks a bridge wait and is then killed outright, so it
+// runs no deferred Cleanup — exactly like SIGKILL or a closed pane. The daemon
+// must still detect the abandonment (via the pid stamped in the marker) and
+// drop the waiter instead of swallowing the next message.
+func TestKilledBridgeWaiterDoesNotSwallowMessages(t *testing.T) {
+	root := workspace(t)
+	defer start(t, root, testFlock)()
+
+	a := register(t, root, testFlock, "engineer")
+	b := register(t, root, testFlock, "reviewer")
+
+	idFile := filepath.Join(t.TempDir(), "helper-id")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperBridgeWait$")
+	cmd.Env = append(os.Environ(),
+		"GO_WANT_HELPER_PROCESS=1",
+		"FLEDGE_HELPER_ROOT="+root,
+		"FLEDGE_HELPER_FLOCK="+testFlock,
+		"FLEDGE_HELPER_AS="+b,
+		"FLEDGE_HELPER_IDFILE="+idFile,
+	)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	killed := false
+	defer func() {
+		if !killed {
+			cmd.Process.Kill()
+		}
+		cmd.Wait()
+	}()
+
+	// Wait for the child to publish its exchange id.
+	var id string
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		data, err := os.ReadFile(idFile)
+		if err == nil && len(data) > 0 {
+			id = strings.TrimSpace(string(data))
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("helper never published its exchange id")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// Wait until the daemon has taken and parked the child's wait.
+	deadline = time.Now().Add(2 * time.Second)
+	for !filebridge.Awaiting(root, testFlock, id) {
+		if time.Now().After(deadline) {
+			t.Fatal("daemon never accepted the bridge wait")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// Kill the client outright and reap it: no Cleanup runs, so only a liveness
+	// probe of the stamped pid can now detect the abandonment.
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatalf("kill helper: %v", err)
+	}
+	cmd.Wait()
+	killed = true
+	// Wait past a liveness-poll tick (250ms) so the dead waiter is dropped.
+	time.Sleep(1 * time.Second)
+
+	// The message must not be handed to the dead bridge waiter; a live wait gets it.
+	sent, err := client.Do(root, testFlock, protocol.Request{Op: protocol.OpSend, From: a, To: b, Body: "for the living"})
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	got, err := client.Do(root, testFlock, protocol.Request{Op: protocol.OpWait, As: b, TimeoutMS: 2000})
+	if err != nil {
+		t.Fatalf("wait after killed bridge waiter: %v", err)
+	}
+	if got.Message == nil || got.Message.ID != sent.ID {
+		t.Fatalf("delivered %+v, want %s", got.Message, sent.ID)
+	}
+}
+
+// TestHelperBridgeWait is not a standalone test: it is the child process
+// spawned by TestKilledBridgeWaiterDoesNotSwallowMessages. It publishes a
+// bridge wait, records its exchange id, and blocks so the parent can kill it.
+func TestHelperBridgeWait(t *testing.T) {
+	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
+		return
+	}
+	id, err := filebridge.Submit(
+		os.Getenv("FLEDGE_HELPER_ROOT"),
+		os.Getenv("FLEDGE_HELPER_FLOCK"),
+		protocol.Request{Op: protocol.OpWait, As: os.Getenv("FLEDGE_HELPER_AS")},
+	)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "helper submit:", err)
+		os.Exit(2)
+	}
+	if err := os.WriteFile(os.Getenv("FLEDGE_HELPER_IDFILE"), []byte(id), 0o600); err != nil {
+		fmt.Fprintln(os.Stderr, "helper write id:", err)
+		os.Exit(2)
+	}
+	time.Sleep(60 * time.Second)
 }
