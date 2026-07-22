@@ -376,11 +376,34 @@ go test -run TestGet ./internal/version/
 gofmt -l . && go vet ./...
 ```
 
-No Makefile or CI. YAML frontmatter uses `github.com/goccy/go-yaml`.
+There is no Makefile. YAML frontmatter uses `github.com/goccy/go-yaml`.
 
 `internal/version/VERSION` is the single source of truth for the version,
-`//go:embed`-ed by `version.go` — bumping means editing that one file. It sits
-inside the package because `embed` cannot cross directory boundaries.
+`//go:embed`-ed by `version.go`. It is also the release contract and must contain
+exactly a strict `MAJOR.MINOR.PATCH` version. It sits inside the package because
+`embed` cannot cross directory boundaries.
+
+Pull requests into `main` run independent formatting/vet, test, static Linux
+amd64/arm64 build, and version checks when opened, reopened, or updated with a
+new commit. PR title and body edits do not rerun them. Tests report total
+coverage in the Actions job summary without enforcing a threshold or uploading
+the coverage file. The version must be greater than every existing semantic
+release tag, and its `v<version>` tag must not already exist. After the initial
+untagged release, bump `internal/version/VERSION` in every releasable PR.
+
+Merging a PR into `main` reruns lint and tests against the exact merge commit.
+If both pass, GitHub Actions tags that commit and publishes a GitHub Release
+with generated notes and these assets:
+
+```text
+fledge_<version>_linux_amd64.tar.gz
+fledge_<version>_linux_arm64.tar.gz
+SHA256SUMS
+```
+
+Each archive contains the executable `fledge` binary and `LICENSE`. Release
+reruns resume a matching draft or accept an already-published release at the
+same commit; conflicting versions or tags fail instead of replacing a release.
 
 ### Layout
 

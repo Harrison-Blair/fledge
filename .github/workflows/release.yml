@@ -1,0 +1,169 @@
+name: Release
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out merge commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Check formatting
+        shell: bash
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [[ -n "$unformatted" ]]; then
+            echo "The following files need gofmt:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+      - name: Vet
+        run: go vet ./...
+
+  test:
+    name: Test
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out merge commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test with coverage
+        shell: bash
+        run: |
+          set +e
+          go test ./... -covermode=atomic -coverprofile=coverage.out
+          test_status=$?
+          total="$(go tool cover -func=coverage.out 2>/dev/null | awk '$1 == "total:" { print $3 }')"
+          set -e
+
+          {
+            echo "## Test coverage"
+            if [[ -n "$total" ]]; then
+              echo "Total: $total"
+            else
+              echo "Total: unavailable"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          exit "$test_status"
+
+  release:
+    name: Release
+    if: github.event.pull_request.merged == true
+    needs:
+      - lint
+      - test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+    steps:
+      - name: Check out merge commit and tags
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Validate release version
+        id: version
+        shell: bash
+        run: |
+          version="$(bash scripts/check-release-version.sh release "$MERGE_SHA")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+      - name: Build and package release assets
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            package="fledge_${VERSION}_linux_${arch}"
+            mkdir -p "$RUNNER_TEMP/$package"
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
+              go build -trimpath -o "$RUNNER_TEMP/$package/fledge" ./cmd/fledge
+            chmod 0755 "$RUNNER_TEMP/$package/fledge"
+            install -m 0644 LICENSE "$RUNNER_TEMP/$package/LICENSE"
+            tar -C "$RUNNER_TEMP/$package" -czf "dist/$package.tar.gz" fledge LICENSE
+          done
+          cd dist
+          sha256sum ./*.tar.gz > SHA256SUMS
+      - name: Create or resume GitHub release
+        shell: bash
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          release_info="$(
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq '.[] | select(.tag_name == env.TAG) | [.id, .draft, .html_url] | @tsv'
+          )"
+
+          tag_exists=false
+          if git show-ref --verify --quiet "refs/tags/$TAG"; then
+            tag_exists=true
+          fi
+
+          if [[ -n "$release_info" ]]; then
+            if [[ "$release_info" == *$'\n'* ]]; then
+              echo "multiple releases use $TAG" >&2
+              exit 1
+            fi
+            IFS=$'\t' read -r release_id is_draft release_url <<< "$release_info"
+            if [[ "$tag_exists" != true ]]; then
+              echo "release $release_id uses $TAG, but the tag is missing" >&2
+              exit 1
+            fi
+            if [[ "$is_draft" != true ]]; then
+              echo "$TAG is already published at the merge commit: $release_url"
+              exit 0
+            fi
+
+            echo "resuming draft release $release_id"
+            gh release upload "$TAG" dist/* --clobber
+            gh release edit "$TAG" --title "$TAG" --draft=false
+            exit 0
+          fi
+
+          if [[ "$tag_exists" != true ]]; then
+            git tag "$TAG" "$MERGE_SHA"
+            git push origin "refs/tags/$TAG"
+          fi
+
+          gh release create "$TAG" dist/* \
+            --verify-tag \
+            --target "$MERGE_SHA" \
+            --title "$TAG" \
+            --generate-notes \
+            --draft
+          gh release edit "$TAG" --draft=false
