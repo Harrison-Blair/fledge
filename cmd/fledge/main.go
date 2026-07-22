@@ -192,14 +192,18 @@ func humanSize(n int64) string {
 }
 
 // takeFlag pulls a flag and its value out of args, returning the value and the
-// remaining arguments. A flag with no value following it is an error.
+// remaining arguments. A flag with no value following it is an error. A
+// following token that is itself flag-shaped (begins with "-") counts as a
+// missing value, so it survives into the later rejectFlags sweep instead of
+// being silently swallowed. No flag in this CLI takes a negative-number value,
+// so there is no legitimate flag-shaped value to preserve.
 func takeFlag(args []string, long, short string) (value string, rest []string, err error) {
 	for i, arg := range args {
 		if arg != long && arg != short {
 			rest = append(rest, arg)
 			continue
 		}
-		if i+1 >= len(args) {
+		if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
 			return "", nil, fmt.Errorf("%s: missing value", long)
 		}
 		return args[i+1], append(rest, args[i+2:]...), nil
@@ -1515,7 +1519,10 @@ func runAgentMsg(args []string) error {
 }
 
 func runAgentMsgSend(args []string) error {
-	if hasHelpFlag(args) {
+	// Help only when it is the sole argument: the recipient and body are
+	// positional by contract, so a flag-shaped value there (e.g. a body of
+	// "-H") must not be read as a help request and silently drop the message.
+	if len(args) == 1 && isHelpFlag(args[0]) {
 		return printHelp("agent msg send")
 	}
 	replyTo, args, err := takeFlag(args, "--reply-to", "-R")
@@ -1607,6 +1614,12 @@ func runAgentMsgWait(args []string) error {
 		if err != nil {
 			return usageErrorf("agent msg wait", "agent msg wait: %v", err)
 		}
+		// The daemon gates on TimeoutMS > 0, so a non-positive timeout would
+		// wait forever rather than bounding the wait. Reject it, matching the
+		// agent spawn guard.
+		if d <= 0 {
+			return usageErrorf("agent msg wait", "agent msg wait: bad --timeout %q", timeout)
+		}
 		timeoutMS = d.Milliseconds()
 	}
 
@@ -1626,7 +1639,11 @@ func runAgentMsgWait(args []string) error {
 // through fledge start, and this exists for that command and for tests.
 func runDaemon(args []string) error {
 	if len(args) != 1 || args[0] != "run" {
-		return usageErrorf("", "unknown command %q", "daemon")
+		bad := "daemon"
+		if len(args) > 0 {
+			bad = args[0]
+		}
+		return usageErrorf("", "unknown command %q", bad)
 	}
 	flockName, err := flock.FromEnv()
 	if err != nil {
