@@ -46,8 +46,13 @@ func stub(mode string) {
 		helper.Stdout = os.Stdout
 		helper.Run()
 		return
-	case "huge":
+	case "huge_stubborn":
+		// Emit an oversized frame, then ignore stdin EOF and stay alive.
+		// The reader's scanner fails on the frame; a wedged agent will not
+		// exit on its own, so this exercises the forced-teardown path.
 		fmt.Println(strings.Repeat("x", maxFrameBytes+1))
+		time.Sleep(30 * time.Second)
+		return
 	}
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -264,14 +269,51 @@ func TestStopWithOrphanHoldingStdout(t *testing.T) {
 }
 
 func TestStopReportsOversizedFrame(t *testing.T) {
-	r := startStub(t, "huge", nil)
+	defer withGrace(t, 200*time.Millisecond)()
 
-	err := r.Stop()
+	// The agent emits an oversized frame and then wedges (ignores EOF): the
+	// reader's scanner fails, but the process never exits on its own. Without
+	// forced teardown the waiter blocks in cmd.Wait forever, done never closes,
+	// and Stop's kill masks the pre-existing read error and returns nil.
+	r := startStub(t, "huge_stubborn", nil)
+
+	stopped := make(chan error, 1)
+	go func() { stopped <- r.Stop() }()
+
+	var err error
+	select {
+	case err = <-stopped:
+	case <-time.After(stopGrace + 5*time.Second):
+		t.Fatal("Stop blocked: the wedged agent was never torn down")
+	}
+
 	if err == nil {
 		t.Fatal("Stop returned nil, want the oversized-frame read error")
 	}
 	if !strings.Contains(err.Error(), "too long") {
 		t.Errorf("Stop error = %v, want it to mention the too-long token", err)
+	}
+
+	select {
+	case <-r.Done():
+	default:
+		t.Error("Done not closed after Stop returned")
+	}
+}
+
+// TestOversizedFrameClosesDoneWithoutStop guards the daemon-hang half of the
+// wedge: watchRunner blocks on <-runner.Done() and marks the agent stopped only
+// once it closes. If an oversized frame merely ends the reader without tearing
+// the agent down, Done never closes and the daemon keeps a dead agent alive
+// forever. No Stop here: the runner must reap itself.
+func TestOversizedFrameClosesDoneWithoutStop(t *testing.T) {
+	r := startStub(t, "huge_stubborn", nil)
+	defer r.Stop()
+
+	select {
+	case <-r.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("Done never closed: the wedged agent was not torn down, so watchRunner would block forever")
 	}
 }
 

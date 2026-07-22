@@ -112,7 +112,25 @@ func (r *Runner) read(stdout io.Reader, onEvent func(Event)) {
 		}
 		onEvent(Event{Type: head.Type, ID: head.ID, Raw: append(json.RawMessage(nil), line...)})
 	}
-	r.readErr = scanner.Err()
+	if r.readErr = scanner.Err(); r.readErr != nil {
+		// A scanner error (e.g. an oversized frame) leaves the stream
+		// unusable and the agent likely wedged writing to a pipe we will
+		// never drain again. Unlike a clean EOF or a descendant holding the
+		// pipe open, it will not exit on its own, so force it down here:
+		// without this the waiter blocks in cmd.Wait forever, done never
+		// closes, and the daemon keeps the agent registered as alive. This
+		// runs before readerDone closes, so the kill still precedes the
+		// waiter's cmd.Wait, and Stop observes the read error rather than
+		// masking it behind a kill it never had to order.
+		r.mu.Lock()
+		if !r.closed {
+			r.closed = true
+			r.stdin.Close()
+		}
+		r.mu.Unlock()
+		r.cmd.Process.Kill()
+		r.stdout.Close()
+	}
 }
 
 // wait reaps the process once the reader has drained stdout, and closing done
