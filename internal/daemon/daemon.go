@@ -39,6 +39,10 @@ import (
 // WatchInterval is how often a bound daemon probes its Herdr session.
 const WatchInterval = 3 * time.Second
 
+// writeTimeout bounds a single response write so a client that never reads
+// cannot pin a handler goroutine. It is a var only so a test can shorten it.
+var writeTimeout = 10 * time.Second
+
 // Daemon serves one workspace.
 type Daemon struct {
 	ln net.Listener
@@ -110,6 +114,23 @@ func SocketPath(root, flockName string) string {
 
 func journalPath(root, flockName string) string {
 	return filepath.Join(flock.Dir(root, flockName), protocol.JournalName)
+}
+
+// lockReclaim takes an exclusive flock(2) on a per-flock lock file in the socket
+// directory, so the stale-socket probe/unlink/bind in New runs against no
+// concurrent New for the same flock. It blocks until the lock is free and
+// returns a release func. The lock file is never removed; only the advisory
+// lock matters.
+func lockReclaim(root, flockName string) (func(), error) {
+	f, err := os.OpenFile(filepath.Join(socketDir(root), flockName+".lock"), os.O_CREATE|os.O_RDONLY, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return func() { f.Close() }, nil // closing the fd releases the flock
 }
 
 // CheckSocketPath reports whether a flock's socket path fits the platform
@@ -212,13 +233,15 @@ func New(root, flockName string) (*Daemon, error) {
 		return nil, err
 	}
 	// Flock directories are made on demand, not by init: a workspace does not
-	// know its flocks until one is started.
-	if err := os.MkdirAll(flock.Dir(root, flockName), 0o755); err != nil {
+	// know its flocks until one is started. 0o700 because the flock directory
+	// can hold a readiness digest whose file path is bearer-equivalent; Chmod
+	// because MkdirAll never downgrades a directory an older fledge left at
+	// 0o755.
+	flockDir := flock.Dir(root, flockName)
+	if err := os.MkdirAll(flockDir, 0o700); err != nil {
 		return nil, err
 	}
-
-	s, err := replay(journalPath(root, flockName))
-	if err != nil {
+	if err := os.Chmod(flockDir, 0o700); err != nil {
 		return nil, err
 	}
 
@@ -228,6 +251,19 @@ func New(root, flockName string) (*Daemon, error) {
 		return nil, err
 	}
 
+	// Establish ownership before replay, which now mutates the journal (it
+	// re-terminates or truncates a torn tail). Reclaiming a stale socket is
+	// probe, then unlink, then bind. Two concurrent New calls for the same flock
+	// could otherwise both probe empty, and the loser's unlink would delete the
+	// winner's live socket, forking the journal and state authority. An
+	// exclusive flock(2) held across the whole sequence serializes them: the
+	// loser blocks, then probes a now-live socket and is refused here.
+	unlock, err := lockReclaim(root, flockName)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+
 	sock := SocketPath(root, flockName)
 	// A leftover socket file from a crashed daemon would block bind; a live
 	// one would not, so probe before removing.
@@ -235,6 +271,13 @@ func New(root, flockName string) (*Daemon, error) {
 		c.Close()
 		return nil, errors.New("daemon already running")
 	}
+
+	// Ownership is ours; only now replay the journal, which may rewrite its tail.
+	s, err := replay(journalPath(root, flockName))
+	if err != nil {
+		return nil, err
+	}
+
 	os.Remove(sock)
 
 	ln, err := net.Listen("unix", sock)
@@ -242,8 +285,15 @@ func New(root, flockName string) (*Daemon, error) {
 		return nil, err
 	}
 
-	journal, err := os.OpenFile(journalPath(root, flockName), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	journal, err := os.OpenFile(journalPath(root, flockName), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
+		ln.Close()
+		return nil, err
+	}
+	// Tighten a journal an older fledge created at 0o644; O_CREATE's mode is
+	// ignored for an existing file.
+	if err := journal.Chmod(0o600); err != nil {
+		journal.Close()
 		ln.Close()
 		return nil, err
 	}
@@ -306,14 +356,36 @@ func (d *Daemon) Close() error {
 	return nil
 }
 
-// Serve accepts connections until the listener is closed.
+// Serve accepts connections until the listener is closed. A temporary Accept
+// error (e.g. EMFILE under fd pressure) is retried with capped backoff rather
+// than mistaken for shutdown; only an intentional listener close returns nil,
+// and any other error is returned so the fault is not hidden as a clean exit.
 func (d *Daemon) Serve() error {
 	d.fileOnce.Do(func() { go d.serveFileRequests() })
+	var backoff time.Duration
 	for {
 		conn, err := d.ln.Accept()
 		if err != nil {
-			return nil
+			if errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Temporary() {
+				if backoff == 0 {
+					backoff = 5 * time.Millisecond
+				} else {
+					backoff *= 2
+				}
+				if backoff > time.Second {
+					backoff = time.Second
+				}
+				d.debug.Printf("accept: %v; retrying in %s", err, backoff)
+				time.Sleep(backoff)
+				continue
+			}
+			return err
 		}
+		backoff = 0
 		go d.handle(conn)
 	}
 }
@@ -369,7 +441,11 @@ func (d *Daemon) handle(conn net.Conn) {
 		d.debug.Printf("marshal response: %v", err)
 		return
 	}
-	conn.Write(append(line, '\n'))
+	// Bound the write so a client that stops reading cannot pin this goroutine.
+	conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+	if _, err := conn.Write(append(line, '\n')); err != nil {
+		d.debug.Printf("write response: %v", err)
+	}
 }
 
 func (d *Daemon) dispatch(req *protocol.Request, gone <-chan struct{}) protocol.Response {

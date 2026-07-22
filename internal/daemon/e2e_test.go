@@ -410,6 +410,87 @@ func TestReplayToleratesTornFinalLine(t *testing.T) {
 	}
 }
 
+// A torn final line must be truncated on replay, not merely skipped. If it is
+// left in place, the next O_APPEND write concatenates onto it, the torn bytes
+// stop being the final line, and every later replay hard-fails on the fused
+// malformed line. This exercises the append-after-torn-tail path that a plain
+// tolerate test does not.
+func TestTornTailTruncatedAcrossRestart(t *testing.T) {
+	root := workspace(t)
+	stop := start(t, root, testFlock)
+	register(t, root, testFlock, "engineer")
+	stop()
+
+	jp := filepath.Join(root, ".fledge", "flocks", testFlock, "journal.jsonl")
+	f, err := os.OpenFile(jp, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"event":"msg.sent","id":"abc`); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	// First restart tolerates the torn tail, then appends (daemon.started plus a
+	// second registration).
+	stop = start(t, root, testFlock)
+	register(t, root, testFlock, "reviewer")
+	stop()
+
+	// Second restart replays a journal that, without truncation, holds the torn
+	// bytes fused to a later line in a non-final position: a hard failure.
+	defer start(t, root, testFlock)()
+
+	list, err := client.Do(root, testFlock, protocol.Request{Op: protocol.OpList})
+	if err != nil {
+		t.Fatalf("list after torn-tail append and restart: %v", err)
+	}
+	if len(list.Agents) != 2 {
+		t.Fatalf("roster after torn-tail append and restart = %+v, want 2 agents", list.Agents)
+	}
+}
+
+// A final line that is a complete, valid event but lacks its trailing newline
+// replays fine, so truncation never touches it — yet the next O_APPEND write
+// still fuses onto it, causing the same permanent corruption. Replay must
+// re-terminate it (append the missing newline), not discard the event.
+func TestUnterminatedFinalLineReterminated(t *testing.T) {
+	root := workspace(t)
+	stop := start(t, root, testFlock)
+	register(t, root, testFlock, "engineer")
+	stop()
+
+	jp := filepath.Join(root, ".fledge", "flocks", testFlock, "journal.jsonl")
+	f, err := os.OpenFile(jp, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A complete, authoritative event, but with no trailing newline.
+	if _, err := f.WriteString(`{"event":"agent.registered","name":"reviewer-king","type":"reviewer","species":"king","pid":123}`); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	// First restart replays the unterminated line and must re-terminate it, then
+	// appends (daemon.started plus a third registration).
+	stop = start(t, root, testFlock)
+	register(t, root, testFlock, "auditor")
+	stop()
+
+	// Second restart replays a journal that, without re-termination, holds the
+	// once-final event fused to daemon.started in a non-final position: a hard
+	// failure.
+	defer start(t, root, testFlock)()
+
+	list, err := client.Do(root, testFlock, protocol.Request{Op: protocol.OpList})
+	if err != nil {
+		t.Fatalf("list after unterminated-line append and restart: %v", err)
+	}
+	if len(list.Agents) != 3 {
+		t.Fatalf("roster after unterminated-line restart = %+v, want 3 agents", list.Agents)
+	}
+}
+
 func TestAbandonedWaiterDoesNotSwallowMessages(t *testing.T) {
 	root := workspace(t)
 	defer start(t, root, testFlock)()

@@ -798,7 +798,7 @@ func spawnDaemon(root, flockName, session string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(flock.Dir(root, flockName), 0o755); err != nil {
+	if err := os.MkdirAll(flock.Dir(root, flockName), 0o700); err != nil {
 		return err
 	}
 	logPath := filepath.Join(flock.Dir(root, flockName), protocol.LogName)

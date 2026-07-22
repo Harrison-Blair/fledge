@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Harrison-Blair/fledge/internal/client"
@@ -12,6 +13,83 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/protocol"
 	"github.com/Harrison-Blair/fledge/internal/scaffold"
 )
+
+// Two daemons for the same flock must never both come up: the stale-socket
+// reclaim (probe, unlink, bind) has to be serialized, or a losing interleaving
+// unlinks the winner's live socket and forks the journal and state authority.
+// A burst of concurrent New calls widens the interleaving window enough to trip
+// the non-atomic version reliably.
+func TestConcurrentNewElectsOneWinner(t *testing.T) {
+	root := workspace(t)
+
+	const n = 12
+	for trial := 0; trial < 30; trial++ {
+		var wg sync.WaitGroup
+		daemons := make([]*daemon.Daemon, n)
+		wg.Add(n)
+		for i := 0; i < n; i++ {
+			go func(i int) {
+				defer wg.Done()
+				if d, err := daemon.New(root, testFlock); err == nil {
+					daemons[i] = d
+				}
+			}(i)
+		}
+		wg.Wait()
+
+		winners := 0
+		for _, d := range daemons {
+			if d != nil {
+				winners++
+				d.Close()
+			}
+		}
+		if winners != 1 {
+			t.Fatalf("trial %d: %d daemons came up for one flock, want exactly 1", trial, winners)
+		}
+	}
+}
+
+// The flock directory can hold a readiness digest whose file path is
+// bearer-equivalent, so the directory and journal must not be group/other
+// readable. An older fledge left them at 0o755/0o644; starting must tighten
+// them, not just create fresh ones correctly.
+func TestFlockDirAndJournalPermissions(t *testing.T) {
+	root := workspace(t)
+
+	dir := filepath.Join(root, ".fledge", "flocks", testFlock)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	jp := filepath.Join(dir, "journal.jsonl")
+	if err := os.WriteFile(jp, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(jp, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	defer start(t, root, testFlock)()
+
+	di, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := di.Mode().Perm(); got != 0o700 {
+		t.Fatalf("flock dir mode = %o, want 700", got)
+	}
+
+	ji, err := os.Stat(jp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ji.Mode().Perm(); got != 0o600 {
+		t.Fatalf("journal mode = %o, want 600", got)
+	}
+}
 
 // Sockets live outside the workspace, so the workspace's identity is what
 // keeps two checkouts running the same flock name apart. This is what replaces

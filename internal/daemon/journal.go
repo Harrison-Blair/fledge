@@ -74,6 +74,14 @@ func (d *Daemon) appendAll(events ...event) error {
 	if _, err := d.journal.Write(buf); err != nil {
 		return fmt.Errorf("journal: %w", err)
 	}
+	// Fsync so "journaled before ack" survives power loss, not just a clean
+	// process exit. In production journal is always an *os.File; a test seam is
+	// not.
+	if f, ok := d.journal.(*os.File); ok {
+		if err := f.Sync(); err != nil {
+			return fmt.Errorf("journal sync: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -100,11 +108,19 @@ func replay(path string) (*state, error) {
 	defer f.Close()
 
 	var lines [][]byte
+	// ends[k] is the byte offset in the file just past the newline that
+	// terminated lines[k], so a torn tail can be truncated to the end of the
+	// last complete line before the journal is reopened for append.
+	var ends []int64
+	var pos int64
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	for sc.Scan() {
-		if line := sc.Bytes(); len(line) > 0 {
-			lines = append(lines, append([]byte(nil), line...))
+		raw := sc.Bytes()
+		pos += int64(len(raw)) + 1 // +1 for the '\n' ScanLines stripped
+		if len(raw) > 0 {
+			lines = append(lines, append([]byte(nil), raw...))
+			ends = append(ends, pos)
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -121,9 +137,30 @@ func replay(path string) (*state, error) {
 			// before it is still authoritative. A bad line anywhere else is
 			// corruption.
 			if i == len(lines)-1 {
+				// Truncate the torn tail. Left in place, the next O_APPEND write
+				// fuses onto it, so it stops being the final line and every later
+				// replay hard-fails on the now-interior malformed line.
+				var keep int64
+				if i > 0 {
+					keep = ends[i-1]
+				}
+				if err := os.Truncate(path, keep); err != nil {
+					return nil, fmt.Errorf("journal %s: truncate torn tail: %w", path, err)
+				}
 				break
 			}
 			return nil, fmt.Errorf("journal %s: %w", path, err)
+		}
+
+		// A final event that landed complete but without its trailing newline
+		// (a short write that still wrote a whole line) parses fine, so the loop
+		// above never truncates it. Left unterminated, the next O_APPEND write
+		// fuses onto it and every later replay hard-fails. It is a complete,
+		// authoritative event, so re-terminate rather than discard.
+		if i == len(lines)-1 {
+			if err := ensureTrailingNewline(path); err != nil {
+				return nil, err
+			}
 		}
 
 		switch e.Event {
@@ -206,4 +243,37 @@ func replay(path string) (*state, error) {
 		}
 	}
 	return s, nil
+}
+
+// ensureTrailingNewline appends a newline when the journal's last byte is not
+// one, so a final event written without its terminator does not fuse with the
+// next O_APPEND write. A missing or empty file needs nothing.
+func ensureTrailingNewline(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if fi.Size() == 0 {
+		return nil
+	}
+	var last [1]byte
+	if _, err := f.ReadAt(last[:], fi.Size()-1); err != nil {
+		return err
+	}
+	if last[0] == '\n' {
+		return nil
+	}
+	if _, err := f.WriteAt([]byte{'\n'}, fi.Size()); err != nil {
+		return err
+	}
+	return nil
 }

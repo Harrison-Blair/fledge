@@ -327,25 +327,25 @@ func (d *Daemon) resolveSpawnDetailed(req *protocol.Request) (spawnResolution, e
 		if err != nil {
 			return out, err
 		}
-		d, ok := defs[req.Agent]
+		def, ok := defs[req.Agent]
 		if !ok {
 			return out, fmt.Errorf("no agent definition %q", req.Agent)
 		}
-		profile := d.Profile
+		profile := def.Profile
 		if req.Profile != "" {
-			if d.Profile != "" {
-				return out, fmt.Errorf("agent %q already selects profile %q", d.Name, d.Profile)
+			if def.Profile != "" {
+				return out, fmt.Errorf("agent %q already selects profile %q", def.Name, def.Profile)
 			}
 			profile = req.Profile
 		}
 		if profile == "" {
-			return out, fmt.Errorf("agent %q is profile-agnostic; pass --profile", d.Name)
+			return out, fmt.Errorf("agent %q is profile-agnostic; pass --profile", def.Name)
 		}
 		cfg, ok := profiles[profile]
 		if !ok {
 			return out, fmt.Errorf("no profile %q", profile)
 		}
-		out = spawnResolution{cfg: cfg, agentType: d.Name, agent: d.Name, profile: profile, source: d.Source, prompt: d.Prompt}
+		out = spawnResolution{cfg: cfg, agentType: def.Name, agent: def.Name, profile: profile, source: def.Source, prompt: def.Prompt}
 	} else if req.Profile != "" {
 		profiles, err := agentcfg.Load(d.root)
 		if err != nil {
