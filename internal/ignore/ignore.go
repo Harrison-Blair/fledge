@@ -12,8 +12,10 @@ import (
 )
 
 // includePrefix splices another ignore file in at the point it appears. It is
-// spelled as a comment so a .fledgeignore stays valid gitignore syntax; the
-// space in "# include" keeps ordinary comments from being mistaken for it.
+// spelled as a comment so a .fledgeignore stays valid gitignore syntax. The
+// directive is "#include" with no interior space, followed by a separator and
+// a path; an ordinary comment like "# include" has a space after the "#" and
+// so does not carry the prefix.
 const includePrefix = "#include"
 
 // Matcher holds the patterns from one ignore file, in file order.
@@ -167,7 +169,13 @@ func parseLine(line string) (pattern, bool, error) {
 // trimTrailingSpace drops trailing spaces unless the last one is backslash-escaped.
 func trimTrailingSpace(s string) string {
 	for len(s) > 0 && (s[len(s)-1] == ' ' || s[len(s)-1] == '\t') {
-		if len(s) >= 2 && s[len(s)-2] == '\\' {
+		// The space is escaped only by an odd run of backslashes; an even
+		// run is escaped backslashes that leave the space unquoted.
+		bs := 0
+		for k := len(s) - 2; k >= 0 && s[k] == '\\'; k-- {
+			bs++
+		}
+		if bs%2 == 1 {
 			break
 		}
 		s = s[:len(s)-1]
@@ -220,13 +228,24 @@ func compile(glob string, anchored bool) (*regexp.Regexp, error) {
 
 		case '[':
 			j := i + 1
+			negate := false
 			if j < n && (glob[j] == '!' || glob[j] == '^') {
+				negate = true
 				j++
 			}
+			body := j // a ']' here is a literal member, not the terminator
 			if j < n && glob[j] == ']' {
 				j++
 			}
 			for j < n && glob[j] != ']' {
+				// A POSIX class such as "[:space:]" ends in ":]"; its inner
+				// ']' does not terminate the enclosing class.
+				if glob[j] == '[' && j+1 < n && glob[j+1] == ':' {
+					if k := strings.Index(glob[j+2:], ":]"); k >= 0 {
+						j += 2 + k + 2
+						continue
+					}
+				}
 				j++
 			}
 			if j >= n {
@@ -234,11 +253,23 @@ func compile(glob string, anchored bool) (*regexp.Regexp, error) {
 				i++
 				break
 			}
-			class := glob[i+1 : j]
-			if strings.HasPrefix(class, "!") {
-				class = "^" + class[1:]
+			class := glob[body:j]
+			// A class never matches the path separator (gitignore
+			// semantics), except a range whose endpoints straddle '/'
+			// (e.g. [.-0]), which is left as-is.
+			// Negated classes add '/' to the excluded set; positive classes
+			// drop '/' from their members. A negated class ending in a bare
+			// '-' is a dangling range operator, so keep that '-' literal-last
+			// rather than let it pair with the appended '/' into an invalid
+			// range.
+			switch {
+			case negate && endsInBareDash(class):
+				b.WriteString("[^" + class[:len(class)-1] + "/-]")
+			case negate:
+				b.WriteString("[^" + class + "/]")
+			default:
+				b.WriteString(positiveClass(class))
 			}
-			b.WriteString("[" + class + "]")
 			i = j + 1
 
 		default:
@@ -249,4 +280,31 @@ func compile(glob string, anchored bool) (*regexp.Regexp, error) {
 
 	b.WriteString("$")
 	return regexp.Compile(b.String())
+}
+
+// endsInBareDash reports whether s ends in an unescaped '-', i.e. a dangling
+// range operator. A trailing '-' preceded by an odd run of backslashes is
+// escaped and thus a literal member, not an operator.
+func endsInBareDash(s string) bool {
+	if !strings.HasSuffix(s, "-") {
+		return false
+	}
+	bs := 0
+	for k := len(s) - 2; k >= 0 && s[k] == '\\'; k-- {
+		bs++
+	}
+	return bs%2 == 0
+}
+
+// positiveClass renders a non-negated bracket class that never matches the
+// path separator by dropping '/' from its members; this assumes '/' is not a
+// range endpoint (a range like +-/ loses its upper bound). A class of only
+// separators can never match, so it becomes a class that matches no character
+// at all.
+func positiveClass(class string) string {
+	inner := strings.ReplaceAll(class, "/", "")
+	if inner == "" {
+		return `[^\x00-\x{10FFFF}]`
+	}
+	return "[" + inner + "]"
 }
