@@ -96,11 +96,11 @@ func TestDiscoverNamesEverySourceAlways(t *testing.T) {
 	}
 
 	want := map[string]agentcfg.Config{
-		"default":    {Integration: "claude"},
-		"opus":       {Integration: "claude", Model: "opus"},
-		"fable":      {Integration: "claude", Model: "fable"},
-		"sonnet":     {Integration: "claude", Model: "sonnet"},
-		"haiku":      {Integration: "claude", Model: "haiku"},
+		"defaultcl":  {Integration: "claude"},
+		"opuscl":     {Integration: "claude", Model: "opus"},
+		"fablecl":    {Integration: "claude", Model: "fable"},
+		"sonnetcl":   {Integration: "claude", Model: "sonnet"},
+		"haikucl":    {Integration: "claude", Model: "haiku"},
 		"gpt56solcx": {Integration: "codex", Model: "gpt-5.6-sol"},
 		"gpt55cx":    {Integration: "codex", Model: "gpt-5.5"},
 		"gpt55pi":    {Integration: "pi", Provider: "openai-codex", Model: "gpt-5.5"},
@@ -135,17 +135,17 @@ func TestDiscoverClaudeVersionGeneratesDefaultAndFamilyLaunchers(t *testing.T) {
 	if len(notes) != 0 {
 		t.Fatalf("notes = %+v, want none", notes)
 	}
-	if got := configs["default"]; got.Integration != "claude" || got.Model != "" || got.Provider != "" ||
+	if got := configs["defaultcl"]; got.Integration != "claude" || got.Model != "" || got.Provider != "" ||
 		got.PermissionMode != "" || got.Sandbox != "" || len(got.Argv) != 0 || len(got.Env) != 0 {
-		t.Errorf("default = %+v, want a model-less native Claude launcher", got)
+		t.Errorf("defaultcl = %+v, want a model-less native Claude launcher", got)
 	}
-	for _, name := range []string{"opus", "fable", "sonnet", "haiku"} {
+	for name, model := range map[string]string{"opuscl": "opus", "fablecl": "fable", "sonnetcl": "sonnet", "haikucl": "haiku"} {
 		got, ok := configs[name]
 		if !ok {
 			t.Errorf("discovery has no %s launcher: %+v", name, configs)
 			continue
 		}
-		if got.Integration != "claude" || got.Model != name || got.Provider != "" ||
+		if got.Integration != "claude" || got.Model != model || got.Provider != "" ||
 			got.PermissionMode != "" || got.Sandbox != "" || len(got.Argv) != 0 || len(got.Env) != 0 {
 			t.Errorf("%s = %+v, want its native Claude family launcher", name, got)
 		}
@@ -309,5 +309,37 @@ func TestWriteIsStableAndLoadable(t *testing.T) {
 	}
 	if merged["glm51og"].Provider != "opencode-go" {
 		t.Fatalf("catalog entry lost in merge: %+v", merged)
+	}
+}
+
+// TestDiscoveredClaudeLaunchersDoNotCollideWithUserProfiles reproduces the
+// machine-dependent break: a committed user definition declaring profile
+// "opus" syncs fine on a machine without claude, but the claude-installed
+// machine's generated (gitignored) catalog once contributed a bare "opus"
+// launcher, so Synchronize hard-failed with a cross-source conflict. Suffixed
+// launcher names must not collide with the profile names users commonly pick.
+func TestDiscoveredClaudeLaunchersDoNotCollideWithUserProfiles(t *testing.T) {
+	fakeAll(t)
+	root := t.TempDir()
+	if _, err := scaffold.Ensure(root); err != nil {
+		t.Fatal(err)
+	}
+	configs, notes := Discover()
+	if len(notes) != 0 {
+		t.Fatalf("notes = %+v, want none", notes)
+	}
+	if err := Write(root, configs); err != nil {
+		t.Fatalf("write catalog: %v", err)
+	}
+	def := "---\nname: reviewer\ndescription: Review changes.\nmodel: claude-opus-4\nfledge:\n  profile: opus\n  launch:\n    permission_mode: plan\n---\nReview.\n"
+	path := filepath.Join(root, scaffold.DirName, agentcfg.AgentsDir, "user", "reviewer", "reviewer.agent.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(def), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := agentcfg.Synchronize(root); err != nil {
+		t.Fatalf("Synchronize: %v", err)
 	}
 }

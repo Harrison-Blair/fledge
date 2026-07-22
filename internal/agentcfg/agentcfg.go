@@ -106,7 +106,7 @@ func Route(model string) (integration, provider string, err error) {
 	case strings.HasPrefix(model, "opencode"):
 		return "pi", "opencode", nil
 	}
-	return "", "", fmt.Errorf("unknown model %q: add it to %s/%s", model, scaffold.DirName, FileName)
+	return "", "", fmt.Errorf("unknown model %q: reference a configured profile with \"fledge.profile: <name>\" or use a routable model prefix (claude*, gpt*, codex*, o-series, opencode*)", model)
 }
 
 // isOSeries reports whether model names an OpenAI o-series model (o3, o4-mini).

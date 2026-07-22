@@ -76,8 +76,8 @@ func Discover() (map[string]agentcfg.Config, []Note) {
 			name := e.name
 			if name == "" {
 				name = slugName(e.model)
-				name += sourceSuffix(e.integration, e.provider)
 			}
+			name += sourceSuffix(e.integration, e.provider)
 			if name == "" {
 				notes = append(notes, Note{src.integration, fmt.Sprintf("model %q has no usable name; dropped", e.model)})
 				continue
@@ -171,6 +171,9 @@ func parsePiModels(out []byte) ([]entry, error) {
 // suffixed — not just colliders — so a name never changes when a later re-init
 // finds the same model served by a second source.
 func sourceSuffix(integration, provider string) string {
+	if integration == "claude" {
+		return "cl"
+	}
 	if integration == "codex" {
 		return "cx"
 	}

@@ -51,6 +51,23 @@ func TestRoute(t *testing.T) {
 	}
 }
 
+func TestRouteErrorPointsToWorkingRemedy(t *testing.T) {
+	_, _, err := Route("llama-3")
+	if err == nil {
+		t.Fatal("Route of an unknown model succeeded, want error")
+	}
+	msg := err.Error()
+	// agents.json is rebuilt wholesale from Markdown, so editing it does
+	// nothing — the message must not send the operator there.
+	if strings.Contains(msg, "agents.json") {
+		t.Errorf("error still points at agents.json: %q", msg)
+	}
+	// It must point at a remedy that works: a configured profile reference.
+	if !strings.Contains(msg, "fledge.profile") {
+		t.Errorf("error does not name the working remedy fledge.profile: %q", msg)
+	}
+}
+
 func TestValidate(t *testing.T) {
 	tests := []struct {
 		desc    string

@@ -1003,13 +1003,13 @@ func TestInitWritesCatalog(t *testing.T) {
 	if got := configs["gpt55pi"]; got.Integration != "pi" || got.Provider != "openai-codex" {
 		t.Errorf("gpt55pi = %+v", got)
 	}
-	if got := configs["default"]; got.Integration != "claude" || got.Model != "" || got.Provider != "" ||
+	if got := configs["defaultcl"]; got.Integration != "claude" || got.Model != "" || got.Provider != "" ||
 		got.PermissionMode != "" || got.Sandbox != "" || len(got.Argv) != 0 || len(got.Env) != 0 {
-		t.Errorf("default = %+v, want model-less native Claude launcher", got)
+		t.Errorf("defaultcl = %+v, want model-less native Claude launcher", got)
 	}
-	for _, name := range []string{"opus", "fable", "sonnet", "haiku"} {
+	for name, model := range map[string]string{"opuscl": "opus", "fablecl": "fable", "sonnetcl": "sonnet", "haikucl": "haiku"} {
 		got := configs[name]
-		if got.Integration != "claude" || got.Model != name || got.Provider != "" ||
+		if got.Integration != "claude" || got.Model != model || got.Provider != "" ||
 			got.PermissionMode != "" || got.Sandbox != "" || len(got.Argv) != 0 || len(got.Env) != 0 {
 			t.Errorf("%s = %+v, want native Claude family launcher", name, got)
 		}

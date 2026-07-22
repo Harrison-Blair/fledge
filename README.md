@@ -257,17 +257,19 @@ tree. `fledge deinit` removes the whole tree, including user definitions.
 `catalog.json` is generated state: init probes
 Claude Code with `claude --version`, asks Pi and Codex what they serve (`pi
 --list-models`, `codex debug models`), and rewrites the file wholesale. A
-successful Claude probe generates a model-less `default` profile plus `opus`,
-`fable`, `sonnet`, and `haiku` profiles using Claude Code's matching
-model-family aliases. `default` leaves model selection to Claude Code, including
-its configured or last-selected default. Those launchers use the Claude Code
-account already logged in on the machine and the limits of that Claude plan;
-they do not require an Anthropic API key. The catalog is per-machine state and
-gitignored. Generated model names are the model id reduced to lowercase
-alphanumerics plus a source suffix — `cx` for codex, and `pi`/`oc`/`og` for
-pi's openai-codex/opencode/opencode-go providers — so `gpt-5.5` served by two
-sources is spawnable as either `gpt55cx` or `gpt55pi`, and a name never
-changes when a later re-init finds new sources. Claude Code has no model-list
+successful Claude probe generates a model-less `defaultcl` profile plus
+`opuscl`, `fablecl`, `sonnetcl`, and `haikucl` profiles using Claude Code's
+matching model-family aliases. `defaultcl` leaves model selection to Claude
+Code, including its configured or last-selected default. Those launchers use the
+Claude Code account already logged in on the machine and the limits of that
+Claude plan; they do not require an Anthropic API key. The catalog is
+per-machine state and gitignored. Generated model names are the model id reduced
+to lowercase alphanumerics plus a source suffix — `cl` for claude, `cx` for
+codex, and `pi`/`oc`/`og` for pi's openai-codex/opencode/opencode-go providers —
+so every generated name carries its source (the gitignored catalog never
+collides with a committed `opus` or `default` profile a user declares), `gpt-5.5`
+served by two sources is spawnable as either `gpt55cx` or `gpt55pi`, and a name
+never changes when a later re-init finds new sources. Claude Code has no model-list
 command, so its four family choices are a fixed discovered set rather than an
 enumeration of every model ID. Optional version-specific or permission-specific
 ### Portable agent definitions
