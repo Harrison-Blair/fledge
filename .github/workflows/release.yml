@@ -1,27 +1,61 @@
 name: Release
 
 on:
-  pull_request:
+  push:
     branches:
       - main
-    types:
-      - closed
 
 permissions:
   contents: read
 
+concurrency:
+  group: release
+
 jobs:
+  gate:
+    name: Gate
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.decide.outputs.release }}
+    steps:
+      - name: Check out pushed commit and tags
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Decide whether to release
+        id: decide
+        shell: bash
+        run: |
+          # Reuse the release-version contract against post-merge tag state.
+          # Exit 0 (tag missing, or the tag already targets this exact commit)
+          # => release; exit non-zero (version already taken at another commit,
+          # or an invalid version) => skip cleanly rather than fail, so ordinary
+          # pushes to main that do not bump the version are no-ops. Passing this
+          # commit's SHA lets an interrupted release resume on a re-run while an
+          # already-released version is skipped.
+          set +e
+          bash scripts/check-release-version.sh release "$GITHUB_SHA" >/dev/null 2>reason.txt
+          rc=$?
+          set -e
+          if [[ $rc -ne 0 ]]; then
+            echo "skipping release:" >&2
+            cat reason.txt >&2
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "release=true" >> "$GITHUB_OUTPUT"
+
   lint:
     name: Lint
-    if: github.event.pull_request.merged == true
+    needs: gate
+    if: needs.gate.outputs.release == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Check out merge commit
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
+      - name: Check out pushed commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
           cache: true
@@ -39,15 +73,14 @@ jobs:
 
   test:
     name: Test
-    if: github.event.pull_request.merged == true
+    needs: gate
+    if: needs.gate.outputs.release == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Check out merge commit
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
+      - name: Check out pushed commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
           cache: true
@@ -73,8 +106,9 @@ jobs:
 
   release:
     name: Release
-    if: github.event.pull_request.merged == true
+    if: needs.gate.outputs.release == 'true'
     needs:
+      - gate
       - lint
       - test
     runs-on: ubuntu-latest
@@ -82,16 +116,15 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
-      MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+      MERGE_SHA: ${{ github.sha }}
     steps:
-      - name: Check out merge commit and tags
-        uses: actions/checkout@v6
+      - name: Check out pushed commit and tags
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
           fetch-tags: true
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
           cache: true
@@ -99,6 +132,9 @@ jobs:
         id: version
         shell: bash
         run: |
+          # Re-check against post-merge tag state before tagging. If a
+          # concurrent release created this tag at a different commit between
+          # the gate and here, this fails loudly instead of pushing over it.
           version="$(bash scripts/check-release-version.sh release "$MERGE_SHA")"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
@@ -118,7 +154,7 @@ jobs:
             tar -C "$RUNNER_TEMP/$package" -czf "dist/$package.tar.gz" fledge LICENSE
           done
           cd dist
-          sha256sum ./*.tar.gz > SHA256SUMS
+          sha256sum *.tar.gz > SHA256SUMS
       - name: Create or resume GitHub release
         shell: bash
         env:
