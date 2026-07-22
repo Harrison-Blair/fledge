@@ -30,7 +30,8 @@ Check the table in README.md before minting a new one.
 ## Agent first design
 
 when adding new commands, prompt the user if they want a --json output.
-Currently `--json -J` exists on `context scan`, `agent list`, `agent models`;
+Currently `--json -J` exists on `context scan`, `context graph`, `agent list`,
+`agent models`, `agent types`, `init`;
 `agent msg wait` is JSON-only.
 
 ## What fledge is
