@@ -3,13 +3,13 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/agentcfg"
 	"github.com/Harrison-Blair/fledge/internal/daemon"
@@ -760,148 +760,6 @@ func TestModelEntriesMatchTableOrderAndProvider(t *testing.T) {
 	}
 }
 
-// spawnRecorder stands in for the daemon round-trip in startOrchestrator
-// tests, recording every config it was asked to spawn and whether the launch
-// was marked as the orchestrator.
-type spawnRecorder struct {
-	asked  []string
-	marked []bool
-	err    func(config string) error
-}
-
-func (s *spawnRecorder) spawn(config string, orchestrator bool) (protocol.Response, error) {
-	s.asked = append(s.asked, config)
-	s.marked = append(s.marked, orchestrator)
-	if s.err != nil {
-		if err := s.err(config); err != nil {
-			return protocol.Response{}, err
-		}
-	}
-	// Mirrors the daemon's naming rule: the reserved orchestrator runs under
-	// its bare name — as does any config marked as the orchestrator — and
-	// everything else gets a species suffix.
-	name := config + "-emperor"
-	if config == agentcfg.ReservedOrchestrator || orchestrator {
-		name = agentcfg.ReservedOrchestrator
-	}
-	return protocol.Response{Name: name, PaneID: "w1:p2"}, nil
-}
-
-// missingConfig is how the daemon reports an absent agents.json entry; the CLI
-// only ever sees the flattened string.
-func missingConfig(name string) error {
-	return fmt.Errorf("no agent config %q in agents.json", name)
-}
-
-func neverPick(map[string]agentcfg.Config) (string, error) {
-	return "", errors.New("picker must not run")
-}
-
-// The happy path spawns the hardcoded profile and never bothers the operator.
-func TestStartOrchestratorSpawnsHardcodedConfig(t *testing.T) {
-	rec := &spawnRecorder{}
-	resp, err := startOrchestrator(t.TempDir(), rec.spawn, neverPick)
-	if err != nil {
-		t.Fatalf("startOrchestrator: %v", err)
-	}
-	if resp.Name != agentcfg.ReservedOrchestrator {
-		t.Errorf("name = %q", resp.Name)
-	}
-	if len(rec.asked) != 1 || rec.asked[0] != agentcfg.ReservedOrchestrator {
-		t.Errorf("spawned %v, want one %q", rec.asked, agentcfg.ReservedOrchestrator)
-	}
-}
-
-// Only the missing-config error opens the picker. Any other failure is not
-// something an operator can pick their way out of, so it must abort.
-func TestStartOrchestratorOtherSpawnErrorSkipsPicker(t *testing.T) {
-	rec := &spawnRecorder{err: func(string) error { return errors.New("daemon is not running") }}
-	_, err := startOrchestrator(t.TempDir(), rec.spawn, neverPick)
-	if err == nil {
-		t.Fatal("startOrchestrator succeeded though the spawn failed")
-	}
-	if !strings.Contains(err.Error(), "daemon is not running") {
-		t.Errorf("error lost its cause: %v", err)
-	}
-	if len(rec.asked) != 1 {
-		t.Errorf("retried after a non-missing-config error: %v", rec.asked)
-	}
-}
-
-// A missing profile falls back to the picker, and the pick is spawned with the
-// same treatment the orchestrator profile would have got: picking at start says
-// which model runs as the orchestrator, so the pick lands on the reserved name
-// rather than under an ordinary <config>-<species> one.
-func TestStartOrchestratorMissingConfigPicks(t *testing.T) {
-	root := writePickerWorkspace(t, pickerFixture())
-	rec := &spawnRecorder{err: func(config string) error {
-		if config == agentcfg.ReservedOrchestrator {
-			return missingConfig(config)
-		}
-		return nil
-	}}
-
-	resp, err := startOrchestrator(root, rec.spawn, func(configs map[string]agentcfg.Config) (string, error) {
-		if len(configs) != 3 {
-			t.Errorf("picker got %d configs, want the whole catalog", len(configs))
-		}
-		return "opus48", nil
-	})
-	if err != nil {
-		t.Fatalf("startOrchestrator: %v", err)
-	}
-	if resp.Name != agentcfg.ReservedOrchestrator {
-		t.Errorf("name = %q, want the picked config on the reserved name", resp.Name)
-	}
-	if len(rec.asked) != 2 || rec.asked[1] != "opus48" {
-		t.Errorf("spawned %v, want the orchestrator then opus48", rec.asked)
-	}
-	// Only the pick carries the marker: the reserved config already is the
-	// orchestrator, and marking it would be a second way to say so.
-	if len(rec.marked) != 2 || rec.marked[0] || !rec.marked[1] {
-		t.Errorf("orchestrator markers = %v, want [false true]", rec.marked)
-	}
-}
-
-// Nothing to pick from is a dead end, and the error has to say how to fix it.
-func TestStartOrchestratorEmptyCatalogHints(t *testing.T) {
-	root := writePickerWorkspace(t, map[string]agentcfg.Config{})
-	rec := &spawnRecorder{err: func(config string) error { return missingConfig(config) }}
-
-	_, err := startOrchestrator(root, rec.spawn, neverPick)
-	if err == nil {
-		t.Fatal("startOrchestrator succeeded with an empty catalog")
-	}
-	if !strings.Contains(err.Error(), "fledge agent register") {
-		t.Errorf("error missing the register hint: %v", err)
-	}
-}
-
-// A cancelled pick propagates: there is no orchestrator, so the start cannot
-// continue.
-func TestStartOrchestratorCancelledPickFails(t *testing.T) {
-	root := writePickerWorkspace(t, pickerFixture())
-	rec := &spawnRecorder{err: func(config string) error {
-		if config == agentcfg.ReservedOrchestrator {
-			return missingConfig(config)
-		}
-		return nil
-	}}
-
-	_, err := startOrchestrator(root, rec.spawn, func(map[string]agentcfg.Config) (string, error) {
-		return "", errors.New("spawn cancelled")
-	})
-	if err == nil {
-		t.Fatal("startOrchestrator succeeded though the pick was cancelled")
-	}
-	if !strings.Contains(err.Error(), "cancelled") {
-		t.Errorf("unexpected error: %v", err)
-	}
-	if len(rec.asked) != 1 {
-		t.Errorf("spawned something after the pick was cancelled: %v", rec.asked)
-	}
-}
-
 // --headless is gone: an interactive start must always end in an orchestrator,
 // so there is no longer a flag that skips the attach.
 func TestStartRejectsRemovedHeadlessFlag(t *testing.T) {
@@ -1080,5 +938,130 @@ func TestInitJSON(t *testing.T) {
 	}
 	if summary.Existed {
 		t.Errorf("fresh init reported existed = true")
+	}
+}
+
+// A start that created the session must tear it down when the daemon never
+// comes up, or `fledge start` exits 1 with a stranded herdr server.
+func TestGuardedBringUpTearsDownCreatedSessionOnSpawnFailure(t *testing.T) {
+	var torn []string
+	teardown := func(session string) error { torn = append(torn, session); return nil }
+	boom := errors.New("daemon did not come up")
+	err := guardedBringUp("fledge-ws-flock", true, teardown, func() error { return boom })
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want it to carry the spawn failure", err)
+	}
+	if len(torn) != 1 || torn[0] != "fledge-ws-flock" {
+		t.Fatalf("teardown calls = %v, want one for the created session", torn)
+	}
+}
+
+// A workspace-create failure is also pre-daemon, so it tears the session down
+// too and never reaches the spawn step.
+func TestGuardedBringUpTearsDownBeforeSpawnOnWorkspaceFailure(t *testing.T) {
+	var torn []string
+	teardown := func(session string) error { torn = append(torn, session); return nil }
+	wsErr := errors.New("create workspace in session")
+	spawnRan := false
+	err := guardedBringUp("fledge-ws-flock", true, teardown,
+		func() error { return wsErr },
+		func() error { spawnRan = true; return nil },
+	)
+	if !errors.Is(err, wsErr) {
+		t.Fatalf("err = %v, want the workspace failure", err)
+	}
+	if spawnRan {
+		t.Fatal("spawn step ran after the workspace step failed")
+	}
+	if len(torn) != 1 || torn[0] != "fledge-ws-flock" {
+		t.Fatalf("teardown calls = %v, want one for the created session", torn)
+	}
+}
+
+// A reused operator session (created == false) belongs to the operator, so a
+// failed bring-up leaves it running rather than killing it out from under them.
+func TestGuardedBringUpLeavesReusedSessionRunning(t *testing.T) {
+	var torn []string
+	teardown := func(session string) error { torn = append(torn, session); return nil }
+	boom := errors.New("daemon did not come up")
+	err := guardedBringUp("operator-session", false, teardown, func() error { return boom })
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want the spawn failure", err)
+	}
+	if len(torn) != 0 {
+		t.Fatalf("tore down a reused operator session: %v", torn)
+	}
+}
+
+// A spawn failure that lands just after the Herdr attach returns must still fail
+// the start: dropping it exits 0 over a flock the goroutine already rolled back.
+func TestAwaitSpawnPropagatesLateSpawnFailure(t *testing.T) {
+	spawned := make(chan error, 1)
+	spawnErr := errors.New("spawn failed")
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		spawned <- spawnErr
+	}()
+	abort := func(root, name string, cause error) error {
+		t.Fatalf("abort called though the attach succeeded: %v", cause)
+		return nil
+	}
+	err := awaitSpawn("/root", "flock", nil, spawned, abort)
+	if !errors.Is(err, spawnErr) {
+		t.Fatalf("err = %v, want it to carry the late spawn failure", err)
+	}
+}
+
+// A failed attach never handed off to the goroutine, so awaitSpawn rolls back
+// through abort without blocking on the channel that will never be written.
+func TestAwaitSpawnRollsBackOnAttachFailure(t *testing.T) {
+	attachErr := errors.New("attach failed")
+	spawned := make(chan error, 1) // deliberately never written
+	aborted := false
+	abort := func(root, name string, cause error) error {
+		aborted = true
+		return cause
+	}
+	err := awaitSpawn("/root", "flock", attachErr, spawned, abort)
+	if !aborted {
+		t.Fatal("attach failure did not roll the start back")
+	}
+	if !errors.Is(err, attachErr) {
+		t.Fatalf("err = %v, want the attach failure", err)
+	}
+}
+
+// The clean path: attach succeeds and the spawn reports no error.
+func TestAwaitSpawnSucceedsWhenSpawnSucceeds(t *testing.T) {
+	spawned := make(chan error, 1)
+	spawned <- nil
+	err := awaitSpawn("/root", "flock", nil, spawned, func(_, _ string, cause error) error {
+		t.Fatalf("abort called on success: %v", cause)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+}
+
+// When both a buffered spawn failure and an attach error are present, the spawn
+// failure wins: the goroutine that reported it has already rolled the flock
+// back, so it is the real cause and abort must not tear down a second time.
+func TestAwaitSpawnBufferedSpawnErrorWinsOverAttachError(t *testing.T) {
+	spawnErr := errors.New("spawn failed")
+	attachErr := errors.New("attach wait error")
+	spawned := make(chan error, 1)
+	spawned <- spawnErr
+	abortCalled := false
+	abort := func(root, name string, cause error) error {
+		abortCalled = true
+		return cause
+	}
+	err := awaitSpawn("/root", "flock", attachErr, spawned, abort)
+	if !errors.Is(err, spawnErr) {
+		t.Fatalf("err = %v, want the buffered spawn failure to win", err)
+	}
+	if abortCalled {
+		t.Fatal("abort ran though the goroutine already reported and rolled back")
 	}
 }

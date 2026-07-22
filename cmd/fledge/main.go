@@ -524,24 +524,33 @@ func runStart(args []string) error {
 	if err != nil {
 		return err
 	}
-	if started {
-		// A fresh session has no workspace until a client attaches, and the
-		// one herdr then makes lands in $HOME, not here. Creating it now,
-		// rooted at the workspace, is what makes attaching open the project.
-		created, err := herdrwire.WorkspaceCreate(s.SocketPath, root, workspaceLabel, true)
-		if err != nil {
-			return fmt.Errorf("create workspace in session %s: %w", s.Name, err)
-		}
-		// Labelling is workspace metadata, not part of the interactive
-		// orchestrator flow, so it happens here for scripted starts too. The
-		// tab herdr opens with the workspace already exists and its id came
-		// back above, so this needs no lookup.
-		if err := herdrwire.TabRename(s.SocketPath, created.TabID, tabLabel); err != nil {
-			return fmt.Errorf("label tab in session %s: %w", s.Name, err)
-		}
-	}
 
-	if err := spawnDaemon(root, name, s.Name); err != nil {
+	// started is true only when this start created (or recreated) the session,
+	// so guardedBringUp tears it down on failure while a reused operator session
+	// is left running. Every pre-daemon failure below routes through that guard
+	// so a start that exits 1 never strands a herdr server.
+	var steps []func() error
+	if started {
+		steps = append(steps, func() error {
+			// A fresh session has no workspace until a client attaches, and the
+			// one herdr then makes lands in $HOME, not here. Creating it now,
+			// rooted at the workspace, is what makes attaching open the project.
+			created, err := herdrwire.WorkspaceCreate(s.SocketPath, root, workspaceLabel, true)
+			if err != nil {
+				return fmt.Errorf("create workspace in session %s: %w", s.Name, err)
+			}
+			// Labelling is workspace metadata, not part of the interactive
+			// orchestrator flow, so it happens here for scripted starts too. The
+			// tab herdr opens with the workspace already exists and its id came
+			// back above, so this needs no lookup.
+			if err := herdrwire.TabRename(s.SocketPath, created.TabID, tabLabel); err != nil {
+				return fmt.Errorf("label tab in session %s: %w", s.Name, err)
+			}
+			return nil
+		})
+	}
+	steps = append(steps, func() error { return spawnDaemon(root, name, s.Name) })
+	if err := guardedBringUp(s.Name, started, stopHerdrSession, steps...); err != nil {
 		return err
 	}
 
@@ -581,18 +590,9 @@ func runStart(args []string) error {
 	attachErr := attachHerdr(s.Name, root, func() {
 		startAfterAttach(func() {
 			resp, spawnErr := client.Do(root, name, req)
-			if spawnErr == nil {
-				self, executableErr := os.Executable()
-				if executableErr != nil {
-					warnWatcherFailure(s.SocketPath, shellPane, name,
-						fmt.Errorf("locate fledge executable: %w", executableErr))
-				} else {
-					// Monitoring is intentionally non-critical. The orchestrator is
-					// already authenticated and healthy, so layout failure preserves
-					// the flock and leaves a manual recovery hint in the shell.
-					_ = installWatcherWorkspace(s.SocketPath, root, name, self, shellPane, resp.PaneID)
-				}
-			}
+			// Report the outcome the instant it is known — before the non-critical
+			// watcher path — so a hang or panic while installing the watcher can
+			// never block awaitSpawn. The channel is buffered, so this never waits.
 			spawned <- spawnErr
 			if spawnErr != nil {
 				// The UI is already visible, so ending the session is how an
@@ -600,8 +600,49 @@ func runStart(args []string) error {
 				_ = stopFlock(root, name)
 				return
 			}
+			self, executableErr := os.Executable()
+			if executableErr != nil {
+				warnWatcherFailure(s.SocketPath, shellPane, name,
+					fmt.Errorf("locate fledge executable: %w", executableErr))
+				return
+			}
+			// Monitoring is intentionally non-critical. The orchestrator is
+			// already authenticated and healthy, so layout failure preserves
+			// the flock and leaves a manual recovery hint in the shell.
+			_ = installWatcherWorkspace(s.SocketPath, root, name, self, shellPane, resp.PaneID)
 		})
 	})
+	return awaitSpawn(root, name, attachErr, spawned, abortStart)
+}
+
+// awaitSpawn resolves an interactive start's outcome once its Herdr attach has
+// returned. attachHerdr fires its attached callback — which launches the spawn
+// goroutine — before it calls cmd.Wait, so attachErr carries a narrow invariant:
+//
+//	nil     ⇒ the attach handed off; the goroutine is running and is guaranteed
+//	          to report exactly one outcome on spawned.
+//	non-nil ⇒ ambiguous: a wait error can arrive after a clean handoff (goroutine
+//	          launched, will report) or before one (LookPath/Start failed, so the
+//	          goroutine never launched and nothing will ever land on spawned).
+//
+// A buffered spawn outcome takes precedence over an attach error: a goroutine
+// that already reported a failure has also already rolled the flock back, so
+// that failure is the real cause and abort must not tear the flock down twice.
+func awaitSpawn(root, name string, attachErr error, spawned <-chan error, abort func(root, name string, cause error) error) error {
+	if attachErr == nil {
+		// Handoff is guaranteed, so block for the one outcome the goroutine owes
+		// rather than drop a spawn failure that lands just after attach returns.
+		// The wait is bounded by the daemon's readiness timeout, not the CLI, so
+		// announce it — otherwise the terminal reads as hung.
+		fmt.Println("waiting for the orchestrator to launch...")
+		if spawnErr := <-spawned; spawnErr != nil {
+			return fmt.Errorf("%w; flock %s rolled back", spawnErr, name)
+		}
+		return nil
+	}
+	// Ambiguous attach error: read an already-reported outcome without blocking,
+	// since the goroutine may never have launched and a blocking read would then
+	// deadlock. A reported spawn failure wins; otherwise the attach error stands.
 	select {
 	case spawnErr := <-spawned:
 		if spawnErr != nil {
@@ -609,10 +650,7 @@ func runStart(args []string) error {
 		}
 	default:
 	}
-	if attachErr != nil {
-		return abortStart(root, name, attachErr)
-	}
-	return nil
+	return abort(root, name, attachErr)
 }
 
 func managedOrchestratorRequest(root string) (protocol.Request, error) {
@@ -649,46 +687,31 @@ const (
 	tabLabel       = "orchestrator"
 )
 
-// startOrchestrator spawns the orchestrator agent, falling back to the picker
-// only when the config itself is missing. Every other spawn failure is the
-// caller's to abort on: a broken config or a dead daemon is not something an
-// operator can pick their way out of.
-//
-// spawn's second argument marks the launch as the orchestrator, which is what
-// puts a picked config on the reserved name: picking here answers "which model
-// runs as my orchestrator", not "which agent do I want alongside one".
-func startOrchestrator(
-	root string,
-	spawn func(config string, orchestrator bool) (protocol.Response, error),
-	pick func(configs map[string]agentcfg.Config) (string, error),
-) (protocol.Response, error) {
-	// The reserved config needs no marker: its own name is the reserved one.
-	resp, err := spawn(agentcfg.ReservedOrchestrator, false)
-	if err == nil {
-		return resp, nil
+// guardedBringUp runs a start's post-session bring-up steps in order. If any
+// step fails and this start created the session (created), the session is torn
+// down through teardown so a half-finished start never strands a herdr server
+// the operator would have to find and stop by hand. A reused operator session
+// (created == false) is left running.
+func guardedBringUp(session string, created bool, teardown func(string) error, steps ...func() error) error {
+	for _, step := range steps {
+		if err := step(); err != nil {
+			if created {
+				if tdErr := teardown(session); tdErr != nil {
+					return fmt.Errorf("%w (tearing herdr session %s down failed too: %v)", err, session, tdErr)
+				}
+			}
+			return err
+		}
 	}
-	// The daemon reports a missing entry as `no agent config %q in %s`
-	// (internal/daemon/spawn.go); client.Do flattens it to an opaque string,
-	// so a substring is the only thing left to match on.
-	if !strings.Contains(err.Error(), "no agent config") {
-		return protocol.Response{}, err
-	}
+	return nil
+}
 
-	configs, loadErr := agentcfg.Load(root)
-	if loadErr != nil {
-		return protocol.Response{}, loadErr
-	}
-	if len(configs) == 0 {
-		return protocol.Response{}, fmt.Errorf(
-			"no %q config and no configured agents — add one with `fledge agent register`",
-			agentcfg.ReservedOrchestrator)
-	}
-
-	picked, err := pick(configs)
-	if err != nil {
-		return protocol.Response{}, err
-	}
-	return spawn(picked, true)
+// stopHerdrSession ends a herdr session server directly, without the daemon.
+// It is the pre-daemon counterpart to stopFlock: a start that created a session
+// but never got a daemon up rolls it back through here. A variable so tests can
+// observe the rollback without a real herdr.
+var stopHerdrSession = func(session string) error {
+	return herdr.Stop(session)
 }
 
 // abortStart rolls a half-finished start back. An interactive start exists to
@@ -958,8 +981,7 @@ func runStop(args []string) error {
 
 // stopFlocks tears every named flock down in order, carrying on past a failure
 // so one stuck flock cannot strand the rest of the workspace. stop is injected
-// the way startOrchestrator injects its spawn, so the aggregation is testable
-// without a daemon per flock.
+// so the aggregation is testable without a daemon per flock.
 func stopFlocks(root string, names []string, stop func(root, name string) error) error {
 	failed := 0
 	for _, name := range names {
