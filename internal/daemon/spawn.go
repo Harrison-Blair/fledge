@@ -1,10 +1,14 @@
 package daemon
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/agentcfg"
 	"github.com/Harrison-Blair/fledge/internal/flock"
@@ -18,6 +22,7 @@ import (
 // liveness is their pid. State only ever changes on an observed event — a
 // launch, a pi frame, a stop — never on inference.
 const (
+	stateStarting = "starting"
 	stateRunning  = "running"
 	stateBusy     = "busy"
 	stateSettled  = "settled"
@@ -44,18 +49,51 @@ const metadataSource = "custom:fledge"
 // for the same reason.
 var spawnLaunchDelay func()
 
-func (d *Daemon) spawn(req *protocol.Request) (protocol.Response, error) {
-	if req.Config == "" && req.Model == "" {
-		return protocol.Response{}, errors.New("spawn needs a config name or a model")
-	}
-	if req.Config != "" && req.Model != "" {
-		return protocol.Response{}, errors.New("spawn takes a config name or a model, not both")
-	}
+var defaultReadinessTimeout = 2 * time.Minute
 
-	cfg, agentType, err := d.resolveSpawn(req)
+// paneInputReadyTimeout bounds the transport-level startup wait before the
+// authenticated readiness prompt is submitted. Herdr reports pane-hosted
+// integrations as unknown while their TUIs initialize and switches to a
+// native status such as idle once pane.send_input is safe.
+var paneInputReadyTimeout = 15 * time.Second
+
+const bootstrapPrompt = "Complete startup now by running `fledge agent ready`. Do not begin other work until Fledge confirms readiness."
+
+// assignedAgentPrompt is prepended to every post-readiness prompt, including
+// raw profile and model spawns with no authored role. Spawn has already
+// registered the reserved name by this point; telling the agent to run
+// `agent register` again would collide with that reservation.
+func assignedAgentPrompt(name, role string) string {
+	instruction := fmt.Sprintf(
+		"Fledge has assigned and already registered you as `%s`. Direct messages will arrive in this agent session. To reply, use `fledge agent msg send <recipient> <body>` with the recipient's assigned name.",
+		name,
+	)
+	if role == "" {
+		return instruction
+	}
+	return instruction + "\n\n" + role
+}
+
+const (
+	agentNameEnv  = protocol.AgentNameEnv
+	agentTokenEnv = protocol.ReadyTokenEnv
+)
+
+type spawnResolution struct {
+	cfg       agentcfg.Config
+	agentType string
+	agent     string
+	profile   string
+	source    string
+	prompt    string
+}
+
+func (d *Daemon) spawn(req *protocol.Request) (protocol.Response, error) {
+	resolved, err := d.resolveSpawnDetailed(req)
 	if err != nil {
 		return protocol.Response{}, err
 	}
+	cfg, agentType := resolved.cfg, resolved.agentType
 	// The picker at `fledge start` chooses which model runs as the orchestrator,
 	// so a picked config keeps everything it resolved — integration, model, cwd —
 	// but takes the reserved identity. Naming it after the reserved type is the
@@ -82,8 +120,27 @@ func (d *Daemon) spawn(req *protocol.Request) (protocol.Response, error) {
 		return protocol.Response{}, err
 	}
 	name, slug := res.name, res.slug
+	authenticated := !d.skipReadiness
+	if authenticated {
+		defer os.Remove(ReadySignalPath(d.root, d.flockName, name))
+	}
+	var token, tokenHash string
+	if authenticated {
+		token, tokenHash, err = readinessToken()
+		if err != nil {
+			d.release(res)
+			return protocol.Response{}, err
+		}
+		if cfg.Env == nil {
+			cfg.Env = map[string]string{}
+		} else {
+			cfg.Env = cloneEnv(cfg.Env)
+		}
+		cfg.Env[agentNameEnv] = name
+		cfg.Env[agentTokenEnv] = token
+	}
 
-	agent, err := d.launch(name, cwd, cfg, req.Split)
+	agent, err := d.launch(name, cwd, cfg, req.Split, req.AnchorPane)
 	if err != nil {
 		d.release(res)
 		return protocol.Response{}, err
@@ -95,9 +152,12 @@ func (d *Daemon) spawn(req *protocol.Request) (protocol.Response, error) {
 	agent.Type = agentType
 	agent.Species = slug
 	agent.Config = req.Config
+	agent.Agent.Agent = resolved.agent
+	agent.Profile = resolved.profile
+	agent.Source = resolved.source
 	agent.Model = cfg.Model
 	agent.Integration = cfg.Integration
-	agent.State = stateRunning
+	agent.State = stateStarting
 
 	d.mu.Lock()
 
@@ -105,7 +165,7 @@ func (d *Daemon) spawn(req *protocol.Request) (protocol.Response, error) {
 	// knows the old events still rebuilds the roster entry, and agent.spawned
 	// after it to upsert the launch metadata. Written separately, a failure
 	// between them would replay as a live agent with no integration.
-	if err := d.appendAll(
+	events := []event{
 		event{Event: evRegistered, Name: name, Type: agentType, Species: slug, PID: agent.PID},
 		event{
 			Event:       evSpawned,
@@ -116,11 +176,19 @@ func (d *Daemon) spawn(req *protocol.Request) (protocol.Response, error) {
 			Integration: agent.Integration,
 			Model:       agent.Model,
 			Config:      agent.Config,
+			Agent:       agent.Agent.Agent,
+			Profile:     agent.Profile,
+			Source:      agent.Source,
 			PaneID:      agent.PaneID,
 			Cwd:         cwd,
 			SessionID:   agent.sessionID,
+			TokenHash:   tokenHash,
 		},
-	); err != nil {
+	}
+	if !authenticated {
+		agent.State = stateRunning
+	}
+	if err := d.appendAll(events...); err != nil {
 		// The journal is the state authority, so an agent it does not record
 		// must not be left running: nothing would ever reap it. Give the name
 		// back under the lock, then tear the process down outside it.
@@ -131,6 +199,18 @@ func (d *Daemon) spawn(req *protocol.Request) (protocol.Response, error) {
 	}
 
 	d.agents[name] = agent.Agent
+	var ready chan struct{}
+	if authenticated {
+		if d.readyTokens == nil {
+			d.readyTokens = make(map[string]string)
+		}
+		if d.readyWaiters == nil {
+			d.readyWaiters = make(map[string]chan struct{})
+		}
+		d.readyTokens[name] = tokenHash
+		ready = make(chan struct{})
+		d.readyWaiters[name] = ready
+	}
 	if agent.runner != nil {
 		d.runners[name] = agent.runner
 		// Only now is the runner findable, so only now may the watcher run: an
@@ -141,37 +221,161 @@ func (d *Daemon) spawn(req *protocol.Request) (protocol.Response, error) {
 	}
 	d.debug.Printf("spawned %s integration=%s pid=%d pane=%s", name, agent.Integration, agent.PID, agent.PaneID)
 	d.mu.Unlock()
+	if !authenticated {
+		return protocol.Response{Name: name, PaneID: agent.PaneID}, nil
+	}
+
+	if agent.PaneID != "" {
+		if err := d.waitPaneInputReady(agent.PaneID); err != nil {
+			d.rollbackStarting(res, agent, "bootstrap failed")
+			return protocol.Response{}, fmt.Errorf("bootstrap %s: %w", name, err)
+		}
+	}
+	if err := d.deliverSpawnPrompt(agent.Agent, agent.runner, bootstrapPrompt); err != nil {
+		d.rollbackStarting(res, agent, "bootstrap failed")
+		return protocol.Response{}, fmt.Errorf("bootstrap %s: %w", name, err)
+	}
+	timeout := defaultReadinessTimeout
+	if req.TimeoutMS > 0 {
+		timeout = time.Duration(req.TimeoutMS) * time.Millisecond
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	readySignals := time.NewTicker(50 * time.Millisecond)
+	defer readySignals.Stop()
+
+readiness:
+	for {
+		select {
+		case <-ready:
+			if !d.agentReady(name) {
+				return protocol.Response{}, fmt.Errorf("agent %s stopped before readiness", name)
+			}
+			break readiness
+		case <-readySignals.C:
+			consumed, signalErr := d.consumeReadySignal(name)
+			if signalErr != nil {
+				d.debug.Printf("ready signal %s: %v", name, signalErr)
+				continue
+			}
+			if consumed {
+				break readiness
+			}
+		case <-timer.C:
+			if d.agentReady(name) {
+				break readiness
+			}
+			if d.rollbackStarting(res, agent, "readiness timeout") {
+				return protocol.Response{}, fmt.Errorf("agent %s did not become ready within %s", name, timeout)
+			}
+			return protocol.Response{}, fmt.Errorf("agent %s stopped before readiness", name)
+		}
+	}
+	// The orchestrator pane belongs to the operator. Fledge only injects the
+	// readiness bootstrap; its identity and role remain available through the
+	// inherited environment and normal mailbox CLI commands.
+	if name != agentcfg.ReservedOrchestrator {
+		if err := d.deliverSpawnPrompt(agent.Agent, agent.runner, assignedAgentPrompt(name, resolved.prompt)); err != nil {
+			d.rollbackStarting(res, agent, "role prompt failed")
+			return protocol.Response{}, fmt.Errorf("deliver role prompt to %s: %w", name, err)
+		}
+	}
 	return protocol.Response{Name: name, PaneID: agent.PaneID}, nil
+}
+
+func (d *Daemon) waitPaneInputReady(paneID string) error {
+	deadline := time.Now().Add(paneInputReadyTimeout)
+	for {
+		status, err := herdrwire.AgentStatus(d.session.SocketPath, paneID)
+		if err != nil {
+			return fmt.Errorf("wait for pane %s input readiness: %w", paneID, err)
+		}
+		if status != "" && status != "unknown" {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("pane %s did not become input-ready within %s", paneID, paneInputReadyTimeout)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // resolveSpawn turns the request into the config to launch and the agent type
 // to name it after: the config's own name when spawned from agents.json, the
 // integration when spawned from a bare model id.
-func (d *Daemon) resolveSpawn(req *protocol.Request) (agentcfg.Config, string, error) {
-	var (
-		cfg       agentcfg.Config
-		agentType string
-	)
+func (d *Daemon) resolveSpawnDetailed(req *protocol.Request) (spawnResolution, error) {
+	var out spawnResolution
+	selected := 0
+	if req.Agent != "" {
+		selected++
+	}
 	if req.Config != "" {
+		selected++
+	}
+	if req.Model != "" {
+		selected++
+	}
+	if req.Profile != "" && req.Agent == "" {
+		selected++
+	}
+	if selected != 1 {
+		return out, errors.New("spawn needs exactly one agent, profile, config, or model")
+	}
+
+	if req.Agent != "" {
+		defs, profiles, err := agentcfg.LoadDefinitions(d.root)
+		if err != nil {
+			return out, err
+		}
+		d, ok := defs[req.Agent]
+		if !ok {
+			return out, fmt.Errorf("no agent definition %q", req.Agent)
+		}
+		profile := d.Profile
+		if req.Profile != "" {
+			if d.Profile != "" {
+				return out, fmt.Errorf("agent %q already selects profile %q", d.Name, d.Profile)
+			}
+			profile = req.Profile
+		}
+		if profile == "" {
+			return out, fmt.Errorf("agent %q is profile-agnostic; pass --profile", d.Name)
+		}
+		cfg, ok := profiles[profile]
+		if !ok {
+			return out, fmt.Errorf("no profile %q", profile)
+		}
+		out = spawnResolution{cfg: cfg, agentType: d.Name, agent: d.Name, profile: profile, source: d.Source, prompt: d.Prompt}
+	} else if req.Profile != "" {
+		profiles, err := agentcfg.Load(d.root)
+		if err != nil {
+			return out, err
+		}
+		cfg, ok := profiles[req.Profile]
+		if !ok {
+			return out, fmt.Errorf("no profile %q", req.Profile)
+		}
+		out = spawnResolution{cfg: cfg, agentType: req.Profile, profile: req.Profile}
+	} else if req.Config != "" {
 		if req.Integration != "" {
-			return cfg, "", errors.New("integration override applies to --model spawns; a config names its integration")
+			return out, errors.New("integration override applies to --model spawns; a config names its integration")
 		}
 		configs, err := agentcfg.Load(d.root)
 		if err != nil {
-			return cfg, "", err
+			return out, err
 		}
 		entry, ok := configs[req.Config]
 		if !ok {
-			return cfg, "", fmt.Errorf("no agent config %q in %s", req.Config, agentcfg.FileName)
+			return out, fmt.Errorf("no agent config %q in %s", req.Config, agentcfg.FileName)
 		}
 		if err := entry.Validate(req.Config); err != nil {
-			return cfg, "", err
+			return out, err
 		}
-		cfg, agentType = entry, req.Config
+		out = spawnResolution{cfg: entry, agentType: req.Config, profile: req.Config}
 	} else {
 		integration, provider, err := agentcfg.Route(req.Model)
 		if err != nil {
-			return cfg, "", err
+			return out, err
 		}
 		if req.Integration != "" && req.Integration != integration {
 			// The routed provider is pi's; under any other integration it
@@ -181,19 +385,164 @@ func (d *Daemon) resolveSpawn(req *protocol.Request) (agentcfg.Config, string, e
 				provider = ""
 			}
 		}
-		cfg = agentcfg.Config{Integration: integration, Model: req.Model, Provider: provider}
-		agentType = integration
+		out.cfg = agentcfg.Config{Integration: integration, Model: req.Model, Provider: provider}
+		out.agentType = integration
 	}
 
 	if req.Provider != "" {
-		cfg.Provider = req.Provider
+		out.cfg.Provider = req.Provider
 	}
 	// An override or a provider flag can assemble a combination no config file
 	// would have passed, so the assembled config takes the same field checks.
-	if err := cfg.ValidateFields(); err != nil {
-		return cfg, "", err
+	if err := out.cfg.ValidateFields(); err != nil {
+		return out, err
 	}
-	return cfg, agentType, nil
+	return out, nil
+}
+
+// resolveSpawn retains the focused resolver seam used by older package tests.
+func (d *Daemon) resolveSpawn(req *protocol.Request) (agentcfg.Config, string, error) {
+	r, err := d.resolveSpawnDetailed(req)
+	return r.cfg, r.agentType, err
+}
+
+func readinessToken() (token, hash string, err error) {
+	a, err := newID()
+	if err != nil {
+		return "", "", err
+	}
+	b, err := newID()
+	if err != nil {
+		return "", "", err
+	}
+	token = a + b
+	sum := sha256.Sum256([]byte(token))
+	return token, hex.EncodeToString(sum[:]), nil
+}
+
+func cloneEnv(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in)+2)
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+// ready authenticates the one-use token injected into a launched process.
+func (d *Daemon) ready(req *protocol.Request) (protocol.Response, error) {
+	if req.Name == "" || req.Token == "" {
+		return protocol.Response{}, errors.New("agent ready requires its injected name and token")
+	}
+	sum := sha256.Sum256([]byte(req.Token))
+	got := hex.EncodeToString(sum[:])
+	return d.readyDigest(req.Name, got)
+}
+
+func (d *Daemon) readyDigest(name, got string) (protocol.Response, error) {
+
+	d.mu.Lock()
+	want, ok := d.readyTokens[name]
+	if !ok {
+		if a, exists := d.agents[name]; exists && a.State != stateStarting {
+			d.mu.Unlock()
+			return protocol.Response{}, fmt.Errorf("readiness token for %q was already used", name)
+		}
+		d.mu.Unlock()
+		return protocol.Response{}, fmt.Errorf("no starting agent %q", name)
+	}
+	if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
+		d.mu.Unlock()
+		return protocol.Response{}, errors.New("invalid readiness token")
+	}
+	if err := d.append(event{Event: evReady, Name: name}); err != nil {
+		d.mu.Unlock()
+		return protocol.Response{}, err
+	}
+	a := d.agents[name]
+	a.State = stateRunning
+	d.agents[name] = a
+	delete(d.readyTokens, name)
+	ch := d.readyWaiters[name]
+	if ch != nil {
+		close(ch)
+		delete(d.readyWaiters, name)
+	}
+	d.debug.Printf("ready %s", name)
+	d.mu.Unlock()
+
+	// A starting pane may survive a daemon restart. With no in-flight spawn
+	// waiter left to deliver its role, ready completes that delivery itself.
+	if ch == nil && name != agentcfg.ReservedOrchestrator {
+		var role string
+		if a.Agent != "" {
+			definition, _, err := agentcfg.FindDefinition(d.root, a.Agent)
+			if err != nil {
+				d.rollbackStarting(reservation{}, launched{Agent: a}, "role prompt failed")
+				return protocol.Response{}, err
+			}
+			role = definition.Prompt
+		}
+		if err := d.deliverSpawnPrompt(a, nil, assignedAgentPrompt(a.Name, role)); err != nil {
+			d.rollbackStarting(reservation{}, launched{Agent: a}, "role prompt failed")
+			return protocol.Response{}, fmt.Errorf("deliver role prompt to %s: %w", a.Name, err)
+		}
+	}
+	return protocol.Response{Name: name}, nil
+}
+
+func (d *Daemon) agentReady(name string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	a, ok := d.agents[name]
+	return ok && a.State != stateStarting && a.State != stateStopped
+}
+
+// deliverSpawnPrompt preserves the same sent-before-delivered journal ordering
+// as ordinary mailbox sends while using the live pane/RPC bridge.
+func (d *Daemon) deliverSpawnPrompt(to protocol.Agent, runner *pirpc.Runner, body string) error {
+	id, err := newID()
+	if err != nil {
+		return err
+	}
+	msg := protocol.Message{ID: id, From: "fledge", To: to.Name, Body: body}
+	d.mu.Lock()
+	if err := d.append(event{Event: evSent, ID: id, From: msg.From, To: msg.To, Body: msg.Body}); err != nil {
+		d.mu.Unlock()
+		return err
+	}
+	d.mu.Unlock()
+	if err := d.bridge(to, runner, msg); err != nil {
+		d.mu.Lock()
+		d.pending = append(d.pending, msg)
+		d.mu.Unlock()
+		return err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.append(event{Event: evDelivered, ID: id, To: to.Name})
+}
+
+func (d *Daemon) rollbackStarting(_ reservation, agent launched, reason string) bool {
+	d.mu.Lock()
+	if current, ok := d.agents[agent.Name]; ok && reason == "readiness timeout" && current.State != stateStarting {
+		d.mu.Unlock()
+		return false
+	}
+	delete(d.readyTokens, agent.Name)
+	delete(d.readyWaiters, agent.Name)
+	if agent.runner != nil {
+		delete(d.runners, agent.Name)
+	}
+	d.mu.Unlock()
+
+	d.teardown(agent.Name, agent)
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, err := d.markStopped(agent.Name, reason); err != nil {
+		d.debug.Printf("%s: rollback journal: %v", agent.Name, err)
+	}
+	return true
 }
 
 // spawnCwd resolves the working directory the agent launches in: the request
@@ -205,6 +554,8 @@ func (d *Daemon) spawnCwd(cfg agentcfg.Config, req *protocol.Request) (string, e
 	}
 	if cwd == "" {
 		cwd = d.root
+	} else if !filepath.IsAbs(cwd) {
+		cwd = filepath.Join(d.root, cwd)
 	}
 	return filepath.Abs(cwd)
 }
@@ -272,7 +623,7 @@ func (d *Daemon) reserve(agentType, requested, integration string) (reservation,
 	}
 	d.agents[r.name] = protocol.Agent{
 		Name: r.name, Type: agentType, Species: slug,
-		PID: reservedPID, Integration: integration, State: stateRunning,
+		PID: reservedPID, Integration: integration, State: stateStarting,
 	}
 	return r, nil
 }
@@ -332,15 +683,15 @@ type launched struct {
 
 // launch starts the agent process. It runs without d.mu held: a Herdr call or a
 // process start can take seconds, and a spawn must not stall the whole flock.
-func (d *Daemon) launch(name, cwd string, cfg agentcfg.Config, split string) (launched, error) {
+func (d *Daemon) launch(name, cwd string, cfg agentcfg.Config, split, anchorPane string) (launched, error) {
 	if agentcfg.PaneHosted(cfg.Integration) {
-		return d.launchPane(name, cwd, cfg, split)
+		return d.launchPane(name, cwd, cfg, split, anchorPane)
 	}
 	// A pi agent is a subprocess with no pane, so there is nothing to split.
 	return d.launchPi(name, cwd, cfg)
 }
 
-func (d *Daemon) launchPane(name, cwd string, cfg agentcfg.Config, split string) (launched, error) {
+func (d *Daemon) launchPane(name, cwd string, cfg agentcfg.Config, split, anchorPane string) (launched, error) {
 	// Only claude takes a session id; codex persists its own sessions and has
 	// no equivalent flag, so its journal line must not carry a fake one.
 	var sessionID string
@@ -360,6 +711,19 @@ func (d *Daemon) launchPane(name, cwd string, cfg agentcfg.Config, split string)
 	if err != nil {
 		return launched{}, err
 	}
+	if anchorPane != "" {
+		// Herdr 0.7.4 can create only right/down splits. Interactive start
+		// therefore creates the orchestrator on the right, then immediately
+		// swaps it left and restores focus before registration, readiness, or
+		// bootstrap can make the temporary placement visible as a later jump.
+		if err := herdrwire.PaneSwap(d.session.SocketPath, anchorPane, started.PaneID); err != nil {
+			return launched{}, d.failPanePlacement(name, started.PaneID, "swap", err)
+		}
+		// pane.swap leaves focus with the slot rather than the pane.
+		if err := herdrwire.PaneFocus(d.session.SocketPath, started.PaneID); err != nil {
+			return launched{}, d.failPanePlacement(name, started.PaneID, "focus", err)
+		}
+	}
 
 	// The pane exists either way; an unknown shell pid only costs the liveness
 	// probe, so it is not worth failing a spawn over.
@@ -375,6 +739,14 @@ func (d *Daemon) launchPane(name, cwd string, cfg agentcfg.Config, split string)
 		Agent:     protocol.Agent{PID: pid, PaneID: started.PaneID},
 		sessionID: sessionID,
 	}, nil
+}
+
+func (d *Daemon) failPanePlacement(name, paneID, operation string, placementErr error) error {
+	err := fmt.Errorf("place %s pane: %s: %w", name, operation, placementErr)
+	if closeErr := herdrwire.PaneClose(d.session.SocketPath, paneID); closeErr != nil {
+		return fmt.Errorf("%w (closing pane also failed: %v)", err, closeErr)
+	}
+	return err
 }
 
 func (d *Daemon) launchPi(name, cwd string, cfg agentcfg.Config) (launched, error) {
@@ -443,6 +815,9 @@ func (d *Daemon) piEvents(name string, frames *os.File) func(pirpc.Event) {
 func (d *Daemon) setState(name, state string, e event) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if a, ok := d.agents[name]; ok && a.State == stateStarting {
+		return
+	}
 
 	if e.Event != "" {
 		if err := d.append(e); err != nil {
@@ -495,6 +870,11 @@ func (d *Daemon) markStopped(name, reason string) (bool, error) {
 	}
 	a.State = stateStopped
 	d.agents[name] = a
+	delete(d.readyTokens, name)
+	if ch := d.readyWaiters[name]; ch != nil {
+		close(ch)
+	}
+	delete(d.readyWaiters, name)
 	return true, nil
 }
 
@@ -543,9 +923,10 @@ func (d *Daemon) stop(req *protocol.Request) (protocol.Response, error) {
 }
 
 // bridged reports whether messages to this agent go to a process fledge drives
-// rather than into the pending queue.
+// rather than into the pending queue. The orchestrator is pane-hosted for
+// interactive use, but remains a user-driven mailbox consumer.
 func bridged(a protocol.Agent) bool {
-	return a.Integration != "" && a.State != stateStopped && a.State != stateOrphaned
+	return a.Name != agentcfg.ReservedOrchestrator && a.Integration != "" && a.State != stateStopped && a.State != stateOrphaned
 }
 
 // bridge hands a message straight to a spawned agent. Called without d.mu:

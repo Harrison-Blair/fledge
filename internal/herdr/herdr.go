@@ -99,6 +99,54 @@ func Ensure(name string, env []string, dir string) (s Session, started bool, err
 	return s, err == nil, err
 }
 
+// Recreate replaces any session record named name with a fresh headless
+// server. Callers use this only for sessions they own: an old managed session
+// can outlive its daemon and retain pane identities that the new daemon cannot
+// adopt safely. Stopping and deleting it before launch restores a clean
+// workspace and the requested environment.
+func Recreate(name string, env []string, dir string) (Session, error) {
+	if name == "" {
+		return Session{}, fmt.Errorf("cannot recreate the default herdr session")
+	}
+	if err := Remove(name); err != nil {
+		return Session{}, err
+	}
+	return start(name, env, dir)
+}
+
+// Remove stops and deletes a named session when its record exists. It is
+// idempotent so cleanup paths can remove an associated managed session without
+// first having to distinguish a live server, a stopped record, and no record.
+func Remove(name string) error {
+	if name == "" {
+		return fmt.Errorf("cannot remove the default herdr session")
+	}
+	s, found, err := Find(name)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+	if Up(s.SocketPath) {
+		if err := Stop(name); err != nil {
+			return err
+		}
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			stopped, stillFound, findErr := Find(name)
+			if findErr == nil && (!stillFound || !stopped.Running || !Up(stopped.SocketPath)) {
+				break
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("herdr session %s did not stop", name)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	return Delete(name)
+}
+
 // Stop ends the named session. Herdr tears down the session's panes and
 // removes its API socket; anything watching that socket sees it go away.
 func Stop(name string) error {

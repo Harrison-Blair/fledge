@@ -130,8 +130,17 @@ func AgentStart(socket, name, cwd string, argv []string, env map[string]string, 
 	return StartedAgent{PaneID: result.Agent.PaneID, TerminalID: result.Agent.TerminalID}, nil
 }
 
-// WorkspaceCreate creates and focuses a workspace rooted at cwd, labelled
-// label, and returns the id of the tab herdr opens with it. A fresh session has
+// CreatedWorkspace identifies the objects Herdr creates together for a new
+// workspace. Callers need all three IDs to label the initial tab, address its
+// normal root shell, and roll the whole workspace back if later setup fails.
+type CreatedWorkspace struct {
+	WorkspaceID string
+	TabID       string
+	RootPaneID  string
+}
+
+// WorkspaceCreate creates a workspace rooted at cwd, labelled label, with the
+// requested focus behavior. A fresh session has
 // no workspace until a client attaches, and the one herdr then manufactures has
 // no reliable cwd (observed landing in $HOME on 0.7.4: its "follow the source
 // pane" default has nothing to follow) — so fledge creates the first workspace
@@ -140,22 +149,40 @@ func AgentStart(socket, name, cwd string, argv []string, env map[string]string, 
 // The initial tab already exists when this returns and its id comes back in the
 // same reply (verified on 0.7.4 / protocol 16), so labelling that tab needs no
 // tab.list lookup.
-func WorkspaceCreate(socket, cwd, label string) (tabID string, err error) {
+func WorkspaceCreate(socket, cwd, label string, focus bool) (CreatedWorkspace, error) {
 	params := struct {
 		Cwd   string `json:"cwd"`
 		Focus bool   `json:"focus"`
 		Label string `json:"label,omitempty"`
-	}{Cwd: cwd, Focus: true, Label: label}
+	}{Cwd: cwd, Focus: focus, Label: label}
 
 	var result struct {
+		Workspace struct {
+			WorkspaceID string `json:"workspace_id"`
+		} `json:"workspace"`
 		Tab struct {
 			TabID string `json:"tab_id"`
 		} `json:"tab"`
+		RootPane struct {
+			PaneID string `json:"pane_id"`
+		} `json:"root_pane"`
 	}
 	if err := Call(socket, "workspace.create", params, &result); err != nil {
-		return "", err
+		return CreatedWorkspace{}, err
 	}
-	return result.Tab.TabID, nil
+	return CreatedWorkspace{
+		WorkspaceID: result.Workspace.WorkspaceID,
+		TabID:       result.Tab.TabID,
+		RootPaneID:  result.RootPane.PaneID,
+	}, nil
+}
+
+// WorkspaceClose closes one workspace and all panes it owns.
+func WorkspaceClose(socket, workspaceID string) error {
+	params := struct {
+		WorkspaceID string `json:"workspace_id"`
+	}{WorkspaceID: workspaceID}
+	return Call(socket, "workspace.close", params, nil)
 }
 
 // TabRename labels a tab.
@@ -294,6 +321,25 @@ func AgentAlive(socket, paneID string) (bool, error) {
 		return false, nil
 	}
 	return false, err
+}
+
+// AgentStatus returns Herdr's native screen-detected status for a pane-hosted
+// agent. A newly created pane reports "unknown" until the integration has
+// initialized its TUI; sending input before that transition can race startup
+// and leave the text echoed above (rather than submitted inside) the TUI.
+func AgentStatus(socket, paneID string) (string, error) {
+	params := struct {
+		Target string `json:"target"`
+	}{Target: paneID}
+	var result struct {
+		Agent struct {
+			Status string `json:"agent_status"`
+		} `json:"agent"`
+	}
+	if err := Call(socket, "agent.get", params, &result); err != nil {
+		return "", err
+	}
+	return result.Agent.Status, nil
 }
 
 // paneParams is the {"pane_id": ...} body shared by the pane-scoped methods.

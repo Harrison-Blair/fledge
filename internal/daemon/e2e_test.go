@@ -106,7 +106,7 @@ func TestRegisterRejectsBadType(t *testing.T) {
 	root := workspace(t)
 	defer start(t, root, testFlock)()
 
-	for _, typ := range []string{"", "code-engineer", "Engineer", "code_engineer"} {
+	for _, typ := range []string{"", "-code-engineer", "code--engineer", "Engineer", "code_engineer"} {
 		if _, err := client.Do(root, testFlock, protocol.Request{Op: protocol.OpRegister, Type: typ, PID: os.Getpid()}); err == nil {
 			t.Fatalf("type %q was accepted", typ)
 		}

@@ -21,41 +21,79 @@ var subdirs = []string{
 	"locks",
 	"context",
 	"flocks",
+	"agents/user",
+	"agents/fledge/fledge-orchestrator",
 }
 
 // IgnoreName is the ignore file fledge keeps inside DirName. Its patterns are
 // relative to the workspace root, not to DirName.
 const IgnoreName = ".fledgeignore"
 
-const ignoreTemplate = `# Paths fledge ignores, one glob per line.
+const ignoreHeader = `# Paths fledge ignores, one glob per line.
 # Syntax follows .gitignore conventions.
 #
 # "#include <path>" splices another ignore file in at that point, resolved
-# from this workspace root. Uncomment the next line to also honor .gitignore:
-# #include .gitignore
-.fledge/
-.git/
+# from this workspace root.
 `
+
+const ignoreBody = `.*/
+!.github/
+!.fledge/
+.fledge/*
+!.fledge/agents/
+.fledge/agents/*
+.fledge/agents/fledge/**
+!.fledge/agents/user/
+.fledge/agents/user/**
+!.fledge/agents/user/**/
+!.fledge/agents/user/**/*.agent.md
+`
+
+// ignoreTemplate seeds IgnoreName. The .gitignore include is active only when
+// that file exists: ignore.ParseFile treats a missing include target as an
+// error, not an empty file, so an unconditional directive would break every
+// scan in a tree that has no .gitignore.
+func ignoreTemplate(root string) string {
+	include := "# Uncomment the next line to also honor .gitignore:\n# #include .gitignore\n"
+	if _, err := os.Stat(filepath.Join(root, ".gitignore")); err == nil {
+		include = "#include .gitignore\n"
+	}
+	return ignoreHeader + include + ignoreBody
+}
 
 // AgentsName is the agent config file fledge stubs out inside DirName. It must
 // stay equal to agentcfg.FileName, which reads it; agentcfg imports this
 // package for DirName, so the constant cannot live there without a cycle.
-const AgentsName = "agents.json"
+const AgentsName = "agents/agents.json"
+
+const managedAgentsName = "agents/fledge-agents.json"
+
+const orchestratorName = "agents/fledge/fledge-orchestrator/fledge-orchestrator.agent.md"
 
 // catalogName must stay equal to agentcfg.CatalogName, mirrored here for the
 // same cycle reason as AgentsName. The scaffold never writes the catalog —
 // init regenerates it wholesale from the installed integrations — but it is
 // per-machine state, so it belongs in .gitignore with the other runtime paths.
-const catalogName = "catalog.json"
+const catalogName = "agents/catalog.json"
 
-// agentsTemplate ships one illustrative entry rather than a comment, which
-// JSON has no room for. The operator edits or replaces it.
+// agentsTemplate starts empty. Native integrations are generated in the
+// catalog; the operator adds only custom profiles here.
 const agentsTemplate = `{
-  "example": {
-    "integration": "claude",
-    "permission_mode": "plan"
-  }
+  "version": 1,
+  "agents": {},
+  "profiles": {}
 }
+`
+
+const orchestratorTemplate = `---
+name: fledge-orchestrator
+description: Coordinate a Fledge flock without performing the delegated implementation itself.
+tools: []
+---
+You are the flock orchestrator. Decompose the user's goal, spawn or register
+specialized agents when useful, coordinate their work through Fledge messages,
+and synthesize the final result. The orchestrator coordinates; it does not
+perform delegated implementation itself.
 `
 
 // Ensure creates the .fledge tree under root, creating anything missing and
@@ -78,10 +116,16 @@ func Ensure(root string) (existed bool, err error) {
 	}
 
 	// Never clobber a file the user has edited.
-	if err := writeIfAbsent(filepath.Join(base, IgnoreName), ignoreTemplate); err != nil {
+	if err := writeIfAbsent(filepath.Join(base, IgnoreName), ignoreTemplate(root)); err != nil {
 		return existed, err
 	}
 	if err := writeIfAbsent(filepath.Join(base, AgentsName), agentsTemplate); err != nil {
+		return existed, err
+	}
+	if err := writeIfAbsent(filepath.Join(base, managedAgentsName), agentsTemplate); err != nil {
+		return existed, err
+	}
+	if err := writeIfAbsent(filepath.Join(base, orchestratorName), orchestratorTemplate); err != nil {
 		return existed, err
 	}
 
@@ -93,6 +137,8 @@ func Ensure(root string) (existed bool, err error) {
 var GitignoreEntries = []string{
 	DirName + "/locks/",
 	DirName + "/flocks/",
+	DirName + "/agents/fledge/",
+	DirName + "/agents/fledge-agents.json",
 	DirName + "/" + catalogName,
 }
 

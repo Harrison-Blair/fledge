@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/agentcfg"
+	"github.com/Harrison-Blair/fledge/internal/filebridge"
 	"github.com/Harrison-Blair/fledge/internal/flock"
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/protocol"
@@ -77,7 +78,11 @@ func (f *fakeHerdr) handle(conn net.Conn, replies map[string]string) {
 	method := strings.Trim(string(env["method"]), `"`)
 	reply, ok := replies[method]
 	if !ok {
-		reply = `{"id":"1","result":{}}`
+		if method == "agent.get" {
+			reply = `{"id":"1","result":{"type":"agent","agent":{"pane_id":"w1:p2","agent_status":"idle"}}}`
+		} else {
+			reply = `{"id":"1","result":{}}`
+		}
 	}
 	conn.Write([]byte(reply + "\n"))
 }
@@ -126,6 +131,16 @@ func (f *fakeHerdr) params(method string) map[string]any {
 	return p
 }
 
+func (f *fakeHerdr) methods() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, 0, len(f.got))
+	for _, env := range f.got {
+		out = append(out, strings.Trim(string(env["method"]), `"`))
+	}
+	return out
+}
+
 // Stub agent bodies. piEcho answers every prompt; piCrash does too but dies
 // abnormally when stdin closes, which is what makes Runner.Stop report an
 // error even though the stop itself worked; piSelfExit never reads stdin at
@@ -172,6 +187,18 @@ func writeAgents(t *testing.T, root string, configs map[string]agentcfg.Config) 
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, scaffold.DirName, agentcfg.FileName), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeCatalog installs generated catalog entries in the workspace.
+func writeCatalog(t *testing.T, root string, configs map[string]agentcfg.Config) {
+	t.Helper()
+	data, err := json.Marshal(configs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, scaffold.DirName, agentcfg.CatalogName), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -348,6 +375,63 @@ func slicesContains(list []string, want string) bool {
 	return false
 }
 
+func TestSpawnDiscoveredClaudeFamilyUsesNativeLauncher(t *testing.T) {
+	f := serveHerdr(t, map[string]string{
+		"agent.start":       paneStartedReply,
+		"pane.process_info": `{"id":"1","result":{"process_info":{"shell_pid":4242}}}`,
+	})
+	d := boundDaemon(t, f)
+	writeCatalog(t, d.root, map[string]agentcfg.Config{
+		"opus": {Integration: "claude", Model: "opus"},
+	})
+
+	resp, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Config: "opus"})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if resp.Name != "opus-emperor" {
+		t.Fatalf("name = %q, want opus-emperor", resp.Name)
+	}
+
+	argv := strs(t, f.params("agent.start")["argv"])
+	if len(argv) != 5 || argv[0] != "claude" || argv[1] != "--session-id" || argv[2] == "" ||
+		argv[3] != "--model" || argv[4] != "opus" {
+		t.Fatalf("argv = %v, want claude --session-id <uuid> --model opus", argv)
+	}
+	if slicesContains(argv, "--provider") {
+		t.Fatalf("argv %v carries an API-provider flag", argv)
+	}
+}
+
+func TestSpawnDiscoveredClaudeDefaultLeavesModelUnspecified(t *testing.T) {
+	f := serveHerdr(t, map[string]string{
+		"agent.start":       paneStartedReply,
+		"pane.process_info": `{"id":"1","result":{"process_info":{"shell_pid":4242}}}`,
+	})
+	d := boundDaemon(t, f)
+	writeCatalog(t, d.root, map[string]agentcfg.Config{
+		"default": {Integration: "claude"},
+	})
+
+	resp, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Config: "default"})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if resp.Name != "default-emperor" {
+		t.Fatalf("name = %q, want default-emperor", resp.Name)
+	}
+
+	argv := strs(t, f.params("agent.start")["argv"])
+	if len(argv) != 3 || argv[0] != "claude" || argv[1] != "--session-id" || argv[2] == "" {
+		t.Fatalf("argv = %v, want claude --session-id <uuid>", argv)
+	}
+	for _, unwanted := range []string{"--model", "--provider"} {
+		if slicesContains(argv, unwanted) {
+			t.Fatalf("argv %v carries %s for the default launcher", argv, unwanted)
+		}
+	}
+}
+
 func TestSpawnCodexByConfig(t *testing.T) {
 	f := serveHerdr(t, map[string]string{
 		"agent.start":       paneStartedReply,
@@ -429,6 +513,90 @@ func TestSpawnPiByModel(t *testing.T) {
 	}
 	if !strings.Contains(string(frames), `"agent_start"`) {
 		t.Fatalf("frame log = %q, want the raw agent_start frame", frames)
+	}
+}
+
+func TestFileBridgeDispatchesSpawn(t *testing.T) {
+	piStub(t)
+	d := newTestDaemon(t)
+	go d.serveFileRequests()
+
+	id, err := filebridge.Submit(d.root, d.flockName, protocol.Request{
+		Op: protocol.OpSpawn, Model: "gpt-x",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := filebridge.Await(d.root, d.flockName, id, time.Second, time.Second)
+	if err != nil {
+		t.Fatalf("file bridge spawn: %v", err)
+	}
+	if resp.Error != "" {
+		t.Fatalf("file bridge spawn response: %s", resp.Error)
+	}
+	if resp.Name != "pi-emperor" {
+		t.Fatalf("spawned name = %q", resp.Name)
+	}
+	d.mu.Lock()
+	spawned := d.agents[resp.Name]
+	d.mu.Unlock()
+	if spawned.Integration != "pi" || spawned.State == stateStopped {
+		t.Fatalf("spawned agent = %+v", spawned)
+	}
+}
+
+func TestFileBridgeDispatchesMessageWait(t *testing.T) {
+	d := newTestDaemon(t)
+	if _, err := d.register(&protocol.Request{Type: "sender", PID: os.Getpid()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.register(&protocol.Request{Type: "receiver", PID: os.Getpid()}); err != nil {
+		t.Fatal(err)
+	}
+	go d.serveFileRequests()
+
+	waitID, err := filebridge.Submit(d.root, d.flockName, protocol.Request{
+		Op: protocol.OpWait, As: "receiver-emperor", TimeoutMS: 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waited := make(chan protocol.Response, 1)
+	waitErr := make(chan error, 1)
+	go func() {
+		resp, err := filebridge.Await(d.root, d.flockName, waitID, time.Second, 2*time.Second)
+		waited <- resp
+		waitErr <- err
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		d.mu.Lock()
+		parked := len(d.waiters)
+		d.mu.Unlock()
+		if parked == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("file bridge wait never parked")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	sendID, err := filebridge.Submit(d.root, d.flockName, protocol.Request{
+		Op: protocol.OpSend, From: "sender-emperor", To: "receiver-emperor", Body: "hello",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp, err := filebridge.Await(d.root, d.flockName, sendID, time.Second, time.Second); err != nil || resp.Error != "" {
+		t.Fatalf("file bridge send = %+v, %v", resp, err)
+	}
+	resp := <-waited
+	if err := <-waitErr; err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error != "" || resp.Message == nil || resp.Message.Body != "hello" {
+		t.Fatalf("file bridge wait = %+v", resp)
 	}
 }
 
@@ -1023,7 +1191,7 @@ func TestSpawnRejectsUnknownConfigAndModel(t *testing.T) {
 		t.Fatal("spawn accepted a request naming neither a config nor a model")
 	}
 	// Not merely an unroutable empty model: the request itself is malformed.
-	if !strings.Contains(err.Error(), "config name or a model") {
+	if !strings.Contains(err.Error(), "exactly one agent, profile, config, or model") {
 		t.Fatalf("error = %v, want the missing-selector refusal", err)
 	}
 }
@@ -1064,6 +1232,40 @@ func TestSendToCodexAgentGoesToItsPane(t *testing.T) {
 	}
 	if keys := strs(t, input["keys"]); len(keys) != 1 || keys[0] != "enter" {
 		t.Fatalf("pane keys = %v, want [enter]", keys)
+	}
+}
+
+func TestSendToOrchestratorWaitsInMailbox(t *testing.T) {
+	f := claudeHerdr(t)
+	d := boundDaemon(t, f)
+	writeAgents(t, d.root, map[string]agentcfg.Config{
+		agentcfg.ReservedOrchestrator: {Integration: "claude", Model: "claude-opus-4"},
+	})
+	if _, err := d.spawn(&protocol.Request{Config: agentcfg.ReservedOrchestrator}); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	sender, err := d.register(&protocol.Request{Type: "lead", PID: os.Getpid()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.send(&protocol.Request{From: sender.Name, To: agentcfg.ReservedOrchestrator, Body: "hello operator"}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if got := f.count("pane.send_input"); got != 0 {
+		t.Fatalf("orchestrator pane inputs = %d, want 0", got)
+	}
+	d.mu.Lock()
+	queued := len(d.pending)
+	d.mu.Unlock()
+	if queued != 1 {
+		t.Fatalf("pending messages = %d, want 1", queued)
+	}
+	resp, err := d.wait(&protocol.Request{As: agentcfg.ReservedOrchestrator}, make(chan struct{}))
+	if err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if resp.Message == nil || resp.Message.Body != "hello operator" {
+		t.Fatalf("wait response = %+v", resp.Message)
 	}
 }
 
@@ -1406,6 +1608,75 @@ func TestSpawnClaudePassesSplitThrough(t *testing.T) {
 	if got := f.params("agent.start")["split"]; got != "right" {
 		t.Fatalf("agent.start split = %v, want right", got)
 	}
+	if got := f.count("pane.swap"); got != 0 {
+		t.Fatalf("ordinary spawn made %d pane.swap calls, want none", got)
+	}
+}
+
+func TestSpawnEarlyPlacementFailureClosesPaneAndReleasesName(t *testing.T) {
+	tests := []struct {
+		name      string
+		operation string
+		replies   map[string]string
+	}{
+		{
+			name:      "swap",
+			operation: "swap",
+			replies: map[string]string{
+				"agent.start": paneStartedReply,
+				"pane.swap":   `{"id":"1","error":{"code":"swap_failed","message":"cannot swap"}}`,
+			},
+		},
+		{
+			name:      "focus",
+			operation: "focus",
+			replies: map[string]string{
+				"agent.start": paneStartedReply,
+				"pane.focus":  `{"id":"1","error":{"code":"focus_failed","message":"cannot focus"}}`,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := serveHerdr(t, tt.replies)
+			d := boundDaemon(t, f)
+			writeAgents(t, d.root, map[string]agentcfg.Config{
+				agentcfg.ReservedOrchestrator: {Integration: "claude", Model: "claude-opus-4"},
+			})
+
+			_, err := d.spawn(&protocol.Request{
+				Op: protocol.OpSpawn, Config: agentcfg.ReservedOrchestrator,
+				Split: "right", AnchorPane: "w1:p1",
+			})
+			if err == nil || !strings.Contains(err.Error(), tt.operation) {
+				t.Fatalf("spawn error = %v, want %s placement failure", err, tt.operation)
+			}
+			if got := f.count("pane.close"); got != 1 {
+				t.Fatalf("pane.close calls = %d, want 1", got)
+			}
+			if got := f.params("pane.close")["pane_id"]; got != "w1:p2" {
+				t.Fatalf("closed pane = %v, want w1:p2", got)
+			}
+			if hasEvent(t, d, evRegistered, agentcfg.ReservedOrchestrator) ||
+				hasEvent(t, d, evSpawned, agentcfg.ReservedOrchestrator) {
+				t.Fatal("placement failure journaled the orchestrator")
+			}
+			d.mu.Lock()
+			_, held := d.agents[agentcfg.ReservedOrchestrator]
+			d.mu.Unlock()
+			if held {
+				t.Fatal("placement failure left the orchestrator name reserved")
+			}
+
+			resp, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Config: agentcfg.ReservedOrchestrator})
+			if err != nil {
+				t.Fatalf("reuse name: %v", err)
+			}
+			if resp.Name != agentcfg.ReservedOrchestrator {
+				t.Fatalf("reused name = %q", resp.Name)
+			}
+		})
+	}
 }
 
 func TestSpawnClaudeWithoutSplitSendsNone(t *testing.T) {
@@ -1463,20 +1734,18 @@ func TestSpawnOrchestratorRunsUnderItsBareName(t *testing.T) {
 	}
 }
 
-// The carve-out is a name, not a licence: a hyphenated config that is not the
-// reserved one is still refused at spawn, not just at config validation.
-func TestSpawnStillRejectsOtherHyphenatedConfigs(t *testing.T) {
+func TestSpawnAcceptsKebabCaseConfigs(t *testing.T) {
 	d := boundDaemon(t, claudeHerdr(t))
 	writeAgents(t, d.root, map[string]agentcfg.Config{
 		"some-agent": {Integration: "claude", Model: "claude-opus-4"},
 	})
 
-	_, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Config: "some-agent"})
-	if err == nil {
-		t.Fatal("spawn accepted a hyphenated non-reserved config")
+	resp, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Config: "some-agent"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "lowercase letters and digits only") {
-		t.Errorf("unexpected error: %v", err)
+	if resp.Name != "some-agent-emperor" {
+		t.Errorf("name = %q", resp.Name)
 	}
 }
 
@@ -1626,7 +1895,8 @@ func TestRegisterReservedTypeTakesTheBareName(t *testing.T) {
 	d := newTestDaemon(t)
 
 	resp, err := d.register(&protocol.Request{
-		Op: protocol.OpRegister, Type: agentcfg.ReservedOrchestrator, PID: os.Getpid(),
+		Op: protocol.OpRegister, Type: agentcfg.ReservedOrchestrator, Agent: agentcfg.ReservedOrchestrator,
+		Source: "fledge/fledge-orchestrator/fledge-orchestrator.agent.md", PID: os.Getpid(),
 	})
 	if err != nil {
 		t.Fatalf("register: %v", err)
@@ -1645,12 +1915,12 @@ func TestRegisterSecondReservedCollides(t *testing.T) {
 	d := newTestDaemon(t)
 
 	if _, err := d.register(&protocol.Request{
-		Op: protocol.OpRegister, Type: agentcfg.ReservedOrchestrator, PID: os.Getpid(),
+		Op: protocol.OpRegister, Type: agentcfg.ReservedOrchestrator, Agent: agentcfg.ReservedOrchestrator, PID: os.Getpid(),
 	}); err != nil {
 		t.Fatalf("first register: %v", err)
 	}
 	_, err := d.register(&protocol.Request{
-		Op: protocol.OpRegister, Type: agentcfg.ReservedOrchestrator, PID: os.Getpid(),
+		Op: protocol.OpRegister, Type: agentcfg.ReservedOrchestrator, Agent: agentcfg.ReservedOrchestrator, PID: os.Getpid(),
 	})
 	if err == nil {
 		t.Fatal("a second orchestrator registered alongside the live one")
@@ -1666,7 +1936,7 @@ func TestRegisterReservedTypeRejectsRequestedSpecies(t *testing.T) {
 	d := newTestDaemon(t)
 
 	_, err := d.register(&protocol.Request{
-		Op: protocol.OpRegister, Type: agentcfg.ReservedOrchestrator,
+		Op: protocol.OpRegister, Type: agentcfg.ReservedOrchestrator, Agent: agentcfg.ReservedOrchestrator,
 		Species: "emperor", PID: os.Getpid(),
 	})
 	if err == nil {

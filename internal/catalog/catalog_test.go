@@ -81,20 +81,26 @@ func installBin(t *testing.T, name, body string) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-func fakeBoth(t *testing.T) {
+func fakeAll(t *testing.T) {
 	t.Helper()
+	installBin(t, "claude", "test \"$1\" = --version || exit 2\nprintf '%s\\n' '2.1.0'")
 	installBin(t, "codex", "cat <<'EOF'\n"+codexSample+"\nEOF")
 	installBin(t, "pi", "cat <<'EOF'\n"+piSample+"EOF")
 }
 
 func TestDiscoverNamesEverySourceAlways(t *testing.T) {
-	fakeBoth(t)
+	fakeAll(t)
 	configs, notes := Discover()
 	if len(notes) != 0 {
 		t.Fatalf("notes = %+v, want none", notes)
 	}
 
 	want := map[string]agentcfg.Config{
+		"default":    {Integration: "claude"},
+		"opus":       {Integration: "claude", Model: "opus"},
+		"fable":      {Integration: "claude", Model: "fable"},
+		"sonnet":     {Integration: "claude", Model: "sonnet"},
+		"haiku":      {Integration: "claude", Model: "haiku"},
 		"gpt56solcx": {Integration: "codex", Model: "gpt-5.6-sol"},
 		"gpt55cx":    {Integration: "codex", Model: "gpt-5.5"},
 		"gpt55pi":    {Integration: "pi", Provider: "openai-codex", Model: "gpt-5.5"},
@@ -122,13 +128,47 @@ func TestDiscoverNamesEverySourceAlways(t *testing.T) {
 	}
 }
 
+func TestDiscoverClaudeVersionGeneratesDefaultAndFamilyLaunchers(t *testing.T) {
+	fakeAll(t)
+
+	configs, notes := Discover()
+	if len(notes) != 0 {
+		t.Fatalf("notes = %+v, want none", notes)
+	}
+	if got := configs["default"]; got.Integration != "claude" || got.Model != "" || got.Provider != "" ||
+		got.PermissionMode != "" || got.Sandbox != "" || len(got.Argv) != 0 || len(got.Env) != 0 {
+		t.Errorf("default = %+v, want a model-less native Claude launcher", got)
+	}
+	for _, name := range []string{"opus", "fable", "sonnet", "haiku"} {
+		got, ok := configs[name]
+		if !ok {
+			t.Errorf("discovery has no %s launcher: %+v", name, configs)
+			continue
+		}
+		if got.Integration != "claude" || got.Model != name || got.Provider != "" ||
+			got.PermissionMode != "" || got.Sandbox != "" || len(got.Argv) != 0 || len(got.Env) != 0 {
+			t.Errorf("%s = %+v, want its native Claude family launcher", name, got)
+		}
+	}
+	count := 0
+	for _, cfg := range configs {
+		if cfg.Integration == "claude" {
+			count++
+		}
+	}
+	if count != 5 {
+		t.Fatalf("discovered %d claude launchers, want 5: %+v", count, configs)
+	}
+}
+
 func TestDiscoverSkipsMissingBinary(t *testing.T) {
+	installBin(t, "claude", "exit 0")
 	installBin(t, "codex", "cat <<'EOF'\n"+codexSample+"\nEOF")
 	t.Setenv("PATH", pathWithout(t, "pi"))
 
 	configs, notes := Discover()
-	if len(configs) != 2 {
-		t.Fatalf("discovered %d configs, want codex's 2: %+v", len(configs), configs)
+	if len(configs) != 7 {
+		t.Fatalf("discovered %d configs, want Claude's 5 plus Codex's 2: %+v", len(configs), configs)
 	}
 	if len(notes) != 1 || notes[0].Integration != "pi" {
 		t.Fatalf("notes = %+v, want one pi skip", notes)
@@ -136,6 +176,7 @@ func TestDiscoverSkipsMissingBinary(t *testing.T) {
 }
 
 func TestDiscoverSkipsFailingBinary(t *testing.T) {
+	installBin(t, "claude", "exit 0")
 	installBin(t, "codex", "exit 1")
 	installBin(t, "pi", "cat <<'EOF'\n"+piSample+"EOF")
 
@@ -148,8 +189,47 @@ func TestDiscoverSkipsFailingBinary(t *testing.T) {
 	}
 }
 
+func TestDiscoverSkipsMissingClaudeWithNote(t *testing.T) {
+	installBin(t, "codex", "cat <<'EOF'\n"+codexSample+"\nEOF")
+	installBin(t, "pi", "cat <<'EOF'\n"+piSample+"EOF")
+	t.Setenv("PATH", pathWithout(t, "claude"))
+
+	configs, notes := Discover()
+	for _, cfg := range configs {
+		if cfg.Integration == "claude" {
+			t.Fatalf("missing claude produced a launcher: %+v", configs)
+		}
+	}
+	if len(configs) != 6 {
+		t.Fatalf("claude's absence affected other discovery: %+v", configs)
+	}
+	if len(notes) != 1 || notes[0].Integration != "claude" || !strings.Contains(notes[0].Detail, "not on PATH") {
+		t.Fatalf("notes = %+v, want one missing-claude note", notes)
+	}
+}
+
+func TestDiscoverSkipsFailingClaudeWithNote(t *testing.T) {
+	installBin(t, "claude", "exit 7")
+	installBin(t, "codex", "cat <<'EOF'\n"+codexSample+"\nEOF")
+	installBin(t, "pi", "cat <<'EOF'\n"+piSample+"EOF")
+
+	configs, notes := Discover()
+	for _, cfg := range configs {
+		if cfg.Integration == "claude" {
+			t.Fatalf("failing claude produced a launcher: %+v", configs)
+		}
+	}
+	if len(configs) != 6 {
+		t.Fatalf("claude's failure affected other discovery: %+v", configs)
+	}
+	if len(notes) != 1 || notes[0].Integration != "claude" || !strings.Contains(notes[0].Detail, "claude --version failed") {
+		t.Fatalf("notes = %+v, want one failing-claude note", notes)
+	}
+}
+
 func TestDiscoverDropsPostSuffixCollision(t *testing.T) {
 	// Two distinct pi models that reduce to the same name and suffix.
+	installBin(t, "claude", "exit 0")
 	installBin(t, "pi", "cat <<'EOF'\nprovider model\nopencode gpt-5.5\nopencode gpt5.5\nEOF")
 	t.Setenv("PATH", pathWithout(t, "codex"))
 
@@ -183,7 +263,7 @@ func pathWithout(t *testing.T, name string) string {
 }
 
 func TestWriteIsStableAndLoadable(t *testing.T) {
-	fakeBoth(t)
+	fakeAll(t)
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, scaffold.DirName), 0o755); err != nil {
 		t.Fatal(err)
@@ -208,9 +288,13 @@ func TestWriteIsStableAndLoadable(t *testing.T) {
 		t.Fatal("two writes of the same discovery differ")
 	}
 
-	// The user file shadows a catalog name; everything else flows through.
+	// User entries shadow generated names, including Claude family launchers;
+	// everything else flows through.
 	if err := os.WriteFile(filepath.Join(root, scaffold.DirName, agentcfg.FileName),
-		[]byte(`{"gpt56solcx": {"integration": "codex", "model": "gpt-5.6-sol", "sandbox": "read-only"}}`), 0o644); err != nil {
+		[]byte(`{
+			"opus": {"integration": "claude", "model": "opus", "permission_mode": "plan"},
+			"gpt56solcx": {"integration": "codex", "model": "gpt-5.6-sol", "sandbox": "read-only"}
+		}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	merged, err := agentcfg.Load(root)
@@ -219,6 +303,9 @@ func TestWriteIsStableAndLoadable(t *testing.T) {
 	}
 	if merged["gpt56solcx"].Sandbox != "read-only" {
 		t.Fatalf("user entry did not shadow the catalog: %+v", merged["gpt56solcx"])
+	}
+	if merged["opus"].PermissionMode != "plan" {
+		t.Fatalf("user opus entry did not shadow discovery: %+v", merged["opus"])
 	}
 	if merged["glm51og"].Provider != "opencode-go" {
 		t.Fatalf("catalog entry lost in merge: %+v", merged)

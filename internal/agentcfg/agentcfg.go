@@ -17,42 +17,44 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/scaffold"
 )
 
-// FileName is the agent config file, relative to the .fledge directory.
-const FileName = "agents.json"
+// FileName is the generated user index, relative to the .fledge directory.
+const FileName = "agents/agents.json"
+
+// ManagedIndexName is the generated built-in index, relative to .fledge.
+const ManagedIndexName = "agents/" + ManagedFileName
 
 // CatalogName is the generated model catalog, relative to the .fledge
 // directory. fledge init regenerates it wholesale from the installed
 // integrations; it is never hand-edited, and an agents.json entry shadows a
 // catalog entry of the same name.
-const CatalogName = "catalog.json"
+const CatalogName = "agents/catalog.json"
 
 // Config describes one launchable agent.
 type Config struct {
-	Integration    string            `json:"integration"`
-	Model          string            `json:"model,omitempty"`
-	Provider       string            `json:"provider,omitempty"`
-	Cwd            string            `json:"cwd,omitempty"`
-	PermissionMode string            `json:"permission_mode,omitempty"`
-	Sandbox        string            `json:"sandbox,omitempty"`
-	Argv           []string          `json:"argv,omitempty"`
-	Env            map[string]string `json:"env,omitempty"`
+	Integration    string            `json:"integration" yaml:"integration"`
+	Model          string            `json:"model,omitempty" yaml:"model,omitempty"`
+	Provider       string            `json:"provider,omitempty" yaml:"provider,omitempty"`
+	Cwd            string            `json:"cwd,omitempty" yaml:"cwd,omitempty"`
+	PermissionMode string            `json:"permission_mode,omitempty" yaml:"permission_mode,omitempty"`
+	Sandbox        string            `json:"sandbox,omitempty" yaml:"sandbox,omitempty"`
+	Argv           []string          `json:"argv,omitempty" yaml:"argv,omitempty"`
+	Env            map[string]string `json:"env,omitempty" yaml:"env,omitempty"`
 }
 
-// Load reads the agent configs under root: the generated catalog first, then
-// the user file over it, so an agents.json entry shadows a catalog entry of
-// the same name. A missing file is not an error — either is optional until
-// init discovers models or an operator writes a config.
+// Load reads resolved profiles in deterministic user, managed, catalog order.
+// Synchronize rejects differing collisions; identical declarations coalesce.
 func Load(root string) (map[string]Config, error) {
-	configs, err := loadFile(root, CatalogName)
-	if err != nil {
-		return nil, err
-	}
-	user, err := loadFile(root, FileName)
-	if err != nil {
-		return nil, err
-	}
-	for name, cfg := range user {
-		configs[name] = cfg
+	configs := map[string]Config{}
+	for _, file := range []string{FileName, ManagedIndexName, CatalogName} {
+		entries, err := loadFile(root, file)
+		if err != nil {
+			return nil, err
+		}
+		for name, cfg := range entries {
+			if _, exists := configs[name]; !exists {
+				configs[name] = cfg
+			}
+		}
 	}
 	return configs, nil
 }
@@ -68,6 +70,19 @@ func loadFile(root, file string) (map[string]Config, error) {
 		return nil, err
 	}
 
+	var idx Index
+	if err := json.Unmarshal(data, &idx); err == nil && idx.Version != 0 {
+		if idx.Version != IndexVersion {
+			return nil, fmt.Errorf("parse %s: unsupported index version %d", file, idx.Version)
+		}
+		if idx.Profiles == nil {
+			return map[string]Config{}, nil
+		}
+		return idx.Profiles, nil
+	}
+	// Compatibility for focused daemon tests that install a flat profile map
+	// directly at the canonical generated-index path. Commands synchronize the
+	// file from Markdown before loading, so this is not a user-facing format.
 	configs := map[string]Config{}
 	if err := json.Unmarshal(data, &configs); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", file, err)
@@ -110,6 +125,20 @@ func (c Config) Validate(name string) error {
 	return nil
 }
 
+// ValidateProfile validates a user-configurable profile name and its fields.
+func (c Config) ValidateProfile(name string) error {
+	if err := validPortableName(name); err != nil {
+		return err
+	}
+	if strings.HasPrefix(name, "fledge-") {
+		return fmt.Errorf("profile %q uses the reserved fledge-* namespace", name)
+	}
+	if err := c.ValidateFields(); err != nil {
+		return fmt.Errorf("profile %q: %w", name, err)
+	}
+	return nil
+}
+
 // ValidateFields cross-checks integration-specific fields without a name, so
 // the daemon can run the same checks on a config assembled from spawn flags.
 // permission_mode and sandbox stay separate fields: claude's vocabulary (plan,
@@ -145,8 +174,8 @@ func (c Config) ValidateFields() error {
 
 // PaneHosted reports whether the integration runs in a visible herdr pane
 // rather than as a supervised subprocess. Pane-hosted agents need the flock
-// bound to a herdr session; their input goes through pane.send_input and their
-// stop is pane.close.
+// bound to a herdr session; worker input goes through pane.send_input and
+// their stop is pane.close. The orchestrator is the user-driven exception.
 func PaneHosted(integration string) bool {
 	return integration == "claude" || integration == "codex"
 }
@@ -158,22 +187,9 @@ func PaneHosted(integration string) bool {
 // already know without looking it up.
 const ReservedOrchestrator = "fledge-orchestrator"
 
-// validName accepts lowercase alphanumerics only, matching the agent naming
-// rule the daemon enforces. The reserved orchestrator name is the sole
-// exception; every other name keeps the rule, hyphens included.
+// validName accepts portable kebab-case agent/profile fixture names.
 func validName(name string) error {
-	if name == "" {
-		return errors.New("missing agent name")
-	}
-	if name == ReservedOrchestrator {
-		return nil
-	}
-	for _, r := range name {
-		if (r < 'a' || r > 'z') && (r < '0' || r > '9') {
-			return fmt.Errorf("invalid agent name %q: use lowercase letters and digits only", name)
-		}
-	}
-	return nil
+	return validPortableName(name)
 }
 
 // CommandArgv assembles the full launch argv for the config. sessionID is used

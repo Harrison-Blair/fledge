@@ -16,6 +16,7 @@ commands:
   deinit     remove the .fledge directory
   start      bring up a flock and open its herdr UI
   stop       stop every flock in the workspace
+  watch      stream a flock's daemon log
   context    inspect what fledge sees in a workspace
   flock      bring flocks up and down, inspect them
   agent      register, launch and inspect agents
@@ -33,10 +34,10 @@ var helpPages = map[string]string{
 create or refresh the .fledge directory without replacing existing files.
 dir defaults to the current directory.
 
-also discovers the models the installed integrations can launch (pi
---list-models, codex debug models) and regenerates .fledge/catalog.json
-from them. agents.json is the operator's file and wins on name collisions;
-claude models have no list command and stay hand-written there.
+also discovers native Claude Code default and model-family launchers (claude --version)
+and the models available through pi and Codex (pi --list-models, codex debug
+models), then regenerates .fledge/agents/catalog.json and synchronizes portable
+Markdown definitions into versioned indexes.
 
 flags:
   --json, -J   emit a JSON summary instead of text
@@ -59,13 +60,16 @@ bring up a flock, its herdr session and its daemon, then open the herdr UI.
 runs anywhere inside the workspace; everything roots at the directory holding
 .fledge. starting a flock that is already running reattaches to its session.
 
-a fresh start also spawns the fledge-orchestrator agent and lands you in an
-orchestrator | shell pane split. that agent runs under its exact config name,
-with no species suffix. with no such config it offers the agent
-picker instead, and whatever you pick runs as the orchestrator: under the same
-reserved name, listed under the config it came from. if no orchestrator can be
-started at all — nothing to pick,
-or the pick is cancelled — the start is rolled back rather than attached.
+a fresh start offers a profile for the managed, profile-agnostic
+fledge-orchestrator definition, opens the UI, then visibly launches the
+orchestrator, completes authenticated readiness, and delivers its role prompt.
+after that succeeds, a separate, unfocused workspace named fledge-watch opens
+with a watch tab whose normal shell runs fledge watch. the primary workspace
+keeps its orchestrator | CLI split, and focus returns to the orchestrator.
+the watcher is not registered as a herdr or fledge agent. watcher setup failure
+closes only the new watcher workspace when possible, keeps the healthy flock
+and primary workspace, and prints a manual-watch hint in the CLI.
+if no orchestrator can be started, the start is rolled back.
 a start whose stdout is not a terminal stops after the daemon: no orchestrator,
 no picker, no attach.
 
@@ -88,11 +92,21 @@ fledge flock stop <name> to stop a flock from a script.
 flags:
   --help, -H   print this help
 `,
+	"watch": `usage:
+  fledge watch [name]
+
+print a flock's complete daemon.log, then follow appended entries until the
+daemon stops or the command is interrupted. name defaults to FLEDGE_FLOCK.
+
+flags:
+  --help, -H   print this help
+`,
 	"context": `usage:
   fledge context <command>
 
 commands:
-  scan   list the files visible to fledge
+  scan    list the files visible to fledge
+  graph   show their structural directory graph
 
 flags:
   --help, -H   print this help
@@ -109,13 +123,45 @@ flags:
   --json, -J   emit JSON instead of grouped text
   --help, -H   print this help
 `,
+	"context graph": `usage:
+  fledge context graph [dir] [flags]
+
+show the workspace, its visible directories and files as a structural tree.
+directory sizes and file counts are recursive. the workspace root is found
+and .fledgeignore is applied exactly as for context scan; dir defaults to the
+whole workspace and an explicit dir limits the graph to that subtree.
+
+flags:
+  --json, -J   emit JSON nodes and contains edges instead of text
+  --help, -H   print this help
+`,
 	"flock": `usage:
   fledge flock <command>
 
 commands:
+  clear [name]   permanently remove saved flock state
   stop [name]    stop a flock (default: the calling flock)
   list           list every flock in the workspace
   status [name]  show one flock (default: the calling flock)
+
+flags:
+  --help, -H   print this help
+`,
+	"flock clear": `usage:
+  fledge flock clear [name]
+
+permanently remove saved state for one stopped flock, or every flock in the
+workspace when no name is given. the bare form does not use FLEDGE_FLOCK.
+running flocks are skipped; stop them separately with fledge flock stop first.
+
+the command previews each target and its running/down status, then asks once
+with a default-No [y/N] confirmation. it requires terminals on both stdin and
+stdout, and has no non-interactive bypass. clearing removes the flock's
+journal, daemon log, RPC remnants, and roster history.
+the corresponding default fledge-managed herdr session is stopped and deleted
+first. after confirmation, project-scoped managed herdr sessions with no saved
+flock directory are also removed. operator-named --session records and managed
+sessions belonging to other projects are untouched.
 
 flags:
   --help, -H   print this help
@@ -150,10 +196,12 @@ flags:
   fledge agent <command>
 
 commands:
-  register <type>  register an already-running agent
-  spawn [config]   launch an agent
+  register <type|agent.md>  register an already-running agent
+  spawn [agent]    launch an agent definition or raw profile/model
+  ready            authenticate a Fledge-started agent
   stop <name>      stop a spawned agent
   list             list registered agents with liveness
+  types            list configured agent definitions
   models           list the configured spawnable models
   msg <command>    send and wait for messages
 
@@ -161,12 +209,13 @@ flags:
   --help, -H   print this help
 `,
 	"agent register": `usage:
-  fledge agent register <type> [flags]
+  fledge agent register <type|agent.md> [flags]
 
-register an already-running agent and print its assigned name.
-types are lowercase letters and digits; fledge-orchestrator is the one
-reserved name allowed a hyphen, and it registers under that exact name
-with no species suffix.
+register an already-running agent and print its assigned name. An .agent.md
+path attaches its configured agent/profile/source metadata. A bare type is an
+ad hoc registration; the fledge-* namespace is reserved for managed agents.
+Cooperative agents can establish their shell identity with:
+  export FLEDGE_AGENT_NAME="$(fledge agent register <type>)"
 
 flags:
   --species, -S <slug>  request a specific species slug
@@ -174,22 +223,35 @@ flags:
   --help, -H            print this help
 `,
 	"agent spawn": `usage:
-  fledge agent spawn <config> [flags]
+  fledge agent spawn <agent> [flags]
+  fledge agent spawn --profile <name> [flags]
   fledge agent spawn --model <id> [flags]
   fledge agent spawn [flags]
 
-launch an agent and print its assigned name. Supply exactly one config name
-or model id. Given neither on a terminal, it prints a numbered menu of the
-configured agents and spawns the one picked.
+launch an agent and print its assigned name after authenticated readiness.
+An agent applies its Markdown role prompt. --profile launches an unprompted
+raw profile; it may also supply the profile for a profile-agnostic agent.
+Given no selection on a terminal, a numbered agent menu is shown.
 
 flags:
-  --model, -M <id>         model id to launch instead of a config name
+  --profile, -L <name>     raw profile, or profile for an agnostic agent
+  --model, -M <id>         raw model id to route and launch
   --provider, -D <name>    pi provider override
   --integration, -I <name> run the model under this integration
                            (claude, pi or codex; default: routed by prefix)
   --cwd, -C <dir>          working directory (default: workspace root)
   --species, -S <slug>     request a specific species slug
+  --timeout, -T <duration> readiness timeout (default: 2m)
   --help, -H               print this help
+`,
+	"agent ready": `usage:
+  fledge agent ready
+
+authenticate the one-use readiness token injected by fledge agent spawn.
+This command takes no arguments and only works inside a starting agent.
+
+flags:
+  --help, -H   print this help
 `,
 	"agent stop": `usage:
   fledge agent stop <name>
@@ -211,9 +273,19 @@ flags:
 	"agent models": `usage:
   fledge agent models [flags]
 
-list spawnable models from .fledge/catalog.json and .fledge/agents.json
-(agents.json wins on name collisions), grouped by provider.
+list resolved launch profiles from the user, managed, and discovered indexes,
+grouped by provider. Conflicting declarations are errors.
 This command needs no flock context or running daemon.
+
+flags:
+  --json, -J   emit JSON instead of text
+  --help, -H   print this help
+`,
+	"agent types": `usage:
+  fledge agent types [flags]
+
+list configured Markdown agent definitions. This command needs no flock
+context or running daemon.
 
 flags:
   --json, -J   emit JSON instead of text
@@ -230,22 +302,20 @@ flags:
   --help, -H   print this help
 `,
 	"agent msg send": `usage:
-  fledge agent msg send <to> <body> --from <name> [flags]
+  fledge agent msg send <to> <body> [flags]
 
-send a message and print its id.
+send a message and print its id. The sender is FLEDGE_AGENT_NAME.
 
 flags:
-  --from, -F <name>    sender name (required)
   --reply-to, -R <id>  id this message answers
   --help, -H           print this help
 `,
 	"agent msg wait": `usage:
-  fledge agent msg wait --as <name> [flags]
+  fledge agent msg wait [flags]
 
-wait for a message and print it as JSON.
+wait for a message and print it as JSON. The recipient is FLEDGE_AGENT_NAME.
 
 flags:
-  --as, -A <name>          name to wait as (required)
   --reply-to, -R <id>      wait only for a reply to this id
   --timeout, -T <duration> give up after this duration (default: never)
   --help, -H               print this help

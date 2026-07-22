@@ -2,6 +2,11 @@
 // between the fledge CLI and the fledge daemon over the workspace unix socket.
 package protocol
 
+const (
+	AgentNameEnv  = "FLEDGE_AGENT_NAME"
+	ReadyTokenEnv = "FLEDGE_READY_TOKEN"
+)
+
 // JournalName is the append-only event log, relative to a flock's directory.
 const JournalName = "journal.jsonl"
 
@@ -17,6 +22,7 @@ const (
 	OpSend     = "send"
 	OpWait     = "wait"
 	OpSpawn    = "spawn"
+	OpReady    = "ready"
 	OpStop     = "stop"
 )
 
@@ -28,6 +34,9 @@ type Request struct {
 	Type    string `json:"type,omitempty"`
 	Species string `json:"species,omitempty"`
 	PID     int    `json:"pid,omitempty"`
+	Agent   string `json:"agent,omitempty"`
+	Profile string `json:"profile,omitempty"`
+	Source  string `json:"source,omitempty"`
 
 	// send
 	From string `json:"from,omitempty"`
@@ -54,10 +63,17 @@ type Request struct {
 	// Split places a pane-hosted agent by splitting the focused pane
 	// ("right" or "down"). Ignored by pi agents, which have no pane.
 	Split string `json:"split,omitempty"`
+	// AnchorPane asks the daemon to swap a newly created pane with this pane
+	// and focus the new pane immediately after launch. Interactive start uses
+	// it to place the managed orchestrator before readiness begins.
+	AnchorPane string `json:"anchor_pane,omitempty"`
 	// Orchestrator runs Config as the reserved orchestrator: it is resolved as
 	// itself, but reserved under the bare orchestrator name. Only the fallback
 	// pick of `fledge start` sets it; `fledge agent spawn` never does.
 	Orchestrator bool `json:"orchestrator,omitempty"`
+
+	// ready
+	Token string `json:"token,omitempty"`
 
 	// stop
 	Name string `json:"name,omitempty"`
@@ -93,8 +109,11 @@ type Agent struct {
 	Integration string `json:"integration,omitempty"` // "claude" | "pi" | "codex"
 	Model       string `json:"model,omitempty"`
 	Config      string `json:"config,omitempty"` // agents.json entry it came from
+	Agent       string `json:"agent,omitempty"`
+	Profile     string `json:"profile,omitempty"`
+	Source      string `json:"source,omitempty"`
 	PaneID      string `json:"pane_id,omitempty"`
-	State       string `json:"state,omitempty"` // running | busy | settled | stopped | orphaned
+	State       string `json:"state,omitempty"` // starting | running | busy | settled | stopped | orphaned
 }
 
 // Message is a point-to-point message. ReplyTo correlates it with the message

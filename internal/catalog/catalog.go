@@ -1,8 +1,7 @@
-// Package catalog discovers the models the installed integrations can launch
+// Package catalog discovers the agents the installed integrations can launch
 // and writes them to .fledge/catalog.json. Discovery is exec-and-parse only:
-// fledge asks each binary what it serves and never guesses at a model list.
-// Claude has no list command, so claude entries stay hand-written in
-// agents.json.
+// fledge asks Codex and Pi what models they serve and probes Claude Code for
+// native default and model-family launchers.
 package catalog
 
 import (
@@ -30,8 +29,9 @@ type Note struct {
 // cmdTimeout bounds each discovery exec so a hung binary cannot hang init.
 const cmdTimeout = 10 * time.Second
 
-// entry is one discovered model before it is named.
+// entry is one discovered launcher before it is named.
 type entry struct {
+	name        string
 	integration string
 	provider    string
 	model       string
@@ -47,15 +47,16 @@ type source struct {
 }
 
 var sources = []source{
+	{integration: "claude", argv: []string{"claude", "--version"}, parse: parseClaudeVersion},
 	{integration: "codex", argv: []string{"codex", "debug", "models"}, parse: parseCodexModels},
 	{integration: "pi", argv: []string{"pi", "--list-models"}, parse: parsePiModels},
 }
 
-// Discover asks each installed integration for its models and returns them as
-// named configs. A missing binary, a failed run, or an unparseable output
-// skips that integration with a Note. An empty map means no integration
-// answered with models — callers must then keep any existing catalog rather
-// than write an empty one over it (a broken PATH is not "no models").
+// Discover asks each installed integration what it can launch and returns the
+// results as named configs. A missing binary, a failed run, or unparseable
+// output skips that integration with a Note. An empty map means no integration
+// answered — callers must then keep any existing catalog rather than write an
+// empty one over it (a broken PATH is not "nothing installed").
 func Discover() (map[string]agentcfg.Config, []Note) {
 	configs := map[string]agentcfg.Config{}
 	var notes []Note
@@ -72,16 +73,19 @@ func Discover() (map[string]agentcfg.Config, []Note) {
 			continue
 		}
 		for _, e := range entries {
-			name := slugName(e.model)
+			name := e.name
+			if name == "" {
+				name = slugName(e.model)
+				name += sourceSuffix(e.integration, e.provider)
+			}
 			if name == "" {
 				notes = append(notes, Note{src.integration, fmt.Sprintf("model %q has no usable name; dropped", e.model)})
 				continue
 			}
-			name += sourceSuffix(e.integration, e.provider)
 			cfg := agentcfg.Config{Integration: e.integration, Provider: e.provider, Model: e.model}
 			// Validate rather than trust the derivation: a suffix from an
 			// unknown provider is still only as clean as slugName made it.
-			if err := cfg.Validate(name); err != nil {
+			if err := cfg.ValidateProfile(name); err != nil {
 				notes = append(notes, Note{src.integration, fmt.Sprintf("model %q: %v; dropped", e.model, err)})
 				continue
 			}
@@ -108,6 +112,19 @@ func run(src source) ([]byte, *Note) {
 		return nil, &Note{src.integration, fmt.Sprintf("%s failed: %v", strings.Join(src.argv, " "), err)}
 	}
 	return out, nil
+}
+
+// parseClaudeVersion turns a successful `claude --version` probe into a
+// model-less default plus the family aliases Claude Code supports without
+// needing model enumeration.
+func parseClaudeVersion(_ []byte) ([]entry, error) {
+	return []entry{
+		{name: "default", integration: "claude"},
+		{name: "opus", integration: "claude", model: "opus"},
+		{name: "fable", integration: "claude", model: "fable"},
+		{name: "sonnet", integration: "claude", model: "sonnet"},
+		{name: "haiku", integration: "claude", model: "haiku"},
+	}, nil
 }
 
 // parseCodexModels reads `codex debug models` JSON. Models the catalog hides
@@ -184,10 +201,46 @@ func slugName(model string) string {
 // the catalog is generated state — and MarshalIndent sorts map keys, so the
 // same discovery writes the same bytes.
 func Write(root string, configs map[string]agentcfg.Config) error {
-	data, err := json.MarshalIndent(configs, "", "  ")
+	idx := agentcfg.Index{
+		Version:  agentcfg.IndexVersion,
+		Agents:   map[string]agentcfg.AgentRecord{},
+		Profiles: configs,
+	}
+	data, err := json.MarshalIndent(idx, "", "  ")
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(root, scaffold.DirName, agentcfg.CatalogName)
-	return os.WriteFile(path, append(data, '\n'), 0o644)
+	name := filepath.Join(root, scaffold.DirName, agentcfg.CatalogName)
+	if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(name), ".catalog-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	ok := false
+	defer func() {
+		tmp.Close()
+		if !ok {
+			os.Remove(tmpName)
+		}
+	}()
+	if err := tmp.Chmod(0o644); err != nil {
+		return err
+	}
+	if _, err := tmp.Write(append(data, '\n')); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, name); err != nil {
+		return err
+	}
+	ok = true
+	return nil
 }

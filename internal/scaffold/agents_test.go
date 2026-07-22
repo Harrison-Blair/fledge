@@ -30,7 +30,7 @@ func TestGitignoreCatalogEntryMatchesAgentcfg(t *testing.T) {
 	t.Errorf("GitignoreEntries = %v, missing %q", scaffold.GitignoreEntries, want)
 }
 
-func TestAgentsStubLoadsAndValidates(t *testing.T) {
+func TestAgentsStubIsEmptyAndLoads(t *testing.T) {
 	root := t.TempDir()
 	if _, err := scaffold.Ensure(root); err != nil {
 		t.Fatalf("Ensure: %v", err)
@@ -40,14 +40,7 @@ func TestAgentsStubLoadsAndValidates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if len(configs) != 1 {
-		t.Fatalf("got %d configs, want 1: %v", len(configs), configs)
-	}
-	cfg, ok := configs["example"]
-	if !ok {
-		t.Fatalf("stub has no \"example\" entry: %v", configs)
-	}
-	if err := cfg.Validate("example"); err != nil {
-		t.Errorf("Validate: %v", err)
+	if len(configs) != 0 {
+		t.Fatalf("got %d configs, want an empty template: %v", len(configs), configs)
 	}
 }

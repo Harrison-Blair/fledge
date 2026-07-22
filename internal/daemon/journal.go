@@ -14,6 +14,7 @@ const (
 	evStarted    = "daemon.started"
 	evRegistered = "agent.registered"
 	evSpawned    = "agent.spawned"
+	evReady      = "agent.ready"
 	evSettled    = "agent.settled"
 	evStopped    = "agent.stopped"
 	evSent       = "msg.sent"
@@ -33,11 +34,15 @@ type event struct {
 	Integration string `json:"integration,omitempty"`
 	Model       string `json:"model,omitempty"`
 	Config      string `json:"config,omitempty"`
+	Agent       string `json:"agent,omitempty"`
+	Profile     string `json:"profile,omitempty"`
+	Source      string `json:"source,omitempty"`
 	PaneID      string `json:"pane_id,omitempty"`
 	Cwd         string `json:"cwd,omitempty"`
 	SessionID   string `json:"session_id,omitempty"`
 	Reason      string `json:"reason,omitempty"`
 	MsgID       string `json:"msg_id,omitempty"`
+	TokenHash   string `json:"token_hash,omitempty"`
 
 	ID      string `json:"id,omitempty"`
 	From    string `json:"from,omitempty"`
@@ -77,13 +82,14 @@ type state struct {
 	agents  map[string]protocol.Agent
 	order   []string
 	pending []protocol.Message
+	tokens  map[string]string
 }
 
 // replay reconstructs state from an existing journal. A missing journal
 // replays as empty state. A message that was sent but never delivered is
 // pending; delivery order is the order the messages were sent in.
 func replay(path string) (*state, error) {
-	s := &state{agents: make(map[string]protocol.Agent)}
+	s := &state{agents: make(map[string]protocol.Agent), tokens: make(map[string]string)}
 
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {
@@ -130,15 +136,34 @@ func replay(path string) (*state, error) {
 				Type:    e.Type,
 				Species: e.Species,
 				PID:     e.PID,
+				Agent:   e.Agent,
+				Profile: e.Profile,
+				Source:  e.Source,
 			}
 		case evSpawned:
 			a := s.agents[e.Name]
 			a.Integration = e.Integration
 			a.Model = e.Model
 			a.Config = e.Config
+			a.Agent = e.Agent
+			a.Profile = e.Profile
+			a.Source = e.Source
 			a.PaneID = e.PaneID
-			a.State = stateRunning
+			if e.TokenHash == "" {
+				a.State = stateRunning
+			} else {
+				a.State = stateStarting
+			}
 			s.agents[e.Name] = a
+			if e.TokenHash != "" {
+				s.tokens[e.Name] = e.TokenHash
+			}
+		case evReady:
+			if a, ok := s.agents[e.Name]; ok {
+				a.State = stateRunning
+				s.agents[e.Name] = a
+				delete(s.tokens, e.Name)
+			}
 		case evSettled:
 			if a, ok := s.agents[e.Name]; ok {
 				a.State = stateSettled
@@ -148,6 +173,7 @@ func replay(path string) (*state, error) {
 			if a, ok := s.agents[e.Name]; ok {
 				a.State = stateStopped
 				s.agents[e.Name] = a
+				delete(s.tokens, e.Name)
 			}
 		case evSent:
 			sent = append(sent, protocol.Message{
@@ -170,6 +196,7 @@ func replay(path string) (*state, error) {
 		if a.Integration == "pi" && a.State != stateStopped {
 			a.State = stateOrphaned
 			s.agents[name] = a
+			delete(s.tokens, name)
 		}
 	}
 

@@ -300,6 +300,23 @@ func TestAgentAliveTransportError(t *testing.T) {
 	}
 }
 
+func TestAgentStatus(t *testing.T) {
+	f := serve(t, map[string]string{
+		"agent.get": `{"id":"1","result":{"type":"agent","agent":{"pane_id":"w1:p2","agent_status":"idle"}}}`,
+	})
+
+	status, err := AgentStatus(f.socket, "w1:p2")
+	if err != nil {
+		t.Fatalf("AgentStatus: %v", err)
+	}
+	if status != "idle" {
+		t.Fatalf("status = %q, want idle", status)
+	}
+	if p := f.params(0); p["target"] != "w1:p2" {
+		t.Errorf("target = %v, want w1:p2", p["target"])
+	}
+}
+
 func TestCallTimesOutOnSilentServer(t *testing.T) {
 	// A server that accepts and then says nothing models a wedged Herdr
 	// socket: the dial succeeds, so only the read deadline can end the call.
@@ -409,15 +426,15 @@ const workspaceCreatedReply = `{"id":"1","result":{"type":"workspace_created","w
 func TestWorkspaceCreateParams(t *testing.T) {
 	f := serve(t, map[string]string{"workspace.create": workspaceCreatedReply})
 
-	if _, err := WorkspaceCreate(f.socket, "/tmp/ws", "lbl"); err != nil {
+	if _, err := WorkspaceCreate(f.socket, "/tmp/ws", "lbl", false); err != nil {
 		t.Fatalf("WorkspaceCreate: %v", err)
 	}
 	p := f.params(0)
 	if p["cwd"] != "/tmp/ws" {
 		t.Errorf("cwd = %v, want /tmp/ws", p["cwd"])
 	}
-	if p["focus"] != true {
-		t.Errorf("focus = %v, want true", p["focus"])
+	if p["focus"] != false {
+		t.Errorf("focus = %v, want false", p["focus"])
 	}
 	if m := string(f.request(0)["method"]); m != `"workspace.create"` {
 		t.Errorf("method = %s", m)
@@ -509,14 +526,17 @@ func TestPaneFocusParams(t *testing.T) {
 func TestWorkspaceCreateLabel(t *testing.T) {
 	f := serve(t, map[string]string{"workspace.create": workspaceCreatedReply})
 
-	if _, err := WorkspaceCreate(f.socket, "/tmp/ws", "fledge-orchestrator"); err != nil {
+	if _, err := WorkspaceCreate(f.socket, "/tmp/ws", "fledge-orchestrator", true); err != nil {
 		t.Fatalf("WorkspaceCreate: %v", err)
 	}
 	if got := f.params(0)["label"]; got != "fledge-orchestrator" {
 		t.Errorf("label = %v, want fledge-orchestrator", got)
 	}
+	if got := f.params(0)["focus"]; got != true {
+		t.Errorf("focus = %v, want true", got)
+	}
 
-	if _, err := WorkspaceCreate(f.socket, "/tmp/ws", ""); err != nil {
+	if _, err := WorkspaceCreate(f.socket, "/tmp/ws", "", true); err != nil {
 		t.Fatalf("WorkspaceCreate: %v", err)
 	}
 	if _, ok := f.params(1)["label"]; ok {
@@ -524,17 +544,31 @@ func TestWorkspaceCreateLabel(t *testing.T) {
 	}
 }
 
-// The tab herdr opens with the workspace comes back in the same reply, which is
-// what lets start label it without a tab.list lookup.
-func TestWorkspaceCreateReturnsInitialTabID(t *testing.T) {
+// All IDs created with the workspace come back in the same reply, which lets
+// callers label and address it without list lookups and close it for rollback.
+func TestWorkspaceCreateReturnsCreatedIDs(t *testing.T) {
 	f := serve(t, map[string]string{"workspace.create": workspaceCreatedReply})
 
-	tabID, err := WorkspaceCreate(f.socket, "/tmp/ws", "lbl")
+	created, err := WorkspaceCreate(f.socket, "/tmp/ws", "lbl", true)
 	if err != nil {
 		t.Fatalf("WorkspaceCreate: %v", err)
 	}
-	if tabID != "w1:t1" {
-		t.Errorf("tabID = %q, want w1:t1", tabID)
+	if want := (CreatedWorkspace{WorkspaceID: "w1", TabID: "w1:t1", RootPaneID: "w1:p1"}); created != want {
+		t.Errorf("WorkspaceCreate = %+v, want %+v", created, want)
+	}
+}
+
+func TestWorkspaceCloseParams(t *testing.T) {
+	f := serve(t, nil)
+
+	if err := WorkspaceClose(f.socket, "w7"); err != nil {
+		t.Fatalf("WorkspaceClose: %v", err)
+	}
+	if got := f.params(0)["workspace_id"]; got != "w7" {
+		t.Errorf("workspace_id = %v, want w7", got)
+	}
+	if got := string(f.request(0)["method"]); got != `"workspace.close"` {
+		t.Errorf("method = %s, want workspace.close", got)
 	}
 }
 

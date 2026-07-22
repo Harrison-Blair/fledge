@@ -12,7 +12,7 @@ go test -run TestSpawn ./internal/daemon/   # single test
 gofmt -l . && go vet ./...
 ```
 
-No Makefile, no CI, no dependencies — `go.mod` has zero requires, Go 1.26.
+No Makefile or CI. Go 1.26; YAML frontmatter uses `github.com/goccy/go-yaml`.
 Unix-only (unix sockets, `setsid`, signal-0 probes).
 
 ## cli flags
@@ -58,9 +58,16 @@ only).
   socket, herdr session. State: `.fledge/flocks/<name>/`. Socket:
   `$XDG_RUNTIME_DIR/fledge/<workspaceHash>/<flock>.sock` — deliberately outside
   the workspace (108-byte `sun_path` cap; NFS can't bind unix sockets).
-- **Flock selection is `FLEDGE_FLOCK` env only** — no override flag, by design,
-  so a pane in one flock can't address another. `fledge start` exports it into
-  the herdr session it launches.
+- **Flock selection defaults to `FLEDGE_FLOCK`** — `fledge start` exports it
+  into every session pane. Operational commands with a positional flock name
+  (`flock stop`, `flock status`, `watch`) use that explicit name first; agent
+  commands remain scoped to their inherited flock.
+- **Managed session recovery and cleanup**: starting a down flock recreates
+  its deterministic default Herdr session, so stale panes cannot collide with
+  the journal's empty roster. Confirmed `flock clear` stops and deletes each
+  target's default managed session and sweeps other session records carrying
+  this workspace's managed prefix when no saved flock directory links them.
+  Operator-named sessions and other workspaces are never swept.
 - **Journal** (`internal/daemon/journal.go`): append-only
   `journal.jsonl`, written **before** the client is ack'd — the core invariant.
   The daemon rebuilds roster + pending messages by replay. Torn final line =
@@ -76,22 +83,51 @@ only).
   CLI for session lifecycle (no socket API for that); `internal/herdrwire`
   speaks the socket directly for pane ops. Pinned to herdr 0.7.4 / protocol 16
   with live-verified quirks documented inline.
-- **Agent names** are `<type>-<species>`, species drawn from a fixed pool of 18
-  penguin slugs per type (`internal/species`). Exception:
-  `fledge-orchestrator` (`agentcfg.ReservedOrchestrator`) — the only name with
-  a hyphen and no species suffix. It is special-cased at **three** validation
-  seams (`agentcfg.validName`, `daemon.validType`, and the name-collision logic
-  in both register and reserve); miss one and it can't be spawned.
+- **Agent names** are kebab-case `<type>-<species>`, with species drawn from a
+  fixed pool (`internal/species`). User definitions and profiles cannot use
+  the reserved `fledge-*` namespace. Managed types retain species suffixes;
+  exact `fledge-orchestrator` is the singleton exception.
 - **Model routing** (`agentcfg.Route`) is a fixed prefix table, never guessed:
   `claude*` → claude integration; `gpt*`/`codex*`/o-series → pi with provider
   `openai-codex`. `agent spawn --integration -I` overrides the route (pi vs
   codex for the same model id). `provider` is pi-only, `permission_mode`
   claude-only, `sandbox` codex-only — validation cross-checks.
-- **Model catalog** (`internal/catalog`): `fledge init` execs
-  `pi --list-models` / `codex debug models` and regenerates
-  `.fledge/catalog.json` (gitignored, per-machine) wholesale; `agents.json`
-  stays operator-owned and shadows catalog names in `agentcfg.Load`. Empty
-  discovery keeps the old catalog.
+- **Definitions and profiles** (`internal/agentcfg`): portable Markdown under
+  `.fledge/agents/{user,fledge}/` is authoritative. Synchronization validates
+  path/name/namespace rules and atomically writes versioned `agents.json` and
+  `fledge-agents.json` indexes with separate agent/profile maps. The generated
+  catalog is the third profile source; differing declarations are errors.
+- **Model catalog** (`internal/catalog`): `fledge init` probes
+  `claude --version`, execs `pi --list-models` / `codex debug models`, and
+  regenerates `.fledge/agents/catalog.json` (gitignored, per-machine) wholesale.
+  Claude discovery contributes a model-less default plus native Opus, Fable,
+  Sonnet, and Haiku launchers;
+  Empty discovery keeps the old catalog.
+- **Authenticated readiness**: spawn journals `starting`, injects a one-use
+  name/token, and sends only the bootstrap instruction. `agent ready` hashes
+  and validates the token, journals `agent.ready`, then spawn delivers the
+  Markdown role prompt. Sandboxed agents that cannot open the daemon socket
+  atomically publish the digest under the flock directory for the daemon to
+  validate and consume. Interactive start attaches Herdr before beginning this
+  lifecycle. Every post-readiness prompt starts with the daemon-assigned,
+  already-registered name and direct-send reply syntax; spawned agents receive
+  messages in their sessions rather than polling `agent msg wait`;
+  raw profile/model spawns receive that preamble even without an authored role.
+  Immediately after `agent.start`, interactive start swaps and focuses the managed
+  orchestrator into its final left position before registration or readiness.
+- After readiness and role delivery complete, interactive fresh starts keep
+  the primary `fledge-orchestrator` workspace as `orchestrator | CLI`, then
+  create an unfocused `fledge-watch` workspace rooted at the project. Its
+  initial tab is labelled `watch`, and its normal root shell execs the current
+  executable as `fledge watch <flock>`; it is not a Herdr or Fledge agent.
+  Focus returns to the orchestrator. Setup is transactional: failure closes
+  only the created watcher workspace when possible and keeps the healthy flock,
+  primary workspace, and CLI. Reattach and scripted starts do not create
+  watchers. Timeout or delivery failure tears the transport down.
+- **Sandboxed daemon access**: clients try the runtime-directory Unix socket
+  first, then the daemon's ephemeral workspace-local `.rpc/` request/response
+  bridge. The fallback dispatches the full protocol, so orchestrators can
+  spawn, message, wait, list, and stop even when their sandbox denies sockets.
 - **Liveness differs by kind**: self-registered agents are probed by pid
   (signal 0; the pid defaults to the *session leader*, not the parent);
   spawned agents change state only on an *observed* event, never inference.
@@ -103,8 +139,8 @@ only).
   seconds. Spawn reserves the name under the lock (pid −1), launches unlocked,
   releases on failure.
 
-README.md documents the full command surface, `.fledge/` tree, and
-`agents.json` format — it is accurate; read it before adding commands.
+README.md documents the full command surface, `.fledge/` tree, and portable
+agent format — it is accurate; read it before adding commands.
 The `pluma/{plumage,feathers}` dirs are scaffolded but nothing reads them yet.
 
 ## `docs/` is a completed legacy experiment

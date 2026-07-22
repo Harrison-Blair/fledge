@@ -1,6 +1,7 @@
 // Package daemon runs the fledge message daemon: an in-memory view over the
 // append-only journal in a flock's directory, served to CLI clients over a
-// unix socket. Every state-changing operation is journaled before it is
+// Unix socket or a sandbox-compatible file bridge. Every state-changing
+// operation is journaled before it is
 // acknowledged, so a restart replays into the same state.
 //
 // One daemon serves one flock. Flocks in the same workspace share nothing:
@@ -18,11 +19,13 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/agentcfg"
+	"github.com/Harrison-Blair/fledge/internal/filebridge"
 	"github.com/Harrison-Blair/fledge/internal/flock"
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/herdrwire"
@@ -55,12 +58,18 @@ type Daemon struct {
 	// Only the watch goroutine touches it, so it needs no lock.
 	titled bool
 
-	mu      sync.Mutex
-	agents  map[string]protocol.Agent
-	order   []string
-	pending []protocol.Message
-	waiters []*waiter
-	runners map[string]*pirpc.Runner
+	mu           sync.Mutex
+	agents       map[string]protocol.Agent
+	order        []string
+	pending      []protocol.Message
+	waiters      []*waiter
+	runners      map[string]*pirpc.Runner
+	readyTokens  map[string]string
+	readyWaiters map[string]chan struct{}
+	fileOnce     sync.Once
+	// skipReadiness is a package-test seam for legacy spawn tests. Production
+	// daemons leave it false, so every launch uses authenticated readiness.
+	skipReadiness bool
 }
 
 // waiter is a blocked wait call. ch is buffered so a delivering sender never
@@ -145,6 +154,7 @@ func RunBound(root, flockName, session string) error {
 		d.session = s
 		go d.WatchSession(func() bool { return !herdr.Up(s.SocketPath) }, WatchInterval)
 	}
+	d.consumeReadySignals()
 	return d.Serve()
 }
 
@@ -244,18 +254,26 @@ func New(root, flockName string) (*Daemon, error) {
 		ln.Close()
 		return nil, err
 	}
+	if err := filebridge.ResetServer(root, flockName); err != nil {
+		debugFile.Close()
+		journal.Close()
+		ln.Close()
+		return nil, fmt.Errorf("file RPC: %w", err)
+	}
 
 	d := &Daemon{
-		ln:        ln,
-		journal:   journal,
-		debug:     log.New(debugFile, "", log.LstdFlags),
-		done:      make(chan struct{}),
-		root:      root,
-		flockName: flockName,
-		agents:    s.agents,
-		order:     s.order,
-		pending:   s.pending,
-		runners:   make(map[string]*pirpc.Runner),
+		ln:           ln,
+		journal:      journal,
+		debug:        log.New(debugFile, "", log.LstdFlags),
+		done:         make(chan struct{}),
+		root:         root,
+		flockName:    flockName,
+		agents:       s.agents,
+		order:        s.order,
+		pending:      s.pending,
+		runners:      make(map[string]*pirpc.Runner),
+		readyTokens:  s.tokens,
+		readyWaiters: make(map[string]chan struct{}),
 	}
 	if err := d.append(event{Event: evStarted}); err != nil {
 		d.Close()
@@ -279,6 +297,9 @@ func (d *Daemon) Close() error {
 	if d.ln != nil {
 		d.ln.Close()
 	}
+	if err := filebridge.CloseServer(d.root, d.flockName); err != nil {
+		d.debug.Printf("close file RPC: %v", err)
+	}
 	if d.journal != nil {
 		d.journal.Close()
 	}
@@ -287,12 +308,39 @@ func (d *Daemon) Close() error {
 
 // Serve accepts connections until the listener is closed.
 func (d *Daemon) Serve() error {
+	d.fileOnce.Do(func() { go d.serveFileRequests() })
 	for {
 		conn, err := d.ln.Accept()
 		if err != nil {
 			return nil
 		}
 		go d.handle(conn)
+	}
+}
+
+func (d *Daemon) serveFileRequests() {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-d.done:
+			return
+		case <-ticker.C:
+		}
+		pending, err := filebridge.Take(d.root, d.flockName)
+		if err != nil {
+			d.debug.Printf("file RPC: %v", err)
+			continue
+		}
+		for _, p := range pending {
+			p := p
+			go func() {
+				resp := d.dispatch(&p.Request, nil)
+				if err := filebridge.Respond(d.root, d.flockName, p.ID, resp); err != nil {
+					d.debug.Printf("file RPC response %s: %v", p.ID, err)
+				}
+			}()
+		}
 	}
 }
 
@@ -346,6 +394,8 @@ func (d *Daemon) dispatch(req *protocol.Request, gone <-chan struct{}) protocol.
 		resp, err = d.wait(req, gone)
 	case protocol.OpSpawn:
 		resp, err = d.spawn(req)
+	case protocol.OpReady:
+		resp, err = d.ready(req)
 	case protocol.OpStop:
 		resp, err = d.stop(req)
 	default:
@@ -372,6 +422,9 @@ func alive(pid int) bool {
 func (d *Daemon) register(req *protocol.Request) (protocol.Response, error) {
 	if err := validType(req.Type); err != nil {
 		return protocol.Response{}, err
+	}
+	if strings.HasPrefix(req.Type, "fledge-") && req.Agent == "" {
+		return protocol.Response{}, errors.New("the fledge-* namespace is reserved for managed definitions")
 	}
 
 	d.mu.Lock()
@@ -409,8 +462,11 @@ func (d *Daemon) register(req *protocol.Request) (protocol.Response, error) {
 		d.order = append(d.order, name)
 	}
 	d.agents[name] = protocol.Agent{Name: name, Type: req.Type, Species: slug, PID: req.PID}
+	a := d.agents[name]
+	a.Agent, a.Profile, a.Source = req.Agent, req.Profile, req.Source
+	d.agents[name] = a
 
-	if err := d.append(event{Event: evRegistered, Name: name, Type: req.Type, Species: slug, PID: req.PID}); err != nil {
+	if err := d.append(event{Event: evRegistered, Name: name, Type: req.Type, Species: slug, PID: req.PID, Agent: req.Agent, Profile: req.Profile, Source: req.Source}); err != nil {
 		return protocol.Response{}, err
 	}
 	d.debug.Printf("registered %s pid=%d", name, req.PID)
@@ -426,12 +482,12 @@ func validType(t string) error {
 	if t == "" {
 		return errors.New("missing agent type")
 	}
-	if t == agentcfg.ReservedOrchestrator {
-		return nil
+	if strings.HasPrefix(t, "-") || strings.HasSuffix(t, "-") || strings.Contains(t, "--") {
+		return fmt.Errorf("invalid type %q: use kebab-case", t)
 	}
 	for _, r := range t {
-		if (r < 'a' || r > 'z') && (r < '0' || r > '9') {
-			return fmt.Errorf("invalid type %q: use lowercase letters and digits only", t)
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
+			return fmt.Errorf("invalid type %q: use kebab-case", t)
 		}
 	}
 	return nil

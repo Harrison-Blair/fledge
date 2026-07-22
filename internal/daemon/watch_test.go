@@ -18,6 +18,7 @@ func newTestDaemon(t *testing.T) *Daemon {
 	if err != nil {
 		t.Fatal(err)
 	}
+	d.skipReadiness = true
 	t.Cleanup(func() { d.Close() })
 	return d
 }

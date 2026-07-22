@@ -66,7 +66,7 @@ func TestValidate(t *testing.T) {
 		{desc: "codex with sandbox", name: "worker", cfg: Config{Integration: "codex", Sandbox: "workspace-write"}},
 		{desc: "empty name", name: "", cfg: Config{Integration: "claude"}, wantErr: true},
 		{desc: "uppercase name", name: "Worker", cfg: Config{Integration: "claude"}, wantErr: true},
-		{desc: "hyphenated name", name: "code-worker", cfg: Config{Integration: "claude"}, wantErr: true},
+		{desc: "kebab-case name", name: "code-worker", cfg: Config{Integration: "claude"}},
 		{desc: "empty integration", name: "worker", cfg: Config{}, wantErr: true},
 		{desc: "unknown integration", name: "worker", cfg: Config{Integration: "goose"}, wantErr: true},
 		{desc: "provider on claude", name: "worker", cfg: Config{Integration: "claude", Provider: "openai"}, wantErr: true},
@@ -272,11 +272,11 @@ func writeConfig(t *testing.T, body string) string {
 
 func writeConfigFile(t *testing.T, root, file, body string) {
 	t.Helper()
-	dir := filepath.Join(root, scaffold.DirName)
+	dir := filepath.Join(root, scaffold.DirName, filepath.Dir(file))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, file), []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, filepath.Base(file)), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -293,21 +293,18 @@ func TestNewSessionID(t *testing.T) {
 	}
 }
 
-// The orchestrator carve-out is exactly one literal name. A name that merely
-// looks like it — same shape, same hyphen — stays rejected, so the exemption
-// cannot be widened by accident into "hyphens are fine now".
-func TestReservedNameIsTheOnlyHyphenException(t *testing.T) {
+func TestPortableNamesAllowKebabCase(t *testing.T) {
 	if err := (Config{Integration: "claude"}).Validate(ReservedOrchestrator); err != nil {
 		t.Errorf("reserved name %q rejected: %v", ReservedOrchestrator, err)
 	}
-	for _, name := range []string{
-		"some-agent",
-		"fledge-orchestrator2",
-		"fledge-orchestra",
-		"Fledge-Orchestrator",
-	} {
+	for _, name := range []string{"some-agent", "fledge-orchestrator2", "fledge-orchestra"} {
+		if err := (Config{Integration: "claude"}).Validate(name); err != nil {
+			t.Errorf("kebab-case name %q was rejected: %v", name, err)
+		}
+	}
+	for _, name := range []string{"Fledge-Orchestrator", "-agent", "agent-", "some--agent"} {
 		if err := (Config{Integration: "claude"}).Validate(name); err == nil {
-			t.Errorf("hyphenated non-reserved name %q was accepted", name)
+			t.Errorf("invalid kebab-case name %q was accepted", name)
 		}
 	}
 }

@@ -22,7 +22,7 @@ func TestRootHelpOnlyShowsTopLevelCommandsAndFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"  init ", "  deinit ", "  start ", "  stop ", "  context ", "  flock ", "  agent ", "--version, -V"} {
+	for _, want := range []string{"  init ", "  deinit ", "  start ", "  stop ", "  watch ", "  context ", "  flock ", "  agent ", "--version, -V"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("root help missing %q:\n%s", want, out)
 		}
@@ -112,7 +112,7 @@ func TestEveryLeafAcceptsHelpWithoutExecuting(t *testing.T) {
 		})
 	}
 
-	for _, leaf := range []string{"init", "deinit", "start", "stop"} {
+	for _, leaf := range []string{"init", "deinit", "start", "stop", "watch"} {
 		out, err := captureRun(t, leaf, "--help")
 		if err != nil {
 			t.Fatal(err)
@@ -462,11 +462,11 @@ func writePickerWorkspace(t *testing.T, configs map[string]agentcfg.Config) stri
 	if _, err := scaffold.Ensure(dir); err != nil {
 		t.Fatal(err)
 	}
-	data, err := json.Marshal(configs)
+	data, err := json.Marshal(agentcfg.Index{Version: agentcfg.IndexVersion, Agents: map[string]agentcfg.AgentRecord{}, Profiles: configs})
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, scaffold.DirName, agentcfg.FileName)
+	path := filepath.Join(dir, scaffold.DirName, agentcfg.CatalogName)
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -480,11 +480,39 @@ func TestPickerRowsGroupsByProvider(t *testing.T) {
 	want := []string{
 		"Configured agents:",
 		"",
-		"  anthropic",
+		"  anthropic (claude)",
 		"    1. opus48    claude-opus-4-8",
 		"    2. sonnet5   claude-sonnet-5",
-		"  openai-codex",
+		"  openai-codex (pi)",
 		"    3. gpt55     gpt-5.5",
+	}
+	assertRows(t, rows, want)
+}
+
+func TestPickerRowsPlacesDiscoveredClaudeChoicesBeforeOpenAI(t *testing.T) {
+	rows := pickerRows(map[string]agentcfg.Config{
+		"default": {Integration: "claude"},
+		"opus":    {Integration: "claude", Model: "opus"},
+		"fable":   {Integration: "claude", Model: "fable"},
+		"sonnet":  {Integration: "claude", Model: "sonnet"},
+		"haiku":   {Integration: "claude", Model: "haiku"},
+		"sol56":   {Integration: "codex", Model: "gpt-5.6-sol"},
+		"gpt55":   {Integration: "pi", Provider: "openai-codex", Model: "gpt-5.5"},
+	})
+
+	want := []string{
+		"Configured agents:",
+		"",
+		"  anthropic (claude)",
+		"    1. default",
+		"    2. fable     fable",
+		"    3. haiku     haiku",
+		"    4. opus      opus",
+		"    5. sonnet    sonnet",
+		"  openai (codex)",
+		"    6. sol56     gpt-5.6-sol",
+		"  openai-codex (pi)",
+		"    7. gpt55     gpt-5.5",
 	}
 	assertRows(t, rows, want)
 }
@@ -549,15 +577,14 @@ func TestPickAgentConfigCancels(t *testing.T) {
 	}
 }
 
-// Scripted use keeps the pre-picker contract: no menu, the same usage error.
-func TestAgentSpawnBareWithoutTerminalIsUnchanged(t *testing.T) {
+func TestAgentSpawnBareWithoutTerminalIsUsageError(t *testing.T) {
 	writePickerWorkspace(t, pickerFixture())
 	stubStdinNotTerminal(t)
 	out, err := captureRun(t, "agent", "spawn")
 	if err == nil {
 		t.Fatal("bare agent spawn succeeded without a terminal")
 	}
-	if !strings.Contains(err.Error(), "want exactly one of a config name or --model") {
+	if !strings.Contains(err.Error(), "choose an agent, --profile, or --model") {
 		t.Errorf("unexpected error: %v", err)
 	}
 	if strings.Contains(out, "Configured agents:") {
@@ -565,9 +592,7 @@ func TestAgentSpawnBareWithoutTerminalIsUnchanged(t *testing.T) {
 	}
 }
 
-func TestAgentSpawnPickerEmptyCatalogHints(t *testing.T) {
-	// Explicitly empty: the scaffold seeds an example config, so an untouched
-	// workspace has a catalog of one.
+func TestAgentSpawnPickerProfileAgnosticAgentNeedsProfiles(t *testing.T) {
 	writePickerWorkspace(t, map[string]agentcfg.Config{})
 	stubStdinTerminal(t)
 	withStdin(t, "1\n")
@@ -575,11 +600,11 @@ func TestAgentSpawnPickerEmptyCatalogHints(t *testing.T) {
 	if err == nil {
 		t.Fatal("bare agent spawn succeeded with an empty catalog")
 	}
-	if !strings.Contains(err.Error(), "no configured agents") {
+	if !strings.Contains(err.Error(), "no profiles are configured") {
 		t.Errorf("error missing hint: %v", err)
 	}
-	if strings.Contains(out, "Configured agents:") {
-		t.Errorf("menu shown for an empty catalog:\n%s", out)
+	if !strings.Contains(out, agentcfg.ReservedOrchestrator) {
+		t.Errorf("managed agent missing from menu:\n%s", out)
 	}
 }
 
@@ -605,7 +630,7 @@ func TestAgentSpawnPickerCancelIsRuntimeError(t *testing.T) {
 func TestAgentSpawnPickerSelectionRejoinsSpawnPath(t *testing.T) {
 	writePickerWorkspace(t, pickerFixture())
 	stubStdinTerminal(t)
-	withStdin(t, "1\n")
+	withStdin(t, "1\n1\n")
 	t.Setenv("FLEDGE_FLOCK", "")
 	out, err := captureRun(t, "agent", "spawn")
 	if err == nil {
@@ -614,8 +639,8 @@ func TestAgentSpawnPickerSelectionRejoinsSpawnPath(t *testing.T) {
 	if !strings.Contains(err.Error(), "FLEDGE_FLOCK") {
 		t.Errorf("unexpected error: %v", err)
 	}
-	if !strings.Contains(out, "1. opus48") {
-		t.Errorf("menu missing:\n%s", out)
+	if !strings.Contains(out, agentcfg.ReservedOrchestrator) || !strings.Contains(out, "1. opus48") {
+		t.Errorf("agent/profile menus missing:\n%s", out)
 	}
 }
 
@@ -629,7 +654,7 @@ func TestAgentSpawnProviderWithoutModelSkipsPicker(t *testing.T) {
 	if err == nil {
 		t.Fatal("agent spawn --provider without --model succeeded")
 	}
-	if !strings.Contains(err.Error(), "want exactly one of a config name or --model") {
+	if !strings.Contains(err.Error(), "--provider only applies to --model") {
 		t.Errorf("unexpected error: %v", err)
 	}
 	if strings.Contains(out, "Configured agents:") {
@@ -647,7 +672,7 @@ func TestAgentSpawnIntegrationWithoutModelSkipsPicker(t *testing.T) {
 	if err == nil {
 		t.Fatal("agent spawn --integration without --model succeeded")
 	}
-	if !strings.Contains(err.Error(), "want exactly one of a config name or --model") {
+	if !strings.Contains(err.Error(), "--integration only applies to --model") {
 		t.Errorf("unexpected error: %v", err)
 	}
 	if strings.Contains(out, "Configured agents:") {
@@ -661,7 +686,7 @@ func TestAgentSpawnIntegrationWithConfigRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("agent spawn <config> --integration succeeded")
 	}
-	if !strings.Contains(err.Error(), "--integration overrides routing for --model") {
+	if !strings.Contains(err.Error(), "--integration only applies to --model") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
@@ -688,6 +713,7 @@ func TestModelRowsGroupsByProvider(t *testing.T) {
 		"bare":    {Integration: "claude"},
 		"gpt55":   {Integration: "pi", Provider: "openai-codex", Model: "gpt-5.5"},
 		"sol56cx": {Integration: "codex", Model: "gpt-5.6-sol"},
+		"pickle":  {Integration: "pi", Provider: "opencode", Model: "big-pickle"},
 	})
 
 	want := []string{
@@ -700,6 +726,8 @@ func TestModelRowsGroupsByProvider(t *testing.T) {
 		"gpt55    pi           openai-codex  gpt-5.5",
 		"",
 		"glm52    pi           opencode-go   glm-5.2",
+		"",
+		"pickle   pi           opencode-zen  big-pickle",
 	}
 	assertRows(t, rows, want)
 }
@@ -712,6 +740,7 @@ func TestModelEntriesMatchTableOrderAndProvider(t *testing.T) {
 		"opus48":  {Integration: "claude", Model: "claude-opus-4-8"},
 		"gpt55":   {Integration: "pi", Provider: "openai-codex", Model: "gpt-5.5"},
 		"sol56cx": {Integration: "codex", Model: "gpt-5.6-sol"},
+		"pickle":  {Integration: "pi", Provider: "opencode", Model: "big-pickle"},
 	})
 
 	want := []modelEntry{
@@ -719,6 +748,7 @@ func TestModelEntriesMatchTableOrderAndProvider(t *testing.T) {
 		{Name: "sol56cx", Integration: "codex", Provider: "openai", Model: "gpt-5.6-sol"},
 		{Name: "gpt55", Integration: "pi", Provider: "openai-codex", Model: "gpt-5.5"},
 		{Name: "glm52", Integration: "pi", Provider: "opencode-go", Model: "glm-5.2"},
+		{Name: "pickle", Integration: "pi", Provider: "opencode-zen", Model: "big-pickle"},
 	}
 	if len(entries) != len(want) {
 		t.Fatalf("got %d entries, want %d: %+v", len(entries), len(want), entries)
@@ -896,43 +926,28 @@ func TestStartRejectsRemovedHeadlessShortFlag(t *testing.T) {
 	}
 }
 
-// The reserved name is exempt from the naming rule, not hidden: it is an
-// ordinary agents.json entry and has to list and be pickable like one.
-func TestReservedOrchestratorListsLikeAnyConfig(t *testing.T) {
-	configs := pickerFixture()
-	configs[agentcfg.ReservedOrchestrator] = agentcfg.Config{Integration: "claude", Model: "claude-opus-4"}
-	writePickerWorkspace(t, configs)
+func TestReservedOrchestratorListsAsManagedType(t *testing.T) {
+	writePickerWorkspace(t, pickerFixture())
 
-	out, err := captureRun(t, "agent", "models")
+	out, err := captureRun(t, "agent", "types")
 	if err != nil {
-		t.Fatalf("agent models: %v", err)
+		t.Fatalf("agent types: %v", err)
 	}
 	if !strings.Contains(out, agentcfg.ReservedOrchestrator) {
-		t.Errorf("agent models omits the reserved config:\n%s", out)
-	}
-
-	var menu strings.Builder
-	got, err := pickAgentConfig(configs, strings.NewReader(agentcfg.ReservedOrchestrator+"\n"), &menu)
-	if err != nil {
-		t.Fatalf("pickAgentConfig: %v", err)
-	}
-	if got != agentcfg.ReservedOrchestrator {
-		t.Errorf("picked %q, want the reserved config", got)
-	}
-	if !strings.Contains(menu.String(), agentcfg.ReservedOrchestrator) {
-		t.Errorf("picker menu omits the reserved config:\n%s", menu.String())
+		t.Errorf("agent types omits the managed definition:\n%s", out)
 	}
 }
 
-// stubDiscovery pins init's model discovery to fake pi and codex binaries
+// stubDiscovery pins init's discovery to fake Claude, Pi and Codex binaries
 // with small constant catalogs, so init tests neither exec the real ones nor
 // depend on what the machine has installed.
 func stubDiscovery(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
 	scripts := map[string]string{
-		"pi":    "#!/bin/sh\ncat <<'EOF'\nprovider model\nopenai-codex gpt-5.5\nEOF\n",
-		"codex": "#!/bin/sh\ncat <<'EOF'\n{\"models\":[{\"slug\":\"gpt-5.6-sol\",\"visibility\":\"list\"}]}\nEOF\n",
+		"claude": "#!/bin/sh\ntest \"$1\" = --version || exit 2\nprintf '%s\\n' '2.1.0'\n",
+		"pi":     "#!/bin/sh\ncat <<'EOF'\nprovider model\nopenai-codex gpt-5.5\nEOF\n",
+		"codex":  "#!/bin/sh\ncat <<'EOF'\n{\"models\":[{\"slug\":\"gpt-5.6-sol\",\"visibility\":\"list\"}]}\nEOF\n",
 	}
 	for name, body := range scripts {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
@@ -953,7 +968,7 @@ func TestInitAppendsToGitignore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	if !strings.Contains(out, "added .fledge/locks/, .fledge/flocks/, .fledge/catalog.json to .gitignore") {
+	if !strings.Contains(out, "added "+strings.Join(scaffold.GitignoreEntries, ", ")+" to .gitignore") {
 		t.Errorf("output missing gitignore log line: %q", out)
 	}
 
@@ -974,7 +989,7 @@ func TestInitWritesCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	if !strings.Contains(out, "wrote .fledge/catalog.json (1 from codex, 1 from pi)") {
+	if !strings.Contains(out, "wrote .fledge/agents/catalog.json (5 from claude, 1 from codex, 1 from pi)") {
 		t.Errorf("output missing catalog log line: %q", out)
 	}
 
@@ -988,10 +1003,24 @@ func TestInitWritesCatalog(t *testing.T) {
 	if got := configs["gpt55pi"]; got.Integration != "pi" || got.Provider != "openai-codex" {
 		t.Errorf("gpt55pi = %+v", got)
 	}
-	// Discovery writes the catalog, never the operator's file: the stub entry
-	// must still be the whole of agents.json.
-	if _, ok := configs["example"]; !ok {
-		t.Errorf("agents.json stub lost: %+v", configs)
+	if got := configs["default"]; got.Integration != "claude" || got.Model != "" || got.Provider != "" ||
+		got.PermissionMode != "" || got.Sandbox != "" || len(got.Argv) != 0 || len(got.Env) != 0 {
+		t.Errorf("default = %+v, want model-less native Claude launcher", got)
+	}
+	for _, name := range []string{"opus", "fable", "sonnet", "haiku"} {
+		got := configs[name]
+		if got.Integration != "claude" || got.Model != name || got.Provider != "" ||
+			got.PermissionMode != "" || got.Sandbox != "" || len(got.Argv) != 0 || len(got.Env) != 0 {
+			t.Errorf("%s = %+v, want native Claude family launcher", name, got)
+		}
+	}
+	// Discovery writes the catalog, never the operator's empty agents.json.
+	userData, err := os.ReadFile(filepath.Join(dir, scaffold.DirName, agentcfg.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(userData), `"version": 1`) || !strings.Contains(string(userData), `"profiles": {}`) {
+		t.Errorf("agents.json changed during discovery: %q", userData)
 	}
 }
 
@@ -1000,12 +1029,13 @@ func TestInitKeepsCatalogWhenNothingAnswers(t *testing.T) {
 	if _, err := scaffold.Ensure(dir); err != nil {
 		t.Fatal(err)
 	}
-	sentinel := `{"kept": {"integration": "codex", "model": "gpt-5.6-sol"}}`
-	catalogPath := filepath.Join(dir, scaffold.DirName, "catalog.json")
+	sentinel := `{"version":1,"agents":{},"profiles":{"kept":{"integration":"codex","model":"gpt-5.6-sol"}}}`
+	catalogPath := filepath.Join(dir, scaffold.DirName, agentcfg.CatalogName)
 	if err := os.WriteFile(catalogPath, []byte(sentinel), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// A PATH with no pi and no codex: discovery must skip both, not fail init.
+	// A PATH with no claude, pi or codex: discovery skips all three without
+	// failing init.
 	t.Setenv("PATH", t.TempDir())
 
 	out, err := captureRun(t, "init", dir)
@@ -1014,6 +1044,9 @@ func TestInitKeepsCatalogWhenNothingAnswers(t *testing.T) {
 	}
 	if !strings.Contains(out, "left as it was") {
 		t.Errorf("output missing the kept-catalog line: %q", out)
+	}
+	if !strings.Contains(out, "note: claude is not on PATH; skipped") {
+		t.Errorf("output missing the Claude discovery note: %q", out)
 	}
 	got, err := os.ReadFile(catalogPath)
 	if err != nil {
@@ -1042,7 +1075,7 @@ func TestInitJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &summary); err != nil {
 		t.Fatalf("output is not JSON: %v\n%s", err, out)
 	}
-	if !summary.CatalogWritten || summary.Models["codex"] != 1 || summary.Models["pi"] != 1 {
+	if !summary.CatalogWritten || summary.Models["claude"] != 5 || summary.Models["codex"] != 1 || summary.Models["pi"] != 1 {
 		t.Errorf("summary = %+v", summary)
 	}
 	if summary.Existed {

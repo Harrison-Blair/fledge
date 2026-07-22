@@ -5,10 +5,18 @@
 # from this workspace root.
 #include .gitignore
 .gitignore
-.fledge/
-.claude/
-.codex/
-.git/
+.*/
+!.github/
+!.fledge/
+.fledge/*
+!.fledge/agents/
+.fledge/agents/*
+.fledge/agents/fledge/**
+!.fledge/agents/user/
+.fledge/agents/user/**
+!.fledge/agents/user/**/
+!.fledge/agents/user/**/*.agent.md
+
 CLAUDE.md
 LICENSE
 README.md

@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -134,6 +135,16 @@ func (r *wireRecorder) methodParams(method string) (map[string]any, bool) {
 		return p, true
 	}
 	return nil, false
+}
+
+func (r *wireRecorder) methods() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, 0, len(r.got))
+	for _, env := range r.got {
+		out = append(out, strings.Trim(string(env["method"]), `"`))
+	}
+	return out
 }
 
 // liveSocket listens on sock so herdr.Up sees the fake session as alive,
@@ -278,7 +289,7 @@ func TestStartReusesRunningFlock(t *testing.T) {
 
 	recDir := t.TempDir()
 	sock := filepath.Join(t.TempDir(), "herdr.sock")
-	_, closeSession := liveSocket(t, sock)
+	rec, closeSession := liveSocket(t, sock)
 	// Pre-seed the record so the fake reports the session the daemon binds to.
 	if err := os.WriteFile(filepath.Join(recDir, "session"), []byte("boundsession"), 0o644); err != nil {
 		t.Fatal(err)
@@ -307,6 +318,92 @@ func TestStartReusesRunningFlock(t *testing.T) {
 	}
 	if !strings.Contains(out, "daemon: up") {
 		t.Errorf("reused start missing daemon summary:\n%s", out)
+	}
+	if _, ok := rec.methodParams("workspace.create"); ok {
+		t.Error("reattaching to a running flock created another workspace")
+	}
+}
+
+// A managed Herdr session can outlive a crashed or otherwise missing daemon.
+// Its old orchestrator identity is not part of the new daemon's authoritative
+// journal, so start must replace that session instead of colliding with the
+// stale fledge-orchestrator pane.
+func TestStartRecreatesStaleManagedSession(t *testing.T) {
+	root, sub := scaffoldedWorkspace(t)
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	record := t.TempDir()
+	staleSocket := filepath.Join(t.TempDir(), "stale.sock")
+	freshSocket := filepath.Join(t.TempDir(), "fresh.sock")
+	staleRec, closeStale := liveSocket(t, staleSocket)
+	freshRec, closeFresh := liveSocketReplies(t, freshSocket, map[string]string{
+		"workspace.create": createdWorkspaceReply,
+	})
+
+	bin := t.TempDir()
+	script := `#!/bin/sh
+REC="` + record + `"
+STALE="` + staleSocket + `"
+FRESH="` + freshSocket + `"
+case "$1" in
+--session)
+	touch "$REC/started"
+	printf 'start %s\n' "$2" >> "$REC/actions"
+	exit 0
+	;;
+session)
+	case "$2" in
+	list)
+		if [ -f "$REC/started" ]; then
+			printf '{"sessions":[{"name":"%s","running":true,"default":false,"socket_path":"%s"}]}' "$(cat "$REC/name")" "$FRESH"
+		elif [ -f "$REC/stopped" ]; then
+			printf '{"sessions":[{"name":"%s","running":false,"default":false,"socket_path":"%s"}]}' "$(cat "$REC/name")" "$REC/stopped.sock"
+		else
+			printf '{"sessions":[{"name":"%s","running":true,"default":false,"socket_path":"%s"}]}' "$(cat "$REC/name")" "$STALE"
+		fi
+		;;
+	stop)
+		printf 'stop %s\n' "$3" >> "$REC/actions"
+		touch "$REC/stopped"
+		;;
+	delete)
+		printf 'delete %s\n' "$3" >> "$REC/actions"
+		;;
+	esac
+	exit 0
+	;;
+esac
+exit 8
+`
+	if err := os.WriteFile(filepath.Join(bin, "herdr"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	managed := flock.SessionName(canonical(t, root), "flock1")
+	if err := os.WriteFile(filepath.Join(record, "name"), []byte(managed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeFresh()
+		closeStale()
+		waitDaemonDown(t, "flock1", root, sub)
+	})
+
+	t.Chdir(root)
+	out, err := captureRun(t, "start", "--flock", "flock1")
+	if err != nil {
+		t.Fatalf("start with stale managed session: %v\n%s", err, out)
+	}
+	actions, err := os.ReadFile(filepath.Join(record, "actions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"stop " + managed, "delete " + managed, "start " + managed} {
+		if !strings.Contains(string(actions), want) {
+			t.Errorf("session actions %q missing %q", actions, want)
+		}
+	}
+	if _, ok := freshRec.methodParams("workspace.create"); !ok {
+		t.Errorf("fresh managed session did not receive its primary workspace; actions=%q output=%q stale methods=%v fresh methods=%v", actions, out, staleRec.methods(), freshRec.methods())
 	}
 }
 
@@ -478,22 +575,35 @@ func stubAttach(t *testing.T) *bool {
 	t.Helper()
 	called := false
 	original := attachHerdr
-	attachHerdr = func(session, root string) error {
+	originalStart := startAfterAttach
+	startAfterAttach = func(start func()) {
+		if !called {
+			t.Error("orchestrator launch began before the Herdr UI attached")
+		}
+		start()
+	}
+	attachHerdr = func(session, root string, attached func()) error {
 		called = true
+		if attached != nil {
+			attached()
+		}
 		return nil
 	}
-	t.Cleanup(func() { attachHerdr = original })
+	t.Cleanup(func() {
+		attachHerdr = original
+		startAfterAttach = originalStart
+	})
 	return &called
 }
 
-// writeAgentCatalog sets the workspace's agents.json to exactly configs.
+// writeAgentCatalog sets the workspace's generated catalog profiles.
 func writeAgentCatalog(t *testing.T, root string, configs map[string]agentcfg.Config) {
 	t.Helper()
-	data, err := json.Marshal(configs)
+	data, err := json.Marshal(agentcfg.Index{Version: agentcfg.IndexVersion, Agents: map[string]agentcfg.AgentRecord{}, Profiles: configs})
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(root, scaffold.DirName, agentcfg.FileName)
+	path := filepath.Join(root, scaffold.DirName, agentcfg.CatalogName)
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -503,9 +613,16 @@ const startedPaneReply = `{"id":"1","result":{"type":"agent_started","agent":{"t
 
 const currentPaneReply = `{"id":"1","result":{"type":"pane_current","pane":{"pane_id":"w1:p1","focused":true}}}`
 
+const idleAgentReply = `{"id":"1","result":{"type":"agent","agent":{"pane_id":"w1:p2","agent_status":"idle"}}}`
+
 // interactiveStart wires a fake session whose catalog is configs, runs an
 // interactive `start`, and hands back everything the assertions need.
 func interactiveStart(t *testing.T, configs map[string]agentcfg.Config, stdin string) (rec *wireRecorder, root string, attached *bool, out string, err error) {
+	t.Helper()
+	return interactiveStartReplies(t, configs, stdin, nil)
+}
+
+func interactiveStartReplies(t *testing.T, configs map[string]agentcfg.Config, stdin string, extraReplies map[string]string) (rec *wireRecorder, root string, attached *bool, out string, err error) {
 	t.Helper()
 	root, sub := scaffoldedWorkspace(t)
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
@@ -513,10 +630,16 @@ func interactiveStart(t *testing.T, configs map[string]agentcfg.Config, stdin st
 
 	recDir := t.TempDir()
 	sock := filepath.Join(t.TempDir(), "herdr.sock")
-	rec, closeSession := liveSocketReplies(t, sock, map[string]string{
-		"agent.start":  startedPaneReply,
-		"pane.current": currentPaneReply,
-	})
+	replies := map[string]string{
+		"agent.start":      startedPaneReply,
+		"agent.get":        idleAgentReply,
+		"pane.current":     currentPaneReply,
+		"workspace.create": createdWorkspaceReply,
+	}
+	for method, reply := range extraReplies {
+		replies[method] = reply
+	}
+	rec, closeSession := liveSocketReplies(t, sock, replies)
 	fakeHerdr(t, recDir, sock)
 	t.Cleanup(func() {
 		closeSession()
@@ -528,17 +651,38 @@ func interactiveStart(t *testing.T, configs map[string]agentcfg.Config, stdin st
 	withStdin(t, stdin)
 	attached = stubAttach(t)
 
+	// The fake pane has no LLM to execute the bootstrap command, so emulate
+	// exactly that one action after the bootstrap reaches pane.send_input.
+	go func() {
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			start, started := rec.methodParams("agent.start")
+			_, bootstrapped := rec.methodParams("pane.send_input")
+			if started && bootstrapped {
+				env, _ := start["env"].(map[string]any)
+				name, _ := start["name"].(string)
+				token, _ := env[protocol.ReadyTokenEnv].(string)
+				if name != "" && token != "" {
+					if _, err := client.Do(root, "flock1", protocol.Request{Op: protocol.OpReady, Name: name, Token: token}); err == nil {
+						return
+					}
+				}
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
 	t.Chdir(root)
 	out, err = captureRun(t, "start", "--flock", "flock1")
 	return rec, root, attached, out, err
 }
 
-// The whole point of the feature: an interactive start brings the orchestrator
-// up itself, splits it off the shell pane, and lands the operator in it.
+// Interactive start attaches the UI before it asks the daemon to bring the
+// orchestrator up, so the operator can watch registration and readiness.
 func TestStartInteractiveSpawnsOrchestrator(t *testing.T) {
 	rec, _, attached, out, err := interactiveStart(t, map[string]agentcfg.Config{
-		agentcfg.ReservedOrchestrator: {Integration: "claude", Model: "claude-opus-4"},
-	}, "")
+		"orchestrator-profile": {Integration: "claude", Model: "claude-opus-4"},
+	}, "1\n")
 	if err != nil {
 		t.Fatalf("interactive start: %v\n%s", err, out)
 	}
@@ -551,21 +695,20 @@ func TestStartInteractiveSpawnsOrchestrator(t *testing.T) {
 		t.Errorf("agent.start split = %v, want right", got)
 	}
 	if !*attached {
-		t.Error("start did not attach after spawning the orchestrator")
+		t.Error("start did not attach before spawning the orchestrator")
 	}
-	if strings.Contains(out, "Spawn which agent?") {
-		t.Errorf("picker shown though the orchestrator config exists:\n%s", out)
+	if !strings.Contains(out, "Spawn which agent?") {
+		t.Errorf("profile picker missing:\n%s", out)
 	}
 }
 
 // agent.start split:"right" puts the new pane on the RIGHT of the pane it
-// split (verified live on herdr 0.7.4/protocol 16), so reaching the wanted
-// orchestrator|shell order costs a swap — and because pane.swap moves focus
-// with the slot rather than the pane, a focus call has to follow it.
+// split (verified live on herdr 0.7.4/protocol 16). The daemon swaps and
+// focuses it immediately, before readiness or bootstrap begins.
 func TestStartInteractivePlacesOrchestratorLeftAndFocused(t *testing.T) {
 	rec, _, _, out, err := interactiveStart(t, map[string]agentcfg.Config{
-		agentcfg.ReservedOrchestrator: {Integration: "claude", Model: "claude-opus-4"},
-	}, "")
+		"orchestrator-profile": {Integration: "claude", Model: "claude-opus-4"},
+	}, "1\n")
 	if err != nil {
 		t.Fatalf("interactive start: %v\n%s", err, out)
 	}
@@ -583,6 +726,41 @@ func TestStartInteractivePlacesOrchestratorLeftAndFocused(t *testing.T) {
 	}
 	if focus["pane_id"] != "w1:p2" {
 		t.Errorf("pane.focus pane_id = %v, want the orchestrator pane w1:p2", focus["pane_id"])
+	}
+
+	want := []string{"agent.start", "pane.swap", "pane.focus", "agent.get", "pane.send_input"}
+	var relevant []string
+	for _, method := range rec.methods() {
+		switch method {
+		case "agent.start", "pane.swap", "pane.focus", "agent.get", "pane.send_input":
+			relevant = append(relevant, method)
+		}
+		if len(relevant) == len(want) {
+			break
+		}
+	}
+	if !slices.Equal(relevant, want) {
+		t.Errorf("startup call order = %v, want %v", relevant, want)
+	}
+}
+
+func TestStartInteractivePlacementFailureRollsBack(t *testing.T) {
+	_, root, attached, out, err := interactiveStartReplies(t, map[string]agentcfg.Config{
+		"orchestrator-profile": {Integration: "claude", Model: "claude-opus-4"},
+	}, "1\n", map[string]string{
+		"pane.swap": `{"id":"1","error":{"code":"swap_failed","message":"cannot swap"}}`,
+	})
+	if err == nil {
+		t.Fatalf("interactive start succeeded after placement failure:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "swap") || !strings.Contains(err.Error(), "rolled back") {
+		t.Fatalf("placement error = %v", err)
+	}
+	if !*attached {
+		t.Fatal("placement failed before the UI-first attach")
+	}
+	if client.Running(root, "flock1") {
+		t.Fatal("placement failure left the interactive flock running")
 	}
 }
 
@@ -607,11 +785,8 @@ func TestStartInteractiveMissingConfigOffersPicker(t *testing.T) {
 	if got := start["name"]; got != agentcfg.ReservedOrchestrator {
 		t.Errorf("picked agent name = %v, want the reserved %q", got, agentcfg.ReservedOrchestrator)
 	}
-	if !strings.Contains(out, "\n"+agentcfg.ReservedOrchestrator+"\n") {
-		t.Errorf("start did not report the orchestrator by its reserved name:\n%s", out)
-	}
 	if !*attached {
-		t.Error("start did not attach after the picked orchestrator came up")
+		t.Error("start did not attach before launching the picked orchestrator")
 	}
 }
 
@@ -621,8 +796,8 @@ func TestStartInteractiveEmptyCatalogRollsBack(t *testing.T) {
 	if err == nil {
 		t.Fatalf("start succeeded with nothing to run as an orchestrator:\n%s", out)
 	}
-	if !strings.Contains(err.Error(), "fledge agent register") {
-		t.Errorf("error missing the register hint: %v", err)
+	if !strings.Contains(err.Error(), "no profiles available") {
+		t.Errorf("error missing the profile hint: %v", err)
 	}
 	if !strings.Contains(err.Error(), "rolled back") {
 		t.Errorf("error does not say the start was rolled back: %v", err)
@@ -660,7 +835,7 @@ func TestStartNonInteractiveSkipsOrchestrator(t *testing.T) {
 	root, sub := scaffoldedWorkspace(t)
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	writeAgentCatalog(t, root, map[string]agentcfg.Config{
-		agentcfg.ReservedOrchestrator: {Integration: "claude", Model: "claude-opus-4"},
+		"orchestrator-profile": {Integration: "claude", Model: "claude-opus-4"},
 	})
 
 	recDir := t.TempDir()
@@ -683,6 +858,15 @@ func TestStartNonInteractiveSkipsOrchestrator(t *testing.T) {
 	}
 	if _, ok := rec.methodParams("agent.start"); ok {
 		t.Error("a scripted start spawned an orchestrator")
+	}
+	created := 0
+	for _, method := range rec.methods() {
+		if method == "workspace.create" {
+			created++
+		}
+	}
+	if created != 1 {
+		t.Errorf("scripted start created %d workspaces, want only the primary workspace", created)
 	}
 	if strings.Contains(out, "Spawn which agent?") {
 		t.Errorf("a scripted start printed the picker:\n%s", out)

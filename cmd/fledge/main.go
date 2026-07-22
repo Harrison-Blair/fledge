@@ -25,7 +25,6 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/flock"
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/herdrwire"
-	"github.com/Harrison-Blair/fledge/internal/ignore"
 	"github.com/Harrison-Blair/fledge/internal/protocol"
 	"github.com/Harrison-Blair/fledge/internal/scaffold"
 	"github.com/Harrison-Blair/fledge/internal/scan"
@@ -54,6 +53,8 @@ func run(args []string) error {
 		return runStart(args[1:])
 	case "stop":
 		return runStop(args[1:])
+	case "watch":
+		return runWatch(args[1:])
 	case "context":
 		return runContext(args[1:])
 	case "flock":
@@ -87,6 +88,8 @@ func runContext(args []string) error {
 	switch args[0] {
 	case "scan":
 		return runContextScan(args[1:])
+	case "graph":
+		return runContextGraph(args[1:])
 	default:
 		return usageErrorf("context", "unknown context subcommand %q", args[0])
 	}
@@ -109,50 +112,9 @@ func runContextScan(args []string) error {
 		start = args[0]
 	}
 
-	abs, err := filepath.Abs(start)
+	context, err := scanContext(start, len(args) == 1)
 	if err != nil {
 		return err
-	}
-	// Canonicalize like FindRoot does, so dir and root agree on spelling and
-	// the subtree prefix below compares cleanly.
-	dir, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		return err
-	}
-	root, err := workspace.FindRoot(dir)
-	if err != nil {
-		return err
-	}
-
-	m, err := ignore.ParseFile(filepath.Join(root, scaffold.DirName, scaffold.IgnoreName), root)
-	if err != nil {
-		return err
-	}
-
-	files, err := scan.Files(root, m)
-	if err != nil {
-		return err
-	}
-
-	// An explicit dir below the root narrows the listing to that subtree —
-	// git-status-style, a bare scan lists the whole workspace from anywhere
-	// inside it. Filtering the full walk (rather than walking dir) keeps the
-	// pruning rule: nothing beneath an excluded directory reappears.
-	sub := "."
-	if len(args) == 1 {
-		if sub, err = filepath.Rel(root, dir); err != nil {
-			return err
-		}
-	}
-	if sub != "." {
-		prefix := filepath.ToSlash(sub) + "/"
-		kept := files[:0]
-		for _, f := range files {
-			if strings.HasPrefix(f.Path, prefix) {
-				kept = append(kept, f)
-			}
-		}
-		files = kept
 	}
 
 	if asJSON {
@@ -161,10 +123,10 @@ func runContextScan(args []string) error {
 		return enc.Encode(struct {
 			Root  string      `json:"root"`
 			Files []scan.File `json:"files"`
-		}{root, files})
+		}{context.Root, context.Files})
 	}
 
-	printGrouped(files)
+	printGrouped(context.Files)
 	return nil
 }
 
@@ -266,6 +228,8 @@ func runFlock(args []string) error {
 		return runHelp("flock", args[1:])
 	}
 	switch args[0] {
+	case "clear":
+		return runFlockClear(args[1:])
 	case "stop":
 		return runFlockStop(args[1:])
 	case "list":
@@ -275,6 +239,199 @@ func runFlock(args []string) error {
 	default:
 		return usageErrorf("flock", "unknown flock subcommand %q", args[0])
 	}
+}
+
+// runFlockClear permanently forgets saved state for one flock, or for every
+// flock when no name is given. Unlike other optionally named flock commands,
+// the bare form is deliberately workspace-wide and never consults
+// FLEDGE_FLOCK.
+func runFlockClear(args []string) error {
+	if hasHelpFlag(args) {
+		return printHelp("flock clear")
+	}
+	if err := rejectFlags("flock clear", args); err != nil {
+		return usageErrorFor("flock clear", err)
+	}
+	if len(args) > 1 {
+		return usageErrorf("flock clear", "flock clear: unexpected argument %q", args[1])
+	}
+	if len(args) == 1 {
+		if err := flock.Validate(args[0]); err != nil {
+			return usageErrorFor("flock clear", err)
+		}
+	}
+	if !stdinIsTerminal() || !stdoutIsTerminal() {
+		return errors.New("fledge flock clear needs a terminal on stdin and stdout")
+	}
+
+	root, err := workspaceRoot()
+	if err != nil {
+		return err
+	}
+	orphanSessions, err := clearFlockOrphans(root)
+	if err != nil {
+		return err
+	}
+	names, err := flock.List(root)
+	if err != nil {
+		return err
+	}
+	if len(args) == 1 {
+		requested := args[0]
+		matched := names[:0]
+		for _, name := range names {
+			if name == requested {
+				matched = append(matched, name)
+			}
+		}
+		names = matched
+		if len(names) == 0 {
+			fmt.Printf("flock %s: no saved state\n", requested)
+			if len(orphanSessions) == 0 {
+				return nil
+			}
+		}
+	}
+	if len(names) == 0 && len(orphanSessions) == 0 {
+		fmt.Println("no saved flock state")
+		return nil
+	}
+
+	if len(names) > 0 {
+		printClearOverview(root, names, clearFlockRunning)
+	}
+	for _, session := range orphanSessions {
+		fmt.Printf("%s  orphan managed herdr session\n", session)
+	}
+	fmt.Print("\npermanently clear the flock state and managed herdr sessions above? [y/N] ")
+	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	answer := strings.ToLower(strings.TrimSpace(line))
+	if answer != "y" && answer != "yes" {
+		fmt.Println("aborted; nothing cleared")
+		return nil
+	}
+
+	var clearErrors []error
+	if len(names) > 0 {
+		if err := clearFlocks(root, names, clearFlockRunning, clearFlockSession, clearFlockRemoveAll); err != nil {
+			clearErrors = append(clearErrors, err)
+		}
+	}
+	if len(orphanSessions) > 0 {
+		if err := clearOrphanSessions(orphanSessions, clearOrphanSession); err != nil {
+			clearErrors = append(clearErrors, err)
+		}
+	}
+	return errors.Join(clearErrors...)
+}
+
+// These seams make the liveness race and partial filesystem failure testable
+// without depending on timing or host permissions.
+var (
+	clearFlockRunning   = client.Running
+	clearFlockSession   = clearManagedSession
+	clearFlockRemoveAll = os.RemoveAll
+	clearFlockOrphans   = managedOrphanSessions
+	clearOrphanSession  = herdr.Remove
+)
+
+func clearManagedSession(root, name string) error {
+	return herdr.Remove(flock.SessionName(root, name))
+}
+
+func managedOrphanSessions(root string) ([]string, error) {
+	sessions, err := herdr.List()
+	if err != nil {
+		return nil, err
+	}
+	names, err := flock.List(root)
+	if err != nil {
+		return nil, err
+	}
+	linked := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		linked[flock.SessionName(root, name)] = struct{}{}
+	}
+	prefix := flock.SessionPrefix(root)
+	var orphans []string
+	for _, session := range sessions {
+		if !strings.HasPrefix(session.Name, prefix) {
+			continue
+		}
+		if _, ok := linked[session.Name]; !ok {
+			orphans = append(orphans, session.Name)
+		}
+	}
+	sort.Strings(orphans)
+	return orphans, nil
+}
+
+func clearOrphanSessions(names []string, remove func(name string) error) error {
+	failed := 0
+	for _, name := range names {
+		if err := remove(name); err != nil {
+			fmt.Printf("herdr session %s: failed to clear: %v\n", name, err)
+			failed++
+			continue
+		}
+		fmt.Printf("herdr session %s: cleared\n", name)
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d of %d orphan managed herdr sessions were not cleared", failed, len(names))
+	}
+	return nil
+}
+
+func printClearOverview(root string, names []string, running func(root, name string) bool) {
+	widest := 0
+	for _, name := range names {
+		if len(name) > widest {
+			widest = len(name)
+		}
+	}
+	for _, name := range names {
+		status := "down"
+		if running(root, name) {
+			status = "running"
+		}
+		fmt.Printf("%-*s  %s\n", widest, name, status)
+	}
+}
+
+// clearFlocks rechecks each daemon immediately before touching that flock's
+// directory. The deterministic managed Herdr session is removed first so a
+// stale pane identity cannot survive cleared state. A running flock or cleanup
+// failure does not strand later targets, but either makes the command fail.
+func clearFlocks(
+	root string,
+	names []string,
+	running func(root, name string) bool,
+	removeSession func(root, name string) error,
+	removeAll func(string) error,
+) error {
+	notCleared := 0
+	for _, name := range names {
+		if running(root, name) {
+			fmt.Printf("flock %s: skipped (daemon running; run fledge flock stop %s first)\n", name, name)
+			notCleared++
+			continue
+		}
+		if err := removeSession(root, name); err != nil {
+			fmt.Printf("flock %s: failed to clear managed herdr session: %v\n", name, err)
+			notCleared++
+			continue
+		}
+		if err := removeAll(flock.Dir(root, name)); err != nil {
+			fmt.Printf("flock %s: failed to clear: %v\n", name, err)
+			notCleared++
+			continue
+		}
+		fmt.Printf("flock %s: cleared\n", name)
+	}
+	if notCleared > 0 {
+		return fmt.Errorf("%d of %d flocks were not cleared", notCleared, len(names))
+	}
+	return nil
 }
 
 // runStart brings up a flock: its own herdr session and its own daemon.
@@ -301,6 +458,9 @@ func runStart(args []string) error {
 
 	root, err := workspaceRoot()
 	if err != nil {
+		return err
+	}
+	if err := agentcfg.Synchronize(root); err != nil {
 		return err
 	}
 
@@ -332,18 +492,31 @@ func runStart(args []string) error {
 		if !stdoutIsTerminal() {
 			return nil
 		}
-		return attachHerdr(resp.Session, root)
+		return attachHerdr(resp.Session, root, nil)
 	}
 
 	// A flock's session is named after its workspace and itself unless the
 	// operator points it at another one, so two flocks never share a session
 	// by accident — not even the same-named flock of another workspace. The
 	// fledge- prefix is what marks it as managed in herdr's session list.
-	if session == "" {
+	managedSession := session == ""
+	if managedSession {
 		session = flock.SessionName(root, name)
 	}
 
-	s, started, err := herdr.Ensure(session, []string{flock.Env + "=" + name}, root)
+	var s herdr.Session
+	var started bool
+	if managedSession {
+		// The daemon is known to be down, so any surviving default session is
+		// stale. It may still contain an orchestrator pane whose Herdr identity
+		// a new daemon cannot adopt; recreate the managed session before launch.
+		s, err = herdr.Recreate(session, []string{flock.Env + "=" + name}, root)
+		started = err == nil
+	} else {
+		// Explicit sessions belong to the operator and retain the established
+		// reuse behavior, including their existing environment and panes.
+		s, started, err = herdr.Ensure(session, []string{flock.Env + "=" + name}, root)
+	}
 	if err != nil {
 		return err
 	}
@@ -351,7 +524,7 @@ func runStart(args []string) error {
 		// A fresh session has no workspace until a client attaches, and the
 		// one herdr then makes lands in $HOME, not here. Creating it now,
 		// rooted at the workspace, is what makes attaching open the project.
-		tabID, err := herdrwire.WorkspaceCreate(s.SocketPath, root, workspaceLabel)
+		created, err := herdrwire.WorkspaceCreate(s.SocketPath, root, workspaceLabel, true)
 		if err != nil {
 			return fmt.Errorf("create workspace in session %s: %w", s.Name, err)
 		}
@@ -359,7 +532,7 @@ func runStart(args []string) error {
 		// orchestrator flow, so it happens here for scripted starts too. The
 		// tab herdr opens with the workspace already exists and its id came
 		// back above, so this needs no lookup.
-		if err := herdrwire.TabRename(s.SocketPath, tabID, tabLabel); err != nil {
+		if err := herdrwire.TabRename(s.SocketPath, created.TabID, tabLabel); err != nil {
 			return fmt.Errorf("label tab in session %s: %w", s.Name, err)
 		}
 	}
@@ -390,38 +563,79 @@ func runStart(args []string) error {
 		return abortStart(root, name, err)
 	}
 
-	resp, err := startOrchestrator(root,
-		func(config string, orchestrator bool) (protocol.Response, error) {
-			return client.Do(root, name, protocol.Request{
-				Op:           protocol.OpSpawn,
-				Config:       config,
-				Split:        "right",
-				Orchestrator: orchestrator,
-			})
-		},
-		func(configs map[string]agentcfg.Config) (string, error) {
-			// Only the picker needs stdin; a config that resolves on its own
-			// leaves a stdin-less but terminal-attached start working.
-			if !stdinIsTerminal() {
-				return "", fmt.Errorf("no %q config and no terminal to choose one on", agentcfg.ReservedOrchestrator)
-			}
-			return pickAgentConfig(configs, os.Stdin, os.Stdout)
-		})
+	req, err := managedOrchestratorRequest(root)
 	if err != nil {
 		return abortStart(root, name, err)
 	}
+	req.AnchorPane = shellPane
 
-	fmt.Printf("\n%s\n", resp.Name)
-	if resp.PaneID != "" {
-		fmt.Printf("pane: %s\n", resp.PaneID)
-		if err := placeOrchestrator(s.SocketPath, resp.PaneID, shellPane); err != nil {
-			// The orchestrator is up, which is the invariant; where its pane
-			// sits is cosmetic and not worth tearing the flock down over.
-			fmt.Printf("could not move the orchestrator pane left: %v\n", err)
+	// Herdr must own the terminal before the authenticated launch begins. That
+	// lets the operator watch the orchestrator pane appear, receive bootstrap,
+	// and transition to running instead of staring at a blocked `fledge start`
+	// while all of that happens in an invisible server-side session.
+	spawned := make(chan error, 1)
+	attachErr := attachHerdr(s.Name, root, func() {
+		startAfterAttach(func() {
+			resp, spawnErr := client.Do(root, name, req)
+			if spawnErr == nil {
+				self, executableErr := os.Executable()
+				if executableErr != nil {
+					warnWatcherFailure(s.SocketPath, shellPane, name,
+						fmt.Errorf("locate fledge executable: %w", executableErr))
+				} else {
+					// Monitoring is intentionally non-critical. The orchestrator is
+					// already authenticated and healthy, so layout failure preserves
+					// the flock and leaves a manual recovery hint in the shell.
+					_ = installWatcherWorkspace(s.SocketPath, root, name, self, shellPane, resp.PaneID)
+				}
+			}
+			spawned <- spawnErr
+			if spawnErr != nil {
+				// The UI is already visible, so ending the session is how an
+				// asynchronous launch failure preserves start's rollback rule.
+				_ = stopFlock(root, name)
+				return
+			}
+		})
+	})
+	select {
+	case spawnErr := <-spawned:
+		if spawnErr != nil {
+			return fmt.Errorf("%w; flock %s rolled back", spawnErr, name)
+		}
+	default:
+	}
+	if attachErr != nil {
+		return abortStart(root, name, attachErr)
+	}
+	return nil
+}
+
+func managedOrchestratorRequest(root string) (protocol.Request, error) {
+	defs, profiles, err := agentcfg.LoadDefinitions(root)
+	if err != nil {
+		return protocol.Request{}, err
+	}
+	d, ok := defs[agentcfg.ReservedOrchestrator]
+	if !ok {
+		return protocol.Request{}, fmt.Errorf("managed %q definition is missing", agentcfg.ReservedOrchestrator)
+	}
+	profile := d.Profile
+	if profile == "" {
+		if !stdinIsTerminal() {
+			return protocol.Request{}, errors.New("start needs a terminal to choose the orchestrator profile")
+		}
+		if len(profiles) == 0 {
+			return protocol.Request{}, errors.New("no profiles available for the fledge-orchestrator")
+		}
+		profile, err = pickAgentConfig(profiles, os.Stdin, os.Stdout)
+		if err != nil {
+			return protocol.Request{}, err
 		}
 	}
-
-	return attachHerdr(s.Name, root)
+	return protocol.Request{
+		Op: protocol.OpSpawn, Agent: d.Name, Profile: profile, Split: "right",
+	}, nil
 }
 
 // Labels for the herdr workspace and tab a fresh start opens, so the session
@@ -473,21 +687,6 @@ func startOrchestrator(
 	return spawn(picked, true)
 }
 
-// placeOrchestrator leaves the orchestrator pane left of the shell pane it was
-// split from, focused.
-//
-// Verified live on herdr 0.7.4 / protocol 16: agent.start split:"right" makes
-// the new pane the *right* half of the pane it split, so reaching the wanted
-// orchestrator|shell order always costs a swap. pane.swap then moves focus
-// with the slot rather than with the pane, which is why the focus call after
-// it is not redundant.
-func placeOrchestrator(socket, orchestratorPane, shellPane string) error {
-	if err := herdrwire.PaneSwap(socket, shellPane, orchestratorPane); err != nil {
-		return err
-	}
-	return herdrwire.PaneFocus(socket, orchestratorPane)
-}
-
 // abortStart rolls a half-finished start back. An interactive start exists to
 // land the operator in a running orchestrator, so a flock that cannot get one
 // is torn down rather than left up for them to find and clean out by hand.
@@ -533,24 +732,57 @@ func workspaceRoot() (string, error) {
 	return workspace.FindRoot(".")
 }
 
-// attachHerdr replaces this process with the herdr UI attached to session, so
-// starting a flock lands the operator inside it. Exec never returns on
-// success; the printed start summary stays on scrollback.
+// attachHerdr starts the herdr UI attached to session and waits for it. Once
+// the UI process owns the terminal, attached is called. Keeping this parent
+// alive is intentional: interactive start uses that callback to begin the
+// authenticated orchestrator launch while the operator watches it happen.
 //
 // The attach runs from the workspace root: herdr re-roots a session server at
 // the attaching client's cwd (verified on 0.7.4), so attaching from wherever
 // the operator happened to stand would move where the session opens its panes.
 // It is a variable so tests can exercise the interactive start path without
 // the process replacing itself.
-var attachHerdr = func(session, root string) error {
+var attachHerdr = func(session, root string, attached func()) error {
 	herdrPath, err := exec.LookPath("herdr")
 	if err != nil {
 		return fmt.Errorf("start: herdr not on PATH to attach: %w", err)
 	}
-	if err := os.Chdir(root); err != nil {
+	cmd := exec.Command(herdrPath, "session", "attach", session)
+	cmd.Dir = root
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
 		return err
 	}
-	return syscall.Exec(herdrPath, []string{"herdr", "session", "attach", session}, os.Environ())
+	if attached != nil {
+		attached()
+	}
+	waitErr := cmd.Wait()
+	if waitErr == nil {
+		return nil
+	}
+	// Herdr exits its attached client with status 1 when the session server
+	// shuts down. Once the session is verifiably gone that is the normal end
+	// of the UI lifecycle, not a failed Fledge start.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s, found, findErr := herdr.Find(session)
+		if findErr == nil && (!found || !herdr.Up(s.SocketPath)) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return waitErr
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// startAfterAttach keeps the orchestrator request alive alongside the Herdr
+// client without delaying its first frame. Tests replace it with synchronous
+// execution so launch ordering and placement remain deterministic.
+var startAfterAttach = func(start func()) {
+	go start()
 }
 
 // spawnDaemon re-execs fledge as `daemon run` in its own session, scoped to a
@@ -916,6 +1148,9 @@ func agentRows(agents []protocol.Agent) []string {
 		row := fmt.Sprintf("%-*s  %-10s %-8d %-5s  %-6s %-*s %-*s %s",
 			nameW, a.Name, a.Species, a.PID, liveness,
 			a.Integration, modelW, a.Model, paneW, a.PaneID, a.State)
+		if a.Agent != "" || a.Profile != "" || a.Source != "" {
+			row += fmt.Sprintf("  agent=%s profile=%s source=%s", a.Agent, a.Profile, a.Source)
+		}
 		rows = append(rows, strings.TrimRight(row, " "))
 	}
 	return rows
@@ -936,12 +1171,16 @@ func runAgent(args []string) error {
 		return runAgentRegister(args[1:])
 	case "spawn":
 		return runAgentSpawn(args[1:])
+	case "ready":
+		return runAgentReady(args[1:])
 	case "stop":
 		return runAgentStop(args[1:])
 	case "list":
 		return runAgentList(args[1:])
 	case "models":
 		return runAgentModels(args[1:])
+	case "types":
+		return runAgentTypes(args[1:])
 	case "msg":
 		return runAgentMsg(args[1:])
 	default:
@@ -987,11 +1226,26 @@ func runAgentRegister(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := agentcfg.Synchronize(root); err != nil {
+		return err
+	}
+	typeName := args[0]
+	var agentName, profile, source string
+	if strings.HasSuffix(args[0], agentcfg.DefinitionSuffix) {
+		d, _, err := agentcfg.FindDefinition(root, args[0])
+		if err != nil {
+			return err
+		}
+		typeName, agentName, profile, source = d.Name, d.Name, d.Profile, d.Source
+	}
 	resp, err := client.Do(root, flockName, protocol.Request{
 		Op:      protocol.OpRegister,
-		Type:    args[0],
+		Type:    typeName,
 		Species: slug,
 		PID:     pid,
+		Agent:   agentName,
+		Profile: profile,
+		Source:  source,
 	})
 	if err != nil {
 		return err
@@ -1007,6 +1261,10 @@ func runAgentSpawn(args []string) error {
 		return printHelp("agent spawn")
 	}
 	model, args, err := takeFlag(args, "--model", "-M")
+	if err != nil {
+		return usageErrorFor("agent spawn", err)
+	}
+	profile, args, err := takeFlag(args, "--profile", "-L")
 	if err != nil {
 		return usageErrorFor("agent spawn", err)
 	}
@@ -1028,6 +1286,10 @@ func runAgentSpawn(args []string) error {
 	if err != nil {
 		return usageErrorFor("agent spawn", err)
 	}
+	timeoutArg, args, err := takeFlag(args, "--timeout", "-T")
+	if err != nil {
+		return usageErrorFor("agent spawn", err)
+	}
 	if err := rejectFlags("agent spawn", args); err != nil {
 		return usageErrorFor("agent spawn", err)
 	}
@@ -1035,39 +1297,60 @@ func runAgentSpawn(args []string) error {
 		return usageErrorf("agent spawn", "agent spawn: unexpected argument %q", args[1])
 	}
 
-	var config string
+	var agent string
 	if len(args) == 1 {
-		config = args[0]
+		agent = args[0]
 	}
 	// Bare and interactive: offer the catalog rather than the usage error.
 	// Requiring provider to be empty too keeps --provider without --model the
 	// error it has always been, and a non-terminal stdin falls through to the
 	// same error scripted callers already get.
-	if config == "" && model == "" && provider == "" && integration == "" && stdinIsTerminal() {
+	if agent == "" && profile == "" && model == "" && provider == "" && integration == "" && stdinIsTerminal() {
 		root, err := workspaceRoot()
 		if err != nil {
 			return err
 		}
-		configs, err := agentcfg.Load(root)
+		defs, profiles, err := agentcfg.LoadDefinitions(root)
 		if err != nil {
 			return err
 		}
-		if len(configs) == 0 {
+		if len(defs) == 0 {
 			return usageErrorf("agent spawn",
-				"agent spawn: want exactly one of a config name or --model\n"+
-					"no configured agents — add one with `fledge agent register` or pass --model")
+				"agent spawn: choose an agent, --profile, or --model\nno configured agents")
 		}
-		if config, err = pickAgentConfig(configs, os.Stdin, os.Stdout); err != nil {
+		reader := bufio.NewReader(os.Stdin)
+		if agent, err = pickAgentDefinition(defs, reader, os.Stdout); err != nil {
 			return err
+		}
+		if defs[agent].Profile == "" {
+			if len(profiles) == 0 {
+				return errors.New("selected agent is profile-agnostic and no profiles are configured")
+			}
+			if profile, err = pickAgentConfig(profiles, reader, os.Stdout); err != nil {
+				return err
+			}
 		}
 	}
 	// The daemon rejects the same pair, but saying so here keeps the operator
 	// from needing a running flock to learn they typed the command wrong.
-	if (config == "") == (model == "") {
-		return usageErrorf("agent spawn", "agent spawn: want exactly one of a config name or --model")
-	}
 	if integration != "" && model == "" {
-		return usageErrorf("agent spawn", "agent spawn: --integration overrides routing for --model; a config names its integration")
+		return usageErrorf("agent spawn", "agent spawn: --integration only applies to --model")
+	}
+	if provider != "" && model == "" {
+		return usageErrorf("agent spawn", "agent spawn: --provider only applies to --model")
+	}
+	if model != "" && (agent != "" || profile != "") {
+		return usageErrorf("agent spawn", "agent spawn: --model cannot be combined with an agent or --profile")
+	}
+	if model == "" && agent == "" && profile == "" {
+		return usageErrorf("agent spawn", "agent spawn: choose an agent, --profile, or --model")
+	}
+	var timeout time.Duration
+	if timeoutArg != "" {
+		timeout, err = time.ParseDuration(timeoutArg)
+		if err != nil || timeout <= 0 {
+			return usageErrorf("agent spawn", "agent spawn: bad --timeout %q", timeoutArg)
+		}
 	}
 
 	flockName, err := flock.FromEnv()
@@ -1078,14 +1361,19 @@ func runAgentSpawn(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := agentcfg.Synchronize(root); err != nil {
+		return err
+	}
 	resp, err := client.Do(root, flockName, protocol.Request{
 		Op:          protocol.OpSpawn,
-		Config:      config,
+		Agent:       agent,
+		Profile:     profile,
 		Model:       model,
 		Provider:    provider,
 		Integration: integration,
 		Cwd:         cwd,
 		Species:     slug,
+		TimeoutMS:   timeout.Milliseconds(),
 	})
 	if err != nil {
 		return err
@@ -1094,6 +1382,43 @@ func runAgentSpawn(args []string) error {
 	if resp.PaneID != "" {
 		fmt.Printf("pane: %s\n", resp.PaneID)
 	}
+	return nil
+}
+
+func runAgentReady(args []string) error {
+	if hasHelpFlag(args) {
+		return printHelp("agent ready")
+	}
+	if err := rejectFlags("agent ready", args); err != nil {
+		return usageErrorFor("agent ready", err)
+	}
+	if len(args) != 0 {
+		return usageErrorf("agent ready", "agent ready: unexpected argument %q", args[0])
+	}
+	name, token := os.Getenv(protocol.AgentNameEnv), os.Getenv(protocol.ReadyTokenEnv)
+	if name == "" || token == "" {
+		return errors.New("agent ready must run inside a Fledge-started agent")
+	}
+	flockName, err := flock.FromEnv()
+	if err != nil {
+		return err
+	}
+	root, err := workspaceRoot()
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(root, flockName, protocol.Request{Op: protocol.OpReady, Name: name, Token: token})
+	if err != nil {
+		if !errors.Is(err, client.ErrNotRunning) {
+			return err
+		}
+		if err := daemon.WriteReadySignal(root, flockName, name, token); err != nil {
+			return fmt.Errorf("publish readiness signal: %w", err)
+		}
+		fmt.Println(name)
+		return nil
+	}
+	fmt.Println(resp.Name)
 	return nil
 }
 
@@ -1193,10 +1518,6 @@ func runAgentMsgSend(args []string) error {
 	if hasHelpFlag(args) {
 		return printHelp("agent msg send")
 	}
-	from, args, err := takeFlag(args, "--from", "-F")
-	if err != nil {
-		return usageErrorFor("agent msg send", err)
-	}
 	replyTo, args, err := takeFlag(args, "--reply-to", "-R")
 	if err != nil {
 		return usageErrorFor("agent msg send", err)
@@ -1204,11 +1525,12 @@ func runAgentMsgSend(args []string) error {
 	if err := rejectFlags("agent msg send", args); err != nil {
 		return usageErrorFor("agent msg send", err)
 	}
-	if from == "" {
-		return usageErrorf("agent msg send", "agent msg send: --from is required")
-	}
 	if len(args) != 2 {
 		return usageErrorf("agent msg send", "agent msg send: want a recipient and a body")
+	}
+	from := strings.TrimSpace(os.Getenv(protocol.AgentNameEnv))
+	if from == "" {
+		return errors.New("agent msg send: FLEDGE_AGENT_NAME is required")
 	}
 	flockName, err := flock.FromEnv()
 	if err != nil {
@@ -1217,6 +1539,20 @@ func runAgentMsgSend(args []string) error {
 	root, err := workspaceRoot()
 	if err != nil {
 		return err
+	}
+	roster, err := client.Do(root, flockName, protocol.Request{Op: protocol.OpList})
+	if err != nil {
+		return err
+	}
+	registered := false
+	for _, agent := range roster.Agents {
+		if agent.Name == from {
+			registered = true
+			break
+		}
+	}
+	if !registered {
+		return fmt.Errorf("agent msg send: no registered agent %q", from)
 	}
 
 	resp, err := client.Do(root, flockName, protocol.Request{
@@ -1237,10 +1573,6 @@ func runAgentMsgWait(args []string) error {
 	if hasHelpFlag(args) {
 		return printHelp("agent msg wait")
 	}
-	as, args, err := takeFlag(args, "--as", "-A")
-	if err != nil {
-		return usageErrorFor("agent msg wait", err)
-	}
 	replyTo, args, err := takeFlag(args, "--reply-to", "-R")
 	if err != nil {
 		return usageErrorFor("agent msg wait", err)
@@ -1252,11 +1584,12 @@ func runAgentMsgWait(args []string) error {
 	if err := rejectFlags("agent msg wait", args); err != nil {
 		return usageErrorFor("agent msg wait", err)
 	}
-	if as == "" {
-		return usageErrorf("agent msg wait", "agent msg wait: --as is required")
-	}
 	if len(args) != 0 {
 		return usageErrorf("agent msg wait", "agent msg wait: unexpected argument %q", args[0])
+	}
+	as := strings.TrimSpace(os.Getenv(protocol.AgentNameEnv))
+	if as == "" {
+		return errors.New("agent msg wait: FLEDGE_AGENT_NAME is required")
 	}
 	flockName, err := flock.FromEnv()
 	if err != nil {
@@ -1361,8 +1694,9 @@ func runInit(args []string) error {
 			return err
 		}
 	}
-	notes = append(notes, "claude models are configured by hand in "+scaffold.DirName+"/"+agentcfg.FileName)
-
+	if err := agentcfg.Synchronize(root); err != nil {
+		return err
+	}
 	if asJSON {
 		return encodeJSON(initSummary{
 			Root:           abs,
@@ -1510,13 +1844,18 @@ func runDeinit(args []string) error {
 // configProvider names the vendor a config talks to. The claude and codex
 // integrations carry no provider of their own — the field is pi-only, since it
 // is a pi flag — but each CLI reaches exactly one vendor, so the catalog can
-// say which without the config storing it.
+// say which without the config storing it. Pi's "opencode" provider is shown
+// under its product name "opencode-zen", which also groups it after
+// "opencode-go" in the listings.
 func configProvider(c agentcfg.Config) string {
 	switch c.Integration {
 	case "claude":
 		return "anthropic"
 	case "codex":
 		return "openai"
+	}
+	if c.Provider == "opencode" {
+		return "opencode-zen"
 	}
 	return c.Provider
 }
@@ -1579,6 +1918,9 @@ func runAgentModels(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := agentcfg.Synchronize(root); err != nil {
+		return err
+	}
 	configs, err := agentcfg.Load(root)
 	if err != nil {
 		return err
@@ -1596,6 +1938,84 @@ func runAgentModels(args []string) error {
 	}
 	fmt.Printf("\n%d models\n", len(configs))
 	return nil
+}
+
+type agentTypeEntry struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Tools       []string `json:"tools,omitempty"`
+	Profile     string   `json:"profile,omitempty"`
+	Source      string   `json:"source"`
+}
+
+func runAgentTypes(args []string) error {
+	if hasHelpFlag(args) {
+		return printHelp("agent types")
+	}
+	asJSON, args := takeBoolFlag(args, "--json", "-J")
+	if err := rejectFlags("agent types", args); err != nil {
+		return usageErrorFor("agent types", err)
+	}
+	if len(args) != 0 {
+		return usageErrorf("agent types", "agent types: unexpected argument %q", args[0])
+	}
+	root, err := workspaceRoot()
+	if err != nil {
+		return err
+	}
+	defs, _, err := agentcfg.LoadDefinitions(root)
+	if err != nil {
+		return err
+	}
+	names := make([]string, 0, len(defs))
+	for name := range defs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	entries := make([]agentTypeEntry, 0, len(names))
+	for _, name := range names {
+		d := defs[name]
+		entries = append(entries, agentTypeEntry{Name: d.Name, Description: d.Description, Tools: d.Tools, Profile: d.Profile, Source: d.Source})
+	}
+	if asJSON {
+		return encodeJSON(entries)
+	}
+	for _, e := range entries {
+		profile := e.Profile
+		if profile == "" {
+			profile = "(profile required)"
+		}
+		fmt.Printf("%-24s %-22s %s\n", e.Name, profile, e.Description)
+	}
+	return nil
+}
+
+func pickAgentDefinition(defs map[string]agentcfg.Definition, in io.Reader, out io.Writer) (string, error) {
+	names := make([]string, 0, len(defs))
+	for name := range defs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	fmt.Fprintln(out, "Configured agents:")
+	for i, name := range names {
+		fmt.Fprintf(out, "  %d. %-24s %s\n", i+1, name, defs[name].Description)
+	}
+	fmt.Fprint(out, "\nSpawn which agent? (number or name): ")
+	line, _ := bufio.NewReader(in).ReadString('\n')
+	answer := strings.TrimSpace(line)
+	if answer == "" {
+		return "", errors.New("spawn cancelled")
+	}
+	if n, err := strconv.Atoi(answer); err == nil {
+		if n < 1 || n > len(names) {
+			return "", fmt.Errorf("invalid selection %q", answer)
+		}
+		return names[n-1], nil
+	}
+	if _, ok := defs[answer]; !ok {
+		return "", fmt.Errorf("invalid selection %q", answer)
+	}
+	return answer, nil
 }
 
 // groupedNames orders config names by provider, then by name within a
@@ -1617,7 +2037,10 @@ func groupedNames(configs map[string]agentcfg.Config) []string {
 
 // pickerRows renders the interactive spawn menu: the catalog numbered over
 // groupedNames, so the number an operator reads indexes the same slice
-// pickAgentConfig resolves against and the two can never disagree.
+// pickAgentConfig resolves against and the two can never disagree. Group
+// headers carry the integration in parens — unlike the models table, picker
+// rows have no INTEGRATION column, and openai (the codex CLI) next to
+// openai-codex (pi on codex limits) is ambiguous without it.
 func pickerRows(configs map[string]agentcfg.Config) []string {
 	names := groupedNames(configs)
 
@@ -1634,7 +2057,7 @@ func pickerRows(configs map[string]agentcfg.Config) []string {
 		c := configs[name]
 		provider := configProvider(c)
 		if provider != prev {
-			rows = append(rows, "  "+provider)
+			rows = append(rows, fmt.Sprintf("  %s (%s)", provider, c.Integration))
 		}
 		prev = provider
 		row := fmt.Sprintf("    %*d. %-*s   %s", numW, i+1, nameW, name, c.Model)

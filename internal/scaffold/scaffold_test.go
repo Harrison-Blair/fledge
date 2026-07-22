@@ -3,7 +3,10 @@ package scaffold
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/Harrison-Blair/fledge/internal/ignore"
 )
 
 func TestEnsureCreatesTree(t *testing.T) {
@@ -82,6 +85,128 @@ func TestEnsureRefreshPreservesIgnoreAndRestoresDirs(t *testing.T) {
 	}
 }
 
+func TestEnsureIgnoreTemplate(t *testing.T) {
+	seed := func(t *testing.T, root string) string {
+		t.Helper()
+		if _, err := Ensure(root); err != nil {
+			t.Fatalf("Ensure: %v", err)
+		}
+		got, err := os.ReadFile(filepath.Join(root, DirName, IgnoreName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(got)
+	}
+	hasLine := func(content, want string) bool {
+		for _, line := range strings.Split(content, "\n") {
+			if line == want {
+				return true
+			}
+		}
+		return false
+	}
+
+	t.Run("gitignore present activates the include", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("bin/\nsecret.txt\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		content := seed(t, root)
+		if !hasLine(content, "#include .gitignore") {
+			t.Errorf("include not active, got:\n%s", content)
+		}
+		if hasLine(content, "# #include .gitignore") {
+			t.Errorf("include still commented out, got:\n%s", content)
+		}
+
+		// What actually matters: the seeded file parses, and the spliced-in
+		// .gitignore patterns match.
+		m, err := ignore.ParseFile(filepath.Join(root, DirName, IgnoreName), root)
+		if err != nil {
+			t.Fatalf("ParseFile: %v", err)
+		}
+		if !m.Match("bin", true) {
+			t.Error(`"bin" not ignored; the .gitignore include did not take effect`)
+		}
+		if !m.Match("secret.txt", false) {
+			t.Error(`"secret.txt" not ignored; the .gitignore include did not take effect`)
+		}
+		if m.Match("keep.go", false) {
+			t.Error(`"keep.go" ignored, want kept`)
+		}
+	})
+
+	t.Run("no gitignore leaves the include commented", func(t *testing.T) {
+		root := t.TempDir()
+
+		content := seed(t, root)
+		if !hasLine(content, "# #include .gitignore") {
+			t.Errorf("include not commented out, got:\n%s", content)
+		}
+
+		// Regression guard: an active directive naming a missing file is a
+		// hard error in ignore.load, which would break every scan here.
+		m, err := ignore.ParseFile(filepath.Join(root, DirName, IgnoreName), root)
+		if err != nil {
+			t.Fatalf("ParseFile on a tree with no .gitignore: %v", err)
+		}
+		if m.Match(DirName, true) {
+			t.Errorf("%s ignored; user agent definitions must remain reachable", DirName)
+		}
+	})
+
+	t.Run("dot-directories are ignored, .github is not", func(t *testing.T) {
+		root := t.TempDir()
+		seed(t, root)
+
+		m, err := ignore.ParseFile(filepath.Join(root, DirName, IgnoreName), root)
+		if err != nil {
+			t.Fatalf("ParseFile: %v", err)
+		}
+
+		// The dot rule stands in for the explicit .fledge/ and .git/ lines it
+		// replaced, and reaches any depth — scan prunes on the directory, so
+		// matching the directory itself is what matters.
+		for _, dir := range []string{".git", ".claude", "src/.hidden"} {
+			if !m.Match(dir, true) {
+				t.Errorf("%s/ not ignored", dir)
+			}
+		}
+		// Carved back in: the negation lands on the directory, so it is never
+		// pruned and its contents stay reachable.
+		if m.Match(".github", true) {
+			t.Error(".github/ ignored, want carved out")
+		}
+		for _, dir := range []string{".fledge", ".fledge/agents", ".fledge/agents/user", ".fledge/agents/user/reviewer"} {
+			if m.Match(dir, true) {
+				t.Errorf("%s/ ignored, which would prune portable user definitions", dir)
+			}
+		}
+		if m.Match(".fledge/agents/user/reviewer/reviewer.agent.md", false) {
+			t.Error("portable user definition ignored")
+		}
+		for _, hidden := range []string{
+			".fledge/agents/agents.json",
+			".fledge/agents/catalog.json",
+			".fledge/agents/fledge/fledge-orchestrator/fledge-orchestrator.agent.md",
+		} {
+			if !m.Match(hidden, false) {
+				t.Errorf("generated or managed file %s exposed", hidden)
+			}
+		}
+		// Directory-only: dot-files are deliberately left alone.
+		for _, file := range []string{".env", ".clang-format"} {
+			if m.Match(file, false) {
+				t.Errorf("%s ignored, want kept", file)
+			}
+		}
+		if m.Match("src", true) || m.Match("main.c", false) {
+			t.Error("a non-dot path was ignored")
+		}
+	})
+}
+
 func TestEnsureGitignore(t *testing.T) {
 	write := func(t *testing.T, root, content string) string {
 		t.Helper()
@@ -99,6 +224,7 @@ func TestEnsureGitignore(t *testing.T) {
 		}
 		return string(got)
 	}
+	block := "# fledge\n" + strings.Join(GitignoreEntries, "\n") + "\n"
 
 	t.Run("missing file is a no-op", func(t *testing.T) {
 		root := t.TempDir()
@@ -124,7 +250,7 @@ func TestEnsureGitignore(t *testing.T) {
 		if len(added) != len(GitignoreEntries) {
 			t.Fatalf("added = %v, want every entry", added)
 		}
-		if got, want := read(t, name), "bin/\n\n# fledge\n.fledge/locks/\n.fledge/flocks/\n.fledge/catalog.json\n"; got != want {
+		if got, want := read(t, name), "bin/\n\n"+block; got != want {
 			t.Errorf("got %q, want %q", got, want)
 		}
 	})
@@ -135,7 +261,7 @@ func TestEnsureGitignore(t *testing.T) {
 		if _, err := EnsureGitignore(root); err != nil {
 			t.Fatalf("EnsureGitignore: %v", err)
 		}
-		if got, want := read(t, name), "bin/\n\n# fledge\n.fledge/locks/\n.fledge/flocks/\n.fledge/catalog.json\n"; got != want {
+		if got, want := read(t, name), "bin/\n\n"+block; got != want {
 			t.Errorf("got %q, want %q", got, want)
 		}
 	})
@@ -147,23 +273,23 @@ func TestEnsureGitignore(t *testing.T) {
 		if err != nil {
 			t.Fatalf("EnsureGitignore: %v", err)
 		}
-		if len(added) != 2 || added[0] != ".fledge/flocks/" || added[1] != ".fledge/catalog.json" {
-			t.Errorf("added = %v, want the flocks and catalog entries", added)
+		if got, want := strings.Join(added, "\n"), strings.Join(GitignoreEntries[1:], "\n"); got != want {
+			t.Errorf("added = %v, want %v", added, GitignoreEntries[1:])
 		}
-		if got, want := read(t, name), ".fledge/locks/\n\n# fledge\n.fledge/flocks/\n.fledge/catalog.json\n"; got != want {
+		if got, want := read(t, name), ".fledge/locks/\n\n# fledge\n"+strings.Join(GitignoreEntries[1:], "\n")+"\n"; got != want {
 			t.Errorf("got %q, want %q", got, want)
 		}
 	})
 
 	t.Run("skips a catalog entry already present", func(t *testing.T) {
 		root := t.TempDir()
-		write(t, root, ".fledge/catalog.json\n")
+		write(t, root, ".fledge/agents/catalog.json\n")
 		added, err := EnsureGitignore(root)
 		if err != nil {
 			t.Fatalf("EnsureGitignore: %v", err)
 		}
-		if len(added) != 2 || added[0] != ".fledge/locks/" || added[1] != ".fledge/flocks/" {
-			t.Errorf("added = %v, want only the directory entries", added)
+		if len(added) != len(GitignoreEntries)-1 {
+			t.Errorf("added = %v, want every non-catalog entry", added)
 		}
 	})
 
@@ -188,7 +314,7 @@ func TestEnsureGitignore(t *testing.T) {
 		if _, err := EnsureGitignore(root); err != nil {
 			t.Fatalf("EnsureGitignore: %v", err)
 		}
-		if got, want := read(t, name), "bin/\n\n# fledge\n.fledge/locks/\n.fledge/flocks/\n.fledge/catalog.json\n"; got != want {
+		if got, want := read(t, name), "bin/\n\n"+block; got != want {
 			t.Errorf("got %q, want %q", got, want)
 		}
 	})
@@ -199,7 +325,7 @@ func TestEnsureGitignore(t *testing.T) {
 		if _, err := EnsureGitignore(root); err != nil {
 			t.Fatalf("EnsureGitignore: %v", err)
 		}
-		if got, want := read(t, name), "# fledge\n.fledge/locks/\n.fledge/flocks/\n.fledge/catalog.json\n"; got != want {
+		if got, want := read(t, name), block; got != want {
 			t.Errorf("got %q, want %q", got, want)
 		}
 	})
@@ -210,7 +336,7 @@ func TestEnsureGitignore(t *testing.T) {
 		if _, err := EnsureGitignore(root); err != nil {
 			t.Fatalf("EnsureGitignore: %v", err)
 		}
-		if got, want := read(t, name), "# fledge\n.fledge/locks/\n.fledge/flocks/\n.fledge/catalog.json\n\nbin/\n"; got != want {
+		if got, want := read(t, name), block+"\nbin/\n"; got != want {
 			t.Errorf("got %q, want %q", got, want)
 		}
 	})

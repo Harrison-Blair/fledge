@@ -43,7 +43,14 @@ func Dir(root, name string) string {
 // it, every workspace's flock1 would resolve to one shared session, and
 // stopping one flock would tear down every workspace bound to it.
 func SessionName(root, name string) string {
-	return "fledge-" + workspace.Slug(root) + "-" + name
+	return SessionPrefix(root) + name
+}
+
+// SessionPrefix identifies every default Fledge-managed Herdr session for one
+// workspace. It lets cleanup distinguish this project's orphan session records
+// from managed sessions belonging to another workspace.
+func SessionPrefix(root string) string {
+	return "fledge-" + workspace.Slug(root) + "-"
 }
 
 // WindowTitle is the terminal window title a flock's session carries.
