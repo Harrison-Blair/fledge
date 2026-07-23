@@ -28,9 +28,57 @@ func TestEnsureCreatesTree(t *testing.T) {
 		"flocks",
 		".fledgeignore",
 		AgentsName,
+		orchestratorName,
+		foragerName,
 	} {
 		if _, err := os.Stat(filepath.Join(root, DirName, filepath.FromSlash(want))); err != nil {
 			t.Errorf("missing %s: %v", want, err)
+		}
+	}
+}
+
+func TestEnsureSeedsForagerAndPreservesManagedTemplates(t *testing.T) {
+	root := t.TempDir()
+	if _, err := Ensure(root); err != nil {
+		t.Fatal(err)
+	}
+	base := filepath.Join(root, DirName)
+	forager, err := os.ReadFile(filepath.Join(base, foragerName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"name: fledge-forager",
+		"label: fledge-context",
+		"tab: context",
+		"fledge context scan --json",
+		`"schema_version": 1`,
+		"Every scanned file must appear exactly once",
+	} {
+		if !strings.Contains(string(forager), want) {
+			t.Errorf("forager template missing %q", want)
+		}
+	}
+
+	edits := map[string]string{
+		filepath.Join(base, orchestratorName): "operator orchestrator edit\n",
+		filepath.Join(base, foragerName):      "operator forager edit\n",
+	}
+	for name, content := range edits {
+		if err := os.WriteFile(name, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Ensure(root); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range edits {
+		got, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != want {
+			t.Fatalf("refresh replaced %s: %q", name, got)
 		}
 	}
 }
@@ -190,6 +238,7 @@ func TestEnsureIgnoreTemplate(t *testing.T) {
 			".fledge/agents/agents.json",
 			".fledge/agents/catalog.json",
 			".fledge/agents/fledge/fledge-orchestrator/fledge-orchestrator.agent.md",
+			".fledge/agents/fledge/fledge-forager/fledge-forager.agent.md",
 		} {
 			if !m.Match(hidden, false) {
 				t.Errorf("generated or managed file %s exposed", hidden)

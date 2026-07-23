@@ -21,7 +21,7 @@ func installStartingToken(t *testing.T, d *Daemon, name string) string {
 	}
 	if err := d.appendAll(
 		event{Event: evRegistered, Name: name, Type: "worker", Species: "emperor"},
-		event{Event: evSpawned, Name: name, Integration: "claude", TokenHash: hash},
+		event{Event: evSpawned, Name: name, Integration: "claude", PaneID: "w1:p2", TokenHash: hash},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -102,8 +102,8 @@ func TestInvalidReadySignalDoesNotTransitionAgent(t *testing.T) {
 }
 
 func TestSpawnReadinessTimeoutRollsBackAndReusesSpecies(t *testing.T) {
-	piStub(t)
-	d := newTestDaemon(t)
+	f := serveHerdr(t, map[string]string{"agent.start": paneStartedReply})
+	d := boundDaemon(t, f)
 	d.skipReadiness = false
 	_, err := d.spawn(&protocol.Request{Model: "gpt-x", TimeoutMS: 10})
 	if err == nil || !strings.Contains(err.Error(), "did not become ready") {
@@ -307,13 +307,12 @@ Do reviews.
 	}
 }
 
-func TestSpawnDeliversRolePromptThroughPiRPC(t *testing.T) {
-	installPi(t, `printf '%s' "$FLEDGE_READY_TOKEN" > ready.token
-while IFS= read -r line; do
-  printf '%s\n' "$line" >> prompts.jsonl
-done
-`)
-	d := newTestDaemon(t)
+func TestSpawnDeliversRolePromptThroughPiPane(t *testing.T) {
+	f := serveHerdr(t, map[string]string{
+		"agent.start":       paneStartedReply,
+		"pane.process_info": `{"id":"1","result":{"process_info":{"shell_pid":4242}}}`,
+	})
+	d := boundDaemon(t, f)
 	d.skipReadiness = false
 	source := filepath.Join(d.root, scaffold.DirName, agentcfg.AgentsDir, agentcfg.UserDir, "pi-reviewer", "pi-reviewer.agent.md")
 	if err := os.MkdirAll(filepath.Dir(source), 0o755); err != nil {
@@ -326,7 +325,7 @@ model: gpt-x
 fledge:
   profile: pi-review
 ---
-Review through RPC.
+Review through Pi.
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -336,18 +335,21 @@ Review through RPC.
 		_, err := d.spawn(&protocol.Request{Agent: "pi-reviewer", TimeoutMS: 2000})
 		done <- err
 	}()
-	var token string
 	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		data, err := os.ReadFile(filepath.Join(d.root, "ready.token"))
-		if err == nil {
-			token = string(data)
-			break
-		}
+	for f.count("pane.send_input") < 1 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
+	start := f.params("agent.start")
+	if argv := start["argv"].([]any); argv[0] != "pi" {
+		t.Fatalf("argv = %v, want a pi launch", argv)
+	}
+	env := start["env"].(map[string]any)
+	if got := env[protocol.AgentNameEnv]; got != "pi-reviewer-emperor" {
+		t.Fatalf("agent name env = %v, want pi-reviewer-emperor", got)
+	}
+	token, _ := env[protocol.ReadyTokenEnv].(string)
 	if token == "" {
-		t.Fatal("Pi process did not receive readiness token")
+		t.Fatalf("start env has no readiness token: %v", env)
 	}
 	if _, err := d.ready(&protocol.Request{Name: "pi-reviewer-emperor", Token: token}); err != nil {
 		t.Fatal(err)
@@ -356,29 +358,65 @@ Review through RPC.
 		t.Fatal(err)
 	}
 
-	var messages []string
-	deadline = time.Now().Add(time.Second)
-	for len(messages) < 2 && time.Now().Before(deadline) {
-		messages = nil
-		data, err := os.ReadFile(filepath.Join(d.root, "prompts.jsonl"))
-		if err != nil {
+	var prompts []string
+	f.mu.Lock()
+	for _, envelope := range f.got {
+		if strings.Trim(string(envelope["method"]), `"`) != "pane.send_input" {
+			continue
+		}
+		var params struct {
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(envelope["params"], &params); err != nil {
+			f.mu.Unlock()
 			t.Fatal(err)
 		}
-		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-			var frame struct{ Type, Message string }
-			if err := json.Unmarshal([]byte(line), &frame); err != nil {
-				t.Fatal(err)
-			}
-			if frame.Type == "prompt" {
-				messages = append(messages, frame.Message)
-			}
-		}
-		if len(messages) < 2 {
-			time.Sleep(time.Millisecond)
-		}
+		prompts = append(prompts, params.Text)
 	}
-	if len(messages) != 2 || messages[0] != bootstrapPrompt || messages[1] != assignedAgentPrompt("pi-reviewer-emperor", "Review through RPC.\n") {
-		t.Fatalf("Pi prompts = %#v", messages)
+	f.mu.Unlock()
+	if len(prompts) != 2 || prompts[0] != bootstrapPrompt || prompts[1] != assignedAgentPrompt("pi-reviewer-emperor", "Review through Pi.\n") {
+		t.Fatalf("prompt order = %#v", prompts)
+	}
+}
+
+// Herdr only knows pi's native status once `herdr integration install pi` has
+// run; without it agent.get reports unknown forever. The input-ready wait must
+// then degrade to proceeding after its timeout rather than failing the spawn —
+// the readiness handshake is the real gate.
+func TestSpawnProceedsWhenPaneStatusStaysUnknown(t *testing.T) {
+	f := serveHerdr(t, map[string]string{
+		"agent.start": paneStartedReply,
+		"agent.get":   `{"id":"1","result":{"type":"agent","agent":{"pane_id":"w1:p2","agent_status":"unknown"}}}`,
+	})
+	d := boundDaemon(t, f)
+	d.skipReadiness = false
+
+	old := paneInputReadyTimeout
+	paneInputReadyTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { paneInputReadyTimeout = old })
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := d.spawn(&protocol.Request{Model: "gpt-x", TimeoutMS: 2000})
+		done <- err
+	}()
+	deadline := time.Now().Add(time.Second)
+	for f.count("pane.send_input") < 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if f.count("pane.send_input") != 1 {
+		t.Fatal("bootstrap was never delivered; the unknown status failed the spawn")
+	}
+	env := f.params("agent.start")["env"].(map[string]any)
+	token, _ := env[protocol.ReadyTokenEnv].(string)
+	if token == "" {
+		t.Fatal("start env has no readiness token")
+	}
+	if _, err := d.ready(&protocol.Request{Name: "pi-emperor", Token: token}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("spawn failed though the readiness handshake completed: %v", err)
 	}
 }
 

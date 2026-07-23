@@ -115,9 +115,14 @@ herdr api schema --json               # self-describing schema → generated typ
 ## Pi — pinned v0.80.x
 
 **Last verified:** NOT yet verified against a live binary (2026-07-18 —
-research snapshot only). Update after driving `pi --mode rpc` live.
+research snapshot only). Update after driving the pi TUI in a pane live.
 
 ### Surface Fledge uses
+
+Fledge drives the plain interactive `pi` TUI in a herdr pane, exactly like
+claude and codex: input via `pane.send_input` + `keys:["enter"]`, stop via
+`pane.close`. The RPC mode below is documented for reference; Fledge no
+longer uses it (the supervised `pi --mode rpc` subprocess shape was removed).
 
 - **RPC mode** (`pi --mode rpc`): strict JSONL over stdin/stdout. Commands:
   `prompt` (with `streamingBehavior: "steer"|"followUp"`), `steer`,
@@ -133,14 +138,17 @@ research snapshot only). Update after driving `pi --mode rpc` live.
   `~/.pi/agent/extensions/herdr-agent-state.ts` (honors
   `PI_CODING_AGENT_DIR`). When installed, Pi authoritatively reports
   idle/working/blocked *and* a native session reference — Fledge trusts this
-  and never reports custom state onto Pi panes.
+  and never reports custom state onto Pi panes. Without it, herdr reports a
+  pi pane's status as `unknown`; Fledge's pane input-ready wait degrades to
+  proceeding after its timeout, and the authenticated readiness handshake
+  gates the spawn.
 - **Sessions:** `pi -c`, `pi --session <id>`, `pi --fork`, `--name`,
   `--no-session`; RPC `switch_session`/`fork`/`clone`.
 
 ### Invocation examples
 
 ```sh
-herdr agent start impl-gpt --cwd ~/proj --split right -- pi --mode rpc --provider openai --model gpt-5.6
+herdr agent start impl-gpt --cwd ~/proj --split right -- pi --provider openai --model gpt-5.6
 ```
 
 ```json

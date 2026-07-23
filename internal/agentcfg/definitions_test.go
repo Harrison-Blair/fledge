@@ -29,6 +29,9 @@ tools: [read, search]
 model: claude-opus-4
 fledge:
   profile: opus-plan
+  workspace:
+    label: fledge-context
+    tab: context
   launch:
     permission_mode: plan
     cwd: .
@@ -45,6 +48,29 @@ Find concrete bugs first.
 	}
 	if d.Launch.PermissionMode != "plan" || d.Launch.Env["REVIEW"] != "1" || len(d.Tools) != 2 {
 		t.Fatalf("frontmatter fields = %+v", d)
+	}
+	if d.Workspace == nil || d.Workspace.Label != "fledge-context" || d.Workspace.Tab != "context" {
+		t.Fatalf("workspace = %+v", d.Workspace)
+	}
+}
+
+func TestParseDefinitionValidatesWorkspace(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{"missing label", "tab: context", "workspace.label"},
+		{"missing tab", "label: fledge-context", "workspace.tab"},
+		{"untrimmed label", "label: ' fledge-context'\n    tab: context", "trimmed label"},
+		{"multiline tab", "label: fledge-context\n    tab: \"context\\nother\"", "trimmed label"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseDefinition([]byte("---\nname: worker\ndescription: Work.\nfledge:\n  workspace:\n    " + tt.body + "\n---\nPrompt.\n"))
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+		})
 	}
 }
 
@@ -98,6 +124,38 @@ Review.
 	}
 	if idx.Agents["code-reviewer"].Source != "user/code-reviewer/code-reviewer.agent.md" || idx.Agents["code-reviewer"].PromptHash == "" {
 		t.Fatalf("agent record = %+v", idx.Agents["code-reviewer"])
+	}
+}
+
+func TestSynchronizeIndexesWorkspaceDeterministically(t *testing.T) {
+	root := t.TempDir()
+	if _, err := scaffold.Ensure(root); err != nil {
+		t.Fatal(err)
+	}
+	writeDefinition(t, root, "user/context-planner/context-planner.agent.md", `---
+name: context-planner
+description: Plan context.
+fledge:
+  workspace:
+    label: fledge-context
+    tab: context
+---
+Plan.
+`)
+	if err := Synchronize(root); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, scaffold.DirName, FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var idx Index
+	if err := json.Unmarshal(data, &idx); err != nil {
+		t.Fatal(err)
+	}
+	workspace := idx.Agents["context-planner"].Workspace
+	if workspace == nil || workspace.Label != "fledge-context" || workspace.Tab != "context" {
+		t.Fatalf("indexed workspace = %+v", workspace)
 	}
 }
 

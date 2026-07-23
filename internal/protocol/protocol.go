@@ -89,7 +89,7 @@ type Response struct {
 	Agents  []Agent  `json:"agents,omitempty"`
 	Message *Message `json:"message,omitempty"`
 
-	// spawn: the Herdr pane hosting the agent, empty for pi subprocesses.
+	// spawn: the Herdr pane hosting the agent.
 	PaneID string `json:"pane_id,omitempty"`
 
 	// status: the Herdr session the daemon is bound to, empty when unbound.
@@ -106,14 +106,16 @@ type Agent struct {
 	Alive   bool   `json:"alive"`
 
 	// Spawned agents only; all empty for self-registered agents.
-	Integration string `json:"integration,omitempty"` // "claude" | "pi" | "codex"
-	Model       string `json:"model,omitempty"`
-	Config      string `json:"config,omitempty"` // agents.json entry it came from
-	Agent       string `json:"agent,omitempty"`
-	Profile     string `json:"profile,omitempty"`
-	Source      string `json:"source,omitempty"`
-	PaneID      string `json:"pane_id,omitempty"`
-	State       string `json:"state,omitempty"` // starting | running | busy | settled | stopped | orphaned
+	Integration    string `json:"integration,omitempty"` // "claude" | "pi" | "codex"
+	Model          string `json:"model,omitempty"`
+	Config         string `json:"config,omitempty"` // agents.json entry it came from
+	Agent          string `json:"agent,omitempty"`
+	Profile        string `json:"profile,omitempty"`
+	Source         string `json:"source,omitempty"`
+	PaneID         string `json:"pane_id,omitempty"`
+	WorkspaceID    string `json:"workspace_id,omitempty"`
+	WorkspaceLabel string `json:"workspace_label,omitempty"`
+	State          string `json:"state,omitempty"` // starting | running | stopped | orphaned
 }
 
 // Message is a point-to-point message. ReplyTo correlates it with the message

@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -78,7 +77,9 @@ func (f *fakeHerdr) handle(conn net.Conn, replies map[string]string) {
 	method := strings.Trim(string(env["method"]), `"`)
 	reply, ok := replies[method]
 	if !ok {
-		if method == "agent.get" {
+		if method == "pane.current" {
+			reply = `{"id":"1","result":{"type":"pane_current","pane":{"pane_id":"w1:p1","focused":true}}}`
+		} else if method == "agent.get" {
 			reply = `{"id":"1","result":{"type":"agent","agent":{"pane_id":"w1:p2","agent_status":"idle"}}}`
 		} else {
 			reply = `{"id":"1","result":{}}`
@@ -139,44 +140,6 @@ func (f *fakeHerdr) methods() []string {
 		out = append(out, strings.Trim(string(env["method"]), `"`))
 	}
 	return out
-}
-
-// Stub agent bodies. piEcho answers every prompt; piCrash does too but dies
-// abnormally when stdin closes, which is what makes Runner.Stop report an
-// error even though the stop itself worked; piSelfExit never reads stdin at
-// all, so it is gone before anyone asks it to stop.
-const (
-	piEcho = `printf '{"type":"agent_start"}\n'
-while IFS= read -r line; do
-	case "$line" in
-	*'"type":"prompt"'*)
-		id=$(printf '%s' "$line" | sed 's/.*"id":"\([^"]*\)".*/\1/')
-		printf '{"id":"%s","type":"agent_settled"}\n' "$id"
-		;;
-	esac
-done
-`
-	piCrash    = piEcho + "exit 2\n"
-	piSelfExit = "printf '{\"type\":\"agent_start\"}\\n'\nexit 0\n"
-	// piPidFile drops its pid in the launch cwd so a test can check the reap.
-	piPidFile = "printf '%s' \"$$\" > pi.pid\n" + piEcho
-)
-
-// installPi puts a fake `pi` with the given body first on PATH.
-func installPi(t *testing.T, body string) {
-	t.Helper()
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "pi"), []byte("#!/bin/sh\n"+body), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-}
-
-// piStub installs the cooperative stub: it announces itself, then answers every
-// prompt frame with a settled frame carrying the same id.
-func piStub(t *testing.T) {
-	t.Helper()
-	installPi(t, piEcho)
 }
 
 // writeAgents installs an agents.json in the workspace.
@@ -275,20 +238,6 @@ func agentState(d *Daemon, name string) string {
 	return d.agents[name].State
 }
 
-// awaitState polls until the agent reaches want, which is how a test observes
-// state that only moves when a frame arrives from the agent's own goroutine.
-func awaitState(t *testing.T, d *Daemon, name, want string) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if got := agentState(d, name); got == want {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatalf("%s state = %q, want %q", name, agentState(d, name), want)
-}
-
 func strs(t *testing.T, v any) []string {
 	t.Helper()
 	raw, ok := v.([]any)
@@ -300,6 +249,158 @@ func strs(t *testing.T, v any) []string {
 		out = append(out, item.(string))
 	}
 	return out
+}
+
+const dedicatedWorkspaceReply = `{"id":"1","result":{"workspace":{"workspace_id":"w9"},"tab":{"tab_id":"w9:t1"},"root_pane":{"pane_id":"w9:p1"}}}`
+
+func writeDedicatedDefinition(t *testing.T, root, model string) {
+	t.Helper()
+	name := filepath.Join(root, scaffold.DirName, agentcfg.AgentsDir, agentcfg.UserDir, "context-planner", "context-planner.agent.md")
+	if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `---
+name: context-planner
+description: Plan repository context.
+model: ` + model + `
+fledge:
+  profile: context-profile
+  workspace:
+    label: fledge-context
+    tab: context
+---
+Plan context.
+`
+	if err := os.WriteFile(name, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSpawnDefinitionInDedicatedWorkspace(t *testing.T) {
+	f := serveHerdr(t, map[string]string{
+		"workspace.create":  dedicatedWorkspaceReply,
+		"agent.start":       `{"id":"1","result":{"agent":{"pane_id":"w9:p2","terminal_id":"term_x"}}}`,
+		"pane.process_info": `{"id":"1","result":{"process_info":{"shell_pid":4242}}}`,
+	})
+	d := boundDaemon(t, f)
+	writeDedicatedDefinition(t, d.root, "claude-opus-4")
+
+	resp, err := d.spawn(&protocol.Request{Agent: "context-planner"})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if resp.Name != "context-planner-emperor" || resp.PaneID != "w9:p2" {
+		t.Fatalf("spawn = %+v", resp)
+	}
+	create := f.params("workspace.create")
+	if create["label"] != "fledge-context" || create["focus"] != false || create["cwd"] != d.root {
+		t.Fatalf("workspace.create = %+v", create)
+	}
+	if rename := f.params("tab.rename"); rename["tab_id"] != "w9:t1" || rename["label"] != "context" {
+		t.Fatalf("tab.rename = %+v", rename)
+	}
+	start := f.params("agent.start")
+	if start["workspace_id"] != "w9" || start["tab_id"] != "w9:t1" || start["focus"] != false {
+		t.Fatalf("agent.start placement = %+v", start)
+	}
+	if close := f.params("pane.close"); close["pane_id"] != "w9:p1" {
+		t.Fatalf("initial shell close = %+v", close)
+	}
+	if focus := f.params("pane.focus"); focus["pane_id"] != "w1:p1" {
+		t.Fatalf("restored focus = %+v", focus)
+	}
+
+	agent := d.agents[resp.Name]
+	if agent.WorkspaceID != "w9" || agent.WorkspaceLabel != "fledge-context" {
+		t.Fatalf("roster workspace = %+v", agent)
+	}
+	spawned := findEvent(t, d, evSpawned, resp.Name)
+	if spawned.WorkspaceID != "w9" || spawned.WorkspaceLabel != "fledge-context" {
+		t.Fatalf("journal workspace = %+v", spawned)
+	}
+	replayed, err := replay(journalPath(d.root, d.flockName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := replayed.agents[resp.Name]; got.WorkspaceID != "w9" || got.WorkspaceLabel != "fledge-context" {
+		t.Fatalf("replayed workspace = %+v", got)
+	}
+
+	if _, err := d.stop(&protocol.Request{Name: resp.Name}); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if close := f.params("workspace.close"); close["workspace_id"] != "w9" {
+		t.Fatalf("workspace close = %+v", close)
+	}
+	if got := f.count("pane.close"); got != 1 {
+		t.Fatalf("pane.close count = %d, want only initial shell cleanup", got)
+	}
+}
+
+func TestDedicatedWorkspaceRejectsPiProfile(t *testing.T) {
+	d := boundDaemon(t, nil)
+	writeDedicatedDefinition(t, d.root, "gpt-x")
+	_, err := d.spawn(&protocol.Request{Agent: "context-planner"})
+	if err == nil || !strings.Contains(err.Error(), "do not support Herdr workspace placement") || !strings.Contains(err.Error(), "claude or codex") {
+		t.Fatalf("error = %v", err)
+	}
+	if len(d.agents) != 0 {
+		t.Fatalf("placement failure reserved an agent: %+v", d.agents)
+	}
+}
+
+func TestDedicatedWorkspaceLaunchFailuresRollBack(t *testing.T) {
+	failure := `{"id":"1","error":{"code":"failed","message":"nope"}}`
+	for _, tt := range []struct {
+		name    string
+		replies map[string]string
+		closed  bool
+	}{
+		{"create", map[string]string{"workspace.create": failure}, false},
+		{"incomplete ids", map[string]string{"workspace.create": `{"id":"1","result":{"workspace":{"workspace_id":"w9"}}}`}, true},
+		{"tab rename", map[string]string{"workspace.create": dedicatedWorkspaceReply, "tab.rename": failure}, true},
+		{"agent start", map[string]string{"workspace.create": dedicatedWorkspaceReply, "agent.start": failure}, true},
+		{"shell cleanup", map[string]string{"workspace.create": dedicatedWorkspaceReply, "agent.start": paneStartedReply, "pane.close": failure}, true},
+		{"focus restore", map[string]string{"workspace.create": dedicatedWorkspaceReply, "agent.start": paneStartedReply, "pane.focus": failure}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := serveHerdr(t, tt.replies)
+			d := boundDaemon(t, f)
+			writeDedicatedDefinition(t, d.root, "claude-opus-4")
+			if _, err := d.spawn(&protocol.Request{Agent: "context-planner"}); err == nil {
+				t.Fatal("spawn succeeded")
+			}
+			if got := f.count("workspace.close") > 0; got != tt.closed {
+				t.Fatalf("workspace close = %v, want %v; methods %v", got, tt.closed, f.methods())
+			}
+			if len(d.agents) != 0 {
+				t.Fatalf("failed launch left roster residue: %+v", d.agents)
+			}
+		})
+	}
+}
+
+func TestUnjournaledDedicatedLaunchClosesWorkspace(t *testing.T) {
+	f := serveHerdr(t, map[string]string{
+		"workspace.create": dedicatedWorkspaceReply,
+		"agent.start":      `{"id":"1","result":{"agent":{"pane_id":"w9:p2","terminal_id":"term_x"}}}`,
+	})
+	d := boundDaemon(t, f)
+	writeDedicatedDefinition(t, d.root, "claude-opus-4")
+	d.journal.Close()
+
+	if _, err := d.spawn(&protocol.Request{Agent: "context-planner"}); err == nil {
+		t.Fatal("spawn succeeded with a closed journal")
+	}
+	if close := f.params("workspace.close"); close["workspace_id"] != "w9" {
+		t.Fatalf("workspace rollback = %+v", close)
+	}
+	if got := f.count("pane.close"); got != 1 {
+		t.Fatalf("pane.close count = %d, want only initial shell cleanup", got)
+	}
+	if len(d.agents) != 0 {
+		t.Fatalf("failed journal left roster residue: %+v", d.agents)
+	}
 }
 
 func TestSpawnClaudeByConfig(t *testing.T) {
@@ -482,43 +583,52 @@ func TestSpawnCodexByConfig(t *testing.T) {
 }
 
 func TestSpawnPiByModel(t *testing.T) {
-	piStub(t)
-	d := boundDaemon(t, nil)
+	f := serveHerdr(t, map[string]string{
+		"agent.start":       paneStartedReply,
+		"pane.process_info": `{"id":"1","result":{"process_info":{"shell_pid":4242}}}`,
+	})
+	d := boundDaemon(t, f)
 
 	resp, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Model: "gpt-x"})
 	if err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
-	if resp.Name != "pi-emperor" {
-		t.Fatalf("name = %q, want pi-emperor", resp.Name)
-	}
-	if resp.PaneID != "" {
-		t.Fatalf("pi agent reported pane %q; it has no pane", resp.PaneID)
+	if resp.Name != "pi-emperor" || resp.PaneID != "w1:p2" {
+		t.Fatalf("spawn = %+v, want pi-emperor in w1:p2", resp)
 	}
 
 	agent := d.agents["pi-emperor"]
-	if agent.Integration != "pi" || agent.Model != "gpt-x" {
+	if agent.Integration != "pi" || agent.Model != "gpt-x" || agent.PaneID != "w1:p2" {
 		t.Fatalf("roster entry = %+v", agent)
 	}
-	if agent.PID <= 0 {
-		t.Fatalf("pid = %d, want the runner's", agent.PID)
+
+	argv := strs(t, f.params("agent.start")["argv"])
+	want := []string{"pi", "--provider", "openai-codex", "--model", "gpt-x"}
+	if len(argv) != len(want) {
+		t.Fatalf("argv = %v, want %v", argv, want)
+	}
+	for i, w := range want {
+		if argv[i] != w {
+			t.Fatalf("argv = %v, want %v", argv, want)
+		}
 	}
 
-	// The stub announces itself on startup, which is the agent's first frame.
-	awaitState(t, d, "pi-emperor", stateBusy)
-
-	frames, err := os.ReadFile(filepath.Join(flock.Dir(d.root, d.flockName), "pi-pi-emperor.jsonl"))
-	if err != nil {
-		t.Fatal(err)
+	spawned := findEvent(t, d, evSpawned, "pi-emperor")
+	if spawned.Integration != "pi" || spawned.PaneID != "w1:p2" {
+		t.Fatalf("agent.spawned = %+v", spawned)
 	}
-	if !strings.Contains(string(frames), `"agent_start"`) {
-		t.Fatalf("frame log = %q, want the raw agent_start frame", frames)
+	if spawned.SessionID != "" {
+		t.Fatalf("pi journal line carries session id %q; pi owns its sessions", spawned.SessionID)
+	}
+
+	// No RPC subprocess means no frame log.
+	if _, err := os.Stat(filepath.Join(flock.Dir(d.root, d.flockName), "pi-pi-emperor.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("frame log exists for a pane-hosted pi: %v", err)
 	}
 }
 
 func TestFileBridgeDispatchesSpawn(t *testing.T) {
-	piStub(t)
-	d := newTestDaemon(t)
+	d := boundDaemon(t, serveHerdr(t, map[string]string{"agent.start": paneStartedReply}))
 	go d.serveFileRequests()
 
 	id, err := filebridge.Submit(d.root, d.flockName, protocol.Request{
@@ -603,8 +713,7 @@ func TestFileBridgeDispatchesMessageWait(t *testing.T) {
 // Launching drops d.mu for as long as a process start takes, so concurrent
 // spawns must not both walk away with the same species.
 func TestConcurrentSpawnsGetDistinctNames(t *testing.T) {
-	piStub(t)
-	d := boundDaemon(t, nil)
+	d := boundDaemon(t, serveHerdr(t, map[string]string{"agent.start": paneStartedReply}))
 
 	const n = 4
 	names := make(chan string, n)
@@ -772,8 +881,7 @@ func (c *countingJournal) Write(p []byte) (int, error) {
 // registered line alone replays as a live agent with no integration. Writing
 // them in one call is what makes a failure between them impossible.
 func TestSpawnJournalsItsPairInOneWrite(t *testing.T) {
-	piStub(t)
-	d := boundDaemon(t, nil)
+	d := boundDaemon(t, serveHerdr(t, map[string]string{"agent.start": paneStartedReply}))
 
 	counter := &countingJournal{WriteCloser: d.journal}
 	d.journal = counter
@@ -794,99 +902,6 @@ func TestSpawnJournalsItsPairInOneWrite(t *testing.T) {
 	}
 	if len(seen) != 2 || seen[0] != evRegistered || seen[1] != evSpawned {
 		t.Fatalf("journaled %v, want [%s %s]", seen, evRegistered, evSpawned)
-	}
-}
-
-// A launch the journal could not record must leave nothing behind: no roster
-// entry, no burned slug, no child process, and nothing for replay to find.
-func TestUnjournaledLaunchIsUnwound(t *testing.T) {
-	installPi(t, piPidFile)
-	d := boundDaemon(t, nil)
-
-	// Closing the journal makes every append fail, which is the failure this
-	// unwind exists for.
-	d.journal.Close()
-
-	if _, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Model: "gpt-x"}); err == nil {
-		t.Fatal("spawn reported success though its journal write failed")
-	}
-
-	d.mu.Lock()
-	_, inRoster := d.agents["pi-emperor"]
-	residue := len(d.agents)
-	runners := len(d.runners)
-	d.mu.Unlock()
-	if inRoster || residue != 0 {
-		t.Fatalf("roster = %d entries, want none: the unwind left residue", residue)
-	}
-	if runners != 0 {
-		t.Fatalf("%d runners left registered after an unwound launch", runners)
-	}
-
-	// The child must be reaped by the time spawn returns, not merely orphaned.
-	data, err := os.ReadFile(filepath.Join(d.root, "pi.pid"))
-	if err != nil {
-		t.Fatalf("stub never recorded its pid: %v", err)
-	}
-	pid, err := strconv.Atoi(string(data))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if alive(pid) {
-		t.Fatalf("pi child %d survived the unwind", pid)
-	}
-
-	// With a working journal the slug is free again, and a replay of what was
-	// written sees no trace of the failed launch.
-	journal, err := os.OpenFile(journalPath(d.root, d.flockName), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.journal = journal
-
-	resp, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Model: "gpt-x"})
-	if err != nil {
-		t.Fatalf("respawn: %v", err)
-	}
-	if resp.Name != "pi-emperor" {
-		t.Fatalf("respawn took %q; the failed launch burned its slug", resp.Name)
-	}
-}
-
-// An agent can die before spawn has finished registering it. The watcher reads
-// a runner missing from d.runners as one the daemon stopped on purpose, so if
-// it reaches the lock first the death goes unrecorded: the roster keeps calling
-// a dead agent running and never gives its species back. The seam forces that
-// ordering, which is otherwise microseconds wide and passes a stress run even
-// with the fix reverted.
-func TestAgentDyingDuringLaunchIsStillRecorded(t *testing.T) {
-	installPi(t, piSelfExit)
-	d := boundDaemon(t, nil)
-
-	spawnLaunchDelay = func() { time.Sleep(150 * time.Millisecond) }
-	t.Cleanup(func() { spawnLaunchDelay = nil })
-
-	if _, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Model: "gpt-x"}); err != nil {
-		t.Fatalf("spawn: %v", err)
-	}
-
-	// The agent was already gone before it was registered; its death must still
-	// be recorded exactly once.
-	awaitState(t, d, "pi-emperor", stateStopped)
-	if stopped := findEvent(t, d, evStopped, "pi-emperor"); stopped.Reason != "exited" {
-		t.Fatalf("reason = %q, want exited", stopped.Reason)
-	}
-	if n := countEvents(t, d, evStopped, "pi-emperor"); n != 1 {
-		t.Fatalf("%d agent.stopped lines, want exactly 1", n)
-	}
-
-	// A recorded death hands the slug back.
-	resp, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Model: "gpt-x"})
-	if err != nil {
-		t.Fatalf("respawn: %v", err)
-	}
-	if resp.Name != "pi-emperor" {
-		t.Fatalf("respawn took %q; the lost death leaked the slug", resp.Name)
 	}
 }
 
@@ -1003,8 +1018,7 @@ func TestFailedBridgeWakesAParkedWaiter(t *testing.T) {
 // An orphaned agent's pid belonged to a daemon that is gone, so its slug is
 // free even if some unrelated process now happens to own that pid.
 func TestOrphanedAgentReleasesItsSpecies(t *testing.T) {
-	piStub(t)
-	d := boundDaemon(t, nil)
+	d := boundDaemon(t, serveHerdr(t, map[string]string{"agent.start": paneStartedReply}))
 
 	if _, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Model: "gpt-x"}); err != nil {
 		t.Fatalf("spawn: %v", err)
@@ -1016,7 +1030,6 @@ func TestOrphanedAgentReleasesItsSpecies(t *testing.T) {
 	a.State = stateOrphaned
 	a.PID = os.Getpid()
 	d.agents["pi-emperor"] = a
-	delete(d.runners, "pi-emperor")
 	d.mu.Unlock()
 
 	resp, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Model: "gpt-x"})
@@ -1113,6 +1126,18 @@ func TestSpawnCodexNeedsBoundSession(t *testing.T) {
 	}
 }
 
+func TestSpawnPiNeedsBoundSession(t *testing.T) {
+	d := boundDaemon(t, nil)
+
+	_, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Model: "gpt-x"})
+	if err == nil {
+		t.Fatal("pi spawned on an unbound daemon; it has no session to open a pane in")
+	}
+	if !strings.Contains(err.Error(), "not bound") || !strings.Contains(err.Error(), "pi") {
+		t.Fatalf("error = %v, want the unbound-session refusal naming pi", err)
+	}
+}
+
 func TestResolveSpawnIntegrationOverride(t *testing.T) {
 	d := boundDaemon(t, nil)
 	tests := []struct {
@@ -1199,7 +1224,6 @@ func TestSpawnRejectsUnknownConfigAndModel(t *testing.T) {
 // A config and a model each fully determine what to launch, so a request
 // carrying both is refused rather than silently resolved by one of them.
 func TestSpawnRejectsConfigAndModelTogether(t *testing.T) {
-	piStub(t)
 	d := boundDaemon(t, nil)
 	writeAgents(t, d.root, map[string]agentcfg.Config{"worker": {Integration: "pi", Provider: "openai"}})
 
@@ -1222,16 +1246,26 @@ func TestSendToCodexAgentGoesToItsPane(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := d.send(&protocol.Request{Op: protocol.OpSend, From: sender.Name, To: "worker-emperor", Body: "do the thing"}); err != nil {
+	sent, err := d.send(&protocol.Request{Op: protocol.OpSend, From: sender.Name, To: "worker-emperor", Body: "do the thing"})
+	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
 
 	input := f.params("pane.send_input")
-	if input["text"] != "do the thing" {
-		t.Fatalf("pane text = %v", input["text"])
+	want := directMessagePrompt(protocol.Message{ID: sent.ID, From: sender.Name, To: "worker-emperor", Body: "do the thing"})
+	if input["text"] != want {
+		t.Fatalf("pane text = %v, want %q", input["text"], want)
 	}
 	if keys := strs(t, input["keys"]); len(keys) != 1 || keys[0] != "enter" {
 		t.Fatalf("pane keys = %v, want [enter]", keys)
+	}
+}
+
+func TestDirectMessagePromptExposesCorrelationMetadata(t *testing.T) {
+	msg := protocol.Message{ID: "task-123", From: "lead-emperor", To: "worker-emperor", Body: `{"work":"now"}`, ReplyTo: "earlier-9"}
+	want := "Fledge direct message\nid: task-123\nfrom: lead-emperor\nreply_to: earlier-9\n\n{\"work\":\"now\"}"
+	if got := directMessagePrompt(msg); got != want {
+		t.Fatalf("direct prompt = %q, want %q", got, want)
 	}
 }
 
@@ -1308,8 +1342,9 @@ func TestSendToClaudeAgentGoesToItsPane(t *testing.T) {
 	}
 
 	input := f.params("pane.send_input")
-	if input["text"] != "do the thing" {
-		t.Fatalf("pane text = %v", input["text"])
+	want := directMessagePrompt(protocol.Message{ID: sent.ID, From: sender.Name, To: "worker-emperor", Body: "do the thing"})
+	if input["text"] != want {
+		t.Fatalf("pane text = %v, want %q", input["text"], want)
 	}
 	// Only keys:["enter"] actually submits in a TUI (EXP2).
 	if keys := strs(t, input["keys"]); len(keys) != 1 || keys[0] != "enter" {
@@ -1334,9 +1369,9 @@ func TestSendToClaudeAgentGoesToItsPane(t *testing.T) {
 	}
 }
 
-func TestSendToPiAgentPromptsIt(t *testing.T) {
-	piStub(t)
-	d := boundDaemon(t, nil)
+func TestSendToPiAgentGoesToItsPane(t *testing.T) {
+	f := serveHerdr(t, map[string]string{"agent.start": paneStartedReply})
+	d := boundDaemon(t, f)
 
 	if _, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Model: "gpt-x"}); err != nil {
 		t.Fatalf("spawn: %v", err)
@@ -1345,37 +1380,35 @@ func TestSendToPiAgentPromptsIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	awaitState(t, d, "pi-emperor", stateBusy)
 
 	sent, err := d.send(&protocol.Request{Op: protocol.OpSend, From: sender.Name, To: "pi-emperor", Body: "ship it"})
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
 
-	// The stub settles the prompt it was given, which is the only thing that
-	// can move the agent out of busy.
-	awaitState(t, d, "pi-emperor", stateSettled)
-
-	settled := findEvent(t, d, evSettled, "pi-emperor")
-	if settled.MsgID != sent.ID {
-		t.Fatalf("agent.settled msg_id = %q, want the prompt's id %q", settled.MsgID, sent.ID)
+	input := f.params("pane.send_input")
+	want := directMessagePrompt(protocol.Message{ID: sent.ID, From: sender.Name, To: "pi-emperor", Body: "ship it"})
+	if input["text"] != want {
+		t.Fatalf("pane text = %v, want %q", input["text"], want)
+	}
+	if keys := strs(t, input["keys"]); len(keys) != 1 || keys[0] != "enter" {
+		t.Fatalf("pane keys = %v, want [enter]", keys)
 	}
 }
 
-func TestStopPiReapsItAndFreesItsSpecies(t *testing.T) {
-	piStub(t)
-	d := boundDaemon(t, nil)
+func TestStopPiClosesItsPaneAndFreesItsSpecies(t *testing.T) {
+	f := serveHerdr(t, map[string]string{"agent.start": paneStartedReply})
+	d := boundDaemon(t, f)
 
 	if _, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Model: "gpt-x"}); err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
-	pid := d.agents["pi-emperor"].PID
-
 	if _, err := d.stop(&protocol.Request{Op: protocol.OpStop, Name: "pi-emperor"}); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
-	if alive(pid) {
-		t.Fatalf("pid %d still alive after stop", pid)
+
+	if closed := f.params("pane.close"); closed["pane_id"] != "w1:p2" {
+		t.Fatalf("pane.close pane_id = %v, want w1:p2", closed["pane_id"])
 	}
 	if got := agentState(d, "pi-emperor"); got != stateStopped {
 		t.Fatalf("state = %q, want stopped", got)
@@ -1391,75 +1424,6 @@ func TestStopPiReapsItAndFreesItsSpecies(t *testing.T) {
 	}
 	if resp.Name != "pi-emperor" {
 		t.Fatalf("respawn took %q; a stopped agent's slug must be reusable", resp.Name)
-	}
-}
-
-// An agent that dies badly is still an agent that stopped. Runner.Stop reports
-// the abnormal exit, but the process is reaped either way, so the operator's
-// stop must succeed rather than fail on the corpse's exit status.
-func TestStopSucceedsWhenAgentExitsAbnormally(t *testing.T) {
-	installPi(t, piCrash)
-	d := boundDaemon(t, nil)
-
-	if _, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Model: "gpt-x"}); err != nil {
-		t.Fatalf("spawn: %v", err)
-	}
-	pid := d.agents["pi-emperor"].PID
-
-	if _, err := d.stop(&protocol.Request{Op: protocol.OpStop, Name: "pi-emperor"}); err != nil {
-		t.Fatalf("stop reported failure though the agent is down: %v", err)
-	}
-	if alive(pid) {
-		t.Fatalf("pid %d still alive after stop", pid)
-	}
-	if got := agentState(d, "pi-emperor"); got != stateStopped {
-		t.Fatalf("state = %q, want stopped", got)
-	}
-	if n := countEvents(t, d, evStopped, "pi-emperor"); n != 1 {
-		t.Fatalf("%d agent.stopped lines, want exactly 1", n)
-	}
-
-	// A crashed agent releases its slug like any other stopped one.
-	resp, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Model: "gpt-x"})
-	if err != nil {
-		t.Fatalf("respawn: %v", err)
-	}
-	if resp.Name != "pi-emperor" {
-		t.Fatalf("respawn took %q, want the crashed agent's freed slug", resp.Name)
-	}
-}
-
-// The watcher and an operator stop can both reach the lock for the same death.
-// Whichever arrives first records it; the journal must not gain a second line.
-func TestStopAfterSelfExitJournalsOnce(t *testing.T) {
-	installPi(t, piSelfExit)
-	d := boundDaemon(t, nil)
-
-	if _, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Model: "gpt-x"}); err != nil {
-		t.Fatalf("spawn: %v", err)
-	}
-	// The agent exits on its own, so the watcher records the stop first.
-	awaitState(t, d, "pi-emperor", stateStopped)
-	if stopped := findEvent(t, d, evStopped, "pi-emperor"); stopped.Reason != "exited" {
-		t.Fatalf("reason = %q, want exited", stopped.Reason)
-	}
-
-	if _, err := d.stop(&protocol.Request{Op: protocol.OpStop, Name: "pi-emperor"}); err != nil {
-		t.Fatalf("stop on an already-dead agent: %v", err)
-	}
-	if n := countEvents(t, d, evStopped, "pi-emperor"); n != 1 {
-		t.Fatalf("%d agent.stopped lines, want exactly 1: the stop double-journaled a death the watcher already recorded", n)
-	}
-
-	// A journal with one stop line per death replays to exactly that state.
-	d.Close()
-	restarted, err := New(d.root, d.flockName)
-	if err != nil {
-		t.Fatalf("restart: %v", err)
-	}
-	defer restarted.Close()
-	if got := restarted.agents["pi-emperor"].State; got != stateStopped {
-		t.Fatalf("replayed state = %q, want stopped", got)
 	}
 }
 
@@ -1531,7 +1495,6 @@ func TestStopRejectsSelfRegisteredAgent(t *testing.T) {
 }
 
 func TestReplayRestoresSpawnedAgents(t *testing.T) {
-	piStub(t)
 	f := serveHerdr(t, map[string]string{"agent.start": paneStartedReply})
 	d := boundDaemon(t, f)
 	writeAgents(t, d.root, map[string]agentcfg.Config{"worker": {Integration: "claude", Model: "claude-opus-4"}})
@@ -1565,28 +1528,42 @@ func TestReplayRestoresSpawnedAgents(t *testing.T) {
 		t.Fatalf("claude state = %q, want running", claude.State)
 	}
 
-	// A pi agent's pipes died with the daemon that owned them.
-	if got := restarted.agents["pi-emperor"].State; got != stateOrphaned {
-		t.Fatalf("replayed pi state = %q, want orphaned", got)
+	// A pi agent lives in a pane exactly like claude, so its state stands too.
+	pi := restarted.agents["pi-emperor"]
+	if pi.State != stateRunning || pi.PaneID != "w1:p2" {
+		t.Fatalf("replayed pi = %+v, want running in its pane", pi)
 	}
 	if got := restarted.agents["pi-king"].State; got != stateStopped {
 		t.Fatalf("stopped pi replayed as %q, want stopped", got)
 	}
 }
 
-func TestCloseReapsRunners(t *testing.T) {
-	piStub(t)
-	d := boundDaemon(t, nil)
-
-	if _, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Model: "gpt-x"}); err != nil {
-		t.Fatalf("spawn: %v", err)
+// A journal written before pi was pane-hosted records spawned pi agents with no
+// pane_id, and may carry agent.settled lines from the removed RPC shape. Such a
+// journal must still replay cleanly: the pane-less agent is unreachable (its
+// pipes died with the daemon that owned them), so it comes back orphaned.
+func TestReplayOrphansLegacyPanelessAgents(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "journal.jsonl")
+	lines := []string{
+		`{"event":"agent.registered","name":"pi-emperor","type":"pi","species":"emperor","pid":1234}`,
+		`{"event":"agent.spawned","name":"pi-emperor","type":"pi","species":"emperor","pid":1234,"integration":"pi","model":"gpt-x"}`,
+		`{"event":"agent.settled","name":"pi-emperor","msg_id":"abc123"}`,
+		`{"event":"agent.registered","name":"pi-king","type":"pi","species":"king","pid":1235}`,
+		`{"event":"agent.spawned","name":"pi-king","type":"pi","species":"king","pid":1235,"integration":"pi","model":"gpt-x","pane_id":"w1:p9"}`,
 	}
-	pid := d.agents["pi-emperor"].PID
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
-	d.Close()
-
-	if syscall.Kill(pid, 0) == nil {
-		t.Fatalf("pi agent %d outlived the daemon that owned its pipes", pid)
+	s, err := replay(path)
+	if err != nil {
+		t.Fatalf("replay of a legacy journal failed: %v", err)
+	}
+	if got := s.agents["pi-emperor"].State; got != stateOrphaned {
+		t.Fatalf("pane-less legacy agent replayed as %q, want orphaned", got)
+	}
+	if got := s.agents["pi-king"].State; got != stateRunning {
+		t.Fatalf("pane-hosted pi replayed as %q, want running", got)
 	}
 }
 

@@ -1177,6 +1177,9 @@ func agentRows(agents []protocol.Agent) []string {
 		if a.Agent != "" || a.Profile != "" || a.Source != "" {
 			row += fmt.Sprintf("  agent=%s profile=%s source=%s", a.Agent, a.Profile, a.Source)
 		}
+		if a.WorkspaceID != "" || a.WorkspaceLabel != "" {
+			row += fmt.Sprintf("  workspace=%s workspace_id=%s", a.WorkspaceLabel, a.WorkspaceID)
+		}
 		rows = append(rows, strings.TrimRight(row, " "))
 	}
 	return rows
@@ -1980,11 +1983,12 @@ func runAgentModels(args []string) error {
 }
 
 type agentTypeEntry struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Tools       []string `json:"tools,omitempty"`
-	Profile     string   `json:"profile,omitempty"`
-	Source      string   `json:"source"`
+	Name        string              `json:"name"`
+	Description string              `json:"description"`
+	Tools       []string            `json:"tools,omitempty"`
+	Profile     string              `json:"profile,omitempty"`
+	Workspace   *agentcfg.Workspace `json:"workspace,omitempty"`
+	Source      string              `json:"source"`
 }
 
 func runAgentTypes(args []string) error {
@@ -2014,7 +2018,7 @@ func runAgentTypes(args []string) error {
 	entries := make([]agentTypeEntry, 0, len(names))
 	for _, name := range names {
 		d := defs[name]
-		entries = append(entries, agentTypeEntry{Name: d.Name, Description: d.Description, Tools: d.Tools, Profile: d.Profile, Source: d.Source})
+		entries = append(entries, agentTypeEntry{Name: d.Name, Description: d.Description, Tools: d.Tools, Profile: d.Profile, Workspace: d.Workspace, Source: d.Source})
 	}
 	if asJSON {
 		return encodeJSON(entries)

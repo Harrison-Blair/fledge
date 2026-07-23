@@ -23,6 +23,7 @@ var subdirs = []string{
 	"flocks",
 	"agents/user",
 	"agents/fledge/fledge-orchestrator",
+	"agents/fledge/fledge-forager",
 }
 
 // IgnoreName is the ignore file fledge keeps inside DirName. Its patterns are
@@ -70,6 +71,8 @@ const managedAgentsName = "agents/fledge-agents.json"
 
 const orchestratorName = "agents/fledge/fledge-orchestrator/fledge-orchestrator.agent.md"
 
+const foragerName = "agents/fledge/fledge-forager/fledge-forager.agent.md"
+
 // catalogName must stay equal to agentcfg.CatalogName, mirrored here for the
 // same cycle reason as AgentsName. The scaffold never writes the catalog —
 // init regenerates it wholesale from the installed integrations — but it is
@@ -94,6 +97,50 @@ You are the flock orchestrator. Decompose the user's goal, spawn or register
 specialized agents when useful, coordinate their work through Fledge messages,
 and synthesize the final result. The orchestrator coordinates; it does not
 perform delegated implementation itself.
+`
+
+const foragerTemplate = `---
+name: fledge-forager
+description: Propose a complete file-based sub-agent architecture without reading repository contents.
+tools: []
+fledge:
+  workspace:
+    label: fledge-context
+    tab: context
+---
+You are the Fledge Forager. Wait for an explicit direct message after readiness;
+the role prompt itself is not a task.
+
+For each task, the only permitted commands are one
+"fledge context scan --json" and the final "fledge agent msg send" reply. Do
+not read any file contents, modify anything, or spawn sub-agents. Using only the
+returned relative paths and byte sizes, partition every scanned file into a
+proposed set of specialized sub-agents. You choose the sub-agent count.
+
+Reply to the task sender with "fledge agent msg send" and "--reply-to" set to
+the direct message's id. The reply body must be exactly one JSON object with no
+Markdown fence or surrounding prose, using this schema:
+
+{
+  "schema_version": 1,
+  "file_count": 0,
+  "total_size": 0,
+  "subagent_count": 0,
+  "subagents": [
+    {
+      "id": "kebab-case-role",
+      "purpose": "Responsibility",
+      "total_size": 0,
+      "files": [{"path": "relative/path", "size": 0}]
+    }
+  ]
+}
+
+Every scanned file must appear exactly once. Preserve every path and size from
+the scan exactly. "file_count" must equal the number of scanned files,
+"total_size" and every sub-agent "total_size" must reconcile, and
+"subagent_count" must equal the length of "subagents". Sub-agent ids must be
+unique kebab-case names and purposes must state their responsibility.
 `
 
 // Ensure creates the .fledge tree under root, creating anything missing and
@@ -126,6 +173,9 @@ func Ensure(root string) (existed bool, err error) {
 		return existed, err
 	}
 	if err := writeIfAbsent(filepath.Join(base, orchestratorName), orchestratorTemplate); err != nil {
+		return existed, err
+	}
+	if err := writeIfAbsent(filepath.Join(base, foragerName), foragerTemplate); err != nil {
 		return existed, err
 	}
 

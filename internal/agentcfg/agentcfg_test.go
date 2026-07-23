@@ -127,7 +127,7 @@ func TestCommandArgv(t *testing.T) {
 		{
 			desc: "pi bare",
 			cfg:  Config{Integration: "pi"},
-			want: []string{"pi", "--mode", "rpc"},
+			want: []string{"pi"},
 		},
 		{
 			desc: "pi full ignores session id",
@@ -137,7 +137,7 @@ func TestCommandArgv(t *testing.T) {
 				Model:       "o3",
 				Argv:        []string{"--trace"},
 			},
-			want: []string{"pi", "--mode", "rpc", "--provider", "openai", "--model", "o3", "--trace"},
+			want: []string{"pi", "--provider", "openai", "--model", "o3", "--trace"},
 		},
 		{
 			desc: "codex bare ignores session id",
@@ -164,24 +164,6 @@ func TestCommandArgv(t *testing.T) {
 	for _, tt := range tests {
 		if got := tt.cfg.CommandArgv("sid"); !slices.Equal(got, tt.want) {
 			t.Errorf("%s: CommandArgv() = %v, want %v", tt.desc, got, tt.want)
-		}
-	}
-}
-
-func TestPaneHosted(t *testing.T) {
-	tests := []struct {
-		integration string
-		want        bool
-	}{
-		{integration: "claude", want: true},
-		{integration: "codex", want: true},
-		{integration: "pi", want: false},
-		{integration: "", want: false},
-		{integration: "goose", want: false},
-	}
-	for _, tt := range tests {
-		if got := PaneHosted(tt.integration); got != tt.want {
-			t.Errorf("PaneHosted(%q) = %v, want %v", tt.integration, got, tt.want)
 		}
 	}
 }

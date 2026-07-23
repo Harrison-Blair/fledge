@@ -15,10 +15,12 @@ const (
 	evRegistered = "agent.registered"
 	evSpawned    = "agent.spawned"
 	evReady      = "agent.ready"
-	evSettled    = "agent.settled"
-	evStopped    = "agent.stopped"
-	evSent       = "msg.sent"
-	evDelivered  = "msg.delivered"
+	// evSettled is a legacy event from the removed pi RPC subprocess shape:
+	// recognized on replay so old journals still load, never emitted.
+	evSettled   = "agent.settled"
+	evStopped   = "agent.stopped"
+	evSent      = "msg.sent"
+	evDelivered = "msg.delivered"
 )
 
 // event is one journal line. The union of every event's fields; each event
@@ -31,18 +33,20 @@ type event struct {
 	Species string `json:"species,omitempty"`
 	PID     int    `json:"pid,omitempty"`
 
-	Integration string `json:"integration,omitempty"`
-	Model       string `json:"model,omitempty"`
-	Config      string `json:"config,omitempty"`
-	Agent       string `json:"agent,omitempty"`
-	Profile     string `json:"profile,omitempty"`
-	Source      string `json:"source,omitempty"`
-	PaneID      string `json:"pane_id,omitempty"`
-	Cwd         string `json:"cwd,omitempty"`
-	SessionID   string `json:"session_id,omitempty"`
-	Reason      string `json:"reason,omitempty"`
-	MsgID       string `json:"msg_id,omitempty"`
-	TokenHash   string `json:"token_hash,omitempty"`
+	Integration    string `json:"integration,omitempty"`
+	Model          string `json:"model,omitempty"`
+	Config         string `json:"config,omitempty"`
+	Agent          string `json:"agent,omitempty"`
+	Profile        string `json:"profile,omitempty"`
+	Source         string `json:"source,omitempty"`
+	PaneID         string `json:"pane_id,omitempty"`
+	WorkspaceID    string `json:"workspace_id,omitempty"`
+	WorkspaceLabel string `json:"workspace_label,omitempty"`
+	Cwd            string `json:"cwd,omitempty"`
+	SessionID      string `json:"session_id,omitempty"`
+	Reason         string `json:"reason,omitempty"`
+	MsgID          string `json:"msg_id,omitempty"`
+	TokenHash      string `json:"token_hash,omitempty"`
 
 	ID      string `json:"id,omitempty"`
 	From    string `json:"from,omitempty"`
@@ -186,6 +190,8 @@ func replay(path string) (*state, error) {
 			a.Profile = e.Profile
 			a.Source = e.Source
 			a.PaneID = e.PaneID
+			a.WorkspaceID = e.WorkspaceID
+			a.WorkspaceLabel = e.WorkspaceLabel
 			if e.TokenHash == "" {
 				a.State = stateRunning
 			} else {
@@ -202,10 +208,8 @@ func replay(path string) (*state, error) {
 				delete(s.tokens, e.Name)
 			}
 		case evSettled:
-			if a, ok := s.agents[e.Name]; ok {
-				a.State = stateSettled
-				s.agents[e.Name] = a
-			}
+			// Legacy pi RPC event; the pane-less rule below already sidelines
+			// every agent that could have emitted one, so it changes nothing.
 		case evStopped:
 			if a, ok := s.agents[e.Name]; ok {
 				a.State = stateStopped
@@ -225,12 +229,13 @@ func replay(path string) (*state, error) {
 		}
 	}
 
-	// A pi agent's pipes died with the daemon that owned them, so a replayed
-	// one is unreachable however it looked when the journal was written. A
-	// Claude agent lives in a pane that may well have outlived the daemon, so
-	// its state stands and alive(pid) reports on it.
+	// A spawned agent with no pane came from the removed subprocess shape (pi
+	// before it was pane-hosted); its pipes died with the daemon that owned
+	// them, so a replayed one is unreachable however it looked when the journal
+	// was written. A pane-hosted agent's pane may well have outlived the
+	// daemon, so its state stands and alive(pid) reports on it.
 	for name, a := range s.agents {
-		if a.Integration == "pi" && a.State != stateStopped {
+		if a.Integration != "" && a.PaneID == "" && a.State != stateStopped {
 			a.State = stateOrphaned
 			s.agents[name] = a
 			delete(s.tokens, name)

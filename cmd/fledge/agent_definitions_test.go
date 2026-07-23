@@ -63,17 +63,23 @@ func TestAgentTypesJSONListsPortableDefinitions(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &entries); err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 {
+	if len(entries) != 3 {
 		t.Fatalf("entries = %+v", entries)
 	}
-	var found bool
+	var found, foundForager bool
 	for _, e := range entries {
 		if e.Name == "code-reviewer" {
 			found = e.Profile == "review-plan" && e.Source == "user/code-reviewer/code-reviewer.agent.md" && len(e.Tools) == 2
 		}
+		if e.Name == "fledge-forager" {
+			foundForager = e.Profile == "" && e.Workspace != nil && e.Workspace.Label == "fledge-context" && e.Workspace.Tab == "context"
+		}
 	}
 	if !found {
 		t.Fatalf("user definition missing metadata: %+v", entries)
+	}
+	if !foundForager {
+		t.Fatalf("managed forager missing workspace metadata: %+v", entries)
 	}
 }
 

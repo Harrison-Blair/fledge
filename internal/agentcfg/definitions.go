@@ -32,11 +32,19 @@ const (
 // definition. PromptHash lets consumers notice changes without duplicating
 // the authoritative Markdown body in generated JSON.
 type AgentRecord struct {
-	Source      string   `json:"source"`
-	Description string   `json:"description"`
-	Tools       []string `json:"tools,omitempty"`
-	Profile     string   `json:"profile,omitempty"`
-	PromptHash  string   `json:"prompt_hash"`
+	Source      string     `json:"source"`
+	Description string     `json:"description"`
+	Tools       []string   `json:"tools,omitempty"`
+	Profile     string     `json:"profile,omitempty"`
+	Workspace   *Workspace `json:"workspace,omitempty"`
+	PromptHash  string     `json:"prompt_hash"`
+}
+
+// Workspace requests a dedicated Herdr workspace for an agent definition.
+// It is placement metadata, independent of the profile selected at spawn.
+type Workspace struct {
+	Label string `json:"label" yaml:"label"`
+	Tab   string `json:"tab" yaml:"tab"`
 }
 
 // Index is the versioned shape shared by user, managed, and catalog indexes.
@@ -57,6 +65,7 @@ type Definition struct {
 	Source      string
 	Managed     bool
 	Launch      Config
+	Workspace   *Workspace
 }
 
 type frontMatter struct {
@@ -65,9 +74,10 @@ type frontMatter struct {
 	Tools       []string `yaml:"tools"`
 	Model       string   `yaml:"model"`
 	Fledge      struct {
-		Profile  string         `yaml:"profile"`
-		Launch   Config         `yaml:"launch"`
-		Worktree map[string]any `yaml:"worktree"`
+		Profile   string         `yaml:"profile"`
+		Launch    Config         `yaml:"launch"`
+		Workspace *Workspace     `yaml:"workspace"`
+		Worktree  map[string]any `yaml:"worktree"`
 	} `yaml:"fledge"`
 }
 
@@ -106,12 +116,33 @@ func ParseDefinition(data []byte) (Definition, error) {
 	if strings.TrimSpace(fm.Description) == "" {
 		return Definition{}, errors.New("frontmatter description is required")
 	}
+	if err := validateWorkspace(fm.Fledge.Workspace); err != nil {
+		return Definition{}, err
+	}
 	prompt := strings.TrimPrefix(rest[after:], "\n")
 	return Definition{
 		Name: fm.Name, Description: fm.Description, Tools: fm.Tools,
 		Model: fm.Model, Profile: fm.Fledge.Profile, Prompt: prompt,
-		Launch: fm.Fledge.Launch,
+		Launch: fm.Fledge.Launch, Workspace: fm.Fledge.Workspace,
 	}, nil
+}
+
+func validateWorkspace(workspace *Workspace) error {
+	if workspace == nil {
+		return nil
+	}
+	if strings.TrimSpace(workspace.Label) == "" {
+		return errors.New("fledge.workspace.label is required")
+	}
+	if strings.TrimSpace(workspace.Tab) == "" {
+		return errors.New("fledge.workspace.tab is required")
+	}
+	for field, value := range map[string]string{"label": workspace.Label, "tab": workspace.Tab} {
+		if value != strings.TrimSpace(value) || strings.ContainsAny(value, "\r\n\x00") {
+			return fmt.Errorf("fledge.workspace.%s must be a single, trimmed label", field)
+		}
+	}
+	return nil
 }
 
 // Synchronize rebuilds the user and managed indexes atomically from Markdown.
@@ -141,7 +172,7 @@ func Synchronize(root string) error {
 				return fmt.Errorf("duplicate agent %q", d.Name)
 			}
 			h := sha256.Sum256([]byte(d.Prompt))
-			set.idx.Agents[d.Name] = AgentRecord{Source: d.Source, Description: d.Description, Tools: d.Tools, Profile: d.Profile, PromptHash: hex.EncodeToString(h[:])}
+			set.idx.Agents[d.Name] = AgentRecord{Source: d.Source, Description: d.Description, Tools: d.Tools, Profile: d.Profile, Workspace: cloneWorkspace(d.Workspace), PromptHash: hex.EncodeToString(h[:])}
 			if d.Profile != "" && (d.Model != "" || !reflect.DeepEqual(d.Launch, Config{})) {
 				cfg, err := deriveProfile(d)
 				if err != nil {
@@ -187,6 +218,14 @@ func Synchronize(root string) error {
 		return err
 	}
 	return writeIndexAtomic(filepath.Join(base, ManagedFileName), managed)
+}
+
+func cloneWorkspace(in *Workspace) *Workspace {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	return &out
 }
 
 func newIndex() Index {

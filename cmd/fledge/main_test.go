@@ -425,6 +425,18 @@ func TestAgentRowsSpawnedAddsLaunchColumns(t *testing.T) {
 	assertRows(t, rows, want)
 }
 
+func TestAgentRowsDedicatedWorkspaceAddsPlacement(t *testing.T) {
+	rows := agentRows([]protocol.Agent{{
+		Name: "fledge-forager-emperor", Species: "emperor", PID: 101, Alive: true,
+		Integration: "codex", Model: "gpt-5.6-sol", PaneID: "w9:p2", State: "running",
+		Agent: "fledge-forager", Profile: "gpt56cx", Source: "fledge/fledge-forager/fledge-forager.agent.md",
+		WorkspaceID: "w9", WorkspaceLabel: "fledge-context",
+	}})
+	if len(rows) != 1 || !strings.Contains(rows[0], "workspace=fledge-context workspace_id=w9") {
+		t.Fatalf("rows = %v", rows)
+	}
+}
+
 // A self-registered agent sharing a roster with a spawned one keeps its blank
 // launch columns rather than borrowing its neighbour's.
 func TestAgentRowsMixedRosterLeavesRegisteredBlank(t *testing.T) {

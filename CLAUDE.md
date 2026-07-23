@@ -74,12 +74,12 @@ only).
   The daemon rebuilds roster + pending messages by replay. Torn final line =
   tolerated; malformed earlier line = corruption, startup fails. Anything not
   journaled must not be left running (spawn failure ⇒ teardown).
-- **Three integrations, two shapes** (`internal/daemon/spawn.go`): `claude`
-  and `codex` are pane-hosted (`agentcfg.PaneHosted`) — a visible herdr pane,
-  input via `pane.send_input` + `keys:["enter"]`, survives daemon restart
-  because the pane does; `pi` runs as a supervised `pi --mode rpc` subprocess
-  over JSONL (`internal/pirpc`; marked `orphaned` on replay since its pipes
-  died with the daemon).
+- **Three integrations, one shape** (`internal/daemon/spawn.go`): `claude`,
+  `codex`, and `pi` are all pane-hosted — a visible herdr pane, input via
+  `pane.send_input` + `keys:["enter"]`, survives daemon restart because the
+  pane does. Journals from before pi was pane-hosted record spawned pi agents
+  with no `pane_id`; replay marks those `orphaned` (their RPC pipes died with
+  the daemon) and tolerates legacy `agent.settled` lines as no-ops.
 - **Two herdr packages by design**: `internal/herdr` shells out to the herdr
   CLI for session lifecycle (no socket API for that); `internal/herdrwire`
   speaks the socket directly for pane ops. Pinned to herdr 0.7.4 / protocol 16
@@ -136,8 +136,8 @@ only).
   `.fledge/` directory, then `EvalSymlinks` — client and daemon must agree on
   the canonical path because the hash keys the socket namespace and session
   name.
-- `d.mu` must never be held across a herdr call or `runner.Stop` — they take
-  seconds. Spawn reserves the name under the lock (pid −1), launches unlocked,
+- `d.mu` must never be held across a herdr call — it can take seconds. Spawn
+  reserves the name under the lock (pid −1), launches unlocked,
   releases on failure.
 
 README.md documents the full command surface, `.fledge/` tree, and portable

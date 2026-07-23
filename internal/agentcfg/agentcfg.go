@@ -172,14 +172,6 @@ func (c Config) ValidateFields() error {
 	return nil
 }
 
-// PaneHosted reports whether the integration runs in a visible herdr pane
-// rather than as a supervised subprocess. Pane-hosted agents need the flock
-// bound to a herdr session; worker input goes through pane.send_input and
-// their stop is pane.close. The orchestrator is the user-driven exception.
-func PaneHosted(integration string) bool {
-	return integration == "claude" || integration == "codex"
-}
-
 // ReservedOrchestrator is the single name exempt from the agent naming rule.
 // fledge start brings this profile up on every interactive start and the agent
 // runs under this exact string — hyphen included, and with no species suffix —
@@ -193,8 +185,9 @@ func validName(name string) error {
 }
 
 // CommandArgv assembles the full launch argv for the config. sessionID is used
-// by the claude integration only; pi has no equivalent flag. An integration the
-// table does not know yields nil rather than a guess.
+// by the claude integration only; pi and codex persist their own sessions and
+// have no equivalent flag. An integration the table does not know yields nil
+// rather than a guess.
 func (c Config) CommandArgv(sessionID string) []string {
 	var argv []string
 	switch c.Integration {
@@ -204,7 +197,7 @@ func (c Config) CommandArgv(sessionID string) []string {
 			argv = append(argv, "--permission-mode", c.PermissionMode)
 		}
 	case "pi":
-		argv = []string{"pi", "--mode", "rpc"}
+		argv = []string{"pi"}
 		if c.Provider != "" {
 			argv = append(argv, "--provider", c.Provider)
 		}

@@ -233,6 +233,20 @@ An agent applies its Markdown role prompt. --profile launches an unprompted
 raw profile; it may also supply the profile for a profile-agnostic agent.
 Given no selection on a terminal, a numbered agent menu is shown.
 
+Definitions may request fledge.workspace label/tab metadata. Fledge then
+creates that unfocused workspace in the flock's existing Herdr session,
+renames its initial tab, starts a pane-hosted Claude/Codex agent there, and
+removes the initial shell. Pi profiles cannot satisfy dedicated placement.
+Any launch, readiness, or prompt failure closes the whole new workspace.
+
+The managed, profile-agnostic fledge-forager uses a fledge-context workspace.
+After spawn returns, send it an explicit planning task, save the message id,
+and wait with "agent msg wait --reply-to <id>". Its reply body is one JSON
+object: schema_version 1; file_count and total_size; subagent_count; and a
+subagents array whose entries contain kebab-case id, purpose, total_size, and
+files [{path,size}]. Every file from "context scan --json" appears exactly
+once, and every count and byte total reconciles.
+
 flags:
   --profile, -L <name>     raw profile, or profile for an agnostic agent
   --model, -M <id>         raw model id to route and launch
@@ -256,7 +270,8 @@ flags:
 	"agent stop": `usage:
   fledge agent stop <name>
 
-stop a spawned agent.
+stop a spawned agent. A dedicated agent closes its whole workspace; an
+ordinary pane-hosted agent closes only its pane.
 
 flags:
   --help, -H   print this help
@@ -304,7 +319,9 @@ flags:
 	"agent msg send": `usage:
   fledge agent msg send <to> <body> [flags]
 
-send a message and print its id. The sender is FLEDGE_AGENT_NAME.
+send a message and print its id. The sender is FLEDGE_AGENT_NAME. A spawned
+recipient sees a direct-message envelope containing this id and sender before
+the body, so it can answer with --reply-to. Bootstrap and role prompts are raw.
 
 flags:
   --reply-to, -R <id>  id this message answers

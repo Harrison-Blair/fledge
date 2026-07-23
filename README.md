@@ -3,9 +3,9 @@
 A zero-inference orchestrator for multi-agent coding sessions.
 
 fledge brings up isolated orchestration sessions ("flocks"), launches coding
-agents into them, and carries messages between those agents. It runs Claude
-Code agents in visible [herdr](https://github.com/Harrison-Blair/herdr) panes
-you can watch and type into, and `pi` agents as supervised RPC subprocesses.
+agents into them, and carries messages between those agents. Every agent runs
+in a visible [herdr](https://github.com/Harrison-Blair/herdr) pane you can
+watch and type into.
 
 Two invariants shape the whole design:
 
@@ -23,9 +23,9 @@ Two invariants shape the whole design:
 - **Unix** (Linux or macOS). Uses unix sockets, `setsid`, and signal-0
   liveness probes.
 - **`herdr`** on `PATH`, protocol 16 (verified against 0.7.4). Required to
-  start a flock, and required for any Claude-integration agent, which needs a
-  pane to live in.
+  start a flock and for every spawned agent, which lives in a pane.
 - **`claude`** on `PATH` for the `claude` integration.
+- **`codex`** on `PATH` for the `codex` integration.
 - **`pi`** on `PATH` for the `pi` integration.
 
 You only need the CLI for the integrations you actually spawn.
@@ -156,20 +156,22 @@ first is alive fails the way an exhausted species pool does.
 
 | | `claude` | `codex` | `pi` |
 |---|---|---|---|
-| Runs in | a herdr pane | a herdr pane | a supervised subprocess |
-| Launch | `claude --session-id <uuid> [--permission-mode …] [--model …]` | `codex [--sandbox …] [--model …]` | `pi --mode rpc [--provider …] [--model …]` |
-| Delivery | `pane.send_input` with `keys:["enter"]` | `pane.send_input` with `keys:["enter"]` | JSONL `prompt` frame on stdin |
-| Stop | `pane.close` | `pane.close` | `abort` frame, stdin EOF, then SIGKILL after 3s |
-| Visible | yes — you can watch and type into it | yes — you can watch and type into it | no |
+| Runs in | a herdr pane | a herdr pane | a herdr pane |
+| Launch | `claude --session-id <uuid> [--permission-mode …] [--model …]` | `codex [--sandbox …] [--model …]` | `pi [--provider …] [--model …]` |
+| Delivery | `pane.send_input` with `keys:["enter"]` | `pane.send_input` with `keys:["enter"]` | `pane.send_input` with `keys:["enter"]` |
+| Stop | `pane.close`, or `workspace.close` when dedicated | `pane.close`, or `workspace.close` when dedicated | `pane.close` |
+| Visible | yes — you can watch and type into it | yes — you can watch and type into it | yes — you can watch and type into it |
 
-Claude and Codex agents survive a daemon restart because their panes do; pi
-agents are marked `orphaned` on journal replay, since their pipes died with
-the daemon.
+Every spawned agent survives a daemon restart because its pane does. Journals
+written by older fledge versions may record pi agents with no pane (the removed
+RPC-subprocess shape); those replay as `orphaned`.
 
 **Journal** — `.fledge/flocks/<name>/journal.jsonl`, append-only JSON lines,
 written *before* an operation is acknowledged. It records `daemon.started`,
-`agent.registered`, `agent.spawned`, `agent.ready`, `agent.settled`, `agent.stopped`,
-`msg.sent`, and `msg.delivered`. The daemon rebuilds its entire roster and
+`agent.registered`, `agent.spawned`, `agent.ready`, `agent.stopped`,
+`msg.sent`, and `msg.delivered` (`agent.settled` is a legacy event from the
+removed pi RPC shape — recognized on replay, never emitted). The daemon
+rebuilds its entire roster and
 pending-message queue by replaying it. A malformed final line is treated as a
 torn write and ignored; malformed anywhere else is corruption and fails
 startup.
@@ -239,6 +241,7 @@ flags. Enter a command group such as `fledge agent`, or run `fledge agent
 ├── agents/
 │   ├── user/<name>/<name>.agent.md
 │   ├── fledge/fledge-orchestrator/fledge-orchestrator.agent.md
+│   ├── fledge/fledge-forager/fledge-forager.agent.md
 │   ├── agents.json          generated user index
 │   ├── fledge-agents.json   generated managed index
 │   └── catalog.json         generated machine model profiles
@@ -288,6 +291,9 @@ tools: [read, search]
 model: claude-opus-4-8
 fledge:
   profile: opus-plan
+  workspace:
+    label: review-space
+    tab: review
   launch:
     integration: claude
     permission_mode: plan
@@ -305,6 +311,16 @@ integration/provider. Differing declarations of the same profile are errors.
 `provider` is pi-only, `permission_mode` is Claude-only, and `sandbox` is
 Codex-only. Permission bypass is never inferred. `fledge.worktree` is reserved
 and rejected until worktree lifecycle support exists.
+
+`fledge.workspace` is definition-level placement metadata, independent of the
+profile selected by the caller. Both `label` and `tab` are required. At spawn,
+Fledge creates an unfocused workspace in the flock's existing Herdr session,
+renames its initial tab, targets the agent start into that workspace, and
+removes the initial shell pane. Claude and Codex profiles support this; a Pi
+profile fails with a clear placement error. The workspace id and label are
+journaled and shown by `agent list`, including JSON output. Launch, readiness,
+bootstrap, and role-delivery failures close the whole workspace. `agent stop`
+does the same; ordinary pane-hosted agents still close only their pane.
 
 You can skip the config file and spawn a bare model — `fledge agent spawn
 --model claude-opus-4-8` — as long as a prefix routing table recognizes it:
@@ -331,7 +347,64 @@ timeout or prompt-delivery failure stops the transport and releases its name.
 The orchestrator is user-driven: startup injects only readiness text. Use
 `fledge agent msg wait` in a background orchestrator-side process to consume
 messages sent to it. Spawned Claude, Codex, and Pi workers continue to receive
-direct pane/RPC pushes.
+direct pane pushes.
+
+Ordinary direct pushes carry correlation metadata before their body:
+
+```text
+Fledge direct message
+id: <message-id>
+from: <assigned-sender-name>
+reply_to: <original-id>        # present only on a reply
+
+<body>
+```
+
+Bootstrap and role prompts remain raw. A recipient replies with `fledge agent
+msg send <sender> <body> --reply-to <message-id>`; the sender waits for exactly
+that response with `fledge agent msg wait --reply-to <message-id>`.
+
+### Fledge Forager
+
+`fledge-forager` is a managed, profile-agnostic definition for proposing a
+file-based sub-agent architecture. Select a Claude or Codex profile, then use
+the assigned name printed by spawn:
+
+```sh
+fledge agent spawn fledge-forager --profile <profile>
+task_id=$(fledge agent msg send <assigned-forager-name> "Propose the sub-agent architecture")
+fledge agent msg wait --reply-to "$task_id"
+fledge agent stop <assigned-forager-name>
+```
+
+Forager launches unfocused beside `fledge-orchestrator` and `fledge-watch` in
+the same Herdr session, in a workspace labelled `fledge-context` with a
+`context` tab. It waits for the explicit post-readiness task, runs only
+`fledge context scan --json`, reads no file contents, changes nothing, and
+spawns no agents. Its correlated reply body is exactly one JSON object, with
+no Markdown fence or surrounding prose:
+
+```json
+{
+  "schema_version": 1,
+  "file_count": 0,
+  "total_size": 0,
+  "subagent_count": 0,
+  "subagents": [
+    {
+      "id": "kebab-case-role",
+      "purpose": "Responsibility",
+      "total_size": 0,
+      "files": [{"path": "relative/path", "size": 0}]
+    }
+  ]
+}
+```
+
+Every scanned file must occur exactly once with its scan-reported size.
+`file_count`, `total_size`, every sub-agent `total_size`, and `subagent_count`
+must reconcile; Forager chooses the proposed sub-agent count. Stopping it closes
+only `fledge-context`, leaving the orchestrator and watcher workspaces intact.
 
 ### `.fledgeignore`
 
@@ -418,7 +491,6 @@ same commit; conflicting versions or tags fail instead of replacing a release.
 | `internal/flock` | flock naming, layout, socket paths, `FLEDGE_FLOCK` |
 | `internal/herdr` | shells out to the herdr CLI for session lifecycle |
 | `internal/herdrwire` | speaks the herdr socket API directly |
-| `internal/pirpc` | pi subprocess supervision over JSONL |
 | `internal/agentcfg` | `.agent.md` parsing, index synchronization, profiles and model routing |
 | `internal/catalog` | model discovery from the installed integrations |
 | `internal/species` | the penguin slug pool |

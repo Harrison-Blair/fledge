@@ -29,7 +29,6 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/flock"
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/herdrwire"
-	"github.com/Harrison-Blair/fledge/internal/pirpc"
 	"github.com/Harrison-Blair/fledge/internal/protocol"
 	"github.com/Harrison-Blair/fledge/internal/scaffold"
 	"github.com/Harrison-Blair/fledge/internal/species"
@@ -67,7 +66,6 @@ type Daemon struct {
 	order        []string
 	pending      []protocol.Message
 	waiters      []*waiter
-	runners      map[string]*pirpc.Runner
 	readyTokens  map[string]string
 	readyWaiters map[string]chan struct{}
 	fileOnce     sync.Once
@@ -321,7 +319,6 @@ func New(root, flockName string) (*Daemon, error) {
 		agents:       s.agents,
 		order:        s.order,
 		pending:      s.pending,
-		runners:      make(map[string]*pirpc.Runner),
 		readyTokens:  s.tokens,
 		readyWaiters: make(map[string]chan struct{}),
 	}
@@ -333,10 +330,9 @@ func New(root, flockName string) (*Daemon, error) {
 	return d, nil
 }
 
-// Close reaps the agents this daemon owns, then releases the listener, socket
-// file, and log handles.
+// Close releases the listener, socket file, and log handles. Agents live in
+// herdr panes, which outlive the daemon by design.
 func (d *Daemon) Close() error {
-	d.stopRunners()
 	if d.done != nil {
 		select {
 		case <-d.done:
@@ -658,15 +654,14 @@ func (d *Daemon) send(req *protocol.Request) (protocol.Response, error) {
 	}
 
 	// A spawned agent is driven, not polled: its message goes straight into the
-	// pane or the rpc pipe rather than waiting for a wait to claim it.
+	// pane rather than waiting for a wait to claim it.
 	if bridged(to) {
-		runner := d.runners[req.To]
 		d.mu.Unlock()
 
 		// A hand-off that fails puts the message on the pending queue, exactly
 		// as an unbridged send would: the live queue is what holds it, and
 		// journaling no delivery line is what makes a replay agree.
-		if err := d.bridge(to, runner, msg); err != nil {
+		if err := d.bridge(to, msg); err != nil {
 			d.mu.Lock()
 			// Same disposal as an unbridged send: a parked wait takes it, and
 			// only an unwanted message queues.

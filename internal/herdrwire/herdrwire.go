@@ -110,13 +110,31 @@ type StartedAgent struct {
 // "down") splits the focused pane to make room for the new one instead of
 // taking over a tab; empty means let herdr place it.
 func AgentStart(socket, name, cwd string, argv []string, env map[string]string, split string) (StartedAgent, error) {
+	return agentStart(socket, name, cwd, argv, env, split, "", "", false)
+}
+
+// AgentStartInWorkspace launches an unfocused agent in a specific existing
+// workspace and tab. Dedicated-definition placement uses this after creating
+// and labelling the workspace, so it never depends on the operator's focus.
+func AgentStartInWorkspace(socket, name, cwd string, argv []string, env map[string]string, workspaceID, tabID string) (StartedAgent, error) {
+	return agentStart(socket, name, cwd, argv, env, "", workspaceID, tabID, true)
+}
+
+func agentStart(socket, name, cwd string, argv []string, env map[string]string, split, workspaceID, tabID string, explicitFocus bool) (StartedAgent, error) {
 	params := struct {
-		Name  string            `json:"name"`
-		Argv  []string          `json:"argv"`
-		Cwd   string            `json:"cwd,omitempty"`
-		Env   map[string]string `json:"env,omitempty"`
-		Split string            `json:"split,omitempty"`
-	}{Name: name, Argv: argv, Cwd: cwd, Env: env, Split: split}
+		Name        string            `json:"name"`
+		Argv        []string          `json:"argv"`
+		Cwd         string            `json:"cwd,omitempty"`
+		Env         map[string]string `json:"env,omitempty"`
+		Split       string            `json:"split,omitempty"`
+		WorkspaceID string            `json:"workspace_id,omitempty"`
+		TabID       string            `json:"tab_id,omitempty"`
+		Focus       *bool             `json:"focus,omitempty"`
+	}{Name: name, Argv: argv, Cwd: cwd, Env: env, Split: split, WorkspaceID: workspaceID, TabID: tabID}
+	if explicitFocus {
+		focus := false
+		params.Focus = &focus
+	}
 
 	var result struct {
 		Agent struct {

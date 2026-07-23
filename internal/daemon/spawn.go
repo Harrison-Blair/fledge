@@ -13,19 +13,16 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/agentcfg"
 	"github.com/Harrison-Blair/fledge/internal/flock"
 	"github.com/Harrison-Blair/fledge/internal/herdrwire"
-	"github.com/Harrison-Blair/fledge/internal/pirpc"
 	"github.com/Harrison-Blair/fledge/internal/protocol"
 	"github.com/Harrison-Blair/fledge/internal/species"
 )
 
 // Lifecycle states of a spawned agent. Self-registered agents have none: their
 // liveness is their pid. State only ever changes on an observed event — a
-// launch, a pi frame, a stop — never on inference.
+// launch, a readiness call, a stop — never on inference.
 const (
 	stateStarting = "starting"
 	stateRunning  = "running"
-	stateBusy     = "busy"
-	stateSettled  = "settled"
 	stateStopped  = "stopped"
 	stateOrphaned = "orphaned"
 )
@@ -40,21 +37,15 @@ const reservedPID = -1
 // detection wins over a custom source anyway (EXP1, ADR-004).
 const metadataSource = "custom:fledge"
 
-// spawnLaunchDelay is a test seam, nil everywhere but in the one test that sets
-// it. It widens the window between a launch returning and its runner being
-// registered, which is the ordering an agent that dies immediately depends on.
-// That window is microseconds wide in practice, and the regression it guards
-// against is silent — a dead agent left reading as running, its slug held for
-// good — so the invariant is untestable without it. pirpc's stopGrace is a var
-// for the same reason.
-var spawnLaunchDelay func()
-
 var defaultReadinessTimeout = 2 * time.Minute
 
-// paneInputReadyTimeout bounds the transport-level startup wait before the
-// authenticated readiness prompt is submitted. Herdr reports pane-hosted
-// integrations as unknown while their TUIs initialize and switches to a
-// native status such as idle once pane.send_input is safe.
+// paneInputReadyTimeout bounds the best-effort startup wait before the
+// authenticated readiness prompt is submitted. Herdr reports integrations it
+// natively detects as unknown while their TUIs initialize and switches to a
+// status such as idle once pane.send_input is safe. An integration herdr has
+// no detector for (pi without `herdr integration install pi`) stays unknown
+// forever, so expiry proceeds rather than fails: the pacing is lost but the
+// two-minute readiness handshake still gates the spawn.
 var paneInputReadyTimeout = 15 * time.Second
 
 const bootstrapPrompt = "Complete startup now by running `fledge agent ready`. Do not begin other work until Fledge confirms readiness."
@@ -86,6 +77,7 @@ type spawnResolution struct {
 	profile   string
 	source    string
 	prompt    string
+	workspace *agentcfg.Workspace
 }
 
 func (d *Daemon) spawn(req *protocol.Request) (protocol.Response, error) {
@@ -106,7 +98,13 @@ func (d *Daemon) spawn(req *protocol.Request) (protocol.Response, error) {
 	if err := validType(agentType); err != nil {
 		return protocol.Response{}, err
 	}
-	if agentcfg.PaneHosted(cfg.Integration) && d.session.SocketPath == "" {
+	if resolved.workspace != nil && cfg.Integration == "pi" {
+		return protocol.Response{}, fmt.Errorf("agent %q requests dedicated workspace %q, but pi profiles do not support Herdr workspace placement; use a claude or codex profile", resolved.agent, resolved.workspace.Label)
+	}
+	if resolved.workspace != nil && req.AnchorPane != "" {
+		return protocol.Response{}, fmt.Errorf("agent %q requests dedicated workspace %q and cannot also use anchored pane placement", resolved.agent, resolved.workspace.Label)
+	}
+	if d.session.SocketPath == "" {
 		return protocol.Response{}, fmt.Errorf("flock is not bound to a herdr session; %s agents need a pane", cfg.Integration)
 	}
 
@@ -140,13 +138,10 @@ func (d *Daemon) spawn(req *protocol.Request) (protocol.Response, error) {
 		cfg.Env[agentTokenEnv] = token
 	}
 
-	agent, err := d.launch(name, cwd, cfg, req.Split, req.AnchorPane)
+	agent, err := d.launch(name, cwd, cfg, req.Split, req.AnchorPane, resolved.workspace)
 	if err != nil {
 		d.release(res)
 		return protocol.Response{}, err
-	}
-	if spawnLaunchDelay != nil {
-		spawnLaunchDelay()
 	}
 	agent.Name = name
 	agent.Type = agentType
@@ -168,21 +163,23 @@ func (d *Daemon) spawn(req *protocol.Request) (protocol.Response, error) {
 	events := []event{
 		event{Event: evRegistered, Name: name, Type: agentType, Species: slug, PID: agent.PID},
 		event{
-			Event:       evSpawned,
-			Name:        name,
-			Type:        agentType,
-			Species:     slug,
-			PID:         agent.PID,
-			Integration: agent.Integration,
-			Model:       agent.Model,
-			Config:      agent.Config,
-			Agent:       agent.Agent.Agent,
-			Profile:     agent.Profile,
-			Source:      agent.Source,
-			PaneID:      agent.PaneID,
-			Cwd:         cwd,
-			SessionID:   agent.sessionID,
-			TokenHash:   tokenHash,
+			Event:          evSpawned,
+			Name:           name,
+			Type:           agentType,
+			Species:        slug,
+			PID:            agent.PID,
+			Integration:    agent.Integration,
+			Model:          agent.Model,
+			Config:         agent.Config,
+			Agent:          agent.Agent.Agent,
+			Profile:        agent.Profile,
+			Source:         agent.Source,
+			PaneID:         agent.PaneID,
+			WorkspaceID:    agent.WorkspaceID,
+			WorkspaceLabel: agent.WorkspaceLabel,
+			Cwd:            cwd,
+			SessionID:      agent.sessionID,
+			TokenHash:      tokenHash,
 		},
 	}
 	if !authenticated {
@@ -211,14 +208,6 @@ func (d *Daemon) spawn(req *protocol.Request) (protocol.Response, error) {
 		ready = make(chan struct{})
 		d.readyWaiters[name] = ready
 	}
-	if agent.runner != nil {
-		d.runners[name] = agent.runner
-		// Only now is the runner findable, so only now may the watcher run: an
-		// agent that dies this early would otherwise look to the watcher like
-		// one the daemon had already stopped, and its death would go
-		// unrecorded while the roster still called it running.
-		go d.watchRunner(name, agent.runner, agent.files...)
-	}
 	d.debug.Printf("spawned %s integration=%s pid=%d pane=%s", name, agent.Integration, agent.PID, agent.PaneID)
 	d.mu.Unlock()
 	if !authenticated {
@@ -231,7 +220,7 @@ func (d *Daemon) spawn(req *protocol.Request) (protocol.Response, error) {
 			return protocol.Response{}, fmt.Errorf("bootstrap %s: %w", name, err)
 		}
 	}
-	if err := d.deliverSpawnPrompt(agent.Agent, agent.runner, bootstrapPrompt); err != nil {
+	if err := d.deliverSpawnPrompt(agent.Agent, bootstrapPrompt); err != nil {
 		d.rollbackStarting(res, agent, "bootstrap failed")
 		return protocol.Response{}, fmt.Errorf("bootstrap %s: %w", name, err)
 	}
@@ -275,7 +264,7 @@ readiness:
 	// readiness bootstrap; its identity and role remain available through the
 	// inherited environment and normal mailbox CLI commands.
 	if name != agentcfg.ReservedOrchestrator {
-		if err := d.deliverSpawnPrompt(agent.Agent, agent.runner, assignedAgentPrompt(name, resolved.prompt)); err != nil {
+		if err := d.deliverSpawnPrompt(agent.Agent, assignedAgentPrompt(name, resolved.prompt)); err != nil {
 			d.rollbackStarting(res, agent, "role prompt failed")
 			return protocol.Response{}, fmt.Errorf("deliver role prompt to %s: %w", name, err)
 		}
@@ -294,7 +283,10 @@ func (d *Daemon) waitPaneInputReady(paneID string) error {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("pane %s did not become input-ready within %s", paneID, paneInputReadyTimeout)
+			// Herdr has no native detector for this TUI; proceed and let the
+			// readiness handshake gate the spawn (see paneInputReadyTimeout).
+			d.debug.Printf("pane %s still reports %q after %s; proceeding", paneID, status, paneInputReadyTimeout)
+			return nil
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -345,7 +337,7 @@ func (d *Daemon) resolveSpawnDetailed(req *protocol.Request) (spawnResolution, e
 		if !ok {
 			return out, fmt.Errorf("no profile %q", profile)
 		}
-		out = spawnResolution{cfg: cfg, agentType: def.Name, agent: def.Name, profile: profile, source: def.Source, prompt: def.Prompt}
+		out = spawnResolution{cfg: cfg, agentType: def.Name, agent: def.Name, profile: profile, source: def.Source, prompt: def.Prompt, workspace: def.Workspace}
 	} else if req.Profile != "" {
 		profiles, err := agentcfg.Load(d.root)
 		if err != nil {
@@ -482,7 +474,7 @@ func (d *Daemon) readyDigest(name, got string) (protocol.Response, error) {
 			}
 			role = definition.Prompt
 		}
-		if err := d.deliverSpawnPrompt(a, nil, assignedAgentPrompt(a.Name, role)); err != nil {
+		if err := d.deliverSpawnPrompt(a, assignedAgentPrompt(a.Name, role)); err != nil {
 			d.rollbackStarting(reservation{}, launched{Agent: a}, "role prompt failed")
 			return protocol.Response{}, fmt.Errorf("deliver role prompt to %s: %w", a.Name, err)
 		}
@@ -498,8 +490,8 @@ func (d *Daemon) agentReady(name string) bool {
 }
 
 // deliverSpawnPrompt preserves the same sent-before-delivered journal ordering
-// as ordinary mailbox sends while using the live pane/RPC bridge.
-func (d *Daemon) deliverSpawnPrompt(to protocol.Agent, runner *pirpc.Runner, body string) error {
+// as ordinary mailbox sends while using the live pane bridge.
+func (d *Daemon) deliverSpawnPrompt(to protocol.Agent, body string) error {
 	id, err := newID()
 	if err != nil {
 		return err
@@ -511,7 +503,7 @@ func (d *Daemon) deliverSpawnPrompt(to protocol.Agent, runner *pirpc.Runner, bod
 		return err
 	}
 	d.mu.Unlock()
-	if err := d.bridge(to, runner, msg); err != nil {
+	if err := d.bridgePrompt(to, msg.Body); err != nil {
 		d.mu.Lock()
 		d.pending = append(d.pending, msg)
 		d.mu.Unlock()
@@ -530,9 +522,6 @@ func (d *Daemon) rollbackStarting(_ reservation, agent launched, reason string) 
 	}
 	delete(d.readyTokens, agent.Name)
 	delete(d.readyWaiters, agent.Name)
-	if agent.runner != nil {
-		delete(d.runners, agent.Name)
-	}
 	d.mu.Unlock()
 
 	d.teardown(agent.Name, agent)
@@ -653,19 +642,14 @@ func (d *Daemon) releaseLocked(r reservation) {
 }
 
 // teardown reaps a launch that could not be journaled. It must run WITHOUT
-// d.mu: Stop blocks until the process is reaped, and PaneClose is a socket
-// round-trip — exactly the slow calls the lock may not span.
+// d.mu: PaneClose is a socket round-trip — exactly the slow call the lock may
+// not span.
 func (d *Daemon) teardown(name string, agent launched) {
-	if agent.runner != nil {
-		if err := agent.runner.Stop(); err != nil {
-			d.debug.Printf("%s: teardown: %v", name, err)
+	if agent.WorkspaceID != "" {
+		if err := herdrwire.WorkspaceClose(d.session.SocketPath, agent.WorkspaceID); err != nil {
+			d.debug.Printf("%s: teardown workspace: %v", name, err)
 		}
-		for _, f := range agent.files {
-			f.Close()
-		}
-		return
-	}
-	if agent.PaneID != "" {
+	} else if agent.PaneID != "" {
 		if err := herdrwire.PaneClose(d.session.SocketPath, agent.PaneID); err != nil {
 			d.debug.Printf("%s: teardown pane: %v", name, err)
 		}
@@ -676,24 +660,15 @@ func (d *Daemon) teardown(name string, agent launched) {
 // bits that ride on the journal line rather than the roster.
 type launched struct {
 	protocol.Agent
-	runner    *pirpc.Runner
 	sessionID string
-	files     []*os.File
 }
 
-// launch starts the agent process. It runs without d.mu held: a Herdr call or a
-// process start can take seconds, and a spawn must not stall the whole flock.
-func (d *Daemon) launch(name, cwd string, cfg agentcfg.Config, split, anchorPane string) (launched, error) {
-	if agentcfg.PaneHosted(cfg.Integration) {
-		return d.launchPane(name, cwd, cfg, split, anchorPane)
-	}
-	// A pi agent is a subprocess with no pane, so there is nothing to split.
-	return d.launchPi(name, cwd, cfg)
-}
-
-func (d *Daemon) launchPane(name, cwd string, cfg agentcfg.Config, split, anchorPane string) (launched, error) {
-	// Only claude takes a session id; codex persists its own sessions and has
-	// no equivalent flag, so its journal line must not carry a fake one.
+// launch starts the agent's herdr pane. It runs without d.mu held: a Herdr call
+// can take seconds, and a spawn must not stall the whole flock.
+func (d *Daemon) launch(name, cwd string, cfg agentcfg.Config, split, anchorPane string, workspace *agentcfg.Workspace) (launched, error) {
+	// Only claude takes a session id; pi and codex persist their own sessions
+	// and have no equivalent flag, so their journal lines must not carry a
+	// fake one.
 	var sessionID string
 	if cfg.Integration == "claude" {
 		sessionID = agentcfg.NewSessionID()
@@ -707,7 +682,16 @@ func (d *Daemon) launchPane(name, cwd string, cfg agentcfg.Config, split, anchor
 	// agent register` work from inside it.
 	env[flock.Env] = d.flockName
 
-	started, err := herdrwire.AgentStart(d.session.SocketPath, name, cwd, cfg.CommandArgv(sessionID), env, split)
+	var (
+		started herdrwire.StartedAgent
+		created herdrwire.CreatedWorkspace
+		err     error
+	)
+	if workspace == nil {
+		started, err = herdrwire.AgentStart(d.session.SocketPath, name, cwd, cfg.CommandArgv(sessionID), env, split)
+	} else {
+		started, created, err = d.createAgentWorkspace(name, cwd, cfg.CommandArgv(sessionID), env, *workspace)
+	}
 	if err != nil {
 		return launched{}, err
 	}
@@ -736,9 +720,70 @@ func (d *Daemon) launchPane(name, cwd string, cfg agentcfg.Config, split, anchor
 	}
 
 	return launched{
-		Agent:     protocol.Agent{PID: pid, PaneID: started.PaneID},
+		Agent: protocol.Agent{
+			PID: pid, PaneID: started.PaneID,
+			WorkspaceID: created.WorkspaceID, WorkspaceLabel: workspaceLabel(workspace),
+		},
 		sessionID: sessionID,
 	}, nil
+}
+
+func workspaceLabel(workspace *agentcfg.Workspace) string {
+	if workspace == nil {
+		return ""
+	}
+	return workspace.Label
+}
+
+// createAgentWorkspace performs all placement steps before the launch can be
+// journaled. Any failure closes the whole workspace, so no unnamed shell or
+// untracked agent pane is left behind.
+func (d *Daemon) createAgentWorkspace(name, cwd string, argv []string, env map[string]string, workspace agentcfg.Workspace) (herdrwire.StartedAgent, herdrwire.CreatedWorkspace, error) {
+	focusedPane, err := herdrwire.PaneCurrent(d.session.SocketPath)
+	if err != nil {
+		return herdrwire.StartedAgent{}, herdrwire.CreatedWorkspace{}, fmt.Errorf("record focus before creating workspace for %s: %w", name, err)
+	}
+	if focusedPane == "" {
+		return herdrwire.StartedAgent{}, herdrwire.CreatedWorkspace{}, fmt.Errorf("record focus before creating workspace for %s: Herdr returned no pane id", name)
+	}
+
+	created, err := herdrwire.WorkspaceCreate(d.session.SocketPath, cwd, workspace.Label, false)
+	if err != nil {
+		return herdrwire.StartedAgent{}, herdrwire.CreatedWorkspace{}, fmt.Errorf("create workspace for %s: %w", name, err)
+	}
+	fail := func(cause error) (herdrwire.StartedAgent, herdrwire.CreatedWorkspace, error) {
+		if created.WorkspaceID != "" {
+			if closeErr := herdrwire.WorkspaceClose(d.session.SocketPath, created.WorkspaceID); closeErr != nil {
+				cause = fmt.Errorf("%w (closing workspace %s also failed: %v)", cause, created.WorkspaceID, closeErr)
+			}
+		}
+		return herdrwire.StartedAgent{}, herdrwire.CreatedWorkspace{}, cause
+	}
+	if created.WorkspaceID == "" || created.TabID == "" || created.RootPaneID == "" {
+		return fail(fmt.Errorf("create workspace for %s: Herdr returned incomplete workspace IDs", name))
+	}
+	if err := herdrwire.TabRename(d.session.SocketPath, created.TabID, workspace.Tab); err != nil {
+		return fail(fmt.Errorf("rename workspace tab for %s: %w", name, err))
+	}
+	started, err := herdrwire.AgentStartInWorkspace(d.session.SocketPath, name, cwd, argv, env, created.WorkspaceID, created.TabID)
+	if err != nil {
+		return fail(fmt.Errorf("start %s in workspace %s: %w", name, workspace.Label, err))
+	}
+	if started.PaneID == "" {
+		return fail(fmt.Errorf("start %s in workspace %s: Herdr returned no pane id", name, workspace.Label))
+	}
+	if err := herdrwire.PaneClose(d.session.SocketPath, created.RootPaneID); err != nil {
+		return fail(fmt.Errorf("remove initial shell from workspace %s: %w", workspace.Label, err))
+	}
+	// Herdr 0.7.4 focuses the surviving pane's workspace when the initial
+	// shell is closed, even though workspace.create and agent.start both used
+	// focus:false. Put focus back where it was so dedicated placement is
+	// observationally unfocused. A failed restoration makes the placement
+	// incomplete and therefore rolls the whole workspace back.
+	if err := herdrwire.PaneFocus(d.session.SocketPath, focusedPane); err != nil {
+		return fail(fmt.Errorf("restore focus after creating workspace %s: %w", workspace.Label, err))
+	}
+	return started, created, nil
 }
 
 func (d *Daemon) failPanePlacement(name, paneID, operation string, placementErr error) error {
@@ -747,113 +792,6 @@ func (d *Daemon) failPanePlacement(name, paneID, operation string, placementErr 
 		return fmt.Errorf("%w (closing pane also failed: %v)", err, closeErr)
 	}
 	return err
-}
-
-func (d *Daemon) launchPi(name, cwd string, cfg agentcfg.Config) (launched, error) {
-	env := make([]string, 0, len(cfg.Env)+1)
-	for k, v := range cfg.Env {
-		env = append(env, k+"="+v)
-	}
-	env = append(env, flock.Env+"="+d.flockName)
-
-	frames, err := d.agentFile(name, ".jsonl")
-	if err != nil {
-		return launched{}, err
-	}
-	stderr, err := d.agentFile(name, ".stderr.log")
-	if err != nil {
-		frames.Close()
-		return launched{}, err
-	}
-
-	runner, err := pirpc.Start(cfg.CommandArgv(""), cwd, env, stderr, d.piEvents(name, frames))
-	if err != nil {
-		frames.Close()
-		stderr.Close()
-		return launched{}, err
-	}
-
-	// The watcher is deliberately not started here: it tells a deliberate stop
-	// from a crash by the runner's absence from d.runners, so it cannot run
-	// before spawn has put the runner there. See spawn.
-	return launched{
-		Agent:  protocol.Agent{PID: runner.PID()},
-		runner: runner,
-		files:  []*os.File{frames, stderr},
-	}, nil
-}
-
-// agentFile opens a per-agent log in the flock directory.
-func (d *Daemon) agentFile(name, suffix string) (*os.File, error) {
-	path := filepath.Join(flock.Dir(d.root, d.flockName), "pi-"+name+suffix)
-	return os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-}
-
-// piEvents records every frame the agent emits and advances its state from the
-// three frames that mean something. Everything else is logged, not interpreted.
-func (d *Daemon) piEvents(name string, frames *os.File) func(pirpc.Event) {
-	return func(ev pirpc.Event) {
-		// Safe without synchronisation: pirpc calls onEvent only from its
-		// reader goroutine, and watchRunner closes this file only after Done,
-		// which the reader closes as its last act.
-		if _, err := frames.Write(append([]byte(ev.Raw), '\n')); err != nil {
-			d.debug.Printf("%s: frame log: %v", name, err)
-		}
-
-		switch ev.Type {
-		case "agent_start":
-			d.setState(name, stateBusy, event{})
-		case "agent_settled":
-			d.setState(name, stateSettled, event{Event: evSettled, Name: name, MsgID: ev.ID})
-		case "agent_end":
-			d.setState(name, stateSettled, event{})
-		}
-	}
-}
-
-// setState moves an agent's state, journaling e first when it carries an event.
-func (d *Daemon) setState(name, state string, e event) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if a, ok := d.agents[name]; ok && a.State == stateStarting {
-		return
-	}
-
-	if e.Event != "" {
-		if err := d.append(e); err != nil {
-			d.debug.Printf("%s: journal %s: %v", name, e.Event, err)
-		}
-	}
-	if a, ok := d.agents[name]; ok {
-		a.State = state
-		d.agents[name] = a
-	}
-}
-
-// watchRunner records an agent that died on its own. A runner the daemon
-// stopped on purpose is out of d.runners by the time this fires, which is what
-// tells the two apart — so spawn must not start this watcher until the runner
-// is in d.runners, or an agent that dies during launch reads as one already
-// stopped and its death goes unrecorded.
-//
-// Closing the files here is only safe because Done closes after pirpc's reader
-// goroutine returns, and that reader is the sole writer to them (see piEvents).
-func (d *Daemon) watchRunner(name string, runner *pirpc.Runner, files ...*os.File) {
-	<-runner.Done()
-	for _, f := range files {
-		f.Close()
-	}
-
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.runners[name] != runner {
-		return
-	}
-	delete(d.runners, name)
-	if _, err := d.markStopped(name, "exited"); err != nil {
-		d.debug.Printf("%s: journal %s: %v", name, evStopped, err)
-	}
-	d.debug.Printf("%s exited", name)
 }
 
 // markStopped records an agent as stopped, and reports whether this call was
@@ -893,24 +831,16 @@ func (d *Daemon) stop(req *protocol.Request) (protocol.Response, error) {
 		d.mu.Unlock()
 		return protocol.Response{}, fmt.Errorf("agent %q was not spawned by fledge; stop it where it runs", req.Name)
 	}
-	// Claiming the runner here is what marks this exit as deliberate, so the
-	// watcher does not also journal it as a crash.
-	runner := d.runners[req.Name]
-	delete(d.runners, req.Name)
 	d.mu.Unlock()
 
-	if agentcfg.PaneHosted(agent.Integration) {
-		if err := herdrwire.PaneClose(d.session.SocketPath, agent.PaneID); err != nil {
-			return protocol.Response{}, err
-		}
-	} else if runner != nil {
-		// A non-nil error here says how the agent died, not that stopping it
-		// failed: the process is reaped and Done is closed either way. The
-		// agent is down, so the stop stands and the crash detail goes to the
-		// log — the journal records that it stopped, which is the state.
-		if err := runner.Stop(); err != nil {
-			d.debug.Printf("%s: agent exited abnormally: %v", req.Name, err)
-		}
+	var err error
+	if agent.WorkspaceID != "" {
+		err = herdrwire.WorkspaceClose(d.session.SocketPath, agent.WorkspaceID)
+	} else {
+		err = herdrwire.PaneClose(d.session.SocketPath, agent.PaneID)
+	}
+	if err != nil {
+		return protocol.Response{}, err
 	}
 
 	d.mu.Lock()
@@ -931,28 +861,18 @@ func bridged(a protocol.Agent) bool {
 
 // bridge hands a message straight to a spawned agent. Called without d.mu:
 // a Herdr call can block for seconds.
-func (d *Daemon) bridge(to protocol.Agent, runner *pirpc.Runner, msg protocol.Message) error {
-	if agentcfg.PaneHosted(to.Integration) {
-		return herdrwire.SendInput(d.session.SocketPath, to.PaneID, msg.Body, true)
-	}
-	if runner == nil {
-		return fmt.Errorf("agent %q has no running process", to.Name)
-	}
-	return runner.Prompt(msg.ID, msg.Body)
+func (d *Daemon) bridge(to protocol.Agent, msg protocol.Message) error {
+	return d.bridgePrompt(to, directMessagePrompt(msg))
 }
 
-// stopRunners shuts every pi subprocess down, so no agent outlives the daemon
-// that owns its pipes.
-func (d *Daemon) stopRunners() {
-	d.mu.Lock()
-	runners := make([]*pirpc.Runner, 0, len(d.runners))
-	for name, r := range d.runners {
-		runners = append(runners, r)
-		delete(d.runners, name)
+func directMessagePrompt(msg protocol.Message) string {
+	prompt := fmt.Sprintf("Fledge direct message\nid: %s\nfrom: %s", msg.ID, msg.From)
+	if msg.ReplyTo != "" {
+		prompt += "\nreply_to: " + msg.ReplyTo
 	}
-	d.mu.Unlock()
+	return prompt + "\n\n" + msg.Body
+}
 
-	for _, r := range runners {
-		r.Stop()
-	}
+func (d *Daemon) bridgePrompt(to protocol.Agent, body string) error {
+	return herdrwire.SendInput(d.session.SocketPath, to.PaneID, body, true)
 }

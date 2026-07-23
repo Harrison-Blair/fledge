@@ -478,6 +478,24 @@ func TestAgentStartSplit(t *testing.T) {
 	}
 }
 
+func TestAgentStartInWorkspaceTargetsTabWithoutFocus(t *testing.T) {
+	f := serve(t, map[string]string{"agent.start": agentStartedReply})
+
+	if _, err := AgentStartInWorkspace(f.socket, "forager", "/work", []string{"codex"}, map[string]string{"A": "1"}, "w9", "w9:t1"); err != nil {
+		t.Fatalf("AgentStartInWorkspace: %v", err)
+	}
+	p := f.params(0)
+	if p["workspace_id"] != "w9" || p["tab_id"] != "w9:t1" {
+		t.Fatalf("target = workspace %v tab %v", p["workspace_id"], p["tab_id"])
+	}
+	if p["focus"] != false {
+		t.Fatalf("focus = %v, want false", p["focus"])
+	}
+	if _, ok := p["split"]; ok {
+		t.Fatal("workspace-targeted start carried a focused-pane split")
+	}
+}
+
 func TestPaneCurrent(t *testing.T) {
 	f := serve(t, map[string]string{
 		"pane.current": `{"id":"1","result":{"type":"pane_current","pane":{"pane_id":"w1:p1","focused":true}}}`,
