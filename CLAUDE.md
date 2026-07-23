@@ -75,9 +75,10 @@ only).
   tolerated; malformed earlier line = corruption, startup fails. Anything not
   journaled must not be left running (spawn failure ⇒ teardown).
 - **Three integrations, one shape** (`internal/daemon/spawn.go`): `claude`,
-  `codex`, and `pi` are all pane-hosted — a visible herdr pane, input via
-  `pane.send_input` + `keys:["enter"]`, survives daemon restart because the
-  pane does. Journals from before pi was pane-hosted record spawned pi agents
+  `codex`, and `pi` are all pane-hosted — a visible herdr pane; ordinary direct
+  messages use `pane.send_input` + `keys:["enter"]`, while startup identity and
+  role use each CLI's native instruction option. Panes survive daemon restart.
+  Journals from before pi was pane-hosted record spawned pi agents
   with no `pane_id`; replay marks those `orphaned` (their RPC pipes died with
   the daemon) and tolerates legacy `agent.settled` lines as no-ops.
 - **Two herdr packages by design**: `internal/herdr` shells out to the herdr
@@ -104,19 +105,27 @@ only).
   Claude discovery contributes a model-less default plus native Opus, Fable,
   Sonnet, and Haiku launchers;
   Empty discovery keeps the old catalog.
-- **Authenticated readiness**: spawn journals `starting`, injects a one-use
-  name/token, and sends only the bootstrap instruction. `agent ready` hashes
-  and validates the token, journals `agent.ready`, then spawn delivers the
-  Markdown role prompt. Sandboxed agents that cannot open the daemon socket
+- **Authoritative launch and authenticated readiness**: before Herdr runs,
+  spawn atomically journals `agent.registered` and `agent.launching` with the
+  resolved launch metadata, one-use token hash, and SHA-256 instruction hash.
+  It installs separate launch/readiness latches, starts Claude/Pi with a final
+  `--append-system-prompt` or Codex with a final TOML-encoded
+  `developer_instructions`, and supplies readiness as the initial positional
+  prompt. The instruction document contains the assigned identity, direct-send
+  guidance, and exact Markdown role (identity/guidance only for raw spawns).
+  Profile `argv` is option-only, rejects `--`, and precedes Fledge's arguments.
+  Once Herdr resolves, `agent.spawned` records PID/pane/workspace metadata and
+  releases early readiness or stop calls. `agent ready` hashes and validates
+  the token and journals `agent.ready`. No lifecycle `pane.send_input` or
+  `msg.sent` events are emitted. Sandboxed agents that cannot open the daemon socket
   atomically publish the digest under the flock directory for the daemon to
   validate and consume. Interactive start attaches Herdr before beginning this
-  lifecycle. Every post-readiness prompt starts with the daemon-assigned,
-  already-registered name and direct-send reply syntax; spawned agents receive
-  messages in their sessions rather than polling `agent msg wait`;
-  raw profile/model spawns receive that preamble even without an authored role.
+  lifecycle. Spawned agents receive ordinary messages in their sessions rather
+  than polling `agent msg wait`; the user-driven orchestrator retains its
+  mailbox-wait behavior but has no role-injection exception.
   Immediately after `agent.start`, interactive start swaps and focuses the managed
   orchestrator into its final left position before registration or readiness.
-- After readiness and role delivery complete, interactive fresh starts keep
+- After readiness completes, interactive fresh starts keep
   the primary `fledge-orchestrator` workspace as `orchestrator | CLI`, then
   create an unfocused `fledge-watch` workspace rooted at the project. Its
   initial tab is labelled `watch`, and its normal root shell execs the current
@@ -124,7 +133,8 @@ only).
   Focus returns to the orchestrator. Setup is transactional: failure closes
   only the created watcher workspace when possible and keeps the healthy flock,
   primary workspace, and CLI. Reattach and scripted starts do not create
-  watchers. Timeout or delivery failure tears the transport down.
+  watchers. Launch, spawn-journal, or readiness failure tears the transport
+  down; replay invalidates incomplete `agent.launching` attempts as orphaned.
 - **Sandboxed daemon access**: clients try the runtime-directory Unix socket
   first, then the daemon's ephemeral workspace-local `.rpc/` request/response
   bridge. The fallback dispatches the full protocol, so orchestrators can

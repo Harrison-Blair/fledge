@@ -104,3 +104,36 @@ func TestReplayLastRegistrationWins(t *testing.T) {
 		t.Fatalf("pid = %d, want 999", pid)
 	}
 }
+
+func TestReplayIncompleteLaunchingAttemptIsOrphaned(t *testing.T) {
+	path := writeJournal(t, `{"event":"agent.registered","name":"worker-emperor","type":"worker","species":"emperor","pid":-1}
+{"event":"agent.launching","name":"worker-emperor","integration":"claude","model":"claude-opus-4","token_hash":"secret-hash","instruction_hash":"instructions"}
+`)
+	s, err := replay(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.agents["worker-emperor"]; got.State != stateOrphaned || got.Integration != "claude" {
+		t.Fatalf("replayed incomplete launch = %+v", got)
+	}
+	if _, ok := s.tokens["worker-emperor"]; ok {
+		t.Fatal("incomplete launch retained its readiness token")
+	}
+}
+
+func TestReplayCompleteLaunchingAttemptRestoresStarting(t *testing.T) {
+	path := writeJournal(t, `{"event":"agent.registered","name":"worker-emperor","type":"worker","species":"emperor","pid":-1}
+{"event":"agent.launching","name":"worker-emperor","integration":"codex","model":"gpt-5.6-sol","token_hash":"secret-hash","instruction_hash":"instructions"}
+{"event":"agent.spawned","name":"worker-emperor","pid":42,"pane_id":"w1:p2"}
+`)
+	s, err := replay(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.agents["worker-emperor"]; got.State != stateStarting || got.PID != 42 || got.PaneID != "w1:p2" || got.Integration != "codex" {
+		t.Fatalf("replayed complete launch = %+v", got)
+	}
+	if s.tokens["worker-emperor"] != "secret-hash" {
+		t.Fatalf("tokens = %v", s.tokens)
+	}
+}

@@ -168,6 +168,46 @@ func TestCommandArgv(t *testing.T) {
 	}
 }
 
+func TestLaunchArgvAppendsNativeInstructionsAfterProfileOptions(t *testing.T) {
+	instructions := "identity \"quoted\"\n\nrole line 1\nrole line 2\n"
+	bootstrap := "run readiness"
+	tests := []struct {
+		name string
+		cfg  Config
+		want []string
+	}{
+		{
+			name: "claude",
+			cfg:  Config{Integration: "claude", Argv: []string{"--append-system-prompt", "profile loses"}},
+			want: []string{"claude", "--session-id", "sid", "--append-system-prompt", "profile loses", "--append-system-prompt", instructions, bootstrap},
+		},
+		{
+			name: "pi",
+			cfg:  Config{Integration: "pi", Argv: []string{"--append-system-prompt", "profile loses"}},
+			want: []string{"pi", "--append-system-prompt", "profile loses", "--append-system-prompt", instructions, bootstrap},
+		},
+		{
+			name: "codex",
+			cfg:  Config{Integration: "codex", Argv: []string{"--config", "developer_instructions=\"profile loses\""}},
+			want: []string{"codex", "--config", "developer_instructions=\"profile loses\"", "--config", `developer_instructions="identity \"quoted\"\n\nrole line 1\nrole line 2\n"`, bootstrap},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.cfg.LaunchArgv("sid", instructions, bootstrap); !slices.Equal(got, tt.want) {
+				t.Fatalf("LaunchArgv() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsArgvDelimiter(t *testing.T) {
+	cfg := Config{Integration: "claude", Argv: []string{"--verbose", "--"}}
+	if err := cfg.ValidateProfile("worker"); err == nil || !strings.Contains(err.Error(), "option-only") {
+		t.Fatalf("ValidateProfile error = %v", err)
+	}
+}
+
 func TestLoadMissingFile(t *testing.T) {
 	configs, err := Load(t.TempDir())
 	if err != nil {

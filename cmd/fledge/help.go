@@ -62,7 +62,8 @@ runs anywhere inside the workspace; everything roots at the directory holding
 
 a fresh start offers a profile for the managed, profile-agnostic
 fledge-orchestrator definition, opens the UI, then visibly launches the
-orchestrator, completes authenticated readiness, and delivers its role prompt.
+orchestrator with its identity and Markdown role in the integration's native
+instruction channel and readiness as the CLI's initial prompt.
 after that succeeds, a separate, unfocused workspace named fledge-watch opens
 with a watch tab whose normal shell runs fledge watch. the primary workspace
 keeps its orchestrator | CLI split, and focus returns to the orchestrator.
@@ -229,15 +230,18 @@ flags:
   fledge agent spawn [flags]
 
 launch an agent and print its assigned name after authenticated readiness.
-An agent applies its Markdown role prompt. --profile launches an unprompted
-raw profile; it may also supply the profile for a profile-agnostic agent.
+Fledge installs an agent's exact Markdown role plus its assigned identity and
+message guidance through the integration's native instruction option. A raw
+profile has identity and messaging guidance but no authored role; it may also
+supply the profile for a profile-agnostic agent. Readiness is the CLI's initial
+positional prompt; startup does not send lifecycle text through the pane.
 Given no selection on a terminal, a numbered agent menu is shown.
 
 Definitions may request fledge.workspace label/tab metadata. Fledge then
 creates that unfocused workspace in the flock's existing Herdr session,
 renames its initial tab, starts a pane-hosted Claude/Codex agent there, and
 removes the initial shell. Pi profiles cannot satisfy dedicated placement.
-Any launch, readiness, or prompt failure closes the whole new workspace.
+Any launch, spawn-journal, or readiness failure closes the whole new workspace.
 
 The managed, profile-agnostic fledge-forager uses a fledge-context workspace.
 After spawn returns, send it an explicit planning task, save the message id,
@@ -321,7 +325,8 @@ flags:
 
 send a message and print its id. The sender is FLEDGE_AGENT_NAME. A spawned
 recipient sees a direct-message envelope containing this id and sender before
-the body, so it can answer with --reply-to. Bootstrap and role prompts are raw.
+the body, so it can answer with --reply-to. Startup instructions are supplied
+at launch and are not mailbox messages.
 
 flags:
   --reply-to, -R <id>  id this message answers

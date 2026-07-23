@@ -144,6 +144,11 @@ func (c Config) ValidateProfile(name string) error {
 // permission_mode and sandbox stay separate fields: claude's vocabulary (plan,
 // acceptEdits, …) and codex's (read-only, workspace-write, …) don't map 1:1.
 func (c Config) ValidateFields() error {
+	for _, arg := range c.Argv {
+		if arg == "--" {
+			return errors.New("argv is option-only and must not contain --")
+		}
+	}
 	switch c.Integration {
 	case "claude":
 		if c.Provider != "" {
@@ -213,6 +218,25 @@ func (c Config) CommandArgv(sessionID string) []string {
 		argv = append(argv, "--model", c.Model)
 	}
 	return append(argv, c.Argv...)
+}
+
+// LaunchArgv assembles the complete interactive launch command. Profile argv
+// is deliberately placed before Fledge's native instruction option so a
+// profile cannot override the identity and role assigned to this run. The
+// readiness bootstrap is the CLI's initial positional prompt.
+func (c Config) LaunchArgv(sessionID, instructions, bootstrap string) []string {
+	argv := c.CommandArgv(sessionID)
+	if argv == nil {
+		return nil
+	}
+	switch c.Integration {
+	case "claude", "pi":
+		argv = append(argv, "--append-system-prompt", instructions)
+	case "codex":
+		encoded, _ := json.Marshal(instructions)
+		argv = append(argv, "--config", "developer_instructions="+string(encoded))
+	}
+	return append(argv, bootstrap)
 }
 
 // NewSessionID returns a fresh RFC-4122 version 4 UUID.

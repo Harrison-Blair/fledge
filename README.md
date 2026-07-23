@@ -50,8 +50,9 @@ session named `fledge-<dir>-<hash>-<flock>` (workspace-scoped, so same-named
 flocks in different projects never collide) rooted at the workspace root,
 spawns a daemon bound to that session, and opens the Herdr UI. Once the UI owns
 the terminal, Fledge starts the `fledge-orchestrator`, immediately places and
-focuses its pane left of the shell, then begins registration and readiness so
-the sole injected text—the readiness bootstrap—first appears in that position.
+focuses its pane left of the shell. Its assigned identity and authoritative
+Markdown role are installed through the integration's native instruction
+option, and the readiness bootstrap is the CLI's initial positional prompt.
 Once authenticated startup finishes, Fledge creates a second, unfocused Herdr
 workspace rooted at the project and starts `fledge watch <flock>` in its normal
 root shell, leaving:
@@ -73,9 +74,9 @@ CLI shows the manual watch command. The primary workspace is labelled
 they are session metadata).
 The shipped `fledge-orchestrator` definition is profile-agnostic, so an
 interactive start offers the profile picker. It then completes authenticated
-readiness without injecting a role prompt or messages into the orchestrator
-pane; orchestrator messages are consumed by background `fledge agent msg wait`
-processes. If no profile can be started
+readiness with the managed role already installed; no lifecycle text is sent
+through the orchestrator pane. Orchestrator messages are consumed by background
+`fledge agent msg wait` processes. If no profile can be started
 or the pick is cancelled, the whole start is rolled back: the daemon is stopped
 and nothing is attached. An interactive start never lands you in a flock
 without an orchestrator. A start whose stdout is not a terminal stops once the
@@ -157,8 +158,8 @@ first is alive fails the way an exhausted species pool does.
 | | `claude` | `codex` | `pi` |
 |---|---|---|---|
 | Runs in | a herdr pane | a herdr pane | a herdr pane |
-| Launch | `claude --session-id <uuid> [--permission-mode …] [--model …]` | `codex [--sandbox …] [--model …]` | `pi [--provider …] [--model …]` |
-| Delivery | `pane.send_input` with `keys:["enter"]` | `pane.send_input` with `keys:["enter"]` | `pane.send_input` with `keys:["enter"]` |
+| Launch instructions | final `--append-system-prompt` | final `--config developer_instructions=<TOML string>` | final `--append-system-prompt` |
+| Direct-message delivery | `pane.send_input` with `keys:["enter"]` | `pane.send_input` with `keys:["enter"]` | `pane.send_input` with `keys:["enter"]` |
 | Stop | `pane.close`, or `workspace.close` when dedicated | `pane.close`, or `workspace.close` when dedicated | `pane.close` |
 | Visible | yes — you can watch and type into it | yes — you can watch and type into it | yes — you can watch and type into it |
 
@@ -168,13 +169,17 @@ RPC-subprocess shape); those replay as `orphaned`.
 
 **Journal** — `.fledge/flocks/<name>/journal.jsonl`, append-only JSON lines,
 written *before* an operation is acknowledged. It records `daemon.started`,
-`agent.registered`, `agent.spawned`, `agent.ready`, `agent.stopped`,
+`agent.registered`, `agent.launching`, `agent.spawned`, `agent.ready`, `agent.stopped`,
 `msg.sent`, and `msg.delivered` (`agent.settled` is a legacy event from the
 removed pi RPC shape — recognized on replay, never emitted). The daemon
 rebuilds its entire roster and
 pending-message queue by replaying it. A malformed final line is treated as a
 torn write and ignored; malformed anywhere else is corruption and fails
-startup.
+startup. Registration and resolved launch intent are committed atomically
+before Herdr starts the CLI. `agent.launching` includes the readiness-token
+hash and SHA-256 `instruction_hash`; `agent.spawned` follows with the resolved
+PID and pane/workspace metadata. An incomplete launching attempt replays as
+`orphaned` with its token invalidated.
 
 ## Commands
 
@@ -309,7 +314,9 @@ Markdown remains authoritative. If a referenced profile does not already
 exist, `model` must be routable and `fledge.launch` is merged over its derived
 integration/provider. Differing declarations of the same profile are errors.
 `provider` is pi-only, `permission_mode` is Claude-only, and `sandbox` is
-Codex-only. Permission bypass is never inferred. `fledge.worktree` is reserved
+Codex-only. `argv` is option-only and cannot contain `--`; Fledge appends its
+own instruction arguments after it so the assigned role wins for that run.
+Permission bypass is never inferred. `fledge.worktree` is reserved
 and rejected until worktree lifecycle support exists.
 
 `fledge.workspace` is definition-level placement metadata, independent of the
@@ -319,7 +326,7 @@ renames its initial tab, targets the agent start into that workspace, and
 removes the initial shell pane. Claude and Codex profiles support this; a Pi
 profile fails with a clear placement error. The workspace id and label are
 journaled and shown by `agent list`, including JSON output. Launch, readiness,
-bootstrap, and role-delivery failures close the whole workspace. `agent stop`
+spawn-journal, and readiness failures close the whole workspace. `agent stop`
 does the same; ordinary pane-hosted agents still close only their pane.
 
 You can skip the config file and spawn a bare model — `fledge agent spawn
@@ -331,20 +338,24 @@ guess — define a profile in an agent Markdown file. `--integration -I` overrid
 the same model id can run under either harness: `fledge agent spawn --model
 gpt-5.6-sol --integration codex`.
 
-Run bare on a terminal and Fledge lists definitions, not profiles. A spawned
-transport receives a one-use readiness token and only a bootstrap instruction.
-`fledge agent ready` authenticates it; Fledge then delivers a common preamble
-that names its already-registered identity and explains that direct messages
-arrive in its session. Replies use `fledge agent msg send <recipient> <body>`,
-followed by the Markdown role prompt.
-Raw profile and model spawns receive the same preamble without an authored
-role. If an integration sandbox cannot open the daemon socket, `agent ready`
+Run bare on a terminal and Fledge lists definitions, not profiles. Before
+launch, Fledge builds one native instruction document: the assigned,
+already-registered identity; direct-message reply guidance using `fledge agent
+msg send <recipient> <body>`; and the exact authoritative Markdown role. Raw
+profile and model spawns receive only the identity and messaging guidance.
+Claude and Pi receive this as the final `--append-system-prompt`; Codex receives
+it as the final TOML-encoded `developer_instructions` config. The readiness
+bootstrap is the CLI's initial positional prompt, and `fledge agent ready`
+authenticates its one-use token. No startup `pane.send_input` or lifecycle
+`msg.sent` events are produced. If an integration sandbox cannot open the
+daemon socket, `agent ready`
 atomically publishes only the token hash under the flock directory for the
 daemon to validate and consume. The default readiness timeout is two minutes
 (`--timeout`, `-T`). A
-timeout or prompt-delivery failure stops the transport and releases its name.
+timeout or launch failure stops the transport and releases its name.
 
-The orchestrator is user-driven: startup injects only readiness text. Use
+The orchestrator is user-driven but receives its managed Markdown role through
+the same native instruction path as every other definition. Use
 `fledge agent msg wait` in a background orchestrator-side process to consume
 messages sent to it. Spawned Claude, Codex, and Pi workers continue to receive
 direct pane pushes.
@@ -360,7 +371,7 @@ reply_to: <original-id>        # present only on a reply
 <body>
 ```
 
-Bootstrap and role prompts remain raw. A recipient replies with `fledge agent
+A recipient replies with `fledge agent
 msg send <sender> <body> --reply-to <message-id>`; the sender waits for exactly
 that response with `fledge agent msg wait --reply-to <message-id>`.
 

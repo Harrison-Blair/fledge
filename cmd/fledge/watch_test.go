@@ -207,7 +207,7 @@ func (r *wireRecorder) methodParamsAt(method string, occurrence int) (map[string
 	return nil, false
 }
 
-func TestInteractiveStartCreatesWatcherAfterRoleDelivery(t *testing.T) {
+func TestInteractiveStartCreatesWatcherAfterNativeLaunchReadiness(t *testing.T) {
 	rec, root, _, out, err := interactiveStart(t, map[string]agentcfg.Config{
 		"orchestrator-profile": {Integration: "claude", Model: "claude-opus-4"},
 	}, "1\n")
@@ -228,7 +228,7 @@ func TestInteractiveStartCreatesWatcherAfterRoleDelivery(t *testing.T) {
 	}
 
 	methods := rec.methods()
-	watcherAt, lastDelivery := -1, -1
+	watcherAt := -1
 	seenWorkspaces := 0
 	for i, method := range methods {
 		if method == "workspace.create" {
@@ -237,12 +237,14 @@ func TestInteractiveStartCreatesWatcherAfterRoleDelivery(t *testing.T) {
 				watcherAt = i
 			}
 		}
-		if method == "pane.send_input" && watcherAt < 0 {
-			lastDelivery = i
-		}
 	}
-	if lastDelivery < 0 || watcherAt <= lastDelivery {
-		t.Fatalf("startup methods = %v; watcher must follow all orchestrator prompt delivery", methods)
+	if watcherAt < 0 {
+		t.Fatalf("startup methods = %v; watcher workspace is missing", methods)
+	}
+	for _, method := range methods[:watcherAt] {
+		if method == "pane.send_input" {
+			t.Fatalf("startup methods = %v; lifecycle input preceded watcher setup", methods)
+		}
 	}
 	if strings.Count(strings.Join(methods, ","), "agent.start") != 1 {
 		t.Fatalf("startup methods = %v; watcher must not invoke agent.start", methods)

@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -101,6 +103,106 @@ func TestInvalidReadySignalDoesNotTransitionAgent(t *testing.T) {
 	}
 }
 
+func TestEarlyReadyWaitsUntilSpawnedIsJournaled(t *testing.T) {
+	gate := make(chan struct{})
+	f := serveHerdr(t, map[string]string{"agent.start": paneStartedReply})
+	f.mu.Lock()
+	f.blocks = map[string]<-chan struct{}{"agent.start": gate}
+	f.mu.Unlock()
+	d := boundDaemon(t, f)
+	d.skipReadiness = false
+
+	spawned := make(chan error, 1)
+	go func() {
+		_, err := d.spawn(&protocol.Request{Model: "gpt-x", TimeoutMS: 2000})
+		spawned <- err
+	}()
+	deadline := time.Now().Add(time.Second)
+	for f.count("agent.start") == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	env := f.params("agent.start")["env"].(map[string]any)
+	token := env[protocol.ReadyTokenEnv].(string)
+	ready := make(chan error, 1)
+	go func() {
+		_, err := d.ready(&protocol.Request{Name: "pi-emperor", Token: token})
+		ready <- err
+	}()
+
+	select {
+	case err := <-ready:
+		t.Fatalf("early readiness returned before launch resolution: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if hasEvent(t, d, evSpawned, "pi-emperor") || hasEvent(t, d, evReady, "pi-emperor") {
+		t.Fatal("spawned or ready was journaled while agent.start was blocked")
+	}
+	close(gate)
+	if err := <-ready; err != nil {
+		t.Fatalf("ready: %v", err)
+	}
+	if err := <-spawned; err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	var order []string
+	for _, e := range events(t, d) {
+		if e.Name == "pi-emperor" {
+			order = append(order, e.Event)
+		}
+	}
+	want := []string{evRegistered, evLaunching, evSpawned, evReady}
+	if len(order) != len(want) {
+		t.Fatalf("event order = %v, want %v", order, want)
+	}
+	for i := range want {
+		if order[i] != want[i] {
+			t.Fatalf("event order = %v, want %v", order, want)
+		}
+	}
+}
+
+func TestConcurrentStopWaitsForLaunchThenClosesPane(t *testing.T) {
+	gate := make(chan struct{})
+	f := serveHerdr(t, map[string]string{"agent.start": paneStartedReply})
+	f.mu.Lock()
+	f.blocks = map[string]<-chan struct{}{"agent.start": gate}
+	f.mu.Unlock()
+	d := boundDaemon(t, f)
+	d.skipReadiness = false
+
+	spawned := make(chan error, 1)
+	go func() {
+		_, err := d.spawn(&protocol.Request{Model: "gpt-x", TimeoutMS: 2000})
+		spawned <- err
+	}()
+	deadline := time.Now().Add(time.Second)
+	for f.count("agent.start") == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	stopped := make(chan error, 1)
+	go func() {
+		_, err := d.stop(&protocol.Request{Name: "pi-emperor"})
+		stopped <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	if f.count("pane.close") != 0 {
+		t.Fatal("stop closed a pane before launch resolution")
+	}
+	close(gate)
+	if err := <-stopped; err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if err := <-spawned; err == nil || !strings.Contains(err.Error(), "stopped before readiness") {
+		t.Fatalf("spawn error = %v", err)
+	}
+	if close := f.params("pane.close"); close["pane_id"] != "w1:p2" {
+		t.Fatalf("pane.close = %+v", close)
+	}
+	if got := agentState(d, "pi-emperor"); got != stateStopped {
+		t.Fatalf("state = %q, want stopped", got)
+	}
+}
+
 func TestSpawnReadinessTimeoutRollsBackAndReusesSpecies(t *testing.T) {
 	f := serveHerdr(t, map[string]string{"agent.start": paneStartedReply})
 	d := boundDaemon(t, f)
@@ -153,11 +255,11 @@ Do reviews.
 		done <- err
 	}()
 	deadline := time.Now().Add(time.Second)
-	for f.count("pane.send_input") < 1 && time.Now().Before(deadline) {
+	for f.count("agent.start") < 1 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
-	if f.count("pane.send_input") != 1 {
-		t.Fatal("bootstrap was not delivered")
+	if f.count("agent.start") != 1 {
+		t.Fatal("agent was not launched")
 	}
 	if _, err := d.stop(&protocol.Request{Name: "reviewer-emperor"}); err != nil {
 		t.Fatal(err)
@@ -170,8 +272,8 @@ Do reviews.
 	case <-time.After(time.Second):
 		t.Fatal("spawn did not wake when the starting agent stopped")
 	}
-	if got := f.count("pane.send_input"); got != 1 {
-		t.Fatalf("pane inputs = %d, want only the bootstrap", got)
+	if got := f.count("pane.send_input"); got != 0 {
+		t.Fatalf("pane inputs = %d, want no lifecycle input", got)
 	}
 }
 
@@ -189,11 +291,11 @@ func TestOrchestratorReadinessOnlyStartup(t *testing.T) {
 		done <- err
 	}()
 	deadline := time.Now().Add(time.Second)
-	for f.count("pane.send_input") < 1 && time.Now().Before(deadline) {
+	for f.count("agent.start") < 1 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
-	if f.count("pane.send_input") != 1 {
-		t.Fatalf("bootstrap inputs = %d, want 1", f.count("pane.send_input"))
+	if f.count("agent.start") != 1 {
+		t.Fatal("orchestrator was not launched")
 	}
 	env := f.params("agent.start")["env"].(map[string]any)
 	if got := env[protocol.AgentNameEnv]; got != agentcfg.ReservedOrchestrator {
@@ -209,8 +311,43 @@ func TestOrchestratorReadinessOnlyStartup(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if got := f.count("pane.send_input"); got != 1 {
-		t.Fatalf("pane inputs after readiness = %d, want only bootstrap", got)
+	if got := f.count("pane.send_input"); got != 0 {
+		t.Fatalf("pane inputs after readiness = %d, want 0", got)
+	}
+}
+
+func TestManagedOrchestratorReceivesAuthoritativeRoleNatively(t *testing.T) {
+	f := claudeHerdr(t)
+	d := boundDaemon(t, f)
+	catalog, err := json.Marshal(agentcfg.Index{
+		Version: agentcfg.IndexVersion, Agents: map[string]agentcfg.AgentRecord{},
+		Profiles: map[string]agentcfg.Config{"orchestrator-profile": {Integration: "claude", Model: "claude-opus-4"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d.root, scaffold.DirName, agentcfg.CatalogName), catalog, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	definition, _, err := agentcfg.FindDefinition(d.root, agentcfg.ReservedOrchestrator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.spawn(&protocol.Request{Agent: agentcfg.ReservedOrchestrator, Profile: "orchestrator-profile"}); err != nil {
+		t.Fatal(err)
+	}
+	argv := strs(t, f.params("agent.start")["argv"])
+	want := assignedAgentPrompt(agentcfg.ReservedOrchestrator, definition.Prompt)
+	if len(argv) < 3 || argv[len(argv)-3] != "--append-system-prompt" || argv[len(argv)-2] != want || argv[len(argv)-1] != bootstrapPrompt {
+		t.Fatalf("orchestrator argv = %#v", argv)
+	}
+	sum := sha256.Sum256([]byte(want))
+	launching := findEvent(t, d, evLaunching, agentcfg.ReservedOrchestrator)
+	if launching.InstructionHash != hex.EncodeToString(sum[:]) {
+		t.Fatalf("instruction hash = %q, want %x", launching.InstructionHash, sum)
+	}
+	if got := f.count("pane.send_input"); got != 0 {
+		t.Fatalf("orchestrator lifecycle pane inputs = %d, want 0", got)
 	}
 }
 
@@ -228,7 +365,7 @@ func TestOrchestratorReadinessRecoverySkipsRolePrompt(t *testing.T) {
 	}
 }
 
-func TestSpawnSendsBootstrapBeforeRolePrompt(t *testing.T) {
+func TestSpawnInjectsClaudeRoleAndBootstrapAtLaunch(t *testing.T) {
 	f := serveHerdr(t, map[string]string{
 		"agent.start":       paneStartedReply,
 		"pane.process_info": `{"id":"1","result":{"process_info":{"shell_pid":4242}}}`,
@@ -259,7 +396,7 @@ Do reviews.
 		done <- err
 	}()
 	deadline := time.Now().Add(time.Second)
-	for f.count("pane.send_input") < 1 && time.Now().Before(deadline) {
+	for f.count("agent.start") < 1 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
 	start := f.params("agent.start")
@@ -267,9 +404,6 @@ Do reviews.
 	token, _ := env[protocol.ReadyTokenEnv].(string)
 	if token == "" {
 		t.Fatalf("start env has no readiness token: %v", env)
-	}
-	if f.count("agent.get") == 0 {
-		t.Fatal("bootstrap was sent without waiting for the pane transport to become input-ready")
 	}
 	if _, err := d.ready(&protocol.Request{Name: "reviewer-emperor", Token: token}); err != nil {
 		t.Fatal(err)
@@ -286,28 +420,20 @@ Do reviews.
 		t.Fatalf("replayed agent metadata = %+v", ra)
 	}
 
-	var prompts []string
-	f.mu.Lock()
-	for _, envelope := range f.got {
-		if strings.Trim(string(envelope["method"]), `"`) != "pane.send_input" {
-			continue
-		}
-		var params struct {
-			Text string `json:"text"`
-		}
-		if err := json.Unmarshal(envelope["params"], &params); err != nil {
-			f.mu.Unlock()
-			t.Fatal(err)
-		}
-		prompts = append(prompts, params.Text)
+	argv := strs(t, start["argv"])
+	wantInstructions := assignedAgentPrompt("reviewer-emperor", "Do reviews.\n")
+	if len(argv) < 3 || argv[len(argv)-3] != "--append-system-prompt" || argv[len(argv)-2] != wantInstructions || argv[len(argv)-1] != bootstrapPrompt {
+		t.Fatalf("launch argv tail = %#v", argv)
 	}
-	f.mu.Unlock()
-	if len(prompts) != 2 || prompts[0] != bootstrapPrompt || prompts[1] != assignedAgentPrompt("reviewer-emperor", "Do reviews.\n") {
-		t.Fatalf("prompt order = %#v", prompts)
+	if got := f.count("pane.send_input"); got != 0 {
+		t.Fatalf("lifecycle pane inputs = %d, want 0", got)
+	}
+	if got := countEvents(t, d, evSent, "reviewer-emperor"); got != 0 {
+		t.Fatalf("lifecycle msg.sent events = %d, want 0", got)
 	}
 }
 
-func TestSpawnDeliversRolePromptThroughPiPane(t *testing.T) {
+func TestSpawnInjectsPiRoleAndBootstrapAtLaunch(t *testing.T) {
 	f := serveHerdr(t, map[string]string{
 		"agent.start":       paneStartedReply,
 		"pane.process_info": `{"id":"1","result":{"process_info":{"shell_pid":4242}}}`,
@@ -336,7 +462,7 @@ Review through Pi.
 		done <- err
 	}()
 	deadline := time.Now().Add(time.Second)
-	for f.count("pane.send_input") < 1 && time.Now().Before(deadline) {
+	for f.count("agent.start") < 1 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
 	start := f.params("agent.start")
@@ -358,32 +484,17 @@ Review through Pi.
 		t.Fatal(err)
 	}
 
-	var prompts []string
-	f.mu.Lock()
-	for _, envelope := range f.got {
-		if strings.Trim(string(envelope["method"]), `"`) != "pane.send_input" {
-			continue
-		}
-		var params struct {
-			Text string `json:"text"`
-		}
-		if err := json.Unmarshal(envelope["params"], &params); err != nil {
-			f.mu.Unlock()
-			t.Fatal(err)
-		}
-		prompts = append(prompts, params.Text)
+	argv := strs(t, start["argv"])
+	wantInstructions := assignedAgentPrompt("pi-reviewer-emperor", "Review through Pi.\n")
+	if len(argv) < 3 || argv[len(argv)-3] != "--append-system-prompt" || argv[len(argv)-2] != wantInstructions || argv[len(argv)-1] != bootstrapPrompt {
+		t.Fatalf("launch argv tail = %#v", argv)
 	}
-	f.mu.Unlock()
-	if len(prompts) != 2 || prompts[0] != bootstrapPrompt || prompts[1] != assignedAgentPrompt("pi-reviewer-emperor", "Review through Pi.\n") {
-		t.Fatalf("prompt order = %#v", prompts)
+	if got := f.count("pane.send_input"); got != 0 {
+		t.Fatalf("lifecycle pane inputs = %d, want 0", got)
 	}
 }
 
-// Herdr only knows pi's native status once `herdr integration install pi` has
-// run; without it agent.get reports unknown forever. The input-ready wait must
-// then degrade to proceeding after its timeout rather than failing the spawn —
-// the readiness handshake is the real gate.
-func TestSpawnProceedsWhenPaneStatusStaysUnknown(t *testing.T) {
+func TestSpawnDoesNotPollPaneStatusOrSendLifecycleInput(t *testing.T) {
 	f := serveHerdr(t, map[string]string{
 		"agent.start": paneStartedReply,
 		"agent.get":   `{"id":"1","result":{"type":"agent","agent":{"pane_id":"w1:p2","agent_status":"unknown"}}}`,
@@ -391,21 +502,14 @@ func TestSpawnProceedsWhenPaneStatusStaysUnknown(t *testing.T) {
 	d := boundDaemon(t, f)
 	d.skipReadiness = false
 
-	old := paneInputReadyTimeout
-	paneInputReadyTimeout = 50 * time.Millisecond
-	t.Cleanup(func() { paneInputReadyTimeout = old })
-
 	done := make(chan error, 1)
 	go func() {
 		_, err := d.spawn(&protocol.Request{Model: "gpt-x", TimeoutMS: 2000})
 		done <- err
 	}()
 	deadline := time.Now().Add(time.Second)
-	for f.count("pane.send_input") < 1 && time.Now().Before(deadline) {
+	for f.count("agent.start") < 1 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
-	}
-	if f.count("pane.send_input") != 1 {
-		t.Fatal("bootstrap was never delivered; the unknown status failed the spawn")
 	}
 	env := f.params("agent.start")["env"].(map[string]any)
 	token, _ := env[protocol.ReadyTokenEnv].(string)
@@ -417,6 +521,9 @@ func TestSpawnProceedsWhenPaneStatusStaysUnknown(t *testing.T) {
 	}
 	if err := <-done; err != nil {
 		t.Fatalf("spawn failed though the readiness handshake completed: %v", err)
+	}
+	if f.count("agent.get") != 0 || f.count("pane.send_input") != 0 {
+		t.Fatalf("startup methods = %v, want no status poll or pane input", f.methods())
 	}
 }
 
@@ -437,7 +544,7 @@ func TestRawSpawnReceivesAssignedNameAndMessageWaitPrompt(t *testing.T) {
 		done <- err
 	}()
 	deadline := time.Now().Add(time.Second)
-	for f.count("pane.send_input") < 1 && time.Now().Before(deadline) {
+	for f.count("agent.start") < 1 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
 	env := f.params("agent.start")["env"].(map[string]any)
@@ -452,34 +559,19 @@ func TestRawSpawnReceivesAssignedNameAndMessageWaitPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var prompts []string
-	f.mu.Lock()
-	for _, envelope := range f.got {
-		if strings.Trim(string(envelope["method"]), `"`) != "pane.send_input" {
-			continue
-		}
-		var params struct {
-			Text string `json:"text"`
-		}
-		if err := json.Unmarshal(envelope["params"], &params); err != nil {
-			f.mu.Unlock()
-			t.Fatal(err)
-		}
-		prompts = append(prompts, params.Text)
-	}
-	f.mu.Unlock()
 	want := assignedAgentPrompt("raw-emperor", "")
-	if len(prompts) != 2 || prompts[0] != bootstrapPrompt || prompts[1] != want {
-		t.Fatalf("raw prompts = %#v, want bootstrap then %q", prompts, want)
+	argv := strs(t, f.params("agent.start")["argv"])
+	if len(argv) < 3 || argv[len(argv)-2] != want || argv[len(argv)-1] != bootstrapPrompt {
+		t.Fatalf("raw launch argv = %#v", argv)
 	}
 	for _, text := range []string{"already registered", "`raw-emperor`", "Direct messages will arrive", "fledge agent msg send <recipient> <body>"} {
-		if !strings.Contains(prompts[1], text) {
-			t.Errorf("assigned-name prompt missing %q: %q", text, prompts[1])
+		if !strings.Contains(want, text) {
+			t.Errorf("assigned-name instructions missing %q: %q", text, want)
 		}
 	}
 	for _, text := range []string{"fledge agent msg wait", "--as raw-emperor", "--from raw-emperor"} {
-		if strings.Contains(prompts[1], text) {
-			t.Errorf("assigned-name prompt still contains removed instruction %q: %q", text, prompts[1])
+		if strings.Contains(want, text) {
+			t.Errorf("assigned-name instructions still contain removed instruction %q: %q", text, want)
 		}
 	}
 }

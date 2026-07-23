@@ -3,6 +3,7 @@ package daemon
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -27,8 +28,9 @@ type fakeHerdr struct {
 	t      *testing.T
 	socket string
 
-	mu  sync.Mutex
-	got []map[string]json.RawMessage
+	mu     sync.Mutex
+	got    []map[string]json.RawMessage
+	blocks map[string]<-chan struct{}
 }
 
 const paneStartedReply = `{"id":"1","result":{"agent":{"pane_id":"w1:p2","terminal_id":"term_x"}}}`
@@ -70,11 +72,15 @@ func (f *fakeHerdr) handle(conn net.Conn, replies map[string]string) {
 		return
 	}
 
+	method := strings.Trim(string(env["method"]), `"`)
 	f.mu.Lock()
 	f.got = append(f.got, env)
+	block := f.blocks[method]
 	f.mu.Unlock()
 
-	method := strings.Trim(string(env["method"]), `"`)
+	if block != nil {
+		<-block
+	}
 	reply, ok := replies[method]
 	if !ok {
 		if method == "pane.current" {
@@ -373,24 +379,24 @@ func TestDedicatedWorkspaceLaunchFailuresRollBack(t *testing.T) {
 			if got := f.count("workspace.close") > 0; got != tt.closed {
 				t.Fatalf("workspace close = %v, want %v; methods %v", got, tt.closed, f.methods())
 			}
-			if len(d.agents) != 0 {
-				t.Fatalf("failed launch left roster residue: %+v", d.agents)
+			if got := agentState(d, "context-planner-emperor"); got != stateStopped {
+				t.Fatalf("failed launch state = %q, want stopped", got)
 			}
 		})
 	}
 }
 
-func TestUnjournaledDedicatedLaunchClosesWorkspace(t *testing.T) {
+func TestSpawnJournalFailureClosesDedicatedWorkspace(t *testing.T) {
 	f := serveHerdr(t, map[string]string{
 		"workspace.create": dedicatedWorkspaceReply,
 		"agent.start":      `{"id":"1","result":{"agent":{"pane_id":"w9:p2","terminal_id":"term_x"}}}`,
 	})
 	d := boundDaemon(t, f)
 	writeDedicatedDefinition(t, d.root, "claude-opus-4")
-	d.journal.Close()
+	d.journal = &failNthJournal{WriteCloser: d.journal, failAt: 2}
 
 	if _, err := d.spawn(&protocol.Request{Agent: "context-planner"}); err == nil {
-		t.Fatal("spawn succeeded with a closed journal")
+		t.Fatal("spawn succeeded with a failed spawned-event write")
 	}
 	if close := f.params("workspace.close"); close["workspace_id"] != "w9" {
 		t.Fatalf("workspace rollback = %+v", close)
@@ -398,8 +404,8 @@ func TestUnjournaledDedicatedLaunchClosesWorkspace(t *testing.T) {
 	if got := f.count("pane.close"); got != 1 {
 		t.Fatalf("pane.close count = %d, want only initial shell cleanup", got)
 	}
-	if len(d.agents) != 0 {
-		t.Fatalf("failed journal left roster residue: %+v", d.agents)
+	if got := agentState(d, "context-planner-emperor"); got != stateStopped {
+		t.Fatalf("failed journal state = %q, want stopped", got)
 	}
 }
 
@@ -458,12 +464,13 @@ func TestSpawnClaudeByConfig(t *testing.T) {
 	if !hasEvent(t, d, evRegistered, "worker-emperor") {
 		t.Fatal("no agent.registered line; an old replay would not see this agent")
 	}
+	launching := findEvent(t, d, evLaunching, "worker-emperor")
 	spawned := findEvent(t, d, evSpawned, "worker-emperor")
-	if spawned.Integration != "claude" || spawned.Config != "worker" || spawned.PaneID != "w1:p2" {
-		t.Fatalf("agent.spawned = %+v", spawned)
+	if launching.Integration != "claude" || launching.Config != "worker" || spawned.PaneID != "w1:p2" {
+		t.Fatalf("launching=%+v spawned=%+v", launching, spawned)
 	}
-	if spawned.SessionID == "" || spawned.Cwd == "" {
-		t.Fatalf("agent.spawned dropped session id or cwd: %+v", spawned)
+	if launching.SessionID == "" || launching.Cwd == "" || launching.InstructionHash == "" {
+		t.Fatalf("agent.launching dropped launch metadata: %+v", launching)
 	}
 }
 
@@ -495,9 +502,9 @@ func TestSpawnDiscoveredClaudeFamilyUsesNativeLauncher(t *testing.T) {
 	}
 
 	argv := strs(t, f.params("agent.start")["argv"])
-	if len(argv) != 5 || argv[0] != "claude" || argv[1] != "--session-id" || argv[2] == "" ||
-		argv[3] != "--model" || argv[4] != "opus" {
-		t.Fatalf("argv = %v, want claude --session-id <uuid> --model opus", argv)
+	if len(argv) != 8 || argv[0] != "claude" || argv[1] != "--session-id" || argv[2] == "" ||
+		argv[3] != "--model" || argv[4] != "opus" || argv[5] != "--append-system-prompt" || argv[7] != bootstrapPrompt {
+		t.Fatalf("argv = %v, want native instructions and bootstrap", argv)
 	}
 	if slicesContains(argv, "--provider") {
 		t.Fatalf("argv %v carries an API-provider flag", argv)
@@ -523,8 +530,8 @@ func TestSpawnDiscoveredClaudeDefaultLeavesModelUnspecified(t *testing.T) {
 	}
 
 	argv := strs(t, f.params("agent.start")["argv"])
-	if len(argv) != 3 || argv[0] != "claude" || argv[1] != "--session-id" || argv[2] == "" {
-		t.Fatalf("argv = %v, want claude --session-id <uuid>", argv)
+	if len(argv) != 6 || argv[0] != "claude" || argv[1] != "--session-id" || argv[2] == "" || argv[3] != "--append-system-prompt" || argv[5] != bootstrapPrompt {
+		t.Fatalf("argv = %v, want claude native instructions and bootstrap", argv)
 	}
 	for _, unwanted := range []string{"--model", "--provider"} {
 		if slicesContains(argv, unwanted) {
@@ -573,12 +580,13 @@ func TestSpawnCodexByConfig(t *testing.T) {
 		t.Fatal("no pane.report_metadata; the pane was never titled")
 	}
 
+	launching := findEvent(t, d, evLaunching, "worker-emperor")
 	spawned := findEvent(t, d, evSpawned, "worker-emperor")
-	if spawned.Integration != "codex" || spawned.PaneID != "w1:p2" {
-		t.Fatalf("agent.spawned = %+v", spawned)
+	if launching.Integration != "codex" || spawned.PaneID != "w1:p2" {
+		t.Fatalf("launching=%+v spawned=%+v", launching, spawned)
 	}
-	if spawned.SessionID != "" {
-		t.Fatalf("codex journal line carries session id %q; codex owns its sessions", spawned.SessionID)
+	if launching.SessionID != "" {
+		t.Fatalf("codex launch carries session id %q; codex owns its sessions", launching.SessionID)
 	}
 }
 
@@ -603,7 +611,7 @@ func TestSpawnPiByModel(t *testing.T) {
 	}
 
 	argv := strs(t, f.params("agent.start")["argv"])
-	want := []string{"pi", "--provider", "openai-codex", "--model", "gpt-x"}
+	want := []string{"pi", "--provider", "openai-codex", "--model", "gpt-x", "--append-system-prompt", assignedAgentPrompt("pi-emperor", ""), bootstrapPrompt}
 	if len(argv) != len(want) {
 		t.Fatalf("argv = %v, want %v", argv, want)
 	}
@@ -613,12 +621,13 @@ func TestSpawnPiByModel(t *testing.T) {
 		}
 	}
 
+	launching := findEvent(t, d, evLaunching, "pi-emperor")
 	spawned := findEvent(t, d, evSpawned, "pi-emperor")
-	if spawned.Integration != "pi" || spawned.PaneID != "w1:p2" {
-		t.Fatalf("agent.spawned = %+v", spawned)
+	if launching.Integration != "pi" || spawned.PaneID != "w1:p2" {
+		t.Fatalf("launching=%+v spawned=%+v", launching, spawned)
 	}
-	if spawned.SessionID != "" {
-		t.Fatalf("pi journal line carries session id %q; pi owns its sessions", spawned.SessionID)
+	if launching.SessionID != "" {
+		t.Fatalf("pi launch carries session id %q; pi owns its sessions", launching.SessionID)
 	}
 
 	// No RPC subprocess means no frame log.
@@ -763,23 +772,17 @@ func TestFailedLaunchReleasesItsName(t *testing.T) {
 		t.Fatal("spawn reported success though agent.start failed")
 	}
 
-	d.mu.Lock()
-	_, inRoster := d.agents["worker-emperor"]
-	order := append([]string(nil), d.order...)
-	d.mu.Unlock()
-
-	if inRoster {
-		t.Fatal("a failed launch left its reservation on the roster")
+	if got := agentState(d, "worker-emperor"); got != stateStopped {
+		t.Fatalf("failed launch state = %q, want stopped", got)
 	}
-	if slicesContains(order, "worker-emperor") {
-		t.Fatalf("order = %v, still lists the released name", order)
+	if !hasEvent(t, d, evLaunching, "worker-emperor") || !hasEvent(t, d, evStopped, "worker-emperor") {
+		t.Fatal("failed launch did not journal launching then stopped")
 	}
 }
 
-// Reusing a stopped agent's slug must not erase that agent when the new launch
-// fails: the journal still records it, so the live roster would disagree with a
-// replay of its own journal.
-func TestFailedLaunchRestoresTheStoppedAgentItReused(t *testing.T) {
+// Reusing a stopped slug creates a new durable attempt. If that attempt fails,
+// the latest roster and replay both describe the new stopped attempt.
+func TestFailedLaunchReplacesStoppedAttemptConsistently(t *testing.T) {
 	f := serveHerdr(t, map[string]string{"agent.start": paneStartedReply})
 	d := boundDaemon(t, f)
 	writeAgents(t, d.root, map[string]agentcfg.Config{"worker": {Integration: "claude"}})
@@ -807,8 +810,8 @@ func TestFailedLaunchRestoresTheStoppedAgentItReused(t *testing.T) {
 	if !ok {
 		t.Fatal("the failed launch erased the stopped agent whose slug it reused")
 	}
-	if got.State != stateStopped || got.PaneID != "w1:p2" {
-		t.Fatalf("restored entry = %+v, want the stopped agent unchanged", got)
+	if got.State != stateStopped || got.PaneID != "" {
+		t.Fatalf("latest stopped attempt = %+v", got)
 	}
 
 	// The live roster must match what this journal replays to.
@@ -872,15 +875,28 @@ type countingJournal struct {
 	writes int
 }
 
+type failNthJournal struct {
+	io.WriteCloser
+	writes int
+	failAt int
+}
+
+func (f *failNthJournal) Write(p []byte) (int, error) {
+	f.writes++
+	if f.writes == f.failAt {
+		return 0, errors.New("injected journal failure")
+	}
+	return f.WriteCloser.Write(p)
+}
+
 func (c *countingJournal) Write(p []byte) (int, error) {
 	c.writes++
 	return c.WriteCloser.Write(p)
 }
 
-// agent.registered and agent.spawned only describe an agent together: a
-// registered line alone replays as a live agent with no integration. Writing
-// them in one call is what makes a failure between them impossible.
-func TestSpawnJournalsItsPairInOneWrite(t *testing.T) {
+// Registration and launch intent are one atomic pre-launch write; spawned is a
+// second write after Herdr resolves.
+func TestSpawnJournalsIntentBeforeSpawnResolution(t *testing.T) {
 	d := boundDaemon(t, serveHerdr(t, map[string]string{"agent.start": paneStartedReply}))
 
 	counter := &countingJournal{WriteCloser: d.journal}
@@ -889,8 +905,8 @@ func TestSpawnJournalsItsPairInOneWrite(t *testing.T) {
 	if _, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Model: "gpt-x"}); err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
-	if counter.writes != 1 {
-		t.Fatalf("spawn made %d journal writes, want 1: the pair can tear between them", counter.writes)
+	if counter.writes != 2 {
+		t.Fatalf("spawn made %d journal writes, want intent then spawned", counter.writes)
 	}
 
 	// Both events are nonetheless present and in replay order.
@@ -900,14 +916,46 @@ func TestSpawnJournalsItsPairInOneWrite(t *testing.T) {
 			seen = append(seen, e.Event)
 		}
 	}
-	if len(seen) != 2 || seen[0] != evRegistered || seen[1] != evSpawned {
-		t.Fatalf("journaled %v, want [%s %s]", seen, evRegistered, evSpawned)
+	if len(seen) != 3 || seen[0] != evRegistered || seen[1] != evLaunching || seen[2] != evSpawned {
+		t.Fatalf("journaled %v, want [%s %s %s]", seen, evRegistered, evLaunching, evSpawned)
 	}
 }
 
-// A claude launch the journal could not record must close its pane. Nothing
-// else will: the pane is not on the roster, so no stop can ever reach it.
-func TestUnjournaledClaudeLaunchClosesItsPane(t *testing.T) {
+func TestSpawnJournalFailureStopsAndCleansLaunchedPane(t *testing.T) {
+	f := serveHerdr(t, map[string]string{"agent.start": paneStartedReply})
+	d := boundDaemon(t, f)
+	d.skipReadiness = false
+	failing := &failNthJournal{WriteCloser: d.journal, failAt: 2}
+	d.journal = failing
+
+	if _, err := d.spawn(&protocol.Request{Model: "gpt-x", TimeoutMS: 1000}); err == nil || !strings.Contains(err.Error(), "journal") {
+		t.Fatalf("spawn error = %v", err)
+	}
+	if close := f.params("pane.close"); close["pane_id"] != "w1:p2" {
+		t.Fatalf("pane.close = %+v", close)
+	}
+	if got := agentState(d, "pi-emperor"); got != stateStopped {
+		t.Fatalf("state = %q, want stopped", got)
+	}
+	d.mu.Lock()
+	_, token := d.readyTokens["pi-emperor"]
+	_, ready := d.readyWaiters["pi-emperor"]
+	_, launch := d.launches["pi-emperor"]
+	d.mu.Unlock()
+	if token || ready || launch {
+		t.Fatalf("latches leaked: token=%v ready=%v launch=%v", token, ready, launch)
+	}
+	replayed, err := replay(journalPath(d.root, d.flockName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := replayed.agents["pi-emperor"].State; got != stateStopped {
+		t.Fatalf("replayed state = %q, want stopped", got)
+	}
+}
+
+// A failure to persist launch intent must prevent Herdr from being called.
+func TestUnjournaledLaunchNeverStartsClaude(t *testing.T) {
 	f := serveHerdr(t, map[string]string{"agent.start": paneStartedReply})
 	d := boundDaemon(t, f)
 	writeAgents(t, d.root, map[string]agentcfg.Config{"worker": {Integration: "claude"}})
@@ -918,12 +966,8 @@ func TestUnjournaledClaudeLaunchClosesItsPane(t *testing.T) {
 		t.Fatal("spawn reported success though its journal write failed")
 	}
 
-	closed, ok := f.call("pane.close")
-	if !ok {
-		t.Fatal("pane.close never sent; the unjournaled pane is leaked forever")
-	}
-	if closed["pane_id"] != "w1:p2" {
-		t.Fatalf("pane.close pane_id = %v, want w1:p2", closed["pane_id"])
+	if got := f.count("agent.start"); got != 0 {
+		t.Fatalf("agent.start calls = %d, want 0", got)
 	}
 
 	d.mu.Lock()
@@ -1634,15 +1678,13 @@ func TestSpawnEarlyPlacementFailureClosesPaneAndReleasesName(t *testing.T) {
 			if got := f.params("pane.close")["pane_id"]; got != "w1:p2" {
 				t.Fatalf("closed pane = %v, want w1:p2", got)
 			}
-			if hasEvent(t, d, evRegistered, agentcfg.ReservedOrchestrator) ||
-				hasEvent(t, d, evSpawned, agentcfg.ReservedOrchestrator) {
-				t.Fatal("placement failure journaled the orchestrator")
+			if !hasEvent(t, d, evRegistered, agentcfg.ReservedOrchestrator) ||
+				!hasEvent(t, d, evLaunching, agentcfg.ReservedOrchestrator) ||
+				!hasEvent(t, d, evStopped, agentcfg.ReservedOrchestrator) {
+				t.Fatal("placement failure did not journal the stopped attempt")
 			}
-			d.mu.Lock()
-			_, held := d.agents[agentcfg.ReservedOrchestrator]
-			d.mu.Unlock()
-			if held {
-				t.Fatal("placement failure left the orchestrator name reserved")
+			if got := agentState(d, agentcfg.ReservedOrchestrator); got != stateStopped {
+				t.Fatalf("placement failure state = %q, want stopped", got)
 			}
 
 			resp, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Config: agentcfg.ReservedOrchestrator})

@@ -625,7 +625,12 @@ func interactiveStart(t *testing.T, configs map[string]agentcfg.Config, stdin st
 func interactiveStartReplies(t *testing.T, configs map[string]agentcfg.Config, stdin string, extraReplies map[string]string) (rec *wireRecorder, root string, attached *bool, out string, err error) {
 	t.Helper()
 	root, sub := scaffoldedWorkspace(t)
-	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	runtimeDir, err := os.MkdirTemp(os.TempDir(), "fledge-runtime-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(runtimeDir) })
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
 	writeAgentCatalog(t, root, configs)
 
 	recDir := t.TempDir()
@@ -651,14 +656,13 @@ func interactiveStartReplies(t *testing.T, configs map[string]agentcfg.Config, s
 	withStdin(t, stdin)
 	attached = stubAttach(t)
 
-	// The fake pane has no LLM to execute the bootstrap command, so emulate
-	// exactly that one action after the bootstrap reaches pane.send_input.
+	// The fake pane has no LLM to execute the initial readiness prompt, so
+	// emulate that action as soon as agent.start exposes the injected token.
 	go func() {
 		deadline := time.Now().Add(10 * time.Second)
 		for time.Now().Before(deadline) {
 			start, started := rec.methodParams("agent.start")
-			_, bootstrapped := rec.methodParams("pane.send_input")
-			if started && bootstrapped {
+			if started {
 				env, _ := start["env"].(map[string]any)
 				name, _ := start["name"].(string)
 				token, _ := env[protocol.ReadyTokenEnv].(string)
@@ -704,7 +708,7 @@ func TestStartInteractiveSpawnsOrchestrator(t *testing.T) {
 
 // agent.start split:"right" puts the new pane on the RIGHT of the pane it
 // split (verified live on herdr 0.7.4/protocol 16). The daemon swaps and
-// focuses it immediately, before readiness or bootstrap begins.
+// focuses it immediately after agent.start resolves.
 func TestStartInteractivePlacesOrchestratorLeftAndFocused(t *testing.T) {
 	rec, _, _, out, err := interactiveStart(t, map[string]agentcfg.Config{
 		"orchestrator-profile": {Integration: "claude", Model: "claude-opus-4"},
@@ -728,11 +732,11 @@ func TestStartInteractivePlacesOrchestratorLeftAndFocused(t *testing.T) {
 		t.Errorf("pane.focus pane_id = %v, want the orchestrator pane w1:p2", focus["pane_id"])
 	}
 
-	want := []string{"agent.start", "pane.swap", "pane.focus", "agent.get", "pane.send_input"}
+	want := []string{"agent.start", "pane.swap", "pane.focus"}
 	var relevant []string
 	for _, method := range rec.methods() {
 		switch method {
-		case "agent.start", "pane.swap", "pane.focus", "agent.get", "pane.send_input":
+		case "agent.start", "pane.swap", "pane.focus":
 			relevant = append(relevant, method)
 		}
 		if len(relevant) == len(want) {
@@ -741,6 +745,20 @@ func TestStartInteractivePlacesOrchestratorLeftAndFocused(t *testing.T) {
 	}
 	if !slices.Equal(relevant, want) {
 		t.Errorf("startup call order = %v, want %v", relevant, want)
+	}
+	methods := rec.methods()
+	if slices.Contains(methods, "agent.get") {
+		t.Errorf("startup unexpectedly polled agent status: %v", methods)
+	}
+	workspaces := 0
+	for _, method := range methods {
+		if method == "workspace.create" {
+			workspaces++
+		}
+		if workspaces < 2 && method == "pane.send_input" {
+			t.Errorf("startup sent lifecycle pane input before watcher setup: %v", methods)
+			break
+		}
 	}
 }
 

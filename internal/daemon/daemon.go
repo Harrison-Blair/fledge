@@ -68,6 +68,7 @@ type Daemon struct {
 	waiters      []*waiter
 	readyTokens  map[string]string
 	readyWaiters map[string]chan struct{}
+	launches     map[string]*launchLatch
 	fileOnce     sync.Once
 	// skipReadiness is a package-test seam for legacy spawn tests. Production
 	// daemons leave it false, so every launch uses authenticated readiness.
@@ -321,6 +322,7 @@ func New(root, flockName string) (*Daemon, error) {
 		pending:      s.pending,
 		readyTokens:  s.tokens,
 		readyWaiters: make(map[string]chan struct{}),
+		launches:     make(map[string]*launchLatch),
 	}
 	if err := d.append(event{Event: evStarted}); err != nil {
 		d.Close()

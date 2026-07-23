@@ -13,6 +13,7 @@ import (
 const (
 	evStarted    = "daemon.started"
 	evRegistered = "agent.registered"
+	evLaunching  = "agent.launching"
 	evSpawned    = "agent.spawned"
 	evReady      = "agent.ready"
 	// evSettled is a legacy event from the removed pi RPC subprocess shape:
@@ -33,20 +34,21 @@ type event struct {
 	Species string `json:"species,omitempty"`
 	PID     int    `json:"pid,omitempty"`
 
-	Integration    string `json:"integration,omitempty"`
-	Model          string `json:"model,omitempty"`
-	Config         string `json:"config,omitempty"`
-	Agent          string `json:"agent,omitempty"`
-	Profile        string `json:"profile,omitempty"`
-	Source         string `json:"source,omitempty"`
-	PaneID         string `json:"pane_id,omitempty"`
-	WorkspaceID    string `json:"workspace_id,omitempty"`
-	WorkspaceLabel string `json:"workspace_label,omitempty"`
-	Cwd            string `json:"cwd,omitempty"`
-	SessionID      string `json:"session_id,omitempty"`
-	Reason         string `json:"reason,omitempty"`
-	MsgID          string `json:"msg_id,omitempty"`
-	TokenHash      string `json:"token_hash,omitempty"`
+	Integration     string `json:"integration,omitempty"`
+	Model           string `json:"model,omitempty"`
+	Config          string `json:"config,omitempty"`
+	Agent           string `json:"agent,omitempty"`
+	Profile         string `json:"profile,omitempty"`
+	Source          string `json:"source,omitempty"`
+	PaneID          string `json:"pane_id,omitempty"`
+	WorkspaceID     string `json:"workspace_id,omitempty"`
+	WorkspaceLabel  string `json:"workspace_label,omitempty"`
+	Cwd             string `json:"cwd,omitempty"`
+	SessionID       string `json:"session_id,omitempty"`
+	Reason          string `json:"reason,omitempty"`
+	MsgID           string `json:"msg_id,omitempty"`
+	TokenHash       string `json:"token_hash,omitempty"`
+	InstructionHash string `json:"instruction_hash,omitempty"`
 
 	ID      string `json:"id,omitempty"`
 	From    string `json:"from,omitempty"`
@@ -133,6 +135,8 @@ func replay(path string) (*state, error) {
 
 	delivered := make(map[string]bool)
 	var sent []protocol.Message
+	launching := make(map[string]bool)
+	spawned := make(map[string]bool)
 
 	for i, line := range lines {
 		var e event
@@ -181,7 +185,10 @@ func replay(path string) (*state, error) {
 				Profile: e.Profile,
 				Source:  e.Source,
 			}
-		case evSpawned:
+			delete(s.tokens, e.Name)
+			delete(launching, e.Name)
+			delete(spawned, e.Name)
+		case evLaunching:
 			a := s.agents[e.Name]
 			a.Integration = e.Integration
 			a.Model = e.Model
@@ -189,18 +196,41 @@ func replay(path string) (*state, error) {
 			a.Agent = e.Agent
 			a.Profile = e.Profile
 			a.Source = e.Source
+			a.WorkspaceLabel = e.WorkspaceLabel
+			a.State = stateStarting
+			s.agents[e.Name] = a
+			launching[e.Name] = true
+			if e.TokenHash != "" {
+				s.tokens[e.Name] = e.TokenHash
+			}
+		case evSpawned:
+			a := s.agents[e.Name]
+			if e.PID != 0 || a.PID == reservedPID {
+				a.PID = e.PID
+			}
+			if e.Integration != "" {
+				a.Integration = e.Integration
+				a.Model = e.Model
+				a.Config = e.Config
+				a.Agent = e.Agent
+				a.Profile = e.Profile
+				a.Source = e.Source
+			}
 			a.PaneID = e.PaneID
 			a.WorkspaceID = e.WorkspaceID
-			a.WorkspaceLabel = e.WorkspaceLabel
-			if e.TokenHash == "" {
+			if e.WorkspaceLabel != "" {
+				a.WorkspaceLabel = e.WorkspaceLabel
+			}
+			if e.TokenHash != "" {
+				s.tokens[e.Name] = e.TokenHash
+			}
+			if s.tokens[e.Name] == "" {
 				a.State = stateRunning
 			} else {
 				a.State = stateStarting
 			}
 			s.agents[e.Name] = a
-			if e.TokenHash != "" {
-				s.tokens[e.Name] = e.TokenHash
-			}
+			spawned[e.Name] = true
 		case evReady:
 			if a, ok := s.agents[e.Name]; ok {
 				a.State = stateRunning
@@ -227,6 +257,22 @@ func replay(path string) (*state, error) {
 		case evDelivered:
 			delivered[e.ID] = true
 		}
+	}
+
+	// A durable launch intent without a corresponding spawned event is an
+	// incomplete attempt. No CLI is trusted to authenticate after restart and
+	// the claimed species is immediately reusable.
+	for name := range launching {
+		if spawned[name] {
+			continue
+		}
+		a := s.agents[name]
+		if a.State == stateStopped {
+			continue
+		}
+		a.State = stateOrphaned
+		s.agents[name] = a
+		delete(s.tokens, name)
 	}
 
 	// A spawned agent with no pane came from the removed subprocess shape (pi
