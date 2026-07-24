@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/agentcfg"
+	"github.com/Harrison-Blair/fledge/internal/flock"
 	"github.com/Harrison-Blair/fledge/internal/protocol"
 	"github.com/Harrison-Blair/fledge/internal/scaffold"
 )
@@ -23,12 +24,17 @@ func installStartingToken(t *testing.T, d *Daemon, name string) string {
 	}
 	if err := d.appendAll(
 		event{Event: evRegistered, Name: name, Type: "worker", Species: "emperor"},
+		event{Event: evLaunching, Name: name, Integration: "claude", SessionID: "11111111-1111-4111-8111-111111111111", TokenHash: hash},
 		event{Event: evSpawned, Name: name, Integration: "claude", PaneID: "w1:p2", TokenHash: hash},
 	); err != nil {
 		t.Fatal(err)
 	}
 	d.mu.Lock()
-	d.agents[name] = protocol.Agent{Name: name, Type: "worker", Species: "emperor", State: stateStarting}
+	d.agents[name] = protocol.Agent{
+		Name: name, Type: "worker", Species: "emperor",
+		Integration: "claude", PaneID: "w1:p2", State: stateStarting,
+		SessionID: "11111111-1111-4111-8111-111111111111", Cwd: d.root,
+	}
 	d.order = append(d.order, name)
 	d.readyTokens[name] = hash
 	d.readyWaiters[name] = make(chan struct{})
@@ -61,6 +67,265 @@ func TestReadyValidInvalidAndReplayedTokens(t *testing.T) {
 	if replayed.agents["worker-emperor"].State != stateRunning || replayed.tokens["worker-emperor"] != "" {
 		t.Fatalf("replayed state = %+v tokens=%v", replayed.agents["worker-emperor"], replayed.tokens)
 	}
+	sum := sha256.Sum256([]byte(token))
+	if got := replayed.credentials["worker-emperor"]; got != hex.EncodeToString(sum[:]) {
+		t.Fatalf("replayed identity credential = %q", got)
+	}
+}
+
+func TestSpawnedMessageIdentityUsesLaunchCredential(t *testing.T) {
+	d := newTestDaemon(t)
+	token := installStartingToken(t, d, "worker-emperor")
+	if _, err := d.ready(&protocol.Request{Name: "worker-emperor", Token: token}); err != nil {
+		t.Fatal(err)
+	}
+	receiver, err := d.register(&protocol.Request{Type: "receiver", PID: os.Getpid()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for label, credential := range map[string]string{"missing": "", "wrong": "wrong"} {
+		if _, err := d.send(&protocol.Request{
+			From: "worker-emperor", To: receiver.Name, Body: label, Token: credential,
+		}); err == nil || !strings.Contains(err.Error(), "identity token") {
+			t.Fatalf("%s send error = %v", label, err)
+		}
+	}
+	if _, err := d.send(&protocol.Request{
+		From: "worker-emperor", To: receiver.Name, Body: "valid", Token: token,
+	}); err != nil {
+		t.Fatalf("authenticated send: %v", err)
+	}
+
+	if _, err := d.wait(&protocol.Request{
+		As: "worker-emperor", TimeoutMS: 1,
+	}, nil); err == nil || !strings.Contains(err.Error(), "identity token") {
+		t.Fatalf("unauthenticated wait error = %v", err)
+	}
+	if _, err := d.wait(&protocol.Request{
+		As: "worker-emperor", Token: token, TimeoutMS: 1,
+	}, nil); err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("authenticated wait error = %v, want timeout", err)
+	}
+}
+
+func TestStoppedSpawnedIdentityRemainsAuthenticatedButUnauthorized(t *testing.T) {
+	d := newTestDaemon(t)
+	token := installStartingToken(t, d, "worker-emperor")
+	if _, err := d.ready(&protocol.Request{Name: "worker-emperor", Token: token}); err != nil {
+		t.Fatal(err)
+	}
+	sender, err := d.register(&protocol.Request{Type: "sender", PID: os.Getpid()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbound, err := d.send(&protocol.Request{
+		From: sender.Name, To: "worker-emperor", Body: "claim before stop",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.inbox(&protocol.Request{As: "worker-emperor", Token: token}); err != nil {
+		t.Fatal(err)
+	}
+
+	d.mu.Lock()
+	if _, err := d.markStopped("worker-emperor", "test"); err != nil {
+		d.mu.Unlock()
+		t.Fatal(err)
+	}
+	credential := d.identityTokens["worker-emperor"]
+	d.mu.Unlock()
+	if credential == "" {
+		t.Fatal("stop discarded identity credential")
+	}
+
+	operations := map[string]func() error{
+		"send": func() error {
+			_, err := d.send(&protocol.Request{
+				From: "worker-emperor", To: sender.Name, Body: "stale", Token: token,
+			})
+			return err
+		},
+		"inbox": func() error {
+			_, err := d.inbox(&protocol.Request{As: "worker-emperor", Token: token})
+			return err
+		},
+		"wait": func() error {
+			_, err := d.wait(&protocol.Request{
+				As: "worker-emperor", Token: token, TimeoutMS: 1,
+			}, nil)
+			return err
+		},
+		"reply": func() error {
+			_, err := d.reply(&protocol.Request{
+				From: "worker-emperor", ID: inbound.ID, Body: "stale", Token: token,
+			})
+			return err
+		},
+	}
+	for name, operation := range operations {
+		if err := operation(); err == nil || !strings.Contains(err.Error(), "not authorized") {
+			t.Fatalf("%s error = %v, want lifecycle authorization failure", name, err)
+		}
+	}
+	if _, err := d.send(&protocol.Request{
+		From: sender.Name, To: "worker-emperor", Body: "after stop",
+	}); err == nil || !strings.Contains(err.Error(), "cannot receive") {
+		t.Fatalf("send to stopped recipient error = %v", err)
+	}
+
+	replayed, err := replay(journalPath(d.root, d.flockName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.agents["worker-emperor"].State != stateStopped ||
+		replayed.credentials["worker-emperor"] != credential {
+		t.Fatalf("replayed stopped identity = %+v credential=%q",
+			replayed.agents["worker-emperor"], replayed.credentials["worker-emperor"])
+	}
+}
+
+func TestStoppingAgentCancelsParkedMessageWait(t *testing.T) {
+	d := newTestDaemon(t)
+	token := installStartingToken(t, d, "worker-emperor")
+	if _, err := d.ready(&protocol.Request{Name: "worker-emperor", Token: token}); err != nil {
+		t.Fatal(err)
+	}
+	waited := make(chan error, 1)
+	go func() {
+		_, err := d.wait(&protocol.Request{As: "worker-emperor", Token: token}, nil)
+		waited <- err
+	}()
+	waitFor(t, func() bool {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		return len(d.waiters) == 1
+	})
+	d.mu.Lock()
+	if _, err := d.markStopped("worker-emperor", "test"); err != nil {
+		d.mu.Unlock()
+		t.Fatal(err)
+	}
+	d.mu.Unlock()
+	select {
+	case err := <-waited:
+		if err == nil || !strings.Contains(err.Error(), "stopped while waiting") {
+			t.Fatalf("wait error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stopped agent wait was not canceled")
+	}
+}
+
+func TestAuthenticatedReadyWaitDeliversBeforeAndAfterSendExactlyOnce(t *testing.T) {
+	assertDeliveredOnce := func(t *testing.T, d *Daemon, id string) {
+		t.Helper()
+		deliveries := 0
+		for _, e := range events(t, d) {
+			if e.Event == evDelivered && e.ID == id {
+				deliveries++
+			}
+		}
+		if deliveries != 1 {
+			t.Fatalf("delivery events for %s = %d, want 1", id, deliveries)
+		}
+	}
+
+	t.Run("sent before ready", func(t *testing.T) {
+		d := newTestDaemon(t)
+		token := installStartingToken(t, d, "worker-emperor")
+		sender, err := d.register(&protocol.Request{Type: "sender", PID: os.Getpid()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sent, err := d.send(&protocol.Request{
+			From: sender.Name, To: "worker-emperor", Body: "queued before ready",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := d.ready(&protocol.Request{Name: "worker-emperor", Token: token}); err != nil {
+			t.Fatal(err)
+		}
+		got, err := d.wait(&protocol.Request{
+			As: "worker-emperor", Token: token, TimeoutMS: 1000,
+		}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Message == nil || got.Message.ID != sent.ID {
+			t.Fatalf("ready wait received %+v, want %s", got.Message, sent.ID)
+		}
+		if _, err := d.wait(&protocol.Request{
+			As: "worker-emperor", Token: token, TimeoutMS: 20,
+		}, nil); err == nil {
+			t.Fatal("queued message was delivered twice")
+		}
+		assertDeliveredOnce(t, d, sent.ID)
+
+		readyIndex, deliveredIndex := -1, -1
+		for i, e := range events(t, d) {
+			if e.Event == evReady && e.Name == "worker-emperor" {
+				readyIndex = i
+			}
+			if e.Event == evDelivered && e.ID == sent.ID {
+				deliveredIndex = i
+			}
+		}
+		if readyIndex < 0 || deliveredIndex < 0 || readyIndex >= deliveredIndex {
+			t.Fatalf("journal order ready=%d delivered=%d", readyIndex, deliveredIndex)
+		}
+	})
+
+	t.Run("sent after ready wait parks", func(t *testing.T) {
+		d := newTestDaemon(t)
+		token := installStartingToken(t, d, "worker-emperor")
+		sender, err := d.register(&protocol.Request{Type: "sender", PID: os.Getpid()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := d.ready(&protocol.Request{Name: "worker-emperor", Token: token}); err != nil {
+			t.Fatal(err)
+		}
+
+		type waitResult struct {
+			resp protocol.Response
+			err  error
+		}
+		waited := make(chan waitResult, 1)
+		go func() {
+			resp, err := d.wait(&protocol.Request{
+				As: "worker-emperor", Token: token, TimeoutMS: 2000,
+			}, nil)
+			waited <- waitResult{resp: resp, err: err}
+		}()
+		waitFor(t, func() bool {
+			d.mu.Lock()
+			defer d.mu.Unlock()
+			return len(d.waiters) == 1
+		})
+
+		sent, err := d.send(&protocol.Request{
+			From: sender.Name, To: "worker-emperor", Body: "sent after wait",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result := <-waited
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if result.resp.Message == nil || result.resp.Message.ID != sent.ID {
+			t.Fatalf("parked ready wait received %+v, want %s", result.resp.Message, sent.ID)
+		}
+		if _, err := d.wait(&protocol.Request{
+			As: "worker-emperor", Token: token, TimeoutMS: 20,
+		}, nil); err == nil {
+			t.Fatal("directly delivered message was delivered twice")
+		}
+		assertDeliveredOnce(t, d, sent.ID)
+	})
 }
 
 func TestReadySignalAuthenticatesWithoutDaemonSocket(t *testing.T) {
@@ -321,7 +586,10 @@ func TestManagedOrchestratorReceivesAuthoritativeRoleNatively(t *testing.T) {
 	d := boundDaemon(t, f)
 	catalog, err := json.Marshal(agentcfg.Index{
 		Version: agentcfg.IndexVersion, Agents: map[string]agentcfg.AgentRecord{},
-		Profiles: map[string]agentcfg.Config{"orchestrator-profile": {Integration: "claude", Model: "claude-opus-4"}},
+		Profiles: map[string]agentcfg.Config{
+			"haikucl":              {Integration: "claude", Model: "haiku"},
+			"orchestrator-profile": {Integration: "claude", Model: "claude-opus-4"},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -338,7 +606,7 @@ func TestManagedOrchestratorReceivesAuthoritativeRoleNatively(t *testing.T) {
 	}
 	argv := strs(t, f.params("agent.start")["argv"])
 	want := assignedAgentPrompt(agentcfg.ReservedOrchestrator, definition.Prompt)
-	if len(argv) < 3 || argv[len(argv)-3] != "--append-system-prompt" || argv[len(argv)-2] != want || argv[len(argv)-1] != bootstrapPrompt {
+	if len(argv) < 3 || argv[len(argv)-3] != "--append-system-prompt" || argv[len(argv)-2] != want || argv[len(argv)-1] != orchestratorBootstrapPrompt {
 		t.Fatalf("orchestrator argv = %#v", argv)
 	}
 	sum := sha256.Sum256([]byte(want))
@@ -348,6 +616,103 @@ func TestManagedOrchestratorReceivesAuthoritativeRoleNatively(t *testing.T) {
 	}
 	if got := f.count("pane.send_input"); got != 0 {
 		t.Fatalf("orchestrator lifecycle pane inputs = %d, want 0", got)
+	}
+}
+
+func TestListAndSummaryLogTrackSpawnReadyStop(t *testing.T) {
+	f := claudeHerdr(t)
+	d := boundDaemon(t, f)
+	d.skipReadiness = false
+	writeAgents(t, d.root, map[string]agentcfg.Config{
+		"worker": {Integration: "claude", Model: "claude-opus-4"},
+	})
+
+	type spawnResult struct {
+		resp protocol.Response
+		err  error
+	}
+	spawned := make(chan spawnResult, 1)
+	go func() {
+		resp, err := d.spawn(&protocol.Request{Config: "worker", TimeoutMS: 2000})
+		spawned <- spawnResult{resp: resp, err: err}
+	}()
+
+	waitFor(t, func() bool {
+		for _, a := range d.list() {
+			if a.Name == "worker-emperor" && a.State == stateStarting && a.PaneID != "" {
+				return true
+			}
+		}
+		return false
+	})
+	starting := d.list()
+	if len(starting) != 1 || starting[0].Name != "worker-emperor" || starting[0].State != stateStarting {
+		t.Fatalf("starting roster = %+v", starting)
+	}
+
+	logPath := filepath.Join(flock.Dir(d.root, d.flockName), protocol.LogName)
+	readLog := func() string {
+		t.Helper()
+		data, err := os.ReadFile(logPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	if got := strings.Count(readLog(), "started: 0 agents, 0 pending"); got != 1 {
+		t.Fatalf("initial summary count = %d, want 1", got)
+	}
+	if got := strings.Count(readLog(), "started: 1 agents, 0 pending"); got != 1 {
+		t.Fatalf("spawn summary count = %d, want 1", got)
+	}
+
+	env := f.params("agent.start")["env"].(map[string]any)
+	token, _ := env[protocol.ReadyTokenEnv].(string)
+	if token == "" {
+		t.Fatalf("start env has no readiness token: %v", env)
+	}
+	if _, err := d.ready(&protocol.Request{Name: "worker-emperor", Token: token}); err != nil {
+		t.Fatal(err)
+	}
+	result := <-spawned
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	if result.resp.Name != "worker-emperor" {
+		t.Fatalf("spawn response = %+v", result.resp)
+	}
+	running := d.list()
+	if len(running) != 1 || running[0].State != stateRunning {
+		t.Fatalf("running roster = %+v", running)
+	}
+	if got := strings.Count(readLog(), "started: 1 agents, 0 pending"); got != 2 {
+		t.Fatalf("spawn plus ready summary count = %d, want 2", got)
+	}
+
+	sender, err := d.register(&protocol.Request{Type: "sender", PID: os.Getpid()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.send(&protocol.Request{
+		From: sender.Name, To: "worker-emperor", Body: "still pending at stop",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.stop(&protocol.Request{Name: "worker-emperor"}); err != nil {
+		t.Fatal(err)
+	}
+	stopped := d.list()
+	var workerState string
+	for _, a := range stopped {
+		if a.Name == "worker-emperor" {
+			workerState = a.State
+		}
+	}
+	if len(stopped) != 2 || workerState != stateStopped {
+		t.Fatalf("stopped roster = %+v", stopped)
+	}
+	if got := strings.Count(readLog(), "started: 2 agents, 1 pending"); got != 1 {
+		t.Fatalf("stop summary with current counts = %d, want 1", got)
 	}
 }
 
@@ -564,7 +929,7 @@ func TestRawSpawnReceivesAssignedNameAndMessageWaitPrompt(t *testing.T) {
 	if len(argv) < 3 || argv[len(argv)-2] != want || argv[len(argv)-1] != bootstrapPrompt {
 		t.Fatalf("raw launch argv = %#v", argv)
 	}
-	for _, text := range []string{"already registered", "`raw-emperor`", "Direct messages will arrive", "fledge agent msg send <recipient> <body>"} {
+	for _, text := range []string{"already registered", "`raw-emperor`", "Direct messages arrive", "fledge agent msg inbox", "fledge agent msg reply <message-id> <body>"} {
 		if !strings.Contains(want, text) {
 			t.Errorf("assigned-name instructions missing %q: %q", text, want)
 		}

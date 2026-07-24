@@ -86,6 +86,22 @@ func TestReplayPendingKeepsSendOrder(t *testing.T) {
 	}
 }
 
+func TestReplayTreatsRealLegacyPaneDeliveryAsFinal(t *testing.T) {
+	path := writeJournal(t, `{"event":"msg.sent","id":"plain","from":"a-emperor","to":"b-emperor","body":"notice"}
+{"event":"msg.delivered","id":"plain","to":"b-emperor"}
+{"event":"msg.sent","id":"reply","from":"a-emperor","to":"b-emperor","body":"answer","reply_to":"task-1"}
+{"event":"msg.delivered","id":"reply","to":"b-emperor"}
+`)
+
+	s, err := replay(path)
+	if err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if len(s.pending) != 0 {
+		t.Fatalf("pending = %+v, want real legacy deliveries final", s.pending)
+	}
+}
+
 func TestReplayLastRegistrationWins(t *testing.T) {
 	// A dead agent's name may be reclaimed; replay must keep the newest PID
 	// and must not list the name twice.

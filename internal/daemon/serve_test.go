@@ -2,15 +2,21 @@ package daemon
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net"
+	"os"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/Harrison-Blair/fledge/internal/filebridge"
 	"github.com/Harrison-Blair/fledge/internal/protocol"
+	"github.com/Harrison-Blair/fledge/internal/version"
 )
 
 // scriptedListener returns a queued sequence of Accept results, then blocks
@@ -51,6 +57,19 @@ type tempError struct{}
 func (tempError) Error() string   { return "temporary accept failure" }
 func (tempError) Timeout() bool   { return true }
 func (tempError) Temporary() bool { return true }
+
+type afterPassJournal struct {
+	io.WriteCloser
+	after  *atomic.Bool
+	writes *atomic.Int32
+}
+
+func (j *afterPassJournal) Write(p []byte) (int, error) {
+	if j.after.Load() {
+		j.writes.Add(1)
+	}
+	return j.WriteCloser.Write(p)
+}
 
 func serveTestDaemon(ln net.Listener) *Daemon {
 	d := &Daemon{ln: ln, debug: log.New(io.Discard, "", 0), done: make(chan struct{})}
@@ -126,4 +145,254 @@ func TestHandleWriteDeadlineFreesBlockedWriter(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("handle pinned on a response write to a non-reading client")
 	}
+}
+
+func TestStatusReportsDaemonProcessAndVersion(t *testing.T) {
+	d := newTestDaemon(t)
+
+	resp := d.dispatch(&protocol.Request{Op: protocol.OpStatus}, nil)
+	if resp.Error != "" {
+		t.Fatalf("status error = %q", resp.Error)
+	}
+	if resp.DaemonPID != os.Getpid() {
+		t.Fatalf("daemon_pid = %d, want %d", resp.DaemonPID, os.Getpid())
+	}
+	if resp.DaemonVersion != version.Get() {
+		t.Fatalf("daemon_version = %q, want %q", resp.DaemonVersion, version.Get())
+	}
+}
+
+func TestFileBridgeStatusReportsDaemonProcessAndVersion(t *testing.T) {
+	d := newTestDaemon(t)
+	served := make(chan error, 1)
+	go func() { served <- d.Serve() }()
+
+	id, err := filebridge.Submit(d.root, d.flockName, protocol.Request{Op: protocol.OpStatus})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := filebridge.Await(d.root, d.flockName, id, time.Second, time.Second)
+	if err != nil {
+		t.Fatalf("filebridge status: %v", err)
+	}
+	if resp.Error != "" {
+		t.Fatalf("status error = %q", resp.Error)
+	}
+	if resp.DaemonPID != os.Getpid() {
+		t.Fatalf("daemon_pid = %d, want %d", resp.DaemonPID, os.Getpid())
+	}
+	if resp.DaemonVersion != version.Get() {
+		t.Fatalf("daemon_version = %q, want %q", resp.DaemonVersion, version.Get())
+	}
+
+	d.Close()
+	if err := <-served; err != nil {
+		t.Fatalf("Serve after close = %v", err)
+	}
+}
+
+func TestFileBridgeShutdownRespondsBeforeClose(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		t.Run(fmt.Sprintf("attempt-%02d", i), func(t *testing.T) {
+			d := newTestDaemon(t)
+			served := make(chan error, 1)
+			go func() { served <- d.Serve() }()
+
+			id, err := filebridge.Submit(d.root, d.flockName, protocol.Request{Op: protocol.OpShutdown})
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := filebridge.Await(d.root, d.flockName, id, time.Second, time.Second)
+			if err != nil {
+				t.Fatalf("filebridge shutdown await: %v", err)
+			}
+			if resp.Error != "" {
+				t.Fatalf("shutdown error = %q", resp.Error)
+			}
+			if resp.DaemonPID != os.Getpid() || resp.DaemonVersion != version.Get() {
+				t.Fatalf("shutdown response = %+v", resp)
+			}
+			if err := <-served; err != nil {
+				t.Fatalf("Serve after shutdown = %v", err)
+			}
+		})
+	}
+}
+
+func TestShutdownReleasesParkedWaiters(t *testing.T) {
+	d := newTestDaemon(t)
+	sender, err := d.register(&protocol.Request{Type: "sender", PID: os.Getpid()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiver, err := d.register(&protocol.Request{Type: "receiver", PID: os.Getpid()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type waitResult struct {
+		resp protocol.Response
+		err  error
+	}
+	done := make(chan waitResult, 1)
+	go func() {
+		d.beginRequest()
+		resp, err := d.wait(&protocol.Request{As: receiver.Name, From: sender.Name}, nil)
+		d.endRequest()
+		done <- waitResult{resp: resp, err: err}
+	}()
+	waitFor(t, func() bool {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		return len(d.waiters) == 1
+	})
+
+	resp := d.dispatch(&protocol.Request{Op: protocol.OpShutdown}, nil)
+	if resp.Error != "" {
+		t.Fatalf("shutdown error = %q", resp.Error)
+	}
+
+	select {
+	case result := <-done:
+		if result.err == nil || !strings.Contains(result.err.Error(), "shutting down") {
+			t.Fatalf("wait result = %+v, %v; want shutdown error", result.resp, result.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown did not release parked waiter")
+	}
+}
+
+func TestShutdownHoldsOwnershipUntilActiveRequestsDrain(t *testing.T) {
+	d := newTestDaemon(t)
+	served := make(chan error, 1)
+	go func() { served <- d.Serve() }()
+
+	d.beginRequest()
+	resp := d.dispatch(&protocol.Request{Op: protocol.OpShutdown}, nil)
+	if resp.Error != "" {
+		t.Fatalf("shutdown error = %q", resp.Error)
+	}
+
+	select {
+	case err := <-served:
+		if err != nil {
+			t.Fatalf("Serve after shutdown = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown did not close the listener")
+	}
+
+	type startResult struct {
+		d   *Daemon
+		err error
+	}
+	started := make(chan startResult, 1)
+	go func() {
+		next, err := New(d.root, d.flockName)
+		started <- startResult{d: next, err: err}
+	}()
+
+	select {
+	case result := <-started:
+		if result.d != nil {
+			result.d.Close()
+		}
+		t.Fatalf("replacement New returned before the active request drained: %v", result.err)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	d.endRequest()
+
+	select {
+	case result := <-started:
+		if result.err != nil {
+			t.Fatalf("replacement New after drain: %v", result.err)
+		}
+		result.d.Close()
+	case <-time.After(2 * time.Second):
+		t.Fatal("replacement New did not proceed after active request drained")
+	}
+}
+
+func TestFileBridgeDrainCompletesBeforeOwnershipPasses(t *testing.T) {
+	d := newTestDaemon(t)
+	var after atomic.Bool
+	var writes atomic.Int32
+	d.journal = &afterPassJournal{WriteCloser: d.journal, after: &after, writes: &writes}
+
+	served := make(chan error, 1)
+	go func() { served <- d.Serve() }()
+
+	d.fileMu.Lock()
+	if _, err := filebridge.Submit(d.root, d.flockName, protocol.Request{
+		Op: protocol.OpRegister, Type: "bridge", PID: os.Getpid(),
+	}); err != nil {
+		d.fileMu.Unlock()
+		t.Fatal(err)
+	}
+
+	shutdown := make(chan protocol.Response, 1)
+	go func() {
+		shutdown <- d.dispatch(&protocol.Request{Op: protocol.OpShutdown}, nil)
+	}()
+	var serveErr error
+	select {
+	case serveErr = <-served:
+		if serveErr != nil {
+			d.fileMu.Unlock()
+			t.Fatalf("Serve after shutdown listener close = %v", serveErr)
+		}
+	case <-time.After(2 * time.Second):
+		d.fileMu.Unlock()
+		t.Fatal("shutdown did not close listener while bridge drain was blocked")
+	}
+
+	type startResult struct {
+		d   *Daemon
+		err error
+	}
+	started := make(chan startResult, 1)
+	go func() {
+		next, err := New(d.root, d.flockName)
+		started <- startResult{d: next, err: err}
+	}()
+
+	select {
+	case result := <-started:
+		if result.d != nil {
+			result.d.Close()
+		}
+		d.fileMu.Unlock()
+		t.Fatalf("replacement New returned while old bridge drain was blocked: %v", result.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	d.fileMu.Unlock()
+
+	select {
+	case resp := <-shutdown:
+		if resp.Error != "" {
+			t.Fatalf("shutdown error = %q", resp.Error)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown did not finish after bridge drain unblocked")
+	}
+
+	select {
+	case result := <-started:
+		if result.err != nil {
+			t.Fatalf("replacement New: %v", result.err)
+		}
+		after.Store(true)
+		time.Sleep(100 * time.Millisecond)
+		if got := writes.Load(); got != 0 {
+			result.d.Close()
+			t.Fatalf("old daemon wrote journal after ownership passed: %d writes", got)
+		}
+		result.d.Close()
+	case <-time.After(2 * time.Second):
+		t.Fatal("replacement New did not proceed after bridge drain")
+	}
+
+	_ = serveErr
 }

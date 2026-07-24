@@ -9,7 +9,10 @@
 package daemon
 
 import (
+	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -25,6 +28,7 @@ import (
 	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/agentcfg"
+	"github.com/Harrison-Blair/fledge/internal/contextdoc"
 	"github.com/Harrison-Blair/fledge/internal/filebridge"
 	"github.com/Harrison-Blair/fledge/internal/flock"
 	"github.com/Harrison-Blair/fledge/internal/herdr"
@@ -32,6 +36,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/protocol"
 	"github.com/Harrison-Blair/fledge/internal/scaffold"
 	"github.com/Harrison-Blair/fledge/internal/species"
+	"github.com/Harrison-Blair/fledge/internal/version"
 	"github.com/Harrison-Blair/fledge/internal/workspace"
 )
 
@@ -48,10 +53,12 @@ type Daemon struct {
 	// journal is an interface, not the *os.File it always is in production, so
 	// that a test can count and fail writes.
 	journal   io.WriteCloser
+	debugFile io.WriteCloser
 	debug     *log.Logger
 	done      chan struct{}
 	root      string
 	flockName string
+	unlock    func()
 
 	// session is the Herdr session this daemon's lifetime is bound to, zero
 	// when it runs unbound.
@@ -61,15 +68,50 @@ type Daemon struct {
 	// Only the watch goroutine touches it, so it needs no lock.
 	titled bool
 
-	mu           sync.Mutex
-	agents       map[string]protocol.Agent
-	order        []string
-	pending      []protocol.Message
-	waiters      []*waiter
-	readyTokens  map[string]string
-	readyWaiters map[string]chan struct{}
-	launches     map[string]*launchLatch
-	fileOnce     sync.Once
+	mu                 sync.Mutex
+	agents             map[string]protocol.Agent
+	order              []string
+	pending            []protocol.Message
+	notifyPending      []protocol.Message
+	inboxNotifyArmed   map[string]bool
+	inboxNotified      map[string]bool
+	messages           map[string]protocol.Message
+	messageOrder       []string
+	messageDelivered   map[string]bool
+	inboxNotify        chan struct{}
+	inboxNotifyDone    chan struct{}
+	inboxNotifyTasks   map[string]*inboxNotifyTask
+	inboxNotifyFlights map[string]*inboxNotifyFlight
+	inboxWake          inboxWakeFunc
+	inboxWakeCancel    context.CancelFunc
+	inboxNotifyStarted bool
+	closing            bool
+	stopping           map[string]bool
+	waiters            []*waiter
+	readyTokens        map[string]string
+	identityTokens     map[string]string
+	readyWaiters       map[string]chan struct{}
+	launches           map[string]*launchLatch
+	ownedTabs          map[string]ownedTab
+	tabCreateIntents   map[string]pendingTabCreate
+	tabCreates         map[string]*tabCreateLatch
+	tabShells          map[string]*tabShellLatch
+	closingTabs        map[string]bool
+	closingWorkspaces  map[string]bool
+	tabClosures        map[string]tabRecord
+	workspaceClosures  map[string]event
+	tabCloseRuns       map[string]*closeLatch
+	workspaceCloseRuns map[string]*closeLatch
+	fileOnce           sync.Once
+	fileStopOnce       sync.Once
+	fileStop           chan struct{}
+	fileMu             sync.Mutex
+	closeOnce          sync.Once
+	finalCloseOnce     sync.Once
+	closeDone          chan struct{}
+	closeErr           error
+	active             int
+	shutdownDrained    bool
 	// skipReadiness is a package-test seam for legacy spawn tests. Production
 	// daemons leave it false, so every launch uses authenticated readiness.
 	skipReadiness bool
@@ -78,10 +120,18 @@ type Daemon struct {
 // waiter is a blocked wait call. ch is buffered so a delivering sender never
 // blocks on it.
 type waiter struct {
-	as      string
-	replyTo string
-	ch      chan protocol.Message
-	done    bool
+	as          string
+	from        string
+	replyTo     string
+	acknowledge bool
+	ch          chan waiterResult
+	cancel      chan struct{}
+	done        bool
+}
+
+type waiterResult struct {
+	msg protocol.Message
+	err error
 }
 
 // maxSocketPath is the size of sun_path in struct sockaddr_un, minus the
@@ -115,21 +165,40 @@ func journalPath(root, flockName string) string {
 	return filepath.Join(flock.Dir(root, flockName), protocol.JournalName)
 }
 
-// lockReclaim takes an exclusive flock(2) on a per-flock lock file in the socket
-// directory, so the stale-socket probe/unlink/bind in New runs against no
-// concurrent New for the same flock. It blocks until the lock is free and
-// returns a release func. The lock file is never removed; only the advisory
-// lock matters.
-func lockReclaim(root, flockName string) (func(), error) {
+func liveSocket(sock string) bool {
+	c, err := net.Dial("unix", sock)
+	if err != nil {
+		return false
+	}
+	c.Close()
+	return true
+}
+
+// lockOwnership takes an exclusive flock(2) on a per-flock lock file in the
+// socket directory. The daemon holds it for its whole lifetime, so a
+// replacement blocks until the old daemon has closed every request path and
+// durable handle. While waiting, a live socket means this is just another
+// healthy start attempt, so it fails immediately instead of waiting for exit.
+func lockOwnership(root, flockName, sock string) (func(), error) {
 	f, err := os.OpenFile(filepath.Join(socketDir(root), flockName+".lock"), os.O_CREATE|os.O_RDONLY, 0o600)
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		f.Close()
-		return nil, err
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return func() { f.Close() }, nil // closing the fd releases the flock
+		}
+		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
+			f.Close()
+			return nil, err
+		}
+		if liveSocket(sock) {
+			f.Close()
+			return nil, errors.New("daemon already running")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	return func() { f.Close() }, nil // closing the fd releases the flock
 }
 
 // CheckSocketPath reports whether a flock's socket path fits the platform
@@ -172,6 +241,10 @@ func RunBound(root, flockName, session string) error {
 			return fmt.Errorf("no herdr session %q", session)
 		}
 		d.session = s
+		if err := d.recoverOwnedTabs(); err != nil {
+			return err
+		}
+		d.replayInboxNotifications()
 		go d.WatchSession(func() bool { return !herdr.Up(s.SocketPath) }, WatchInterval)
 	}
 	d.consumeReadySignals()
@@ -250,30 +323,41 @@ func New(root, flockName string) (*Daemon, error) {
 		return nil, err
 	}
 
+	sock := SocketPath(root, flockName)
+	// A leftover socket file from a crashed daemon would block bind; a live
+	// one would not, so probe before removing.
+	if liveSocket(sock) {
+		return nil, errors.New("daemon already running")
+	}
+
 	// Establish ownership before replay, which now mutates the journal (it
 	// re-terminates or truncates a torn tail). Reclaiming a stale socket is
 	// probe, then unlink, then bind. Two concurrent New calls for the same flock
 	// could otherwise both probe empty, and the loser's unlink would delete the
-	// winner's live socket, forking the journal and state authority. An
-	// exclusive flock(2) held across the whole sequence serializes them: the
-	// loser blocks, then probes a now-live socket and is refused here.
-	unlock, err := lockReclaim(root, flockName)
+	// winner's live socket, forking the journal and state authority. The lock is
+	// held until final daemon close so an in-place replacement cannot replay the
+	// journal before the old daemon has drained and closed its handles.
+	unlock, err := lockOwnership(root, flockName, sock)
 	if err != nil {
 		return nil, err
 	}
-	defer unlock()
+	locked := true
+	release := func() {
+		if locked {
+			locked = false
+			unlock()
+		}
+	}
 
-	sock := SocketPath(root, flockName)
-	// A leftover socket file from a crashed daemon would block bind; a live
-	// one would not, so probe before removing.
-	if c, err := net.Dial("unix", sock); err == nil {
-		c.Close()
+	if liveSocket(sock) {
+		release()
 		return nil, errors.New("daemon already running")
 	}
 
 	// Ownership is ours; only now replay the journal, which may rewrite its tail.
 	s, err := replay(journalPath(root, flockName))
 	if err != nil {
+		release()
 		return nil, err
 	}
 
@@ -281,12 +365,14 @@ func New(root, flockName string) (*Daemon, error) {
 
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
+		release()
 		return nil, err
 	}
 
 	journal, err := os.OpenFile(journalPath(root, flockName), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		ln.Close()
+		release()
 		return nil, err
 	}
 	// Tighten a journal an older fledge created at 0o644; O_CREATE's mode is
@@ -294,6 +380,7 @@ func New(root, flockName string) (*Daemon, error) {
 	if err := journal.Chmod(0o600); err != nil {
 		journal.Close()
 		ln.Close()
+		release()
 		return nil, err
 	}
 
@@ -301,57 +388,196 @@ func New(root, flockName string) (*Daemon, error) {
 	if err != nil {
 		journal.Close()
 		ln.Close()
+		release()
 		return nil, err
 	}
 	if err := filebridge.ResetServer(root, flockName); err != nil {
 		debugFile.Close()
 		journal.Close()
 		ln.Close()
+		release()
 		return nil, fmt.Errorf("file RPC: %w", err)
 	}
 
 	d := &Daemon{
-		ln:           ln,
-		journal:      journal,
-		debug:        log.New(debugFile, "", log.LstdFlags),
-		done:         make(chan struct{}),
-		root:         root,
-		flockName:    flockName,
-		agents:       s.agents,
-		order:        s.order,
-		pending:      s.pending,
-		readyTokens:  s.tokens,
-		readyWaiters: make(map[string]chan struct{}),
-		launches:     make(map[string]*launchLatch),
+		ln:                 ln,
+		journal:            journal,
+		debug:              log.New(debugFile, "", log.LstdFlags),
+		debugFile:          debugFile,
+		done:               make(chan struct{}),
+		closeDone:          make(chan struct{}),
+		fileStop:           make(chan struct{}),
+		root:               root,
+		flockName:          flockName,
+		unlock:             unlock,
+		agents:             s.agents,
+		order:              s.order,
+		pending:            s.pending,
+		notifyPending:      s.notifyPending,
+		inboxNotifyArmed:   s.inboxNotifyArmed,
+		inboxNotified:      s.inboxNotified,
+		messages:           s.messages,
+		messageOrder:       s.messageOrder,
+		messageDelivered:   s.messageDelivered,
+		inboxNotify:        make(chan struct{}, 1),
+		inboxNotifyDone:    make(chan struct{}),
+		inboxNotifyTasks:   make(map[string]*inboxNotifyTask),
+		inboxNotifyFlights: make(map[string]*inboxNotifyFlight),
+		stopping:           make(map[string]bool),
+		readyTokens:        s.tokens,
+		identityTokens:     s.credentials,
+		readyWaiters:       make(map[string]chan struct{}),
+		launches:           make(map[string]*launchLatch),
+		ownedTabs:          s.ownedTabs,
+		tabCreateIntents:   s.tabCreateIntents,
+		tabCreates:         make(map[string]*tabCreateLatch),
+		tabShells:          make(map[string]*tabShellLatch),
+		closingTabs:        make(map[string]bool),
+		closingWorkspaces:  make(map[string]bool),
+		tabClosures:        s.tabClosures,
+		workspaceClosures:  s.workspaceClosures,
+		tabCloseRuns:       make(map[string]*closeLatch),
+		workspaceCloseRuns: make(map[string]*closeLatch),
+	}
+	for tabID := range d.tabClosures {
+		d.closingTabs[tabID] = true
+	}
+	for workspaceID := range d.workspaceClosures {
+		d.closingWorkspaces[workspaceID] = true
 	}
 	if err := d.append(event{Event: evStarted}); err != nil {
 		d.Close()
 		return nil, err
 	}
-	d.debug.Printf("started: %d agents, %d pending", len(d.agents), len(d.pending))
+	locked = false
+	d.startInboxNotifier()
+	d.logStateSummary()
 	return d, nil
 }
 
-// Close releases the listener, socket file, and log handles. Agents live in
-// herdr panes, which outlive the daemon by design.
+func (d *Daemon) logStateSummary() {
+	d.debug.Printf("started: %d agents, %d pending", len(d.agents), len(d.pending))
+}
+
+// Close begins shutdown and waits until every accepted request has responded,
+// the notifier has stopped, durable handles are closed, and ownership is
+// released. Agents live in herdr panes, which outlive the daemon by design.
 func (d *Daemon) Close() error {
-	if d.done != nil {
-		select {
-		case <-d.done:
-		default:
+	d.initiateShutdown()
+	if d.closeDone != nil {
+		<-d.closeDone
+	}
+	return d.closeErr
+}
+
+func (d *Daemon) beginRequest() {
+	d.mu.Lock()
+	d.active++
+	d.mu.Unlock()
+}
+
+func (d *Daemon) endRequest() {
+	d.mu.Lock()
+	if d.active > 0 {
+		d.active--
+	}
+	shouldClose := d.closing && d.shutdownDrained && d.active == 0
+	d.mu.Unlock()
+	if shouldClose {
+		d.finalClose()
+	}
+}
+
+func (d *Daemon) maybeFinalClose() {
+	d.mu.Lock()
+	shouldClose := d.closing && d.shutdownDrained && d.active == 0
+	d.mu.Unlock()
+	if shouldClose {
+		d.finalClose()
+	}
+}
+
+func (d *Daemon) initiateShutdown() {
+	d.closeOnce.Do(func() {
+		var waiters []*waiter
+		d.mu.Lock()
+		d.closing = true
+		for name := range d.inboxNotifyArmed {
+			d.inboxNotifyArmed[name] = false
+		}
+		d.inboxNotifyTasks = make(map[string]*inboxNotifyTask)
+		for _, w := range d.waiters {
+			if w.done {
+				continue
+			}
+			w.done = true
+			waiters = append(waiters, w)
+		}
+		d.waiters = nil
+		cancel := d.inboxWakeCancel
+		d.mu.Unlock()
+
+		for _, w := range waiters {
+			w.ch <- waiterResult{err: errors.New("daemon is shutting down")}
+		}
+		if cancel != nil {
+			cancel()
+		}
+		if d.ln != nil {
+			d.ln.Close()
+		}
+		d.stopFilePolling()
+		d.drainFileRequests()
+		d.mu.Lock()
+		d.shutdownDrained = true
+		d.mu.Unlock()
+		d.maybeFinalClose()
+	})
+}
+
+func (d *Daemon) stopFilePolling() {
+	d.fileStopOnce.Do(func() {
+		if d.fileStop != nil {
+			close(d.fileStop)
+		}
+	})
+}
+
+func (d *Daemon) finalClose() {
+	d.finalCloseOnce.Do(func() {
+		if d.done != nil {
 			close(d.done)
 		}
-	}
-	if d.ln != nil {
-		d.ln.Close()
-	}
-	if err := filebridge.CloseServer(d.root, d.flockName); err != nil {
-		d.debug.Printf("close file RPC: %v", err)
-	}
-	if d.journal != nil {
-		d.journal.Close()
-	}
-	return nil
+		if err := filebridge.CloseServer(d.root, d.flockName); err != nil && d.debug != nil {
+			d.debug.Printf("close file RPC: %v", err)
+		}
+
+		d.mu.Lock()
+		started := d.inboxNotifyStarted
+		done := d.inboxNotifyDone
+		d.mu.Unlock()
+		// A notifier may still be returning from an integration command. Join
+		// it before closing the journal and log it can still use.
+		if started && done != nil {
+			<-done
+		}
+		if d.journal != nil {
+			if err := d.journal.Close(); err != nil {
+				d.closeErr = err
+			}
+		}
+		if d.debugFile != nil {
+			if err := d.debugFile.Close(); err != nil && d.closeErr == nil {
+				d.closeErr = err
+			}
+		}
+		if d.unlock != nil {
+			d.unlock()
+		}
+		if d.closeDone != nil {
+			close(d.closeDone)
+		}
+	})
 }
 
 // Serve accepts connections until the listener is closed. A temporary Accept
@@ -395,34 +621,60 @@ func (d *Daemon) serveFileRequests() {
 		select {
 		case <-d.done:
 			return
+		case <-d.fileStop:
+			return
 		case <-ticker.C:
 		}
-		pending, err := filebridge.Take(d.root, d.flockName)
-		if err != nil {
+		d.drainFileRequests()
+	}
+}
+
+func (d *Daemon) drainFileRequests() {
+	d.fileMu.Lock()
+	defer d.fileMu.Unlock()
+
+	pending, err := filebridge.Take(d.root, d.flockName)
+	if err != nil {
+		if d.debug != nil {
 			d.debug.Printf("file RPC: %v", err)
-			continue
 		}
-		for _, p := range pending {
-			p := p
-			go func() {
-				// A bridge wait has no connection to watch, so give it a
-				// liveness signal built from the exchange's accepted marker: a
-				// client that gives up removes it via Cleanup. Without this a
-				// killed sandboxed `agent msg wait` (which sends no timeout)
-				// would park in d.waiters forever and swallow the next message.
-				var gone chan struct{}
-				if p.Request.Op == protocol.OpWait {
-					gone = make(chan struct{})
-					done := make(chan struct{})
-					defer close(done)
-					go d.watchBridgeWaiter(p.ID, gone, done)
-				}
-				resp := d.dispatch(&p.Request, gone)
-				if err := filebridge.Respond(d.root, d.flockName, p.ID, resp); err != nil {
-					d.debug.Printf("file RPC response %s: %v", p.ID, err)
-				}
-			}()
+		return
+	}
+	for _, p := range pending {
+		p := p
+		d.beginRequest()
+		go func() {
+			defer d.endRequest()
+			// A bridge wait has no connection to watch, so give it a
+			// liveness signal built from the exchange's accepted marker: a
+			// client that gives up removes it via Cleanup. Without this a
+			// killed sandboxed `agent msg wait` (which sends no timeout)
+			// would park in d.waiters forever and swallow the next message.
+			var gone chan struct{}
+			if p.Request.Op == protocol.OpWait || p.Request.Op == protocol.OpReceive {
+				gone = make(chan struct{})
+				done := make(chan struct{})
+				defer close(done)
+				go d.watchBridgeWaiter(p.ID, gone, done)
+			}
+			resp := d.dispatch(&p.Request, gone)
+			if err := filebridge.Respond(d.root, d.flockName, p.ID, resp); err != nil && d.debug != nil {
+				d.debug.Printf("file RPC response %s: %v", p.ID, err)
+			}
+			if p.Request.Op == protocol.OpShutdown {
+				d.waitBridgeCleanup(p.ID, time.Second)
+			}
+		}()
+	}
+}
+
+func (d *Daemon) waitBridgeCleanup(id string, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for filebridge.Awaiting(d.root, d.flockName, id) {
+		if time.Now().After(deadline) {
+			return
 		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -454,16 +706,19 @@ func (d *Daemon) watchBridgeWaiter(id string, gone chan struct{}, done <-chan st
 
 func (d *Daemon) handle(conn net.Conn) {
 	defer conn.Close()
+	d.beginRequest()
+	defer d.endRequest()
 
 	var req protocol.Request
 	if err := json.NewDecoder(conn).Decode(&req); err != nil {
 		return
 	}
 
-	// For wait, watch the connection so a client that dies mid-wait has its
-	// waiter dropped instead of silently swallowing the next message.
+	// For blocking mailbox operations, watch the connection so a client that
+	// dies mid-wait has its waiter dropped instead of swallowing the next
+	// message.
 	var gone chan struct{}
-	if req.Op == protocol.OpWait {
+	if req.Op == protocol.OpWait || req.Op == protocol.OpReceive {
 		gone = make(chan struct{})
 		go func() {
 			io.Copy(io.Discard, conn)
@@ -498,18 +753,33 @@ func (d *Daemon) dispatch(req *protocol.Request, gone <-chan struct{}) protocol.
 		resp = protocol.Response{
 			Session:       d.session.Name,
 			SessionSocket: d.session.SocketPath,
+			DaemonPID:     os.Getpid(),
+			DaemonVersion: version.Get(),
 			Agents:        d.list(),
 		}
 	case protocol.OpSend:
 		resp, err = d.send(req)
+	case protocol.OpReply:
+		resp, err = d.reply(req)
+	case protocol.OpInbox:
+		resp, err = d.inbox(req)
 	case protocol.OpWait:
 		resp, err = d.wait(req, gone)
+	case protocol.OpPeek:
+		resp, err = d.peek(req)
+	case protocol.OpReceive:
+		resp, err = d.receive(req, gone)
+	case protocol.OpAck:
+		resp, err = d.ack(req)
 	case protocol.OpSpawn:
 		resp, err = d.spawn(req)
 	case protocol.OpReady:
 		resp, err = d.ready(req)
 	case protocol.OpStop:
 		resp, err = d.stop(req)
+	case protocol.OpShutdown:
+		d.initiateShutdown()
+		resp = protocol.Response{DaemonPID: os.Getpid(), DaemonVersion: version.Get()}
 	default:
 		err = fmt.Errorf("unknown op %q", req.Op)
 	}
@@ -541,6 +811,9 @@ func (d *Daemon) register(req *protocol.Request) (protocol.Response, error) {
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.closing {
+		return protocol.Response{}, errors.New("daemon is closing")
+	}
 
 	// The species pool is per-type: a slug is taken only if this type already
 	// holds it under a live process.
@@ -628,7 +901,7 @@ func newID() (string, error) {
 
 func (d *Daemon) send(req *protocol.Request) (protocol.Response, error) {
 	if req.From == "" {
-		return protocol.Response{}, errors.New("missing --from")
+		return protocol.Response{}, errors.New("missing sender")
 	}
 	if req.To == "" {
 		return protocol.Response{}, errors.New("missing recipient")
@@ -641,11 +914,22 @@ func (d *Daemon) send(req *protocol.Request) (protocol.Response, error) {
 	msg := protocol.Message{ID: id, From: req.From, To: req.To, Body: req.Body, ReplyTo: req.ReplyTo}
 
 	d.mu.Lock()
-
-	to, ok := d.agents[req.To]
-	if !ok {
+	if d.closing {
 		d.mu.Unlock()
-		return protocol.Response{}, fmt.Errorf("no registered agent %q", req.To)
+		return protocol.Response{}, errors.New("daemon is closing")
+	}
+
+	if err := d.authorizeMessageActorLocked(req.From, req.Token, req.Credential); err != nil {
+		d.mu.Unlock()
+		return protocol.Response{}, err
+	}
+	if err := d.validateMessageRecipientLocked(req.To); err != nil {
+		d.mu.Unlock()
+		return protocol.Response{}, err
+	}
+	if err := d.validateManagedContextMessageLocked(msg); err != nil {
+		d.mu.Unlock()
+		return protocol.Response{}, err
 	}
 
 	if err := d.append(event{
@@ -654,72 +938,175 @@ func (d *Daemon) send(req *protocol.Request) (protocol.Response, error) {
 		d.mu.Unlock()
 		return protocol.Response{}, err
 	}
-
-	// A spawned agent is driven, not polled: its message goes straight into the
-	// pane rather than waiting for a wait to claim it.
-	if bridged(to) {
-		d.mu.Unlock()
-
-		// A hand-off that fails puts the message on the pending queue, exactly
-		// as an unbridged send would: the live queue is what holds it, and
-		// journaling no delivery line is what makes a replay agree.
-		if err := d.bridge(to, msg); err != nil {
-			d.mu.Lock()
-			// Same disposal as an unbridged send: a parked wait takes it, and
-			// only an unwanted message queues.
-			if w := d.matchWaiter(msg); w != nil {
-				if derr := d.deliver(w, msg); derr != nil {
-					d.debug.Printf("deliver %s after failed bridge: %v", msg.ID, derr)
-					d.pending = append(d.pending, msg)
-				}
-			} else {
-				d.pending = append(d.pending, msg)
-			}
-			d.mu.Unlock()
-			return protocol.Response{}, err
-		}
-
-		d.mu.Lock()
-		defer d.mu.Unlock()
-		if err := d.append(event{Event: evDelivered, ID: msg.ID, To: msg.To}); err != nil {
-			return protocol.Response{}, err
-		}
-		d.debug.Printf("bridged %s %s -> %s", id, msg.From, msg.To)
-		return protocol.Response{ID: id}, nil
-	}
+	d.messages[id] = msg
+	d.messageOrder = append(d.messageOrder, id)
 
 	defer d.mu.Unlock()
 
+	notify := d.shouldNotifyInboxLocked(msg)
 	if w := d.matchWaiter(msg); w != nil {
-		if err := d.deliver(w, msg); err != nil {
-			return protocol.Response{}, err
+		if w.acknowledge {
+			d.pending = append(d.pending, msg)
+			d.offer(w, msg)
+		} else {
+			if err := d.deliver(w, msg); err != nil {
+				d.pending = append(d.pending, msg)
+				d.failWaiter(w, err)
+				if notify {
+					d.queueInboxWakeLocked(msg.To, 0, time.Time{})
+				}
+				return protocol.Response{}, err
+			}
 		}
 	} else {
 		d.pending = append(d.pending, msg)
 	}
 
 	d.debug.Printf("sent %s %s -> %s", id, msg.From, msg.To)
+	if notify {
+		d.queueInboxWakeLocked(msg.To, 0, time.Time{})
+	}
 	return protocol.Response{ID: id}, nil
 }
 
-// matchWaiter finds the first live waiter msg satisfies, removing it from the
-// waiter list. Caller holds d.mu.
+func (d *Daemon) reply(req *protocol.Request) (protocol.Response, error) {
+	if req.From == "" {
+		return protocol.Response{}, errors.New("missing sender")
+	}
+	if req.ID == "" {
+		return protocol.Response{}, errors.New("missing inbound message id")
+	}
+	id, err := newID()
+	if err != nil {
+		return protocol.Response{}, err
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closing {
+		return protocol.Response{}, errors.New("daemon is closing")
+	}
+	if err := d.authorizeMessageActorLocked(req.From, req.Token, req.Credential); err != nil {
+		return protocol.Response{}, err
+	}
+	original, ok := d.messages[req.ID]
+	if !ok || original.To != req.From {
+		return protocol.Response{}, fmt.Errorf("message %q is not inbound to %q", req.ID, req.From)
+	}
+	if !d.messageDelivered[req.ID] {
+		return protocol.Response{}, fmt.Errorf("message %q has not been claimed by %q", req.ID, req.From)
+	}
+	if err := d.validateMessageRecipientLocked(original.From); err != nil {
+		return protocol.Response{}, fmt.Errorf("original sender cannot receive reply: %w", err)
+	}
+	msg := protocol.Message{
+		ID: id, From: req.From, To: original.From, Body: req.Body, ReplyTo: original.ID,
+	}
+	if err := d.validateManagedContextMessageLocked(msg); err != nil {
+		return protocol.Response{}, err
+	}
+	if err := d.append(event{
+		Event: evSent, ID: msg.ID, From: msg.From, To: msg.To,
+		Body: msg.Body, ReplyTo: msg.ReplyTo,
+	}); err != nil {
+		return protocol.Response{}, err
+	}
+	d.messages[id] = msg
+	d.messageOrder = append(d.messageOrder, id)
+	notify := d.shouldNotifyInboxLocked(msg)
+	if w := d.matchWaiter(msg); w != nil {
+		if w.acknowledge {
+			d.pending = append(d.pending, msg)
+			d.offer(w, msg)
+		} else {
+			if err := d.deliver(w, msg); err != nil {
+				d.pending = append(d.pending, msg)
+				d.failWaiter(w, err)
+				if notify {
+					d.queueInboxWakeLocked(msg.To, 0, time.Time{})
+				}
+				return protocol.Response{}, err
+			}
+		}
+	} else {
+		d.pending = append(d.pending, msg)
+	}
+	if notify {
+		d.queueInboxWakeLocked(msg.To, 0, time.Time{})
+	}
+	d.debug.Printf("replied %s %s -> %s reply_to=%s", id, msg.From, msg.To, msg.ReplyTo)
+	return protocol.Response{ID: id}, nil
+}
+
+const (
+	contextForagerType  = "fledge-forager"
+	contextAnalyzerType = "fledge-analyzer"
+)
+
+// validateManagedContextMessageLocked makes the context protocol a daemon
+// boundary rather than a prompt convention. Managed requests and replies are
+// rejected before msg.sent is appended, so malformed or uncorrelated payloads
+// can never enter a recipient's mailbox. Caller holds d.mu.
+func (d *Daemon) validateManagedContextMessageLocked(msg protocol.Message) error {
+	sender := d.agents[msg.From]
+	recipient := d.agents[msg.To]
+
+	switch {
+	case sender.Type == contextForagerType && recipient.Type == contextAnalyzerType:
+		if msg.ReplyTo != "" {
+			return errors.New("managed context analyzer request must not set reply_to")
+		}
+		if err := contextdoc.ValidateComposedAnalyzerRequest([]byte(msg.Body)); err != nil {
+			return fmt.Errorf("managed context analyzer request rejected before send: %w", err)
+		}
+	case sender.Type == contextAnalyzerType && recipient.Type == contextForagerType:
+		if msg.ReplyTo == "" {
+			return errors.New("managed context analyzer reply requires reply_to")
+		}
+		original, ok := d.messages[msg.ReplyTo]
+		if !ok {
+			return fmt.Errorf("managed context analyzer reply references unknown message %q", msg.ReplyTo)
+		}
+		if original.From != msg.To || original.To != msg.From {
+			return fmt.Errorf(
+				"managed context analyzer reply %q does not correlate %q -> %q",
+				msg.ReplyTo, msg.To, msg.From,
+			)
+		}
+		if !d.messageDelivered[msg.ReplyTo] {
+			return fmt.Errorf(
+				"managed context analyzer request %q has not been claimed by %q",
+				msg.ReplyTo, msg.From,
+			)
+		}
+		if err := contextdoc.ValidateAnalyzerReply(
+			[]byte(msg.Body), []byte(original.Body),
+		); err != nil {
+			return fmt.Errorf("managed context analyzer reply rejected before send: %w", err)
+		}
+	}
+	return nil
+}
+
+// matchWaiter finds the first live waiter msg satisfies. The waiter remains
+// parked until the authoritative delivery append succeeds. Caller holds d.mu.
 func (d *Daemon) matchWaiter(msg protocol.Message) *waiter {
-	for i, w := range d.waiters {
+	for _, w := range d.waiters {
 		if w.done || !w.matches(msg) {
 			continue
 		}
-		w.done = true
-		d.waiters = append(d.waiters[:i], d.waiters[i+1:]...)
 		return w
 	}
 	return nil
 }
 
-// matches reports whether msg satisfies this wait. A wait with --reply-to
-// takes only the correlated reply; anything else stays pending.
+// matches reports whether msg satisfies this wait. Sender and reply
+// constraints are conjunctive; anything else stays pending.
 func (w *waiter) matches(msg protocol.Message) bool {
 	if msg.To != w.as {
+		return false
+	}
+	if w.from != "" && msg.From != w.from {
 		return false
 	}
 	if w.replyTo != "" && msg.ReplyTo != w.replyTo {
@@ -728,39 +1115,155 @@ func (w *waiter) matches(msg protocol.Message) bool {
 	return true
 }
 
-// deliver journals the delivery and hands the message to the waiter. Caller
+// offer hands a message to an acknowledge-after-output waiter without removing
+// it from durable pending state. If the receiver disappears before ack, the
+// same correlation remains available to a retry.
+func (d *Daemon) offer(w *waiter, msg protocol.Message) {
+	w.done = true
+	d.dropWaiter(w)
+	w.ch <- waiterResult{msg: msg}
+	d.debug.Printf("offered %s to %s", msg.ID, msg.To)
+}
+
+// deliver is the legacy eager-delivery path used by old wire clients. Caller
 // holds d.mu.
 func (d *Daemon) deliver(w *waiter, msg protocol.Message) error {
 	if err := d.append(event{Event: evDelivered, ID: msg.ID, To: msg.To}); err != nil {
 		return err
 	}
-	w.ch <- msg
+	d.messageDelivered[msg.ID] = true
+	w.done = true
+	d.dropWaiter(w)
+	w.ch <- waiterResult{msg: msg}
 	d.debug.Printf("delivered %s to %s", msg.ID, msg.To)
 	return nil
 }
 
-func (d *Daemon) wait(req *protocol.Request, gone <-chan struct{}) (protocol.Response, error) {
+// failWaiter releases a parked wait after a delivery append failure. The
+// message is already back in pending before this is called, so the client can
+// retry immediately without a daemon restart. Caller holds d.mu.
+func (d *Daemon) failWaiter(w *waiter, err error) {
+	w.done = true
+	d.dropWaiter(w)
+	w.ch <- waiterResult{err: err}
+}
+
+// inbox returns the oldest matching message immediately. Undelivered mailbox
+// messages retain send order. A nil message is a successful empty inbox check.
+func (d *Daemon) inbox(req *protocol.Request) (protocol.Response, error) {
 	if req.As == "" {
 		return protocol.Response{}, errors.New("missing --as")
 	}
 
-	w := &waiter{as: req.As, replyTo: req.ReplyTo, ch: make(chan protocol.Message, 1)}
+	filter := &waiter{as: req.As, from: req.From, replyTo: req.ReplyTo}
 
 	d.mu.Lock()
-	if _, ok := d.agents[req.As]; !ok {
+	defer d.mu.Unlock()
+	if d.closing {
+		return protocol.Response{}, errors.New("daemon is closing")
+	}
+	if err := d.authorizeMessageActorLocked(req.As, req.Token, req.Credential); err != nil {
+		return protocol.Response{}, err
+	}
+	if req.From != "" {
+		if _, ok := d.agents[req.From]; !ok {
+			return protocol.Response{}, fmt.Errorf("no registered agent %q", req.From)
+		}
+	}
+	for i, msg := range d.pending {
+		if !filter.matches(msg) {
+			continue
+		}
+		if err := d.append(event{Event: evDelivered, ID: msg.ID, To: msg.To}); err != nil {
+			return protocol.Response{}, err
+		}
+		d.pending = append(d.pending[:i], d.pending[i+1:]...)
+		d.messageDelivered[msg.ID] = true
+		d.debug.Printf("inbox delivered %s to %s", msg.ID, msg.To)
+		return protocol.Response{Message: &msg}, nil
+	}
+	return protocol.Response{}, nil
+}
+
+// peek returns the oldest matching message without finalizing delivery. The
+// CLI acknowledges only after it has written the JSON response successfully.
+func (d *Daemon) peek(req *protocol.Request) (protocol.Response, error) {
+	if req.As == "" {
+		return protocol.Response{}, errors.New("missing --as")
+	}
+
+	filter := &waiter{as: req.As, from: req.From, replyTo: req.ReplyTo}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closing {
+		return protocol.Response{}, errors.New("daemon is closing")
+	}
+	if err := d.authorizeMessageActorLocked(req.As, req.Token, req.Credential); err != nil {
+		return protocol.Response{}, err
+	}
+	if req.From != "" {
+		if _, ok := d.agents[req.From]; !ok {
+			return protocol.Response{}, fmt.Errorf("no registered agent %q", req.From)
+		}
+	}
+	for _, msg := range d.pending {
+		if filter.matches(msg) {
+			d.debug.Printf("peeked %s for %s", msg.ID, msg.To)
+			return protocol.Response{Message: &msg}, nil
+		}
+	}
+	return protocol.Response{}, nil
+}
+
+func (d *Daemon) wait(req *protocol.Request, gone <-chan struct{}) (protocol.Response, error) {
+	return d.waitMode(req, gone, false)
+}
+
+// receive blocks like wait but leaves the matched message pending until ack.
+func (d *Daemon) receive(req *protocol.Request, gone <-chan struct{}) (protocol.Response, error) {
+	return d.waitMode(req, gone, true)
+}
+
+func (d *Daemon) waitMode(req *protocol.Request, gone <-chan struct{}, acknowledge bool) (protocol.Response, error) {
+	if req.As == "" {
+		return protocol.Response{}, errors.New("missing --as")
+	}
+
+	w := &waiter{
+		as: req.As, from: req.From, replyTo: req.ReplyTo, acknowledge: acknowledge,
+		ch: make(chan waiterResult, 1), cancel: make(chan struct{}),
+	}
+
+	d.mu.Lock()
+	if d.closing {
 		d.mu.Unlock()
-		return protocol.Response{}, fmt.Errorf("no registered agent %q", req.As)
+		return protocol.Response{}, errors.New("daemon is closing")
+	}
+	if err := d.authorizeMessageActorLocked(req.As, req.Token, req.Credential); err != nil {
+		d.mu.Unlock()
+		return protocol.Response{}, err
+	}
+	if req.From != "" {
+		if _, ok := d.agents[req.From]; !ok {
+			d.mu.Unlock()
+			return protocol.Response{}, fmt.Errorf("no registered agent %q", req.From)
+		}
 	}
 	// Pending messages are consumed in send order.
 	for i, msg := range d.pending {
 		if !w.matches(msg) {
 			continue
 		}
-		d.pending = append(d.pending[:i], d.pending[i+1:]...)
+		if acknowledge {
+			d.mu.Unlock()
+			return protocol.Response{Message: &msg}, nil
+		}
 		if err := d.deliver(w, msg); err != nil {
 			d.mu.Unlock()
 			return protocol.Response{}, err
 		}
+		d.pending = append(d.pending[:i], d.pending[i+1:]...)
 		d.mu.Unlock()
 		return protocol.Response{Message: &msg}, nil
 	}
@@ -775,16 +1278,26 @@ func (d *Daemon) wait(req *protocol.Request, gone <-chan struct{}) (protocol.Res
 	}
 
 	select {
-	case msg := <-w.ch:
-		return protocol.Response{Message: &msg}, nil
+	case result := <-w.ch:
+		if result.err != nil {
+			return protocol.Response{}, result.err
+		}
+		return protocol.Response{Message: &result.msg}, nil
+	case <-w.cancel:
+		return protocol.Response{}, fmt.Errorf("agent %q stopped while waiting", req.As)
 	case <-timeout:
 		d.mu.Lock()
 		defer d.mu.Unlock()
 		// A sender may have claimed this waiter between the timer firing and
 		// the lock; that delivery is already journaled, so honor it.
 		select {
-		case msg := <-w.ch:
-			return protocol.Response{Message: &msg}, nil
+		case result := <-w.ch:
+			if result.err != nil {
+				return protocol.Response{}, result.err
+			}
+			return protocol.Response{Message: &result.msg}, nil
+		case <-w.cancel:
+			return protocol.Response{}, fmt.Errorf("agent %q stopped while waiting", req.As)
 		default:
 		}
 		d.dropWaiter(w)
@@ -793,16 +1306,160 @@ func (d *Daemon) wait(req *protocol.Request, gone <-chan struct{}) (protocol.Res
 		d.mu.Lock()
 		defer d.mu.Unlock()
 		select {
-		case msg := <-w.ch:
-			// Already journaled as delivered but the client is gone; the
-			// response write will fail. This is the accepted crash window.
-			d.debug.Printf("delivered %s to %s, but its wait disconnected", msg.ID, msg.To)
-			return protocol.Response{Message: &msg}, nil
+		case result := <-w.ch:
+			if result.err != nil {
+				return protocol.Response{}, result.err
+			}
+			if acknowledge {
+				d.debug.Printf("offered %s to %s, but its receive disconnected; message remains pending", result.msg.ID, result.msg.To)
+			} else {
+				// Legacy wait clients finalize before the response write and
+				// retain their historical crash window.
+				d.debug.Printf("delivered %s to %s, but its wait disconnected", result.msg.ID, result.msg.To)
+			}
+			return protocol.Response{Message: &result.msg}, nil
+		case <-w.cancel:
+			return protocol.Response{}, fmt.Errorf("agent %q stopped while waiting", req.As)
 		default:
 		}
 		d.dropWaiter(w)
 		return protocol.Response{}, errors.New("wait abandoned")
 	}
+}
+
+// ack finalizes a message only after the receiving CLI has emitted it. Ack is
+// idempotent so a caller may safely repeat it if the acknowledgement response
+// itself is lost.
+func (d *Daemon) ack(req *protocol.Request) (protocol.Response, error) {
+	if req.As == "" {
+		return protocol.Response{}, errors.New("missing --as")
+	}
+	if req.ID == "" {
+		return protocol.Response{}, errors.New("missing message id")
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closing {
+		return protocol.Response{}, errors.New("daemon is closing")
+	}
+	if err := d.authorizeMessageActorLocked(req.As, req.Token, req.Credential); err != nil {
+		return protocol.Response{}, err
+	}
+	msg, ok := d.messages[req.ID]
+	if !ok || msg.To != req.As {
+		return protocol.Response{}, fmt.Errorf("message %q is not inbound to %q", req.ID, req.As)
+	}
+	if d.messageDelivered[req.ID] {
+		return protocol.Response{ID: req.ID}, nil
+	}
+	index := -1
+	for i, pending := range d.pending {
+		if pending.ID == req.ID {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return protocol.Response{}, fmt.Errorf("message %q is not pending for %q", req.ID, req.As)
+	}
+	if err := d.append(event{Event: evDelivered, ID: msg.ID, To: msg.To}); err != nil {
+		return protocol.Response{}, err
+	}
+	d.pending = append(d.pending[:index], d.pending[index+1:]...)
+	d.messageDelivered[msg.ID] = true
+	d.debug.Printf("acknowledged %s by %s", msg.ID, req.As)
+	return protocol.Response{ID: msg.ID}, nil
+}
+
+// authenticateIdentityLocked checks the launch credential for a spawned
+// identity. Self-registered agents predate launch credentials and continue to
+// rely on the same-user Unix-socket boundary. Caller holds d.mu.
+func (d *Daemon) authenticateIdentityLocked(name, token, credential string) error {
+	want := d.identityTokens[name]
+	if want == "" {
+		return nil
+	}
+	if credential != "" && subtle.ConstantTimeCompare([]byte(credential), []byte(want)) == 1 {
+		return nil
+	}
+	if token == "" {
+		return fmt.Errorf("agent %q requires its injected identity token", name)
+	}
+	sum := sha256.Sum256([]byte(token))
+	got := hex.EncodeToString(sum[:])
+	if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
+		return fmt.Errorf("invalid identity token for %q", name)
+	}
+	return nil
+}
+
+// authorizeMessageActorLocked authenticates the claimed identity before
+// checking lifecycle authority. A stopped spawned agent deliberately retains
+// its credential: stale panes remain identifiable but cannot message.
+func (d *Daemon) authorizeMessageActorLocked(name, token, credential string) error {
+	a, ok := d.agents[name]
+	if !ok {
+		return fmt.Errorf("no registered agent %q", name)
+	}
+	if err := d.authenticateIdentityLocked(name, token, credential); err != nil {
+		return err
+	}
+	if d.agentWorkspaceClosingLocked(name) {
+		return fmt.Errorf("agent %q belongs to a closing workspace and is not authorized for messaging", name)
+	}
+	if d.stopping[name] {
+		return fmt.Errorf("agent %q is stopping and is not authorized for messaging", name)
+	}
+	if a.Integration != "" {
+		if a.State != stateRunning {
+			return fmt.Errorf("agent %q is %s and is not authorized for messaging", name, a.State)
+		}
+		return nil
+	}
+	if !alive(a.PID) {
+		return fmt.Errorf("agent %q is not running and is not authorized for messaging", name)
+	}
+	return nil
+}
+
+// validateMessageRecipientLocked allows durable work to queue while a spawned
+// recipient is starting, but never after it stops or becomes orphaned.
+func (d *Daemon) validateMessageRecipientLocked(name string) error {
+	a, ok := d.agents[name]
+	if !ok {
+		return fmt.Errorf("no registered agent %q", name)
+	}
+	if d.agentWorkspaceClosingLocked(name) {
+		return fmt.Errorf("agent %q belongs to a closing workspace and cannot receive messages", name)
+	}
+	if d.stopping[name] {
+		return fmt.Errorf("agent %q is stopping and cannot receive messages", name)
+	}
+	if a.Integration != "" {
+		if a.State == stateStopped || a.State == stateOrphaned {
+			return fmt.Errorf("agent %q is %s and cannot receive messages", name, a.State)
+		}
+		return nil
+	}
+	if !alive(a.PID) {
+		return fmt.Errorf("agent %q is not running and cannot receive messages", name)
+	}
+	return nil
+}
+
+// agentWorkspaceClosingLocked reports durable teardown intent, not merely an
+// in-progress RPC. Once workspace.closing is journaled, every identity in that
+// workspace has lost messaging authority until the closure is completed or
+// recovered, even if the external close succeeded before its completion facts
+// could be appended. Caller holds d.mu.
+func (d *Daemon) agentWorkspaceClosingLocked(name string) bool {
+	a, ok := d.agents[name]
+	if !ok || a.WorkspaceID == "" {
+		return false
+	}
+	_, closing := d.workspaceClosures[a.WorkspaceID]
+	return closing
 }
 
 // dropWaiter removes an abandoned waiter. Caller holds d.mu.

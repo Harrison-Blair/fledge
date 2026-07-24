@@ -24,8 +24,14 @@ const (
 	AgentsDir        = "agents"
 	UserDir          = "user"
 	ManagedDir       = "fledge"
-	ManagedFileName  = "fledge-agents.json"
+	ManagedFileName  = "managed-agents.json"
 	DefinitionSuffix = ".agent.md"
+)
+
+const (
+	legacyUserIndexName    = "agents.json"
+	legacyManagedIndexName = "fledge-agents.json"
+	legacyCatalogName      = "catalog.json"
 )
 
 // AgentRecord is the deterministic, prompt-free projection of a Markdown
@@ -186,7 +192,7 @@ func Synchronize(root string) error {
 		}
 	}
 
-	catalog, err := readIndex(filepath.Join(base, "catalog.json"))
+	catalog, err := readIndex(filepath.Join(base, ManagedDir, "catalog.json"))
 	if err != nil {
 		return err
 	}
@@ -194,11 +200,14 @@ func Synchronize(root string) error {
 	for _, src := range []struct {
 		name     string
 		profiles map[string]Config
+		managed  bool
 	}{
-		{"user", user.Profiles}, {"managed", managed.Profiles}, {"catalog", catalog.Profiles},
+		{"user", user.Profiles, false},
+		{"managed", managed.Profiles, true},
+		{"catalog", catalog.Profiles, false},
 	} {
 		for name, cfg := range src.profiles {
-			if err := cfg.ValidateProfile(name); err != nil {
+			if err := cfg.validateProfile(name, src.managed); err != nil {
 				return fmt.Errorf("%s index: %w", src.name, err)
 			}
 			if prev, ok := resolved[name]; ok && !reflect.DeepEqual(prev, cfg) {
@@ -214,10 +223,10 @@ func Synchronize(root string) error {
 			}
 		}
 	}
-	if err := writeIndexAtomic(filepath.Join(base, "agents.json"), user); err != nil {
+	if err := writeIndexAtomic(filepath.Join(base, ManagedDir, "user-agents.json"), user); err != nil {
 		return err
 	}
-	return writeIndexAtomic(filepath.Join(base, ManagedFileName), managed)
+	return writeIndexAtomic(filepath.Join(base, ManagedDir, ManagedFileName), managed)
 }
 
 func cloneWorkspace(in *Workspace) *Workspace {
@@ -266,6 +275,11 @@ func scanDefinitions(base, dir string, managed bool) ([]Definition, error) {
 		if err := validateDefinitionName(d.Name, managed); err != nil {
 			return fmt.Errorf("%s: %w", filepath.ToSlash(rel), err)
 		}
+		if d.Profile != "" {
+			if err := validateDefinitionProfileName(d.Profile, managed); err != nil {
+				return fmt.Errorf("%s: %w", filepath.ToSlash(rel), err)
+			}
+		}
 		d.Source, d.Managed = filepath.ToSlash(rel), managed
 		defs = append(defs, d)
 		return nil
@@ -278,6 +292,16 @@ func scanDefinitions(base, dir string, managed bool) ([]Definition, error) {
 	}
 	sort.Slice(defs, func(i, j int) bool { return defs[i].Name < defs[j].Name })
 	return defs, nil
+}
+
+func validateDefinitionProfileName(name string, managed bool) error {
+	if err := validPortableName(name); err != nil {
+		return fmt.Errorf("invalid profile: %w", err)
+	}
+	if strings.HasPrefix(name, "fledge-") && !managed {
+		return fmt.Errorf("profile %q uses the reserved fledge-* namespace", name)
+	}
+	return nil
 }
 
 func validateDefinitionName(name string, managed bool) error {
@@ -323,7 +347,7 @@ func deriveProfile(d Definition) (Config, error) {
 	if cfg.Integration != "pi" && d.Launch.Integration != "" {
 		cfg.Provider = d.Launch.Provider
 	}
-	if err := cfg.ValidateProfile(d.Profile); err != nil {
+	if err := cfg.validateProfile(d.Profile, d.Managed); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
@@ -424,6 +448,57 @@ func writeIndexAtomic(name string, idx Index) error {
 		return err
 	}
 	ok = true
+	return nil
+}
+
+// MigrateLegacyGenerated moves the three generated indexes into the managed
+// directory. A valid canonical file wins; otherwise a valid legacy file is
+// copied before the old path is removed. Invalid legacy state is retained and
+// reported rather than silently discarded.
+func MigrateLegacyGenerated(root string) error {
+	base := filepath.Join(root, scaffold.DirName, AgentsDir)
+	for _, files := range []struct {
+		legacy    string
+		canonical string
+	}{
+		{legacyUserIndexName, filepath.Join(ManagedDir, "user-agents.json")},
+		{legacyManagedIndexName, filepath.Join(ManagedDir, ManagedFileName)},
+		{legacyCatalogName, filepath.Join(ManagedDir, "catalog.json")},
+	} {
+		oldName := filepath.Join(base, files.legacy)
+		if _, err := os.Stat(oldName); errors.Is(err, fs.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return err
+		}
+
+		newName := filepath.Join(base, files.canonical)
+		_, statErr := os.Stat(newName)
+		if statErr == nil {
+			if _, err := readIndex(newName); err != nil {
+				legacy, legacyErr := readIndex(oldName)
+				if legacyErr != nil {
+					return fmt.Errorf("cannot migrate %s: canonical and legacy generated files are invalid: %w", files.legacy, legacyErr)
+				}
+				if err := writeIndexAtomic(newName, legacy); err != nil {
+					return err
+				}
+			}
+		} else if !errors.Is(statErr, fs.ErrNotExist) {
+			return statErr
+		} else {
+			legacy, legacyErr := readIndex(oldName)
+			if legacyErr != nil {
+				return fmt.Errorf("cannot migrate legacy generated file %s: %w", files.legacy, legacyErr)
+			}
+			if err := writeIndexAtomic(newName, legacy); err != nil {
+				return err
+			}
+		}
+		if err := os.Remove(oldName); err != nil {
+			return fmt.Errorf("remove migrated generated file %s: %w", files.legacy, err)
+		}
+	}
 	return nil
 }
 

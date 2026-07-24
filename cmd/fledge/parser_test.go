@@ -9,7 +9,8 @@ import (
 
 // takeFlag must not swallow a flag-shaped token into a preceding flag's value
 // slot. This CLI has no flags whose value is a negative number, so any value
-// beginning with "-" is treated as a missing value.
+// beginning with "-" is treated as a missing value, except the conventional
+// stdin marker "-".
 func TestTakeFlag(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -59,6 +60,13 @@ func TestTakeFlag(t *testing.T) {
 			args: []string{"--species", "-P", "1234"},
 			long: "--species", short: "-S",
 			wantErrSub: "missing value",
+		},
+		{
+			name:      "stdin marker is a value",
+			args:      []string{"--body-file", "-"},
+			long:      "--body-file",
+			short:     "-F",
+			wantValue: "-",
 		},
 	}
 	for _, tc := range tests {

@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Harrison-Blair/fledge/internal/agentcfg"
 	"github.com/Harrison-Blair/fledge/internal/scaffold"
 )
 
@@ -14,6 +15,9 @@ func newTestDaemon(t *testing.T) *Daemon {
 	if _, err := scaffold.Ensure(root); err != nil {
 		t.Fatal(err)
 	}
+	writeCatalog(t, root, map[string]agentcfg.Config{
+		"haikucl": {Integration: "claude", Model: "haiku"},
+	})
 	d, err := New(root, "test")
 	if err != nil {
 		t.Fatal(err)

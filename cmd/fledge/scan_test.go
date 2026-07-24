@@ -5,9 +5,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
-	"github.com/Harrison-Blair/fledge/internal/scan"
+	"github.com/Harrison-Blair/fledge/internal/contextdoc"
 	"github.com/Harrison-Blair/fledge/internal/workspace"
 )
 
@@ -44,16 +45,21 @@ func scanJSON(t *testing.T, args ...string) (string, []string) {
 	if err != nil {
 		t.Fatalf("context scan: %v", err)
 	}
-	var got struct {
-		Root  string      `json:"root"`
-		Files []scan.File `json:"files"`
-	}
+	var got contextdoc.Scan
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("unmarshal %q: %v", out, err)
 	}
+	if got.SchemaVersion != contextdoc.SchemaVersion || got.FileCount != len(got.Files) {
+		t.Fatalf("scan contract = %+v", got)
+	}
+	var total int64
 	paths := make([]string, len(got.Files))
 	for i, f := range got.Files {
 		paths[i] = f.Path
+		total += f.Size
+	}
+	if got.TotalSize != total {
+		t.Fatalf("total_size = %d, want derived %d", got.TotalSize, total)
 	}
 	return got.Root, paths
 }
@@ -103,6 +109,13 @@ func TestContextScanIgnoredSubtreeIsEmpty(t *testing.T) {
 	t.Chdir(root)
 	_, paths := scanJSON(t, "sub")
 	assertPaths(t, paths, nil)
+	out, err := captureRun(t, "context", "scan", "sub", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"files": []`) {
+		t.Fatalf("empty scan files must be an array: %s", out)
+	}
 }
 
 // Outside any workspace the scan fails like other commands do, instead of

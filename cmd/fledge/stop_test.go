@@ -28,6 +28,7 @@ func stubStdoutNotTerminal(t *testing.T) {
 func runningFlock(t *testing.T) string {
 	t.Helper()
 	root, _ := scaffoldedWorkspace(t)
+	t.Setenv(flock.Env, "")
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	startDaemon(t, root, "flock1")
 	t.Chdir(root)
@@ -71,6 +72,7 @@ func TestStopRefusesWithoutATerminal(t *testing.T) {
 func TestStopWithNoFlocksSkipsThePrompt(t *testing.T) {
 	root, _ := scaffoldedWorkspace(t)
 	t.Chdir(root)
+	t.Setenv(flock.Env, "")
 	stubStdinTerminal(t)
 	stubStdoutTerminal(t)
 	withStdin(t, "y\n")
@@ -84,6 +86,37 @@ func TestStopWithNoFlocksSkipsThePrompt(t *testing.T) {
 	}
 	if strings.Contains(out, "[y/N]") {
 		t.Errorf("stop prompted with nothing to stop:\n%s", out)
+	}
+}
+
+func TestStopInsideFlockOnlyOffersAndStopsThatFlock(t *testing.T) {
+	root, _ := scaffoldedWorkspace(t)
+	for _, name := range []string{"flock1", "flock2"} {
+		if err := os.MkdirAll(flock.Dir(root, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(root)
+	t.Setenv(flock.Env, "flock2")
+	stubStdinTerminal(t)
+	stubStdoutTerminal(t)
+	withStdin(t, "y\n")
+
+	out, err := captureRun(t, "stop")
+	if err != nil {
+		t.Fatalf("scoped stop: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "flock2  down") {
+		t.Errorf("scoped stop did not preview its flock:\n%s", out)
+	}
+	if !strings.Contains(out, "stop flock2 above? [y/N]") {
+		t.Errorf("scoped stop used the wrong confirmation:\n%s", out)
+	}
+	if !strings.Contains(out, "flock flock2: daemon already down") {
+		t.Errorf("scoped stop did not execute its flock:\n%s", out)
+	}
+	if strings.Contains(out, "flock1") || strings.Contains(out, "stop all flocks") {
+		t.Errorf("scoped stop leaked into workspace-wide mode:\n%s", out)
 	}
 }
 
@@ -186,6 +219,7 @@ func TestStopFlocksSucceedsWhenEveryFlockStops(t *testing.T) {
 // workspace, through the same path flock stop uses.
 func TestStopConfirmedTearsDownEveryFlock(t *testing.T) {
 	root, _ := scaffoldedWorkspace(t)
+	t.Setenv(flock.Env, "")
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 
 	recDir := t.TempDir()

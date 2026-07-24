@@ -607,3 +607,47 @@ func TestTabRenameParams(t *testing.T) {
 		t.Errorf("method = %s, want tab.rename", m)
 	}
 }
+
+func TestWorkspaceAndTabPlacementMethods(t *testing.T) {
+	f := serve(t, map[string]string{
+		"workspace.list": `{"id":"1","result":{"type":"workspace_list","workspaces":[{"workspace_id":"w1","label":"main"},{"workspace_id":"w2","label":"review"}]}}`,
+		"tab.list":       `{"id":"1","result":{"type":"tab_list","tabs":[{"tab_id":"w2:t1","workspace_id":"w2","label":"code"}]}}`,
+		"tab.create":     `{"id":"1","result":{"type":"tab_created","tab":{"tab_id":"w2:t2"},"root_pane":{"pane_id":"w2:p9"}}}`,
+	})
+
+	workspaces, err := WorkspaceList(f.socket)
+	if err != nil {
+		t.Fatalf("WorkspaceList: %v", err)
+	}
+	if len(workspaces) != 2 || workspaces[1].WorkspaceID != "w2" || workspaces[1].Label != "review" {
+		t.Fatalf("workspaces = %+v", workspaces)
+	}
+	tabs, err := TabList(f.socket, "w2")
+	if err != nil {
+		t.Fatalf("TabList: %v", err)
+	}
+	if len(tabs) != 1 || tabs[0].TabID != "w2:t1" || tabs[0].Label != "code" {
+		t.Fatalf("tabs = %+v", tabs)
+	}
+	created, err := TabCreate(f.socket, "w2", "/repo", "tests")
+	if err != nil {
+		t.Fatalf("TabCreate: %v", err)
+	}
+	if created.TabID != "w2:t2" || created.RootPaneID != "w2:p9" {
+		t.Fatalf("created = %+v", created)
+	}
+	if err := TabClose(f.socket, "w2:t2"); err != nil {
+		t.Fatalf("TabClose: %v", err)
+	}
+
+	if params := f.params(1); params["workspace_id"] != "w2" {
+		t.Fatalf("tab.list params = %+v", params)
+	}
+	create := f.params(2)
+	if create["workspace_id"] != "w2" || create["cwd"] != "/repo" || create["label"] != "tests" || create["focus"] != false {
+		t.Fatalf("tab.create params = %+v", create)
+	}
+	if params := f.params(3); params["tab_id"] != "w2:t2" {
+		t.Fatalf("tab.close params = %+v", params)
+	}
+}

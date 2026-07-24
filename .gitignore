@@ -27,6 +27,7 @@ go.work.sum
 # fledge
 .fledge/locks/
 .fledge/flocks/
+.fledge/context/runs/
 .fledge/agents/fledge/
 .fledge/agents/fledge-agents.json
 .fledge/agents/catalog.json

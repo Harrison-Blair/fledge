@@ -157,6 +157,33 @@ type CreatedWorkspace struct {
 	RootPaneID  string
 }
 
+// Workspace identifies one live Herdr workspace for placement resolution.
+type Workspace struct {
+	WorkspaceID string
+	Label       string
+}
+
+// WorkspaceList returns every live workspace in the session.
+func WorkspaceList(socket string) ([]Workspace, error) {
+	var result struct {
+		Workspaces []struct {
+			WorkspaceID string `json:"workspace_id"`
+			Label       string `json:"label"`
+		} `json:"workspaces"`
+	}
+	if err := Call(socket, "workspace.list", nil, &result); err != nil {
+		return nil, err
+	}
+	out := make([]Workspace, 0, len(result.Workspaces))
+	for _, workspace := range result.Workspaces {
+		out = append(out, Workspace{
+			WorkspaceID: workspace.WorkspaceID,
+			Label:       workspace.Label,
+		})
+	}
+	return out, nil
+}
+
 // WorkspaceCreate creates a workspace rooted at cwd, labelled label, with the
 // requested focus behavior. A fresh session has
 // no workspace until a client attaches, and the one herdr then manufactures has
@@ -201,6 +228,76 @@ func WorkspaceClose(socket, workspaceID string) error {
 		WorkspaceID string `json:"workspace_id"`
 	}{WorkspaceID: workspaceID}
 	return Call(socket, "workspace.close", params, nil)
+}
+
+// Tab identifies one live Herdr tab for placement resolution.
+type Tab struct {
+	TabID       string
+	WorkspaceID string
+	Label       string
+}
+
+// CreatedTab identifies a newly created tab and its initial shell pane.
+type CreatedTab struct {
+	TabID      string
+	RootPaneID string
+}
+
+// TabList returns the tabs in workspaceID.
+func TabList(socket, workspaceID string) ([]Tab, error) {
+	params := struct {
+		WorkspaceID string `json:"workspace_id"`
+	}{WorkspaceID: workspaceID}
+	var result struct {
+		Tabs []struct {
+			TabID       string `json:"tab_id"`
+			WorkspaceID string `json:"workspace_id"`
+			Label       string `json:"label"`
+		} `json:"tabs"`
+	}
+	if err := Call(socket, "tab.list", params, &result); err != nil {
+		return nil, err
+	}
+	out := make([]Tab, 0, len(result.Tabs))
+	for _, tab := range result.Tabs {
+		out = append(out, Tab{
+			TabID:       tab.TabID,
+			WorkspaceID: tab.WorkspaceID,
+			Label:       tab.Label,
+		})
+	}
+	return out, nil
+}
+
+// TabCreate creates an unfocused tab in workspaceID. Herdr creates an initial
+// shell pane with every tab; callers may close it after placing a durable pane.
+func TabCreate(socket, workspaceID, cwd, label string) (CreatedTab, error) {
+	params := struct {
+		WorkspaceID string `json:"workspace_id"`
+		Cwd         string `json:"cwd"`
+		Label       string `json:"label"`
+		Focus       bool   `json:"focus"`
+	}{WorkspaceID: workspaceID, Cwd: cwd, Label: label, Focus: false}
+	var result struct {
+		Tab struct {
+			TabID string `json:"tab_id"`
+		} `json:"tab"`
+		RootPane struct {
+			PaneID string `json:"pane_id"`
+		} `json:"root_pane"`
+	}
+	if err := Call(socket, "tab.create", params, &result); err != nil {
+		return CreatedTab{}, err
+	}
+	return CreatedTab{TabID: result.Tab.TabID, RootPaneID: result.RootPane.PaneID}, nil
+}
+
+// TabClose closes one tab and every pane it owns.
+func TabClose(socket, tabID string) error {
+	params := struct {
+		TabID string `json:"tab_id"`
+	}{TabID: tabID}
+	return Call(socket, "tab.close", params, nil)
 }
 
 // TabRename labels a tab.

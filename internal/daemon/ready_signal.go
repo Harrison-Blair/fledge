@@ -3,19 +3,20 @@ package daemon
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/Harrison-Blair/fledge/internal/agentcfg"
 	"github.com/Harrison-Blair/fledge/internal/flock"
 )
 
 const readySignalDir = ".ready"
 
 // ReadySignalPath is the workspace-local fallback used when an agent's
-// sandbox cannot connect to the daemon's Unix socket. The file contains only
-// the one-use token digest, never the token itself.
+// sandbox cannot connect to the daemon's Unix socket. The file contains the
+// one-use token digest and optional resumable session id, never the token.
 func ReadySignalPath(root, flockName, agentName string) string {
 	return filepath.Join(flock.Dir(root, flockName), readySignalDir, agentName)
 }
@@ -24,6 +25,13 @@ func ReadySignalPath(root, flockName, agentName string) string {
 // daemon to consume. This path exists specifically for sandboxed integrations
 // whose command runner can write the workspace but cannot open Unix sockets.
 func WriteReadySignal(root, flockName, agentName, token string) error {
+	return WriteReadySignalWithSession(root, flockName, agentName, token, "")
+}
+
+// WriteReadySignalWithSession also persists an integration-assigned runtime
+// session id. A launcher-owned same-session adapter may use it when atomically
+// arming delivery; the current Herdr-owned launcher degrades to manual inboxes.
+func WriteReadySignalWithSession(root, flockName, agentName, token, sessionID string) error {
 	sum := sha256.Sum256([]byte(token))
 	digest := hex.EncodeToString(sum[:])
 	dir := filepath.Dir(ReadySignalPath(root, flockName, agentName))
@@ -45,7 +53,11 @@ func WriteReadySignal(root, flockName, agentName, token string) error {
 	if err := tmp.Chmod(0o600); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(tmp, digest); err != nil {
+	signal := struct {
+		Digest    string `json:"digest"`
+		SessionID string `json:"session_id,omitempty"`
+	}{Digest: digest, SessionID: sessionID}
+	if err := json.NewEncoder(tmp).Encode(signal); err != nil {
 		return err
 	}
 	if err := tmp.Sync(); err != nil {
@@ -75,7 +87,15 @@ func (d *Daemon) consumeReadySignal(agentName string) (bool, error) {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return false, err
 	}
-	_, err = d.readyDigest(agentName, strings.TrimSpace(string(data)))
+	var signal struct {
+		Digest    string `json:"digest"`
+		SessionID string `json:"session_id,omitempty"`
+	}
+	if json.Unmarshal(data, &signal) != nil {
+		// Older readiness signals were a plain digest line.
+		signal.Digest = strings.TrimSpace(string(data))
+	}
+	_, err = d.readyDigest(agentName, signal.Digest, agentName == agentcfg.ReservedOrchestrator, signal.SessionID)
 	return true, err
 }
 

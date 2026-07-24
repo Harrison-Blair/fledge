@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +23,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/agentcfg"
 	"github.com/Harrison-Blair/fledge/internal/catalog"
 	"github.com/Harrison-Blair/fledge/internal/client"
+	"github.com/Harrison-Blair/fledge/internal/contextdoc"
 	"github.com/Harrison-Blair/fledge/internal/daemon"
 	"github.com/Harrison-Blair/fledge/internal/flock"
 	"github.com/Harrison-Blair/fledge/internal/herdr"
@@ -51,6 +54,8 @@ func run(args []string) error {
 		return runDeinit(args[1:])
 	case "start":
 		return runStart(args[1:])
+	case "restart":
+		return runRestart(args[1:])
 	case "stop":
 		return runStop(args[1:])
 	case "watch":
@@ -90,9 +95,140 @@ func runContext(args []string) error {
 		return runContextScan(args[1:])
 	case "graph":
 		return runContextGraph(args[1:])
+	case "compose":
+		return runContextCompose(args[1:])
+	case "validate":
+		return runContextValidate(args[1:])
+	case "render-project":
+		return runContextRenderProject(args[1:])
 	default:
 		return usageErrorf("context", "unknown context subcommand %q", args[0])
 	}
+}
+
+func runContextValidate(args []string) error {
+	if len(args) == 0 {
+		return printHelp("context validate")
+	}
+	if isHelpFlag(args[0]) {
+		return printHelp("context validate")
+	}
+	if args[0] == "help" {
+		return runHelp("context validate", args[1:])
+	}
+	switch args[0] {
+	case "analyzer-request":
+		return runContextValidateAnalyzerRequest(args[1:])
+	case "analyzer-reply":
+		return runContextValidateAnalyzerReply(args[1:])
+	default:
+		return usageErrorf("context validate", "unknown context validate subcommand %q", args[0])
+	}
+}
+
+func runContextValidateAnalyzerRequest(args []string) error {
+	if hasHelpFlag(args) {
+		return printHelp("context validate analyzer-request")
+	}
+	if err := rejectFlags("context validate analyzer-request", args); err != nil {
+		return usageErrorFor("context validate analyzer-request", err)
+	}
+	if len(args) > 1 {
+		return usageErrorf("context validate analyzer-request",
+			"context validate analyzer-request: unexpected argument %q", args[1])
+	}
+	name := "-"
+	if len(args) == 1 {
+		name = args[0]
+	}
+	input, cleanup, err := inputPath(name)
+	if err != nil {
+		return fmt.Errorf("context validate analyzer-request: %w", err)
+	}
+	defer cleanup()
+	return contextdoc.ValidateAnalyzerRequestFile(input)
+}
+
+func runContextValidateAnalyzerReply(args []string) error {
+	if hasHelpFlag(args) {
+		return printHelp("context validate analyzer-reply")
+	}
+	requestPath, args, err := takeFlag(args, "--request", "-Q")
+	if err != nil {
+		return usageErrorFor("context validate analyzer-reply", err)
+	}
+	if err := rejectFlags("context validate analyzer-reply", args); err != nil {
+		return usageErrorFor("context validate analyzer-reply", err)
+	}
+	if requestPath == "" {
+		return usageErrorf("context validate analyzer-reply",
+			"context validate analyzer-reply: --request is required")
+	}
+	if requestPath == "-" {
+		return usageErrorf("context validate analyzer-reply",
+			"context validate analyzer-reply: --request requires a file path")
+	}
+	if len(args) > 1 {
+		return usageErrorf("context validate analyzer-reply",
+			"context validate analyzer-reply: unexpected argument %q", args[1])
+	}
+	replyName := "-"
+	if len(args) == 1 {
+		replyName = args[0]
+	}
+	replyPath, cleanup, err := inputPath(replyName)
+	if err != nil {
+		return fmt.Errorf("context validate analyzer-reply: %w", err)
+	}
+	defer cleanup()
+	// The contextdoc contract takes reply first and its correlating request
+	// second. Keep that order explicit at this CLI boundary.
+	return contextdoc.ValidateAnalyzerReplyFile(replyPath, requestPath)
+}
+
+func runContextRenderProject(args []string) error {
+	if hasHelpFlag(args) {
+		return printHelp("context render-project")
+	}
+	if err := rejectFlags("context render-project", args); err != nil {
+		return usageErrorFor("context render-project", err)
+	}
+	if len(args) != 1 {
+		return usageErrorf("context render-project",
+			"context render-project: want exactly one run directory")
+	}
+	result, err := contextdoc.RenderProject(args[0])
+	if err != nil {
+		return err
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(result)
+}
+
+// inputPath adapts stdin to validators whose strict public contract is a file
+// path. Named inputs are returned untouched; "-" is copied to a private
+// temporary file that is removed before the command returns.
+func inputPath(name string) (string, func(), error) {
+	if name != "-" {
+		return name, func() {}, nil
+	}
+	file, err := os.CreateTemp("", "fledge-context-*.json")
+	if err != nil {
+		return "", func() {}, err
+	}
+	tempPath := file.Name()
+	cleanup := func() { _ = os.Remove(tempPath) }
+	if _, err := io.Copy(file, os.Stdin); err != nil {
+		_ = file.Close()
+		cleanup()
+		return "", func() {}, fmt.Errorf("read stdin: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		cleanup()
+		return "", func() {}, err
+	}
+	return tempPath, cleanup, nil
 }
 
 func runContextScan(args []string) error {
@@ -118,12 +254,22 @@ func runContextScan(args []string) error {
 	}
 
 	if asJSON {
+		totalSize := int64(0)
+		for _, file := range context.Files {
+			if file.Size < 0 || file.Size > math.MaxInt64-totalSize {
+				return fmt.Errorf("context scan: file sizes overflow total_size")
+			}
+			totalSize += file.Size
+		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(struct {
-			Root  string      `json:"root"`
-			Files []scan.File `json:"files"`
-		}{context.Root, context.Files})
+			SchemaVersion int         `json:"schema_version"`
+			Root          string      `json:"root"`
+			FileCount     int         `json:"file_count"`
+			TotalSize     int64       `json:"total_size"`
+			Files         []scan.File `json:"files"`
+		}{contextdoc.SchemaVersion, context.Root, len(context.Files), totalSize, context.Files})
 	}
 
 	printGrouped(context.Files)
@@ -195,15 +341,15 @@ func humanSize(n int64) string {
 // remaining arguments. A flag with no value following it is an error. A
 // following token that is itself flag-shaped (begins with "-") counts as a
 // missing value, so it survives into the later rejectFlags sweep instead of
-// being silently swallowed. No flag in this CLI takes a negative-number value,
-// so there is no legitimate flag-shaped value to preserve.
+// being silently swallowed. The exact token "-" is the conventional stdin
+// value accepted by file-input flags.
 func takeFlag(args []string, long, short string) (value string, rest []string, err error) {
 	for i, arg := range args {
 		if arg != long && arg != short {
 			rest = append(rest, arg)
 			continue
 		}
-		if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+		if i+1 >= len(args) || (args[i+1] != "-" && strings.HasPrefix(args[i+1], "-")) {
 			return "", nil, fmt.Errorf("%s: missing value", long)
 		}
 		return args[i+1], append(rest, args[i+2:]...), nil
@@ -608,8 +754,8 @@ func runStart(args []string) error {
 			}
 			// Monitoring is intentionally non-critical. The orchestrator is
 			// already authenticated and healthy, so layout failure preserves
-			// the flock and leaves a manual recovery hint in the shell.
-			_ = installWatcherWorkspace(s.SocketPath, root, name, self, shellPane, resp.PaneID)
+			// the flock and leaves a manual recovery hint in the CLI pane.
+			_ = installWatcherPane(s.SocketPath, name, self, shellPane, resp.PaneID)
 		})
 	})
 	return awaitSpawn(root, name, attachErr, spawned, abortStart)
@@ -670,7 +816,7 @@ func managedOrchestratorRequest(root string) (protocol.Request, error) {
 		if len(profiles) == 0 {
 			return protocol.Request{}, errors.New("no profiles available for the fledge-orchestrator")
 		}
-		profile, err = pickAgentConfig(profiles, os.Stdin, os.Stdout)
+		profile, err = pickOrchestratorConfig(profiles, os.Stdin, os.Stdout)
 		if err != nil {
 			return protocol.Request{}, err
 		}
@@ -813,7 +959,8 @@ var startAfterAttach = func(start func()) {
 }
 
 // spawnDaemon re-execs fledge as `daemon run` in its own session, scoped to a
-// flock and bound to a herdr session, then waits for its socket to come up.
+// flock and bound to a herdr session, then waits for status to report that
+// exact session. A bound daemon can listen before it records its herdr binding.
 // The daemon writes its own logs, so the child's stdio only needs to catch a
 // startup crash.
 func spawnDaemon(root, flockName, session string) error {
@@ -845,14 +992,162 @@ func spawnDaemon(root, flockName, session string) error {
 		return err
 	}
 
+	return waitSpawnDaemonReady(root, flockName, session, logPath)
+}
+
+var (
+	spawnDaemonStatus = queryDaemonStatus
+	spawnDaemonSleep  = time.Sleep
+)
+
+func waitSpawnDaemonReady(root, flockName, session, logPath string) error {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if client.Running(root, flockName) {
+		resp, err := spawnDaemonStatus(root, flockName)
+		if err == nil && resp.Session == session {
 			return nil
 		}
-		time.Sleep(50 * time.Millisecond)
+		spawnDaemonSleep(50 * time.Millisecond)
 	}
 	return fmt.Errorf("daemon did not come up; see %s", logPath)
+}
+
+var daemonStatusForCLI = queryDaemonStatus
+
+func queryDaemonStatus(root, name string) (protocol.Response, error) {
+	return client.Do(root, name, protocol.Request{Op: protocol.OpStatus})
+}
+
+var (
+	restartDaemonStatus   = queryDaemonStatus
+	restartDaemonShutdown = shutdownDaemon
+	restartDaemonRunning  = client.Running
+	restartSpawnDaemon    = spawnDaemon
+	restartSleep          = time.Sleep
+	restartWaitTimeout    = 10 * time.Second
+)
+
+func shutdownDaemon(root, name string) error {
+	_, err := client.Do(root, name, protocol.Request{Op: protocol.OpShutdown})
+	return err
+}
+
+func runRestart(args []string) error {
+	if hasHelpFlag(args) {
+		return printHelp("restart")
+	}
+	if err := rejectFlags("restart", args); err != nil {
+		return usageErrorFor("restart", err)
+	}
+	if len(args) > 1 {
+		return usageErrorf("restart", "restart: unexpected argument %q", args[1])
+	}
+	name, err := flockArg("restart", args)
+	if err != nil {
+		if len(args) == 1 {
+			return usageErrorFor("restart", err)
+		}
+		return err
+	}
+
+	root, err := workspaceRoot()
+	if err != nil {
+		return err
+	}
+	if !restartDaemonRunning(root, name) {
+		return client.ErrNotRunning
+	}
+	oldStatus, err := restartDaemonStatus(root, name)
+	if err != nil {
+		return err
+	}
+	if err := restartDaemonShutdown(root, name); err != nil {
+		if shutdownUnsupported(err) && restartDaemonRunning(root, name) {
+			return fmt.Errorf("restart requires daemon shutdown support; daemon is still running. Use `fledge flock stop %s`, then `fledge start --flock %s`", name, name)
+		}
+		return err
+	}
+	if err := waitRestartDaemonDown(root, name); err != nil {
+		return err
+	}
+
+	if err := restartSpawnDaemon(root, name, oldStatus.Session); err != nil {
+		return replacementFailure(name, root, oldStatus.Session, err)
+	}
+	newStatus, err := restartDaemonStatus(root, name)
+	if err != nil {
+		return replacementFailure(name, root, oldStatus.Session, err)
+	}
+	if err := verifyRestartStatus(oldStatus, newStatus); err != nil {
+		return replacementFailure(name, root, oldStatus.Session, err)
+	}
+
+	fmt.Printf("flock:   %s\n", name)
+	fmt.Printf("session: %s\n", displaySession(newStatus.Session))
+	fmt.Printf("old:     pid %d version %s\n", oldStatus.DaemonPID, displayVersion(oldStatus.DaemonVersion))
+	fmt.Printf("new:     pid %d version %s\n", newStatus.DaemonPID, displayVersion(newStatus.DaemonVersion))
+	return nil
+}
+
+func shutdownUnsupported(err error) bool {
+	return strings.Contains(err.Error(), `unknown op "shutdown"`)
+}
+
+func waitRestartDaemonDown(root, name string) error {
+	deadline := time.Now().Add(restartWaitTimeout)
+	for time.Now().Before(deadline) {
+		if !restartDaemonRunning(root, name) {
+			return nil
+		}
+		restartSleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("flock %s: daemon did not shut down", name)
+}
+
+func verifyRestartStatus(oldStatus, newStatus protocol.Response) error {
+	if oldStatus.Session != newStatus.Session {
+		return fmt.Errorf("restart changed herdr session from %q to %q", oldStatus.Session, newStatus.Session)
+	}
+	if oldStatus.DaemonPID == 0 {
+		return errors.New("old daemon status did not report pid")
+	}
+	if newStatus.DaemonPID == 0 {
+		return errors.New("new daemon status did not report pid")
+	}
+	if oldStatus.DaemonPID == newStatus.DaemonPID {
+		return fmt.Errorf("restart kept daemon pid %d", newStatus.DaemonPID)
+	}
+	current := version.Get()
+	if newStatus.DaemonVersion == "" {
+		return errors.New("new daemon status did not report version")
+	}
+	if newStatus.DaemonVersion != current {
+		return fmt.Errorf("new daemon version %s does not match current fledge %s", newStatus.DaemonVersion, current)
+	}
+	return nil
+}
+
+func replacementFailure(name, root, session string, err error) error {
+	return fmt.Errorf("restart %s: replacement daemon failed; herdr session %q was left running; see %s: %w",
+		name, session, daemonLogPath(root, name), err)
+}
+
+func daemonLogPath(root, name string) string {
+	return filepath.Join(flock.Dir(root, name), protocol.LogName)
+}
+
+func displaySession(session string) string {
+	if session == "" {
+		return "(none)"
+	}
+	return session
+}
+
+func displayVersion(v string) string {
+	if v == "" {
+		return "(unknown)"
+	}
+	return v
 }
 
 // runFlockStop ends a flock's herdr session and waits for its daemon to
@@ -926,12 +1221,12 @@ func stopFlock(root, name string) error {
 	return fmt.Errorf("flock %s: herdr session %s ended but the daemon is still up", name, resp.Session)
 }
 
-// runStop tears down every flock in the workspace behind one confirmation.
-// It is the bulk counterpart to flock stop, not a replacement: that command
-// still takes a name and needs no terminal.
+// runStop tears down the calling flock behind one confirmation when
+// FLEDGE_FLOCK is set. Outside a flock it retains the workspace-wide bulk
+// behavior. `fledge flock stop [name]` remains the non-interactive path.
 //
 // The whole command is interactive by design — the confirmation is the only
-// thing standing between a typo and a workspace with nothing left running —
+// thing standing between a typo and tearing down one or more flocks —
 // so a missing terminal on either stream is a refusal rather than a default.
 // `fledge flock stop <name>` remains the scriptable path.
 func runStop(args []string) error {
@@ -954,7 +1249,7 @@ func runStop(args []string) error {
 	if err != nil {
 		return err
 	}
-	names, err := flock.List(root)
+	names, scoped, err := stopTargets(root)
 	if err != nil {
 		return err
 	}
@@ -963,10 +1258,14 @@ func runStop(args []string) error {
 		return nil
 	}
 
-	if err := statusOverview(root); err != nil {
+	if err := statusOverviewNames(root, names); err != nil {
 		return err
 	}
-	fmt.Print("\nstop all flocks above? [y/N] ")
+	if scoped {
+		fmt.Printf("\nstop %s above? [y/N] ", names[0])
+	} else {
+		fmt.Print("\nstop all flocks above? [y/N] ")
+	}
 	// A read error means no confirmation was given, so it falls through to
 	// the default No along with EOF and a bare enter.
 	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
@@ -977,6 +1276,20 @@ func runStop(args []string) error {
 	}
 
 	return stopFlocks(root, names, stopFlock)
+}
+
+// stopTargets resolves top-level stop's scope. A pane carrying FLEDGE_FLOCK is
+// authoritative context and narrows the command to that exact flock. Outside
+// a flock, stop retains its workspace-wide behavior.
+func stopTargets(root string) (names []string, scoped bool, err error) {
+	if name := os.Getenv(flock.Env); name != "" {
+		if err := flock.Validate(name); err != nil {
+			return nil, false, fmt.Errorf("%s: %w", flock.Env, err)
+		}
+		return []string{name}, true, nil
+	}
+	names, err = flock.List(root)
+	return names, false, err
 }
 
 // stopFlocks tears every named flock down in order, carrying on past a failure
@@ -1078,9 +1391,15 @@ func statusFlock(root, name string) error {
 	fmt.Println("daemon: up")
 	fmt.Printf("socket: %s\n", daemon.SocketPath(root, name))
 
-	resp, err := client.Do(root, name, protocol.Request{Op: protocol.OpStatus})
+	resp, err := daemonStatusForCLI(root, name)
 	if err != nil {
 		return err
+	}
+	if resp.DaemonPID != 0 {
+		fmt.Printf("pid:    %d\n", resp.DaemonPID)
+	}
+	if resp.DaemonVersion != "" {
+		fmt.Printf("version: %s\n", resp.DaemonVersion)
 	}
 	switch {
 	case resp.Session == "":
@@ -1099,6 +1418,10 @@ func statusOverview(root string) error {
 	if err != nil {
 		return err
 	}
+	return statusOverviewNames(root, names)
+}
+
+func statusOverviewNames(root string, names []string) error {
 	if len(names) == 0 {
 		fmt.Println("no flocks; run fledge start")
 		return nil
@@ -1285,6 +1608,8 @@ func runAgentRegister(args []string) error {
 
 // runAgentSpawn launches an agent the daemon owns, named either by an entry in
 // agents.json or by a bare model id the routing table knows.
+var agentSpawnRequest = client.Do
+
 func runAgentSpawn(args []string) error {
 	if hasHelpFlag(args) {
 		return printHelp("agent spawn")
@@ -1316,6 +1641,14 @@ func runAgentSpawn(args []string) error {
 		return usageErrorFor("agent spawn", err)
 	}
 	timeoutArg, args, err := takeFlag(args, "--timeout", "-T")
+	if err != nil {
+		return usageErrorFor("agent spawn", err)
+	}
+	workspaceSelector, args, err := takeFlag(args, "--workspace", "-W")
+	if err != nil {
+		return usageErrorFor("agent spawn", err)
+	}
+	tabSelector, args, err := takeFlag(args, "--tab", "-B")
 	if err != nil {
 		return usageErrorFor("agent spawn", err)
 	}
@@ -1374,6 +1707,9 @@ func runAgentSpawn(args []string) error {
 	if model == "" && agent == "" && profile == "" {
 		return usageErrorf("agent spawn", "agent spawn: choose an agent, --profile, or --model")
 	}
+	if (workspaceSelector == "") != (tabSelector == "") {
+		return usageErrorf("agent spawn", "agent spawn: --workspace and --tab must be used together")
+	}
 	var timeout time.Duration
 	if timeoutArg != "" {
 		timeout, err = time.ParseDuration(timeoutArg)
@@ -1393,7 +1729,7 @@ func runAgentSpawn(args []string) error {
 	if err := agentcfg.Synchronize(root); err != nil {
 		return err
 	}
-	resp, err := client.Do(root, flockName, protocol.Request{
+	resp, err := agentSpawnRequest(root, flockName, protocol.Request{
 		Op:          protocol.OpSpawn,
 		Agent:       agent,
 		Profile:     profile,
@@ -1403,6 +1739,8 @@ func runAgentSpawn(args []string) error {
 		Cwd:         cwd,
 		Species:     slug,
 		TimeoutMS:   timeout.Milliseconds(),
+		Workspace:   workspaceSelector,
+		Tab:         tabSelector,
 	})
 	if err != nil {
 		return err
@@ -1418,6 +1756,7 @@ func runAgentReady(args []string) error {
 	if hasHelpFlag(args) {
 		return printHelp("agent ready")
 	}
+	noWait, args := takeBoolFlag(args, "--no-wait", "-O")
 	if err := rejectFlags("agent ready", args); err != nil {
 		return usageErrorFor("agent ready", err)
 	}
@@ -1436,18 +1775,43 @@ func runAgentReady(args []string) error {
 	if err != nil {
 		return err
 	}
-	resp, err := client.Do(root, flockName, protocol.Request{Op: protocol.OpReady, Name: name, Token: token})
+	runtimeSessionID := strings.TrimSpace(os.Getenv(protocol.CodexThreadIDEnv))
+	resp, err := agentMsgRequest(root, flockName, protocol.Request{
+		Op: protocol.OpReady, Name: name, Token: token, NoWait: noWait,
+		SessionID: runtimeSessionID,
+	})
 	if err != nil {
 		if !errors.Is(err, client.ErrNotRunning) {
 			return err
 		}
-		if err := daemon.WriteReadySignal(root, flockName, name, token); err != nil {
+		if !noWait {
+			return err
+		}
+		if err := daemon.WriteReadySignalWithSession(root, flockName, name, token, runtimeSessionID); err != nil {
 			return fmt.Errorf("publish readiness signal: %w", err)
 		}
 		fmt.Println(name)
+		fmt.Fprintln(os.Stderr, "warning: automatic inbox delivery is unavailable: the current interactive launcher does not own a same-session integration control channel; messages remain durable for `fledge agent msg inbox` or `fledge agent msg wait`")
 		return nil
 	}
+	if !noWait {
+		resp, err = agentMsgRequest(root, flockName, protocol.Request{
+			Op:    protocol.OpReceive,
+			As:    name,
+			Token: token,
+		})
+		if err != nil {
+			return err
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(resp.Message); err != nil {
+			return err
+		}
+		return acknowledgeMessage(root, flockName, name, resp.Message)
+	}
 	fmt.Println(resp.Name)
+	if resp.InboxDelivery == "manual" {
+		fmt.Fprintln(os.Stderr, "warning: automatic inbox delivery is unavailable: the current interactive launcher does not own a same-session integration control channel; messages remain durable for `fledge agent msg inbox` or `fledge agent msg wait`")
+	}
 	return nil
 }
 
@@ -1536,12 +1900,18 @@ func runAgentMsg(args []string) error {
 	switch args[0] {
 	case "send":
 		return runAgentMsgSend(args[1:])
+	case "reply":
+		return runAgentMsgReply(args[1:])
+	case "inbox":
+		return runAgentMsgInbox(args[1:])
 	case "wait":
 		return runAgentMsgWait(args[1:])
 	default:
 		return usageErrorf("agent msg", "unknown agent msg subcommand %q", args[0])
 	}
 }
+
+var agentMsgRequest = client.Do
 
 func runAgentMsgSend(args []string) error {
 	// Help only when it is the sole argument: the recipient and body are
@@ -1554,11 +1924,35 @@ func runAgentMsgSend(args []string) error {
 	if err != nil {
 		return usageErrorFor("agent msg send", err)
 	}
+	bodyFile, args, err := takeFlag(args, "--body-file", "-F")
+	if err != nil {
+		return usageErrorFor("agent msg send", err)
+	}
 	if err := rejectFlags("agent msg send", args); err != nil {
 		return usageErrorFor("agent msg send", err)
 	}
-	if len(args) != 2 {
-		return usageErrorf("agent msg send", "agent msg send: want a recipient and a body")
+	if len(args) < 1 || len(args) > 2 {
+		return usageErrorf("agent msg send",
+			"agent msg send: want a recipient and exactly one body or --body-file")
+	}
+	if (len(args) == 2) == (bodyFile != "") {
+		return usageErrorf("agent msg send",
+			"agent msg send: provide exactly one positional body or --body-file")
+	}
+	body := ""
+	if bodyFile != "" {
+		var data []byte
+		if bodyFile == "-" {
+			data, err = io.ReadAll(os.Stdin)
+		} else {
+			data, err = os.ReadFile(bodyFile)
+		}
+		if err != nil {
+			return fmt.Errorf("agent msg send: read body file %q: %w", bodyFile, err)
+		}
+		body = string(data)
+	} else {
+		body = args[1]
 	}
 	from := strings.TrimSpace(os.Getenv(protocol.AgentNameEnv))
 	if from == "" {
@@ -1572,7 +1966,7 @@ func runAgentMsgSend(args []string) error {
 	if err != nil {
 		return err
 	}
-	roster, err := client.Do(root, flockName, protocol.Request{Op: protocol.OpList})
+	roster, err := agentMsgRequest(root, flockName, protocol.Request{Op: protocol.OpList})
 	if err != nil {
 		return err
 	}
@@ -1587,12 +1981,14 @@ func runAgentMsgSend(args []string) error {
 		return fmt.Errorf("agent msg send: no registered agent %q", from)
 	}
 
-	resp, err := client.Do(root, flockName, protocol.Request{
-		Op:      protocol.OpSend,
-		From:    from,
-		To:      args[0],
-		Body:    args[1],
-		ReplyTo: replyTo,
+	resp, err := agentMsgRequest(root, flockName, protocol.Request{
+		Op:         protocol.OpSend,
+		From:       from,
+		To:         args[0],
+		Body:       body,
+		ReplyTo:    replyTo,
+		Token:      os.Getenv(protocol.ReadyTokenEnv),
+		Credential: os.Getenv(protocol.AgentCredentialEnv),
 	})
 	if err != nil {
 		return err
@@ -1601,11 +1997,120 @@ func runAgentMsgSend(args []string) error {
 	return nil
 }
 
+func runAgentMsgReply(args []string) error {
+	if len(args) == 1 && isHelpFlag(args[0]) {
+		return printHelp("agent msg reply")
+	}
+	bodyFile, args, err := takeFlag(args, "--body-file", "-F")
+	if err != nil {
+		return usageErrorFor("agent msg reply", err)
+	}
+	if err := rejectFlags("agent msg reply", args); err != nil {
+		return usageErrorFor("agent msg reply", err)
+	}
+	if len(args) < 1 || len(args) > 2 {
+		return usageErrorf("agent msg reply",
+			"agent msg reply: want a message id and exactly one body or --body-file")
+	}
+	if (len(args) == 2) == (bodyFile != "") {
+		return usageErrorf("agent msg reply",
+			"agent msg reply: provide exactly one positional body or --body-file")
+	}
+	var body string
+	if bodyFile != "" {
+		var data []byte
+		if bodyFile == "-" {
+			data, err = io.ReadAll(os.Stdin)
+		} else {
+			data, err = os.ReadFile(bodyFile)
+		}
+		if err != nil {
+			return fmt.Errorf("agent msg reply: read body file %q: %w", bodyFile, err)
+		}
+		body = string(data)
+	} else {
+		body = args[1]
+	}
+	from := strings.TrimSpace(os.Getenv(protocol.AgentNameEnv))
+	if from == "" {
+		return errors.New("agent msg reply: FLEDGE_AGENT_NAME is required")
+	}
+	flockName, err := flock.FromEnv()
+	if err != nil {
+		return err
+	}
+	root, err := workspaceRoot()
+	if err != nil {
+		return err
+	}
+	resp, err := agentMsgRequest(root, flockName, protocol.Request{
+		Op: protocol.OpReply, From: from, ID: args[0], Body: body,
+		Token:      os.Getenv(protocol.ReadyTokenEnv),
+		Credential: os.Getenv(protocol.AgentCredentialEnv),
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Println(resp.ID)
+	return nil
+}
+
+func runAgentMsgInbox(args []string) error {
+	if hasHelpFlag(args) {
+		return printHelp("agent msg inbox")
+	}
+	replyTo, args, err := takeFlag(args, "--reply-to", "-R")
+	if err != nil {
+		return usageErrorFor("agent msg inbox", err)
+	}
+	from, args, err := takeFlag(args, "--from", "")
+	if err != nil {
+		return usageErrorFor("agent msg inbox", err)
+	}
+	if err := rejectFlags("agent msg inbox", args); err != nil {
+		return usageErrorFor("agent msg inbox", err)
+	}
+	if len(args) != 0 {
+		return usageErrorf("agent msg inbox", "agent msg inbox: unexpected argument %q", args[0])
+	}
+	as := strings.TrimSpace(os.Getenv(protocol.AgentNameEnv))
+	if as == "" {
+		return errors.New("agent msg inbox: FLEDGE_AGENT_NAME is required")
+	}
+	flockName, err := flock.FromEnv()
+	if err != nil {
+		return err
+	}
+	root, err := workspaceRoot()
+	if err != nil {
+		return err
+	}
+	resp, err := agentMsgRequest(root, flockName, protocol.Request{
+		Op:         protocol.OpPeek,
+		As:         as,
+		From:       from,
+		ReplyTo:    replyTo,
+		Token:      os.Getenv(protocol.ReadyTokenEnv),
+		Credential: os.Getenv(protocol.AgentCredentialEnv),
+	})
+	if err != nil {
+		return err
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(resp.Message); err != nil {
+		return err
+	}
+	return acknowledgeMessage(root, flockName, as, resp.Message)
+}
+
 func runAgentMsgWait(args []string) error {
 	if hasHelpFlag(args) {
 		return printHelp("agent msg wait")
 	}
 	replyTo, args, err := takeFlag(args, "--reply-to", "-R")
+	if err != nil {
+		return usageErrorFor("agent msg wait", err)
+	}
+	from, args, err := takeFlag(args, "--from", "")
 	if err != nil {
 		return usageErrorFor("agent msg wait", err)
 	}
@@ -1648,16 +2153,36 @@ func runAgentMsgWait(args []string) error {
 		timeoutMS = d.Milliseconds()
 	}
 
-	resp, err := client.Do(root, flockName, protocol.Request{
-		Op:        protocol.OpWait,
-		As:        as,
-		ReplyTo:   replyTo,
-		TimeoutMS: timeoutMS,
+	resp, err := agentMsgRequest(root, flockName, protocol.Request{
+		Op:         protocol.OpReceive,
+		As:         as,
+		From:       from,
+		ReplyTo:    replyTo,
+		TimeoutMS:  timeoutMS,
+		Token:      os.Getenv(protocol.ReadyTokenEnv),
+		Credential: os.Getenv(protocol.AgentCredentialEnv),
 	})
 	if err != nil {
 		return err
 	}
-	return json.NewEncoder(os.Stdout).Encode(resp.Message)
+	if err := json.NewEncoder(os.Stdout).Encode(resp.Message); err != nil {
+		return err
+	}
+	return acknowledgeMessage(root, flockName, as, resp.Message)
+}
+
+func acknowledgeMessage(root, flockName, as string, msg *protocol.Message) error {
+	if msg == nil {
+		return nil
+	}
+	_, err := agentMsgRequest(root, flockName, protocol.Request{
+		Op:         protocol.OpAck,
+		As:         as,
+		ID:         msg.ID,
+		Token:      os.Getenv(protocol.ReadyTokenEnv),
+		Credential: os.Getenv(protocol.AgentCredentialEnv),
+	})
+	return err
 }
 
 // runDaemon is hidden from public help: operators start the daemon
@@ -1686,11 +2211,15 @@ func runInit(args []string) error {
 		return printHelp("init")
 	}
 	asJSON, args := takeBoolFlag(args, "--json", "-J")
+	fresh, args := takeBoolFlag(args, "--fresh", "-X")
 	if err := rejectFlags("init", args); err != nil {
 		return usageErrorFor("init", err)
 	}
 	if len(args) > 1 {
 		return usageErrorf("init", "init: unexpected argument %q", args[1])
+	}
+	if fresh && asJSON {
+		return usageErrorf("init", "init: --fresh cannot be combined with --json")
 	}
 
 	root := "."
@@ -1703,6 +2232,18 @@ func runInit(args []string) error {
 		return err
 	}
 
+	freshened := false
+	if fresh {
+		proceed, removed, err := prepareFreshInit(root, abs)
+		if err != nil {
+			return err
+		}
+		if !proceed {
+			return nil
+		}
+		freshened = removed
+	}
+
 	var notes []string
 	// Checked from the parent so re-initializing a workspace does not warn
 	// about itself. A nested workspace shadows the enclosing one for every
@@ -1713,6 +2254,9 @@ func runInit(args []string) error {
 
 	existed, err := scaffold.Ensure(root)
 	if err != nil {
+		return err
+	}
+	if err := agentcfg.MigrateLegacyGenerated(root); err != nil {
 		return err
 	}
 
@@ -1750,7 +2294,9 @@ func runInit(args []string) error {
 		})
 	}
 
-	if existed {
+	if freshened {
+		fmt.Printf("fledge freshly initialized in %s\n", abs)
+	} else if existed {
 		fmt.Printf("fledge re-initialized in %s\n", abs)
 	} else {
 		fmt.Printf("fledge initialized in %s\n", abs)
@@ -1769,6 +2315,8 @@ func runInit(args []string) error {
 			counts = append(counts, fmt.Sprintf("%d from %s", models[integration], integration))
 		}
 		fmt.Printf("wrote %s/%s (%s)\n", scaffold.DirName, agentcfg.CatalogName, strings.Join(counts, ", "))
+	} else if freshened {
+		fmt.Printf("no integration answered discovery; %s/%s was not created\n", scaffold.DirName, agentcfg.CatalogName)
 	} else {
 		fmt.Printf("no integration answered discovery; %s/%s left as it was\n", scaffold.DirName, agentcfg.CatalogName)
 	}
@@ -1776,6 +2324,130 @@ func runInit(args []string) error {
 		fmt.Printf("note: %s\n", note)
 	}
 	return nil
+}
+
+// prepareFreshInit previews and removes an existing .fledge tree only after
+// the operator has seen its contents and explicitly confirmed the destructive
+// replacement. proceed is false only when the operator declines; removed says
+// whether an existing tree was actually deleted.
+func prepareFreshInit(root, abs string) (proceed, removed bool, err error) {
+	target := filepath.Join(root, scaffold.DirName)
+	info, err := os.Lstat(target)
+	if os.IsNotExist(err) {
+		return true, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+
+	if info.IsDir() {
+		names, err := flock.List(root)
+		if err != nil {
+			return false, false, err
+		}
+		var running []string
+		for _, name := range names {
+			if client.Running(root, name) {
+				running = append(running, name)
+			}
+		}
+		if len(running) > 0 {
+			return false, false, fmt.Errorf("init --fresh: flocks still running: %s; run fledge flock stop first", strings.Join(running, ", "))
+		}
+	}
+
+	if !stdinIsTerminal() || !stdoutIsTerminal() {
+		return false, false, errors.New("init --fresh is interactive and needs terminals on stdin and stdout")
+	}
+
+	fmt.Println("WARNING: --fresh permanently deletes the entire .fledge tree, including user definitions, context artifacts, and flock history.")
+	if err := printFledgeTree(root, target, info); err != nil {
+		return false, false, err
+	}
+	risk := freshInitGitRisk(abs)
+	switch {
+	case risk.Unavailable != "":
+		fmt.Printf("\nWARNING: Git could not verify this data (%s). Assume every item above is unrecoverable.\n", risk.Unavailable)
+	case len(risk.Paths) > 0:
+		fmt.Println("\nWARNING: these files are not tracked by Git and are not ignored; fresh init will permanently delete them:")
+		for _, name := range risk.Paths {
+			fmt.Printf("  %s\n", name)
+		}
+	}
+
+	fmt.Printf("\ndestroy and freshly initialize %s in %s? [y/N] ", scaffold.DirName, abs)
+	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	answer := strings.ToLower(strings.TrimSpace(line))
+	if answer != "y" && answer != "yes" {
+		fmt.Println("aborted; nothing removed")
+		return false, false, nil
+	}
+
+	if err := os.RemoveAll(target); err != nil {
+		return false, false, err
+	}
+	fmt.Printf("removed %s; rebuilding from scratch\n", filepath.Join(abs, scaffold.DirName))
+	return true, true, nil
+}
+
+type freshGitRiskReport struct {
+	Paths       []string
+	Unavailable string
+}
+
+// freshInitGitRisk finds files that Git considers untracked and that no ignore
+// rule covers. Those files have no Git recovery path after the confirmed
+// removal. Outside a Git worktree the whole preview is conservatively treated
+// as unverifiable.
+func freshInitGitRisk(abs string) freshGitRiskReport {
+	check := exec.Command("git", "-C", abs, "rev-parse", "--is-inside-work-tree")
+	out, err := check.CombinedOutput()
+	if err != nil || strings.TrimSpace(string(out)) != "true" {
+		reason := strings.TrimSpace(string(out))
+		if reason == "" {
+			reason = "not a Git worktree"
+		}
+		return freshGitRiskReport{Unavailable: reason}
+	}
+
+	cmd := exec.Command("git", "-C", abs, "ls-files", "--others", "--exclude-standard", "-z", "--", scaffold.DirName)
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		reason := strings.TrimSpace(string(out))
+		if reason == "" {
+			reason = err.Error()
+		}
+		return freshGitRiskReport{Unavailable: reason}
+	}
+	var paths []string
+	for _, name := range strings.Split(string(out), "\x00") {
+		if name != "" {
+			paths = append(paths, filepath.ToSlash(name))
+		}
+	}
+	sort.Strings(paths)
+	return freshGitRiskReport{Paths: paths}
+}
+
+func printFledgeTree(root, target string, info os.FileInfo) error {
+	if !info.IsDir() {
+		fmt.Println(scaffold.DirName)
+		return nil
+	}
+	return filepath.WalkDir(target, func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			rel += "/"
+		}
+		fmt.Println(rel)
+		return nil
+	})
 }
 
 // initSummary is init's --json shape.
@@ -1844,26 +2516,8 @@ func runDeinit(args []string) error {
 		return fmt.Errorf("deinit is interactive and needs a terminal on stdin")
 	}
 
-	if info.IsDir() {
-		err := filepath.WalkDir(target, func(p string, d fs.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			rel, err := filepath.Rel(root, p)
-			if err != nil {
-				return err
-			}
-			if d.IsDir() {
-				rel += "/"
-			}
-			fmt.Println(rel)
-			return nil
-		})
-		if err != nil {
-			return err
-		}
-	} else {
-		fmt.Println(scaffold.DirName)
+	if err := printFledgeTree(root, target, info); err != nil {
+		return err
 	}
 
 	fmt.Printf("\nremove everything above from %s? [y/N] ", abs)
@@ -2138,6 +2792,169 @@ func pickAgentConfig(configs map[string]agentcfg.Config, in io.Reader, out io.Wr
 		return "", fmt.Errorf("invalid selection %q: want 1-%d or a config name", answer, len(names))
 	}
 	return answer, nil
+}
+
+// orchestratorConfigNames splits the startup catalog into the two choices
+// shown directly and the Pi choices available through the submenu. Managed
+// fledge-* profiles remain explicitly spawnable but never appear at startup.
+func orchestratorConfigNames(configs map[string]agentcfg.Config) (direct, pi []string) {
+	var claude, codex []string
+	for name, cfg := range configs {
+		if strings.HasPrefix(name, "fledge-") {
+			continue
+		}
+		switch cfg.Integration {
+		case "claude":
+			claude = append(claude, name)
+		case "codex":
+			codex = append(codex, name)
+		case "pi":
+			pi = append(pi, name)
+		}
+	}
+	sort.Strings(claude)
+	sort.Strings(codex)
+	sort.Slice(pi, func(i, j int) bool {
+		a, b := configProvider(configs[pi[i]]), configProvider(configs[pi[j]])
+		if a != b {
+			return a < b
+		}
+		return pi[i] < pi[j]
+	})
+	return append(claude, codex...), pi
+}
+
+func orchestratorModel(cfg agentcfg.Config) string {
+	if cfg.Model == "" {
+		return "(default model)"
+	}
+	return cfg.Model
+}
+
+func orchestratorPickerRows(configs map[string]agentcfg.Config) []string {
+	direct, pi := orchestratorConfigNames(configs)
+	nameW, count := 0, len(direct)
+	if len(pi) > 0 {
+		count++
+	}
+	for _, name := range direct {
+		if len(name) > nameW {
+			nameW = len(name)
+		}
+	}
+	numW := len(strconv.Itoa(count))
+	rows := []string{"Orchestrator profiles:", ""}
+	previous := ""
+	for i, name := range direct {
+		cfg := configs[name]
+		label := "Claude Code"
+		if cfg.Integration == "codex" {
+			label = "Codex"
+		}
+		if label != previous {
+			rows = append(rows, "  "+label)
+			previous = label
+		}
+		rows = append(rows, fmt.Sprintf("    %*d. %-*s   %s", numW, i+1, nameW, name, orchestratorModel(cfg)))
+	}
+	if len(pi) > 0 {
+		rows = append(rows, "  Pi")
+		rows = append(rows, fmt.Sprintf("    %*d. Browse Pi profiles…", numW, len(direct)+1))
+	}
+	return rows
+}
+
+func piPickerRows(configs map[string]agentcfg.Config, names []string) []string {
+	nameW, numW := 0, len(strconv.Itoa(len(names)))
+	for _, name := range names {
+		if len(name) > nameW {
+			nameW = len(name)
+		}
+	}
+	rows := []string{"Pi profiles:", ""}
+	previous := ""
+	for i, name := range names {
+		cfg := configs[name]
+		provider := configProvider(cfg)
+		if provider != previous {
+			rows = append(rows, fmt.Sprintf("  %s", provider))
+			previous = provider
+		}
+		rows = append(rows, fmt.Sprintf("    %*d. %-*s   %s", numW, i+1, nameW, name, orchestratorModel(cfg)))
+	}
+	rows = append(rows, "", "  0. Back")
+	return rows
+}
+
+func readOrchestratorSelection(in *bufio.Reader, out io.Writer, prompt string) (string, error) {
+	fmt.Fprint(out, prompt)
+	line, _ := in.ReadString('\n')
+	answer := strings.TrimSpace(line)
+	if answer == "" {
+		return "", errors.New("spawn cancelled")
+	}
+	return answer, nil
+}
+
+// pickOrchestratorConfig is the startup-only two-level picker. Claude Code and
+// Codex stay one keystroke away; Pi's potentially much larger provider catalog
+// is browsed separately and can return to the first screen with 0.
+func pickOrchestratorConfig(configs map[string]agentcfg.Config, in io.Reader, out io.Writer) (string, error) {
+	direct, pi := orchestratorConfigNames(configs)
+	if len(direct) == 0 && len(pi) == 0 {
+		return "", errors.New("no profiles available for the fledge-orchestrator")
+	}
+
+	reader := bufio.NewReader(in)
+	for {
+		for _, row := range orchestratorPickerRows(configs) {
+			fmt.Fprintln(out, row)
+		}
+		answer, err := readOrchestratorSelection(reader, out, "\nRun orchestrator with which profile? (number or name): ")
+		if err != nil {
+			return "", err
+		}
+		if n, parseErr := strconv.Atoi(answer); parseErr == nil {
+			if n >= 1 && n <= len(direct) {
+				return direct[n-1], nil
+			}
+			if len(pi) > 0 && n == len(direct)+1 {
+				for {
+					fmt.Fprintln(out)
+					for _, row := range piPickerRows(configs, pi) {
+						fmt.Fprintln(out, row)
+					}
+					piAnswer, readErr := readOrchestratorSelection(reader, out, "\nChoose a Pi profile (number or name): ")
+					if readErr != nil {
+						return "", readErr
+					}
+					if piAnswer == "0" {
+						fmt.Fprintln(out)
+						break
+					}
+					if piN, piParseErr := strconv.Atoi(piAnswer); piParseErr == nil {
+						if piN >= 1 && piN <= len(pi) {
+							return pi[piN-1], nil
+						}
+						return "", fmt.Errorf("invalid selection %q", piAnswer)
+					}
+					if slices.Contains(pi, piAnswer) {
+						return piAnswer, nil
+					}
+					return "", fmt.Errorf("invalid selection %q", piAnswer)
+				}
+				continue
+			}
+			return "", fmt.Errorf("invalid selection %q", answer)
+		}
+		if slices.Contains(direct, answer) {
+			return answer, nil
+		}
+		if slices.Contains(pi, answer) {
+			return answer, nil
+		}
+		return "", fmt.Errorf("invalid selection %q", answer)
+	}
 }
 
 // modelEntry is one catalog row as JSON. Provider is the derived one, so the

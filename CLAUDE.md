@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 ./scripts/build.sh              # go build -> bin/fledge
-./scripts/install.sh            # copy to GOBIN (or GOPATH/bin); BINDIR= to override
+./scripts/install.sh            # build -tags dev (-dev version suffix), install to GOBIN (or GOPATH/bin); BINDIR= to override
 go test ./...
 go test -run TestSpawn ./internal/daemon/   # single test
 gofmt -l . && go vet ./...
@@ -61,8 +61,16 @@ only).
   the workspace (108-byte `sun_path` cap; NFS can't bind unix sockets).
 - **Flock selection defaults to `FLEDGE_FLOCK`** — `fledge start` exports it
   into every session pane. Operational commands with a positional flock name
-  (`flock stop`, `flock status`, `watch`) use that explicit name first; agent
-  commands remain scoped to their inherited flock.
+  (`restart`, `flock stop`, `flock status`, `watch`) use that explicit name
+  first; agent commands remain scoped to their inherited flock.
+- **In-place restart is the install handoff**: after `./scripts/install.sh`
+  replaces the binary, run `fledge restart [name]` for a running flock. The CLI
+  asks the old daemon for status, sends shutdown, waits until it is down, then
+  re-execs the current binary through `spawnDaemon` with the same Herdr session
+  binding, including an empty binding. The replacement must report a different
+  daemon PID, `version.Get()` as `daemon_version`, and the same session. Spawn
+  or post-spawn verification failure leaves Herdr running and reports the
+  flock daemon log path.
 - **Managed session recovery and cleanup**: starting a down flock recreates
   its deterministic default Herdr session, so stale panes cannot collide with
   the journal's empty roster. Confirmed `flock clear` stops and deletes each
@@ -75,9 +83,10 @@ only).
   tolerated; malformed earlier line = corruption, startup fails. Anything not
   journaled must not be left running (spawn failure ⇒ teardown).
 - **Three integrations, one shape** (`internal/daemon/spawn.go`): `claude`,
-  `codex`, and `pi` are all pane-hosted — a visible herdr pane; ordinary direct
-  messages use `pane.send_input` + `keys:["enter"]`, while startup identity and
-  role use each CLI's native instruction option. Panes survive daemon restart.
+  `codex`, and `pi` are all pane-hosted — a visible herdr pane; startup
+  identity and role use each CLI's native instruction option, while direct
+  messages stay in Fledge's durable mailbox until `agent msg inbox` or
+  `agent msg wait` claims them. Panes survive daemon restart.
   Journals from before pi was pane-hosted record spawned pi agents
   with no `pane_id`; replay marks those `orphaned` (their RPC pipes died with
   the daemon) and tolerates legacy `agent.settled` lines as no-ops.
@@ -96,12 +105,12 @@ only).
   claude-only, `sandbox` codex-only — validation cross-checks.
 - **Definitions and profiles** (`internal/agentcfg`): portable Markdown under
   `.fledge/agents/{user,fledge}/` is authoritative. Synchronization validates
-  path/name/namespace rules and atomically writes versioned `agents.json` and
-  `fledge-agents.json` indexes with separate agent/profile maps. The generated
+  path/name/namespace rules and atomically writes versioned `user-agents.json`
+  and `managed-agents.json` indexes with separate agent/profile maps. The generated
   catalog is the third profile source; differing declarations are errors.
 - **Model catalog** (`internal/catalog`): `fledge init` probes
   `claude --version`, execs `pi --list-models` / `codex debug models`, and
-  regenerates `.fledge/agents/catalog.json` (gitignored, per-machine) wholesale.
+  regenerates `.fledge/agents/fledge/catalog.json` (gitignored, per-machine) wholesale.
   Claude discovery contributes a model-less default plus native Opus, Fable,
   Sonnet, and Haiku launchers;
   Empty discovery keeps the old catalog.
@@ -113,16 +122,22 @@ only).
   `developer_instructions`, and supplies readiness as the initial positional
   prompt. The instruction document contains the assigned identity, direct-send
   guidance, and exact Markdown role (identity/guidance only for raw spawns).
-  Profile `argv` is option-only, rejects `--`, and precedes Fledge's arguments.
+  Profile `argv` is option-only, rejects `--` and integration flags that replace
+  the interactive session/control mode, and precedes Fledge's arguments.
   Once Herdr resolves, `agent.spawned` records PID/pane/workspace metadata and
   releases early readiness or stop calls. `agent ready` hashes and validates
   the token and journals `agent.ready`. No lifecycle `pane.send_input` or
-  `msg.sent` events are emitted. Sandboxed agents that cannot open the daemon socket
-  atomically publish the digest under the flock directory for the daemon to
-  validate and consume. Interactive start attaches Herdr before beginning this
-  lifecycle. Spawned agents receive ordinary messages in their sessions rather
-  than polling `agent msg wait`; the user-driven orchestrator retains its
-  mailbox-wait behavior but has no role-injection exception.
+  `msg.sent` events are emitted. `agent ready --no-wait` for the managed
+  orchestrator currently reports degraded/manual inbox delivery: Herdr owns the
+  interactive integration process and provides no persistent native control
+  stream that Fledge can serialize with user turns. No resume/print subprocess,
+  pane input, toast, or polling fallback is permitted. The atomic ready-plus-arm
+  journal field and bounded/coalescing retry worker remain available only to a
+  future launcher-owned same-session adapter. Herdr remains
+  launch/placement/status/teardown only for agent communication. Sandboxed
+  agents that cannot open the daemon socket atomically publish the digest under
+  the flock directory for the daemon to validate and consume. Interactive start
+  attaches Herdr before beginning this lifecycle.
   Immediately after `agent.start`, interactive start swaps and focuses the managed
   orchestrator into its final left position before registration or readiness.
 - After readiness completes, interactive fresh starts keep

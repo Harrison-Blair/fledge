@@ -5,7 +5,9 @@ import (
 	"strings"
 )
 
-const rootHelp = `fledge - agent development harness
+const rootHelp = `        _,
+ _.--""'/
+)-._.-\)
 
 usage:
   fledge <command> [args]
@@ -15,7 +17,8 @@ commands:
   init       create or refresh the .fledge directory
   deinit     remove the .fledge directory
   start      bring up a flock and open its herdr UI
-  stop       stop every flock in the workspace
+  restart    restart a flock daemon in place
+  stop       stop this flock, or every flock outside one
   watch      stream a flock's daemon log
   context    inspect what fledge sees in a workspace
   flock      bring flocks up and down, inspect them
@@ -29,17 +32,23 @@ flags:
 var helpPages = map[string]string{
 	"": rootHelp,
 	"init": `usage:
-  fledge init [dir]
+  fledge init [--fresh] [dir]
 
 create or refresh the .fledge directory without replacing existing files.
 dir defaults to the current directory.
 
 also discovers native Claude Code default and model-family launchers (claude --version)
 and the models available through pi and Codex (pi --list-models, codex debug
-models), then regenerates .fledge/agents/catalog.json and synchronizes portable
+models), then regenerates .fledge/agents/fledge/catalog.json and synchronizes portable
 Markdown definitions into versioned indexes.
 
+--fresh previews and permanently removes an existing .fledge tree, warns about
+untracked files not covered by Git ignore rules, and requires interactive
+confirmation on terminals before rebuilding from scratch. it refuses while a
+flock is running and cannot be combined with --json.
+
 flags:
+  --fresh, -X  destructively rebuild the complete .fledge tree
   --json, -J   emit a JSON summary instead of text
   --help, -H   print this help
 `,
@@ -64,12 +73,10 @@ a fresh start offers a profile for the managed, profile-agnostic
 fledge-orchestrator definition, opens the UI, then visibly launches the
 orchestrator with its identity and Markdown role in the integration's native
 instruction channel and readiness as the CLI's initial prompt.
-after that succeeds, a separate, unfocused workspace named fledge-watch opens
-with a watch tab whose normal shell runs fledge watch. the primary workspace
-keeps its orchestrator | CLI split, and focus returns to the orchestrator.
+after that succeeds, the existing CLI shell beside the orchestrator is replaced
+with fledge watch, leaving an orchestrator | watcher split in the same tab.
 the watcher is not registered as a herdr or fledge agent. watcher setup failure
-closes only the new watcher workspace when possible, keeps the healthy flock
-and primary workspace, and prints a manual-watch hint in the CLI.
+keeps the healthy flock and CLI pane and prints a manual-watch hint there.
 if no orchestrator can be started, the start is rolled back.
 a start whose stdout is not a terminal stops after the daemon: no orchestrator,
 no picker, no attach.
@@ -79,12 +86,23 @@ flags:
   --session, -N <name>    herdr session name (default: fledge-<dir>-<hash>-<flock>)
   --help, -H              print this help
 `,
+	"restart": `usage:
+  fledge restart [name]
+
+restart a running flock daemon without ending its herdr session. name defaults
+to FLEDGE_FLOCK. the replacement daemon uses the current fledge executable and
+the same herdr session binding, including an empty binding when the old daemon
+was unbound.
+
+flags:
+  --help, -H   print this help
+`,
 	"stop": `usage:
   fledge stop
 
-list every flock in the workspace, then stop them all after an interactive
-[y/N] confirmation. runs anywhere inside the workspace. each flock is torn
-down exactly as fledge flock stop would tear it down.
+when FLEDGE_FLOCK is set, show and offer to stop only that flock. otherwise,
+list every flock in the workspace and offer to stop them all. each target is
+torn down exactly as fledge flock stop would tear it down.
 
 this command is interactive only: it refuses unless both stdin and stdout are
 terminals, and there is no flag to bypass the confirmation. use
@@ -106,8 +124,100 @@ flags:
   fledge context <command>
 
 commands:
-  scan    list the files visible to fledge
-  graph   show their structural directory graph
+  scan            list the files visible to fledge
+  graph           show their structural directory graph
+  compose         inject template instructions into analyzer requests
+  validate        validate analyzer request and reply JSON
+  render-project  validate and publish a completed context run
+
+flags:
+  --help, -H   print this help
+`,
+	"context compose": `usage:
+  fledge context compose <command>
+
+commands:
+  analyzer-request  inject template instructions into one analyzer request
+  worksheet         stamp one analyzer worksheet from its template
+
+flags:
+  --help, -H   print this help
+`,
+	"context compose analyzer-request": `usage:
+  fledge context compose analyzer-request [flags] FILE
+
+inject the operator-editable instruction sections from
+.fledge/context/templates/analyzer-request.md into FILE's
+instructions_before and instructions_after fields, substituting {group_id},
+{purpose}, and {worksheet_path} with the request's own values. The template
+sections are delimited by <instructions_before> and <instructions_after> XML
+tags, each required exactly once. A template that references
+{worksheet_path} requires --worksheet. Recomposing overwrites previously
+composed instructions. The composed request prints to standard output unless
+--in-place rewrites FILE atomically.
+
+flags:
+  --in-place, -A          rewrite FILE with the composed request
+  --worksheet, -E <path>  worksheet path substituted for {worksheet_path}
+  --help, -H              print this help
+`,
+	"context compose worksheet": `usage:
+  fledge context compose worksheet [flags] REQUEST
+
+stamp the operator-editable worksheet template
+.fledge/context/templates/analyzer-worksheet.md for REQUEST's group,
+substituting {group_id}, {purpose}, and {files} ({files} renders the
+request's assigned files as a Markdown checklist). The worksheet is the
+analyzer's scratch pad and human-readable deliverable, retained in the run
+folder. It prints to standard output unless --output writes it atomically,
+creating parent directories.
+
+flags:
+  --output, -U <file>  write the worksheet to file instead of standard output
+  --help, -H           print this help
+`,
+	"context validate": `usage:
+  fledge context validate <command>
+
+commands:
+  analyzer-request  validate one analyzer request
+  analyzer-reply    validate a reply against its request
+
+flags:
+  --help, -H   print this help
+`,
+	"context validate analyzer-request": `usage:
+  fledge context validate analyzer-request [FILE|-]
+
+strictly validate one analyzer request JSON object. FILE defaults to "-", which
+reads standard input. Unknown, missing, duplicate, unsafe, and inconsistent
+fields are rejected.
+
+flags:
+  --help, -H   print this help
+`,
+	"context validate analyzer-reply": `usage:
+  fledge context validate analyzer-reply --request FILE [FILE|-]
+
+strictly validate one analyzer reply JSON object and correlate its group and
+assigned-file references with the request. Internal dependencies may use safe
+normalized project-relative paths outside the request. The reply FILE defaults
+to standard input.
+
+flags:
+  --request, -Q <file>  analyzer request used for correlation
+  --help, -H            print this help
+`,
+	"context render-project": `usage:
+  fledge context render-project RUN_DIR
+
+validate a complete forager/analyzer run, atomically replace
+.fledge/context/project.md, publish the run provenance separately as
+.fledge/context/provenance.json, and remove the consumed run JSON only after
+publication succeeds; a run directory retaining worksheets survives. RUN_DIR
+must be canonical and strictly below .fledge/context/runs. success prints
+JSON with path, sha256, provenance_path, and warnings; post-publication
+durability or cleanup problems are warnings, not rollback errors.
 
 flags:
   --help, -H   print this help
@@ -121,7 +231,7 @@ containing .fledge/. dir defaults to the current directory; a dir below
 the root limits the listing to that subtree.
 
 flags:
-  --json, -J   emit JSON instead of grouped text
+  --json, -J   emit strict scan.json JSON with derived counts and total size
   --help, -H   print this help
 `,
 	"context graph": `usage:
@@ -243,13 +353,12 @@ renames its initial tab, starts a pane-hosted Claude/Codex agent there, and
 removes the initial shell. Pi profiles cannot satisfy dedicated placement.
 Any launch, spawn-journal, or readiness failure closes the whole new workspace.
 
-The managed, profile-agnostic fledge-forager uses a fledge-context workspace.
-After spawn returns, send it an explicit planning task, save the message id,
-and wait with "agent msg wait --reply-to <id>". Its reply body is one JSON
-object: schema_version 1; file_count and total_size; subagent_count; and a
-subagents array whose entries contain kebab-case id, purpose, total_size, and
-files [{path,size}]. Every file from "context scan --json" appears exactly
-once, and every count and byte total reconciles.
+The managed fledge-forager uses its pinned Claude profile in a fledge-context workspace.
+After spawn returns, send it an explicit context task, save the message id, and
+wait with "agent msg wait --reply-to <id>". It partitions one context scan,
+spawns file-scoped fledge-analyzer agents into --workspace/--tab targets,
+strictly validates their correlated replies, and publishes the atomic
+.fledge/context/project.md artifact with "context render-project".
 
 flags:
   --profile, -L <name>     raw profile, or profile for an agnostic agent
@@ -258,18 +367,25 @@ flags:
   --integration, -I <name> run the model under this integration
                            (claude, pi or codex; default: routed by prefix)
   --cwd, -C <dir>          working directory (default: workspace root)
+  --workspace, -W <value>  existing Herdr workspace id or exact label
+  --tab, -B <value>        existing tab id/label, or label to create
+                           (--workspace and --tab must be used together)
   --species, -S <slug>     request a specific species slug
   --timeout, -T <duration> readiness timeout (default: 2m)
   --help, -H               print this help
 `,
 	"agent ready": `usage:
-  fledge agent ready
+  fledge agent ready [flags]
 
 authenticate the one-use readiness token injected by fledge agent spawn.
+By default, readiness is journaled and then this command waits for the first
+mailbox message, printing the same JSON object as agent msg wait. --no-wait
+preserves the startup handshake behavior and prints the assigned name.
 This command takes no arguments and only works inside a starting agent.
 
 flags:
-  --help, -H   print this help
+  --no-wait, -O  authenticate readiness and return without waiting
+  --help, -H     print this help
 `,
 	"agent stop": `usage:
   fledge agent stop <name>
@@ -314,30 +430,63 @@ flags:
   fledge agent msg <command>
 
 commands:
-  send <to> <body>  send a message and print its id
+  send <to> [body]  send a message and print its id
+  reply <id> [body] reply to a claimed inbound message
+  inbox             claim the oldest available message without waiting
   wait              wait for a message and print it as JSON
 
 flags:
   --help, -H   print this help
 `,
 	"agent msg send": `usage:
-  fledge agent msg send <to> <body> [flags]
+  fledge agent msg send <to> [body] [flags]
 
 send a message and print its id. The sender is FLEDGE_AGENT_NAME. A spawned
-recipient sees a direct-message envelope containing this id and sender before
-the body, so it can answer with --reply-to. Startup instructions are supplied
-at launch and are not mailbox messages.
+recipient receives it through its durable mailbox after running agent ready.
+Startup instructions are supplied at launch and are not mailbox messages.
+Supply exactly one positional body or --body-file; "-" reads the body unchanged
+from standard input.
 
 flags:
-  --reply-to, -R <id>  id this message answers
+  --body-file, -F <file|->  read the body from a file or standard input
+  --reply-to, -R <id>       id this message answers
+  --help, -H                print this help
+`,
+	"agent msg reply": `usage:
+  fledge agent msg reply <message-id> [body] [flags]
+
+reply to a claimed inbound message and print the new message id. Fledge
+validates that message-id was delivered to FLEDGE_AGENT_NAME, derives its
+original sender as the recipient, and sets reply_to to that exact message id.
+Supply exactly one positional body or --body-file.
+
+flags:
+  --body-file, -F <file|->  read the body from a file or standard input
+  --help, -H                print this help
+`,
+	"agent msg inbox": `usage:
+  fledge agent msg inbox [flags]
+
+claim the oldest available message and print it as JSON, or print null when the
+inbox has no match. Delivery is acknowledged only after the JSON is written
+successfully, so an interrupted output remains available to retry. The
+recipient is FLEDGE_AGENT_NAME. When both --from and --reply-to are present,
+both constraints must match.
+
+flags:
+  --from <agent>       claim only a message from this exact agent
+  --reply-to, -R <id>  claim only a reply to this id
   --help, -H           print this help
 `,
 	"agent msg wait": `usage:
   fledge agent msg wait [flags]
 
 wait for a message and print it as JSON. The recipient is FLEDGE_AGENT_NAME.
-
+Delivery is acknowledged only after the JSON is written successfully, so an
+interrupted output remains available to retry. When both --from and --reply-to
+are present, both constraints must match.
 flags:
+  --from <agent>           wait only for a message from this exact agent
   --reply-to, -R <id>      wait only for a reply to this id
   --timeout, -T <duration> give up after this duration (default: never)
   --help, -H               print this help

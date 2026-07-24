@@ -145,9 +145,10 @@ func TestDeepWorkspaceRunsDaemon(t *testing.T) {
 	defer start(t, root, testFlock)()
 
 	name := register(t, root, testFlock, "engineer")
+	ops := register(t, root, testFlock, "ops")
 
 	sent, err := client.Do(root, testFlock, protocol.Request{
-		Op: protocol.OpSend, From: "ops", To: name, Body: "deep workspace",
+		Op: protocol.OpSend, From: ops, To: name, Body: "deep workspace",
 	})
 	if err != nil {
 		t.Fatalf("send: %v", err)

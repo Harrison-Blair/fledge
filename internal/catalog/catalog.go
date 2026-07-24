@@ -1,5 +1,6 @@
 // Package catalog discovers the agents the installed integrations can launch
-// and writes them to .fledge/catalog.json. Discovery is exec-and-parse only:
+// and writes them to .fledge/agents/fledge/catalog.json. Discovery is
+// exec-and-parse only:
 // fledge asks Codex and Pi what models they serve and probes Claude Code for
 // native default and model-family launchers.
 package catalog
@@ -27,7 +28,7 @@ type Note struct {
 }
 
 // cmdTimeout bounds each discovery exec so a hung binary cannot hang init.
-const cmdTimeout = 10 * time.Second
+const cmdTimeout = 30 * time.Second
 
 // entry is one discovered launcher before it is named.
 type entry struct {
@@ -101,14 +102,23 @@ func Discover() (map[string]agentcfg.Config, []Note) {
 
 // run executes one source, returning its stdout or the Note that excuses it.
 func run(src source) ([]byte, *Note) {
+	return runWithTimeout(src, cmdTimeout)
+}
+
+// runWithTimeout is run with a configurable deadline so timeout behavior can
+// be covered without making tests wait for the production discovery timeout.
+func runWithTimeout(src source, timeout time.Duration) ([]byte, *Note) {
 	bin, err := exec.LookPath(src.argv[0])
 	if err != nil {
 		return nil, &Note{src.integration, src.argv[0] + " is not on PATH; skipped"}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, bin, src.argv[1:]...).Output()
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, &Note{src.integration, fmt.Sprintf("%s timed out after %s; skipped %s discovery", strings.Join(src.argv, " "), timeout, src.integration)}
+		}
 		return nil, &Note{src.integration, fmt.Sprintf("%s failed: %v", strings.Join(src.argv, " "), err)}
 	}
 	return out, nil

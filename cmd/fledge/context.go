@@ -9,11 +9,184 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Harrison-Blair/fledge/internal/contextdoc"
 	"github.com/Harrison-Blair/fledge/internal/ignore"
 	"github.com/Harrison-Blair/fledge/internal/scaffold"
 	"github.com/Harrison-Blair/fledge/internal/scan"
 	"github.com/Harrison-Blair/fledge/internal/workspace"
 )
+
+func runContextCompose(args []string) error {
+	if len(args) == 0 {
+		return printHelp("context compose")
+	}
+	if isHelpFlag(args[0]) {
+		return printHelp("context compose")
+	}
+	if args[0] == "help" {
+		return runHelp("context compose", args[1:])
+	}
+	switch args[0] {
+	case "analyzer-request":
+		return runContextComposeAnalyzerRequest(args[1:])
+	case "worksheet":
+		return runContextComposeWorksheet(args[1:])
+	default:
+		return usageErrorf("context compose", "unknown context compose subcommand %q", args[0])
+	}
+}
+
+func runContextComposeAnalyzerRequest(args []string) error {
+	if hasHelpFlag(args) {
+		return printHelp("context compose analyzer-request")
+	}
+	inPlace, args := takeBoolFlag(args, "--in-place", "-A")
+	worksheetPath, args, err := takeFlag(args, "--worksheet", "-E")
+	if err != nil {
+		return usageErrorFor("context compose analyzer-request", err)
+	}
+	if err := rejectFlags("context compose analyzer-request", args); err != nil {
+		return usageErrorFor("context compose analyzer-request", err)
+	}
+	if len(args) == 0 {
+		return usageErrorf("context compose analyzer-request",
+			"context compose analyzer-request: FILE is required")
+	}
+	if len(args) > 1 {
+		return usageErrorf("context compose analyzer-request",
+			"context compose analyzer-request: unexpected argument %q", args[1])
+	}
+	name := args[0]
+
+	root, err := workspaceRoot()
+	if err != nil {
+		return fmt.Errorf("context compose analyzer-request: %w", err)
+	}
+	templateName := filepath.Join(root, scaffold.DirName, filepath.FromSlash(scaffold.ContextRequestTemplateName))
+	templateData, err := os.ReadFile(templateName)
+	if err != nil {
+		return fmt.Errorf("context compose analyzer-request: analyzer request template %s: %w; run \"fledge init\" to scaffold it", templateName, err)
+	}
+	template, err := contextdoc.ParseRequestTemplate(templateData)
+	if err != nil {
+		return fmt.Errorf("context compose analyzer-request: %s: %w", templateName, err)
+	}
+
+	request, err := contextdoc.LoadAnalyzerRequest(name)
+	if err != nil {
+		return fmt.Errorf("context compose analyzer-request: %w", err)
+	}
+	composed, err := contextdoc.ComposeAnalyzerRequest(request, template, worksheetPath)
+	if err != nil {
+		return fmt.Errorf("context compose analyzer-request: %s: %w", templateName, err)
+	}
+	data, err := json.MarshalIndent(composed, "", "  ")
+	if err != nil {
+		return fmt.Errorf("context compose analyzer-request: %w", err)
+	}
+	data = append(data, '\n')
+	if err := contextdoc.ValidateComposedAnalyzerRequest(data); err != nil {
+		return fmt.Errorf("context compose analyzer-request: composed request: %w", err)
+	}
+
+	if !inPlace {
+		_, err := os.Stdout.Write(data)
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(name), "."+filepath.Base(name)+"-*")
+	if err != nil {
+		return fmt.Errorf("context compose analyzer-request: %w", err)
+	}
+	tmpName := tmp.Name()
+	if err := tmp.Chmod(0o644); err == nil {
+		_, err = tmp.Write(data)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	closeErr := tmp.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(tmpName, name)
+	}
+	if err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("context compose analyzer-request: %w", err)
+	}
+	return nil
+}
+
+func runContextComposeWorksheet(args []string) error {
+	if hasHelpFlag(args) {
+		return printHelp("context compose worksheet")
+	}
+	outputPath, args, err := takeFlag(args, "--output", "-U")
+	if err != nil {
+		return usageErrorFor("context compose worksheet", err)
+	}
+	if err := rejectFlags("context compose worksheet", args); err != nil {
+		return usageErrorFor("context compose worksheet", err)
+	}
+	if len(args) == 0 {
+		return usageErrorf("context compose worksheet",
+			"context compose worksheet: REQUEST is required")
+	}
+	if len(args) > 1 {
+		return usageErrorf("context compose worksheet",
+			"context compose worksheet: unexpected argument %q", args[1])
+	}
+
+	root, err := workspaceRoot()
+	if err != nil {
+		return fmt.Errorf("context compose worksheet: %w", err)
+	}
+	templateName := filepath.Join(root, scaffold.DirName, filepath.FromSlash(scaffold.ContextWorksheetTemplateName))
+	templateData, err := os.ReadFile(templateName)
+	if err != nil {
+		return fmt.Errorf("context compose worksheet: analyzer worksheet template %s: %w; run \"fledge init\" to scaffold it", templateName, err)
+	}
+	request, err := contextdoc.LoadAnalyzerRequest(args[0])
+	if err != nil {
+		return fmt.Errorf("context compose worksheet: %w", err)
+	}
+	worksheet, err := contextdoc.ComposeWorksheet(request, templateData)
+	if err != nil {
+		return fmt.Errorf("context compose worksheet: %s: %w", templateName, err)
+	}
+
+	if outputPath == "" {
+		_, err := os.Stdout.WriteString(worksheet)
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+		return fmt.Errorf("context compose worksheet: %w", err)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(outputPath), "."+filepath.Base(outputPath)+"-*")
+	if err != nil {
+		return fmt.Errorf("context compose worksheet: %w", err)
+	}
+	tmpName := tmp.Name()
+	if err := tmp.Chmod(0o644); err == nil {
+		_, err = tmp.WriteString(worksheet)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	closeErr := tmp.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(tmpName, outputPath)
+	}
+	if err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("context compose worksheet: %w", err)
+	}
+	return nil
+}
 
 // scannedContext is the common workspace view used by context commands.
 // Scope and every file path are slash-separated and workspace-relative.
@@ -50,6 +223,9 @@ func scanContext(start string, explicit bool) (scannedContext, error) {
 	files, err := scan.Files(root, m)
 	if err != nil {
 		return scannedContext{}, err
+	}
+	if files == nil {
+		files = []scan.File{}
 	}
 
 	scope := "."

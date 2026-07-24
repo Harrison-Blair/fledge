@@ -28,9 +28,10 @@ type fakeHerdr struct {
 	t      *testing.T
 	socket string
 
-	mu     sync.Mutex
-	got    []map[string]json.RawMessage
-	blocks map[string]<-chan struct{}
+	mu        sync.Mutex
+	got       []map[string]json.RawMessage
+	blocks    map[string]<-chan struct{}
+	sequences map[string][]string
 }
 
 const paneStartedReply = `{"id":"1","result":{"agent":{"pane_id":"w1:p2","terminal_id":"term_x"}}}`
@@ -74,14 +75,27 @@ func (f *fakeHerdr) handle(conn net.Conn, replies map[string]string) {
 
 	method := strings.Trim(string(env["method"]), `"`)
 	f.mu.Lock()
+	callIndex := 0
+	for _, prior := range f.got {
+		if strings.Trim(string(prior["method"]), `"`) == method {
+			callIndex++
+		}
+	}
 	f.got = append(f.got, env)
 	block := f.blocks[method]
+	var sequencedReply string
+	if sequence := f.sequences[method]; callIndex < len(sequence) {
+		sequencedReply = sequence[callIndex]
+	}
 	f.mu.Unlock()
 
 	if block != nil {
 		<-block
 	}
 	reply, ok := replies[method]
+	if sequencedReply != "" {
+		reply, ok = sequencedReply, true
+	}
 	if !ok {
 		if method == "pane.current" {
 			reply = `{"id":"1","result":{"type":"pane_current","pane":{"pane_id":"w1:p1","focused":true}}}`
@@ -163,7 +177,18 @@ func writeAgents(t *testing.T, root string, configs map[string]agentcfg.Config) 
 // writeCatalog installs generated catalog entries in the workspace.
 func writeCatalog(t *testing.T, root string, configs map[string]agentcfg.Config) {
 	t.Helper()
-	data, err := json.Marshal(configs)
+	withAnalyzer := make(map[string]agentcfg.Config, len(configs)+1)
+	for name, cfg := range configs {
+		withAnalyzer[name] = cfg
+	}
+	if _, exists := withAnalyzer["haikucl"]; !exists {
+		withAnalyzer["haikucl"] = agentcfg.Config{Integration: "claude", Model: "haiku"}
+	}
+	data, err := json.Marshal(agentcfg.Index{
+		Version:  agentcfg.IndexVersion,
+		Agents:   map[string]agentcfg.AgentRecord{},
+		Profiles: withAnalyzer,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -502,8 +527,9 @@ func TestSpawnDiscoveredClaudeFamilyUsesNativeLauncher(t *testing.T) {
 	}
 
 	argv := strs(t, f.params("agent.start")["argv"])
-	if len(argv) != 8 || argv[0] != "claude" || argv[1] != "--session-id" || argv[2] == "" ||
-		argv[3] != "--model" || argv[4] != "opus" || argv[5] != "--append-system-prompt" || argv[7] != bootstrapPrompt {
+	if len(argv) != 10 || argv[0] != "claude" || argv[1] != "--session-id" || argv[2] == "" ||
+		argv[3] != "--permission-mode" || argv[4] != "bypassPermissions" ||
+		argv[5] != "--model" || argv[6] != "opus" || argv[7] != "--append-system-prompt" || argv[9] != bootstrapPrompt {
 		t.Fatalf("argv = %v, want native instructions and bootstrap", argv)
 	}
 	if slicesContains(argv, "--provider") {
@@ -530,13 +556,64 @@ func TestSpawnDiscoveredClaudeDefaultLeavesModelUnspecified(t *testing.T) {
 	}
 
 	argv := strs(t, f.params("agent.start")["argv"])
-	if len(argv) != 6 || argv[0] != "claude" || argv[1] != "--session-id" || argv[2] == "" || argv[3] != "--append-system-prompt" || argv[5] != bootstrapPrompt {
+	if len(argv) != 8 || argv[0] != "claude" || argv[1] != "--session-id" || argv[2] == "" ||
+		argv[3] != "--permission-mode" || argv[4] != "bypassPermissions" ||
+		argv[5] != "--append-system-prompt" || argv[7] != bootstrapPrompt {
 		t.Fatalf("argv = %v, want claude native instructions and bootstrap", argv)
 	}
 	for _, unwanted := range []string{"--model", "--provider"} {
 		if slicesContains(argv, unwanted) {
 			t.Fatalf("argv %v carries %s for the default launcher", argv, unwanted)
 		}
+	}
+}
+
+func TestSpawnManagedContextAgentsUsePinnedModels(t *testing.T) {
+	tests := []struct {
+		name    string
+		agent   string
+		model   string
+		replies map[string]string
+	}{
+		{
+			name:  "analyzer",
+			agent: "fledge-analyzer",
+			model: "claude-haiku-4-5",
+			replies: map[string]string{
+				"agent.start":       paneStartedReply,
+				"pane.process_info": `{"id":"1","result":{"process_info":{"shell_pid":4242}}}`,
+			},
+		},
+		{
+			name:  "forager",
+			agent: "fledge-forager",
+			model: "claude-sonnet-5",
+			replies: map[string]string{
+				"workspace.create":  dedicatedWorkspaceReply,
+				"agent.start":       `{"id":"1","result":{"agent":{"pane_id":"w9:p2","terminal_id":"term_x"}}}`,
+				"pane.process_info": `{"id":"1","result":{"process_info":{"shell_pid":4242}}}`,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := serveHerdr(t, tt.replies)
+			d := boundDaemon(t, f)
+			resp, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Agent: tt.agent})
+			if err != nil {
+				t.Fatalf("spawn: %v", err)
+			}
+			spawned := d.agents[resp.Name]
+			if spawned.Profile != tt.agent || spawned.Model != tt.model {
+				t.Fatalf("spawned = %+v, want profile %q model %q", spawned, tt.agent, tt.model)
+			}
+			argv := strs(t, f.params("agent.start")["argv"])
+			for _, want := range []string{"--permission-mode", "bypassPermissions", "--model", tt.model} {
+				if !slicesContains(argv, want) {
+					t.Fatalf("argv %v is missing %q", argv, want)
+				}
+			}
+		})
 	}
 }
 
@@ -611,7 +688,11 @@ func TestSpawnPiByModel(t *testing.T) {
 	}
 
 	argv := strs(t, f.params("agent.start")["argv"])
-	want := []string{"pi", "--provider", "openai-codex", "--model", "gpt-x", "--append-system-prompt", assignedAgentPrompt("pi-emperor", ""), bootstrapPrompt}
+	if len(argv) < 3 || argv[0] != "pi" || argv[1] != "--session-id" || argv[2] == "" {
+		t.Fatalf("pi argv has no managed session id: %v", argv)
+	}
+	sessionID := argv[2]
+	want := []string{"pi", "--session-id", sessionID, "--provider", "openai-codex", "--model", "gpt-x", "--append-system-prompt", assignedAgentPrompt("pi-emperor", ""), bootstrapPrompt}
 	if len(argv) != len(want) {
 		t.Fatalf("argv = %v, want %v", argv, want)
 	}
@@ -626,8 +707,8 @@ func TestSpawnPiByModel(t *testing.T) {
 	if launching.Integration != "pi" || spawned.PaneID != "w1:p2" {
 		t.Fatalf("launching=%+v spawned=%+v", launching, spawned)
 	}
-	if launching.SessionID != "" {
-		t.Fatalf("pi launch carries session id %q; pi owns its sessions", launching.SessionID)
+	if launching.SessionID != sessionID {
+		t.Fatalf("pi launch session id = %q, want %q", launching.SessionID, sessionID)
 	}
 
 	// No RPC subprocess means no frame log.
@@ -993,9 +1074,7 @@ func TestUnjournaledLaunchNeverStartsClaude(t *testing.T) {
 	}
 }
 
-// A bridge failure must reach a waiting agent the same way an unbridged send
-// would: a parked wait takes the message rather than watching it queue.
-func TestFailedBridgeWakesAParkedWaiter(t *testing.T) {
+func TestSpawnedRecipientSendWakesAParkedWaiter(t *testing.T) {
 	f := serveHerdr(t, map[string]string{"agent.start": paneStartedReply})
 	d := boundDaemon(t, f)
 	writeAgents(t, d.root, map[string]agentcfg.Config{"worker": {Integration: "claude"}})
@@ -1033,10 +1112,8 @@ func TestFailedBridgeWakesAParkedWaiter(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	// Break the pane so the bridge cannot deliver.
-	d.session = herdr.Session{Name: "sess", SocketPath: filepath.Join(t.TempDir(), "gone.sock")}
-	if _, err := d.send(&protocol.Request{Op: protocol.OpSend, From: sender.Name, To: "worker-emperor", Body: "fallback"}); err == nil {
-		t.Fatal("send reported success though the pane write failed")
+	if _, err := d.send(&protocol.Request{Op: protocol.OpSend, From: sender.Name, To: "worker-emperor", Body: "fallback"}); err != nil {
+		t.Fatalf("send: %v", err)
 	}
 
 	select {
@@ -1085,9 +1162,8 @@ func TestOrphanedAgentReleasesItsSpecies(t *testing.T) {
 	}
 }
 
-// A hand-off that fails leaves the message on the live queue, so the running
-// daemon agrees with what its own journal replays to.
-func TestFailedBridgeRequeuesTheMessage(t *testing.T) {
+// Message delivery does not depend on the recipient's Herdr pane after launch.
+func TestMailboxSendIgnoresUnavailableHerdrAndReplaysExactlyOnce(t *testing.T) {
 	f := serveHerdr(t, map[string]string{"agent.start": paneStartedReply})
 	d := boundDaemon(t, f)
 	writeAgents(t, d.root, map[string]agentcfg.Config{"worker": {Integration: "claude"}})
@@ -1100,29 +1176,29 @@ func TestFailedBridgeRequeuesTheMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Point the daemon at a dead socket so the pane write cannot land.
+	// Point the daemon at a dead socket after launch. Messaging must not dial it.
 	d.session = herdr.Session{Name: "sess", SocketPath: filepath.Join(t.TempDir(), "gone.sock")}
-	if _, err := d.send(&protocol.Request{Op: protocol.OpSend, From: sender.Name, To: "worker-emperor", Body: "undeliverable"}); err == nil {
-		t.Fatal("send reported success though the pane write failed")
+	if _, err := d.send(&protocol.Request{Op: protocol.OpSend, From: sender.Name, To: "worker-emperor", Body: "queued"}); err != nil {
+		t.Fatalf("send with unavailable Herdr: %v", err)
 	}
 
 	d.mu.Lock()
 	pending := append([]protocol.Message(nil), d.pending...)
 	d.mu.Unlock()
-	if len(pending) != 1 || pending[0].Body != "undeliverable" {
-		t.Fatalf("pending = %+v, want the undelivered message queued", pending)
+	if len(pending) != 1 || pending[0].Body != "queued" {
+		t.Fatalf("pending = %+v, want the message queued", pending)
 	}
 
-	// It is queued, not lost: a wait takes it, and takes it exactly once.
+	// A wait takes it exactly once.
 	got, err := d.wait(&protocol.Request{Op: protocol.OpWait, As: "worker-emperor", TimeoutMS: 2000}, nil)
 	if err != nil {
-		t.Fatalf("wait for the re-queued message: %v", err)
+		t.Fatalf("wait for queued message: %v", err)
 	}
-	if got.Message == nil || got.Message.Body != "undeliverable" {
+	if got.Message == nil || got.Message.Body != "queued" {
 		t.Fatalf("wait delivered %+v", got.Message)
 	}
 	if _, err := d.wait(&protocol.Request{Op: protocol.OpWait, As: "worker-emperor", TimeoutMS: 100}, nil); err == nil {
-		t.Fatal("the re-queued message was delivered twice")
+		t.Fatal("the queued message was delivered twice")
 	}
 
 	// Replaying the journal must agree: delivered once, nothing left pending.
@@ -1277,40 +1353,91 @@ func TestSpawnRejectsConfigAndModelTogether(t *testing.T) {
 	}
 }
 
-func TestSendToCodexAgentGoesToItsPane(t *testing.T) {
-	f := serveHerdr(t, map[string]string{"agent.start": paneStartedReply})
-	d := boundDaemon(t, f)
-	writeAgents(t, d.root, map[string]agentcfg.Config{"worker": {Integration: "codex"}})
+func TestSendUsesMailboxForSpawnedAndRegisteredRecipients(t *testing.T) {
+	tests := []struct {
+		name      string
+		config    map[string]agentcfg.Config
+		spawn     protocol.Request
+		recipient string
+	}{
+		{
+			name:      "codex",
+			config:    map[string]agentcfg.Config{"worker": {Integration: "codex"}},
+			spawn:     protocol.Request{Op: protocol.OpSpawn, Config: "worker"},
+			recipient: "worker-emperor",
+		},
+		{
+			name:      "claude",
+			config:    map[string]agentcfg.Config{"worker": {Integration: "claude"}},
+			spawn:     protocol.Request{Op: protocol.OpSpawn, Config: "worker"},
+			recipient: "worker-emperor",
+		},
+		{
+			name:      "pi",
+			spawn:     protocol.Request{Op: protocol.OpSpawn, Model: "gpt-x"},
+			recipient: "pi-emperor",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := serveHerdr(t, map[string]string{"agent.start": paneStartedReply})
+			d := boundDaemon(t, f)
+			if tt.config != nil {
+				writeAgents(t, d.root, tt.config)
+			}
+			if _, err := d.spawn(&tt.spawn); err != nil {
+				t.Fatalf("spawn: %v", err)
+			}
+			sender, err := d.register(&protocol.Request{Op: protocol.OpRegister, Type: "lead", PID: os.Getpid()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			sent, err := d.send(&protocol.Request{Op: protocol.OpSend, From: sender.Name, To: tt.recipient, Body: "do the thing"})
+			if err != nil {
+				t.Fatalf("send: %v", err)
+			}
+			if got := f.count("pane.send_input"); got != 0 {
+				t.Fatalf("pane.send_input calls = %d, want 0; methods=%v", got, f.methods())
+			}
+			got, err := d.wait(&protocol.Request{Op: protocol.OpWait, As: tt.recipient, TimeoutMS: 1000}, nil)
+			if err != nil {
+				t.Fatalf("wait: %v", err)
+			}
+			if got.Message == nil || got.Message.ID != sent.ID || got.Message.Body != "do the thing" {
+				t.Fatalf("mailbox message = %+v, want id %s", got.Message, sent.ID)
+			}
+			if _, err := d.wait(&protocol.Request{Op: protocol.OpWait, As: tt.recipient, TimeoutMS: 20}, nil); err == nil {
+				t.Fatal("second wait returned already-delivered message")
+			}
+		})
+	}
 
-	if _, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Config: "worker"}); err != nil {
-		t.Fatalf("spawn: %v", err)
-	}
-	sender, err := d.register(&protocol.Request{Op: protocol.OpRegister, Type: "lead", PID: os.Getpid()})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	sent, err := d.send(&protocol.Request{Op: protocol.OpSend, From: sender.Name, To: "worker-emperor", Body: "do the thing"})
-	if err != nil {
-		t.Fatalf("send: %v", err)
-	}
-
-	input := f.params("pane.send_input")
-	want := directMessagePrompt(protocol.Message{ID: sent.ID, From: sender.Name, To: "worker-emperor", Body: "do the thing"})
-	if input["text"] != want {
-		t.Fatalf("pane text = %v, want %q", input["text"], want)
-	}
-	if keys := strs(t, input["keys"]); len(keys) != 1 || keys[0] != "enter" {
-		t.Fatalf("pane keys = %v, want [enter]", keys)
-	}
-}
-
-func TestDirectMessagePromptExposesCorrelationMetadata(t *testing.T) {
-	msg := protocol.Message{ID: "task-123", From: "lead-emperor", To: "worker-emperor", Body: `{"work":"now"}`, ReplyTo: "earlier-9"}
-	want := "Fledge direct message\nid: task-123\nfrom: lead-emperor\nreply_to: earlier-9\n\n{\"work\":\"now\"}"
-	if got := directMessagePrompt(msg); got != want {
-		t.Fatalf("direct prompt = %q, want %q", got, want)
-	}
+	t.Run("self-registered", func(t *testing.T) {
+		f := serveHerdr(t, map[string]string{"agent.start": paneStartedReply})
+		d := boundDaemon(t, f)
+		sender, err := d.register(&protocol.Request{Op: protocol.OpRegister, Type: "lead", PID: os.Getpid()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		receiver, err := d.register(&protocol.Request{Op: protocol.OpRegister, Type: "worker", PID: os.Getpid()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sent, err := d.send(&protocol.Request{Op: protocol.OpSend, From: sender.Name, To: receiver.Name, Body: "registered"})
+		if err != nil {
+			t.Fatalf("send: %v", err)
+		}
+		if got := f.count("pane.send_input"); got != 0 {
+			t.Fatalf("pane.send_input calls = %d, want 0", got)
+		}
+		got, err := d.wait(&protocol.Request{Op: protocol.OpWait, As: receiver.Name, TimeoutMS: 1000}, nil)
+		if err != nil {
+			t.Fatalf("wait: %v", err)
+		}
+		if got.Message == nil || got.Message.ID != sent.ID || got.Message.Body != "registered" {
+			t.Fatalf("mailbox message = %+v, want id %s", got.Message, sent.ID)
+		}
+	})
 }
 
 func TestSendToOrchestratorWaitsInMailbox(t *testing.T) {
@@ -1347,6 +1474,50 @@ func TestSendToOrchestratorWaitsInMailbox(t *testing.T) {
 	}
 }
 
+func TestPendingMessageCanBeClaimedFromInboxWithFilters(t *testing.T) {
+	d := boundDaemon(t, claudeHerdr(t))
+	first, err := d.register(&protocol.Request{Op: protocol.OpRegister, Type: "first", PID: os.Getpid()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := d.register(&protocol.Request{Op: protocol.OpRegister, Type: "second", PID: os.Getpid()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiver, err := d.register(&protocol.Request{Op: protocol.OpRegister, Type: "receiver", PID: os.Getpid()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.send(&protocol.Request{
+		Op: protocol.OpSend, From: first.Name, To: receiver.Name, Body: "first message",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	wanted, err := d.send(&protocol.Request{
+		Op: protocol.OpSend, From: second.Name, To: receiver.Name, Body: "second message",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := d.inbox(&protocol.Request{
+		Op: protocol.OpInbox, As: receiver.Name, From: second.Name,
+	})
+	if err != nil {
+		t.Fatalf("filtered inbox: %v", err)
+	}
+	if got.Message == nil || got.Message.ID != wanted.ID {
+		t.Fatalf("filtered inbox message = %+v", got.Message)
+	}
+	remaining, err := d.inbox(&protocol.Request{Op: protocol.OpInbox, As: receiver.Name})
+	if err != nil {
+		t.Fatalf("remaining inbox: %v", err)
+	}
+	if remaining.Message == nil || remaining.Message.From != first.Name {
+		t.Fatalf("remaining inbox message = %+v", remaining.Message)
+	}
+}
+
 func TestStopCodexClosesItsPane(t *testing.T) {
 	f := serveHerdr(t, map[string]string{"agent.start": paneStartedReply})
 	d := boundDaemon(t, f)
@@ -1367,7 +1538,7 @@ func TestStopCodexClosesItsPane(t *testing.T) {
 	}
 }
 
-func TestSendToClaudeAgentGoesToItsPane(t *testing.T) {
+func TestPendingMessageCanBeClaimedFromInboxExactlyOnce(t *testing.T) {
 	f := serveHerdr(t, map[string]string{"agent.start": paneStartedReply})
 	d := boundDaemon(t, f)
 	writeAgents(t, d.root, map[string]agentcfg.Config{"worker": {Integration: "claude"}})
@@ -1379,64 +1550,199 @@ func TestSendToClaudeAgentGoesToItsPane(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	sent, err := d.send(&protocol.Request{Op: protocol.OpSend, From: sender.Name, To: "worker-emperor", Body: "do the thing"})
-	if err != nil {
-		t.Fatalf("send: %v", err)
+	if got := f.count("pane.send_input"); got != 0 {
+		t.Fatalf("pane.send_input calls = %d, want 0", got)
 	}
-
-	input := f.params("pane.send_input")
-	want := directMessagePrompt(protocol.Message{ID: sent.ID, From: sender.Name, To: "worker-emperor", Body: "do the thing"})
-	if input["text"] != want {
-		t.Fatalf("pane text = %v, want %q", input["text"], want)
-	}
-	// Only keys:["enter"] actually submits in a TUI (EXP2).
-	if keys := strs(t, input["keys"]); len(keys) != 1 || keys[0] != "enter" {
-		t.Fatalf("keys = %v, want [enter]", keys)
-	}
-
-	var delivered bool
-	for _, e := range events(t, d) {
-		if e.Event == evDelivered && e.ID == sent.ID {
-			delivered = true
-		}
-	}
-	if !delivered {
-		t.Fatal("bridged send was not journaled as delivered")
-	}
-
-	d.mu.Lock()
-	pending := len(d.pending)
-	d.mu.Unlock()
-	if pending != 0 {
-		t.Fatalf("%d messages queued; a bridged send must not sit in the pending queue", pending)
-	}
-}
-
-func TestSendToPiAgentGoesToItsPane(t *testing.T) {
-	f := serveHerdr(t, map[string]string{"agent.start": paneStartedReply})
-	d := boundDaemon(t, f)
-
-	if _, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Model: "gpt-x"}); err != nil {
-		t.Fatalf("spawn: %v", err)
-	}
-	sender, err := d.register(&protocol.Request{Op: protocol.OpRegister, Type: "lead", PID: os.Getpid()})
+	sent, err := d.send(&protocol.Request{
+		Op: protocol.OpSend, From: sender.Name, To: "worker-emperor", Body: "check this later",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	sent, err := d.send(&protocol.Request{Op: protocol.OpSend, From: sender.Name, To: "pi-emperor", Body: "ship it"})
+	got, err := d.inbox(&protocol.Request{
+		Op: protocol.OpInbox, As: "worker-emperor", From: sender.Name,
+	})
 	if err != nil {
-		t.Fatalf("send: %v", err)
+		t.Fatalf("inbox: %v", err)
+	}
+	if got.Message == nil || got.Message.ID != sent.ID || got.Message.Body != "check this later" {
+		t.Fatalf("inbox message = %+v", got.Message)
+	}
+	empty, err := d.inbox(&protocol.Request{Op: protocol.OpInbox, As: "worker-emperor"})
+	if err != nil {
+		t.Fatalf("second inbox: %v", err)
+	}
+	if empty.Message != nil {
+		t.Fatalf("second inbox reclaimed %+v", empty.Message)
 	}
 
-	input := f.params("pane.send_input")
-	want := directMessagePrompt(protocol.Message{ID: sent.ID, From: sender.Name, To: "pi-emperor", Body: "ship it"})
-	if input["text"] != want {
-		t.Fatalf("pane text = %v, want %q", input["text"], want)
+	replayed, err := replay(journalPath(d.root, d.flockName))
+	if err != nil {
+		t.Fatalf("replay: %v", err)
 	}
-	if keys := strs(t, input["keys"]); len(keys) != 1 || keys[0] != "enter" {
-		t.Fatalf("pane keys = %v, want [enter]", keys)
+	if len(replayed.pending) != 0 {
+		t.Fatalf("replay restored claimed inbox messages: %+v", replayed.pending)
+	}
+}
+
+func TestMailboxReplyCorrelationPreservesUnmatchedMessages(t *testing.T) {
+	f := serveHerdr(t, map[string]string{"agent.start": paneStartedReply})
+	d := boundDaemon(t, f)
+	writeAgents(t, d.root, map[string]agentcfg.Config{"forager": {Integration: "claude"}})
+
+	if _, err := d.spawn(&protocol.Request{Op: protocol.OpSpawn, Config: "forager"}); err != nil {
+		t.Fatalf("spawn forager: %v", err)
+	}
+	analyzer, err := d.register(&protocol.Request{Op: protocol.OpRegister, Type: "analyzer", PID: os.Getpid()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	intruder, err := d.register(&protocol.Request{Op: protocol.OpRegister, Type: "intruder", PID: os.Getpid()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dispatch, err := d.send(&protocol.Request{
+		Op: protocol.OpSend, From: "forager-emperor", To: analyzer.Name, Body: "scan this",
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if _, err := d.wait(&protocol.Request{
+		Op: protocol.OpWait, As: analyzer.Name, TimeoutMS: 1000,
+	}, nil); err != nil {
+		t.Fatalf("analyzer receive dispatch: %v", err)
+	}
+
+	unrelated, err := d.send(&protocol.Request{
+		Op: protocol.OpSend, From: intruder.Name, To: "forager-emperor",
+		Body: "unrelated",
+	})
+	if err != nil {
+		t.Fatalf("unrelated message: %v", err)
+	}
+	wrongSender, err := d.send(&protocol.Request{
+		Op: protocol.OpSend, From: intruder.Name, To: "forager-emperor",
+		Body: "spoofed reply", ReplyTo: dispatch.ID,
+	})
+	if err != nil {
+		t.Fatalf("wrong-sender reply: %v", err)
+	}
+	reply, err := d.send(&protocol.Request{
+		Op: protocol.OpSend, From: analyzer.Name, To: "forager-emperor",
+		Body: "findings", ReplyTo: dispatch.ID,
+	})
+	if err != nil {
+		t.Fatalf("reply before wait: %v", err)
+	}
+	if got := f.count("pane.send_input"); got != 0 {
+		t.Fatalf("pane.send_input calls = %d, want 0", got)
+	}
+
+	// An exact waiter skips earlier unmatched traffic without consuming it.
+	if _, err := d.wait(&protocol.Request{
+		Op: protocol.OpWait, As: "forager-emperor", From: intruder.Name,
+		ReplyTo: "another-dispatch", TimeoutMS: 20,
+	}, nil); err == nil {
+		t.Fatal("nonexistent correlation unexpectedly returned a message")
+	}
+
+	got, err := d.wait(&protocol.Request{
+		Op: protocol.OpWait, As: "forager-emperor", From: analyzer.Name,
+		ReplyTo: dispatch.ID, TimeoutMS: 1000,
+	}, nil)
+	if err != nil {
+		t.Fatalf("exact wait after queued reply: %v", err)
+	}
+	if got.Message == nil || got.Message.ID != reply.ID || got.Message.Body != "findings" {
+		t.Fatalf("claimed reply = %+v", got.Message)
+	}
+	if _, err := d.wait(&protocol.Request{
+		Op: protocol.OpWait, As: "forager-emperor", From: analyzer.Name,
+		ReplyTo: dispatch.ID, TimeoutMS: 20,
+	}, nil); err == nil {
+		t.Fatal("a second wait reclaimed the reply")
+	}
+	got, err = d.wait(&protocol.Request{
+		Op: protocol.OpWait, As: "forager-emperor", TimeoutMS: 1000,
+	}, nil)
+	if err != nil {
+		t.Fatalf("unfiltered wait for unrelated message: %v", err)
+	}
+	if got.Message == nil || got.Message.ID != unrelated.ID {
+		t.Fatalf("oldest unmatched message = %+v, want %s", got.Message, unrelated.ID)
+	}
+	got, err = d.wait(&protocol.Request{
+		Op: protocol.OpWait, As: "forager-emperor", TimeoutMS: 1000,
+	}, nil)
+	if err != nil {
+		t.Fatalf("unfiltered wait for wrong-sender reply: %v", err)
+	}
+	if got.Message == nil || got.Message.ID != wrongSender.ID {
+		t.Fatalf("next unmatched message = %+v, want %s", got.Message, wrongSender.ID)
+	}
+
+	// The other ordering works too: an exact wait parked before the reply
+	// receives it directly and only once.
+	dispatch2, err := d.send(&protocol.Request{
+		Op: protocol.OpSend, From: "forager-emperor", To: analyzer.Name, Body: "scan again",
+	})
+	if err != nil {
+		t.Fatalf("second dispatch: %v", err)
+	}
+	if _, err := d.wait(&protocol.Request{
+		Op: protocol.OpWait, As: analyzer.Name, TimeoutMS: 1000,
+	}, nil); err != nil {
+		t.Fatalf("analyzer receive second dispatch: %v", err)
+	}
+
+	type waitResult struct {
+		resp protocol.Response
+		err  error
+	}
+	parked := make(chan waitResult, 1)
+	go func() {
+		resp, err := d.wait(&protocol.Request{
+			Op: protocol.OpWait, As: "forager-emperor", From: analyzer.Name,
+			ReplyTo: dispatch2.ID, TimeoutMS: 2000,
+		}, nil)
+		parked <- waitResult{resp: resp, err: err}
+	}()
+	waitFor(t, func() bool {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		for _, w := range d.waiters {
+			if w.as == "forager-emperor" && w.from == analyzer.Name && w.replyTo == dispatch2.ID {
+				return true
+			}
+		}
+		return false
+	})
+
+	reply2, err := d.send(&protocol.Request{
+		Op: protocol.OpSend, From: analyzer.Name, To: "forager-emperor",
+		Body: "more findings", ReplyTo: dispatch2.ID,
+	})
+	if err != nil {
+		t.Fatalf("reply to parked wait: %v", err)
+	}
+	select {
+	case result := <-parked:
+		if result.err != nil {
+			t.Fatalf("parked exact wait: %v", result.err)
+		}
+		if result.resp.Message == nil || result.resp.Message.ID != reply2.ID {
+			t.Fatalf("parked wait claimed %+v", result.resp.Message)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("parked exact wait did not receive reply")
+	}
+	if _, err := d.wait(&protocol.Request{
+		Op: protocol.OpWait, As: "forager-emperor", From: analyzer.Name,
+		ReplyTo: dispatch2.ID, TimeoutMS: 20,
+	}, nil); err == nil {
+		t.Fatal("parked reply was delivered twice")
 	}
 }
 

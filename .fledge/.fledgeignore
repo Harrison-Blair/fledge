@@ -4,7 +4,6 @@
 # "#include <path>" splices another ignore file in at that point, resolved
 # from this workspace root.
 #include .gitignore
-.gitignore
 .*/
 !.github/
 !.fledge/
@@ -16,7 +15,3 @@
 .fledge/agents/user/**
 !.fledge/agents/user/**/
 !.fledge/agents/user/**/*.agent.md
-
-CLAUDE.md
-LICENSE
-README.md

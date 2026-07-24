@@ -21,6 +21,22 @@ func writeDefinition(t *testing.T, root, source, body string) {
 	}
 }
 
+func writeAnalyzerCatalog(t *testing.T, root string) {
+	t.Helper()
+	idx := Index{
+		Version:  IndexVersion,
+		Agents:   map[string]AgentRecord{},
+		Profiles: map[string]Config{"haikucl": {Integration: "claude", Model: "haiku"}},
+	}
+	data, err := json.Marshal(idx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, scaffold.DirName, CatalogName), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestParseDefinitionYAMLAndPrompt(t *testing.T) {
 	d, err := ParseDefinition([]byte(`---
 name: code-reviewer
@@ -86,6 +102,7 @@ func TestSynchronizeDerivesProfileAndWritesDeterministicIndex(t *testing.T) {
 	if _, err := scaffold.Ensure(root); err != nil {
 		t.Fatal(err)
 	}
+	writeAnalyzerCatalog(t, root)
 	writeDefinition(t, root, "user/code-reviewer/code-reviewer.agent.md", `---
 name: code-reviewer
 description: Review changes.
@@ -105,6 +122,11 @@ Review.
 	if err != nil {
 		t.Fatal(err)
 	}
+	managedName := filepath.Join(root, scaffold.DirName, ManagedIndexName)
+	firstManaged, err := os.ReadFile(managedName)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := Synchronize(root); err != nil {
 		t.Fatal(err)
 	}
@@ -114,6 +136,23 @@ Review.
 	}
 	if string(first) != string(second) {
 		t.Fatal("index bytes changed without a source change")
+	}
+	secondManaged, err := os.ReadFile(managedName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(firstManaged) != string(secondManaged) {
+		t.Fatal("managed index bytes changed without a source change")
+	}
+	for _, generated := range []string{FileName, ManagedIndexName} {
+		if !strings.HasPrefix(generated, "agents/fledge/") {
+			t.Errorf("generated index %q is outside the managed directory", generated)
+		}
+	}
+	for _, legacy := range []string{legacyUserIndexName, legacyManagedIndexName} {
+		if _, err := os.Stat(filepath.Join(root, scaffold.DirName, AgentsDir, legacy)); !os.IsNotExist(err) {
+			t.Errorf("legacy index %s exists: %v", legacy, err)
+		}
 	}
 	var idx Index
 	if err := json.Unmarshal(first, &idx); err != nil {
@@ -132,6 +171,7 @@ func TestSynchronizeIndexesWorkspaceDeterministically(t *testing.T) {
 	if _, err := scaffold.Ensure(root); err != nil {
 		t.Fatal(err)
 	}
+	writeAnalyzerCatalog(t, root)
 	writeDefinition(t, root, "user/context-planner/context-planner.agent.md", `---
 name: context-planner
 description: Plan context.
@@ -175,6 +215,135 @@ func TestSynchronizeValidatesPathAndNamespaces(t *testing.T) {
 				t.Fatal("Synchronize succeeded")
 			}
 		})
+	}
+}
+
+func TestSynchronizePermitsReservedProfilesOnlyFromManagedDefinitions(t *testing.T) {
+	t.Run("managed", func(t *testing.T) {
+		root := t.TempDir()
+		if _, err := scaffold.Ensure(root); err != nil {
+			t.Fatal(err)
+		}
+		if err := Synchronize(root); err != nil {
+			t.Fatalf("managed fledge-* profiles rejected: %v", err)
+		}
+		configs, err := Load(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := configs["fledge-analyzer"]; got.Model != "claude-haiku-4-5" || got.Integration != "claude" {
+			t.Fatalf("managed analyzer profile = %+v", got)
+		}
+		if got := configs["fledge-forager"]; got.Model != "claude-sonnet-5" || got.Integration != "claude" {
+			t.Fatalf("managed forager profile = %+v", got)
+		}
+	})
+
+	t.Run("user reference", func(t *testing.T) {
+		root := t.TempDir()
+		if _, err := scaffold.Ensure(root); err != nil {
+			t.Fatal(err)
+		}
+		writeDefinition(t, root, "user/worker/worker.agent.md", `---
+name: worker
+description: Work.
+fledge:
+  profile: fledge-context-haiku-auto
+---
+Work.
+`)
+		err := Synchronize(root)
+		if err == nil || !strings.Contains(err.Error(), "reserved fledge-* namespace") {
+			t.Fatalf("Synchronize error = %v", err)
+		}
+	})
+}
+
+func TestMigrateLegacyGeneratedIndexesAndCatalog(t *testing.T) {
+	root := t.TempDir()
+	if _, err := scaffold.Ensure(root); err != nil {
+		t.Fatal(err)
+	}
+	base := filepath.Join(root, scaffold.DirName, AgentsDir)
+	for _, canonical := range []string{FileName, ManagedIndexName} {
+		if err := os.Remove(filepath.Join(root, scaffold.DirName, canonical)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	indexes := map[string]Index{
+		legacyUserIndexName: {
+			Version: IndexVersion, Agents: map[string]AgentRecord{"worker": {Source: "user/worker/worker.agent.md"}},
+			Profiles: map[string]Config{"worker": {Integration: "codex", Model: "gpt-5"}},
+		},
+		legacyManagedIndexName: {
+			Version: IndexVersion, Agents: map[string]AgentRecord{"fledge-old": {Source: "fledge/fledge-old/fledge-old.agent.md"}},
+			Profiles: map[string]Config{},
+		},
+		legacyCatalogName: {
+			Version: IndexVersion, Agents: map[string]AgentRecord{},
+			Profiles: map[string]Config{"kept": {Integration: "claude", Model: "sonnet"}},
+		},
+	}
+	for name, idx := range indexes {
+		if err := writeIndexAtomic(filepath.Join(base, name), idx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := MigrateLegacyGenerated(root); err != nil {
+		t.Fatal(err)
+	}
+	for legacy := range indexes {
+		if _, err := os.Stat(filepath.Join(base, legacy)); !os.IsNotExist(err) {
+			t.Errorf("legacy generated file %s remains: %v", legacy, err)
+		}
+	}
+	for _, canonical := range []string{FileName, ManagedIndexName, CatalogName} {
+		if _, err := os.Stat(filepath.Join(root, scaffold.DirName, canonical)); err != nil {
+			t.Errorf("canonical generated file %s: %v", canonical, err)
+		}
+	}
+	configs, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := configs["kept"]; got.Integration != "claude" || got.Model != "sonnet" {
+		t.Fatalf("migrated catalog profile = %+v", got)
+	}
+}
+
+func TestMigrateLegacyCatalogReplacesInvalidCanonicalCopy(t *testing.T) {
+	root := t.TempDir()
+	if _, err := scaffold.Ensure(root); err != nil {
+		t.Fatal(err)
+	}
+	base := filepath.Join(root, scaffold.DirName, AgentsDir)
+	legacy := Index{
+		Version: IndexVersion, Agents: map[string]AgentRecord{},
+		Profiles: map[string]Config{"last-valid": {Integration: "codex", Model: "gpt-5"}},
+	}
+	if err := writeIndexAtomic(filepath.Join(base, legacyCatalogName), legacy); err != nil {
+		t.Fatal(err)
+	}
+	canonical := filepath.Join(root, scaffold.DirName, CatalogName)
+	if err := os.MkdirAll(filepath.Dir(canonical), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(canonical, []byte(`{"version":1,"profiles":`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := MigrateLegacyGenerated(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(base, legacyCatalogName)); !os.IsNotExist(err) {
+		t.Fatalf("legacy catalog remains: %v", err)
+	}
+	idx, err := readIndex(canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := idx.Profiles["last-valid"]; got.Integration != "codex" || got.Model != "gpt-5" {
+		t.Fatalf("preserved catalog profile = %+v", got)
 	}
 }
 

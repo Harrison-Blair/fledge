@@ -43,6 +43,9 @@ func scaffoldedWorkspace(t *testing.T) (root, sub string) {
 	if _, err := scaffold.Ensure(root); err != nil {
 		t.Fatal(err)
 	}
+	writeAgentCatalog(t, root, map[string]agentcfg.Config{
+		"haikucl": {Integration: "claude", Model: "haiku"},
+	})
 	sub = filepath.Join(root, "sub", "deep")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
@@ -701,7 +704,7 @@ func TestStartInteractiveSpawnsOrchestrator(t *testing.T) {
 	if !*attached {
 		t.Error("start did not attach before spawning the orchestrator")
 	}
-	if !strings.Contains(out, "Spawn which agent?") {
+	if !strings.Contains(out, "Run orchestrator with which profile?") {
 		t.Errorf("profile picker missing:\n%s", out)
 	}
 }
@@ -750,15 +753,8 @@ func TestStartInteractivePlacesOrchestratorLeftAndFocused(t *testing.T) {
 	if slices.Contains(methods, "agent.get") {
 		t.Errorf("startup unexpectedly polled agent status: %v", methods)
 	}
-	workspaces := 0
-	for _, method := range methods {
-		if method == "workspace.create" {
-			workspaces++
-		}
-		if workspaces < 2 && method == "pane.send_input" {
-			t.Errorf("startup sent lifecycle pane input before watcher setup: %v", methods)
-			break
-		}
+	if got := strings.Count(strings.Join(methods, ","), "workspace.create"); got != 1 {
+		t.Errorf("startup created %d workspaces, want only the orchestrator workspace: %v", got, methods)
 	}
 }
 
@@ -793,7 +789,7 @@ func TestStartInteractiveMissingConfigOffersPicker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("interactive start: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "Spawn which agent?") {
+	if !strings.Contains(out, "Run orchestrator with which profile?") {
 		t.Errorf("picker not shown for a missing orchestrator config:\n%s", out)
 	}
 	start, ok := rec.methodParams("agent.start")
@@ -886,7 +882,7 @@ func TestStartNonInteractiveSkipsOrchestrator(t *testing.T) {
 	if created != 1 {
 		t.Errorf("scripted start created %d workspaces, want only the primary workspace", created)
 	}
-	if strings.Contains(out, "Spawn which agent?") {
+	if strings.Contains(out, "Run orchestrator with which profile?") {
 		t.Errorf("a scripted start printed the picker:\n%s", out)
 	}
 	if *attached {

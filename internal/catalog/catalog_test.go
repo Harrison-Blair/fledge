@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/agentcfg"
 	"github.com/Harrison-Blair/fledge/internal/scaffold"
@@ -186,6 +187,46 @@ func TestDiscoverSkipsFailingBinary(t *testing.T) {
 	}
 	if _, ok := configs["gpt55pi"]; !ok {
 		t.Fatalf("pi models lost to codex's failure: %+v", configs)
+	}
+}
+
+func TestRunDeadlineReportsTimeout(t *testing.T) {
+	installBin(t, "stuck-discovery", "while :; do :; done")
+	src := source{integration: "pi", argv: []string{"stuck-discovery", "--list-models"}}
+
+	_, note := runWithTimeout(src, 20*time.Millisecond)
+	if note == nil {
+		t.Fatal("run returned no note, want timeout")
+	}
+	if note.Integration != "pi" {
+		t.Errorf("note integration = %q, want pi", note.Integration)
+	}
+	if want := "stuck-discovery --list-models timed out after 20ms; skipped pi discovery"; note.Detail != want {
+		t.Errorf("note detail = %q, want %q", note.Detail, want)
+	}
+	if cmdTimeout != 30*time.Second {
+		t.Errorf("production timeout = %s, want 30s", cmdTimeout)
+	}
+}
+
+func TestRunExternalSIGKILLReportsGenericFailure(t *testing.T) {
+	// A child kills the discovery process while its context is still live.
+	// Signal text alone must not be treated as proof that the deadline fired.
+	installBin(t, "killed-discovery", "sh -c 'kill -9 $PPID' & wait")
+	src := source{integration: "pi", argv: []string{"killed-discovery", "--list-models"}}
+
+	_, note := runWithTimeout(src, time.Second)
+	if note == nil {
+		t.Fatal("run returned no note, want failure")
+	}
+	if note.Integration != "pi" {
+		t.Errorf("note integration = %q, want pi", note.Integration)
+	}
+	if !strings.HasPrefix(note.Detail, "killed-discovery --list-models failed: ") {
+		t.Errorf("note detail = %q, want generic failure", note.Detail)
+	}
+	if strings.Contains(note.Detail, "timed out") {
+		t.Errorf("external SIGKILL mislabeled as timeout: %q", note.Detail)
 	}
 }
 

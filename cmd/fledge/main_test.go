@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -22,7 +23,13 @@ func TestRootHelpOnlyShowsTopLevelCommandsAndFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"  init ", "  deinit ", "  start ", "  stop ", "  watch ", "  context ", "  flock ", "  agent ", "--version, -V"} {
+	if !strings.HasPrefix(out, "        _,\n _.--\"\"'/\n)-._.-\\)\n") {
+		t.Errorf("root help missing fledge banner:\n%s", out)
+	}
+	if strings.Contains(out, "agent development harness") {
+		t.Errorf("root help retained old description:\n%s", out)
+	}
+	for _, want := range []string{"  init ", "  deinit ", "  start ", "  restart ", "  stop ", "  watch ", "  context ", "  flock ", "  agent ", "--version, -V"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("root help missing %q:\n%s", want, out)
 		}
@@ -45,6 +52,30 @@ func TestBareGroupsShowLocalHelpSuccessfully(t *testing.T) {
 				t.Errorf("got:\n%s\nwant:\n%s", out, helpPages[group])
 			}
 		})
+	}
+}
+
+func TestAgentMessageWaitHelpDocumentsExactCorrelation(t *testing.T) {
+	out, err := captureRun(t, "agent", "msg", "wait", "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"--from <agent>", "--reply-to, -R <id>", "both constraints must match"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("wait help missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestAgentMessageInboxHelpDocumentsNonblockingClaim(t *testing.T) {
+	out, err := captureRun(t, "agent", "msg", "inbox", "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"print null", "--from", "--reply-to", "oldest available"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("inbox help missing %q:\n%s", want, out)
+		}
 	}
 }
 
@@ -112,7 +143,7 @@ func TestEveryLeafAcceptsHelpWithoutExecuting(t *testing.T) {
 		})
 	}
 
-	for _, leaf := range []string{"init", "deinit", "start", "stop", "watch"} {
+	for _, leaf := range []string{"init", "deinit", "start", "restart", "stop", "watch"} {
 		out, err := captureRun(t, leaf, "--help")
 		if err != nil {
 			t.Fatal(err)
@@ -318,7 +349,7 @@ func TestDeinitConfirmListsAndRemoves(t *testing.T) {
 				t.Fatalf("output missing prompt:\n%s", out)
 			}
 			for _, entry := range []string{
-				filepath.Join(scaffold.DirName, scaffold.AgentsName),
+				filepath.Join(scaffold.DirName, "agents", "fledge", "fledge-orchestrator", "fledge-orchestrator.agent.md"),
 				filepath.Join(scaffold.DirName, "flocks") + "/",
 			} {
 				at := strings.Index(out, entry)
@@ -365,6 +396,189 @@ func TestDeinitRefusesWhileFlockRunning(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, scaffold.DirName)); err != nil {
 		t.Errorf(".fledge missing after refused deinit: %v", err)
+	}
+}
+
+func testGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmdArgs := append([]string{"-C", dir}, args...)
+	if out, err := exec.Command("git", cmdArgs...).CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+func TestInitFreshRequiresTerminalsBeforeRemovingAnything(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := scaffold.Ensure(dir); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(dir, scaffold.DirName, "keep-me")
+	if err := os.WriteFile(sentinel, []byte("important"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stubStdoutTerminal(t)
+	withStdin(t, "yes\n")
+
+	if _, err := captureRun(t, "init", "--fresh", dir); err == nil ||
+		!strings.Contains(err.Error(), "terminals on stdin and stdout") {
+		t.Fatalf("init --fresh error = %v", err)
+	}
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatalf("fresh init removed data without terminal verification: %v", err)
+	}
+}
+
+func TestInitFreshDeclineLeavesTreeUntouched(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := scaffold.Ensure(dir); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(dir, scaffold.DirName, "keep-me")
+	if err := os.WriteFile(sentinel, []byte("important"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stubStdinTerminal(t)
+	stubStdoutTerminal(t)
+	withStdin(t, "n\n")
+
+	out, err := captureRun(t, "init", "--fresh", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"WARNING: --fresh permanently deletes",
+		"Git could not verify this data",
+		"destroy and freshly initialize .fledge",
+		"[y/N]",
+		"aborted; nothing removed",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("fresh-init preview missing %q:\n%s", want, out)
+		}
+	}
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatalf("declined fresh init changed the tree: %v", err)
+	}
+}
+
+func TestInitFreshWarnsForUntrackedNonIgnoredFilesAndRebuilds(t *testing.T) {
+	stubDiscovery(t)
+	dir := t.TempDir()
+	testGit(t, dir, "init", "-q")
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(".fledge/flocks/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scaffold.Ensure(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	untracked := filepath.Join(dir, scaffold.DirName, "agents", "user", "draft", "draft.agent.md")
+	tracked := filepath.Join(dir, scaffold.DirName, "agents", "user", "tracked", "tracked.agent.md")
+	ignored := filepath.Join(dir, scaffold.DirName, "flocks", "old", "private.txt")
+	for name, body := range map[string]string{
+		untracked: "untracked work\n",
+		tracked:   "staged work\n",
+		ignored:   "runtime state\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(name, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	testGit(t, dir, "add", filepath.ToSlash(filepath.Join(scaffold.DirName, "agents", "user", "tracked", "tracked.agent.md")))
+	sibling := filepath.Join(dir, "keep.txt")
+	if err := os.WriteFile(sibling, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stubStdinTerminal(t)
+	stubStdoutTerminal(t)
+	withStdin(t, "yes\n")
+	out, err := captureRun(t, "init", "-X", dir)
+	if err != nil {
+		t.Fatalf("init --fresh: %v\n%s", err, out)
+	}
+	warningStart := strings.Index(out, "WARNING: these files are not tracked by Git and are not ignored")
+	prompt := strings.Index(out, "destroy and freshly initialize")
+	if warningStart < 0 || prompt < warningStart {
+		t.Fatalf("fresh init missing Git-risk warning before confirmation:\n%s", out)
+	}
+	warning := out[warningStart:prompt]
+	if !strings.Contains(warning, ".fledge/agents/user/draft/draft.agent.md") {
+		t.Errorf("Git-risk warning omitted untracked file:\n%s", warning)
+	}
+	for _, safe := range []string{
+		".fledge/agents/user/tracked/tracked.agent.md",
+		".fledge/flocks/old/private.txt",
+	} {
+		if strings.Contains(warning, safe) {
+			t.Errorf("Git-risk warning included tracked or ignored %q:\n%s", safe, warning)
+		}
+	}
+	for _, removed := range []string{untracked, tracked, ignored} {
+		if _, err := os.Stat(removed); !os.IsNotExist(err) {
+			t.Errorf("old fresh-init target remains at %s: %v", removed, err)
+		}
+	}
+	for _, kept := range []string{
+		sibling,
+		filepath.Join(dir, scaffold.DirName, "agents", "fledge", "fledge-analyzer", "fledge-analyzer.agent.md"),
+		filepath.Join(dir, scaffold.DirName, "agents", "fledge", "fledge-forager", "fledge-forager.agent.md"),
+	} {
+		if _, err := os.Stat(kept); err != nil {
+			t.Errorf("fresh init did not leave expected %s: %v", kept, err)
+		}
+	}
+	if !strings.Contains(out, "fledge freshly initialized") {
+		t.Errorf("fresh init did not report its outcome:\n%s", out)
+	}
+}
+
+func TestInitFreshRejectsJSONWithoutRemovingAnything(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := scaffold.Ensure(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := captureRun(t, "init", "--fresh", "--json", dir); err == nil ||
+		!strings.Contains(err.Error(), "--fresh cannot be combined with --json") {
+		t.Fatalf("init --fresh --json error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, scaffold.DirName)); err != nil {
+		t.Fatalf("rejected fresh init removed .fledge: %v", err)
+	}
+}
+
+func TestInitFreshRefusesWhileFlockRunning(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := scaffold.Ensure(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, scaffold.DirName, "flocks", "flock1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	sock := daemon.SocketPath(dir, "flock1")
+	if err := os.MkdirAll(filepath.Dir(sock), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	stubStdinTerminal(t)
+	stubStdoutTerminal(t)
+	withStdin(t, "yes\n")
+
+	if _, err := captureRun(t, "init", "--fresh", dir); err == nil ||
+		!strings.Contains(err.Error(), "flock1") ||
+		!strings.Contains(err.Error(), "flock stop") {
+		t.Fatalf("init --fresh running-flock error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, scaffold.DirName)); err != nil {
+		t.Fatalf("fresh init removed a running flock: %v", err)
 	}
 }
 
@@ -473,6 +687,13 @@ func writePickerWorkspace(t *testing.T, configs map[string]agentcfg.Config) stri
 	dir := t.TempDir()
 	if _, err := scaffold.Ensure(dir); err != nil {
 		t.Fatal(err)
+	}
+	// General-picker tests control the profile menu exactly; managed context
+	// agents and their profiles are covered by initialized-workspace tests.
+	for _, name := range []string{"fledge-analyzer", "fledge-forager"} {
+		if err := os.RemoveAll(filepath.Join(dir, scaffold.DirName, "agents", "fledge", name)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	data, err := json.Marshal(agentcfg.Index{Version: agentcfg.IndexVersion, Agents: map[string]agentcfg.AgentRecord{}, Profiles: configs})
 	if err != nil {
@@ -586,6 +807,141 @@ func TestPickAgentConfigCancels(t *testing.T) {
 				t.Errorf("prompt missing before cancel:\n%s", out.String())
 			}
 		})
+	}
+}
+
+func orchestratorPickerFixture() map[string]agentcfg.Config {
+	return map[string]agentcfg.Config{
+		"defaultcl":       {Integration: "claude"},
+		"sonnetcl":        {Integration: "claude", Model: "sonnet"},
+		"solcx":           {Integration: "codex", Model: "gpt-5.6-sol"},
+		"gptpi":           {Integration: "pi", Provider: "openai-codex", Model: "gpt-5.5"},
+		"zenpi":           {Integration: "pi", Provider: "opencode", Model: "opencode-big-pickle"},
+		"fledge-analyzer": {Integration: "claude", Model: "claude-haiku-4-5"},
+		"fledge-pi":       {Integration: "pi", Provider: "openai-codex", Model: "gpt-managed"},
+	}
+}
+
+func TestOrchestratorPickerShowsClaudeCodexAndPiBrowser(t *testing.T) {
+	rows := strings.Join(orchestratorPickerRows(orchestratorPickerFixture()), "\n")
+	for _, want := range []string{
+		"Orchestrator profiles:",
+		"Claude Code",
+		"defaultcl",
+		"(default model)",
+		"sonnetcl",
+		"Codex",
+		"solcx",
+		"4. Browse Pi profiles…",
+	} {
+		if !strings.Contains(rows, want) {
+			t.Errorf("startup rows missing %q:\n%s", want, rows)
+		}
+	}
+	for _, hidden := range []string{"fledge-analyzer", "fledge-pi", "gptpi", "zenpi"} {
+		if strings.Contains(rows, hidden) {
+			t.Errorf("startup rows contain hidden %q:\n%s", hidden, rows)
+		}
+	}
+}
+
+func TestPickOrchestratorConfigSelectsClaudeAndCodex(t *testing.T) {
+	for name, tt := range map[string]struct {
+		input string
+		want  string
+	}{
+		"claude": {"2\n", "sonnetcl"},
+		"codex":  {"3\n", "solcx"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var out strings.Builder
+			got, err := pickOrchestratorConfig(orchestratorPickerFixture(), strings.NewReader(tt.input), &out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPickOrchestratorConfigBrowsesPiByProvider(t *testing.T) {
+	var out strings.Builder
+	got, err := pickOrchestratorConfig(orchestratorPickerFixture(), strings.NewReader("4\n2\n"), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "zenpi" {
+		t.Errorf("got %q, want zenpi", got)
+	}
+	menu := out.String()
+	for _, want := range []string{"Pi profiles:", "openai-codex", "gptpi", "opencode-zen", "zenpi", "0. Back"} {
+		if !strings.Contains(menu, want) {
+			t.Errorf("Pi menu missing %q:\n%s", want, menu)
+		}
+	}
+	if strings.Contains(menu, "fledge-pi") {
+		t.Errorf("Pi menu contains managed profile:\n%s", menu)
+	}
+}
+
+func TestPickOrchestratorConfigPiBackReturnsToMain(t *testing.T) {
+	var out strings.Builder
+	got, err := pickOrchestratorConfig(orchestratorPickerFixture(), strings.NewReader("4\n0\n3\n"), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "solcx" {
+		t.Errorf("got %q, want solcx", got)
+	}
+	if strings.Count(out.String(), "Orchestrator profiles:") != 2 {
+		t.Errorf("Back did not redraw startup menu:\n%s", out.String())
+	}
+}
+
+func TestPickOrchestratorConfigRejectsInvalidSelections(t *testing.T) {
+	for name, input := range map[string]string{
+		"main": "99\n",
+		"pi":   "4\n99\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			var out strings.Builder
+			if _, err := pickOrchestratorConfig(orchestratorPickerFixture(), strings.NewReader(input), &out); err == nil ||
+				!strings.Contains(err.Error(), "invalid selection") {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
+func TestPickOrchestratorConfigCancelsAndRejectsManagedOnlyCatalog(t *testing.T) {
+	var out strings.Builder
+	if _, err := pickOrchestratorConfig(orchestratorPickerFixture(), strings.NewReader("\n"), &out); err == nil ||
+		!strings.Contains(err.Error(), "cancelled") {
+		t.Fatalf("cancel error = %v", err)
+	}
+	managed := map[string]agentcfg.Config{
+		"fledge-analyzer": {Integration: "claude", Model: "claude-haiku-4-5"},
+		"fledge-forager":  {Integration: "claude", Model: "claude-sonnet-5"},
+	}
+	if _, err := pickOrchestratorConfig(managed, strings.NewReader(""), io.Discard); err == nil ||
+		!strings.Contains(err.Error(), "no profiles available") {
+		t.Fatalf("managed-only error = %v", err)
+	}
+}
+
+func TestGeneralProfilePickerStillIncludesManagedProfiles(t *testing.T) {
+	configs := map[string]agentcfg.Config{
+		"user":            {Integration: "claude", Model: "sonnet"},
+		"fledge-analyzer": {Integration: "claude", Model: "claude-haiku-4-5"},
+		"fledge-forager":  {Integration: "claude", Model: "claude-sonnet-5"},
+	}
+	rows := strings.Join(pickerRows(configs), "\n")
+	for _, want := range []string{"user", "fledge-analyzer", "fledge-forager"} {
+		if !strings.Contains(rows, want) {
+			t.Errorf("general picker missing %q:\n%s", want, rows)
+		}
 	}
 }
 
@@ -859,7 +1215,7 @@ func TestInitWritesCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	if !strings.Contains(out, "wrote .fledge/agents/catalog.json (5 from claude, 1 from codex, 1 from pi)") {
+	if !strings.Contains(out, "wrote .fledge/agents/fledge/catalog.json (5 from claude, 1 from codex, 1 from pi)") {
 		t.Errorf("output missing catalog log line: %q", out)
 	}
 
@@ -892,6 +1248,163 @@ func TestInitWritesCatalog(t *testing.T) {
 	if !strings.Contains(string(userData), `"version": 1`) || !strings.Contains(string(userData), `"profiles": {}`) {
 		t.Errorf("agents.json changed during discovery: %q", userData)
 	}
+
+	defs, profiles, err := agentcfg.LoadDefinitions(dir)
+	if err != nil {
+		t.Fatalf("load definitions: %v", err)
+	}
+	if got := defs["fledge-analyzer"].Profile; got != "fledge-analyzer" {
+		t.Errorf("fledge-analyzer profile = %q, want fledge-analyzer", got)
+	}
+	if got := defs["fledge-forager"].Profile; got != "fledge-forager" {
+		t.Errorf("fledge-forager profile = %q, want fledge-forager", got)
+	}
+	if got := profiles["fledge-analyzer"]; got.Integration != "claude" || got.Model != "claude-haiku-4-5" {
+		t.Errorf("fledge-analyzer launch = %+v", got)
+	}
+	if got := profiles["fledge-forager"]; got.Integration != "claude" || got.Model != "claude-sonnet-5" {
+		t.Errorf("fledge-forager launch = %+v", got)
+	}
+}
+
+func TestInitRefreshesAnalyzerPromptAndDefaultProfile(t *testing.T) {
+	stubDiscovery(t)
+	dir := t.TempDir()
+	if _, err := captureRun(t, "init", dir); err != nil {
+		t.Fatalf("first init: %v", err)
+	}
+	name := filepath.Join(dir, scaffold.DirName, "agents", "fledge", "fledge-analyzer", "fledge-analyzer.agent.md")
+	if err := os.WriteFile(name, []byte(`---
+name: fledge-analyzer
+description: Locally selected profile.
+fledge:
+  profile: sonnetcl
+---
+stale local prompt
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := captureRun(t, "init", dir); err != nil {
+		t.Fatalf("re-init: %v", err)
+	}
+	data, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "profile: fledge-analyzer") ||
+		!strings.Contains(string(data), "model: claude-haiku-4-5") {
+		t.Errorf("re-init did not restore analyzer profile:\n%s", data)
+	}
+	if strings.Contains(string(data), "stale local prompt") || !strings.Contains(string(data), "Read only the files listed") {
+		t.Errorf("re-init did not refresh analyzer prompt:\n%s", data)
+	}
+}
+
+func TestInitOverwritesStaleAnalyzerProfile(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := scaffold.Ensure(dir); err != nil {
+		t.Fatal(err)
+	}
+	name := filepath.Join(dir, scaffold.DirName, "agents", "fledge", "fledge-analyzer", "fledge-analyzer.agent.md")
+	data, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = []byte(strings.Replace(string(data), "profile: fledge-analyzer", "profile: unavailable-profile", 1))
+	if err := os.WriteFile(name, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+
+	if _, err = captureRun(t, "init", dir); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	refreshed, readErr := os.ReadFile(name)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !strings.Contains(string(refreshed), "profile: fledge-analyzer") {
+		t.Fatal("init did not restore the managed analyzer profile")
+	}
+}
+
+func TestInitRemovesObsoleteManagedContextProfilesAndIndexEntries(t *testing.T) {
+	stubDiscovery(t)
+	dir := t.TempDir()
+	if _, err := captureRun(t, "init", dir); err != nil {
+		t.Fatalf("first init: %v", err)
+	}
+
+	base := filepath.Join(dir, scaffold.DirName, "agents", "fledge")
+	for _, name := range []string{"fledge-context-haiku-auto", "fledge-context-sonnet-auto"} {
+		path := filepath.Join(base, name, name+".agent.md")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("obsolete managed definition\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stale := agentcfg.Index{
+		Version: agentcfg.IndexVersion,
+		Agents: map[string]agentcfg.AgentRecord{
+			"fledge-context-haiku-auto":  {Source: "fledge/fledge-context-haiku-auto/fledge-context-haiku-auto.agent.md"},
+			"fledge-context-sonnet-auto": {Source: "fledge/fledge-context-sonnet-auto/fledge-context-sonnet-auto.agent.md"},
+		},
+		Profiles: map[string]agentcfg.Config{
+			"fledge-context-haiku-auto":  {Integration: "claude", Model: "claude-haiku-4-5"},
+			"fledge-context-sonnet-auto": {Integration: "claude", Model: "claude-sonnet-5"},
+		},
+	}
+	data, err := json.Marshal(stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "managed-agents.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := captureRun(t, "init", dir); err != nil {
+		t.Fatalf("re-init: %v", err)
+	}
+	for _, name := range []string{"fledge-context-haiku-auto", "fledge-context-sonnet-auto"} {
+		if _, err := os.Stat(filepath.Join(base, name)); !os.IsNotExist(err) {
+			t.Errorf("obsolete managed directory %s remains: %v", name, err)
+		}
+	}
+	profiles, err := agentcfg.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"fledge-context-haiku-auto", "fledge-context-sonnet-auto"} {
+		if _, ok := profiles[name]; ok {
+			t.Errorf("obsolete managed profile %s remains in index", name)
+		}
+	}
+}
+
+func TestInitOverwritesMalformedManagedDefinition(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := scaffold.Ensure(dir); err != nil {
+		t.Fatal(err)
+	}
+	name := filepath.Join(dir, scaffold.DirName, "agents", "fledge", "fledge-forager", "fledge-forager.agent.md")
+	malformed := []byte("---\nname: fledge-forager\n")
+	if err := os.WriteFile(name, malformed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+
+	if _, err := captureRun(t, "init", dir); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	got, readErr := os.ReadFile(name)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) == string(malformed) || !strings.Contains(string(got), "Fledge Forager coordinator") {
+		t.Fatalf("init did not refresh malformed definition:\n%s", got)
+	}
 }
 
 func TestInitKeepsCatalogWhenNothingAnswers(t *testing.T) {
@@ -899,7 +1412,7 @@ func TestInitKeepsCatalogWhenNothingAnswers(t *testing.T) {
 	if _, err := scaffold.Ensure(dir); err != nil {
 		t.Fatal(err)
 	}
-	sentinel := `{"version":1,"agents":{},"profiles":{"kept":{"integration":"codex","model":"gpt-5.6-sol"}}}`
+	sentinel := `{"version":1,"agents":{},"profiles":{"haikucl":{"integration":"claude","model":"haiku"},"kept":{"integration":"codex","model":"gpt-5.6-sol"}}}`
 	catalogPath := filepath.Join(dir, scaffold.DirName, agentcfg.CatalogName)
 	if err := os.WriteFile(catalogPath, []byte(sentinel), 0o644); err != nil {
 		t.Fatal(err)

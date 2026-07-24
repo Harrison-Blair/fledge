@@ -18,16 +18,16 @@ import (
 )
 
 // FileName is the generated user index, relative to the .fledge directory.
-const FileName = "agents/agents.json"
+const FileName = "agents/fledge/user-agents.json"
 
 // ManagedIndexName is the generated built-in index, relative to .fledge.
-const ManagedIndexName = "agents/" + ManagedFileName
+const ManagedIndexName = "agents/fledge/" + ManagedFileName
 
 // CatalogName is the generated model catalog, relative to the .fledge
 // directory. fledge init regenerates it wholesale from the installed
-// integrations; it is never hand-edited, and an agents.json entry shadows a
-// catalog entry of the same name.
-const CatalogName = "agents/catalog.json"
+// integrations; it is never hand-edited, and a user-agents.json entry shadows
+// a catalog entry of the same name.
+const CatalogName = "agents/fledge/catalog.json"
 
 // Config describes one launchable agent.
 type Config struct {
@@ -127,10 +127,14 @@ func (c Config) Validate(name string) error {
 
 // ValidateProfile validates a user-configurable profile name and its fields.
 func (c Config) ValidateProfile(name string) error {
+	return c.validateProfile(name, false)
+}
+
+func (c Config) validateProfile(name string, managed bool) error {
 	if err := validPortableName(name); err != nil {
 		return err
 	}
-	if strings.HasPrefix(name, "fledge-") {
+	if strings.HasPrefix(name, "fledge-") && !managed {
 		return fmt.Errorf("profile %q uses the reserved fledge-* namespace", name)
 	}
 	if err := c.ValidateFields(); err != nil {
@@ -148,6 +152,9 @@ func (c Config) ValidateFields() error {
 		if arg == "--" {
 			return errors.New("argv is option-only and must not contain --")
 		}
+	}
+	if err := validateInteractiveArgv(c.Integration, c.Argv); err != nil {
+		return err
 	}
 	switch c.Integration {
 	case "claude":
@@ -177,6 +184,55 @@ func (c Config) ValidateFields() error {
 	return nil
 }
 
+// validateInteractiveArgv rejects options that change the process from the
+// live interactive session Fledge launches or seize session/instruction
+// ownership. Those modes cannot be combined coherently with Herdr's TUI pane
+// and a future owned same-session control channel.
+func validateInteractiveArgv(integration string, argv []string) error {
+	for i, arg := range argv {
+		flag := arg
+		if before, _, ok := strings.Cut(arg, "="); ok {
+			flag = before
+		}
+		forbidden := false
+		switch integration {
+		case "claude":
+			switch flag {
+			case "--print", "-p", "--resume", "-r", "--continue", "-c",
+				"--session-id", "--input-format", "--output-format",
+				"--append-system-prompt":
+				forbidden = true
+			}
+		case "pi":
+			switch flag {
+			case "--print", "-p", "--session", "--session-id", "--mode",
+				"--rpc", "--append-system-prompt":
+				forbidden = true
+			}
+		case "codex":
+			switch flag {
+			case "exec", "resume", "app-server":
+				forbidden = true
+			}
+			if flag == "--config" {
+				value := ""
+				if _, after, ok := strings.Cut(arg, "="); ok {
+					value = after
+				} else if i+1 < len(argv) {
+					value = argv[i+1]
+				}
+				if strings.HasPrefix(value, "developer_instructions=") {
+					forbidden = true
+				}
+			}
+		}
+		if forbidden {
+			return fmt.Errorf("argv option %q is not supported for %s interactive profiles because Fledge owns session and instruction control", arg, integration)
+		}
+	}
+	return nil
+}
+
 // ReservedOrchestrator is the single name exempt from the agent naming rule.
 // fledge start brings this profile up on every interactive start and the agent
 // runs under this exact string — hyphen included, and with no species suffix —
@@ -198,11 +254,16 @@ func (c Config) CommandArgv(sessionID string) []string {
 	switch c.Integration {
 	case "claude":
 		argv = []string{"claude", "--session-id", sessionID}
-		if c.PermissionMode != "" {
-			argv = append(argv, "--permission-mode", c.PermissionMode)
+		permissionMode := c.PermissionMode
+		if permissionMode == "" {
+			permissionMode = "bypassPermissions"
 		}
+		argv = append(argv, "--permission-mode", permissionMode)
 	case "pi":
 		argv = []string{"pi"}
+		if sessionID != "" {
+			argv = append(argv, "--session-id", sessionID)
+		}
 		if c.Provider != "" {
 			argv = append(argv, "--provider", c.Provider)
 		}

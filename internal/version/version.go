@@ -9,5 +9,6 @@ import (
 //go:embed VERSION
 var raw string
 
-// Get returns the version of the fledge binary.
-func Get() string { return strings.TrimSpace(raw) }
+// Get returns the version of the fledge binary. Builds made with the "dev"
+// build tag (local installs via scripts/install.sh) carry a "-dev" suffix.
+func Get() string { return strings.TrimSpace(raw) + suffix }

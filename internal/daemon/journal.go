@@ -14,15 +14,43 @@ const (
 	evStarted    = "daemon.started"
 	evRegistered = "agent.registered"
 	evLaunching  = "agent.launching"
+	evPlaced     = "agent.placed"
 	evSpawned    = "agent.spawned"
 	evReady      = "agent.ready"
 	// evSettled is a legacy event from the removed pi RPC subprocess shape:
 	// recognized on replay so old journals still load, never emitted.
-	evSettled   = "agent.settled"
-	evStopped   = "agent.stopped"
-	evSent      = "msg.sent"
-	evDelivered = "msg.delivered"
+	evSettled           = "agent.settled"
+	evStopped           = "agent.stopped"
+	evTabCreateIntent   = "tab.create.intent"
+	evTabCreateResolved = "tab.create.resolved"
+	evTabCreated        = "tab.created"
+	evTabClosing        = "tab.closing"
+	evTabClosed         = "tab.closed"
+	evWorkspaceClosing  = "workspace.closing"
+	evWorkspaceClosed   = "workspace.closed"
+	evSent              = "msg.sent"
+	evDelivered         = "msg.delivered"
+	evInboxNotified     = "inbox.notified"
 )
+
+type stopRecord struct {
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
+}
+
+type tabRecord struct {
+	WorkspaceID string `json:"workspace_id"`
+	TabID       string `json:"tab_id"`
+	TabLabel    string `json:"tab_label,omitempty"`
+}
+
+type pendingTabCreate struct {
+	IntentID    string
+	WorkspaceID string
+	TabLabel    string
+	CreateLabel string
+	Cwd         string
+}
 
 // event is one journal line. The union of every event's fields; each event
 // writes only the ones it needs.
@@ -43,6 +71,11 @@ type event struct {
 	PaneID          string `json:"pane_id,omitempty"`
 	WorkspaceID     string `json:"workspace_id,omitempty"`
 	WorkspaceLabel  string `json:"workspace_label,omitempty"`
+	TabID           string `json:"tab_id,omitempty"`
+	TabLabel        string `json:"tab_label,omitempty"`
+	IntentID        string `json:"intent_id,omitempty"`
+	CreateLabel     string `json:"create_label,omitempty"`
+	OwnsWorkspace   bool   `json:"owns_workspace,omitempty"`
 	Cwd             string `json:"cwd,omitempty"`
 	SessionID       string `json:"session_id,omitempty"`
 	Reason          string `json:"reason,omitempty"`
@@ -55,6 +88,13 @@ type event struct {
 	To      string `json:"to,omitempty"`
 	Body    string `json:"body,omitempty"`
 	ReplyTo string `json:"reply_to,omitempty"`
+	// InboxNotifyArmed belongs to agent.ready. Keeping it on the same JSON
+	// record makes readiness plus arming replay-atomic even after a torn write.
+	InboxNotifyArmed bool     `json:"inbox_notify_armed,omitempty"`
+	IDs              []string `json:"ids,omitempty"`
+
+	Stops []stopRecord `json:"stops,omitempty"`
+	Tabs  []tabRecord  `json:"tabs,omitempty"`
 }
 
 // append writes one event as a JSON line. It must return before the operation
@@ -91,19 +131,44 @@ func (d *Daemon) appendAll(events ...event) error {
 	return nil
 }
 
-// state is the roster and pending set rebuilt from the journal.
+// state is the roster and message state rebuilt from the journal.
 type state struct {
-	agents  map[string]protocol.Agent
-	order   []string
-	pending []protocol.Message
-	tokens  map[string]string
+	agents            map[string]protocol.Agent
+	order             []string
+	pending           []protocol.Message
+	notifyPending     []protocol.Message
+	tokens            map[string]string
+	credentials       map[string]string
+	inboxNotifyArmed  map[string]bool
+	inboxNotified     map[string]bool
+	messages          map[string]protocol.Message
+	messageOrder      []string
+	messageDelivered  map[string]bool
+	ownedTabs         map[string]ownedTab
+	tabCreateIntents  map[string]pendingTabCreate
+	tabClosures       map[string]tabRecord
+	workspaceClosures map[string]event
 }
 
 // replay reconstructs state from an existing journal. A missing journal
 // replays as empty state. A message that was sent but never delivered is
-// pending; delivery order is the order the messages were sent in.
+// pending. Real journals from the former pane-delivery implementation record
+// msg.delivered with only id/to; those entries are final because no durable
+// fact can prove whether replaying their body would duplicate handling.
 func replay(path string) (*state, error) {
-	s := &state{agents: make(map[string]protocol.Agent), tokens: make(map[string]string)}
+	s := &state{
+		agents:            make(map[string]protocol.Agent),
+		tokens:            make(map[string]string),
+		credentials:       make(map[string]string),
+		inboxNotifyArmed:  make(map[string]bool),
+		inboxNotified:     make(map[string]bool),
+		messages:          make(map[string]protocol.Message),
+		messageDelivered:  make(map[string]bool),
+		ownedTabs:         make(map[string]ownedTab),
+		tabCreateIntents:  make(map[string]pendingTabCreate),
+		tabClosures:       make(map[string]tabRecord),
+		workspaceClosures: make(map[string]event),
+	}
 
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {
@@ -186,6 +251,7 @@ func replay(path string) (*state, error) {
 				Source:  e.Source,
 			}
 			delete(s.tokens, e.Name)
+			delete(s.credentials, e.Name)
 			delete(launching, e.Name)
 			delete(spawned, e.Name)
 		case evLaunching:
@@ -197,12 +263,22 @@ func replay(path string) (*state, error) {
 			a.Profile = e.Profile
 			a.Source = e.Source
 			a.WorkspaceLabel = e.WorkspaceLabel
+			a.Cwd = e.Cwd
+			a.SessionID = e.SessionID
 			a.State = stateStarting
 			s.agents[e.Name] = a
 			launching[e.Name] = true
 			if e.TokenHash != "" {
 				s.tokens[e.Name] = e.TokenHash
+				s.credentials[e.Name] = e.TokenHash
 			}
+		case evPlaced:
+			a := s.agents[e.Name]
+			a.WorkspaceID = e.WorkspaceID
+			a.WorkspaceLabel = e.WorkspaceLabel
+			a.TabID = e.TabID
+			a.TabLabel = e.TabLabel
+			s.agents[e.Name] = a
 		case evSpawned:
 			a := s.agents[e.Name]
 			if e.PID != 0 || a.PID == reservedPID {
@@ -218,11 +294,20 @@ func replay(path string) (*state, error) {
 			}
 			a.PaneID = e.PaneID
 			a.WorkspaceID = e.WorkspaceID
+			a.TabID = e.TabID
+			a.TabLabel = e.TabLabel
+			a.OwnsWorkspace = e.OwnsWorkspace
+			// Journals predating explicit tab placement stored a dedicated
+			// workspace id without an ownership bit or tab id.
+			if a.WorkspaceID != "" && a.TabID == "" {
+				a.OwnsWorkspace = true
+			}
 			if e.WorkspaceLabel != "" {
 				a.WorkspaceLabel = e.WorkspaceLabel
 			}
 			if e.TokenHash != "" {
 				s.tokens[e.Name] = e.TokenHash
+				s.credentials[e.Name] = e.TokenHash
 			}
 			if s.tokens[e.Name] == "" {
 				a.State = stateRunning
@@ -234,28 +319,78 @@ func replay(path string) (*state, error) {
 		case evReady:
 			if a, ok := s.agents[e.Name]; ok {
 				a.State = stateRunning
+				if e.SessionID != "" {
+					a.SessionID = e.SessionID
+				}
 				s.agents[e.Name] = a
 				delete(s.tokens, e.Name)
 			}
+			if e.InboxNotifyArmed {
+				s.inboxNotifyArmed[e.Name] = true
+			}
 		case evSettled:
-			// Legacy pi RPC event; the pane-less rule below already sidelines
-			// every agent that could have emitted one, so it changes nothing.
+		// Legacy pi RPC event; the pane-less rule below already sidelines
+		// every agent that could have emitted one, so it changes nothing.
 		case evStopped:
 			if a, ok := s.agents[e.Name]; ok {
 				a.State = stateStopped
 				s.agents[e.Name] = a
 				delete(s.tokens, e.Name)
+				delete(s.inboxNotifyArmed, e.Name)
 			}
+		case evTabCreateIntent:
+			s.tabCreateIntents[e.IntentID] = pendingTabCreate{
+				IntentID:    e.IntentID,
+				WorkspaceID: e.WorkspaceID,
+				TabLabel:    e.TabLabel,
+				CreateLabel: e.CreateLabel,
+				Cwd:         e.Cwd,
+			}
+		case evTabCreateResolved:
+			delete(s.tabCreateIntents, e.IntentID)
+		case evTabCreated:
+			if e.IntentID != "" {
+				delete(s.tabCreateIntents, e.IntentID)
+			}
+			s.ownedTabs[e.TabID] = ownedTab{
+				WorkspaceID: e.WorkspaceID,
+				TabID:       e.TabID,
+				Label:       e.TabLabel,
+			}
+		case evTabClosing:
+			s.tabClosures[e.TabID] = tabRecord{
+				WorkspaceID: e.WorkspaceID,
+				TabID:       e.TabID,
+				TabLabel:    e.TabLabel,
+			}
+		case evTabClosed:
+			delete(s.ownedTabs, e.TabID)
+			delete(s.tabClosures, e.TabID)
+		case evWorkspaceClosing:
+			s.workspaceClosures[e.WorkspaceID] = e
+		case evWorkspaceClosed:
+			delete(s.workspaceClosures, e.WorkspaceID)
 		case evSent:
-			sent = append(sent, protocol.Message{
+			msg := protocol.Message{
 				ID:      e.ID,
 				From:    e.From,
 				To:      e.To,
 				Body:    e.Body,
 				ReplyTo: e.ReplyTo,
-			})
+			}
+			sent = append(sent, msg)
+			s.messages[e.ID] = msg
+			s.messageOrder = append(s.messageOrder, e.ID)
 		case evDelivered:
 			delivered[e.ID] = true
+			s.messageDelivered[e.ID] = true
+		case evInboxNotified:
+			if e.ID != "" {
+				s.inboxNotified[e.ID] = true
+			}
+			for _, id := range e.IDs {
+				s.inboxNotified[id] = true
+			}
 		}
 	}
 
@@ -273,6 +408,7 @@ func replay(path string) (*state, error) {
 		a.State = stateOrphaned
 		s.agents[name] = a
 		delete(s.tokens, name)
+		delete(s.credentials, name)
 	}
 
 	// A spawned agent with no pane came from the removed subprocess shape (pi
@@ -285,12 +421,18 @@ func replay(path string) (*state, error) {
 			a.State = stateOrphaned
 			s.agents[name] = a
 			delete(s.tokens, name)
+			delete(s.credentials, name)
 		}
 	}
 
 	for _, m := range sent {
 		if !delivered[m.ID] {
 			s.pending = append(s.pending, m)
+		}
+	}
+	for _, m := range sent {
+		if s.inboxNotifyArmed[m.To] && !s.inboxNotified[m.ID] {
+			s.notifyPending = append(s.notifyPending, m)
 		}
 	}
 	return s, nil

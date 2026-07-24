@@ -18,10 +18,9 @@ func TestAgentsNameMatchesAgentcfg(t *testing.T) {
 	}
 }
 
-// The catalog is gitignored under scaffold's mirrored name and read under
-// agentcfg's, so the entry must track agentcfg.CatalogName.
-func TestGitignoreCatalogEntryMatchesAgentcfg(t *testing.T) {
-	want := scaffold.DirName + "/" + agentcfg.CatalogName
+// Every generated index lives beneath the one managed directory ignore.
+func TestGitignoreGeneratedIndexes(t *testing.T) {
+	want := scaffold.DirName + "/agents/fledge/"
 	for _, entry := range scaffold.GitignoreEntries {
 		if entry == want {
 			return

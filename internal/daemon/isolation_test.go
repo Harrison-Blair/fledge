@@ -37,12 +37,13 @@ func TestMessagesDoNotCrossFlocks(t *testing.T) {
 	// The same agent name exists in both flocks, so a leak would land.
 	nameA := register(t, root, "alpha", "worker")
 	nameB := register(t, root, "bravo", "worker")
+	opsA := register(t, root, "alpha", "ops")
 	if nameA != nameB {
 		t.Fatalf("precondition: names differ (%q, %q)", nameA, nameB)
 	}
 
 	if _, err := client.Do(root, "alpha", protocol.Request{
-		Op: protocol.OpSend, From: "ops", To: nameA, Body: "for alpha only",
+		Op: protocol.OpSend, From: opsA, To: nameA, Body: "for alpha only",
 	}); err != nil {
 		t.Fatalf("send in alpha: %v", err)
 	}

@@ -40,13 +40,14 @@ const metadataSource = "custom:fledge"
 var defaultReadinessTimeout = 2 * time.Minute
 
 const bootstrapPrompt = "Complete startup now by running `fledge agent ready`. Do not begin other work until Fledge confirms readiness."
+const orchestratorBootstrapPrompt = "Complete startup now by running `fledge agent ready --no-wait`. Do not begin other work until Fledge confirms readiness."
 
 // assignedAgentPrompt is the complete Fledge-owned native instruction
 // document. Raw profile and model spawns have no authored role, but still get
 // their assigned identity and the mailbox guidance.
 func assignedAgentPrompt(name, role string) string {
 	instruction := fmt.Sprintf(
-		"Fledge has assigned and already registered you as `%s`. Direct messages will arrive in this agent session. To reply, use `fledge agent msg send <recipient> <body>` with the recipient's assigned name.",
+		"Fledge has assigned and already registered you as `%s`. Direct messages arrive in this agent session and remain available through `fledge agent msg inbox` until claimed. Reply to a claimed message with `fledge agent msg reply <message-id> <body>`; Fledge derives the original sender and exact causal `reply_to`.",
 		name,
 	)
 	if role == "" {
@@ -97,6 +98,10 @@ func (d *Daemon) spawn(req *protocol.Request) (protocol.Response, error) {
 	if err := validType(agentType); err != nil {
 		return protocol.Response{}, err
 	}
+	targeted, err := validateSpawnPlacement(req, resolved)
+	if err != nil {
+		return protocol.Response{}, err
+	}
 	if resolved.workspace != nil && cfg.Integration == "pi" {
 		return protocol.Response{}, fmt.Errorf("agent %q requests dedicated workspace %q, but pi profiles do not support Herdr workspace placement; use a claude or codex profile", resolved.agent, resolved.workspace.Label)
 	}
@@ -141,15 +146,20 @@ func (d *Daemon) spawn(req *protocol.Request) (protocol.Response, error) {
 	instructionSum := sha256.Sum256([]byte(instructions))
 	instructionHash := hex.EncodeToString(instructionSum[:])
 	var sessionID string
-	if cfg.Integration == "claude" {
+	if cfg.Integration == "claude" || cfg.Integration == "pi" {
 		sessionID = agentcfg.NewSessionID()
 	}
-	argv := cfg.LaunchArgv(sessionID, instructions, bootstrapPrompt)
+	bootstrap := bootstrapPrompt
+	if agentType == agentcfg.ReservedOrchestrator {
+		bootstrap = orchestratorBootstrapPrompt
+	}
+	argv := cfg.LaunchArgv(sessionID, instructions, bootstrap)
 	placeholder := protocol.Agent{
 		Name: name, Type: agentType, Species: slug, PID: reservedPID,
 		Config: req.Config, Agent: resolved.agent, Profile: resolved.profile,
 		Source: resolved.source, Model: cfg.Model, Integration: cfg.Integration,
 		WorkspaceLabel: workspaceLabel(resolved.workspace), State: stateStarting,
+		SessionID: sessionID, Cwd: cwd,
 	}
 	launching := &launchLatch{done: make(chan struct{})}
 	var ready chan struct{}
@@ -183,17 +193,36 @@ func (d *Daemon) spawn(req *protocol.Request) (protocol.Response, error) {
 		if d.readyTokens == nil {
 			d.readyTokens = make(map[string]string)
 		}
+		if d.identityTokens == nil {
+			d.identityTokens = make(map[string]string)
+		}
 		if d.readyWaiters == nil {
 			d.readyWaiters = make(map[string]chan struct{})
 		}
 		d.readyTokens[name] = tokenHash
+		d.identityTokens[name] = tokenHash
 		d.readyWaiters[name] = ready
 	}
 	d.mu.Unlock()
 
-	agent, err := d.launch(name, cwd, cfg, argv, sessionID, req.Split, req.AnchorPane, resolved.workspace)
+	var target *resolvedPlacement
+	if targeted {
+		placement, placeErr := d.acquirePlacement(name, cwd, req.Workspace, req.Tab)
+		if placeErr != nil {
+			d.failLaunching(name, launching, "placement failed", placeErr)
+			return protocol.Response{}, placeErr
+		}
+		target = &placement
+	}
+
+	agent, err := d.launch(name, cwd, cfg, argv, sessionID, req.Split, req.AnchorPane, resolved.workspace, target)
 	if err != nil {
 		d.failLaunching(name, launching, "launch failed", err)
+		if target != nil {
+			if cleanupErr := d.cleanupOwnedTab(target.TabID); cleanupErr != nil {
+				err = fmt.Errorf("%w (placement rollback also failed: %v)", err, cleanupErr)
+			}
+		}
 		return protocol.Response{}, err
 	}
 	agent.Name = name
@@ -205,6 +234,8 @@ func (d *Daemon) spawn(req *protocol.Request) (protocol.Response, error) {
 	agent.Source = resolved.source
 	agent.Model = cfg.Model
 	agent.Integration = cfg.Integration
+	agent.SessionID = sessionID
+	agent.Cwd = cwd
 	agent.State = stateStarting
 	if !authenticated {
 		agent.State = stateRunning
@@ -214,16 +245,23 @@ func (d *Daemon) spawn(req *protocol.Request) (protocol.Response, error) {
 	if err := d.append(event{
 		Event: evSpawned, Name: name, PID: agent.PID, PaneID: agent.PaneID,
 		WorkspaceID: agent.WorkspaceID, WorkspaceLabel: agent.WorkspaceLabel,
+		TabID: agent.TabID, TabLabel: agent.TabLabel, OwnsWorkspace: agent.OwnsWorkspace,
 	}); err != nil {
 		d.mu.Unlock()
 		d.teardown(name, agent)
 		d.failLaunching(name, launching, "spawn journal failed", err)
+		if target != nil {
+			if cleanupErr := d.cleanupOwnedTab(target.TabID); cleanupErr != nil {
+				err = fmt.Errorf("%w (placement rollback also failed: %v)", err, cleanupErr)
+			}
+		}
 		return protocol.Response{}, err
 	}
 	d.agents[name] = agent.Agent
 	launching.agent = agent
 	close(launching.done)
 	delete(d.launches, name)
+	d.logStateSummary()
 	d.debug.Printf("spawned %s integration=%s pid=%d pane=%s", name, agent.Integration, agent.PID, agent.PaneID)
 	d.mu.Unlock()
 	if !authenticated {
@@ -266,6 +304,26 @@ readiness:
 		}
 	}
 	return protocol.Response{Name: name, PaneID: agent.PaneID}, nil
+}
+
+func validateSpawnPlacement(req *protocol.Request, resolved spawnResolution) (bool, error) {
+	targeted := req.Workspace != "" || req.Tab != ""
+	if (req.Workspace == "") != (req.Tab == "") {
+		return false, errors.New("workspace and tab placement must be provided together")
+	}
+	if !targeted {
+		return false, nil
+	}
+	if resolved.workspace != nil {
+		return false, fmt.Errorf("agent %q requests dedicated workspace %q and cannot also target an existing workspace and tab", resolved.agent, resolved.workspace.Label)
+	}
+	if resolved.cfg.Integration == "pi" {
+		return false, errors.New("pi profiles do not support Herdr workspace and tab placement; use a claude or codex profile")
+	}
+	if req.Split != "" || req.AnchorPane != "" {
+		return false, errors.New("workspace and tab placement cannot be combined with split or anchored pane placement")
+	}
+	return true, nil
 }
 
 // resolveSpawn turns the request into the config to launch and the agent type
@@ -403,12 +461,21 @@ func (d *Daemon) ready(req *protocol.Request) (protocol.Response, error) {
 	}
 	sum := sha256.Sum256([]byte(req.Token))
 	got := hex.EncodeToString(sum[:])
-	return d.readyDigest(req.Name, got)
+	return d.readyDigest(req.Name, got, req.NoWait, req.SessionID)
 }
 
-func (d *Daemon) readyDigest(name, got string) (protocol.Response, error) {
+func (d *Daemon) readyDigest(name, got string, noWait bool, runtimeSessionID string) (protocol.Response, error) {
 	for {
+		var wakes []protocol.Message
 		d.mu.Lock()
+		if d.closing {
+			d.mu.Unlock()
+			return protocol.Response{}, errors.New("daemon is closing")
+		}
+		if d.stopping[name] {
+			d.mu.Unlock()
+			return protocol.Response{}, fmt.Errorf("agent %q is stopping", name)
+		}
 		want, ok := d.readyTokens[name]
 		if !ok {
 			if a, exists := d.agents[name]; exists && a.State != stateStarting {
@@ -429,22 +496,57 @@ func (d *Daemon) readyDigest(name, got string) (protocol.Response, error) {
 			<-launch.done
 			continue
 		}
-		if err := d.append(event{Event: evReady, Name: name}); err != nil {
+		requestNotifier := noWait && name == agentcfg.ReservedOrchestrator
+		armNotifier := requestNotifier && d.inboxWake != nil && !d.inboxNotifyArmed[name]
+		if armNotifier {
+			if err := d.validateInboxNotifierArmLocked(name, runtimeSessionID); err != nil {
+				d.mu.Unlock()
+				return protocol.Response{}, err
+			}
+		}
+		a := d.agents[name]
+		sessionID := a.SessionID
+		if a.Integration == "codex" && noWait {
+			sessionID = runtimeSessionID
+		}
+		if err := d.append(event{
+			Event: evReady, Name: name, SessionID: sessionID,
+			InboxNotifyArmed: armNotifier,
+		}); err != nil {
 			d.mu.Unlock()
 			return protocol.Response{}, err
 		}
-		a := d.agents[name]
+		if armNotifier {
+			d.inboxNotifyArmed[name] = true
+			wakes = d.pendingInboxWakesLocked(name)
+		}
 		a.State = stateRunning
+		a.SessionID = sessionID
 		d.agents[name] = a
+		if d.identityTokens == nil {
+			d.identityTokens = make(map[string]string)
+		}
+		d.identityTokens[name] = want
 		delete(d.readyTokens, name)
 		ch := d.readyWaiters[name]
 		if ch != nil {
 			close(ch)
 			delete(d.readyWaiters, name)
 		}
+		d.logStateSummary()
 		d.debug.Printf("ready %s", name)
 		d.mu.Unlock()
-		return protocol.Response{Name: name}, nil
+		if len(wakes) > 0 {
+			d.queueInboxWake(wakes[0])
+		}
+		delivery := ""
+		if requestNotifier {
+			delivery = "manual"
+			if armNotifier {
+				delivery = "same-session"
+			}
+		}
+		return protocol.Response{Name: name, InboxDelivery: delivery}, nil
 	}
 }
 
@@ -468,12 +570,22 @@ func (d *Daemon) rollbackStarting(_ reservation, agent launched, reason string) 
 	delete(d.readyWaiters, agent.Name)
 	d.mu.Unlock()
 
+	if agent.OwnsWorkspace {
+		if err := d.stopWorkspaceOwner(agent.Name, agent.Agent, reason); err != nil {
+			d.debug.Printf("%s: workspace rollback: %v", agent.Name, err)
+		}
+		return true
+	}
 	d.teardown(agent.Name, agent)
 
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	if _, err := d.markStopped(agent.Name, reason); err != nil {
 		d.debug.Printf("%s: rollback journal: %v", agent.Name, err)
+	}
+	tabID := agent.TabID
+	d.mu.Unlock()
+	if err := d.cleanupOwnedTab(tabID); err != nil {
+		d.debug.Printf("%s: placement rollback: %v", agent.Name, err)
 	}
 	return true
 }
@@ -486,15 +598,7 @@ func (d *Daemon) failLaunching(name string, launch *launchLatch, reason string, 
 	if err := d.append(event{Event: evStopped, Name: name, Reason: reason}); err != nil {
 		d.debug.Printf("%s: failure journal: %v", name, err)
 	}
-	if a, ok := d.agents[name]; ok {
-		a.State = stateStopped
-		d.agents[name] = a
-	}
-	delete(d.readyTokens, name)
-	if ch := d.readyWaiters[name]; ch != nil {
-		close(ch)
-	}
-	delete(d.readyWaiters, name)
+	d.setStoppedLocked(name)
 	launch.err = cause
 	close(launch.done)
 	if d.launches[name] == launch {
@@ -532,6 +636,9 @@ type reservation struct {
 func (d *Daemon) reserve(agentType, requested, integration string) (reservation, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.closing {
+		return reservation{}, errors.New("daemon is closing")
+	}
 
 	// As in register, the pool is per-type. A spawned agent's liveness is its
 	// state rather than its pid: a stopped pane's shell can outlive the stop,
@@ -613,7 +720,7 @@ func (d *Daemon) releaseLocked(r reservation) {
 // d.mu: PaneClose is a socket round-trip — exactly the slow call the lock may
 // not span.
 func (d *Daemon) teardown(name string, agent launched) {
-	if agent.WorkspaceID != "" {
+	if agent.OwnsWorkspace {
 		if err := herdrwire.WorkspaceClose(d.session.SocketPath, agent.WorkspaceID); err != nil {
 			d.debug.Printf("%s: teardown workspace: %v", name, err)
 		}
@@ -633,7 +740,7 @@ type launched struct {
 
 // launch starts the agent's herdr pane. It runs without d.mu held: a Herdr call
 // can take seconds, and a spawn must not stall the whole flock.
-func (d *Daemon) launch(name, cwd string, cfg agentcfg.Config, argv []string, sessionID, split, anchorPane string, workspace *agentcfg.Workspace) (launched, error) {
+func (d *Daemon) launch(name, cwd string, cfg agentcfg.Config, argv []string, sessionID, split, anchorPane string, workspace *agentcfg.Workspace, target *resolvedPlacement) (launched, error) {
 	env := make(map[string]string, len(cfg.Env)+1)
 	for k, v := range cfg.Env {
 		env[k] = v
@@ -648,7 +755,22 @@ func (d *Daemon) launch(name, cwd string, cfg agentcfg.Config, argv []string, se
 		err     error
 	)
 	if workspace == nil {
-		started, err = herdrwire.AgentStart(d.session.SocketPath, name, cwd, argv, env, split)
+		if target == nil {
+			started, err = herdrwire.AgentStart(d.session.SocketPath, name, cwd, argv, env, split)
+		} else {
+			started, err = herdrwire.AgentStartInWorkspace(
+				d.session.SocketPath, name, cwd, argv, env,
+				target.WorkspaceID, target.TabID,
+			)
+			if err == nil && started.PaneID == "" {
+				err = fmt.Errorf("start %s in tab %s: Herdr returned no pane id", name, target.TabID)
+			}
+			if err == nil && started.PaneID != "" {
+				if setupErr := d.finishOwnedTabSetup(target.TabID); setupErr != nil {
+					return launched{}, d.failPanePlacement(name, started.PaneID, "finish tab setup", setupErr)
+				}
+			}
+		}
 	} else {
 		started, created, err = d.createAgentWorkspace(name, cwd, argv, env, *workspace)
 	}
@@ -679,13 +801,20 @@ func (d *Daemon) launch(name, cwd string, cfg agentcfg.Config, argv []string, se
 		d.debug.Printf("%s: report_metadata: %v", name, err)
 	}
 
-	return launched{
-		Agent: protocol.Agent{
-			PID: pid, PaneID: started.PaneID,
-			WorkspaceID: created.WorkspaceID, WorkspaceLabel: workspaceLabel(workspace),
-		},
-		sessionID: sessionID,
-	}, nil
+	placed := protocol.Agent{
+		PID: pid, PaneID: started.PaneID,
+		WorkspaceID: created.WorkspaceID, WorkspaceLabel: workspaceLabel(workspace),
+		TabID: created.TabID, TabLabel: workspaceTabLabel(workspace),
+		OwnsWorkspace: created.WorkspaceID != "",
+	}
+	if target != nil {
+		placed.WorkspaceID = target.WorkspaceID
+		placed.WorkspaceLabel = target.WorkspaceLabel
+		placed.TabID = target.TabID
+		placed.TabLabel = target.TabLabel
+		placed.OwnsWorkspace = false
+	}
+	return launched{Agent: placed, sessionID: sessionID}, nil
 }
 
 func workspaceLabel(workspace *agentcfg.Workspace) string {
@@ -693,6 +822,13 @@ func workspaceLabel(workspace *agentcfg.Workspace) string {
 		return ""
 	}
 	return workspace.Label
+}
+
+func workspaceTabLabel(workspace *agentcfg.Workspace) string {
+	if workspace == nil {
+		return ""
+	}
+	return workspace.Tab
 }
 
 // createAgentWorkspace performs all placement steps before the launch can be
@@ -766,14 +902,45 @@ func (d *Daemon) markStopped(name, reason string) (bool, error) {
 	if err := d.append(event{Event: evStopped, Name: name, Reason: reason}); err != nil {
 		return false, err
 	}
-	a.State = stateStopped
-	d.agents[name] = a
+	d.setStoppedLocked(name)
+	return true, nil
+}
+
+func (d *Daemon) setStoppedLocked(name string) {
+	a, ok := d.agents[name]
+	if ok {
+		a.State = stateStopped
+		d.agents[name] = a
+	}
 	delete(d.readyTokens, name)
 	if ch := d.readyWaiters[name]; ch != nil {
 		close(ch)
 	}
 	delete(d.readyWaiters, name)
-	return true, nil
+	d.inboxNotifyArmed[name] = false
+	delete(d.inboxNotifyTasks, name)
+	delete(d.stopping, name)
+	d.cancelAgentWaitersLocked(name)
+	if ok {
+		d.logStateSummary()
+	}
+}
+
+// cancelAgentWaitersLocked releases message waits owned by an agent whose
+// lifecycle no longer permits mailbox access. Caller holds d.mu.
+func (d *Daemon) cancelAgentWaitersLocked(name string) {
+	kept := d.waiters[:0]
+	for _, w := range d.waiters {
+		if w.as != name || w.done {
+			kept = append(kept, w)
+			continue
+		}
+		w.done = true
+		if w.cancel != nil {
+			close(w.cancel)
+		}
+	}
+	d.waiters = kept
 }
 
 func (d *Daemon) stop(req *protocol.Request) (protocol.Response, error) {
@@ -782,6 +949,10 @@ func (d *Daemon) stop(req *protocol.Request) (protocol.Response, error) {
 	}
 
 	d.mu.Lock()
+	if d.closing {
+		d.mu.Unlock()
+		return protocol.Response{}, errors.New("daemon is closing")
+	}
 	agent, ok := d.agents[req.Name]
 	if !ok {
 		d.mu.Unlock()
@@ -791,57 +962,84 @@ func (d *Daemon) stop(req *protocol.Request) (protocol.Response, error) {
 		d.mu.Unlock()
 		return protocol.Response{}, fmt.Errorf("agent %q was not spawned by fledge; stop it where it runs", req.Name)
 	}
+	if d.stopping == nil {
+		d.stopping = make(map[string]bool)
+	}
+	if d.stopping[req.Name] {
+		d.mu.Unlock()
+		return protocol.Response{}, fmt.Errorf("agent %q is already stopping", req.Name)
+	}
+	if agent.State == stateStopped || agent.State == stateOrphaned {
+		d.mu.Unlock()
+		return protocol.Response{Name: req.Name}, nil
+	}
+	d.stopping[req.Name] = true
+	wasArmed := d.inboxNotifyArmed[req.Name]
+	d.inboxNotifyArmed[req.Name] = false
+	delete(d.inboxNotifyTasks, req.Name)
+	flight := d.inboxNotifyFlights[req.Name]
+	if flight != nil {
+		flight.cancel()
+	}
+	d.cancelAgentWaitersLocked(req.Name)
 	launch := d.launches[req.Name]
 	d.mu.Unlock()
+	if flight != nil {
+		<-flight.done
+	}
 	if launch != nil {
 		<-launch.done
 		if launch.err != nil {
 			// The launch failure path already records the stopped attempt.
+			d.mu.Lock()
+			delete(d.stopping, req.Name)
+			d.mu.Unlock()
 			return protocol.Response{Name: req.Name}, nil
 		}
 		agent = launch.agent.Agent
 	}
 
-	var err error
-	if agent.WorkspaceID != "" {
-		err = herdrwire.WorkspaceClose(d.session.SocketPath, agent.WorkspaceID)
-	} else {
-		err = herdrwire.PaneClose(d.session.SocketPath, agent.PaneID)
+	if agent.OwnsWorkspace {
+		if err := d.stopWorkspaceOwner(req.Name, agent, "requested"); err != nil {
+			d.restoreFailedStop(req.Name, wasArmed)
+			return protocol.Response{}, err
+		}
+		d.debug.Printf("stopped %s", req.Name)
+		return protocol.Response{Name: req.Name}, nil
 	}
-	if err != nil {
+	if err := herdrwire.PaneClose(d.session.SocketPath, agent.PaneID); err != nil {
+		d.restoreFailedStop(req.Name, wasArmed)
 		return protocol.Response{}, err
 	}
 
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	if _, err := d.markStopped(req.Name, "requested"); err != nil {
+		d.mu.Unlock()
 		return protocol.Response{}, err
 	}
+	tabID := agent.TabID
 	d.debug.Printf("stopped %s", req.Name)
+	d.mu.Unlock()
+	if err := d.cleanupOwnedTab(tabID); err != nil {
+		return protocol.Response{}, err
+	}
 	return protocol.Response{Name: req.Name}, nil
 }
 
-// bridged reports whether messages to this agent go to a process fledge drives
-// rather than into the pending queue. The orchestrator is pane-hosted for
-// interactive use, but remains a user-driven mailbox consumer.
-func bridged(a protocol.Agent) bool {
-	return a.Name != agentcfg.ReservedOrchestrator && a.Integration != "" && a.State != stateStopped && a.State != stateOrphaned
-}
-
-// bridge hands a message straight to a spawned agent. Called without d.mu:
-// a Herdr call can block for seconds.
-func (d *Daemon) bridge(to protocol.Agent, msg protocol.Message) error {
-	return d.bridgePrompt(to, directMessagePrompt(msg))
-}
-
-func directMessagePrompt(msg protocol.Message) string {
-	prompt := fmt.Sprintf("Fledge direct message\nid: %s\nfrom: %s", msg.ID, msg.From)
-	if msg.ReplyTo != "" {
-		prompt += "\nreply_to: " + msg.ReplyTo
+func (d *Daemon) restoreFailedStop(name string, wasArmed bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	delete(d.stopping, name)
+	// A durable workspace closure is not a pre-teardown failure. Its panes may
+	// already be gone, so leave notification disabled and let the closing
+	// intent continue to reject messaging until completion or recovery.
+	if d.agentWorkspaceClosingLocked(name) {
+		return
 	}
-	return prompt + "\n\n" + msg.Body
-}
-
-func (d *Daemon) bridgePrompt(to protocol.Agent, body string) error {
-	return herdrwire.SendInput(d.session.SocketPath, to.PaneID, body, true)
+	if wasArmed && d.inboxWake != nil {
+		d.inboxNotifyArmed[name] = true
+		if len(d.pendingInboxWakesLocked(name)) > 0 {
+			d.queueInboxWakeLocked(name, 0, time.Time{})
+		}
+	}
 }

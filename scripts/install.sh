@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
-# Installs the binary built by build.sh onto PATH.
+# Builds a local dev binary (version suffixed "-dev" via the dev build tag)
+# and installs it onto PATH.
 # Destination defaults to GOBIN, else GOPATH/bin. Override with BINDIR=...
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-src="$repo/bin/fledge"
+src="$(mktemp)"
+trap 'rm -f "$src"' EXIT
 
-if [[ ! -x "$src" ]]; then
-	echo "no binary at $src - run scripts/build.sh first" >&2
-	exit 1
-fi
+(cd "$repo" && go build -tags dev -o "$src" ./cmd/fledge)
 
 bindir="${BINDIR:-$(go env GOBIN)}"
 if [[ -z "$bindir" ]]; then

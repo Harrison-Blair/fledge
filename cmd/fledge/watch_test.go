@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -207,49 +208,48 @@ func (r *wireRecorder) methodParamsAt(method string, occurrence int) (map[string
 	return nil, false
 }
 
-func TestInteractiveStartCreatesWatcherAfterNativeLaunchReadiness(t *testing.T) {
-	rec, root, _, out, err := interactiveStart(t, map[string]agentcfg.Config{
+func TestInteractiveStartReusesCLIPaneForWatcherAfterNativeLaunchReadiness(t *testing.T) {
+	rec, _, _, out, err := interactiveStart(t, map[string]agentcfg.Config{
 		"orchestrator-profile": {Integration: "claude", Model: "claude-opus-4"},
 	}, "1\n")
 	if err != nil {
 		t.Fatalf("interactive start: %v\n%s", err, out)
 	}
 
-	create, ok := rec.methodParamsAt("workspace.create", 1)
+	input, ok := rec.methodParamsAt("pane.send_input", 0)
 	if !ok {
-		t.Fatal("interactive start never created the watcher workspace")
+		t.Fatal("interactive start never started the watcher in the CLI pane")
 	}
-	if create["cwd"] != canonical(t, root) || create["label"] != watcherWorkspaceLabel || create["focus"] != false {
-		t.Fatalf("watcher workspace params = %+v", create)
+	text, _ := input["text"].(string)
+	if input["pane_id"] != "w1:p1" || !strings.HasPrefix(text, "exec ") ||
+		!strings.HasSuffix(text, " watch 'flock1'") || input["keys"] == nil {
+		t.Fatalf("watcher command params = %+v", input)
 	}
-	rename, ok := rec.methodParamsAt("tab.rename", 1)
-	if !ok || rename["tab_id"] != "w1:t1" || rename["label"] != watcherTabLabel {
-		t.Fatalf("watcher tab rename = %+v", rename)
+	focus, ok := rec.methodParamsAt("pane.focus", 1)
+	if !ok || focus["pane_id"] != "w1:p2" {
+		t.Fatalf("watcher final focus = %+v", focus)
 	}
 
 	methods := rec.methods()
-	watcherAt := -1
-	seenWorkspaces := 0
+	agentAt, watcherAt := -1, -1
 	for i, method := range methods {
-		if method == "workspace.create" {
-			seenWorkspaces++
-			if seenWorkspaces == 2 {
-				watcherAt = i
-			}
+		if method == "agent.start" {
+			agentAt = i
 		}
-	}
-	if watcherAt < 0 {
-		t.Fatalf("startup methods = %v; watcher workspace is missing", methods)
-	}
-	for _, method := range methods[:watcherAt] {
 		if method == "pane.send_input" {
-			t.Fatalf("startup methods = %v; lifecycle input preceded watcher setup", methods)
+			watcherAt = i
 		}
+	}
+	if agentAt < 0 || watcherAt < agentAt {
+		t.Fatalf("startup methods = %v; watcher started before native launch", methods)
 	}
 	if strings.Count(strings.Join(methods, ","), "agent.start") != 1 {
 		t.Fatalf("startup methods = %v; watcher must not invoke agent.start", methods)
 	}
-	for _, forbidden := range []string{"pane.split", "pane.close"} {
+	if strings.Count(strings.Join(methods, ","), "workspace.create") != 1 {
+		t.Fatalf("startup methods = %v; watcher created another workspace", methods)
+	}
+	for _, forbidden := range []string{"pane.split", "pane.close", "workspace.close"} {
 		if slices.Contains(methods, forbidden) {
 			t.Fatalf("startup methods = %v; watcher must not invoke %s", methods, forbidden)
 		}
@@ -322,96 +322,65 @@ func (r *layoutRecorder) snapshot() []layoutCall {
 	return append([]layoutCall(nil), r.calls...)
 }
 
-const watcherWorkspaceReply = `{"id":"1","result":{"workspace":{"workspace_id":"w9","active_tab_id":"w9:t1"},"tab":{"tab_id":"w9:t1"},"root_pane":{"pane_id":"w9:p1"}}}`
 const layoutFailureReply = `{"id":"1","error":{"code":"failed","message":"can't do that"}}`
 
-func TestInstallWatcherWorkspaceUsesNormalRootShell(t *testing.T) {
-	sock, rec := startLayoutServer(t, map[string][]string{"workspace.create": {watcherWorkspaceReply}})
-	if err := installWatcherWorkspace(sock, "/work/root", "flock7", "/opt/fledge's bin/fledge", "w1:p1", "w1:p2"); err != nil {
+func TestInstallWatcherPaneReusesExistingShell(t *testing.T) {
+	sock, rec := startLayoutServer(t, nil)
+	if err := installWatcherPane(sock, "flock7", "/opt/fledge's bin/fledge", "w1:p1", "w1:p2"); err != nil {
 		t.Fatal(err)
 	}
 	calls := rec.snapshot()
-	if len(calls) != 4 {
+	if len(calls) != 2 {
 		t.Fatalf("layout calls = %+v", calls)
 	}
-	if calls[0].method != "workspace.create" || calls[1].method != "tab.rename" ||
-		calls[2].method != "pane.send_input" || calls[3].method != "pane.focus" ||
-		calls[3].params["pane_id"] != "w1:p2" {
+	if calls[0].method != "pane.send_input" || calls[1].method != "pane.focus" ||
+		calls[1].params["pane_id"] != "w1:p2" {
 		t.Fatalf("layout ordering = %+v", calls)
 	}
-	create := calls[0].params
-	if create["cwd"] != "/work/root" || create["label"] != watcherWorkspaceLabel || create["focus"] != false {
-		t.Fatalf("workspace create params = %+v", create)
-	}
-	if rename := calls[1].params; rename["tab_id"] != "w9:t1" || rename["label"] != watcherTabLabel {
-		t.Fatalf("tab rename params = %+v", rename)
-	}
-	input := calls[2].params
-	if input["pane_id"] != "w9:p1" || input["text"] != `exec '/opt/fledge'"'"'s bin/fledge' watch 'flock7'` || input["keys"] == nil {
+	input := calls[0].params
+	if input["pane_id"] != "w1:p1" || input["text"] != `exec '/opt/fledge'"'"'s bin/fledge' watch 'flock7'` || input["keys"] == nil {
 		t.Fatalf("watcher command params = %+v", input)
 	}
 	for _, call := range calls {
 		switch call.method {
-		case "agent.start", "pane.split", "pane.close":
+		case "agent.start", "pane.split", "pane.close", "workspace.create", "workspace.close", "tab.rename":
 			t.Fatalf("watcher setup invoked %s: %+v", call.method, calls)
 		}
 	}
 }
 
-func TestInstallWatcherWorkspaceFailuresAreTransactional(t *testing.T) {
+func TestInstallWatcherPaneFailuresKeepPrimaryLayout(t *testing.T) {
 	tests := []struct {
-		name       string
-		replies    map[string][]string
-		wantClosed bool
+		name        string
+		replies     map[string][]string
+		wantWarning bool
 	}{
-		{"workspace create", map[string][]string{"workspace.create": {layoutFailureReply}}, false},
-		{"tab rename", map[string][]string{"workspace.create": {watcherWorkspaceReply}, "tab.rename": {layoutFailureReply}}, true},
-		{"command delivery", map[string][]string{"workspace.create": {watcherWorkspaceReply}, "pane.send_input": {layoutFailureReply, `{"id":"1","result":{}}`}}, true},
-		{"final focus", map[string][]string{"workspace.create": {watcherWorkspaceReply}, "pane.focus": {layoutFailureReply, `{"id":"1","result":{}}`}}, true},
-		{"rollback close", map[string][]string{"workspace.create": {watcherWorkspaceReply}, "tab.rename": {layoutFailureReply}, "workspace.close": {layoutFailureReply}}, true},
+		{"command delivery", map[string][]string{"pane.send_input": {layoutFailureReply, `{"id":"1","result":{}}`}}, true},
+		{"final focus", map[string][]string{"pane.focus": {layoutFailureReply}}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sock, rec := startLayoutServer(t, tt.replies)
-			if err := installWatcherWorkspace(sock, "/work", "flock1", "/bin/fledge", "w1:p1", "w1:p2"); err == nil {
+			if err := installWatcherPane(sock, "flock1", "/bin/fledge", "w1:p1", "w1:p2"); err == nil {
 				t.Fatal("layout failure returned nil")
 			}
 			calls := rec.snapshot()
-			var closed []map[string]any
 			var warning map[string]any
 			for _, call := range calls {
-				if call.method == "workspace.close" {
-					closed = append(closed, call.params)
-				}
-				if call.method == "pane.send_input" && call.params["pane_id"] == "w1:p1" {
+				if call.method == "pane.send_input" && call.params["pane_id"] == "w1:p1" &&
+					strings.Contains(fmt.Sprint(call.params["text"]), "automatic log watcher unavailable") {
 					warning = call.params
 				}
-				if call.method == "pane.close" || call.method == "agent.start" || call.method == "pane.split" {
+				switch call.method {
+				case "pane.close", "agent.start", "pane.split", "workspace.create", "workspace.close", "tab.rename":
 					t.Fatalf("failure touched the main layout with %s: %+v", call.method, calls)
 				}
 			}
-			if !tt.wantClosed {
-				if len(closed) != 0 {
-					t.Fatalf("closed workspaces = %v, want none", closed)
-				}
-			} else if len(closed) != 1 || closed[0]["workspace_id"] != "w9" {
-				t.Fatalf("closed workspaces = %v, want only w9", closed)
-			}
-			if warning == nil || warning["pane_id"] != "w1:p1" || warning["keys"] == nil {
+			if tt.wantWarning && (warning == nil || warning["keys"] == nil) {
 				t.Fatalf("manual warning = %+v", warning)
 			}
-			text, _ := warning["text"].(string)
-			if !strings.Contains(text, "fledge watch flock1 manually") || !strings.Contains(text, `'"'"'`) {
-				t.Fatalf("warning is not safely quoted: %q", text)
-			}
-			focuses := 0
-			for _, call := range calls {
-				if call.method == "pane.focus" && call.params["pane_id"] == "w1:p2" {
-					focuses++
-				}
-			}
-			if focuses == 0 {
-				t.Fatalf("failure never attempted to restore orchestrator focus: %+v", calls)
+			if !tt.wantWarning && warning != nil {
+				t.Fatalf("unexpected warning after watcher started: %+v", warning)
 			}
 		})
 	}

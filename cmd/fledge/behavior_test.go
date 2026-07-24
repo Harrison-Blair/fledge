@@ -135,7 +135,7 @@ func TestFlockStatusShowsDownAndRunningDetails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"flock:  alpha", "daemon: up", "socket:", "herdr:  none", "no agents registered"} {
+	for _, want := range []string{"flock:  alpha", "daemon: up", "socket:", "pid:", "version:", "herdr:  none", "no agents registered"} {
 		if !strings.Contains(up, want) {
 			t.Errorf("running status missing %q:\n%s", want, up)
 		}

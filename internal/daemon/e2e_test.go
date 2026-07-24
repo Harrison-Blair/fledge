@@ -168,6 +168,11 @@ func TestSendToUnknownAgentFails(t *testing.T) {
 	if _, err := client.Do(root, testFlock, protocol.Request{Op: protocol.OpSend, From: a, To: "nobody-emperor", Body: "hi"}); err == nil {
 		t.Fatal("send to unregistered name succeeded")
 	}
+	if _, err := client.Do(root, testFlock, protocol.Request{
+		Op: protocol.OpSend, From: "nobody-emperor", To: a, Body: "forged",
+	}); err == nil {
+		t.Fatal("send from unregistered name succeeded")
+	}
 }
 
 func TestSendThenWaitDelivers(t *testing.T) {
@@ -240,12 +245,13 @@ func TestWaitBlocksUntilSend(t *testing.T) {
 	}
 }
 
-func TestWaitReplyToOnlyTakesCorrelatedReply(t *testing.T) {
+func TestWaitReplyToAndSenderRequireExactCorrelation(t *testing.T) {
 	root := workspace(t)
 	defer start(t, root, testFlock)()
 
 	a := register(t, root, testFlock, "engineer")
 	b := register(t, root, testFlock, "reviewer")
+	c := register(t, root, testFlock, "intruder")
 
 	ask, err := client.Do(root, testFlock, protocol.Request{Op: protocol.OpSend, From: a, To: b, Body: "question"})
 	if err != nil {
@@ -258,7 +264,9 @@ func TestWaitReplyToOnlyTakesCorrelatedReply(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		resp, err := client.Do(root, testFlock, protocol.Request{Op: protocol.OpWait, As: a, ReplyTo: ask.ID, TimeoutMS: 5000})
+		resp, err := client.Do(root, testFlock, protocol.Request{
+			Op: protocol.OpWait, As: a, From: b, ReplyTo: ask.ID, TimeoutMS: 5000,
+		})
 		done <- result{resp, err}
 	}()
 
@@ -269,6 +277,18 @@ func TestWaitReplyToOnlyTakesCorrelatedReply(t *testing.T) {
 	select {
 	case r := <-done:
 		t.Fatalf("reply wait took an uncorrelated message: %+v %v", r.resp.Message, r.err)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	// Matching reply_to is insufficient when the sender is wrong.
+	if _, err := client.Do(root, testFlock, protocol.Request{
+		Op: protocol.OpSend, From: c, To: a, Body: "spoof", ReplyTo: ask.ID,
+	}); err != nil {
+		t.Fatalf("send wrong-sender reply: %v", err)
+	}
+	select {
+	case r := <-done:
+		t.Fatalf("reply wait took a wrong-sender reply: %+v %v", r.resp.Message, r.err)
 	case <-time.After(150 * time.Millisecond):
 	}
 
@@ -294,6 +314,13 @@ func TestWaitReplyToOnlyTakesCorrelatedReply(t *testing.T) {
 	}
 	if rest.Message == nil || rest.Message.Body != "unrelated" {
 		t.Fatalf("skipped message = %+v, want it still pending", rest.Message)
+	}
+	rest, err = client.Do(root, testFlock, protocol.Request{Op: protocol.OpWait, As: a, TimeoutMS: 1000})
+	if err != nil {
+		t.Fatalf("wait for the wrong-sender message: %v", err)
+	}
+	if rest.Message == nil || rest.Message.Body != "spoof" || rest.Message.From != c {
+		t.Fatalf("wrong-sender message = %+v, want it still pending", rest.Message)
 	}
 }
 

@@ -112,7 +112,7 @@ func TestCommandArgv(t *testing.T) {
 		{
 			desc: "claude bare",
 			cfg:  Config{Integration: "claude"},
-			want: []string{"claude", "--session-id", "sid"},
+			want: []string{"claude", "--session-id", "sid", "--permission-mode", "bypassPermissions"},
 		},
 		{
 			desc: "claude full",
@@ -127,7 +127,7 @@ func TestCommandArgv(t *testing.T) {
 		{
 			desc: "pi bare",
 			cfg:  Config{Integration: "pi"},
-			want: []string{"pi"},
+			want: []string{"pi", "--session-id", "sid"},
 		},
 		{
 			desc: "pi full ignores session id",
@@ -137,7 +137,7 @@ func TestCommandArgv(t *testing.T) {
 				Model:       "o3",
 				Argv:        []string{"--trace"},
 			},
-			want: []string{"pi", "--provider", "openai", "--model", "o3", "--trace"},
+			want: []string{"pi", "--session-id", "sid", "--provider", "openai", "--model", "o3", "--trace"},
 		},
 		{
 			desc: "codex bare ignores session id",
@@ -179,12 +179,12 @@ func TestLaunchArgvAppendsNativeInstructionsAfterProfileOptions(t *testing.T) {
 		{
 			name: "claude",
 			cfg:  Config{Integration: "claude", Argv: []string{"--append-system-prompt", "profile loses"}},
-			want: []string{"claude", "--session-id", "sid", "--append-system-prompt", "profile loses", "--append-system-prompt", instructions, bootstrap},
+			want: []string{"claude", "--session-id", "sid", "--permission-mode", "bypassPermissions", "--append-system-prompt", "profile loses", "--append-system-prompt", instructions, bootstrap},
 		},
 		{
 			name: "pi",
 			cfg:  Config{Integration: "pi", Argv: []string{"--append-system-prompt", "profile loses"}},
-			want: []string{"pi", "--append-system-prompt", "profile loses", "--append-system-prompt", instructions, bootstrap},
+			want: []string{"pi", "--session-id", "sid", "--append-system-prompt", "profile loses", "--append-system-prompt", instructions, bootstrap},
 		},
 		{
 			name: "codex",
@@ -205,6 +205,26 @@ func TestValidateRejectsArgvDelimiter(t *testing.T) {
 	cfg := Config{Integration: "claude", Argv: []string{"--verbose", "--"}}
 	if err := cfg.ValidateProfile("worker"); err == nil || !strings.Contains(err.Error(), "option-only") {
 		t.Fatalf("ValidateProfile error = %v", err)
+	}
+}
+
+func TestValidateRejectsProfileFlagsThatReplaceInteractiveSessionControl(t *testing.T) {
+	tests := []Config{
+		{Integration: "claude", Argv: []string{"--resume", "session-1"}},
+		{Integration: "claude", Argv: []string{"--print"}},
+		{Integration: "pi", Argv: []string{"--session=session-1"}},
+		{Integration: "pi", Argv: []string{"--mode", "rpc"}},
+		{Integration: "codex", Argv: []string{"exec", "resume", "thread-1"}},
+		{Integration: "codex", Argv: []string{"--config", `developer_instructions="override"`}},
+	}
+	for _, cfg := range tests {
+		name := cfg.Integration + "-" + strings.ReplaceAll(cfg.Argv[0], "-", "")
+		t.Run(name, func(t *testing.T) {
+			err := cfg.ValidateProfile("worker")
+			if err == nil || !strings.Contains(err.Error(), "owns session and instruction control") {
+				t.Fatalf("error = %v", err)
+			}
+		})
 	}
 }
 

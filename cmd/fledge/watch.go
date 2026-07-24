@@ -16,11 +16,6 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/protocol"
 )
 
-const (
-	watcherWorkspaceLabel = "fledge-watch"
-	watcherTabLabel       = "watch"
-)
-
 var watchPollInterval = 100 * time.Millisecond
 var runLogWatcher = watchDaemonLog
 
@@ -97,42 +92,20 @@ func watchDaemonLog(ctx context.Context, root, name string, out io.Writer) error
 	}
 }
 
-// installWatcherWorkspace creates a separate, unfocused workspace containing
-// only a normal shell that execs the log watcher. The primary workspace is
-// never reshaped. Any later failure closes only the workspace created here,
-// leaves the healthy flock and CLI intact, and prints a manual recovery hint.
-func installWatcherWorkspace(socket, root, name, executable, shellPane, orchestratorPane string) error {
-	created := herdrwire.CreatedWorkspace{}
-	rollback := func(cause error) error {
-		if created.WorkspaceID != "" {
-			if err := herdrwire.WorkspaceClose(socket, created.WorkspaceID); err != nil {
-				cause = fmt.Errorf("%w (closing watcher workspace %s also failed: %v)", cause, created.WorkspaceID, err)
-			}
-		}
+// installWatcherPane replaces the existing CLI shell beside the orchestrator
+// with the log watcher. It creates no workspace, tab, split, or agent. A
+// command-delivery failure leaves the CLI available and prints a manual
+// recovery hint there.
+func installWatcherPane(socket, name, executable, shellPane, orchestratorPane string) error {
+	command := "exec " + shellQuote(executable) + " watch " + shellQuote(name)
+	if err := herdrwire.SendInput(socket, shellPane, command, true); err != nil {
+		cause := fmt.Errorf("start watcher command: %w", err)
 		warnWatcherFailure(socket, shellPane, name, cause)
-		// A failed final focus may be transient, and closing a workspace can move
-		// focus. Make one best-effort attempt to restore the orchestrator.
 		_ = herdrwire.PaneFocus(socket, orchestratorPane)
 		return cause
 	}
-
-	var err error
-	created, err = herdrwire.WorkspaceCreate(socket, root, watcherWorkspaceLabel, false)
-	if err != nil {
-		return rollback(fmt.Errorf("create watcher workspace: %w", err))
-	}
-	if created.WorkspaceID == "" || created.TabID == "" || created.RootPaneID == "" {
-		return rollback(fmt.Errorf("create watcher workspace: Herdr returned incomplete workspace IDs"))
-	}
-	if err := herdrwire.TabRename(socket, created.TabID, watcherTabLabel); err != nil {
-		return rollback(fmt.Errorf("label watcher tab: %w", err))
-	}
-	command := "exec " + shellQuote(executable) + " watch " + shellQuote(name)
-	if err := herdrwire.SendInput(socket, created.RootPaneID, command, true); err != nil {
-		return rollback(fmt.Errorf("start watcher command: %w", err))
-	}
 	if err := herdrwire.PaneFocus(socket, orchestratorPane); err != nil {
-		return rollback(fmt.Errorf("refocus orchestrator after watcher: %w", err))
+		return fmt.Errorf("refocus orchestrator after watcher: %w", err)
 	}
 	return nil
 }
