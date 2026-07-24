@@ -58,19 +58,24 @@ the terminal, Fledge starts the `fledge-orchestrator`, immediately places and
 focuses its pane left of the shell. Its assigned identity and authoritative
 Markdown role are installed through the integration's native instruction
 option, and the readiness bootstrap is the CLI's initial positional prompt.
-Once authenticated startup finishes, Fledge replaces the existing CLI shell
-beside the orchestrator with `fledge watch <flock>`, leaving:
+Once authenticated startup finishes, Fledge splits the right-hand CLI pane
+evenly downward, runs `fledge watch <flock>` in the original upper pane, and
+leaves the new lower pane as an interactive project-root shell:
 
 ```text
 Workspace: fledge-orchestrator
 orchestrator | fledge watch
+             | project shell
 ```
 
-Focus remains on the orchestrator. The watcher is a normal shell process, not
-a Herdr or Fledge agent. If watcher setup fails, the healthy flock and CLI
-remain, and the CLI shows the manual watch command. The workspace is labelled
-`fledge-orchestrator` and its tab `orchestrator` (both on scripted starts too —
-they are session metadata).
+The two columns are equal width, the two right panes are equal height, and
+focus remains on the orchestrator. The watcher is a normal shell process, not
+a Herdr or Fledge agent. If the split fails, the original right-hand shell
+remains. If starting the watcher fails, Fledge closes the added lower pane when
+possible to restore the two-pane layout. Either way the healthy flock remains,
+the CLI shows the manual watch command, and Fledge attempts to refocus the
+orchestrator. The workspace is labelled `fledge-orchestrator` and its tab
+`orchestrator` (both on scripted starts too — they are session metadata).
 The shipped `fledge-orchestrator` definition is profile-agnostic, so an
 interactive start offers Claude Code and Codex profiles directly, plus one
 `Browse Pi profiles…` entry that opens a provider-grouped Pi submenu. Managed

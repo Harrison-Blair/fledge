@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -92,20 +93,34 @@ func watchDaemonLog(ctx context.Context, root, name string, out io.Writer) error
 	}
 }
 
-// installWatcherPane replaces the existing CLI shell beside the orchestrator
-// with the log watcher. It creates no workspace, tab, split, or agent. A
-// command-delivery failure leaves the CLI available and prints a manual
-// recovery hint there.
-func installWatcherPane(socket, name, executable, shellPane, orchestratorPane string) error {
+// installWatcherPane splits the existing right-hand CLI pane into equal upper
+// and lower shells, then replaces the original upper shell with the log
+// watcher. The new lower shell remains interactive at the project root.
+// Watcher setup is non-critical: failures retain or restore the prior
+// orchestrator-and-shell layout when possible and print a recovery hint.
+func installWatcherPane(socket, root, name, executable, shellPane, orchestratorPane string) (resultErr error) {
+	defer func() {
+		if err := herdrwire.PaneFocus(socket, orchestratorPane); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("refocus orchestrator after watcher setup: %w", err))
+		}
+	}()
+
+	lowerPane, err := herdrwire.PaneSplit(socket, shellPane, "down", 0.5, root)
+	if err != nil {
+		cause := fmt.Errorf("split watcher shell: %w", err)
+		warnWatcherFailure(socket, shellPane, name, cause)
+		return cause
+	}
+
 	command := "exec " + shellQuote(executable) + " watch " + shellQuote(name)
 	if err := herdrwire.SendInput(socket, shellPane, command, true); err != nil {
 		cause := fmt.Errorf("start watcher command: %w", err)
+		var cleanupErr error
+		if err := herdrwire.PaneClose(socket, lowerPane); err != nil {
+			cleanupErr = fmt.Errorf("close added shell after watcher failure: %w", err)
+		}
 		warnWatcherFailure(socket, shellPane, name, cause)
-		_ = herdrwire.PaneFocus(socket, orchestratorPane)
-		return cause
-	}
-	if err := herdrwire.PaneFocus(socket, orchestratorPane); err != nil {
-		return fmt.Errorf("refocus orchestrator after watcher: %w", err)
+		return errors.Join(cause, cleanupErr)
 	}
 	return nil
 }

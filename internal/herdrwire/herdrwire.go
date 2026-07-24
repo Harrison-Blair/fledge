@@ -355,6 +355,33 @@ func PaneCurrent(socket string) (paneID string, err error) {
 	return result.Pane.PaneID, nil
 }
 
+// PaneSplit divides targetPaneID in direction at ratio and starts an unfocused
+// shell rooted at cwd in the new pane. It returns the new pane's id.
+func PaneSplit(socket, targetPaneID, direction string, ratio float64, cwd string) (paneID string, err error) {
+	params := struct {
+		TargetPaneID string  `json:"target_pane_id"`
+		Direction    string  `json:"direction"`
+		Ratio        float64 `json:"ratio"`
+		Cwd          string  `json:"cwd"`
+		Focus        bool    `json:"focus"`
+	}{
+		TargetPaneID: targetPaneID,
+		Direction:    direction,
+		Ratio:        ratio,
+		Cwd:          cwd,
+		Focus:        false,
+	}
+	var result struct {
+		Pane struct {
+			PaneID string `json:"pane_id"`
+		} `json:"pane"`
+	}
+	if err := Call(socket, "pane.split", params, &result); err != nil {
+		return "", err
+	}
+	return result.Pane.PaneID, nil
+}
+
 // PaneSwap exchanges the positions of two panes. Verified on 0.7.4: the panes
 // trade slots and focus stays with the *slot*, so a caller that wants a
 // specific pane focused afterwards must say so with PaneFocus.

@@ -510,6 +510,39 @@ func TestPaneCurrent(t *testing.T) {
 	}
 }
 
+func TestPaneSplitParamsAndResult(t *testing.T) {
+	f := serve(t, map[string]string{
+		"pane.split": `{"id":"1","result":{"type":"pane_info","pane":{"pane_id":"w1:p3"}}}`,
+	})
+
+	got, err := PaneSplit(f.socket, "w1:p1", "down", 0.5, "/work/project")
+	if err != nil {
+		t.Fatalf("PaneSplit: %v", err)
+	}
+	if got != "w1:p3" {
+		t.Errorf("PaneSplit = %q, want w1:p3", got)
+	}
+	p := f.params(0)
+	if p["target_pane_id"] != "w1:p1" {
+		t.Errorf("target_pane_id = %v, want w1:p1", p["target_pane_id"])
+	}
+	if p["direction"] != "down" {
+		t.Errorf("direction = %v, want down", p["direction"])
+	}
+	if p["ratio"] != 0.5 {
+		t.Errorf("ratio = %v, want 0.5", p["ratio"])
+	}
+	if p["cwd"] != "/work/project" {
+		t.Errorf("cwd = %v, want /work/project", p["cwd"])
+	}
+	if p["focus"] != false {
+		t.Errorf("focus = %v, want false", p["focus"])
+	}
+	if got := string(f.request(0)["method"]); got != `"pane.split"` {
+		t.Errorf("method = %s, want pane.split", got)
+	}
+}
+
 func TestPaneSwapParams(t *testing.T) {
 	f := serve(t, nil)
 

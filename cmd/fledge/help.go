@@ -73,10 +73,11 @@ a fresh start offers a profile for the managed, profile-agnostic
 fledge-orchestrator definition, opens the UI, then visibly launches the
 orchestrator with its identity and Markdown role in the integration's native
 instruction channel and readiness as the CLI's initial prompt.
-after that succeeds, the existing CLI shell beside the orchestrator is replaced
-with fledge watch, leaving an orchestrator | watcher split in the same tab.
-the watcher is not registered as a herdr or fledge agent. watcher setup failure
-keeps the healthy flock and CLI pane and prints a manual-watch hint there.
+after that succeeds, the right-hand CLI pane is split evenly downward:
+fledge watch runs above an interactive project-root shell, with equal-width
+columns and focus returned to the orchestrator. the watcher is not registered
+as a herdr or fledge agent. watcher setup failure keeps the healthy flock,
+restores the prior layout when possible, and prints a manual-watch hint.
 if no orchestrator can be started, the start is rolled back.
 a start whose stdout is not a terminal stops after the daemon: no orchestrator,
 no picker, no attach.

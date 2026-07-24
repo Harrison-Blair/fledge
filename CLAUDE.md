@@ -141,15 +141,18 @@ only).
   Immediately after `agent.start`, interactive start swaps and focuses the managed
   orchestrator into its final left position before registration or readiness.
 - After readiness completes, interactive fresh starts keep
-  the primary `fledge-orchestrator` workspace as `orchestrator | CLI`, then
-  create an unfocused `fledge-watch` workspace rooted at the project. Its
-  initial tab is labelled `watch`, and its normal root shell execs the current
-  executable as `fledge watch <flock>`; it is not a Herdr or Fledge agent.
-  Focus returns to the orchestrator. Setup is transactional: failure closes
-  only the created watcher workspace when possible and keeps the healthy flock,
-  primary workspace, and CLI. Reattach and scripted starts do not create
-  watchers. Launch, spawn-journal, or readiness failure tears the transport
-  down; replay invalidates incomplete `agent.launching` attempts as orphaned.
+  one primary `fledge-orchestrator` workspace. The existing right-hand CLI pane
+  is split down at 50%, rooted at the project, without taking focus. Its
+  original upper pane execs the current executable as
+  `fledge watch <flock>`; the new lower pane remains an interactive shell. The
+  left and right columns are equal width, and the watcher is not a Herdr or
+  Fledge agent. Focus returns to the orchestrator. Setup is non-critical: split
+  failure preserves `orchestrator | shell`; watcher-command failure closes the
+  added lower pane when possible to restore that layout; both paths print a
+  manual-watch hint and keep the healthy flock. Reattach and scripted starts do
+  not create watchers. Launch, spawn-journal, or readiness failure tears the
+  transport down; replay invalidates incomplete `agent.launching` attempts as
+  orphaned.
 - **Sandboxed daemon access**: clients try the runtime-directory Unix socket
   first, then the daemon's ephemeral workspace-local `.rpc/` request/response
   bridge. The fallback dispatches the full protocol, so orchestrators can

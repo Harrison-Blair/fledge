@@ -616,6 +616,8 @@ const startedPaneReply = `{"id":"1","result":{"type":"agent_started","agent":{"t
 
 const currentPaneReply = `{"id":"1","result":{"type":"pane_current","pane":{"pane_id":"w1:p1","focused":true}}}`
 
+const splitPaneReply = `{"id":"1","result":{"type":"pane_info","pane":{"pane_id":"w1:p3"}}}`
+
 const idleAgentReply = `{"id":"1","result":{"type":"agent","agent":{"pane_id":"w1:p2","agent_status":"idle"}}}`
 
 // interactiveStart wires a fake session whose catalog is configs, runs an
@@ -642,6 +644,7 @@ func interactiveStartReplies(t *testing.T, configs map[string]agentcfg.Config, s
 		"agent.start":      startedPaneReply,
 		"agent.get":        idleAgentReply,
 		"pane.current":     currentPaneReply,
+		"pane.split":       splitPaneReply,
 		"workspace.create": createdWorkspaceReply,
 	}
 	for method, reply := range extraReplies {

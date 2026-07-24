@@ -750,12 +750,13 @@ func runStart(args []string) error {
 			if executableErr != nil {
 				warnWatcherFailure(s.SocketPath, shellPane, name,
 					fmt.Errorf("locate fledge executable: %w", executableErr))
+				_ = herdrwire.PaneFocus(s.SocketPath, resp.PaneID)
 				return
 			}
 			// Monitoring is intentionally non-critical. The orchestrator is
 			// already authenticated and healthy, so layout failure preserves
 			// the flock and leaves a manual recovery hint in the CLI pane.
-			_ = installWatcherPane(s.SocketPath, name, self, shellPane, resp.PaneID)
+			_ = installWatcherPane(s.SocketPath, root, name, self, shellPane, resp.PaneID)
 		})
 	})
 	return awaitSpawn(root, name, attachErr, spawned, abortStart)
