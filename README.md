@@ -1,5 +1,7 @@
 # fledge
 
+[![release](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Harrison-Blair/fledge/badges/release.json)](https://github.com/Harrison-Blair/fledge/releases)
+
 A zero-inference orchestrator for multi-agent coding sessions.
 
 fledge brings up isolated orchestration sessions ("flocks"), launches coding
