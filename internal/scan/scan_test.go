@@ -2,87 +2,108 @@ package scan
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/Harrison-Blair/fledge/internal/ignore"
 )
 
-func initRepo(t *testing.T) string {
+// tree writes each path relative to a fresh temp dir, creating parents.
+func tree(t *testing.T, paths ...string) string {
 	t.Helper()
 	root := t.TempDir()
-	if out, err := exec.Command("git", "init", "-q", root).CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v: %s", err, out)
+	for _, p := range paths {
+		full := filepath.Join(root, filepath.FromSlash(p))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return root
 }
 
-func write(t *testing.T, root, rel, content string) {
+// files runs a scan and returns just the paths, for tests about what is listed
+// rather than what is reported about each entry.
+func files(t *testing.T, root, patterns string) []string {
 	t.Helper()
-	path := filepath.Join(root, rel)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestRun(t *testing.T) {
-	root := initRepo(t)
-	write(t, root, "README.md", "hello")       // 5 bytes, <root>
-	write(t, root, "dir1/a.txt", "aaaa")       // 4 bytes
-	write(t, root, "dir1/b.txt", "bb")         // 2 bytes
-	write(t, root, "dir2/c.txt", "c")          // 1 byte
-	write(t, root, "dir3/skip.log", "ignored") // filtered by .fledgeignore
-	write(t, root, ".fledgeignore", "*.log\n.fledge/\n.fledgeignore\n")
-
-	res, err := Run(root)
+	m, err := ignore.Parse(strings.NewReader(patterns), root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.ShortCommit != "none" {
-		t.Errorf("no commits yet: ShortCommit = %q, want none", res.ShortCommit)
-	}
-	names := make([]string, len(res.Modules))
-	for i, m := range res.Modules {
-		names[i] = m.Name
-	}
-	want := []string{"<root>", "dir1", "dir2"}
-	if len(names) != 3 || names[0] != want[0] || names[1] != want[1] || names[2] != want[2] {
-		t.Fatalf("modules = %v, want %v", names, want)
-	}
-	dir1 := res.Modules[1]
-	if dir1.Count != 2 || dir1.Bytes != 6 {
-		t.Errorf("dir1 = %+v, want count 2, bytes 6", dir1)
-	}
-	if len(dir1.Files) != 2 || dir1.Files[0] != "dir1/a.txt" || dir1.Files[1] != "dir1/b.txt" {
-		t.Errorf("dir1 files = %v", dir1.Files)
-	}
-	rootMod := res.Modules[0]
-	if rootMod.Count != 1 || rootMod.Files[0] != "README.md" || rootMod.Bytes != 5 {
-		t.Errorf("<root> = %+v", rootMod)
-	}
-}
-
-func TestRunNoScanIgnore(t *testing.T) {
-	root := initRepo(t)
-	write(t, root, "a.md", "x")
-	res, err := Run(root)
+	got, err := Files(root, m)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Modules) != 1 || res.Modules[0].Count != 1 {
-		t.Errorf("modules = %+v", res.Modules)
+
+	paths := make([]string, len(got))
+	for i, f := range got {
+		paths[i] = f.Path
+	}
+	return paths
+}
+
+func TestFilesNoPatterns(t *testing.T) {
+	root := tree(t, "go.mod", "cmd/fledge/main.go", "internal/scan/scan.go")
+
+	want := []string{"cmd/fledge/main.go", "go.mod", "internal/scan/scan.go"}
+	if got := files(t, root, ""); !reflect.DeepEqual(got, want) {
+		t.Errorf("Files() = %v, want %v", got, want)
 	}
 }
 
-func TestRunEmptyRepo(t *testing.T) {
-	root := initRepo(t)
-	res, err := Run(root)
+func TestFilesReportsSize(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "empty.txt"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := ignore.Parse(strings.NewReader(""), root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Modules) != 0 {
-		t.Errorf("want no modules, got %+v", res.Modules)
+	got, err := Files(root, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []File{{Path: "a.txt", Size: 5}, {Path: "empty.txt", Size: 0}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Files() = %v, want %v", got, want)
+	}
+}
+
+func TestFilesPrunesIgnoredDir(t *testing.T) {
+	root := tree(t, "go.mod", ".fledge/.fledgeignore", ".git/config", ".git/objects/ab/cd")
+
+	want := []string{"go.mod"}
+	if got := files(t, root, ".fledge/\n.git/\n"); !reflect.DeepEqual(got, want) {
+		t.Errorf("Files() = %v, want %v", got, want)
+	}
+}
+
+func TestFilesIgnoresSingleFile(t *testing.T) {
+	root := tree(t, "a.log", "keep.log", "main.go")
+
+	want := []string{"keep.log", "main.go"}
+	if got := files(t, root, "*.log\n!keep.log\n"); !reflect.DeepEqual(got, want) {
+		t.Errorf("Files() = %v, want %v", got, want)
+	}
+}
+
+// Git cannot re-include a file whose parent directory is excluded; pruning the
+// directory is what makes fledge match that behavior.
+func TestFilesCannotReincludeUnderPrunedDir(t *testing.T) {
+	root := tree(t, "build/keep.go", "main.go")
+
+	want := []string{"main.go"}
+	if got := files(t, root, "build/\n!build/keep.go\n"); !reflect.DeepEqual(got, want) {
+		t.Errorf("Files() = %v, want %v", got, want)
 	}
 }

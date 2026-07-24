@@ -2,154 +2,209 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## What this repo is
+## Commands
 
-fledge is a Go CLI (`cmd/fledge`) that brings spec-driven development to
-agent-assisted repos. It keeps feature intent (**plumages**, `.fledge/pluma/plumage/PLM-###`)
-and implementable tasks (**feathers**, `.fledge/pluma/feathers/FTHR-###`) as validated
-markdown specs on disk, and scaffolds one agent-neutral orchestration workflow
-into any harness (Claude Code, pi, Codex) so every agent drives the same
-process.
-
-**This repository is itself fledge-managed** — it dogfoods its own tool. It has
-a `.fledge/` directory (repo knowledge in `.fledge/nest/`, feather claims in
-`.fledge/broods/`), specs under `.fledge/pluma/`, and a scaffolded Claude adapter under
-`.claude/`. The `fledge` binary at the repo root is a build artifact.
-
-### When the user asks for feature/spec/implementation work → use the workflow
-
-Because this repo is fledge-managed, route these requests through the fledge
-orchestration entrypoint rather than improvising:
-
-- **New feature or requirement** ("plan X", "write a plumage for…") → **Planning phase**
-- **New tasks/spec breakdown** ("break this into feathers", "author feathers for PLM-###") → **Planning phase**
-- **Implementation** ("implement PLM/FTHR-###", "run the feathers") → **Implementation phase**
-
-The entrypoint to read first is **`.fledge/skills/fledge-orchestrate/SKILL.md`**
-(routing + ground rules), which points to `planning.md` or `implementation.md`.
-The Claude-specific primitive map is `.claude/fledge-adapter.md`. Do this before
-hand-editing specs — deterministic spec operations must go through the `fledge`
-CLI (`fledge new`, `status`, `set`, `criteria`, `brood`), never by editing
-frontmatter directly. Spec *bodies* (prose) are yours to write.
-
-> Note: those `.fledge/skills/` and `.claude/` files are *generated output* of
-> the Go code below. When changing fledge's behavior, edit the source of truth
-> (`internal/bootstrap/...`), not the scaffolded copies in this repo.
-
-## Build, test, run
-
-```sh
-go build ./...                 # build everything
-go build -o fledge ./cmd/fledge   # build the CLI binary
-go test ./...                  # run all tests
-go vet ./...
-
-# CLI acceptance tests are testscript/txtar files under cmd/fledge/testdata/.
-go test ./cmd/fledge -run TestScripts               # all script tests
-go test ./cmd/fledge -run TestScripts/init          # one script (init.txtar)
-go test ./cmd/fledge -run TestScripts/init -v       # verbose (shows script trace)
-
-# Unit tests live beside their package (internal/spec, internal/check, ...):
-go test ./internal/spec -run TestAllocateID
+```bash
+./scripts/build.sh              # go build -> bin/fledge
+./scripts/install.sh            # build -tags dev (-dev version suffix), install to GOBIN (or GOPATH/bin); BINDIR= to override
+go test ./...
+go test -run TestSpawn ./internal/daemon/   # single test
+gofmt -l . && go vet ./...
 ```
 
-Go 1.26. No Makefile; use `go` directly.
+No Makefile or CI. Go 1.26; YAML frontmatter uses `github.com/goccy/go-yaml`.
+Unix-only (unix sockets, `setsid`, signal-0 probes).
 
-### Rebuild, reinstall, and verify the installed binary
+## cli flags
 
-This repo dogfoods `fledge`, so the `fledge` on your `PATH` must match the
-source you're editing. After changing CLI or `internal/bootstrap/...` code,
-reinstall and verify before relying on the tool:
+Hand-rolled parsing (no `flag` package): `takeFlag`/`takeBoolFlag`/`rejectFlags`
+in `cmd/fledge/main.go`. One convention throughout:
 
-```sh
-go install ./cmd/fledge        # reinstall to $(go env GOPATH)/bin (usually ~/go/bin)
-hash -r                        # drop the shell's cached path to the old binary
-command -v fledge              # confirm it resolves to the go/bin copy, not a stale one
-fledge version                 # must match VERSION in the repo root
-```
+--[wholeflag]
+-[CAPITAL-LETTER]
 
-If `fledge version` disagrees with the `VERSION` file, the installed binary is
-stale — rerun `go install ./cmd/fledge`.
+Short flags are unique across the **entire CLI**, never just within a
+subcommand (e.g. `--provider` is `-D` because `-P` is taken by `--pid`).
+Check the table in README.md before minting a new one.
 
-When you change embedded `core/`/`adapters/` content, also **regenerate** this
-repo's own scaffolded output so it stays consistent with the new binary:
+## Agent first design
 
-```sh
-fledge init --refresh          # reset fledge-owned files to the shipped versions; prunes obsolete ones
-git status                     # review what regeneration changed
-```
+when adding new commands, prompt the user if they want a --json output.
+Currently `--json -J` exists on `context scan`, `context graph`, `agent list`,
+`agent models`, `agent types`, `init`;
+`agent msg wait` is JSON-only.
 
-`--refresh` writes `.fledge/scaffold.json` (the stamp of what fledge owns and at
-what content hash). It is a reset: every fledge-owned file is overwritten with
-the shipped version and files that no longer belong to the scaffold are pruned.
-When user-edited files would be overwritten it confirms first on an interactive
-terminal and refuses otherwise (rerun with `--force` to skip the confirmation);
-edits are recoverable via git. `fledge preen` reports the scaffold healthy when
-the stamp is present and consistent.
+## What fledge is
 
-### Local git hooks
+A **zero-inference Go orchestrator** for a multi-agent coding stack: Herdr (pane
+bus), Pi, and Claude Code. Two invariants:
 
-A `pre-commit` hook at `scripts/hooks/pre-commit` runs the same lint checks
-as CI (`gofmt -l .`, then `go vet ./...`) before a commit is created, so
-formatting or vet problems are caught locally instead of on a pushed PR. It
-is optional/opt-in — not installed by `fledge init` or `scripts/install.sh`
-— and is a one-time, per-clone, manual setup step:
-
-```sh
-git config core.hooksPath scripts/hooks
-```
+1. **The Go CLI is the state authority.** Herdr and agent events are *input
+   signals*; fledge's append-only journal is truth. Herdr loses metadata across
+   server restarts, so it is never durable state.
+2. **Zero inference in the orchestrator.** It issues socket commands, consumes
+   events, advances deterministic state, and writes its journal — never an LLM
+   call. All inference happens inside visible, operator-interactable panes.
 
 ## Architecture
 
-Two layers, deliberately separated:
+One binary, two processes: the CLI, and a per-flock daemon that is the same
+binary re-exec'd as `fledge daemon run` (hidden command) under `setsid`. They
+meet only over a unix socket speaking newline-delimited JSON, one
+request/response per connection (`internal/protocol` is the contract; both
+sides import it, plus `client` imports `daemon` for the socket-path helper
+only).
 
-**1. The CLI (`internal/cli` + domain packages)** — deterministic,
-agent-agnostic spec operations. Command dispatch is in `internal/cli/cli.go`:
-each command file has an `init()` that calls `register(name, run, usage)`, and
-`commandOrder` controls both usage output and the generated allow-lists. Exit
-codes are meaningful and shared: `ExitOK/Fail/Usage/Env` (0/1/2/3). Every
-command supports `--json`. Domain logic lives in focused `internal/` packages:
-`spec` (frontmatter, ID allocation, templates, load), `check` (validation =
-`preen`), `graph` (dependency graph = `vee`), `lock` (feather claims = `brood`),
-`scan`, `repo`.
+- **Flock** = one isolated orchestration session: own daemon, roster, journal,
+  socket, herdr session. State: `.fledge/flocks/<name>/`. Socket:
+  `$XDG_RUNTIME_DIR/fledge/<workspaceHash>/<flock>.sock` — deliberately outside
+  the workspace (108-byte `sun_path` cap; NFS can't bind unix sockets).
+- **Flock selection defaults to `FLEDGE_FLOCK`** — `fledge start` exports it
+  into every session pane. Operational commands with a positional flock name
+  (`restart`, `flock stop`, `flock status`, `watch`) use that explicit name
+  first; agent commands remain scoped to their inherited flock.
+- **In-place restart is the install handoff**: after `./scripts/install.sh`
+  replaces the binary, run `fledge restart [name]` for a running flock. The CLI
+  asks the old daemon for status, sends shutdown, waits until it is down, then
+  re-execs the current binary through `spawnDaemon` with the same Herdr session
+  binding, including an empty binding. The replacement must report a different
+  daemon PID, `version.Get()` as `daemon_version`, and the same session. Spawn
+  or post-spawn verification failure leaves Herdr running and reports the
+  flock daemon log path.
+- **Managed session recovery and cleanup**: starting a down flock recreates
+  its deterministic default Herdr session, so stale panes cannot collide with
+  the journal's empty roster. Confirmed `flock clear` stops and deletes each
+  target's default managed session and sweeps other session records carrying
+  this workspace's managed prefix when no saved flock directory links them.
+  Operator-named sessions and other workspaces are never swept.
+- **Journal** (`internal/daemon/journal.go`): append-only
+  `journal.jsonl`, written **before** the client is ack'd — the core invariant.
+  The daemon rebuilds roster + pending messages by replay. Torn final line =
+  tolerated; malformed earlier line = corruption, startup fails. Anything not
+  journaled must not be left running (spawn failure ⇒ teardown).
+- **Three integrations, one shape** (`internal/daemon/spawn.go`): `claude`,
+  `codex`, and `pi` are all pane-hosted — a visible herdr pane; startup
+  identity and role use each CLI's native instruction option, while direct
+  messages stay in Fledge's durable mailbox until `agent msg inbox` or
+  `agent msg wait` claims them. Panes survive daemon restart.
+  Journals from before pi was pane-hosted record spawned pi agents
+  with no `pane_id`; replay marks those `orphaned` (their RPC pipes died with
+  the daemon) and tolerates legacy `agent.settled` lines as no-ops.
+- **Two herdr packages by design**: `internal/herdr` shells out to the herdr
+  CLI for session lifecycle (no socket API for that); `internal/herdrwire`
+  speaks the socket directly for pane ops. Pinned to herdr 0.7.4 / protocol 16
+  with live-verified quirks documented inline.
+- **Agent names** are kebab-case `<type>-<species>`, with species drawn from a
+  fixed pool (`internal/species`). User definitions and profiles cannot use
+  the reserved `fledge-*` namespace. Managed types retain species suffixes;
+  exact `fledge-orchestrator` is the singleton exception.
+- **Model routing** (`agentcfg.Route`) is a fixed prefix table, never guessed:
+  `claude*` → claude integration; `gpt*`/`codex*`/o-series → pi with provider
+  `openai-codex`. `agent spawn --integration -I` overrides the route (pi vs
+  codex for the same model id). `provider` is pi-only, `permission_mode`
+  claude-only, `sandbox` codex-only — validation cross-checks.
+- **Definitions and profiles** (`internal/agentcfg`): portable Markdown under
+  `.fledge/agents/{user,fledge}/` is authoritative. Synchronization validates
+  path/name/namespace rules and atomically writes versioned `user-agents.json`
+  and `managed-agents.json` indexes with separate agent/profile maps. The generated
+  catalog is the third profile source; differing declarations are errors.
+- **Model catalog** (`internal/catalog`): `fledge init` probes
+  `claude --version`, execs `pi --list-models` / `codex debug models`, and
+  regenerates `.fledge/agents/fledge/catalog.json` (gitignored, per-machine) wholesale.
+  Claude discovery contributes a model-less default plus native Opus, Fable,
+  Sonnet, and Haiku launchers;
+  Empty discovery keeps the old catalog.
+- **Authoritative launch and authenticated readiness**: before Herdr runs,
+  spawn atomically journals `agent.registered` and `agent.launching` with the
+  resolved launch metadata, one-use token hash, and SHA-256 instruction hash.
+  It installs separate launch/readiness latches, starts Claude/Pi with a final
+  `--append-system-prompt` or Codex with a final TOML-encoded
+  `developer_instructions`, and supplies readiness as the initial positional
+  prompt. The instruction document contains the assigned identity, direct-send
+  guidance, and exact Markdown role (identity/guidance only for raw spawns).
+  Profile `argv` is option-only, rejects `--` and integration flags that replace
+  the interactive session/control mode, and precedes Fledge's arguments.
+  Once Herdr resolves, `agent.spawned` records PID/pane/workspace metadata and
+  releases early readiness or stop calls. `agent ready` hashes and validates
+  the token and journals `agent.ready`. No lifecycle `pane.send_input` or
+  `msg.sent` events are emitted. `agent ready --no-wait` for the managed
+  orchestrator currently reports degraded/manual inbox delivery: Herdr owns the
+  interactive integration process and provides no persistent native control
+  stream that Fledge can serialize with user turns. No resume/print subprocess,
+  pane input, toast, or polling fallback is permitted. The atomic ready-plus-arm
+  journal field and bounded/coalescing retry worker remain available only to a
+  future launcher-owned same-session adapter. Herdr remains
+  launch/placement/status/teardown only for agent communication. Sandboxed
+  agents that cannot open the daemon socket atomically publish the digest under
+  the flock directory for the daemon to validate and consume. Interactive start
+  attaches Herdr before beginning this lifecycle.
+  Immediately after `agent.start`, interactive start swaps and focuses the managed
+  orchestrator into its final left position before registration or readiness.
+- After readiness completes, interactive fresh starts keep
+  one primary `fledge-orchestrator` workspace. The existing right-hand CLI pane
+  is split down at 50%, rooted at the project, without taking focus. Its
+  original upper pane execs the current executable as
+  `fledge watch <flock>`; the new lower pane remains an interactive shell. The
+  left and right columns are equal width, and the watcher is not a Herdr or
+  Fledge agent. Focus returns to the orchestrator. Setup is non-critical: split
+  failure preserves `orchestrator | shell`; watcher-command failure closes the
+  added lower pane when possible to restore that layout; both paths print a
+  manual-watch hint and keep the healthy flock. Reattach and scripted starts do
+  not create watchers. Launch, spawn-journal, or readiness failure tears the
+  transport down; replay invalidates incomplete `agent.launching` attempts as
+  orphaned.
+- **Sandboxed daemon access**: clients try the runtime-directory Unix socket
+  first, then the daemon's ephemeral workspace-local `.rpc/` request/response
+  bridge. The fallback dispatches the full protocol, so orchestrators can
+  spawn, message, wait, list, and stop even when their sandbox denies sockets.
+- **Liveness differs by kind**: self-registered agents are probed by pid
+  (signal 0; the pid defaults to the *session leader*, not the parent);
+  spawned agents change state only on an *observed* event, never inference.
+- **Root discovery** (`internal/workspace`): git-style walk up to the nearest
+  `.fledge/` directory, then `EvalSymlinks` — client and daemon must agree on
+  the canonical path because the hash keys the socket namespace and session
+  name.
+- `d.mu` must never be held across a herdr call — it can take seconds. Spawn
+  reserves the name under the lock (pid −1), launches unlocked,
+  releases on failure.
 
-**2. The bootstrap/adapter system (`internal/bootstrap`)** — what `fledge init`
-scaffolds. This is the part to understand before touching init.
+README.md documents the full command surface, `.fledge/` tree, and portable
+agent format — it is accurate; read it before adding commands.
+The `pluma/{plumage,feathers}` dirs are scaffolded but nothing reads them yet.
 
-- `bootstrap.go` embeds two trees via `//go:embed core adapters`.
-- **`core/`** is the single agent-neutral source: the `fledge-orchestrate` and
-  `fledge-interrogate` skills. Written to a repo's `.fledge/skills/` by
-  `WriteCore`. This is where the actual workflow prose (planning.md,
-  implementation.md, worker-protocols.md, incubator.md, brooder.md, skua.md, templates/) lives.
-- **`adapters/<harness>/`** is a thin format-only mapping per harness. Each is
-  driven entirely by its **`manifest.yaml`** (`registry.go` → `Manifest`) — the
-  detector, the `tier_primitives` map, and a file list with per-file write
-  policies. **Adding or changing a harness is editing a manifest, zero Go code.**
-- **The 6 primitives** (`primitives.go`, `PrimitiveOrder`): `confirm-gate`,
-  `read-only-shell`, `write-file`, `run-fledge`, `spawn-worker`,
-  `message-peer`. An adapter declares which mechanism realizes each; its **tier**
-  (A/B/C) is *derived* from that coverage via `DeriveTier`, never declared.
+## `docs/` is a completed legacy experiment
 
-**Manifest file write policies** (`ManifestFile`, documented at
-`registry.go:38`) — know these before changing what init emits:
-`generate`/`primitive_map` (render a `text/template`), `overwrite` (copy
-verbatim, rewrite when changed), `append_if_missing` (additive line), `symlink`
-(e.g. `.claude/skills/...` points into `.fledge/skills/`), and the default
-(copy, **skip-if-exists** so user edits survive; `init --refresh` re-syncs).
-`writeIfChanged` makes writes byte-idempotent, which the txtar tests depend on.
-`fledge init --refresh` writes `.fledge/scaffold.json` — the stamp that records
-which files fledge owns and at what content hash. `fledge preen` validates its
-presence and consistency.
+Everything in `docs/` predates the rewrite and documents "Stage 0", which has
+been **run to completion**. Its roadmap, ground rules, and repo layout are
+historical; do not treat it as the current plan. `docs/handoff-stage0.md` is a
+finished commissioning brief — ignore it as instruction entirely.
+`docs/reference/*` is a fixed 2026-07-17 snapshot, never edited (ADR-006).
 
-## Conventions
+What carries forward is the verified findings (raw: `docs/EXPERIMENTS.md`; wire
+facts: ADR-017), now encoded in the code:
 
-- Spec lifecycle for feathers: `egg → pipping → hatching → fledged`. Acceptance
-  criteria are checkbox lists only ever checked via `fledge criteria check`.
-- IDs (`PLM-###`, `FTHR-###`) and frontmatter are CLI-allocated — don't invent
-  them.
-- Terminology is bird-themed throughout (nest, plumage, feather, brood, preen,
-  molt, forager, skua). `README.md` decodes it; match it in new code and prose.
-- When you change embedded `core/` or `adapters/` content, the `cmd/fledge`
-  txtar tests (especially `init.txtar`, `init_agents.txtar`, `agents.txtar`)
-  assert on the scaffolded output — update those fixtures alongside.
-> fledge: load and follow .fledge/skills/fledge-orchestrate/SKILL.md — primitive map at .claude/fledge-adapter.md
+- **EXP1** — `pane.report_agent` is metadata-only; native screen detection
+  wins. Fledge never seizes agent authority (see `spawn.go` doc comments).
+- **EXP2** — `pane.send_input {text, keys:["enter"]}` submits reliably; a bare
+  `\r` does not.
+- **EXP3** — no practical concurrency ceiling; don't pre-cap concurrent panes.
+  Rate limits are handled reactively (ADR-014).
+
+**Git history is not design input** (ADR-010) — don't resurrect designs from
+it. That's about *design*, not forensics; reading history to see what was
+deleted is fine.
+
+## Versioning
+
+`internal/version/VERSION` is the single source of truth, `//go:embed`-ed by
+`version.go` — bumping means editing that one file. No ldflags. It sits inside
+the package because embed can't cross directory boundaries; a release workflow
+must watch that path, not a root `VERSION`.
+
+## Re-verify before you rely
+
+Herdr, Pi, and Claude Code are fast-moving pre-1.0 surfaces; pinned versions in
+`docs/INTEGRATION-CONTRACTS.md` are from 2026-07-17. Check live (`herdr api
+schema --json`) before building on any version-specific claim. ADR-017 shows
+what drift looks like: client targeted protocol v15, server was 16, five shapes
+differed.

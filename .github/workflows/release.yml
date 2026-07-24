@@ -2,120 +2,204 @@ name: Release
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release
 
 jobs:
-  safety-net:
-    name: Lint, build, test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - name: gofmt
-        run: test -z "$(gofmt -l .)"
-      - name: go vet
-        run: go vet ./...
-      - name: go build
-        run: go build ./...
-      - name: go test
-        run: go test ./...
-
-  detect-version:
-    name: Detect VERSION change
-    needs: safety-net
+  gate:
+    name: Gate
     runs-on: ubuntu-latest
     outputs:
-      changed: ${{ steps.check.outputs.changed }}
-      version: ${{ steps.check.outputs.version }}
+      release: ${{ steps.decide.outputs.release }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out pushed commit and tags
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          fetch-depth: 2
-      - name: Compare VERSION to previous commit
-        id: check
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Decide whether to release
+        id: decide
+        shell: bash
         run: |
-          current="$(cat VERSION)"
-          previous="$(git show HEAD^:VERSION 2>/dev/null || echo '')"
-          echo "version=$current" >> "$GITHUB_OUTPUT"
-          if [ "$current" != "$previous" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
+          # Reuse the release-version contract against post-merge tag state.
+          # Exit 0 (tag missing, or the tag already targets this exact commit)
+          # => release; exit non-zero (version already taken at another commit,
+          # or an invalid version) => skip cleanly rather than fail, so ordinary
+          # pushes to main that do not bump the version are no-ops. Passing this
+          # commit's SHA lets an interrupted release resume on a re-run while an
+          # already-released version is skipped.
+          set +e
+          bash scripts/check-release-version.sh release "$GITHUB_SHA" >/dev/null 2>reason.txt
+          rc=$?
+          set -e
+          if [[ $rc -ne 0 ]]; then
+            echo "skipping release:" >&2
+            cat reason.txt >&2
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          echo "release=true" >> "$GITHUB_OUTPUT"
 
-  build:
-    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
-    needs: detect-version
-    if: needs.detect-version.outputs.changed == 'true'
+  lint:
+    name: Lint
+    needs: gate
+    if: needs.gate.outputs.release == 'true'
     runs-on: ubuntu-latest
-    env:
-      VERSION: ${{ needs.detect-version.outputs.version }}
-    strategy:
-      matrix:
-        include:
-          - goos: linux
-            goarch: amd64
-          - goos: linux
-            goarch: arm64
-          - goos: darwin
-            goarch: amd64
-          - goos: darwin
-            goarch: arm64
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - name: Check out pushed commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
-      - name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+          cache: true
+      - name: Check formatting
+        shell: bash
         run: |
-          mkdir -p dist
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build \
-            -ldflags "-X github.com/Harrison-Blair/fledge/internal/cli.binaryVersion=$VERSION" \
-            -o dist/fledge ./cmd/fledge
-      - name: Package archive
-        run: |
-          cd dist
-          name="fledge_${{ matrix.goos }}_${{ matrix.goarch }}"
-          tar -czf "$name.tar.gz" fledge
-          sha256sum "$name.tar.gz" > "$name.sha256"
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+          unformatted="$(gofmt -l .)"
+          if [[ -n "$unformatted" ]]; then
+            echo "The following files need gofmt:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+      - name: Vet
+        run: go vet ./...
+
+  test:
+    name: Test
+    needs: gate
+    if: needs.gate.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out pushed commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          name: dist-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/fledge_*
+          go-version-file: go.mod
+          cache: true
+      - name: Test with coverage
+        shell: bash
+        run: |
+          set +e
+          go test ./... -covermode=atomic -coverprofile=coverage.out
+          test_status=$?
+          total="$(go tool cover -func=coverage.out 2>/dev/null | awk '$1 == "total:" { print $3 }')"
+          set -e
+
+          {
+            echo "## Test coverage"
+            if [[ -n "$total" ]]; then
+              echo "Total: $total"
+            else
+              echo "Total: unavailable"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          exit "$test_status"
 
   release:
-    name: Create GitHub Release
-    needs: [detect-version, build]
+    name: Release
+    if: needs.gate.outputs.release == 'true'
+    needs:
+      - gate
+      - lint
+      - test
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
-      VERSION: ${{ needs.detect-version.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      MERGE_SHA: ${{ github.sha }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Download all platform artifacts
-        uses: actions/download-artifact@v4
+      - name: Check out pushed commit and tags
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          pattern: dist-*
-          path: dist
-          merge-multiple: true
-      - name: Merge checksums
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Validate release version
+        id: version
+        shell: bash
         run: |
-          cd dist
-          cat fledge_*.sha256 > checksums.txt
-          rm -f fledge_*.sha256
-      - name: Create GitHub Release
+          # Re-check against post-merge tag state before tagging. If a
+          # concurrent release created this tag at a different commit between
+          # the gate and here, this fails loudly instead of pushing over it.
+          version="$(bash scripts/check-release-version.sh release "$MERGE_SHA")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+      - name: Build and package release assets
+        shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          gh release create "v$VERSION" \
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            package="fledge_${VERSION}_linux_${arch}"
+            mkdir -p "$RUNNER_TEMP/$package"
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
+              go build -trimpath -o "$RUNNER_TEMP/$package/fledge" ./cmd/fledge
+            chmod 0755 "$RUNNER_TEMP/$package/fledge"
+            install -m 0644 LICENSE "$RUNNER_TEMP/$package/LICENSE"
+            tar -C "$RUNNER_TEMP/$package" -czf "dist/$package.tar.gz" fledge LICENSE
+          done
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS
+      - name: Create or resume GitHub release
+        shell: bash
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          release_info="$(
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq '.[] | select(.tag_name == env.TAG) | [.id, .draft, .html_url] | @tsv'
+          )"
+
+          tag_exists=false
+          if git show-ref --verify --quiet "refs/tags/$TAG"; then
+            tag_exists=true
+          fi
+
+          if [[ -n "$release_info" ]]; then
+            if [[ "$release_info" == *$'\n'* ]]; then
+              echo "multiple releases use $TAG" >&2
+              exit 1
+            fi
+            IFS=$'\t' read -r release_id is_draft release_url <<< "$release_info"
+            if [[ "$tag_exists" != true ]]; then
+              echo "release $release_id uses $TAG, but the tag is missing" >&2
+              exit 1
+            fi
+            if [[ "$is_draft" != true ]]; then
+              echo "$TAG is already published at the merge commit: $release_url"
+              exit 0
+            fi
+
+            echo "resuming draft release $release_id"
+            gh release upload "$TAG" dist/* --clobber
+            gh release edit "$TAG" --title "$TAG" --draft=false
+            exit 0
+          fi
+
+          if [[ "$tag_exists" != true ]]; then
+            git tag "$TAG" "$MERGE_SHA"
+            git push origin "refs/tags/$TAG"
+          fi
+
+          gh release create "$TAG" dist/* \
+            --verify-tag \
+            --target "$MERGE_SHA" \
+            --title "$TAG" \
             --generate-notes \
-            dist/fledge_linux_amd64.tar.gz \
-            dist/fledge_linux_arm64.tar.gz \
-            dist/fledge_darwin_amd64.tar.gz \
-            dist/fledge_darwin_arm64.tar.gz \
-            dist/checksums.txt
+            --draft
+          gh release edit "$TAG" --draft=false
