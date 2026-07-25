@@ -221,6 +221,57 @@ func TestAgentListJSONUsesEmptyArray(t *testing.T) {
 	}
 }
 
+func TestStoppedAgentsDisappearFromCurrentCLIViews(t *testing.T) {
+	root, _ := scaffoldedWorkspace(t)
+	t.Setenv("XDG_RUNTIME_DIR", shortRuntimeDir(t))
+	t.Setenv(flock.Env, "alpha")
+	dir := flock.Dir(root, "alpha")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	journal := strings.Join([]string{
+		`{"event":"agent.registered","name":"worker-emperor","type":"worker","species":"emperor","pid":0}`,
+		`{"event":"agent.launching","name":"worker-emperor","integration":"claude"}`,
+		`{"event":"agent.spawned","name":"worker-emperor","pane_id":"w1:p2"}`,
+		`{"event":"agent.stopped","name":"worker-emperor","reason":"requested"}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(dir, protocol.JournalName), []byte(journal), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	startDaemon(t, root, "alpha")
+	t.Chdir(root)
+
+	text, err := captureRun(t, "agent", "list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonOut, err := captureRun(t, "agent", "list", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := captureRun(t, "flock", "status", "alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	overview, err := captureRun(t, "flock", "list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(text, "no agents registered") || strings.TrimSpace(jsonOut) != "[]" {
+		t.Fatalf("empty current list views: text=%q json=%q", text, jsonOut)
+	}
+	if !strings.Contains(status, "no agents registered") || !strings.Contains(overview, "agents:0/0") {
+		t.Fatalf("empty current status views: status=%q overview=%q", status, overview)
+	}
+	for label, out := range map[string]string{
+		"text list": text, "JSON list": jsonOut, "status": status, "overview": overview,
+	} {
+		if strings.Contains(out, "worker-emperor") {
+			t.Errorf("%s still shows stopped agent:\n%s", label, out)
+		}
+	}
+}
+
 func TestAgentMessageSendWaitAndReplyCorrelation(t *testing.T) {
 	commandWorkspace(t)
 	pid := decimalPID(os.Getpid())

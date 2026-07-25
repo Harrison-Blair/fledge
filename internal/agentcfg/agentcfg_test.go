@@ -171,6 +171,7 @@ func TestCommandArgv(t *testing.T) {
 func TestLaunchArgvAppendsNativeInstructionsAfterProfileOptions(t *testing.T) {
 	instructions := "identity \"quoted\"\n\nrole line 1\nrole line 2\n"
 	bootstrap := "run readiness"
+	startupArgs := []string{"--startup-asset", "/tmp/readiness"}
 	tests := []struct {
 		name string
 		cfg  Config
@@ -179,25 +180,34 @@ func TestLaunchArgvAppendsNativeInstructionsAfterProfileOptions(t *testing.T) {
 		{
 			name: "claude",
 			cfg:  Config{Integration: "claude", Argv: []string{"--append-system-prompt", "profile loses"}},
-			want: []string{"claude", "--session-id", "sid", "--permission-mode", "bypassPermissions", "--append-system-prompt", "profile loses", "--append-system-prompt", instructions, bootstrap},
+			want: []string{"claude", "--session-id", "sid", "--permission-mode", "bypassPermissions", "--append-system-prompt", "profile loses", "--append-system-prompt", instructions, "--startup-asset", "/tmp/readiness", bootstrap},
 		},
 		{
 			name: "pi",
 			cfg:  Config{Integration: "pi", Argv: []string{"--append-system-prompt", "profile loses"}},
-			want: []string{"pi", "--session-id", "sid", "--append-system-prompt", "profile loses", "--append-system-prompt", instructions, bootstrap},
+			want: []string{"pi", "--session-id", "sid", "--append-system-prompt", "profile loses", "--append-system-prompt", instructions, "--startup-asset", "/tmp/readiness", bootstrap},
 		},
 		{
 			name: "codex",
 			cfg:  Config{Integration: "codex", Argv: []string{"--config", "developer_instructions=\"profile loses\""}},
-			want: []string{"codex", "--config", "developer_instructions=\"profile loses\"", "--config", `developer_instructions="identity \"quoted\"\n\nrole line 1\nrole line 2\n"`, bootstrap},
+			want: []string{"codex", "--config", "developer_instructions=\"profile loses\"", "--config", `developer_instructions="identity \"quoted\"\n\nrole line 1\nrole line 2\n"`, "--startup-asset", "/tmp/readiness", bootstrap},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.cfg.LaunchArgv("sid", instructions, bootstrap); !slices.Equal(got, tt.want) {
+			if got := tt.cfg.LaunchArgv("sid", instructions, startupArgs, bootstrap); !slices.Equal(got, tt.want) {
 				t.Fatalf("LaunchArgv() = %#v, want %#v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestLaunchArgvOmitsEmptyBootstrap(t *testing.T) {
+	cfg := Config{Integration: "pi"}
+	got := cfg.LaunchArgv("sid", "instructions", []string{"--extension", "/tmp/ready.ts"}, "")
+	want := []string{"pi", "--session-id", "sid", "--append-system-prompt", "instructions", "--extension", "/tmp/ready.ts"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("LaunchArgv() = %#v, want %#v", got, want)
 	}
 }
 

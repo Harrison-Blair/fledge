@@ -76,7 +76,7 @@ func TestAgentTypesJSONListsPortableDefinitions(t *testing.T) {
 			found = e.Profile == "review-plan" && e.Source == "user/code-reviewer/code-reviewer.agent.md" && len(e.Tools) == 2
 		}
 		if e.Name == "fledge-forager" {
-			foundForager = e.Profile == "fledge-forager" && e.Workspace != nil && e.Workspace.Label == "fledge-context" && e.Workspace.Tab == "context"
+			foundForager = e.Profile == "fledge-forager" && e.Workspace != nil && e.Workspace.Label == "context" && e.Workspace.Tab == "context"
 		}
 		if e.Name == "fledge-analyzer" {
 			foundAnalyzer = e.Profile == "fledge-analyzer" && e.Workspace == nil

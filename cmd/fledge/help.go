@@ -72,7 +72,9 @@ runs anywhere inside the workspace; everything roots at the directory holding
 a fresh start offers a profile for the managed, profile-agnostic
 fledge-orchestrator definition, opens the UI, then visibly launches the
 orchestrator with its identity and Markdown role in the integration's native
-instruction channel and readiness as the CLI's initial prompt.
+instruction channel. claude and pi authenticate through startup-only native
+automation without triggering a model turn; codex keeps the CLI's initial
+readiness prompt.
 after that succeeds, the right-hand CLI pane is split evenly downward:
 fledge watch runs above an interactive project-root shell, with equal-width
 columns and focus returned to the orchestrator. the watcher is not registered
@@ -291,7 +293,8 @@ flags:
 	"flock list": `usage:
   fledge flock list
 
-list every flock in the workspace. This command needs no flock context.
+list every flock in the workspace. agent counts use the current roster and
+omit stopped agents. this command needs no flock context.
 
 flags:
   --help, -H   print this help
@@ -299,7 +302,8 @@ flags:
 	"flock status": `usage:
   fledge flock status [name]
 
-show one flock in detail. name defaults to FLEDGE_FLOCK.
+show one flock in detail. agent details use the current roster and omit stopped
+agents. name defaults to FLEDGE_FLOCK.
 
 flags:
   --help, -H   print this help
@@ -312,7 +316,7 @@ commands:
   spawn [agent]    launch an agent definition or raw profile/model
   ready            authenticate a Fledge-started agent
   stop <name>      stop a spawned agent
-  list             list registered agents with liveness
+  list             list current agents with liveness
   types            list configured agent definitions
   models           list the configured spawnable models
   msg <command>    send and wait for messages
@@ -354,7 +358,7 @@ renames its initial tab, starts a pane-hosted Claude/Codex agent there, and
 removes the initial shell. Pi profiles cannot satisfy dedicated placement.
 Any launch, spawn-journal, or readiness failure closes the whole new workspace.
 
-The managed fledge-forager uses its pinned Claude profile in a fledge-context workspace.
+The managed fledge-forager uses its pinned Claude profile in a context workspace.
 After spawn returns, send it an explicit context task, save the message id, and
 wait with "agent msg wait --reply-to <id>". It partitions one context scan,
 spawns file-scoped fledge-analyzer agents into --workspace/--tab targets,
@@ -400,7 +404,8 @@ flags:
 	"agent list": `usage:
   fledge agent list [flags]
 
-list registered agents with their liveness and launch details.
+list current agents with their liveness and launch details. stopped agents
+remain in append-only journal history but are omitted from this roster.
 
 flags:
   --json, -J   emit JSON instead of text

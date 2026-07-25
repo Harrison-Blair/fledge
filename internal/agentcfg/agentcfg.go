@@ -283,9 +283,10 @@ func (c Config) CommandArgv(sessionID string) []string {
 
 // LaunchArgv assembles the complete interactive launch command. Profile argv
 // is deliberately placed before Fledge's native instruction option so a
-// profile cannot override the identity and role assigned to this run. The
-// readiness bootstrap is the CLI's initial positional prompt.
-func (c Config) LaunchArgv(sessionID, instructions, bootstrap string) []string {
+// profile cannot override the identity and role assigned to this run.
+// startupArgs loads integration-native startup automation when needed.
+// A non-empty bootstrap is appended as the CLI's initial positional prompt.
+func (c Config) LaunchArgv(sessionID, instructions string, startupArgs []string, bootstrap string) []string {
 	argv := c.CommandArgv(sessionID)
 	if argv == nil {
 		return nil
@@ -297,7 +298,11 @@ func (c Config) LaunchArgv(sessionID, instructions, bootstrap string) []string {
 		encoded, _ := json.Marshal(instructions)
 		argv = append(argv, "--config", "developer_instructions="+string(encoded))
 	}
-	return append(argv, bootstrap)
+	argv = append(argv, startupArgs...)
+	if bootstrap != "" {
+		argv = append(argv, bootstrap)
+	}
+	return argv
 }
 
 // NewSessionID returns a fresh RFC-4122 version 4 UUID.

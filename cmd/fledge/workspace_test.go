@@ -924,8 +924,8 @@ func TestStartLabelsWorkspaceAndTab(t *testing.T) {
 	if !ok {
 		t.Fatal("start never created a workspace")
 	}
-	if got := create["label"]; got != "fledge-orchestrator" {
-		t.Errorf("workspace label = %v, want fledge-orchestrator", got)
+	if got := create["label"]; got != "orchestrator" {
+		t.Errorf("workspace label = %v, want orchestrator", got)
 	}
 
 	rename, ok := rec.methodParams("tab.rename")

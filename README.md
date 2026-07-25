@@ -59,13 +59,15 @@ spawns a daemon bound to that session, and opens the Herdr UI. Once the UI owns
 the terminal, Fledge starts the `fledge-orchestrator`, immediately places and
 focuses its pane left of the shell. Its assigned identity and authoritative
 Markdown role are installed through the integration's native instruction
-option, and the readiness bootstrap is the CLI's initial positional prompt.
+option. Claude and Pi authenticate readiness through native startup automation
+that does not trigger a model turn; Codex retains the CLI's initial positional
+readiness prompt.
 Once authenticated startup finishes, Fledge splits the right-hand CLI pane
 evenly downward, runs `fledge watch <flock>` in the original upper pane, and
 leaves the new lower pane as an interactive project-root shell:
 
 ```text
-Workspace: fledge-orchestrator
+Workspace: orchestrator
 orchestrator | fledge watch
              | project shell
 ```
@@ -76,8 +78,8 @@ a Herdr or Fledge agent. If the split fails, the original right-hand shell
 remains. If starting the watcher fails, Fledge closes the added lower pane when
 possible to restore the two-pane layout. Either way the healthy flock remains,
 the CLI shows the manual watch command, and Fledge attempts to refocus the
-orchestrator. The workspace is labelled `fledge-orchestrator` and its tab
-`orchestrator` (both on scripted starts too — they are session metadata).
+orchestrator. The workspace and its tab are both labelled `orchestrator`
+(on scripted starts too — they are session metadata).
 The shipped `fledge-orchestrator` definition is profile-agnostic, so an
 interactive start offers Claude Code and Codex profiles directly, plus one
 `Browse Pi profiles…` entry that opens a provider-grouped Pi submenu. Managed
@@ -100,7 +102,7 @@ Inside a pane of that session — where `FLEDGE_FLOCK` is already exported:
 ```bash
 fledge agent types                    # what you can spawn
 fledge agent spawn opus48             # -> reviewer-emperor, plus its pane id
-fledge agent list                     # roster with liveness
+fledge agent list                     # current roster with liveness
 
 export FLEDGE_AGENT_NAME="$(fledge agent register operator)"
 fledge agent msg send reviewer-emperor "review internal/daemon"
@@ -182,6 +184,7 @@ first is alive fails the way an exhausted species pool does.
 |---|---|---|---|
 | Runs in | a herdr pane | a herdr pane | a herdr pane |
 | Launch instructions | final `--append-system-prompt` | final `--config developer_instructions=<TOML string>` | final `--append-system-prompt` |
+| Managed orchestrator readiness | startup-only `SessionStart` plugin hook | initial positional prompt | startup-only `session_start` extension handler |
 | Direct-message delivery | durable mailbox | durable mailbox | durable mailbox |
 | Stop | `pane.close`, or `workspace.close` when dedicated | `pane.close`, or `workspace.close` when dedicated | `pane.close` |
 | Visible | yes — you can watch and type into it | yes — you can watch and type into it | yes — you can watch and type into it |
@@ -197,14 +200,16 @@ written *before* an operation is acknowledged. Current events are
 `inbox.notified` (legacy or a future owned same-session adapter); and the
 `tab.*`/`workspace.*` placement lifecycle events.
 `agent.settled` is a real legacy event from the removed pi RPC shape and is
-recognized on replay but never emitted. The daemon
-rebuilds its entire roster and
-pending-message queue by replaying it. A malformed final line is treated as a
-torn write and ignored; malformed anywhere else is corruption and fails
-startup. Registration and resolved launch intent are committed atomically
-before Herdr starts the CLI. `agent.launching` includes the readiness-token
-hash and SHA-256 `instruction_hash`; `agent.spawned` follows with the resolved
-PID and pane/workspace metadata. An incomplete launching attempt replays as
+recognized on replay but never emitted. The daemon rebuilds its entire roster
+and pending-message queue by replaying it. Current roster views (`agent list`,
+flock status, and flock overview) omit explicitly stopped agents; their
+lifecycle records remain in append-only journal history. A malformed final
+line is treated as a torn write and ignored; malformed anywhere else is
+corruption and fails startup. Registration and resolved launch intent are
+committed atomically before Herdr starts the CLI. `agent.launching` includes
+the readiness-token hash and SHA-256 `instruction_hash`; `agent.spawned`
+follows with the resolved PID and pane/workspace metadata. An incomplete
+launching attempt replays as
 `orphaned` with its token invalidated.
 
 ## Commands
@@ -247,7 +252,7 @@ fledge agent register <type|agent.md> register an already-running agent
 fledge agent ready             authenticate and wait for first message
 fledge agent ready --no-wait   authenticate and print assigned name
 fledge agent stop <name>       stop a spawned agent
-fledge agent list              roster with liveness
+fledge agent list              current roster with liveness
 
 fledge agent msg send <to> [body]  send a message, print its id
                                    (--body-file FILE|- is also accepted)
@@ -307,7 +312,9 @@ flags. Enter a command group such as `fledge agent`, or run `fledge agent
 │   ├── fledge/managed-agents.json    generated managed index
 │   └── fledge/catalog.json           generated machine model profiles
 ├── .fledgeignore    ignore patterns, relative to the workspace root
-├── flocks/          per-flock state: journal.jsonl, daemon.log
+├── flocks/<name>/
+│   ├── journal.jsonl, daemon.log
+│   └── runtime/fledge-orchestrator/  generated Claude/Pi startup assets
 ├── context/
 ├── locks/
 └── pluma/{plumage,feathers}/
@@ -410,20 +417,30 @@ already-registered identity; structured reply guidance using `fledge agent
 msg reply <message-id> <body>`; and the exact authoritative Markdown role. Raw
 profile and model spawns receive only the identity and messaging guidance.
 Claude and Pi receive this as the final `--append-system-prompt`; Codex receives
-it as the final TOML-encoded `developer_instructions` config. The readiness
-bootstrap is the CLI's initial positional prompt. Workers run `fledge agent
-ready`, which authenticates the one-use token, journals readiness, then waits
-for the first mailbox message and prints the same JSON object as `fledge agent
-msg wait`. The managed orchestrator runs `fledge agent ready --no-wait`, which
-authenticates and prints the assigned name without waiting. No startup
-`pane.send_input` or lifecycle `msg.sent` events are produced. Readiness warns
-that inbox delivery is manual: Herdr starts and owns the interactive Claude,
-Codex, or Pi process, and exposes pane lifecycle/status but no persistent native
-input/control stream that Fledge can safely serialize with user turns. Fledge
-does not use `claude --resume --print`, `codex exec resume`, `pi --session
---print`, pane input, toasts, or polling as substitutes. Messages remain pending
-for `agent msg inbox` or `agent msg wait`. Herdr remains limited to launch,
-placement, status, and teardown. If an
+it as the final TOML-encoded `developer_instructions` config. Workers retain
+the CLI's initial positional bootstrap and run `fledge agent ready`, which
+authenticates the one-use token, journals readiness, then waits for the first
+mailbox message and prints the same JSON object as `fledge agent msg wait`.
+
+The managed Claude orchestrator loads a deterministic per-flock plugin with a
+startup-only `SessionStart` command hook. The managed Pi orchestrator loads a
+deterministic per-flock extension whose startup-only `session_start` handler
+uses `pi.exec`. Both execute exactly `fledge agent ready --no-wait`, expose
+success or failure in session context, and do not trigger a model turn. Codex
+retains the existing initial positional prompt instructing it to run that
+command. The generated assets live under
+`.fledge/flocks/<name>/runtime/fledge-orchestrator/` and are replaced
+atomically before Herdr launches the pane. An asset-write failure prevents the
+launch and releases the reserved orchestrator name.
+
+No startup `pane.send_input` or lifecycle `msg.sent` events are produced.
+Readiness warns that inbox delivery is manual: Herdr starts and owns the
+interactive Claude, Codex, or Pi process, and exposes pane lifecycle/status but
+no persistent native input/control stream that Fledge can safely serialize
+with user turns. Fledge does not use `claude --resume --print`, `codex exec
+resume`, `pi --session --print`, pane input, toasts, or polling as substitutes.
+Messages remain pending for `agent msg inbox` or `agent msg wait`. Herdr
+remains limited to launch, placement, status, and teardown. If an
 integration sandbox cannot open the daemon socket, `agent ready --no-wait`
 atomically publishes the token hash plus any integration runtime session id
 under the flock directory for the daemon to validate and consume. The default
@@ -458,6 +475,16 @@ leaves the same message available to an exact retry. Inbox checks return
 immediately, print the oldest matching message as JSON, and print `null` when
 empty. Optional `--from` and `--reply-to` filters are conjunctive.
 
+For each delegated task, the managed orchestrator issues one correlated
+15-minute wait using the exact spawned name and dispatch message ID. If the
+host tool yields while that wait is still running, it continues the same
+invocation rather than starting another Fledge wait. It does not poll or inspect
+the inbox, roster, panes, status, or diagnostics unless the user explicitly
+asks for a check. On timeout it reports that the task is still pending, retains
+the correlation details, leaves the spawned agent running, and pauses for user
+direction; it never resends the task. This is orchestrator policy only: a
+direct `fledge agent msg wait` without `--timeout` still waits forever.
+
 A recipient replies with `fledge agent msg reply <message-id> <body>`.
 Fledge validates that the referenced message was claimed by this identity,
 derives its original sender, and sets exact causality in `reply_to`; the sender
@@ -486,18 +513,26 @@ or receive new messages.
 
 `fledge-forager` is a managed coordinator pinned to `claude-sonnet-5` that builds a
 validated `.fledge/context/project.md` through file-scoped
-`fledge-analyzer` agents. Use the assigned name printed by spawn:
+`fledge-analyzer` agents. Asking the managed orchestrator for “new context,”
+“regenerate context,” “refresh context,” “rebuild context,” or equivalent
+project-context work runs this existing workflow: it spawns `fledge-forager`,
+sends exactly `Build the project context`, and applies the standard single
+15-minute correlated wait. It stops the forager only after a terminal success
+or error reply and leaves it running after a timeout.
+
+To run the workflow directly, use the assigned name printed by spawn:
 
 ```sh
 fledge agent spawn fledge-forager
 task_id=$(fledge agent msg send <assigned-forager-name> "Build the project context")
-fledge agent msg wait --from <assigned-forager-name> --reply-to "$task_id"
+fledge agent msg wait --from <assigned-forager-name> \
+  --reply-to "$task_id" --timeout 15m
 fledge agent stop <assigned-forager-name>
 ```
 
-Forager launches unfocused beside the `fledge-orchestrator` workspace in the
-same Herdr session, in a workspace labelled `fledge-context` with a `context`
-tab. It waits for the explicit post-readiness task, creates a
+Forager launches unfocused beside the `orchestrator` workspace in the same
+Herdr session, in a workspace labelled `context` with a `context` tab. It
+waits for the explicit post-readiness task, creates a
 collision-safe run under `.fledge/context/runs/`, and scans once. The forager
 does not read repository contents itself. Instead, it partitions every scanned
 path exactly once into deterministic analyzer requests, each normally limited
@@ -631,8 +666,8 @@ request, and provenance data; warnings come from renderer or cleanup results;
 and leftovers come from the final roster. Cleanup trouble after publication is
 still success with warnings. On a pre-publication failure, the run evidence is
 retained and the reply reports `status`, `stage`, `message`, observed
-`failed_groups`, and the exact `run_path`. Stopping the forager closes only
-`fledge-context`, leaving the orchestrator tab and watcher pane intact.
+`failed_groups`, and the exact `run_path`. Stopping the forager closes only the
+`context` workspace, leaving the orchestrator tab and watcher pane intact.
 
 ### `.fledgeignore`
 

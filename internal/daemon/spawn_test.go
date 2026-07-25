@@ -1775,6 +1775,10 @@ func TestStopPiClosesItsPaneAndFreesItsSpecies(t *testing.T) {
 	if resp.Name != "pi-emperor" {
 		t.Fatalf("respawn took %q; a stopped agent's slug must be reusable", resp.Name)
 	}
+	current := d.list()
+	if len(current) != 1 || current[0].Name != "pi-emperor" || current[0].State != stateRunning {
+		t.Fatalf("current roster after stopped-name reuse = %+v", current)
+	}
 }
 
 func TestStopClaudeClosesItsPane(t *testing.T) {

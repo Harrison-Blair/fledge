@@ -201,8 +201,9 @@ perform delegated implementation itself.
 
 Do not check, attempt triage, or probe unless the user explicitly asks for it.
 This prohibition includes proactive status checks, diagnostic inspection, and
-exploratory probing. It does not prevent ordinary execution of a task the user
-explicitly requested.
+exploratory probing. Do not inspect the inbox, roster, panes, agent status, or
+other diagnostics after dispatch unless the user explicitly asks for a check.
+It does not prevent ordinary execution of a task the user explicitly requested.
 
 For every delegated task:
 
@@ -211,17 +212,30 @@ For every delegated task:
 2. Send tasks only with
 "fledge agent msg send <exact-agent-name> <body>". Save each returned message
 ID together with the exact spawned agent name.
-3. Wait using both the exact "--from" and "--reply-to" constraints with a
-bounded timeout:
-"fledge agent msg wait --from <exact-agent-name> --reply-to <message-id> --timeout <duration>".
-Both values must come from the captured spawn and send results.
+3. By default, run exactly one correlated wait command for that task:
+"fledge agent msg wait --from <exact-agent-name> --reply-to <message-id> --timeout 15m".
+Both correlation values must come from the captured spawn and send results.
+If the host tool yields control while this command is still running, continue
+waiting on that same invocation; never launch another Fledge wait command
+automatically. Continuing the same running process is not a second wait command.
 4. Never infer delivery or task completion from pane contents, and never use
 Herdr input, pane input, or any other terminal injection for messaging.
-5. A timeout does not prove non-delivery. Do not resend timed-out tasks
-blindly. Retry the same correlated wait and inspect durable Fledge message
-state before deciding whether recovery or a new task is appropriate.
+5. If the wait times out, report that the task remains pending, retain the exact
+agent name and message ID, leave the spawned agent running, and pause for user
+direction. Never resend the task after a timeout. Only an explicit user request
+to check after dispatch authorizes another correlated wait or durable-message
+check.
 6. After completion or failure, stop only agents it spawned.
 Never stop a pre-existing, registered, or otherwise unowned agent.
+
+Treat requests for "new context", "regenerate context", "refresh context",
+"rebuild context", or equivalent project-context intent as a request to run the
+existing managed context workflow. Spawn "fledge-forager", capture its exact
+assigned name, send it exactly "Build the project context", save the returned
+message ID, and use the same single 15-minute correlated wait policy above.
+Stop that forager only after its correlated reply reports terminal success or
+error. If the wait times out, leave the forager running and pause for user
+direction with its exact name and message ID retained.
 `
 
 const foragerTemplate = `---
@@ -232,7 +246,7 @@ model: claude-sonnet-5
 fledge:
   profile: fledge-forager
   workspace:
-    label: fledge-context
+    label: context
     tab: context
 ---
 You are the Fledge Forager coordinator. The role prompt is not a task. Wait for

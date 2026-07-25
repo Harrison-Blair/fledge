@@ -55,7 +55,7 @@ func TestEnsureSeedsManagedAnalysisTemplates(t *testing.T) {
 		"name: fledge-forager",
 		"model: claude-sonnet-5",
 		"profile: fledge-forager",
-		"label: fledge-context",
+		"label: context",
 		"tab: context",
 		"fledge context scan --json",
 		`"file_count":0`,
@@ -189,19 +189,16 @@ func TestEnsureRefreshesEveryManagedDefinition(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, want := range map[string]string{
-		orchestratorName: "Do not check, attempt triage, or probe unless the user explicitly asks for it.",
-		foragerName:      "profile: fledge-forager",
-		analyzerName:     "profile: fledge-analyzer",
+		orchestratorName: orchestratorTemplate,
+		foragerName:      foragerTemplate,
+		analyzerName:     analyzerTemplate,
 	} {
 		got, err := os.ReadFile(filepath.Join(base, name))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(got), want) {
-			t.Fatalf("refreshed %s missing %q:\n%s", name, want, got)
-		}
-		if strings.Contains(string(got), "stale managed definition") {
-			t.Fatalf("refresh retained stale prompt in %s", name)
+		if string(got) != want {
+			t.Fatalf("refreshed %s does not match canonical template:\n%s", name, got)
 		}
 	}
 }
@@ -228,25 +225,52 @@ func TestEnsureRemovesObsoleteManagedContextDirectories(t *testing.T) {
 	}
 }
 
-func TestManagedOrchestratorInstructionsRequireExplicitDiagnosticRequest(t *testing.T) {
+func TestManagedOrchestratorInstructionsUseSingleContextAwareWait(t *testing.T) {
 	for _, want := range []string{
 		"Do not check, attempt triage, or probe unless the user explicitly asks for it.",
 		"proactive status checks",
 		"diagnostic inspection",
 		"exploratory probing",
+		"Do not inspect the inbox, roster, panes, agent status",
 		"ordinary execution of a task the user",
 		"Capture the exact spawned agent name",
 		"Send tasks only with",
 		"Save each returned message",
-		"--from <exact-agent-name> --reply-to <message-id> --timeout <duration>",
+		"run exactly one correlated wait command",
+		"--from <exact-agent-name> --reply-to <message-id> --timeout 15m",
+		"continue\nwaiting on that same invocation",
+		"never launch another Fledge wait command\nautomatically",
 		"Never infer delivery",
 		"never use\nHerdr input",
-		"Do not resend timed-out tasks",
-		"inspect durable Fledge message",
+		"report that the task remains pending",
+		"retain the exact\nagent name and message ID",
+		"leave the spawned agent running",
+		"pause for user\ndirection",
+		"Never resend the task after a timeout",
+		"explicit user request\nto check after dispatch",
 		"stop only agents it spawned",
+		`"new context", "regenerate context", "refresh context"`,
+		`"rebuild context"`,
+		`Spawn "fledge-forager"`,
+		`send it exactly "Build the project context"`,
+		"same single 15-minute correlated wait policy",
+		"Stop that forager only after its correlated reply reports terminal success or",
+		"leave the forager running",
 	} {
 		if !strings.Contains(orchestratorTemplate, want) {
 			t.Errorf("orchestrator template missing %q", want)
+		}
+	}
+	if got := strings.Count(orchestratorTemplate, "fledge agent msg wait "); got != 1 {
+		t.Errorf("orchestrator template contains %d wait commands, want exactly 1", got)
+	}
+	for _, old := range []string{
+		"--timeout <duration>",
+		"Retry the same correlated wait",
+		"inspect durable Fledge message\nstate before deciding",
+	} {
+		if strings.Contains(orchestratorTemplate, old) {
+			t.Errorf("orchestrator template retained obsolete instruction %q", old)
 		}
 	}
 }

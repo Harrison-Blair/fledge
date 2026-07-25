@@ -606,8 +606,13 @@ func TestManagedOrchestratorReceivesAuthoritativeRoleNatively(t *testing.T) {
 	}
 	argv := strs(t, f.params("agent.start")["argv"])
 	want := assignedAgentPrompt(agentcfg.ReservedOrchestrator, definition.Prompt)
-	if len(argv) < 3 || argv[len(argv)-3] != "--append-system-prompt" || argv[len(argv)-2] != want || argv[len(argv)-1] != orchestratorBootstrapPrompt {
+	plugin := filepath.Join(flock.Dir(d.root, d.flockName), filepath.FromSlash(orchestratorRuntimeDir), "claude")
+	if len(argv) < 4 || argv[len(argv)-4] != "--append-system-prompt" || argv[len(argv)-3] != want ||
+		argv[len(argv)-2] != "--plugin-dir" || argv[len(argv)-1] != plugin {
 		t.Fatalf("orchestrator argv = %#v", argv)
+	}
+	if slicesContains(argv, orchestratorBootstrapPrompt) {
+		t.Fatalf("orchestrator argv still carries a positional readiness prompt: %#v", argv)
 	}
 	sum := sha256.Sum256([]byte(want))
 	launching := findEvent(t, d, evLaunching, agentcfg.ReservedOrchestrator)
@@ -701,18 +706,73 @@ func TestListAndSummaryLogTrackSpawnReadyStop(t *testing.T) {
 	if _, err := d.stop(&protocol.Request{Name: "worker-emperor"}); err != nil {
 		t.Fatal(err)
 	}
-	stopped := d.list()
-	var workerState string
-	for _, a := range stopped {
-		if a.Name == "worker-emperor" {
-			workerState = a.State
+	current := d.list()
+	if len(current) != 1 || current[0].Name != sender.Name {
+		t.Fatalf("current roster after stop = %+v, want only %s", current, sender.Name)
+	}
+	for _, op := range []string{protocol.OpList, protocol.OpStatus} {
+		resp := d.dispatch(&protocol.Request{Op: op}, nil)
+		if len(resp.Agents) != 1 || resp.Agents[0].Name != sender.Name {
+			t.Fatalf("%s agents after stop = %+v, want only %s", op, resp.Agents, sender.Name)
 		}
 	}
-	if len(stopped) != 2 || workerState != stateStopped {
-		t.Fatalf("stopped roster = %+v", stopped)
+	d.mu.Lock()
+	stopped := d.agents["worker-emperor"]
+	d.mu.Unlock()
+	if stopped.State != stateStopped {
+		t.Fatalf("internal stopped agent = %+v", stopped)
 	}
-	if got := strings.Count(readLog(), "started: 2 agents, 1 pending"); got != 1 {
+	if got := countEvents(t, d, evStopped, "worker-emperor"); got != 1 {
+		t.Fatalf("agent.stopped events = %d, want 1", got)
+	}
+	if got := strings.Count(readLog(), "started: 1 agents, 1 pending"); got != 1 {
 		t.Fatalf("stop summary with current counts = %d, want 1", got)
+	}
+
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := New(d.root, d.flockName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { restarted.Close() })
+	if got := restarted.list(); len(got) != 1 || got[0].Name != sender.Name {
+		t.Fatalf("replayed current roster = %+v, want only %s", got, sender.Name)
+	}
+	if got := restarted.agents["worker-emperor"].State; got != stateStopped {
+		t.Fatalf("replayed stopped state = %q, want %q", got, stateStopped)
+	}
+	if got := strings.Count(readLog(), "started: 1 agents, 1 pending"); got != 2 {
+		t.Fatalf("stop plus restart current summaries = %d, want 2", got)
+	}
+}
+
+func TestListKeepsDeadRegisteredAndOrphanedAgentsCurrent(t *testing.T) {
+	d := newTestDaemon(t)
+	d.mu.Lock()
+	d.order = []string{"dead-emperor", "orphan-emperor", "stopped-emperor"}
+	d.agents = map[string]protocol.Agent{
+		"dead-emperor": {
+			Name: "dead-emperor", Type: "dead", Species: "emperor", PID: 0,
+		},
+		"orphan-emperor": {
+			Name: "orphan-emperor", Type: "orphan", Species: "emperor", PID: 0,
+			Integration: "claude", State: stateOrphaned,
+		},
+		"stopped-emperor": {
+			Name: "stopped-emperor", Type: "stopped", Species: "emperor", PID: 0,
+			Integration: "claude", State: stateStopped,
+		},
+	}
+	d.mu.Unlock()
+
+	got := d.list()
+	if len(got) != 2 || got[0].Name != "dead-emperor" || got[1].Name != "orphan-emperor" {
+		t.Fatalf("current roster = %+v", got)
+	}
+	if got[0].Alive || got[1].Alive || got[1].State != stateOrphaned {
+		t.Fatalf("dead/orphaned roster details = %+v", got)
 	}
 }
 

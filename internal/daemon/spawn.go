@@ -150,10 +150,19 @@ func (d *Daemon) spawn(req *protocol.Request) (protocol.Response, error) {
 		sessionID = agentcfg.NewSessionID()
 	}
 	bootstrap := bootstrapPrompt
+	var startupArgs []string
 	if agentType == agentcfg.ReservedOrchestrator {
 		bootstrap = orchestratorBootstrapPrompt
 	}
-	argv := cfg.LaunchArgv(sessionID, instructions, bootstrap)
+	if orchestratorUsesStartupAsset(agentType, cfg) {
+		startupArgs, err = d.orchestratorStartupArgs(cfg.Integration)
+		if err != nil {
+			d.release(res)
+			return protocol.Response{}, err
+		}
+		bootstrap = ""
+	}
+	argv := cfg.LaunchArgv(sessionID, instructions, startupArgs, bootstrap)
 	placeholder := protocol.Agent{
 		Name: name, Type: agentType, Species: slug, PID: reservedPID,
 		Config: req.Config, Agent: resolved.agent, Profile: resolved.profile,
@@ -489,8 +498,9 @@ func (d *Daemon) readyDigest(name, got string, noWait bool, runtimeSessionID str
 			d.mu.Unlock()
 			return protocol.Response{}, errors.New("invalid readiness token")
 		}
-		// The CLI can execute its initial prompt before agent.start returns.
-		// Wait for the spawned event without keeping the daemon lock held.
+		// Native startup automation or the CLI's initial prompt can execute
+		// readiness before agent.start returns. Wait for the spawned event
+		// without keeping the daemon lock held.
 		if launch := d.launches[name]; launch != nil {
 			d.mu.Unlock()
 			<-launch.done
@@ -780,8 +790,9 @@ func (d *Daemon) launch(name, cwd string, cfg agentcfg.Config, argv []string, se
 	if anchorPane != "" {
 		// Herdr 0.7.4 can create only right/down splits. Interactive start
 		// therefore creates the orchestrator on the right, then immediately
-		// swaps it left and restores focus before registration, readiness, or
-		// bootstrap can make the temporary placement visible as a later jump.
+		// swaps it left and restores focus before registration, readiness
+		// automation, or bootstrap can make the temporary placement visible as
+		// a later jump.
 		if err := herdrwire.PaneSwap(d.session.SocketPath, anchorPane, started.PaneID); err != nil {
 			return launched{}, d.failPanePlacement(name, started.PaneID, "swap", err)
 		}

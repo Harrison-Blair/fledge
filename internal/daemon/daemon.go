@@ -450,13 +450,13 @@ func New(root, flockName string) (*Daemon, error) {
 		return nil, err
 	}
 	locked = false
-	d.startInboxNotifier()
 	d.logStateSummary()
+	d.startInboxNotifier()
 	return d, nil
 }
 
 func (d *Daemon) logStateSummary() {
-	d.debug.Printf("started: %d agents, %d pending", len(d.agents), len(d.pending))
+	d.debug.Printf("started: %d agents, %d pending", len(d.listLocked()), len(d.pending))
 }
 
 // Close begins shutdown and waits until every accepted request has responded,
@@ -882,9 +882,20 @@ func (d *Daemon) list() []protocol.Agent {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	return d.listLocked()
+}
+
+// listLocked projects the current roster from the durable lifecycle state.
+// Stopped agents remain in d.agents for replay, credential rejection, and name
+// reuse, but current roster views omit them. Caller holds d.mu, except during
+// single-threaded daemon construction before the daemon is published.
+func (d *Daemon) listLocked() []protocol.Agent {
 	agents := make([]protocol.Agent, 0, len(d.order))
 	for _, name := range d.order {
 		a := d.agents[name]
+		if a.State == stateStopped {
+			continue
+		}
 		a.Alive = alive(a.PID)
 		agents = append(agents, a)
 	}

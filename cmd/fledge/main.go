@@ -827,10 +827,9 @@ func managedOrchestratorRequest(root string) (protocol.Request, error) {
 	}, nil
 }
 
-// Labels for the herdr workspace and tab a fresh start opens, so the session
-// reads as fledge's rather than as an unnamed shell.
+// Labels for the Herdr workspace and tab a fresh start opens.
 const (
-	workspaceLabel = "fledge-orchestrator"
+	workspaceLabel = "orchestrator"
 	tabLabel       = "orchestrator"
 )
 

@@ -119,9 +119,18 @@ only).
   resolved launch metadata, one-use token hash, and SHA-256 instruction hash.
   It installs separate launch/readiness latches, starts Claude/Pi with a final
   `--append-system-prompt` or Codex with a final TOML-encoded
-  `developer_instructions`, and supplies readiness as the initial positional
-  prompt. The instruction document contains the assigned identity, direct-send
-  guidance, and exact Markdown role (identity/guidance only for raw spawns).
+  `developer_instructions`. Workers and the Codex orchestrator receive
+  readiness as the initial positional prompt. For the managed Claude
+  orchestrator, spawn atomically generates a per-flock plugin and loads it with
+  `--plugin-dir`; its startup-only `SessionStart` hook executes `fledge agent
+  ready --no-wait` and returns the result as session context. For the managed
+  Pi orchestrator, spawn atomically generates a per-flock extension and loads
+  it with `--extension`; its startup-only `session_start` handler executes the
+  same command with `pi.exec` and records a `nextTurn` custom message without
+  triggering inference. Generated assets live below
+  `.fledge/flocks/<name>/runtime/fledge-orchestrator/`. The instruction
+  document contains the assigned identity, direct-send guidance, and exact
+  Markdown role (identity/guidance only for raw spawns).
   Profile `argv` is option-only, rejects `--` and integration flags that replace
   the interactive session/control mode, and precedes Fledge's arguments.
   Once Herdr resolves, `agent.spawned` records PID/pane/workspace metadata and
@@ -141,7 +150,7 @@ only).
   Immediately after `agent.start`, interactive start swaps and focuses the managed
   orchestrator into its final left position before registration or readiness.
 - After readiness completes, interactive fresh starts keep
-  one primary `fledge-orchestrator` workspace. The existing right-hand CLI pane
+  one primary `orchestrator` workspace. The existing right-hand CLI pane
   is split down at 50%, rooted at the project, without taking focus. Its
   original upper pane execs the current executable as
   `fledge watch <flock>`; the new lower pane remains an interactive shell. The

@@ -1,1309 +1,1332 @@
 # Project Context
 
-_Generated at 2026-07-24 01:45:47 UTC._
-
-## Provenance
-
-- Forager: `fledge-forager-emperor` (profile `fledge-context-sonnet-auto`, model `claude-sonnet-5`)
-- Analyzer count: 10
-- Group count: 10
-- File count: 94 (1203040 bytes)
-- Distinct profiles: 2 (`fledge-context-haiku-auto`, `fledge-context-sonnet-auto`)
-- Distinct models: 2 (`claude-haiku-4-5`, `claude-sonnet-5`)
-- Run created at: 2026-07-24 01:45:25 UTC
-- Analyzer `agentcfg-catalog-scaffold`: `fledge-analyzer-gentoo` (profile `fledge-context-haiku-auto`, model `claude-haiku-4-5`)
-- Analyzer `cmd-fledge-1`: `fledge-analyzer-adelie` (profile `fledge-context-haiku-auto`, model `claude-haiku-4-5`)
-- Analyzer `cmd-fledge-2`: `fledge-analyzer-chinstrap` (profile `fledge-context-haiku-auto`, model `claude-haiku-4-5`)
-- Analyzer `contextdoc`: `fledge-analyzer-little` (profile `fledge-context-haiku-auto`, model `claude-haiku-4-5`)
-- Analyzer `daemon-core`: `fledge-analyzer-african` (profile `fledge-context-haiku-auto`, model `claude-haiku-4-5`)
-- Analyzer `daemon-spawn-readiness`: `fledge-analyzer-galapagos` (profile `fledge-context-haiku-auto`, model `claude-haiku-4-5`)
-- Analyzer `docs`: `fledge-analyzer-king` (profile `fledge-context-haiku-auto`, model `claude-haiku-4-5`)
-- Analyzer `herdr-integration`: `fledge-analyzer-humboldt` (profile `fledge-context-haiku-auto`, model `claude-haiku-4-5`)
-- Analyzer `root-meta`: `fledge-analyzer-emperor` (profile `fledge-context-haiku-auto`, model `claude-haiku-4-5`)
-- Analyzer `support-libs`: `fledge-analyzer-magellanic` (profile `fledge-context-haiku-auto`, model `claude-haiku-4-5`)
+_Generated at 2026-07-25 20:27:55 UTC._
 
 ## Project Overview
 
-Fledge is a zero-inference Go orchestrator for a multi-agent coding stack (Herdr pane-bus, Pi, Claude Code, Codex). One binary runs as both the CLI and a per-flock daemon (re-exec'd under setsid), meeting only over a unix socket speaking newline-delimited JSON (internal/protocol). A flock is one isolated orchestration session with its own daemon, agent roster, append-only journal, socket, and Herdr session; the journal is the sole state authority, written before any client is ack'd, and is replayed on restart. Agents are pane-hosted across three integrations (claude/codex/pi) with kebab-case type-species names drawn from a fixed penguin pool, launched via portable Markdown definitions (internal/agentcfg) synchronized into versioned JSON indexes, with models routed by a fixed prefix table and discovered into a per-machine catalog (internal/catalog). Herdr integration is three-layered: CLI shell-out for session lifecycle (internal/herdr), direct socket wire calls for pane/workspace control (internal/herdrwire), and a sandboxed file-bridge fallback (internal/filebridge) for clients that cannot open the daemon socket. A managed context subsystem (internal/contextdoc, this forager/analyzer workflow) lets a forager agent partition a workspace scan into subsystem groups, dispatch them to analyzer agents, validate their structured replies, and atomically render a canonical Markdown project document. The orchestrator itself performs no LLM inference: it issues socket commands, consumes observed events, advances deterministic state, and journals — all inference happens in visible, operator-interactable panes. docs/ is a completed, frozen 'Stage 0' research/experiment record that informs but does not govern current design.
+Fledge is a zero-inference Go orchestrator for multi-agent coding sessions built on three integrations (Claude, Codex, Pi) hosted in visible Herdr panes. Its core invariant is that the Go CLI is the sole state authority: a per-flock daemon (internal/daemon) maintains an append-only journal as ground truth, journaling every state transition before acknowledging the client, and rebuilding roster/messages/placements/readiness by replaying that journal on startup. The daemon never performs LLM inference itself — all reasoning happens inside operator-visible agent panes launched and tracked through the herdr socket API (internal/herdrwire) and CLI (internal/herdr). Agent identity, model routing, and launch configuration are governed by portable Markdown definitions (internal/agentcfg), which are synchronized into deterministic JSON indexes and enforce strict namespace and integration-specific field rules. Supporting packages provide workspace/session identity (internal/workspace, internal/flock), file discovery and ignore filtering (internal/scan, internal/ignore), sandboxed RPC fallback (internal/filebridge via internal/client), model discovery (internal/catalog), and directory scaffolding (internal/scaffold). The cmd/fledge CLI implements hand-rolled flag parsing with globally-unique short flags, dispatches flock/agent/context/daemon subcommands, and drives interactive flows (start, restart, clear) with extensive dependency-injection test seams. A self-hosted Forager/Analyzer mechanism (internal/contextdoc, validated by internal/daemon's context_message_test) partitions the codebase into file groups, dispatches structured-analysis requests to spawned analyzer agents, validates replies, and renders the published project.md context document — this very run is an instance of that mechanism. Legacy Stage 0 design docs (docs/) record now-completed research (authority-split model, screen-detection precedence, reliable input injection, no practical concurrency ceiling) that is carried forward into the current architecture but is not itself a live plan.
 
 ## Routing
 
-- `.github` → `root-meta`: CI/CD workflow definitions (PR checks, release automation); gates on internal/version/VERSION.
-- `scripts` → `root-meta`: Build/install/reinstall/release-version shell scripts; no build system beyond these.
-- `go.mod` → `root-meta`: Module declaration: github.com/Harrison-Blair/fledge, Go 1.26, single dependency goccy/go-yaml.
-- `go.sum` → `root-meta`: Pinned dependency hash for goccy/go-yaml.
-- `README.md` → `root-meta`: Authoritative user-facing command reference, quickstart, concepts, and .fledge/ layout documentation.
-- `CLAUDE.md` → `root-meta`: Project instructions for Claude Code: architecture invariants, conventions, commands.
-- `AGENTS.md` → `root-meta`: Repository guidelines for portable .agent.md definitions and namespacing.
-- `LICENSE` → `root-meta`: AGPLv3 license text.
-- `.gitignore` → `root-meta`: Excludes build artifacts and gitignored generated .fledge state (locks, flocks, catalog.json, agents.json).
-- `docs` → `docs`: Frozen Stage 0 design/decision record (ADRs, experiment findings, integration contracts, immutable reference snapshots). Historical input, not current instruction; do not resurrect from docs/handoff-stage0.md or treat docs/reference/* as current.
-- `cmd/fledge/agent_definitions_test.go` → `cmd-fledge-1`: CLI command dispatcher, context inspection (scan/graph), flock lifecycle, agent lifecycle/message routing.
-- `cmd/fledge/behavior_test.go` → `cmd-fledge-1`: See cmd-fledge-1.
-- `cmd/fledge/clear_test.go` → `cmd-fledge-1`: See cmd-fledge-1.
-- `cmd/fledge/context.go` → `cmd-fledge-1`: `context scan/graph` command implementation.
-- `cmd/fledge/context_pipeline_test.go` → `cmd-fledge-1`: See cmd-fledge-1.
-- `cmd/fledge/graph_test.go` → `cmd-fledge-1`: See cmd-fledge-1.
-- `cmd/fledge/help.go` → `cmd-fledge-1`: Embedded help-page text and dispatch for --help/usage errors.
-- `cmd/fledge/main.go` → `cmd-fledge-1`: Top-level command dispatcher and hand-rolled flag parser (takeFlag/takeBoolFlag/rejectFlags).
-- `cmd/fledge/main_test.go` → `cmd-fledge-2`: CLI entrypoint tests and remaining commands: parser/restart/scan/stop/watch/workspace.
-- `cmd/fledge/parser_test.go` → `cmd-fledge-2`: See cmd-fledge-2.
-- `cmd/fledge/restart_test.go` → `cmd-fledge-2`: In-place restart/install-handoff command tests.
-- `cmd/fledge/scan_test.go` → `cmd-fledge-2`: See cmd-fledge-2.
-- `cmd/fledge/stop_test.go` → `cmd-fledge-2`: See cmd-fledge-2.
-- `cmd/fledge/watch.go` → `cmd-fledge-2`: `fledge watch` command, execs as a non-agent root-shell tab process.
-- `cmd/fledge/watch_test.go` → `cmd-fledge-2`: See cmd-fledge-2.
-- `cmd/fledge/workspace_test.go` → `cmd-fledge-2`: See cmd-fledge-2.
-- `internal/agentcfg` → `agentcfg-catalog-scaffold`: Portable agent/profile definitions, model routing, index synchronization.
-- `internal/catalog` → `agentcfg-catalog-scaffold`: Model discovery from installed integration binaries; regenerates catalog.json.
-- `internal/scaffold` → `agentcfg-catalog-scaffold`: Creates and maintains the .fledge/ directory tree on init.
-- `internal/contextdoc` → `contextdoc`: Context document rendering/validation: analyzer-request/reply schemas, project.md synthesis and atomic publish. Directly governs this forager/analyzer workflow.
-- `internal/daemon/boundary_test.go` → `daemon-core`: Per-flock state machine: journal, placement, message delivery, isolation.
-- `internal/daemon/context_message_test.go` → `daemon-core`: Managed context (forager/analyzer) message validation tests.
-- `internal/daemon/daemon.go` → `daemon-core`: Core daemon server and state machine.
-- `internal/daemon/delivery_order_test.go` → `daemon-core`: Message delivery ordering tests.
-- `internal/daemon/e2e_test.go` → `daemon-core`: End-to-end daemon lifecycle tests.
-- `internal/daemon/forager_test.go` → `daemon-core`: Forager agent type tests.
-- `internal/daemon/inbox_notify.go` → `daemon-core`: Wake/inbox-notify delivery for armed agents.
-- `internal/daemon/inbox_notify_test.go` → `daemon-core`: See inbox_notify.go.
-- `internal/daemon/isolation_test.go` → `daemon-core`: Cross-flock isolation tests.
-- `internal/daemon/journal.go` → `daemon-core`: Append-only journal read/write/replay; torn-line tolerance.
-- `internal/daemon/journal_test.go` → `daemon-core`: See journal.go.
-- `internal/daemon/placement.go` → `daemon-core`: Workspace/tab placement and Herdr session coordination, latching.
-- `internal/daemon/placement_test.go` → `daemon-core`: See placement.go.
-- `internal/daemon/ready_signal.go` → `daemon-spawn-readiness`: Agent spawn/readiness lifecycle: one-use token auth, launch/stop coordination.
-- `internal/daemon/ready_test.go` → `daemon-spawn-readiness`: See ready_signal.go and spawn.go.
-- `internal/daemon/reply_test.go` → `daemon-spawn-readiness`: Reply/wait-correlation tests.
-- `internal/daemon/serve_test.go` → `daemon-spawn-readiness`: Socket serve-loop tests.
-- `internal/daemon/socket_test.go` → `daemon-spawn-readiness`: Socket lifecycle/reclaim tests.
-- `internal/daemon/spawn.go` → `daemon-spawn-readiness`: Agent spawn implementation: journaling, launch metadata, readiness latches.
-- `internal/daemon/spawn_test.go` → `daemon-spawn-readiness`: See spawn.go.
-- `internal/daemon/watch_test.go` → `daemon-spawn-readiness`: Watch-related daemon tests.
-- `internal/herdr` → `herdr-integration`: Herdr CLI shell-out wrapper for session lifecycle (no socket API for this).
-- `internal/herdrwire` → `herdr-integration`: Direct Herdr socket wire protocol (pinned protocol 16 / herdr 0.7.4) for pane ops.
-- `internal/filebridge` → `herdr-integration`: Sandboxed request/response file-bridge fallback transport when the daemon socket is unavailable.
-- `internal/protocol` → `support-libs`: Daemon<->client wire request/response contract types.
-- `internal/scan` → `support-libs`: Workspace file scanning with ignore-rule application.
-- `internal/species` → `support-libs`: Fixed penguin species pool for agent naming.
-- `internal/version` → `support-libs`: Embedded VERSION single source of truth; build-tag dev suffix.
-- `internal/workspace` → `support-libs`: Git-style walk-up root discovery, symlink canonicalization.
-- `internal/client` → `support-libs`: Daemon unix-socket client.
-- `internal/flock` → `support-libs`: Flock name validation and identity.
-- `internal/ignore` → `support-libs`: .fledgeignore gitignore-syntax matching with #include support.
+- `.github` → `project-meta`: CI/CD workflows: PR validation (lint/test/build/version-check), post-merge release automation, and release badge publishing.
+- `scripts` → `project-meta`: Build, install, reinstall, and release-version-check shell scripts.
+- `README.md` → `project-meta`: Authoritative command/flag reference, .fledge/ tree layout, and portable agent format documentation.
+- `CLAUDE.md` → `project-meta`: Developer guide: architecture invariants, CLI flag conventions, versioning, and re-verification rules for fast-moving integrations.
+- `AGENTS.md` → `project-meta`: Repository guidelines for single-user project conventions.
+- `docs` → `docs`: Completed Stage 0 legacy design/decision/experiment record and immutable 2026-07-17 reference snapshots; historical, not a live roadmap.
+- `cmd/fledge/main.go` → `cmd-fledge-core`: CLI entrypoint, command dispatch, flock/daemon lifecycle, agent spawn/messaging, interactive pickers.
+- `cmd/fledge/context.go` → `cmd-fledge-core`: Context subcommands: workspace scan, directory graph, analyzer request/worksheet composition.
+- `cmd/fledge/help.go` → `cmd-fledge-core`: Embedded help topic map and lookup/fallback resolution.
+- `cmd/fledge/watch.go` → `cmd-fledge-core`: Daemon log watcher and non-critical watcher-pane installation.
+- `cmd/fledge/agent_definitions_test.go` → `cmd-fledge-tests`: Full CLI test suite: agent lifecycle, flock management, context pipeline, parser robustness, interactive startup, daemon spawn/restart.
+- `internal/daemon/daemon.go` → `daemon-core-a`: Core daemon state machine, message routing, identity auth.
+- `internal/daemon/journal.go` → `daemon-core-a`: Append-only event journal: atomic writes and full-state replay/recovery.
+- `internal/daemon/placement.go` → `daemon-core-a`: Workspace/tab placement resolution, creation latching, crash recovery.
+- `internal/daemon/ready_signal.go` → `daemon-core-a`: Socket and file-based readiness token authentication.
+- `internal/daemon/ready_test.go` → `daemon-core-a`: Readiness handshake and orchestrator-special-case tests.
+- `internal/daemon/spawn.go` → `daemon-core-b`: Agent spawn lifecycle: reserve/launch/journal/readiness loop for Claude/Pi/Codex.
+- `internal/daemon/startup_assets.go` → `daemon-core-b`: Generated Claude plugin / Pi extension / Codex bootstrap startup automation assets.
+- `internal/daemon/inbox_notify.go` → `daemon-core-b`: Durable orchestrator mailbox wake-notification worker with backoff and coalescing.
+- `internal/daemon/isolation_test.go` → `daemon-core-b`: Per-flock isolation guarantees: journal, socket, roster, species pool.
+- `internal/daemon/boundary_test.go` → `daemon-tests-misc`: Daemon initialization guard tests: scaffold, name/socket validation, malformed-request tolerance.
+- `internal/daemon/context_message_test.go` → `daemon-tests-misc`: Managed Forager/Analyzer message schema validation before journaling.
+- `internal/daemon/delivery_order_test.go` → `daemon-tests-misc`: Message durability under append failure and restart-replay correctness.
+- `internal/daemon/e2e_test.go` → `daemon-tests-misc`: Broad integration coverage: roster, correlation, restart recovery, journal corruption tolerance.
+- `internal/daemon/forager_test.go` → `daemon-tests-misc`: Dedicated-workspace prompt-based launch and readiness-timeout rollback for Forager.
+- `internal/daemon/reply_test.go` → `daemon-tests-misc`: Structured reply correlation and inbox-claim identity checks.
+- `internal/daemon/serve_test.go` → `daemon-tests-misc`: Serve loop accept-error handling and shutdown/ownership-transfer semantics.
+- `internal/daemon/socket_test.go` → `daemon-tests-misc`: Socket path resolution, collision avoidance, concurrent-election tests.
+- `internal/daemon/watch_test.go` → `daemon-tests-misc`: Session liveness probing and window-title branding tests.
+- `internal/agentcfg` → `internal-agentcfg`: Agent profile/definition loading, fixed-prefix model routing, Markdown parsing, atomic index synchronization.
+- `internal/catalog` → `internal-misc-a`: Model discovery from installed integration binaries with deterministic collision resolution.
+- `internal/client` → `internal-misc-a`: Unified daemon RPC: Unix socket primary, filebridge fallback.
+- `internal/contextdoc` → `internal-misc-a`: Analyzer request/reply schema validation, template composition, and project.md rendering — the machinery this very Forager run uses.
+- `internal/filebridge` → `internal-misc-a`: Sandboxed workspace-local file-based RPC transport with PID-liveness tracking.
+- `internal/flock` → `internal-misc-a`: Flock naming/validation and workspace-prefixed session identity derivation.
+- `internal/herdr` → `internal-misc-b`: Herdr CLI wrapper for session lifecycle (ensure/recreate/stop/delete).
+- `internal/herdrwire` → `internal-misc-b`: Direct Herdr Unix-socket wire client for pane/workspace/tab operations.
+- `internal/ignore` → `internal-misc-b`: gitignore-style .fledgeignore pattern matching with #include support.
+- `internal/protocol` → `internal-misc-b`: Daemon wire-format Request/Response/Agent/Message types and Op constants.
+- `internal/scaffold` → `internal-misc-b`: .fledge/ directory tree initialization, template seeding, managed-definition sync.
+- `internal/scan` → `internal-misc-b`: Ignore-aware workspace file walking used by context scan.
+- `internal/species` → `internal-misc-b`: 18-slug penguin species pool allocation per agent type.
+- `internal/version` → `internal-misc-b`: Embedded semantic version source of truth with dev-build suffix.
+- `internal/workspace` → `internal-misc-b`: Canonical workspace root discovery and deterministic hash/slug derivation for socket namespacing.
 
 ## Cross-Group Flows
 
-- `cmd-fledge-1` → `daemon-spawn-readiness`: CLI agent/spawn commands issue socket requests that the daemon journals as registered/launching/spawned before Herdr placement.
-- `cmd-fledge-1` → `support-libs`: CLI commands resolve the workspace root and flock identity via internal/workspace and internal/flock before any daemon dial.
-- `cmd-fledge-2` → `daemon-core`: restart/stop/watch commands query and mutate daemon state (status, shutdown, roster) via the socket client.
-- `agentcfg-catalog-scaffold` → `daemon-spawn-readiness`: Resolved agent definitions, profiles, and routed models feed spawn's launch metadata and instruction-hash computation.
-- `daemon-core` → `herdr-integration`: Placement logic and message delivery drive Herdr workspace/tab/pane creation via herdrwire, and session lifecycle via herdr.
-- `daemon-spawn-readiness` → `herdr-integration`: Spawn launches agents into Herdr panes and tears them down on failure; readiness is authenticated independently of Herdr's pane events.
-- `daemon-spawn-readiness` → `herdr-integration`: Sandboxed agents unable to reach the daemon socket fall back to internal/filebridge for spawn/ready/message round-trips.
-- `daemon-core` → `contextdoc`: The managed context protocol (forager request/reply messages) is schema-validated against internal/contextdoc types before being journaled as sent.
-- `contextdoc` → `support-libs`: Context run-directory and published artifact paths are pinned and canonicalized via internal/workspace root discovery.
-- `root-meta` → `cmd-fledge-1`: CI workflows and build/install scripts build and gate cmd/fledge as the single binary entrypoint.
-- `docs` → `herdr-integration`: Frozen Stage 0 experiment findings (EXP1/EXP2/EXP3) are encoded as live invariants in herdr/herdrwire behavior (native screen detection wins; keys:["enter"] required; no pre-set concurrency cap).
+- `cmd-fledge-core` → `daemon-core-a`: CLI commands (start, agent spawn/ready, flock lifecycle) dial the daemon socket via internal/client and drive placement/readiness state transitions.
+- `cmd-fledge-core` → `daemon-core-b`: runAgentSpawn and interactive start build OpSpawn requests that the daemon's spawn() lifecycle (reserve/launch/journal/ready) fulfills.
+- `daemon-core-a` → `daemon-core-b`: acquirePlacement() (placement.go) resolves the workspace/tab a spawned agent lands in before spawn.go's launch() calls Herdr to start the pane.
+- `daemon-core-b` → `internal-misc-b`: spawn.go's launch() and startup_assets.go call into internal/herdrwire for pane/workspace operations and internal/herdr for session ensure/recreate.
+- `internal-agentcfg` → `daemon-core-b`: agentcfg.Config (Integration/Model/Argv/Env) resolved via Route()/Load() supplies the launch argv and role instructions spawn.go passes to Herdr.
+- `cmd-fledge-core` → `internal-misc-a`: context.go's compose/validate commands and runInit's model discovery call into internal/contextdoc and internal/catalog respectively.
+- `internal-misc-a` → `internal-misc-b`: internal/contextdoc's scan/render pipeline consumes internal/scan file listings (filtered by internal/ignore) and internal/scaffold directory constants.
+- `internal-misc-a` → `daemon-tests-misc`: The Forager/Analyzer request/reply schemas validated in internal/contextdoc are enforced a second time server-side in the daemon's managed-context message path (context_message_test.go), which this run's dispatch/reply traffic exercises.
+- `daemon-core-b` → `daemon-tests-misc`: spawn.go's readiness and inbox-notify machinery is exercised end-to-end by e2e_test.go and delivery_order_test.go for restart-replay and once-only delivery guarantees.
+- `docs` → `daemon-core-a`: The zero-inference and journal-as-truth invariants recorded as resolved ADRs in docs/DECISIONS.md are directly encoded in daemon.go/journal.go's append-before-ack design.
+- `docs` → `internal-misc-b`: EXP1/EXP2 findings (native Claude screen-detection precedence, reliable pane.send_input with real Enter) shape how internal/herdrwire and internal/herdr are used by the daemon, favoring metadata-only reporting for Claude panes.
 
 ## Global Invariants
 
-- The Go CLI (daemon) is the sole state authority; Herdr and agent events are input signals only, never durable state.
-- Zero inference in the orchestrator: it issues socket commands, consumes events, and advances deterministic state; all LLM inference happens inside visible, operator-interactable panes.
-- The journal is append-only and written before any client is acknowledged; replay reconstructs exact state; a torn final line is tolerated but any earlier malformed line is corruption.
-- Anything not journaled must not be left running: a failed spawn is torn down immediately (no dangling Herdr panes/workspaces).
-- Workspace root discovery walks up git-style to the nearest .fledge/ directory then resolves symlinks, so client and daemon always agree on the canonical path that keys the socket namespace.
-- Model routing is a fixed prefix table, never guessed; unknown models are a hard error.
-- Agent names are kebab-case <type>-<species> drawn from a fixed species pool, one pool per flock; fledge-orchestrator is the sole no-species exception; the fledge-* namespace is reserved from user definitions.
-- Herdr pane authority is native/screen-detection-first: Fledge's socket reporting is metadata-only and never seizes agent status authority on Claude panes (EXP1).
-- Unix sockets live under $XDG_RUNTIME_DIR outside the workspace (108-byte sun_path cap; NFS cannot bind unix sockets there).
-- Sandboxed clients that cannot open the daemon socket fall back to a workspace-local file-bridge transport carrying the full protocol.
-- docs/ is a completed, frozen historical record (Stage 0); git history is not design input; only current HEAD and distilled docs/CLAUDE.md govern design.
+- The append-only per-flock journal is the sole state authority; every operation is fsync'd and journaled before the client is acknowledged, and daemon state is rebuilt purely by journal replay on startup.
+- The orchestrator performs zero inference: it only issues Herdr/socket commands, consumes events as input signals, advances a deterministic state machine, and writes its journal.
+- All agent work happens in visible, operator-controllable Herdr panes; Herdr itself is never treated as durable state and loses metadata across restarts.
+- Liveness differs by agent kind: self-registered agents are judged by PID (signal-0 probe on the session leader), while spawned agents change state only on an observed journaled event, never by PID.
+- Workspace/session identity is canonical and deterministic: FindRoot + EvalSymlinks + SHA-256 hash ensures the CLI and daemon always agree on socket namespace and session naming.
+- Model routing is a fixed prefix table with no inference or fallback; an unrecognized model id is always a hard error with a remedy hint, never a guess.
+- Namespace enforcement is strict: user agent/profile names may never use the reserved fledge-* prefix, and fledge-orchestrator is the sole exempt singleton name.
+- Analyzer/Forager request and reply traffic is validated against strict JSON schemas (DisallowUnknownFields, duplicate-key rejection, exact correlation) both client-side (internal/contextdoc) and daemon-side (context_message_test), before anything is journaled or acted on.
+- Flock-level isolation is total: each flock has its own journal, socket, roster, and species pool with no cross-flock visibility.
+- Destructive or irreversible interactive operations (flock clear, deinit) require a real terminal and explicit confirmation; there is no --force flag for scripted bypass.
 
-## Subsystem: agentcfg-catalog-scaffold
+## Subsystem: cmd-fledge-core
 
-The agent configuration subsystem handles portable agent definitions, launch profiles, and model catalog discovery. It synchronizes Markdown-based agent definitions into versioned JSON indexes (user-agents.json, managed-agents.json, catalog.json), routes model IDs to integrations (claude/pi/codex), validates launch configurations, and regenerates the model catalog from installed integration binaries. The scaffold module creates and maintains the .fledge directory tree and managed agent definitions.
+CLI frontend implementing command dispatch, flag parsing, flock/daemon lifecycle, agent spawning, interactive workflows, and context analysis. Hand-rolled flag parsing (takeFlag, takeBoolFlag, rejectFlags) with global short-flag uniqueness. Flock lifecycle spans start (interactive orchestrator + watcher), restart, stop, clear. Daemon spawning via setsid re-exec with readiness polling. Agent commands for register, spawn, ready, stop, list, models, types, and async messaging. Interactive UI with terminal detection, picker menus, confirmation prompts. Context commands for workspace scanning, directory graphs, and analyzer request composition. 32 help topics with fallback resolution.
 
-**Purpose:** Agent configuration subsystem: agent/profile definitions, model catalog discovery, and portable Markdown agent scaffolding.
+**Purpose:** CLI entrypoint, flag parsing, and core commands (main, context, help, watch) in cmd/fledge
 
 ### Entry Points
 
-- `internal/agentcfg/agentcfg.go`: Configuration loading and validation: Load() merges user/managed/catalog profiles in order; Route() maps model IDs to integrations; Validate() checks profiles; CommandArgv()/LaunchArgv() assemble launch commands
-- `internal/agentcfg/definitions.go`: Markdown definition parsing and synchronization: ParseDefinition() reads frontmatter and prompt bodies; Synchronize() rebuilds indexes atomically; LoadDefinitions()/FindDefinition() provide runtime access to agent definitions and their profiles
-- `internal/catalog/catalog.go`: Model discovery from installed binaries: Discover() queries claude/codex/pi for available models; Write() persists the catalog; integration-specific parsers handle version, models, and models output formats
-- `internal/scaffold/scaffold.go`: Workspace initialization: Ensure() creates .fledge tree and refreshes managed definitions; EnsureGitignore() maintains runtime-state ignore patterns
+- `cmd/fledge/main.go`: main() → run() CLI entrypoint and top-level command router (init, start, restart, stop, flock, agent, daemon, context, watch, version, help)
+- `cmd/fledge/main.go`: runStart (590) - Interactive flock startup with herdr session, daemon spawn, orchestrator selection, and watcher pane installation
+- `cmd/fledge/main.go`: runFlock (370) - Flock subcommand dispatcher (clear, stop, list, status)
+- `cmd/fledge/main.go`: runAgent (1511) - Agent subcommand dispatcher (register, spawn, ready, stop, list, models, types, msg)
+- `cmd/fledge/main.go`: runInit (2209) - Create/refresh .fledge directory with model discovery and agent config synchronization
+- `cmd/fledge/main.go`: runContext (83) - Context subcommand dispatcher (scan, graph, compose, validate, render-project)
+- `cmd/fledge/watch.go`: runWatch (23) - Stream daemon.log with polling and interrupt handling
+- `cmd/fledge/context.go`: runContextCompose (19) - Analyzer request/reply composition dispatcher
+- `cmd/fledge/help.go`: printHelp (531) - Lookup and print help topic from embedded helpPages map (32 topics)
 
 ### Key Symbols
 
-- `Config` in `internal/agentcfg/agentcfg.go` (struct): Launchable agent configuration with integration, model, provider, permission_mode, sandbox, argv, env, and cwd fields
-- `Route` in `internal/agentcfg/agentcfg.go` (function): Routes model ID to integration+provider by prefix table; never guesses; claude*, gpt*/codex*/o-series/opencode* are valid; others error with a working remedy hint
-- `Load` in `internal/agentcfg/agentcfg.go` (function): Loads and merges Config profiles in deterministic order: user-agents.json, managed-agents.json, catalog.json; user entries shadow managed/catalog
-- `Definition` in `internal/agentcfg/definitions.go` (struct): Parsed portable agent definition: name, description, tools, model, profile, prompt text, source, managed flag, launch Config, and workspace placement
-- `ParseDefinition` in `internal/agentcfg/definitions.go` (function): Parses .agent.md file: validates YAML frontmatter (name, description required; tools, model, fledge.profile/launch/workspace optional); returns prompt body untrimmed
-- `Synchronize` in `internal/agentcfg/definitions.go` (function): Rebuilds user and managed indexes atomically from Markdown definitions under agents/user and agents/fledge; derives profiles from model+fledge.profile; validates cross-source conflicts; writes JSON atomically with tmp+rename
-- `Index` in `internal/agentcfg/definitions.go` (struct): Versioned JSON index shape: version, agents map (name→AgentRecord), profiles map (name→Config)
-- `Discover` in `internal/catalog/catalog.go` (function): Queries installed integration binaries in fixed order (claude --version, codex debug models, pi --list-models); assembles named Config entries; skips missing/failing binaries gracefully; returns Notes for every skip/error
-- `Write` in `internal/catalog/catalog.go` (function): Atomically replaces catalog.json with discovery results (all Config entries under an Index); deterministic because json.MarshalIndent sorts keys
-- `Ensure` in `internal/scaffold/scaffold.go` (function): Creates .fledge directory tree, seeded agents stub, managed definitions (orchestrator, forager, analyzer, context profiles), and .fledgeignore; migrates legacy context profiles; preserves user edits to .fledgeignore and stub
+- `takeFlag` in `cmd/fledge/main.go` (function): Extract flag with value from args; rejects leading - in values (346-358)
+- `takeBoolFlag` in `cmd/fledge/main.go` (function): Extract valueless flag from args (873-884)
+- `rejectFlags` in `cmd/fledge/main.go` (function): Reject leftover flag-shaped args (360-368)
+- `spawnDaemon` in `cmd/fledge/main.go` (function): Re-exec self as daemon in setsid session with env vars (966-996)
+- `waitSpawnDaemonReady` in `cmd/fledge/main.go` (function): Poll OpStatus until daemon session matches expected; 5s timeout (1003-1013)
+- `stopFlock` in `cmd/fledge/main.go` (function): End flock by stopping its herdr session; managed sessions also deleted (1183-1222)
+- `attachHerdr` in `cmd/fledge/main.go` (function variable): Spawn herdr UI process; stubbed for testing (909-932)
+- `startAfterAttach` in `cmd/fledge/main.go` (function variable): Async orchestrator spawn goroutine; stubbed for testing (957-959)
+- `managedOrchestratorRequest` in `cmd/fledge/main.go` (function): Build OpSpawn request for fledge-orchestrator with profile selection (803-828)
+- `awaitSpawn` in `cmd/fledge/main.go` (function): Resolve interactive start outcome with buffered channel and rollback handling (778-801)
+- `runAgentSpawn` in `cmd/fledge/main.go` (function): Spawn daemon-managed agent with agent/profile/model selection (1613-1753)
+- `runAgentReady` in `cmd/fledge/main.go` (function): Authenticate readiness token; wait for first message unless --no-wait (1755-1816)
+- `pickOrchestratorConfig` in `cmd/fledge/main.go` (function): Two-level interactive menu: Claude/Codex direct, Pi via submenu (2899-2958)
+- `helpPages` in `cmd/fledge/main.go` (map): 32 help topics covering all commands and subcommands (32-497 in help.go)
+- `scanContext` in `cmd/fledge/context.go` (function): Build workspace file list with ignore filtering and optional scope (201-251)
+- `buildContextGraph` in `cmd/fledge/context.go` (function): Build directory tree with recursive sizes and file counts (312-345)
+- `watchDaemonLog` in `cmd/fledge/watch.go` (function): Poll daemon.log, copy appended entries, stop when daemon down (54-94)
+- `installWatcherPane` in `cmd/fledge/watch.go` (function): Split shell pane, start watcher command, focus orchestrator (101-126)
 
 ### Dependencies
 
-- Internal `internal/scaffold`: Provides DirName constant (.fledge), AgentsName stub filename, GitignoreEntries for runtime state, and Ensure() to initialize workspace
-- Internal `internal/ignore`: Parses .fledgeignore and .gitignore patterns; used by EnsureGitignore() to check coverage before appending entries
-- External `encoding/json`: Marshals and unmarshals Index, Config, and catalog JSON; MarshalIndent ensures deterministic key sort order
-- External `github.com/goccy/go-yaml`: Parses YAML frontmatter in .agent.md files; unmarshals into frontMatter struct for validation
-- External `crypto/sha256`: Hashes prompt bodies; PromptHash in AgentRecord lets consumers detect definition changes without storing the full prompt
-- External `os/exec`: Spawns integration binaries (claude, codex, pi) for model discovery; context.WithTimeout bounds each execution
+- Internal `internal/agentcfg`: Load/sync agent definitions, model routing, profile configuration
+- Internal `internal/catalog`: Model discovery from claude/pi/codex CLIs, catalog file writing
+- Internal `internal/client`: Daemon IPC via Do() and Running() liveness probe
+- Internal `internal/contextdoc`: Analyzer request/reply validation and composition
+- Internal `internal/daemon`: Socket path computation, readiness signal publishing
+- Internal `internal/flock`: Flock naming (SessionName, SessionPrefix), environment vars, directory layout
+- Internal `internal/herdr`: Session lifecycle: Ensure, Recreate, Stop, Delete, Find, List, Up
+- Internal `internal/herdrwire`: Pane operations: Create, PaneClose, PaneSplit, SendInput, PaneFocus, TabRename
+- Internal `internal/ignore`: File ignore pattern matching (.fledgeignore)
+- Internal `internal/protocol`: Request/Response/Agent/Message types, OpCodes (OpSpawn, OpRegister, OpReady, etc.)
+- Internal `internal/scaffold`: .fledge directory structure constants and template names
+- Internal `internal/scan`: File listing with ignore pattern filtering
+- Internal `internal/version`: Version string for display and daemon verification
+- Internal `internal/workspace`: Workspace root discovery via git-style walk and EvalSymlinks
+- External `encoding/json`: JSON marshaling for --json output and daemon IPC
+- External `os`: File I/O, executable detection, signal handling, environment vars
+- External `os/exec`: Daemon spawn (setsid), herdr UI attachment, git risk checking
+- External `os/signal`: NotifyContext for watch command interrupt handling
+- External `bufio`: Interactive prompt reading from stdin
+- External `fmt`: Formatted output and error messages
+- External `strings`: String manipulation (TrimSpace, HasPrefix, Split, ReplaceAll)
+- External `time`: Timeouts (5s daemon ready, 10s flock stop, 2s herdr attach), polling intervals
+- External `path/filepath`: Path manipulation, symlink resolution (EvalSymlinks), directory walking
+- External `sort`: Sorting agents, configs, files, help topics
+- External `strconv`: String to int conversion for picker selections and ports
+- External `syscall`: getsid syscall for session leader detection
+- External `math`: Overflow checking for file size totals (MaxInt64)
+- External `io`: io.Copy for daemon log streaming
+- External `io/fs`: fs.DirEntry for .fledge tree walking
+- External `errors`: Error wrapping and joining
+- External `context`: Signal-driven context cancellation
 
 ### Data Flows
 
-- `.fledge/agents/user/**/*.agent.md` → `internal/agentcfg/definitions.go:ParseDefinition`: User definitions on disk are parsed; frontmatter extracted; profile references validated
-- `internal/agentcfg/definitions.go:Synchronize` → `.fledge/agents/fledge/user-agents.json`: Parsed user definitions indexed deterministically; atomically written with tmp+rename; profile derivations included
-- `internal/agentcfg/definitions.go:Synchronize` → `.fledge/agents/fledge/managed-agents.json`: Parsed managed definitions (from .fledge/agents/fledge/) indexed; managed-only profiles included
-- `internal/catalog/catalog.go:Discover` → `installed binaries (claude, codex, pi)`: Spawns each integration with model-list arguments; parses stdout; builds named Config entries from discovered models
-- `internal/catalog/catalog.go:Discover` → `.fledge/agents/fledge/catalog.json`: Generated machine-specific model catalog; reflects currently-installed integrations and their available models
-- `internal/agentcfg/agentcfg.go:Load` → `daemon, CLI commands`: Reads all three indexes in order; returns merged map of launchable profiles; user entries shadow generated ones
-- `internal/agentcfg/agentcfg.go:Route` → `spawn/agent commands`: CLI passes a model ID; Route looks it up in fixed prefix table; returns integration (claude/pi/codex) and provider (pi-only)
-- `CLI spawn flags` → `internal/agentcfg/agentcfg.go:Validate`: Validates permission_mode (claude), sandbox (codex), provider (pi), argv restrictions, and integration-specific combinations
+- `runStart entry` → `spawnDaemon`: Interactive start flows: workspace validation → session create/ensure → daemon spawn (setsid) → readiness poll
+- `spawnDaemon` → `waitSpawnDaemonReady`: Daemon spawn triggers 5-second readiness poll; OpStatus must report matching session
+- `runStart` → `managedOrchestratorRequest`: After daemon ready, build OpSpawn request for orchestrator with profile selection
+- `attachHerdr` → `startAfterAttach`: Herdr UI attaches; once terminal owned, spawn orchestrator in background goroutine
+- `startAfterAttach goroutine` → `awaitSpawn`: Orchestrator spawn result reported on buffered channel; awaitSpawn resolves with rollback guard
+- `installWatcherPane` → `herdrwire operations`: Non-critical watcher setup: split shell (50% down), start watcher command, refocus orchestrator
+- `runAgentSpawn` → `pickAgentDefinition/pickAgentConfig`: Bare spawn with terminal shows numbered menu; selection (by number or name) passed to OpSpawn
+- `runAgentReady` → `client.Do(OpReady)`: Agent authenticates token; if --no-wait returns; else waits for OpReceive message
+- `runAgentMsg*` → `agentMsgRequest (client.Do)`: send/reply/inbox/wait all route through injected agentMsgRequest function
+- `runContextScan` → `scanContext`: Workspace scan → ignore filter → file list; optional scope narrows to subtree
+- `runContextGraph` → `buildContextGraph`: Scan workspace → build tree structure with recursive size measurement
+- `runContextCompose*` → `contextdoc validators`: Compose request/worksheet → validate JSON → atomic write via temp+rename
+- `runWatch` → `watchDaemonLog`: Signal context + polling loop: initial io.Copy, then poll tail + check liveness
 
 ### Invariants
 
-- Model routing is deterministic prefix-match-only; no guessing or defaults; unknown models error with a working remedy hint (fledge.profile reference)
-- User definitions and profiles shadow identically-named managed and catalog entries; no merging or conflict resolution within a name
-- Profile derivation requires both a model (routable) and fledge.profile name if launch fields are present; missing either is an error
-- Managed agent names use the reserved fledge-* namespace; user agents must not; namespace violation is caught at parse time
-- Index writes are atomic (tmp file + rename) to survive crashes; malformed earlier lines in journal are corruption; final torn line is tolerated
-- Generated indexes (user-agents.json, managed-agents.json, catalog.json) live in .fledge/agents/fledge/; only user definitions live in .fledge/agents/user/
-- Portable agent definition paths must be agents/<source>/<name>/<name>.agent.md; folder name, filename, and frontmatter name must all match
-- Profile conflicts (same name, different Config) across sources are errors; Synchronize hard-fails before writing any index
-- Model discovery runs in fixed order (claude, codex, pi) with 30s timeout per integration; missing/failing binaries are noted, not errors
-- Discovered launcher names are always suffixed (cl, cx, pi, oc, og, or provider slug) so the same model doesn't change names when re-discovered
-- CommandArgv and LaunchArgv are deterministic; profile argv is option-only and never contains --; Fledge appends integration identity and instruction after profile argv
-- Workspace metadata (label, tab) must be single trimmed lines with no newlines/nulls; non-text files treated as metadata-only, contents never invented
-- Permission_mode, sandbox, and provider are integration-specific; cross-checks reject mismatched integration+field combinations
+- Short flags are globally unique across entire CLI (per CLAUDE.md); -P for --pid, -D for --provider, preventing subcommand-level collisions
+- Workspace root discovery is canonical via filepath.EvalSymlinks; client and daemon must agree for socket path hash and deterministic session selection
+- Flag parsing exact-match only; takeFlag rejects leading - in values so -H in positional context is always the help flag, never a value
+- Daemon socket lies outside workspace in $XDG_RUNTIME_DIR/fledge/<hash>/ because NFS cannot bind unix sockets; hash supports multiple concurrent workspaces
+- Managed herdr sessions are recreated on every start (not reused) to prevent stale orchestrator pane identity collisions; operator-named sessions (--session) are reused
+- Interactive start requires terminal stdout; non-terminal stdout skips orchestrator, attach, watcher; pre-daemon failures roll back; post-daemon failures preserve flock
+- Destructive operations (flock clear, deinit, fresh init) require terminal I/O; no --force flag; scripted users use rm -rf or manual commands
+- Agent spawn catalog works offline (models/types); agent register/ready/stop/msg all require FLEDGE_FLOCK environment and running daemon
+- Analyzer requests and replies are strictly validated against JSON schemas; unknown fields, missing required fields, unsafe paths are rejected and correlated
+- Help page resolution is exact-match with fallback; runHelp walks up command path to deepest match, falls back to nearest valid topic instead of root
 
 ### Tests
 
-- `internal/agentcfg/agentcfg_test.go`: TestRoute: covers all model prefixes and rejects unknown models with a working remedy hint
-- `internal/agentcfg/agentcfg_test.go`: TestValidate: covers valid configs, name formats, integration combinations, and field isolation (provider on pi only, etc.)
-- `internal/agentcfg/agentcfg_test.go`: TestCommandArgv: assembles launch commands correctly for each integration; verifies option ordering and session ID placement
-- `internal/agentcfg/agentcfg_test.go`: TestLoadValid, TestLoadCatalogOnly, TestLoadUserShadowsCatalog: merges indexes in order; user entries shadow generated ones
-- `internal/agentcfg/definitions_test.go`: TestSynchronizeDerivesProfileAndWritesDeterministicIndex: parses definitions, derives profiles, writes deterministic JSON; ensures rewrite produces identical bytes
-- `internal/agentcfg/definitions_test.go`: TestSynchronizeValidatesPathAndNamespaces: rejects mismatched paths, reserved namespace in user definitions, managed agents outside fledge-* namespace
-- `internal/agentcfg/definitions_test.go`: TestSynchronizeRejectsConflictingProfileDeclarations: hard-fails when two definitions declare the same profile with different Configs
-- `internal/catalog/catalog_test.go`: TestDiscoverNamesEverySourceAlways: discovers models from all three integrations; verifies every entry validates and is suffixed
-- `internal/catalog/catalog_test.go`: TestDiscoverSkipsMissingBinary, TestDiscoverSkipsFailingBinary: gracefully skips missing/failing integrations; other sources still contribute; Notes explain every skip
-- `internal/catalog/catalog_test.go`: TestRunDeadlineReportsTimeout: 30s timeout per binary; context.DeadlineExceeded is caught and reported separately from generic failures
-- `internal/scaffold/agents_test.go`: TestAgentsNameMatchesAgentcfg: verifies scaffold.AgentsName constant equals agentcfg.FileName (no drift in file paths)
-- `internal/scaffold/agents_test.go`: TestAgentsStubIsEmptyAndLoads: seeded agent stub loads as empty Config map
-- `internal/scaffold/scaffold_test.go`: TestEnsureCreatesTree: creates all subdirs, .fledgeignore, agent stubs, and managed definitions
-- `internal/scaffold/scaffold_test.go`: TestEnsureRefreshesEveryManagedDefinition: overwrites stale managed definitions on re-run
-- `internal/scaffold/scaffold_test.go`: TestEnsureMigratesKnownLegacyContextProfiles: removes legacy context-haiku-auto and context-sonnet-auto when their bytes match the old templates
+- `cmd/fledge/main.go`: Testable seams: stdoutIsTerminal, stdinIsTerminal, attachHerdr, startAfterAttach, stopHerdrSession function vars enable stubbing of terminal detection and interactive flow
+- `cmd/fledge/main.go`: Flock clear testable via injected: clearFlockRunning, clearFlockSession, clearFlockRemoveAll, clearFlockOrphans, clearOrphanSession; allows testing without real daemon/herdr
+- `cmd/fledge/main.go`: Daemon operations testable via injected: daemonStatusForCLI, spawnDaemonStatus, spawnDaemonSleep, restartDaemonStatus, restartDaemonShutdown, restartDaemonRunning, restartSpawnDaemon, restartSleep
+- `cmd/fledge/main.go`: Agent operations testable via injected: agentSpawnRequest, agentMsgRequest; allows testing without running daemon
+- `cmd/fledge/watch.go`: Watch testable via injected: runLogWatcher (watchDaemonLog), watchPollInterval; allows testing polling and log tail without real daemon
+- `cmd/fledge/main.go`: Related tests in agent_definitions_test.go, workspace_test.go (from git status); likely test agent definitions and workspace discovery respectively
 
 ### Files
 
-#### internal/agentcfg/agentcfg.go
+#### cmd/fledge/context.go
 
-_text._ Public API for loading and validating launch configurations; defines Config struct, Load/Route/Validate functions, CommandArgv/LaunchArgv builders, and ReservedOrchestrator constant; no inference or defaults
+_text._ 432-line context analysis commands: analyzer request/worksheet composition (39-189), workspace scanning with ignore filtering and optional scope (201-251), directory graph generation with recursive size measurement (281-375), text rendering of tree structures (386-431). Helper types local to file (scannedContext, graphNode, graphDir). No external validation; contextdoc package handles schema checks. Self-contained; could be moved independently.
 
-#### internal/agentcfg/agentcfg_test.go
+#### cmd/fledge/help.go
 
-_text._ Tests for Route, Validate, CommandArgv, LaunchArgv, Load semantics, and name validation; covers all integration combinations and field isolation rules
+_text._ 560-line help system: rootHelp ASCII logo (8-30), 32 hard-coded help topics in helpPages map (32-497), usageError type with help context (499-516), help lookup and printing (518-559). Entire help text embedded; no external localization support. Adding a command requires manual map entry. Help resolution uses exact-match with fallback to nearest valid topic.
 
-#### internal/agentcfg/definitions.go
+#### cmd/fledge/main.go
 
-_text._ Markdown parsing and index synchronization; ParseDefinition extracts YAML frontmatter and prompt; Synchronize rebuilds user/managed indexes atomically; LoadDefinitions and FindDefinition provide runtime lookup; legacy migration helper
+_text._ 2982-line command router, flag parser, flock/daemon lifecycle manager, agent spawner, interactive UI coordinator, context scanner. Sections: top-level dispatch (45-81), context subcommands (83-207), helpers (234-338), flock commands (370-550), interactive start (590-763), lifecycle guards (778-871), daemon ops (966-1127), flock stop/list/status (1153-1310), agent commands (1511-1753), agent models/types (1850-1882), agent messaging (1916-2056), init/deinit (2209-2391), model rendering (2540-2637), interactive pickers (2690-2958). Large file; could be split by domain. Heavy use of function-var seams for testing.
 
-#### internal/agentcfg/definitions_test.go
+#### cmd/fledge/watch.go
 
-_text._ Tests for definition parsing, synchronization atomicity, profile derivation, namespace/path validation, conflict detection, and legacy index migration
+_text._ 142-line daemon log watcher and pane integration: runWatch entry point (23-48), watchDaemonLog polling loop (54-94), watcher pane installation and split (101-126), error recovery with shell quoting (128-141). Self-contained; non-critical setup preserves flock on failure. 50% down pane split; no configuration for ratio.
 
-#### internal/catalog/catalog.go
+## Subsystem: cmd-fledge-tests
 
-_text._ Model discovery from installed integration binaries; Discover queries claude/codex/pi in fixed order; gracefully handles missing/failing binaries; generates named Config entries with source suffixes; deterministic Write with tmp+rename
+Test suite for cmd/fledge CLI package covering agent lifecycle (registration, spawning, messaging, readiness), flock management (creation, listing, status, stopping, clearing), context analysis (scanning, graphing, composition, validation, rendering), CLI parser robustness (flag handling, validation, help pages), interactive orchestrator startup and placement, daemon spawn/restart/supervision, and terminal-based interaction (deinit, clear, stop).
 
-#### internal/catalog/catalog_test.go
-
-_text._ Tests for parsing codex JSON and pi fixed-width output; Discover integration with fake binaries; timeout and failure handling; collision resolution; determinism; and cross-module collision-freedom with user profiles
-
-#### internal/scaffold/agents_test.go
-
-_text._ Cross-package test verifying scaffold.AgentsName matches agentcfg.FileName constant and that generated stub loads as empty; ensures .gitignore covers fledge/agents/fledge/
-
-#### internal/scaffold/scaffold.go
-
-_text._ Workspace initialization: Ensure creates .fledge tree, seeded stubs, and managed definitions (orchestrator, forager, analyzer, context profiles); handles legacy migration; EnsureGitignore appends runtime-state entries idempotently
-
-#### internal/scaffold/scaffold_test.go
-
-_text._ Tests for directory creation, managed definition refresh, legacy profile migration (with modification detection), .fledgeignore template (with .gitignore include logic), and gitignore entry management
-
-## Subsystem: cmd-fledge-1
-
-CLI entrypoint system implementing fledge command dispatcher, context inspection (scan/graph), workspace orchestration (flock lifecycle), and agent lifecycle management with message routing. Comprehensive command parsing and help system.
-
-**Purpose:** CLI entrypoint core: context/help/main/watch command implementations and their direct tests.
+**Purpose:** Test suite for the cmd/fledge CLI package covering agent definitions, behavior, clear, context pipeline, graph, parser, restart, scan, stop, watch, and workspace commands
 
 ### Entry Points
 
-- `cmd/fledge/main.go`: Main entry point and command dispatcher; routes all fledge CLI commands through run() function
-- `cmd/fledge/help.go`: Centralized help system with helpPages map covering all commands and help routing logic
-- `cmd/fledge/context.go`: Context command implementations for workspace scanning and directory graph visualization
+- `cmd/fledge/agent_definitions_test.go`: Agent types, definitions, registration, readiness protocol, socket vs fallback signal
+- `cmd/fledge/behavior_test.go`: CLI operation tests: roster formatting, agent operations, messaging, flock listing
+- `cmd/fledge/clear_test.go`: Flock state cleanup, orphan session management, interactive confirmation
+- `cmd/fledge/context_pipeline_test.go`: Analyzer request/reply validation, worksheet composition, project rendering
+- `cmd/fledge/graph_test.go`: File tree graphing, ignore semantics, scope navigation
+- `cmd/fledge/main_test.go`: Help pages, profile pickers, init discovery, startup orchestration, agent rows
+- `cmd/fledge/parser_test.go`: Flag parsing, value extraction, malformed input detection
+- `cmd/fledge/restart_test.go`: Daemon replacement, liveness polling, verification, error guidance
+- `cmd/fledge/scan_test.go`: File walking, ignore semantics, workspace discovery
+- `cmd/fledge/stop_test.go`: Daemon shutdown, session cleanup, terminal confirmation
+- `cmd/fledge/watch_test.go`: Log polling, pane layout, orchestrator attach, watcher command
+- `cmd/fledge/workspace_test.go`: Daemon spawning, session binding, interactive start, placement rollback
 
 ### Key Symbols
 
-- `run` in `cmd/fledge/main.go` (function): Core command dispatcher routing all top-level subcommands (init, start, context, agent, etc.)
-- `runContext` in `cmd/fledge/main.go` (function): Context subcommand dispatcher routing to scan, graph, validate, and render-project
-- `scanContext` in `cmd/fledge/context.go` (function): Resolves workspace root and applies ignore rules to produce scannedContext view
-- `buildContextGraph` in `cmd/fledge/context.go` (function): Transforms scanned files into hierarchical directory graph with size/count aggregation
-- `runAgentSpawn` in `cmd/fledge/main.go` (function): Agent spawn orchestrator handling profile selection, model routing, workspace placement
-- `runFlockClear` in `cmd/fledge/main.go` (function): Interactive flock state cleanup with managed session teardown and orphan session removal
-- `helpPages` in `cmd/fledge/help.go` (variable): Centralized map of all command help text organized by command path
-- `usageErrorf` in `cmd/fledge/main.go` (function): Creates usageError with contextual help page for command-line syntax errors
-- `takeFlag` in `cmd/fledge/main.go` (function): Extracts flag and value from args list, returns value and remaining args
-- `flockArg` in `cmd/fledge/main.go` (function): Resolves flock name from explicit argument or FLEDGE_FLOCK environment variable
+- `captureRun` in `cmd/fledge/main_test.go` (function): Captures stdout/stderr from CLI run, returns output and error
+- `takeFlag` in `cmd/fledge/main_test.go` (function): Extracts flag value from args, rejects flag-shaped values except stdin marker
+- `pickAgentConfig` in `cmd/fledge/main_test.go` (function): Interactive profile selection via numbered menu or name
+- `scaffoldedWorkspace` in `cmd/fledge/main_test.go` (function): Creates temp workspace with .fledge tree and subdirectory
+- `stubStdinTerminal` in `cmd/fledge/main_test.go` (function): Toggles stdin TTY detection for interactive tests
+- `startDaemon` in `cmd/fledge/main_test.go` (function): Runs in-process daemon with cleanup
+- `interactiveStart` in `cmd/fledge/main_test.go` (function): Wires fake herdr session for interactive start test
+- `liveSocket` in `cmd/fledge/main_test.go` (function): Fake herdr protocol responder recording requests
+- `fakeHerdr` in `cmd/fledge/main_test.go` (function): Stub herdr CLI recording session launches and operations
+- `pickOrchestratorConfig` in `cmd/fledge/main_test.go` (function): Orchestrator-only profile menu with pi browser
 
 ### Dependencies
 
-- Internal `internal/workspace`: Workspace root discovery (FindRoot) using git-style walk-up
-- Internal `internal/scaffold`: .fledge directory management and initialization
-- Internal `internal/agentcfg`: Agent definitions, profiles, and configuration synchronization
-- Internal `internal/catalog`: Model catalog discovery and management for spawning
-- Internal `internal/client`: Socket client for daemon communication (register, spawn, list, msg ops)
-- Internal `internal/daemon`: Daemon lifecycle (spawn, status, shutdown) and journal management
-- Internal `internal/flock`: Flock naming, validation, listing, and directory management
-- Internal `internal/herdr`: Herdr session lifecycle (create, stop, delete, find, up checks)
-- Internal `internal/herdrwire`: Herdr wire protocol for workspace/tab creation and pane operations
-- Internal `internal/protocol`: Socket protocol definitions (Request/Response types and operation codes)
-- Internal `internal/scan`: Workspace file scanning with ignore rules
-- Internal `internal/ignore`: Ignore file parsing for .fledgeignore matching
-- Internal `internal/contextdoc`: Context document validation and project rendering
-- Internal `internal/version`: Version information retrieval
-- External `os`: Process and environment manipulation, filesystem operations
-- External `os/exec`: External command execution (herdr CLI, daemon spawn)
-- External `syscall`: Low-level syscall for setsid (process group) and getsid
-- External `encoding/json`: JSON encoding/decoding for API responses and config
-- External `path/filepath`: Path manipulation and traversal
-- External `bufio`: Buffered I/O for stdin prompts and log tailing
-- External `time`: Duration parsing and deadline management
-- External `fmt`: Formatted output and error messages
-- External `strings`: String manipulation and parsing
+- Internal `internal/agentcfg`: Profile catalog, index versioning, reserved agent names (fledge-orchestrator)
+- Internal `internal/client`: RPC calls to daemon (Do, Running), liveness checks
+- Internal `internal/daemon`: Daemon lifecycle (New, RunBound, SocketPath, ReadySignalPath)
+- Internal `internal/flock`: Flock directory paths, listing, session names, prefixes
+- Internal `internal/protocol`: Request/Response structures, operations, agent names, env vars
+- Internal `internal/scaffold`: Directory tree initialization, .gitignore entries
+- Internal `internal/workspace`: Git-style root discovery with EvalSymlinks
+- Internal `internal/contextdoc`: Analyzer request/reply schemas, scan/render documents, validation
+- Internal `internal/version`: Version.Get() for daemon restart verification
+- External `encoding/json`: Marshaling profiles, requests, responses, graph structures
+- External `os`: File I/O, pipes, environment, Stat, Mkdir, WriteFile
+- External `path/filepath`: Path manipulation, symbolic link resolution with EvalSymlinks
+- External `strings, bufio`: Text processing, line reading, field splitting
+- External `net`: Unix socket listening for fake herdr protocol
+- External `time`: Polling intervals, timeouts, sleep mocking in tests
+- External `io`: Pipe reading for stdout/stderr capture
+- External `sync`: Mutex-protected request recording in wireRecorder
+- External `context`: Cancellation for log watcher polling
+- External `errors`: Error wrapping and identity checks (Is)
+- External `strconv`: PID and duration string conversion
+- External `slices`: Slice equality assertions (Equal, Contains)
 
 ### Data Flows
 
-- `CLI args` → `run()`: Command-line arguments parsed and dispatched to subcommand handlers
-- `workspace root` → `context.go:scanContext`: Workspace directory discovered, ignore rules loaded, files scanned
-- `scanned files` → `buildContextGraph`: Files aggregated into hierarchical directory structure with size/count calculations
-- `agent definitions` → `runAgentSpawn`: Loaded definitions checked for profile requirements, user prompted for selection if needed
-- `spawn request` → `client.Do()`: Protocol request sent to daemon socket for agent launch
-- `flock list` → `runFlockClear`: Flock states enumerated, liveness checked, interactive confirmation obtained
-- `agent ready` → `daemon.WriteReadySignal`: Readiness token and session ID written as fallback when daemon socket unavailable
-- `agent msg ops` → `acknowledgeMessage`: Received messages acknowledged via OpAck after JSON output succeeds
-- `start attach callback` → `startAfterAttach goroutine`: Orchestrator spawn initiated asynchronously after herdr terminal handoff
-- `daemon status` → `awaitSpawn`: Spawn outcome resolved against attach error to determine start success/failure
+- `CLI args` → `takeFlag, takeBoolFlag, rejectFlags`: Parser validates all flags up front, rejects flag-shaped values
+- `Parsed args → run()` → `Command dispatch → handler`: Routes to agent types, spawn, stop, clear, init, etc.
+- `Handler → client.Do() → daemon socket` → `RPC request`: Commands go through protocol to running daemon
+- `Daemon journal → client.Running()` → `Liveness check`: Self-registered and spawned agent liveness via PID probe or event state
+- `Interactive start → herdr session socket` → `wire protocol`: Orchestrator placement: agent.start → pane.swap → pane.focus
+- `Watchdog poller → log file → watch output` → `Streaming lines`: Poll intervals yielded until context cancelled
+- `Flock state → manifest files` → `Cleanup phases`: Session deletion before state removal (ordering invariant)
+- `Analyzer request → response files` → `Workflow inputs`: File list, paths, sizes feed into analyzer assignment
+- `Scan walk → ignore patterns → graph nodes` → `Tree construction`: Patterns applied bottom-up; ignored dirs fully pruned
 
 ### Invariants
 
-- All flock names validated through flock.Validate before use; invalid names rejected with descriptive error
-- Help pages always accompany syntax/usage errors through usageError wrapper; bare runtime failures report directly
-- Flag parsing completed before positional argument checking; rejectFlags catches leftover flags for unified error handling
-- Interactive commands (clear, stop, deinit) require both stdin and stdout terminals; non-terminal stdin/stdout causes immediate refusal
-- Flock argument resolution: explicit positional > FLEDGE_FLOCK environment > error requiring one of both
-- Start rollback: half-finished start always tears down flock to avoid stranded daemons; only partial failures (watcher) are non-critical
-- Ready token lifecycle: one-use token validated before wait; fallback signal written only when socket unavailable, never exposes token
-- Message acknowledgment: only called after successful JSON output to ensure interrupted output preserves message delivery
-- Graph building: ignored files permanently pruned; selecting ignored directory still produces empty root node, never reactivates pruned items
-- Agent liveness probed by PID signal-0; session leader used by default (not immediate parent) to survive transient sh -c processes
-- Managed herdr sessions (fledge- prefix) deleted post-stop; operator-named sessions only stopped, never deleted
-- Spawn placement: --workspace and --tab required together; incompatible with pi profiles; validated before daemon request
-- Configuration loading: agentcfg.Synchronize called before any config-dependent operation to ensure indexes match definitions
-- Workspace root: git-style walk-up to .fledge directory via workspace.FindRoot; canonicalized via EvalSymlinks for consistent socket namespace
+- Flag parsing precedes command dispatch: flag-shaped values reject at parse time, not silently consumed
+- Placed daemons not outside running roster: client.Running() uses journal and signal-0 probes
+- Ready handshake order enforced: register → ready → receive → ack sequence exact
+- Clear/stop only delete running-false targets: re-probed liveness before removal
+- Session cleanup precedes state removal: clearFlocks() deletes session first, preserves on failure
+- Managed sessions scoped to workspace: clearFlockOrphans() filters by hash prefix + saved flock list
+- Interactive start attaches before spawn: orchestrator launch waits for Herdr UI live
+- Workspace labels deterministic: fixed IDs in test fixtures (w1:p1, w1:p2)
+- Ignore patterns applied at scan time: fully ignored subtrees yield single root with FileCount=0
+- Orchestrator profile fallback: missing orchestrator-profile shows general picker menu
 
 ### Tests
 
-- `cmd/fledge/agent_definitions_test.go`: Agent definition registration, readiness authentication, token fallback signal, and metadata carrying tests
-- `cmd/fledge/behavior_test.go`: Help system, flock listing/status, agent registration, agent messaging (send/wait/reply correlation), duration parsing tests
-- `cmd/fledge/clear_test.go`: Flock clear lifecycle: terminal checks, running skip, liveness recheck before deletion, orphan session removal, partial failure handling
-- `cmd/fledge/graph_test.go`: Context graph human/JSON output, scope filtering, recursive size/count calculation, ignore semantics, empty scope handling
-- `cmd/fledge/context_pipeline_test.go`: Spawn placement selectors, message send/reply correlation, inbox claiming, ready no-wait, analyzer request/reply validation, project rendering
+- `cmd/fledge/agent_definitions_test.go`: Agent registration, metadata carrying, readiness protocol, socket/fallback signal handling (6 tests)
+- `cmd/fledge/behavior_test.go`: Roster formatting, flock ops, human output, messaging correlation (10 tests)
+- `cmd/fledge/clear_test.go`: Flock cleanup: confirmation, liveness, orphan sessions, ordering, partial failure (14 tests)
+- `cmd/fledge/context_pipeline_test.go`: Analyzer request/reply validation, worksheet composition, graph rendering (13 tests)
+- `cmd/fledge/graph_test.go`: File tree graphing, ignore patterns, scope handling (6 tests)
+- `cmd/fledge/main_test.go`: Help pages, profile pickers, init discovery, startup orchestration, agent rows (60+ tests)
+- `cmd/fledge/parser_test.go`: Flag parsing robustness, value extraction, malformed input (7 tests)
+- `cmd/fledge/restart_test.go`: Daemon replacement, liveness polling, verification, error guidance (12 tests)
+- `cmd/fledge/scan_test.go`: File walking, ignore semantics, workspace discovery (4 tests)
+- `cmd/fledge/stop_test.go`: Daemon shutdown, session cleanup, terminal confirmation (8 tests)
+- `cmd/fledge/watch_test.go`: Log polling, pane layout, orchestrator attach, watcher command (8 tests)
+- `cmd/fledge/workspace_test.go`: Daemon spawning, session binding, interactive start, placement rollback (25+ tests)
 
 ### Files
 
 #### cmd/fledge/agent_definitions_test.go
 
-_text._ Tests agent type listing, definition registration with metadata carrying, ready authentication sequence with token validation, fallback ready signal, and --no-wait name output with manual delivery warning
+_text._ Tests agent definition loading, registration metadata carrying, readiness protocol with socket and fallback signal paths
 
 #### cmd/fledge/behavior_test.go
 
-_text._ Tests human-readable help output, flock list/status with up/down distinction, agent registration and listing with JSON, agent message send/wait/reply correlation with ID tracking, duration parsing, and environment variable requirements
+_text._ Tests CLI operation: roster listing, agent register/list/stop, flock status/list, human output formatting, messaging
 
 #### cmd/fledge/clear_test.go
 
-_text._ Tests flock clear syntax, terminal requirement, running flock skipping with racecheck, orphan session enumeration and removal, partial failure aggregation, and session cleanup before state removal
-
-#### cmd/fledge/context.go
-
-_text._ Context command dispatcher routing to scan/graph/validate/render-project; scanContext resolving workspace and applying ignores; buildContextGraph constructing hierarchy with recursive aggregation; printContextGraph rendering ASCII tree
+_text._ Tests flock cleanup: confirmation flow, liveness re-checks, orphan session management, cleanup ordering, partial failures
 
 #### cmd/fledge/context_pipeline_test.go
 
-_text._ Tests agent spawn placement selectors (workspace/tab), message send with body file/stdin, reply body handling, wait filtering by sender/reply-to, inbox non-blocking claiming, analyzer request/reply validation with correlation, and project rendering
+_text._ Tests analyzer request/reply validation, worksheet composition, graph rendering, context commands
 
 #### cmd/fledge/graph_test.go
 
-_text._ Tests context graph human tree formatting, JSON schema with totals and containment edges, default/explicit scope filtering, ignore semantics with negation, empty and fully-ignored scopes, and help routing
-
-#### cmd/fledge/help.go
-
-_text._ Help pages map covering all commands with detailed usage, flags, and subcommand routing; usageError wrapper carrying contextual help; runHelp falling back to deepest valid page; printHelp and isHelpFlag utility functions
-
-#### cmd/fledge/main.go
-
-_text._ 2690-line main command implementation: run() dispatcher, context/flock/agent subcommand handlers, workspace initialization (init/deinit), start/stop/restart/watch orchestration, agent spawn/ready/msg protocol implementation, flag parsing (takeFlag, takeBoolFlag, rejectFlags), interactive terminal prompts, help system integration, and daemon lifecycle management
-
-## Subsystem: cmd-fledge-2
-
-CLI entrypoint tests and remaining commands subsystem covering main parser, restart, scan, stop, watch, and workspace functionality. The module validates command routing, flag parsing, help text generation, daemon lifecycle management, and interactive terminal flows.
-
-**Purpose:** CLI entrypoint tests and remaining commands: main/parser/restart/scan/stop/watch/workspace test suites.
-
-### Entry Points
-
-- `cmd/fledge/watch.go`: Log watcher implementation for monitoring flock daemons; runWatch entry point
-
-### Key Symbols
-
-- `run` in `cmd/fledge/main_test.go` (function): Routes command arguments to subcommand handlers; core CLI dispatcher
-- `captureRun` in `cmd/fledge/main_test.go` (function): Test helper that captures stdout from run() for assertion
-- `helpPages` in `cmd/fledge/main_test.go` (variable): Map of command path to help text strings used for validation
-- `agentRows` in `cmd/fledge/main_test.go` (function): Formats agent list output with parity for spawned/unserialized agents
-- `pickerRows` in `cmd/fledge/main_test.go` (function): Renders agent picker menu grouped by provider
-- `modelRows` in `cmd/fledge/main_test.go` (function): Renders model catalog grouped by provider
-- `pickAgentConfig` in `cmd/fledge/main_test.go` (function): Interactive agent selection by number or name
-- `guardedBringUp` in `cmd/fledge/main_test.go` (function): Manages transactional session creation and rollback on daemon spawn failure
-- `awaitSpawn` in `cmd/fledge/main_test.go` (function): Waits for async daemon spawn with attach failure handling
-- `takeFlag` in `cmd/fledge/parser_test.go` (function): Hand-rolled flag parser rejecting flag-shaped values
-- `takeBoolFlag` in `cmd/fledge/parser_test.go` (function): Boolean flag parser for flags without values
-- `rejectFlags` in `cmd/fledge/parser_test.go` (function): Validates remaining args contain no unknown flags
-- `restartDaemonStatus` in `cmd/fledge/restart_test.go` (function): Queries daemon status; stubbed during testing
-- `restartSpawnDaemon` in `cmd/fledge/restart_test.go` (function): Spawns replacement daemon; stubbed during testing
-- `waitSpawnDaemonReady` in `cmd/fledge/restart_test.go` (function): Polls daemon until exact session binding or unbound readiness
-- `contextdoc.Scan` in `cmd/fledge/scan_test.go` (type): JSON-serializable result of context scan with root and file list
-- `watchDaemonLog` in `cmd/fledge/watch_test.go` (function): Polls daemon log file and emits appended content
-- `installWatcherPane` in `cmd/fledge/watch_test.go` (function): Replaces CLI pane with fledge watch command in existing session
-- `runWatch` in `cmd/fledge/watch.go` (function): Entry point for watch command; validates args and starts log watcher
-- `scaffoldedWorkspace` in `cmd/fledge/workspace_test.go` (function): Creates temp workspace with .fledge tree for testing
-- `interactiveStart` in `cmd/fledge/workspace_test.go` (function): Simulates interactive start flow with fake session and herdr
-- `fakeHerdr` in `cmd/fledge/workspace_test.go` (function): Installs stub herdr CLI recording session operations
-- `liveSocket` in `cmd/fledge/workspace_test.go` (function): Listening socket replaying herdr wire protocol for testing
-
-### Dependencies
-
-- Internal `internal/agentcfg`: Agent configuration, catalog, and profile management
-- Internal `internal/daemon`: Daemon process lifecycle and socket communication
-- Internal `internal/protocol`: Client-daemon wire protocol and types
-- Internal `internal/scaffold`: Workspace tree initialization
-- Internal `internal/client`: CLI-side daemon communication
-- Internal `internal/flock`: Flock directory and environment management
-- Internal `internal/herdrwire`: Herdr socket protocol for pane operations
-- Internal `internal/contextdoc`: Context scan result types
-- Internal `internal/workspace`: Workspace root discovery
-- Internal `internal/version`: Daemon and CLI version strings
-- External `testing`: Go standard test package
-- External `os`: Process, signal, and file I/O
-- External `path/filepath`: Path manipulation
-- External `strings`: String operations
-- External `encoding/json`: JSON marshaling
-- External `errors`: Error wrapping
-- External `io`: I/O operations
-- External `net`: Unix socket networking
-- External `context`: Context cancellation
-- External `time`: Timing and polling
-- External `bufio`: Buffered I/O
-- External `sync`: Concurrency primitives
-
-### Data Flows
-
-- `run()` → `route subcommands`: Main dispatcher interprets command arguments and routes to specific command handlers
-- `takeFlag/takeBoolFlag` → `rejectFlags`: Flag parsing is two-phase: consume known flags, then reject unknown ones
-- `restartDaemonStatus` → `version verification`: Restart validates daemon PID changed and version matches before completing
-- `scaffoldedWorkspace` → `test setup`: Test helper creates isolated workspace trees avoiding side effects
-- `interactiveStart` → `agent spawn flow`: Orchestrates fake herdr session, daemon, and CLI to test interactive startup
-- `watchDaemonLog` → `installWatcherPane`: Log watcher runs as CLI pane shell command; pane install sets up the flow
-- `liveSocket/wireRecorder` → `test assertions`: Fake herdr socket records all wire calls for method/param inspection
-
-### Invariants
-
-- Flag parsing must reject flag-shaped positionals before they consume option values
-- Restart must validate both PID change and version match to confirm successful replacement
-- Daemon spawn failures during session creation trigger automatic session cleanup via guardedBringUp
-- Interactive start attaches the UI before spawning the orchestrator agent
-- Watch command reuses the existing CLI pane via herdr wire protocol
-- Context scan walks up git-style to find workspace root and applies ignore patterns
-- Agent list formatting maintains backward compatibility for pre-spawn registrations
-- Test flock names follow FLEDGE_FLOCK environment or explicit positional argument
-- Scaffolded workspaces include a pre-initialized .fledge tree with agent catalog
-- Help text is embedded in helpPages map and served by run() on help requests
-
-### Tests
-
-- `cmd/fledge/main_test.go`: root help, nested help routing, bare groups, agent rows, picker rows, model rows, config picking, deinit interactive flows, agent type listing, init discovery and catalog generation
-- `cmd/fledge/parser_test.go`: takeFlag flag-shaped value rejection, takeBoolFlag short/long forms, rejectFlags validation, agent register species validation, agent msg wait timeout validation, msg send flag-shaped positional handling
-- `cmd/fledge/restart_test.go`: spawn daemon readiness waiting, restart status/shutdown/spawn lifecycle, environment/explicit flock selection, down restart error, legacy shutdown guidance, replacement failure handling, post-spawn verification
-- `cmd/fledge/scan_test.go`: context scan workspace root resolution from subdir, dir arg limiting, ignore patterns, workspace error handling, JSON output contract validation
-- `cmd/fledge/stop_test.go`: stop terminal requirements, no-flock noop, scoped stop, decline behavior, partial failure continuation, confirmed stop with real daemon
-- `cmd/fledge/watch_test.go`: watch flock selection, validation and syntax, running daemon requirement, history plus append ordering, daemon shutdown reporting, watcher pane installation and failure recovery, orchestrator layout ordering
-- `cmd/fledge/workspace_test.go`: flock status/agent list from subdirectory, start reuses running flock, stale managed session recreation, herdr/daemon execution from workspace root, managed session deletion on stop, operator session preservation, workspace creation at root, init nested workspace warning, interactive start flow with picker/placement/rollback, scripted start without orchestrator, workspace and tab labeling
-
-### Files
+_text._ Tests file tree graphing with ignore semantics, scope selection, human and JSON output
 
 #### cmd/fledge/main_test.go
 
-_text._ Comprehensive CLI tests: root/nested help routing, agent/model list formatting with launch column parity, interactive agent picker with menu grouping and selection by number/name, deinit interactive flow with terminal check and confirm/decline paths, init discovery and catalog writing, help page consistency, start/deinit/stop terminal requirements, guardedBringUp session lifecycle, awaitSpawn spawn failure handling. Tests are integration-level, exercising the full run() dispatch and output capture.
+_text._ Tests help pages, profile pickers, init discovery, startup orchestration, agent row formatting, ~1500 lines
 
 #### cmd/fledge/parser_test.go
 
-_text._ Flag parsing tests: takeFlag with flag-shaped value rejection (the core safety invariant), short/long form handling, stdin marker '-' acceptance, takeBoolFlag present/absent cases, rejectFlags unknown flag detection. End-to-end repro for agent register species injection attack and agent msg wait timeout validation. Tests isolate the parser layer before it reaches the daemon.
+_text._ Tests CLI flag parsing: takeFlag robustness, flag-shaped value rejection, unknown flag detection
 
 #### cmd/fledge/restart_test.go
 
-_text._ Restart lifecycle tests: daemon status query stub, spawn stub with failure tracking, waitSpawnDaemonReady exact session or unbound matching, environment vs explicit flock selection, down daemon error handling, legacy shutdown compatibility, spawn failure with log guidance, post-spawn status/PID/version/session verification failures. Covers all verification failure modes and guidance text.
+_text._ Tests daemon replacement: readiness polling, verification, error guidance for spawn/version/session failures
 
 #### cmd/fledge/scan_test.go
 
-_text._ Context scan tests: workspace root git-style walk-up from subdirectory, dir arg subtree limiting, ignore pattern application, JSON output schema contract validation (schema_version, file_count, total_size derivation), outside-workspace error, empty result handling. Tests validate the scan coordination with .fledgeignore matching.
+_text._ Tests file scanning: git-style workspace discovery, ignore pattern application, subtree listing
 
 #### cmd/fledge/stop_test.go
 
-_text._ Stop command tests: terminal requirement (both stdin and stdout), no-flock noop without prompt, scoped stop (FLEDGE_FLOCK env) preview and single-flock execution, decline paths (n/eof/enter/nope), stopFlocks partial failure continuation with per-flock error reporting, confirmed stop with real daemon teardown and managed session deletion. Uses stubStdinTerminal and fakeHerdr for integration.
-
-#### cmd/fledge/watch.go
-
-_text._ Watch command implementation: runWatch entry point with arg validation and help routing, watchDaemonLog append-only polling via file descriptor, installWatcherPane pane.send_input and pane.focus via herdrwire, warnWatcherFailure recovery hint, shellQuote POSIX escaping for error messages. Single 100ms poll interval as module-level var for testing override.
+_text._ Tests daemon shutdown: terminal confirmation, session cleanup, managed session deletion
 
 #### cmd/fledge/watch_test.go
 
-_text._ Watch tests: flock selection (explicit arg > FLEDGE_FLOCK env), validation/syntax error routing, running daemon requirement, history emission plus append ordering with concurrent log writes, daemon shutdown detection, watcher pane installation with shell reuse, failures keep primary layout and emit manual recovery warnings. Uses wireRecorder to inspect herdr protocol calls and verify no workspace/tab creation during watcher setup.
+_text._ Tests log watcher: file polling, daemon shutdown notice, pane layout, orchestrator attach
 
 #### cmd/fledge/workspace_test.go
 
-_text._ Workspace/start tests: flock status and agent list work from subdirectories via workspace root resolution, start reuses running flock without creating workspaces, stale managed session recreation via stop/delete/start sequence, herdr/daemon exec from workspace root with session binding, managed session deletion vs operator session preservation, workspace creation at root before attach, init nested workspace warning, interactive start with attach-first then spawn, orchestrator placement (left via pane.swap), watcher pane installation, picker cancellation/empty catalog rollback, scripted start skips orchestrator and picker, workspace/tab labeling. Largest test file with fake herdr and wire recording.
+_text._ Tests daemon spawning, session binding, interactive start flow, placement rollback, workspace discovery
 
-## Subsystem: contextdoc
+## Subsystem: daemon-core-a
 
-Context document rendering and validation subsystem provides facilities for agents to describe analyzed project subsystems (JSON wire format, schema validation) and synthesizes them into a deterministic, structured Markdown artifact (.fledge/context/project.md) that serves as the project's current canonical context.
+The daemon-core subsystem manages journal durability, agent placement in Herdr workspaces/tabs, and readiness handshaking. The journal is the append-only source of truth; every operation is journaled before client ack. Placement resolves workspace/tab labels, creates tabs if absent, and uses latches to serialize concurrent creates. Readiness authenticates spawned agents via one-use tokens, supporting both socket and file-based (sandbox fallback) paths.
 
-**Purpose:** Context document rendering and validation: builds and validates the published project.md context artifact.
+**Purpose:** Daemon core: journal, placement, and readiness lifecycle in internal/daemon
 
 ### Entry Points
 
-- `internal/contextdoc/render.go`: RenderProject validates all artifacts below a run directory, atomically replaces the workspace context document, and removes consumed JSON; starts the full render pipeline
-- `internal/contextdoc/validate.go`: ValidateAnalyzerRequest, ValidateAnalyzerReply provide in-memory validation entry points for the daemon to validate analyzer requests and correlate replies with requests
+- `internal/daemon/journal.go`: replay(path) reconstructs daemon state from journal file for startup/recovery
+- `internal/daemon/daemon.go`: Daemon.append(e event) atomically writes events with fsync before client ack
+- `internal/daemon/placement.go`: Daemon.acquirePlacement() main entry for placing agents into workspace/tab with concurrent create serialization
+- `internal/daemon/ready_signal.go`: WriteReadySignal() and consumeReadySignal() handle authenticated readiness via socket and file-based paths
 
 ### Key Symbols
 
-- `AnalyzerRequest` in `internal/contextdoc/types.go` (struct): Wire contract for agents to describe their assigned file group: schema version, group ID, purpose, file list with sizes, total size; validated and cached
-- `AnalyzerReply` in `internal/contextdoc/types.go` (struct): Normalized analyzer reply capturing subsystem analysis: status, group ID, summary, entry points, symbols, dependencies, data flows, invariants, tests, files, error list
-- `Synthesis` in `internal/contextdoc/types.go` (struct): Cross-group synthesis summary: project overview, routing table (path prefixes to group IDs), cross-group data flows, global invariants
-- `Provenance` in `internal/contextdoc/types.go` (struct): Agent execution provenance: forager identity, per-group analyzer identities (names, profiles, models), creation timestamp
-- `validRelativePath` in `internal/contextdoc/validate.go` (function): Validates path safety: filesystem.ValidPath, no backslashes, normalized via path.Clean; enforces safe relative paths across all path-valued fields
-- `preflightRun` in `internal/contextdoc/render.go` (function): Preflight security: resolves workspace root via EvalSymlinks, verifies run directory is canonical (no symlinks) and within runs/ tree, pins all directories and artifact file handles before content read
-- `loadContextRun` in `internal/contextdoc/render.go` (function): Loads and cross-validates scan, all requests, matching replies, synthesis, and provenance; validates file ownership uniqueness and internal-dependency scanned-path matching
-- `renderMarkdown` in `internal/contextdoc/render.go` (function): Generates deterministic Markdown document: provenance section (timestamps, agent identities, profile/model counts), project overview, routing table, cross-group flows, global invariants, per-subsystem sections with entry points/symbols/dependencies/flows/invariants/tests/file summaries
-- `decodeExact` in `internal/contextdoc/validate.go` (function): Strict JSON decoder: rejects duplicate object keys, requires exact shape match (no unknown fields, no null values for non-optional), strict number parsing; validates both structural and semantic exactness
-- `writeAtomic` in `internal/contextdoc/render.go` (function): Atomic document publication: creates temporary file in target directory root, writes data, syncs, atomically renames to project.md, syncs directory for durability
+- `state` in `internal/daemon/journal.go` (struct): Full daemon state reconstructed from journal: agents, messages, tokens, owned tabs, workspace/tab closures
+- `event` in `internal/daemon/journal.go` (struct): Union type for all journal events (agent.registered, agent.ready, tab.created, msg.sent, etc.)
+- `resolvedPlacement` in `internal/daemon/placement.go` (struct): Exact workspace/tab address with IDs and labels after label resolution
+- `ownedTab` in `internal/daemon/placement.go` (struct): Metadata for tabs Fledge created, including RootPaneID for ephemeral shell cleanup
+- `tabCreateLatch` in `internal/daemon/placement.go` (struct): Synchronization primitive serializing concurrent tab creates with the same label; waiters converge on one result
 
 ### Dependencies
 
-- Internal `internal/scaffold`: DirName constant (.fledge) used for context document path construction
-- Internal `internal/workspace`: FindRoot function to locate canonical workspace root when validating run directories
-- External `crypto/sha256`: SHA-256 hashing for document integrity verification in RenderResult
-- External `encoding/json`: JSON encoding/decoding for all wire contracts and validation workflows
-- External `regexp`: kebab-case pattern for group_id validation
+- Internal `internal/herdrwire`: Socket API calls to Herdr (WorkspaceList, TabList, TabCreate, TabClose, WorkspaceClose, etc.)
+- Internal `internal/protocol`: Message, Agent, Request, Response types; journal event serialization
+- Internal `internal/agentcfg`: Agent configuration, ReservedOrchestrator constant, agent definition lookups
+- Internal `internal/flock`: Flock directory paths, window title formatting
+- Internal `internal/scaffold`: .fledge layout structure, catalog, agents directory names
+- External `os`: File I/O for journal, ready signals, directory creation/permissions
+- External `encoding/json`: Event marshaling/unmarshaling for journal and ready signals
+- External `bufio`: Scanner for journal replay line-by-line reading
+- External `sync`: Mutex for daemon state lock, WaitGroup for goroutine coordination
+- External `crypto/sha256`: Hashing readiness tokens for credential storage
 
 ### Data Flows
 
-- `AnalyzerRequest (agent)` → `Scan (forager)`: Agents describe file groups they've analyzed; requests must reference files present in the scan (file ownership is exclusive across all requests)
-- `AnalyzerReply (agent)` → `AnalyzerRequest (same agent)`: Replies correlate to requests by group_id; all assigned files must have summaries, entry points/symbols/tests must reference text-content files only
-- `Synthesis (orchestrator)` → `AnalyzerRequest set (all agents)`: Synthesis provides routing (path prefixes to groups), cross-group flows, and global invariants; routing must cover scanned paths and respect file ownership
-- `Provenance (orchestrator)` → `Request + Reply set`: Provenance records forager and per-analyzer identities (name, profile, model); every request must have a corresponding analyzer in provenance
-- `contextRun (loaded)` → `project.md document`: Renders synthesized Markdown containing provenance, project overview, routing, cross-group flows, global invariants, and per-subsystem analysis sections
-- `project.md (published)` → `run JSON artifacts (cleanup)`: After successful publication, all consumed JSON files and directories (scan, requests, replies, synthesis, provenance) are removed from the runs/ tree
+- `Daemon.New()` → `replay(journalPath)`: Reconstruct roster, messages, tokens, owned tabs, closures from journal at startup
+- `replay()` → `Daemon.recoverOwnedTabs()`: After state reconstruction, clean up crash-left ephemeral tabs and creation intents
+- `Daemon.spawn()` → `Daemon.acquirePlacement()`: Resolve workspace/tab labels, create tab if absent, record placement for agent start
+- `acquirePlacement()` → `Daemon.append(evTabCreateIntent/evTabCreated)`: Journal tab creation intent and final ownership atomically for crash recovery
+- `spawned agent` → `Daemon.ready(token) or WriteReadySignal(token)`: Agent signals readiness via socket (normal) or file (sandbox fallback)
+- `Daemon.ready()` → `Daemon.append(evReady)`: Validate token hash, journal readiness, convert token to credential
+- `Daemon.stop(OwnsWorkspace=true)` → `Daemon.stopWorkspaceOwner()`: Cascade stop to nested agents, journal workspace.closing, then workspace.close RPC
+- `Daemon.cleanupOwnedTab()` → `Daemon.append(evTabClosing/evTabClosed)`: Journal tab closure intent before RPC, then completion after idempotent Herdr close
+- `recoverOwnedTabs()` → `Daemon.recoverTabCreateIntent()`: On startup, converge incomplete tab creations: 0 matches→resolve, 1 match→rollback, N>1→preserve
 
 ### Invariants
 
-- Run directory must be canonical (no symlink components) and strictly contained within .fledge/context/runs/ — validated and pinned before any artifact read
-- All scanned files are partitioned exactly once across request groups (no file is unassigned or owned by multiple groups)
-- Every request has a matching reply with the same group_id; reply status must be 'ok' (error replies cause immediate failure)
-- All entry points, key symbols, and tests reference text-content files only (content_kind='text'); non-text files may only be referenced in file summaries
-- All internal dependencies must match a scanned path or directory prefix; path traversal (../) is rejected
-- Routing table covers all scanned paths and respects file ownership: each path_prefix must match files owned by its designated group_id
-- Cross-group flows reference only defined groups; all fields are semantic (non-empty/trimmed)
-- Provenance agent names are globally unique; every request has an analyzer with matching group_id
-- Document publication is atomic: written to temporary file in pinned context root, synced, then renamed; post-publication failures become warnings, not rollbacks
-- JSON wire format is exact: duplicate keys rejected, all required fields present, unknown fields rejected, no null values where not explicitly optional
+- Journal-before-ack: every state change fsync'd before client ack; torn final line tolerable, earlier lines authoritative
+- Idempotent recovery: tab/workspace close checks Herdr inventory, not local state; already-closed treated as success
+- Token single-use: readiness token→credential at evReady journal; replayed tokens rejected
+- Ownership tracking: owned tabs journaled at create (evTabCreated) and close (evTabClosed) atomically
+- Latch serialization: concurrent acquirePlacement() with same workspace/tab label converge via tabCreateLatch on one creation
+- Workspace closure cascade: once evWorkspaceClosing journaled, all agents in workspace blocked from messaging
+- Creation intent attribution: temporary unique label (fledge-create-<hex>) used to identify incomplete creates; recovery handles ambiguity safely
 
 ### Tests
 
-- `internal/contextdoc/contextdoc_test.go`: TestValidateAnalyzerRequestRejectsMalformedAndDuplicateData validates request decoder rejects malformed JSON, duplicate fields, missing required fields, unsafe paths, size mismatches
-- `internal/contextdoc/contextdoc_test.go`: TestValidateAnalyzerRequestEnforcesGroupingBounds validates file and byte limits (50 files, 256KB oversized singleton rule)
-- `internal/contextdoc/contextdoc_test.go`: TestValidateAnalyzerReplyCorrelatesRequestAndNonText validates reply cross-checks group_id, file coverage exactness, content_kind restrictions (text-only for symbols/entry points)
-- `internal/contextdoc/contextdoc_test.go`: TestValidateAnalyzerReplyAllowsSafeUnassignedInternalDependency validates internal dependencies can reference unassigned project paths but must be safe/normalized
-- `internal/contextdoc/contextdoc_test.go`: TestValidateAnalyzerErrorReply validates error-status replies with error code/message and optional assigned paths
-- `internal/contextdoc/contextdoc_test.go`: TestValidateAnalyzerReplyRejectsEmptySemanticFields validates all description/name/summary fields are non-empty and trimmed
-- `internal/contextdoc/contextdoc_test.go`: TestRenderProjectRendersAllSectionsAndCleansRun validates full render pipeline: loads all artifacts, generates deterministic Markdown, publishes atomically, cleans run directory
-- `internal/contextdoc/contextdoc_test.go`: TestRenderProjectCorrelatesInternalDependenciesWithScan validates internal dependencies match scanned paths; absent dependencies cause failure
-- `internal/contextdoc/contextdoc_test.go`: TestRenderProjectRejectsUnconfinedAndSymlinkedInputs validates symlink detection, directory confinement, and preflight rejection on open
-- `internal/contextdoc/contextdoc_test.go`: TestRenderProjectPinnedRunCannotBeRedirectedAfterOpen validates TOCTOU protection: directories/files pinned before content read; post-open mutations cause cleanup refusal warnings
-- `internal/contextdoc/contextdoc_test.go`: TestRenderProjectPublicationUsesPinnedContextRoot validates publication targets the opened context root, immune to symlink or directory replacement attacks
-- `internal/contextdoc/contextdoc_test.go`: TestRenderProjectPostPublicationFailuresAreWarnings validates directory sync and cleanup failures post-publication are warnings, not rollbacks
-- `internal/contextdoc/contextdoc_test.go`: TestRenderProjectFailuresPreserveDocumentAndArtifacts validates validation failures leave prior document and all run artifacts unchanged
+- `internal/daemon/journal_test.go`: 8 tests: replay correctness (missing journal, roster rebuild, pending filtering, send order, legacy delivery), registration reuse, launch lifecycle (incomplete→orphaned, complete→starting)
+- `internal/daemon/placement_test.go`: 25+ tests: label/ID resolution and ambiguity, targeted spawn (reuse/create/close tabs), concurrent create convergence, external creator races, validation, crash recovery (orphaned tabs, pending intents, idempotent closes), workspace cascade stop and messaging lockdown
+- `internal/daemon/ready_test.go`: 20+ tests: token authentication (valid/invalid/replayed), spawned identity messaging, stopped identity lifecycle, parked wait delivery, file-based readiness signal, early readiness blocking, concurrent stop during launch, readiness timeout, orchestrator special handling (managed vs raw), lifecycle input suppression, bootstrap prompt injection
 
 ### Files
 
-#### internal/contextdoc/contextdoc_test.go
+#### internal/daemon/daemon.go
 
-_text._ Comprehensive test suite: malformed JSON and duplicate key rejection, grouping bounds (50 files, 256KB), reply correlation and content_kind restrictions, internal dependency scanned-path validation, symlink + confinement rejection, TOCTOU protection, file ownership synthesis validation, semantic field emptiness, post-publication failure handling, artifact preservation on error
+_text._ Core daemon state machine (45KB): Daemon struct, socket/file request dispatch, agent lifecycle (register/stop), message routing (send/reply/inbox/wait/receive/ack), readiness waiter, identity auth (tokens/credentials), inboxNotification lifecycle. Manages both self-registered agents (Unix socket boundary) and spawned agents (launch credential). No inference; deterministic state advancement via journal.
 
-#### internal/contextdoc/render.go
+#### internal/daemon/journal.go
 
-_text._ Document rendering and publication pipeline: preflight (security validation + handle pinning), load + cross-validate all artifacts, generate Markdown (provenance/overview/routing/flows/invariants/subsystems), atomic write, cleanup. TOCTOU protection via os.Root and file handle pinning; all paths validated as safe normalized relative paths
+_text._ Append-only event log (14KB): append()/appendAll() for atomic fsync writes, replay() for full state reconstruction from line-by-line journal. Handles torn final line gracefully (truncate+re-terminate). Tracks agents, messages, pending deliveries, tokens, owned tabs, workspace/tab closures. Supports legacy pane-delivery events and pi subprocess agents. Orphaned inference for incomplete launches and pane-less spawned agents.
 
-#### internal/contextdoc/types.go
+#### internal/daemon/journal_test.go
 
-_text._ JSON wire contracts and normalized types: SchemaVersion constant, File/Scan (input metadata), AnalyzerRequest/Reply/Error (agent output), Synthesis/Routing/CrossGroupFlow/Provenance (orchestrator summary), RenderResult (publication outcome)
+_text._ Journal replay verification (5.5KB): fixture-based tests for empty journal, roster rebuild, pending filtering, send order preservation, legacy delivery finality, registration reuse, launch lifecycle (orphaned/starting state). Validates state reconstruction correctness.
 
-#### internal/contextdoc/validate.go
+#### internal/daemon/placement.go
 
-_text._ Strict JSON validation and exact decoding: ValidateAnalyzerRequest/Reply entry points, schema shape validation (no unknown fields, required fields, exact structure), duplicate key rejection, safe path validation, file grouping uniqueness, content kind restrictions, semantic field (non-empty/trimmed) validation
+_text._ Workspace/tab placement and lifecycle (26KB): acquirePlacement() resolves labels→creates tabs if absent→latches concurrent creates. Tab creation intent tracking for crash recovery. Owned tab tracking with ephemeral shell cleanup (finishOwnedTabSetup). Workspace owner stop with nested cascade. Idempotent tab/workspace close via Herdr inventory polling. Recovery: crash-left tab cleanup, creation intent convergence (0/1/N matches), tab close retry.
 
-## Subsystem: daemon-core
+#### internal/daemon/placement_test.go
 
-Fledge daemon is a per-flock state machine that binds agents, distributes messages, and manages agent lifecycle (spawning, placement, stopping) via durable append-only journal. Core invariant: every state-changing operation is journaled before acknowledgment; replay from journal reconstructs exact state after restart. Message delivery uses acknowledged wait + eager-delivery paths; placement logic coordinates Herdr session for workspaces/tabs; managed context protocol (forager↔analyzer) validates schema before send.
+_text._ Placement and lifecycle tests (31KB): label/ID resolution (priority, ambiguity), targeted spawn (reuse existing, create/close owned, prevent duplicates), concurrent create convergence via latch, external creator races (rollback only Fledge tab), tab ownership lifecycle, workspace cascading stop, crash recovery (orphaned tabs, pending intents, idempotent closes), edge cases (external same-label, ambiguous temporary label, workspace closure races). Comprehensive concurrent scenarios with fake Herdr.
 
-**Purpose:** Daemon core state machine: main daemon loop, journal replay, placement logic, and message delivery/isolation tests.
+#### internal/daemon/ready_signal.go
+
+_text._ Readiness authentication (3.7KB): WriteReadySignal() atomic write of hash(token) to workspace-local directory (sandbox fallback), consumeReadySignal() validation+removal, consumeReadySignals() batch resume after restart. Token→credential conversion at evReady. Legacy plain-digest format support.
+
+#### internal/daemon/ready_test.go
+
+_text._ Readiness handshake tests (30KB): token single-use+credential re-delivery, spawned identity messaging auth, stopped identity lifecycle, parked wait delivery (before/after ready), file-based signal without socket, early readiness blocking until spawn journaled, concurrent stop during launch, readiness timeout and species reuse, orchestrator special cases (managed=plugin+append-system-prompt, raw=message-wait), lifecycle input suppression, bootstrap prompt injection. Orchestrator readiness only at startup, managed variant no waiter.
+
+## Subsystem: daemon-core-b
+
+Daemon agent lifecycle subsystem (internal/daemon): coordinates spawning pane-hosted agents (Claude, Pi, Codex), validating readiness via one-use token, generating startup automation for managed orchestrators, and delivering durable inbox notifications. Five files implement the full lifecycle from reservation through teardown, plus flock-level isolation (separate journals, sockets, species pools).
+
+**Purpose:** Daemon agent lifecycle: spawn, startup assets, inbox notifications, and isolation in internal/daemon
 
 ### Entry Points
 
-- `internal/daemon/daemon.go`: Run/RunBound starts daemon, New initializes from replayed journal, Serve accepts socket connections, dispatch routes operations
-- `internal/daemon/journal.go`: replay reconstructs state from journal; append/appendAll write events durably with fsync before ack
-- `internal/daemon/placement.go`: acquirePlacement resolves workspace/tab selectors and creates owned tabs; recoverOwnedTabs cleans up crash-left ephemeral tabs
-- `internal/daemon/inbox_notify.go`: runInboxNotifier delivers inbox wake signals to armed orchestrator agents with exponential backoff on failure
+- `internal/daemon/spawn.go`: spawn() entry point: reserve name, launch via Herdr, journal states, await readiness
+- `internal/daemon/spawn.go`: ready()/readyDigest(): authenticate readiness token, transition to running, arm inbox delivery
+- `internal/daemon/startup_assets.go`: orchestratorStartupArgs(): generate Claude plugins/Pi extensions for startup automation
+- `internal/daemon/inbox_notify.go`: startInboxNotifier()/runInboxNotifier(): background worker for durable inbox notifications
+- `internal/daemon/spawn.go`: Flock isolation boundary: each daemon has own journal, socket, roster, species pool
 
 ### Key Symbols
 
-- `Daemon` in `internal/daemon/daemon.go` (struct): Per-flock daemon state: socket listener, journal writer, mutex-protected agent roster, pending/delivered messages, placement state, inbox notifier tasks
-- `Run/RunBound` in `internal/daemon/daemon.go` (function): Entry points: Run starts unbound daemon; RunBound binds to Herdr session and blocks until session ends or listener closes
-- `dispatch` in `internal/daemon/daemon.go` (function): Routes OpRegister/OpList/OpStatus/OpSend/OpReply/OpInbox/OpWait/OpPeek/OpReceive/OpAck/OpSpawn/OpReady/OpStop/OpShutdown to handlers
-- `send/reply` in `internal/daemon/daemon.go` (function): sendReq creates protocol.Message, authorizes actor, journals evSent, matches waiting receiver or enqueues pending, triggers inbox notify
-- `wait/receive` in `internal/daemon/daemon.go` (function): wait blocks on incoming message; acknowledge=false eager-delivers (legacy); receive leaves message pending until explicit ack
-- `authorizeMessageActorLocked/validateMessageRecipientLocked` in `internal/daemon/daemon.go` (function): Authenticates identity token hash; checks agent state, stopping, workspace-closing for messaging authority
-- `replay` in `internal/daemon/journal.go` (function): Rebuilds state from journal.jsonl: agents, pending/delivered messages, tokens, owned tabs, workspace/tab closures; tolerates torn final line and re-terminates short-written lines
-- `event` in `internal/daemon/journal.go` (struct): Journal line: union of all event fields (evStarted/evRegistered/evLaunching/evPlaced/evSpawned/evReady/evStopped/evSent/evDelivered/evInboxNotified/tab/workspace lifecycle)
-- `acquirePlacement` in `internal/daemon/placement.go` (function): Resolves workspace/tab selectors via Herdr wire API; creates owned tab if needed with unique temporary label; latches concurrent same-label requests
-- `resolveWorkspace/resolveTab` in `internal/daemon/placement.go` (function): Match by ID first, then by label; error on ambiguous label; tab selector that looks like ID (w\d+:t\d+) fails if not found
-- `recoverOwnedTabs` in `internal/daemon/placement.go` (function): Startup recovery: closes pending workspace closures; rolls back crash-left tab creation intents; closes stale owned tabs without active agents
-- `stopWorkspaceOwner` in `internal/daemon/placement.go` (function): Workspace owner stop journalsWorkspaceClosing with nested placed agents and owned tabs; closes workspace; journals nested agent stops and tab closures
-- `runInboxNotifier` in `internal/daemon/inbox_notify.go` (function): Background goroutine delivering inbox wake signals to orchestrator; exponential backoff on failure; coalesces concurrent messages
-- `inboxNotifyEligibleLocked` in `internal/daemon/inbox_notify.go` (function): Agent is eligible for inbox wake if: not closing, not stopping, workspace not closing, inboxWake func set, inbox delivery armed
+- `spawn` in `internal/daemon/spawn.go` (func): Main lifecycle: reserve name → launch Herdr pane/workspace → journal states → readiness loop
+- `launchLatch` in `internal/daemon/spawn.go` (type): Synchronization primitive separating slow Herdr launch from spawn response
+- `reserve` in `internal/daemon/spawn.go` (func): Claim name with reservedPID (-1) placeholder before lock-free launch
+- `launch` in `internal/daemon/spawn.go` (func): Herdr calls (agent.start, workspace.create, pane ops) without d.mu held
+- `readyDigest` in `internal/daemon/spawn.go` (func): State machine: token verify → launch await → ready event → inbox arm → running
+- `markStopped` in `internal/daemon/spawn.go` (func): Journal stopped, clear readiness latches, cancel waiters
+- `orchestratorStartupArgs` in `internal/daemon/startup_assets.go` (func): Returns argv for Claude/Pi orchestrators with startup automation files
+- `writeRuntimeFile` in `internal/daemon/startup_assets.go` (func): Atomic write via temp-then-rename; creates parent dirs 0700
+- `runInboxNotifier` in `internal/daemon/inbox_notify.go` (func): Main loop: dequeue task → wait readyAt → notifyInboxAgent() → retry on error
+- `queueInboxWakeLocked` in `internal/daemon/inbox_notify.go` (func): Coalesce multiple sends into one task per agent; preserve backoff
+- `notifyInboxAgent` in `internal/daemon/inbox_notify.go` (func): Extract pending messages, invoke wake callback, journal on success
+- `retryInboxNotifyLocked` in `internal/daemon/inbox_notify.go` (func): Exponential backoff 25ms → 5s, cap at 31 attempts
 
 ### Dependencies
 
-- Internal `internal/protocol`: Request/Response/Agent/Message structures; operation codes (OpRegister, OpSend, etc.)
-- Internal `internal/herdrwire`: Socket API to Herdr: workspace/tab/pane CRUD, window title; protocol version 16
-- Internal `internal/agentcfg`: Agent definitions, profiles, configuration parsing; species pool
-- Internal `internal/contextdoc`: Schema validation for managed context protocol (analyzer request/reply)
-- Internal `internal/flock`: Flock directory layout, window title formatting
-- Internal `internal/filebridge`: Sandbox-compatible request/response file-based RPC bridge for agents without socket access
-- Internal `internal/version`: Daemon version for status/compatibility reporting
-- External `net`: Unix socket listener and connection I/O
-- External `sync`: Mutex protecting roster, messages, and state; channels for notifications and synchronization
-- External `crypto/sha256`: Token hash for identity authentication
-- External `os`: File I/O for journal, lock files, directory creation
-- External `syscall`: flock(2) for exclusive ownership locking; signal 0 liveness probe
+- Internal `internal/agentcfg`: Config, Workspace, ReservedOrchestrator, definition/profile loading
+- Internal `internal/herdrwire`: Pane lifecycle (AgentStart, WorkspaceCreate, PaneClose, ProcessInfo, ReportMetadata, PaneSwap)
+- Internal `internal/species`: Pick() for kebab-case suffix generation
+- Internal `internal/flock`: Env constant, Dir(), journal path helpers
+- Internal `internal/protocol`: Request, Response, Agent, Message, event marshaling
+- External `filebridge`: Fallback RPC for sandboxed agents without socket access
+- External `crypto/sha256, crypto/subtle`: Token hashing, constant-time compare
+- External `context`: Cancellation for inbox notifier
+- External `os, io, filepath`: File I/O, atomicity via temp-rename
+- External `testing`: Fake Herdr server, test utilities
 
 ### Data Flows
 
-- `dispatch` → `send/reply`: OpSend/OpReply → create message → journal evSent → match waiter or enqueue pending → queue inbox wake if eligible
-- `send/reply` → `matchWaiter`: Find first live waiter matching message; if found, offer (acknowledge=true) or deliver (acknowledge=false)
-- `deliver` → `append`: Journal evDelivered, mark messageDelivered, drop waiter, send via channel before returning to client
-- `wait/receive` → `append`: On immediate match, deliver (wait, acknowledge=false) or return without mark (receive, acknowledge=true); else park waiter and block on channel
-- `send/reply` → `queueInboxWakeLocked`: If shouldNotifyInboxLocked (eligible + not already notified), queue inbox notify task or update existing task backoff
-- `runInboxNotifier` → `notifyInboxAgent`: Dequeue next eligible task; call inboxWake callback with orchestrator identity and pending message metadata; journal evInboxNotified on success
-- `dispatch` → `spawn`: OpSpawn resolves launch config, acquires placement, starts pane in Herdr, journals evLaunching/evSpawned
-- `acquirePlacement` → `herdrwire`: Call Herdr to list workspaces/tabs, resolve selectors, create tab if needed (atomic journal → create → rename → re-list for ambiguity)
-- `recoverOwnedTabs` → `herdrwire`: List workspace/tab inventory; match crash-left intents by temporary label; rollback unattributable tabs; close stale owned tabs
-- `replay` → `append`: On startup, replay journal events into state; if final line torn, truncate before reopening for O_APPEND
-- `validateManagedContextMessageLocked` → `contextdoc`: Before send, validate analyzer request schema and reply schema + correlation for managed context protocol
-- `authorizeMessageActorLocked` → `authenticateIdentityLocked`: Verify agent identity via constant-time token hash comparison; accept bare credential for launched agents
+- `spawn()` → `reserve()`: Claim name with reservedPID (-1) placeholder while holding d.mu
+- `spawn()` → `launch()`: Call Herdr without d.mu; slow pane/workspace creation
+- `launch()` → `journal(evSpawned)`: Journal after Herdr succeeds; spawned event is second atomic write
+- `spawn()` → `readiness loop`: Await readiness signal via env-injected token (50ms polling)
+- `ready()` → `readyDigest()`: Token verify → launch latch await → ready event → inbox arm
+- `send()` → `queueInboxWake()`: Orchestrator only: queue/coalesce inbox notification task
+- `runInboxNotifier()` → `notifyInboxAgent()`: Dequeue oldest task, invoke wake callback with target+metadata
+- `notifyInboxAgent()` → `journal(evInboxNotified)`: Journal success; mark notified in-memory
+- `retryInboxNotifyLocked()` → `queueInboxWakeLocked()`: Reschedule failed task with exponential backoff
+- `replayInboxNotifications()` → `queueInboxWakeLocked()`: On restart: queue durable unnotified messages
+- `stop()` → `herdrwire.PaneClose()`: Close spawned agent's pane
+- `stop()` → `stopWorkspaceOwner()`: Close workspace if agent owns it
+- `flock isolation` → `journal`: Each flock maintains own journal; replay filters by flock name
+- `flock isolation` → `species pool`: Each flock type has independent species pool
 
 ### Invariants
 
-- Journal-first: every state-changing operation (send, deliver, spawn, stop, placement, inbox notify) is appended to journal with fsync before responding to client
-- Replay idempotence: restart replays journal and rebuilds exact in-memory state (agents, pending messages, placement, closures) without loss or duplication
-- Torn-line tolerance: final line of journal can be torn; replay detects and truncates before reopening; non-final malformed line is corruption (hard fail)
-- Message delivery atomicity: evSent + evDelivered or evSent + pending are the only valid end states; delivery failure leaves message pending for retry
-- Waiter matching: a waiter parked before evSent blocks until delivery; a sender finding a matching waiter journals delivery before releasing sender or waiter
-- Species pool isolation: each flock has independent species pools; same type/pool in different flocks each hand out first species (e.g., worker-emperor)
-- Placement latching: concurrent spawn requests for same workspace+tab label converge on single tab creation via latch; later requesters journal their own placement event
-- Owned tab lifecycle: tabs created by Fledge are journaled as owned; crash-left tabs without active agents are cleaned up on recovery; stop cleans owned tabs
-- Workspace closure durability: evWorkspaceClosing journals owner name + nested agent stops + owned tabs to close; evWorkspaceClosed marks completion
-- Inbox notify eligibility: agent must be armed (inbox_notify_armed + ready journaled), running, not stopping, workspace not closing for wake delivery
-- Managed context validation: forager→analyzer request rejected if schema invalid before evSent; analyzer→forager reply rejected if schema/correlation invalid before evSent
-- Message actor authorization: sender authenticated via launch credential; lifecycle checked (alive/running/not-stopping/workspace-not-closing) before send allowed
-- Socket path limit: unix socket path ≤ 103 bytes (darwin stricter); socket lives in XDG_RUNTIME_DIR/fledge/workspace-hash/, not workspace (NFS incompatible)
+- State atomicity: registered+launching are one pre-launch journal write; spawned is second post-launch
+- Readiness one-use: token hash stored, deleted after verify, second call fails
+- Name liveness: self-registered agents judged by PID; spawned agents by State (never PID for spawned)
+- Species reuse: only when State ∈ {stopped, orphaned} or (self-registered && !alive(pid))
+- Orchestrator naming: always bare (fledge-orchestrator, no species), one per flock
+- Inbox body-free: wake callback never receives message bodies (metadata only: ID, From, To, ReplyTo)
+- Message atomicity: delivered ≤1 time per mailbox (journaled inbox.notified ids + in-memory map)
+- Flock isolation: roster, journal, socket, species pool all per-flock; no cross-flock visibility
+- Workspace ownership: only spawned agents can own; closed on stop or launch failure
+- Launch coordination: launchLatch ensures readiness/stop calls wait for slow Herdr.launch() to complete
 
 ### Tests
 
-- `internal/daemon/delivery_order_test.go`: TestSendToParkedWaiterDeliveryAppendFailureRemainsRetryable: delivery failure leaves message pending for retry; parked waiter error is propagated
-- `internal/daemon/delivery_order_test.go`: TestReplyToParkedWaiterDeliveryAppendFailurePreservesCorrelation: reply failure preserves reply_to correlation and remains pending
-- `internal/daemon/delivery_order_test.go`: TestWaitDeliveryAppendFailureLeavesPendingForRetry: wait delivery failure retains message pending; retry receives same message
-- `internal/daemon/delivery_order_test.go`: TestDeliveryAppendFailureReplaysDurableSendAsPending: daemon restart replays undelivered send as pending; retry receives same message once
-- `internal/daemon/delivery_order_test.go`: TestReceiveRequiresAckAndCanBeRetriedAfterOutputLoss: receive leaves message pending until ack; multiple receives return same message; ack is idempotent
-- `internal/daemon/placement_test.go`: TestTargetedSpawnResolvesLabelsAndReusesTab: spawn resolves workspace/tab labels via Herdr; reuses existing tab without creating
-- `internal/daemon/placement_test.go`: TestTargetedSpawnCreatesAndClosesOwnedTab: spawn creates owned tab with temporary label, renames to requested label, closes initial shell; stop closes owned tab
-- `internal/daemon/placement_test.go`: TestExternalTabCreateRaceRollsBackOnlyFledgeTab: external creator races with Fledge rename; Fledge detects ambiguity and rolls back only its tab
-- `internal/daemon/placement_test.go`: TestConcurrentTargetedSpawnsConvergeOnCreatedTab: two concurrent spawns for same label latch; single tab creation; both agents placed in same tab
-- `internal/daemon/placement_test.go`: TestRecoverOwnedTabsClosesOnlyUnreferencedAuthority: startup recovery closes stale owned tabs without active agents; keeps tabs with active placements
-- `internal/daemon/placement_test.go`: TestRecoverTabCreateIntentBeforeCreateLeavesExternalSameLabel: recovery with intent before create resolves intent without closing external same-label tab
-- `internal/daemon/context_message_test.go`: TestManagedContextSendRejectsInvalidTrafficBeforeJournal: malformed request/reply rejected before evSent; invalid schema or missing correlation rejected
-- `internal/daemon/inbox_notify_test.go`: Inbox notifier arms/disarms agents; retries with exponential backoff on failure; journals evInboxNotified for successful delivery
-- `internal/daemon/isolation_test.go`: TestFlocksHaveSeparateSpeciesPools: two flocks in same workspace have independent species pools; each hands out first species per type
-- `internal/daemon/isolation_test.go`: TestMessagesDoNotCrossFlocks: message sent in one flock is never visible in another; isolated journals and rosters
-- `internal/daemon/isolation_test.go`: TestRestartReplaysOnlyItsOwnFlock: daemon restart replays only its own journal; roster does not leak agents from other flocks
+- `internal/daemon/spawn_test.go`: 60+ integration tests covering placement, orchestrator, launchers, concurrency, atomicity, readiness, orphans, mailbox
+- `internal/daemon/startup_assets_test.go`: 7 tests validating Claude/Pi asset generation, JSON validity, script perms, no-trigger, Codex bootstrap
+- `internal/daemon/inbox_notify_test.go`: 11 tests validating readiness+arming atomicity, body-free metadata, coalescing, retry, worker join, replay
+- `internal/daemon/isolation_test.go`: 4 tests validating flock isolation: species pools, message boundaries, daemon death, restart replay
+
+### Files
+
+#### internal/daemon/inbox_notify.go
+
+_text._ Durable orchestrator mailbox notifications (283 lines): exponential backoff (25ms → 5s, 31 attempts), coalescing, body-free metadata wake, journal recovery. Daemon close cancels flights and joins worker.
+
+#### internal/daemon/inbox_notify_test.go
+
+_text._ Inbox lifecycle tests (455 lines, 13k bytes): readiness+arming atomicity, body-free metadata, coalescing, retry, worker join, replay recovery, degraded mode.
+
+#### internal/daemon/isolation_test.go
+
+_text._ Flock isolation validation (146 lines): separate species pools, message boundaries, daemon death isolation, restart replay. Confirms complete flock-level separation.
+
+#### internal/daemon/spawn.go
+
+_text._ Core lifecycle (956 lines): reserve → launch Herdr panes/workspaces → readiness token validation. Orchestrator special-cased for bare naming, workspace ownership, inbox arm. All Herdr calls run without d.mu. Readiness token injected via env, hashed SHA256, constant-time verified. Launch latch synchronization for readiness/stop. Supports Claude/Pi/Codex with role-specific argv. Message delivery via mailbox only.
+
+#### internal/daemon/spawn_test.go
+
+_text._ Comprehensive integration tests (2289 lines, 77k bytes): 60+ scenarios for placement, orchestrator, launchers, concurrency, atomicity, readiness, orphans, isolation, replay. Uses fake Herdr server to intercept calls.
+
+#### internal/daemon/startup_assets.go
+
+_text._ Generates startup automation (157 lines): Claude plugin.json + hooks.json + ready.sh (0700); Pi readiness.ts (TypeScript, session_start, no triggerTurn, nextTurn); Codex positional bootstrap. Atomic temp-then-rename writes.
+
+#### internal/daemon/startup_assets_test.go
+
+_text._ Validates asset generation (199 lines): JSON validity, script perms, hooks structure, Pi extension details, Codex bootstrap, write failure prevention.
+
+## Subsystem: daemon-tests-misc
+
+Nine test files covering daemon lifecycle, robustness, and message durability: initialization and validation (boundary); managed context orchestration (context_message); message durability under append failures (delivery_order); comprehensive integration testing (e2e); dedicated workspace spawning (forager); structured reply validation (reply); serve loop error handling and shutdown (serve); socket path resolution and concurrent election (socket); session liveness and window branding (watch). Together these tests ensure the daemon is bulletproof in startup, messaging, restart recovery, corruption tolerance, and graceful shutdown.
+
+**Purpose:** Remaining daemon test coverage: boundary, context messages, delivery order, e2e, forager, reply, serve, socket, and watch in internal/daemon
+
+### Entry Points
+
+- `internal/daemon/boundary_test.go`: Daemon initialization guards: scaffold validation, flock name format, socket path size limit, malformed client handling, scaffolding requirement
+- `internal/daemon/context_message_test.go`: Managed context (analyzer) message lifecycle: request schema validation, reply correlation, traffic rejection before journal entry
+- `internal/daemon/delivery_order_test.go`: Message durability under failures: delivery append failure recovery, retry-ability, restart replay, once-only delivery guarantee
+- `internal/daemon/e2e_test.go`: End-to-end roster and messaging: species assignment, exact correlation, restart recovery, abandoned waiter detection, journal corruption tolerance
+- `internal/daemon/forager_test.go`: Dedicated workspace spawn: prompt-based launch without pane input, readiness timeout with workspace rollback
+- `internal/daemon/reply_test.go`: Structured reply validation: inbox claim requirement, inbound identity verification, correlation derivation
+- `internal/daemon/serve_test.go`: Serve loop robustness: accept error handling, response write deadline protection, shutdown semantics, ownership transfer ordering
+- `internal/daemon/socket_test.go`: Socket path resolution and collision avoidance: concurrent election, permission hardening, deep workspace support, path stability
+- `internal/daemon/watch_test.go`: Session liveness and window branding: probe-based exit, title landing caching, client attachment retry logic, graceful goroutine shutdown
+
+### Key Symbols
+
+- `daemon.New` in `internal/daemon/boundary_test.go` (function): Daemon constructor: validates scaffold, socket path, binds socket, elects winner on concurrent calls
+- `daemon.Run` in `internal/daemon/boundary_test.go` (function): Standalone daemon runner: requires scaffolding before serving
+- `register` in `internal/daemon/e2e_test.go` (function): Test helper: registers agent with type, returns assigned name (type-species format)
+- `workspace` in `internal/daemon/e2e_test.go` (function): Test helper: creates scaffolded temp workspace
+- `start` in `internal/daemon/e2e_test.go` (function): Test helper: starts daemon in background, returns stop func
+- `registerManagedContextPair` in `internal/daemon/context_message_test.go` (function): Test helper: registers forager and analyzer agents for context flow
+- `failDeliveredJournal` in `internal/daemon/delivery_order_test.go` (type): Injectible journal wrapper: fails msg.delivered writes to simulate append failure
+- `scriptedListener` in `internal/daemon/serve_test.go` (type): Mock listener for Serve error testing: returns scripted accept() results
+- `TestConcurrentNewElectsOneWinner` in `internal/daemon/socket_test.go` (test): Concurrent New() calls: exactly one winner (stale socket reclaim serialized)
+- `TestWatchSessionSetsWindowTitleOnce` in `internal/daemon/watch_test.go` (test): Window title lands on attached client; cached and not retried
+
+### Dependencies
+
+- Internal `internal/client`: Client-side socket operations (Do, Running, ErrNotRunning)
+- Internal `internal/protocol`: Request/Response/Agent/Message types, Op constants (OpRegister, OpSend, OpWait, OpReply, OpInbox, OpReceive, OpAck, OpList, OpStatus, OpShutdown), event type constants
+- Internal `internal/scaffold`: Workspace initialization, .fledge tree structure (DirName), Ensure helper
+- Internal `internal/filebridge`: Sandboxed client fallback (Submit, Await, Cleanup, Awaiting, liveness polling)
+- Internal `internal/flock`: Flock name validation and constants (MaxName)
+- Internal `internal/version`: version.Get() for status reporting
+- Internal `internal/agentcfg`: Agent catalog, config structures, writeCatalog test helper
+- Internal `internal/herdr`: Herdr CLI session lifecycle (workspace.create, agent.start via serveHerdr mock)
+- External `net`: Unix socket listener, dialer, pipe, error types (ErrClosed)
+- External `encoding/json`: Request/response marshaling and unmarshaling
+- External `os`: File operations (permissions, PID, env), exec for helper process spawning
+- External `sync`: Mutex, atomic types (Bool, Int32), waitgroup for concurrency
+- External `time`: Ticker, timeout, deadline, sleep for timing control
+- External `syscall`: Signal 0 probe for liveness, EINVAL and other error codes
+- External `io`: Reader/Writer interfaces, Discard sink
+
+### Data Flows
+
+- `daemon startup` → `socket bind`: New() probes XDG_RUNTIME_DIR path, checks scaffold, tightens permissions, binds socket; concurrent calls race to bind (winner = first successful bind)
+- `journal replay` → `daemon state`: On startup, replay agent.registered events rebuild roster; replay msg.sent events rebuild pending messages
+- `send request` → `pending messages`: send() journals msg.sent atomically, adds to pending slice; journals before return (durability invariant)
+- `pending messages` → `delivery`: Parked wait/receive/ack handlers wake, attempt delivery, journal msg.delivered on success; if journal append fails, message stays pending
+- `wait request` → `delivery or timeout`: wait() parks with exact correlation (From, ReplyTo); wakes on message match or timeout; skipped messages remain pending
+- `shutdown request` → `listener close`: dispatch(OpShutdown) closes listener, which closes accept loop; parked waiters released with error; active requests must drain before ownership transfer
+- `watch probe` → `serve exit`: WatchSession calls probe() on tick; if probe returns true (session gone), close listener and Serve exits
+- `title landing` → `title cache`: Window title set request lands (changed=true) and daemon caches titled=true, stops retrying
+
+### Invariants
+
+- Once-only delivery: messageDelivered map ensures each message ID delivered at most once, survives retries and restarts
+- Append-only journal: msg.sent journals before send() returns, establishing durability; corrupted final lines (torn, unterminated) are recovered on replay by truncation or re-termination
+- Exact correlation strictness: wait(As, From, ReplyTo) matches sender and replyTo exactly; partial matches rejected; uncorrelated messages remain pending for later matching
+- Socket uniqueness per flock: concurrent New() calls serialize stale socket reclaim (probe, unlink, bind), electing exactly one winner
+- Permission hardening: flock directory and journal upgraded from 0o755 to 0o700 and 0o644 to 0o600 on startup if stale
+- Species pool per type: each agent type has its own 18-slot pool; species override allows explicit request; dead PID releases slot for reclaim
+- No pane input on prompt launch: dedicated workspace with prompt instructions uses instructions only, no pane.send_input calls
+- Filebridge liveness polling: daemon probes bridge waiter pid every ~250ms; dead process means waiter dropped, message not swallowed
+- Structured reply validation: reply JSON validated against schema before journal entry; group_id must match original dispatch
+- Shutdown ownership transfer: active requests (beginRequest/endRequest refcount) must drain before listener release; filebridge drain completes before ownership passes to new daemon
+- Watch graceful exit: Close() stops watch goroutine via done channel, no leak
+
+### Tests
+
+- `internal/daemon/boundary_test.go`: TestNewRejectsMissingScaffold: New() fails if .fledge/ missing
+- `internal/daemon/boundary_test.go`: TestNewRejectsInvalidFlockNames: rejects empty, uppercase, dash-containing, >32-char names
+- `internal/daemon/boundary_test.go`: TestNewRejectsOversizedSocketPath: rejects path >103 bytes
+- `internal/daemon/boundary_test.go`: TestUnknownOperationReturnsDaemonError: unknown Op returns protocol error
+- `internal/daemon/boundary_test.go`: TestMalformedClientRequestIsDroppedWithoutStoppingDaemon: non-JSON request dropped; daemon continues
+- `internal/daemon/boundary_test.go`: TestRunRequiresScaffoldingBeforeServing: Run() fails if scaffold absent
+- `internal/daemon/context_message_test.go`: TestManagedContextSendRejectsInvalidTrafficBeforeJournal: malformed JSON, missing instructions_before, mismatched group_id rejected before journal
+- `internal/daemon/context_message_test.go`: TestManagedContextStructuredReplyValidatesBeforeJournal: malformed reply JSON rejected before journal entry
+- `internal/daemon/delivery_order_test.go`: TestSendToParkedWaiterDeliveryAppendFailureRemainsRetryable: delivery append failure leaves message pending; parked waiter and retry waiter both get it
+- `internal/daemon/delivery_order_test.go`: TestReplyToParkedWaiterDeliveryAppendFailurePreservesCorrelation: failed reply append keeps reply_to correlation intact
+- `internal/daemon/delivery_order_test.go`: TestWaitDeliveryAppendFailureLeavesPendingForRetry: failed wait append leaves message pending for retry
+- `internal/daemon/delivery_order_test.go`: TestDeliveryAppendFailureReplaysDurableSendAsPending: restart recovers durable send from before delivery append, replays as pending
+- `internal/daemon/e2e_test.go`: TestDaemonDownIsHardError: no daemon running returns ErrNotRunning
+- `internal/daemon/e2e_test.go`: TestRegisterAssignsSpeciesPerType: engineer-emperor, engineer-king per type; reviewer-emperor; species override honored
+- `internal/daemon/e2e_test.go`: TestRegisterRejectsBadType: rejects empty, leading dash, double dash, uppercase, underscore
+- `internal/daemon/e2e_test.go`: TestDeadAgentReleasesItsName: PID 0 registration born dead; name reclaimed by next registration
+- `internal/daemon/e2e_test.go`: TestPoolExhaustsAtNineteen: 18 registrations succeed; 19th fails; different type unaffected
+- `internal/daemon/e2e_test.go`: TestSendToUnknownAgentFails: rejects unknown to or from agent
+- `internal/daemon/e2e_test.go`: TestSendThenWaitDelivers: single delivery; second wait times out (once-only)
+- `internal/daemon/e2e_test.go`: TestWaitBlocksUntilSend: wait parks; wakes on send
+- `internal/daemon/e2e_test.go`: TestWaitReplyToAndSenderRequireExactCorrelation: uncorrelated messages skip; wrong sender rejected; correlated delivers; skipped messages remain pending
+- `internal/daemon/e2e_test.go`: TestWaitTimesOut: timeout honored; pending message remains
+- `internal/daemon/e2e_test.go`: TestWaitAsUnknownAgentFails: unknown agent rejected
+- `internal/daemon/e2e_test.go`: TestRestartReplaysRosterAndPending: roster and undelivered messages survive daemon restart
+- `internal/daemon/e2e_test.go`: TestRestartDoesNotRedeliver: delivered message not redelivered after restart
+- `internal/daemon/e2e_test.go`: TestSecondDaemonRefusesLiveSocket: concurrent New() blocks until first releases socket
+- `internal/daemon/e2e_test.go`: TestReplayToleratesTornFinalLine: torn final line ignored; earlier events replayed
+- `internal/daemon/e2e_test.go`: TestTornTailTruncatedAcrossRestart: torn tail truncated on replay; next append does not fuse corrupted bytes
+- `internal/daemon/e2e_test.go`: TestUnterminatedFinalLineReterminated: unterminated valid event re-terminated; next append does not fuse
+- `internal/daemon/e2e_test.go`: TestAbandonedWaiterDoesNotSwallowMessages: socket waiter abandoned (connection closed) means waiter dropped; live wait gets message
+- `internal/daemon/e2e_test.go`: TestAbandonedBridgeWaiterDoesNotSwallowMessages: filebridge waiter abandoned (Cleanup called) means waiter dropped; live wait gets message
+- `internal/daemon/e2e_test.go`: TestKilledBridgeWaiterDoesNotSwallowMessages: filebridge waiter killed (pid dies) means liveness probe detects; waiter dropped; live wait gets message
+- `internal/daemon/forager_test.go`: TestDedicatedWorkspaceUsesLaunchPromptWithoutPaneInput: prompt-based launch does not send pane.send_input
+- `internal/daemon/forager_test.go`: TestDedicatedWorkspaceReadinessTimeoutClosesWorkspace: readiness timeout means workspace.close and agent stopped
+- `internal/daemon/reply_test.go`: TestStructuredReplyDerivesClaimedInboundSenderAndCausality: reply before inbox claim fails; after claim, derives from/to/replyTo
+- `internal/daemon/reply_test.go`: TestStructuredReplyRejectsMessageInboundToAnotherIdentity: reply from non-recipient agent rejected
+- `internal/daemon/serve_test.go`: TestServeReturnsNonTemporaryAcceptError: non-temporary accept error terminates Serve with error
+- `internal/daemon/serve_test.go`: TestServeRetriesTemporaryAcceptError: temporary error (EMFILE) retried; clean close returns nil
+- `internal/daemon/serve_test.go`: TestHandleWriteDeadlineFreesBlockedWriter: response write deadline frees blocked handler (non-reading client)
+- `internal/daemon/serve_test.go`: TestStatusReportsDaemonProcessAndVersion: status Op returns daemon PID and version
+- `internal/daemon/serve_test.go`: TestFileBridgeStatusReportsDaemonProcessAndVersion: filebridge status Op returns daemon PID and version
+- `internal/daemon/serve_test.go`: TestFileBridgeShutdownRespondsBeforeClose: filebridge shutdown Op responds before listener close
+- `internal/daemon/serve_test.go`: TestShutdownReleasesParkedWaiters: shutdown Op releases parked waiters with error
+- `internal/daemon/serve_test.go`: TestShutdownHoldsOwnershipUntilActiveRequestsDrain: shutdown waits for active requests to drain before ownership passes to replacement
+- `internal/daemon/serve_test.go`: TestFileBridgeDrainCompletesBeforeOwnershipPasses: filebridge request drain completes before ownership transfer; old daemon writes no journal after replacement binds
+- `internal/daemon/socket_test.go`: TestConcurrentNewElectsOneWinner: burst of 12 concurrent New() calls means exactly 1 daemon comes up
+- `internal/daemon/socket_test.go`: TestFlockDirAndJournalPermissions: 0o755 to 0o700 flock dir, 0o644 to 0o600 journal on startup
+- `internal/daemon/socket_test.go`: TestSocketPathsDifferPerWorkspace: different roots hash to different socket paths
+- `internal/daemon/socket_test.go`: TestSocketPathIsStableAcrossEquivalentRoots: relative and symlink resolution produce same socket path
+- `internal/daemon/socket_test.go`: TestDeepWorkspaceRunsDaemon: workspace >100 chars works end-to-end
+- `internal/daemon/socket_test.go`: TestWorstCaseSocketPathFitsDarwinLimit: max flock name + deep workspace fits 103-byte darwin sun_path limit
+- `internal/daemon/watch_test.go`: TestWatchSessionExitsWhenSessionGone: probe returns true means Serve exits with nil
+- `internal/daemon/watch_test.go`: TestWatchSessionKeepsServingWhileSessionUp: probe returns false means Serve keeps running
+- `internal/daemon/watch_test.go`: TestWatchSessionSetsWindowTitleOnce: title lands (changed=true) means cache titled=true, no retries
+- `internal/daemon/watch_test.go`: TestWatchSessionRetriesWindowTitleUntilAttached: no foreground client means keep retrying title
+- `internal/daemon/watch_test.go`: TestWatchSessionUnboundSetsNoTitle: unbound daemon (no session) means sets no title
+- `internal/daemon/watch_test.go`: TestWatchSessionStopsOnClose: Close() stops watch goroutine, no leak
 
 ### Files
 
 #### internal/daemon/boundary_test.go
 
-_text._ Test boundary conditions for request validation and error cases
+_text._ Boundary and initialization guard tests: daemon.New() validates scaffold presence, flock name format (lowercase, no dash, at most 32 chars), socket path size (at most 103 bytes); daemon.Run() requires scaffolding; malformed client requests (non-JSON) are dropped without crashing; unknown operations return protocol error.
 
 #### internal/daemon/context_message_test.go
 
-_text._ Managed context protocol validation: analyzer request/reply schema check before send; correlation validation
-
-#### internal/daemon/daemon.go
-
-_text._ Core state machine: Daemon struct with agent roster, messages, placement state; New/Run/RunBound/Serve/Close lifecycle; dispatch routing; send/reply/wait/inbox/ack/spawn/ready/stop handlers
+_text._ Managed context orchestration tests: registers forager and analyzer agents; sends analyzer requests with validation of JSON schema and required fields (instructions_before, instructions_after); validates replies before journaling (schema, group_id correlation); tests rejection of invalid traffic before journal entry to preserve causality.
 
 #### internal/daemon/delivery_order_test.go
 
-_text._ Message delivery durability and retry: parked waiter + eager delivery paths; delivery append failure handling; receive + ack flow
+_text._ Message durability and recovery tests: injects delivery-append failures to test retry-ability of messages and exact recovery of reply_to correlation; verifies messages stay pending when delivery journals fail; confirms durable sends survive daemon restart and replay as pending; tests receive/ack idempotence and once-only delivery guarantee.
 
 #### internal/daemon/e2e_test.go
 
-_text._ End-to-end spawn, message exchange, agent lifecycle tests with fake Herdr integration
+_text._ Comprehensive integration tests (largest suite, 22.9k): species assignment per type with pool exhaustion; exact send/wait correlation with partial-match rejection and uncorrelated pending retention; restart replay of roster and pending; reduplicate prevention; abandoned waiter detection (socket connection close and filebridge cleanup/pid liveness); journal corruption tolerance (torn final line, unterminated line).
 
 #### internal/daemon/forager_test.go
 
-_text._ Context forager request/reply protocol tests
-
-#### internal/daemon/inbox_notify.go
-
-_text._ Inbox notifier: runInboxNotifier background goroutine; task queuing with exponential backoff; eligibility checks; integration wake callback
-
-#### internal/daemon/inbox_notify_test.go
-
-_text._ Inbox notifier tests: arming/disarming, retry backoff, journal atomicity, coalescing
-
-#### internal/daemon/isolation_test.go
-
-_text._ Multi-flock isolation: separate species pools, message isolation, independent restarts
-
-#### internal/daemon/journal.go
-
-_text._ Journal replay and append: event struct; replay reconstructs state from journal.jsonl; append writes with fsync; torn-line tolerance and re-termination
-
-#### internal/daemon/journal_test.go
-
-_text._ Journal replay tests: event ordering, message pending state, delivery markers, tab lifecycle
-
-#### internal/daemon/placement.go
-
-_text._ Placement logic: acquirePlacement resolves workspace/tab via Herdr; creates owned tabs with latching for concurrent requests; recovery closes crash-left tabs
-
-#### internal/daemon/placement_test.go
-
-_text._ Placement tests: label resolution, tab creation/reuse, external race handling, concurrent spawn convergence, recovery
-
-## Subsystem: daemon-spawn-readiness
-
-Daemon-driven agent lifecycle: spawn, readiness authentication via one-use tokens with SHA-256 digest validation, socket/serve handling with deadline-bounded writes, and comprehensive readiness/launch/stop coordination across socket and sandboxed file-bridge channels.
-
-**Purpose:** Daemon agent lifecycle: spawn/readiness signaling, socket/serve handling, and related tests.
-
-### Entry Points
-
-- `internal/daemon/spawn.go`: Main spawn entry point: agent reservation, launch preparation, readiness orchestration, and failed rollback
-- `internal/daemon/ready_signal.go`: Sandboxed readiness fallback: atomic file-based digest storage and consumption for agents whose sandbox denies Unix sockets
-- `internal/daemon/serve_test.go`: Socket serve harness: listener error handling (non-temporary fails fast, temporary retries), write deadlines, shutdown sequencing
-
-### Key Symbols
-
-- `spawn` in `internal/daemon/spawn.go` (func): Orchestrates spawn lifecycle: resolves config, reserves name, writes atomic launch intent, launches Herdr pane, journals spawned event, polls readiness token and file-bridge signal
-- `ready` in `internal/daemon/spawn.go` (func): Authenticates one-use token via SHA-256 constant-time comparison, awaits spawn event if launch still in flight, transitions agent to running, delivers queued inbox messages
-- `reserve` in `internal/daemon/spawn.go` (func): Allocates name from species pool before launch (with reservedPID=-1 placeholder), serializes against concurrent spawns via d.mu
-- `launch` in `internal/daemon/spawn.go` (func): Calls Herdr to create pane/workspace, reports metadata, probes shell PID; runs unlocked to avoid stalling flock on socket round-trips
-- `failLaunching` in `internal/daemon/spawn.go` (func): Atomically journals stopped event and releases launch/ready latches after unrecoverable pre-launch failure
-- `rollbackStarting` in `internal/daemon/spawn.go` (func): On readiness timeout: tears down pane or workspace, journals stopped, clears readiness latches
-- `stop` in `internal/daemon/spawn.go` (func): Stops spawned agent: awaits launch latch, closes pane/workspace via Herdr, journals stopped, cancels parked message waiters
-- `WriteReadySignal` in `internal/daemon/ready_signal.go` (func): Atomically publishes hashed token (never raw) in .fledge/flocks/<name>/.ready/<agentName> for sandboxed launch paths
-- `consumeReadySignal` in `internal/daemon/ready_signal.go` (func): Validates and removes file-bridge readiness signal; tolerates legacy plain-digest format; invalid/stale signals are consumed without agent transition
-- `consumeReadySignals` in `internal/daemon/ready_signal.go` (func): Resumes ready signals left while daemon was restarting; only processes signals corresponding to journaled tokens
-- `launchLatch` in `internal/daemon/spawn.go` (type): Synchronization primitive: readable-once channel that spawn() parks early-ready calls on while Herdr launch resolves
-- `spawnResolution` in `internal/daemon/spawn.go` (type): Resolved spawn configuration: agent name, profile, config entry, prompt, workspace (if dedicated), source path
-
-### Dependencies
-
-- Internal `internal/protocol`: RPC request/response envelopes, operation codes, environment variable keys
-- Internal `internal/agentcfg`: Config resolution (Load, LoadDefinitions), reserved orchestrator name, session ID generation, validation
-- Internal `internal/species`: Species pool management: Pick() allocates unique suffixes
-- Internal `internal/flock`: Flock directory path helpers, environment variable for pane inheritance
-- Internal `internal/herdrwire`: Socket API for pane/workspace ops: AgentStart, WorkspaceCreate, PaneClose, ReportMetadata, ProcessInfo
-- Internal `internal/herdr`: Session state object with socket path; only imported for session binding checks
-- Internal `internal/scaffold`: Workspace initialization (.fledge directory structure)
-- Internal `internal/filebridge`: Fallback RPC for sandboxed agents: Submit, Await
-- External `crypto/sha256`: One-use token digest for readiness authentication
-- External `encoding/hex`: Hex encoding of SHA-256 digests
-- External `os`: File I/O for ready signals, process info queries
-- External `sync`: Mutex (d.mu) protecting roster, pending messages, readiness state
-- External `time`: Readiness timeout (default 2 minutes), ticker for file-signal probes, deadline-bounded writes
-- External `net`: Listen/Accept error classification (temporary vs. non-temporary), deadline on response writes
-
-### Data Flows
-
-- `spawn()` → `d.appendAll() [registered + launching]`: Atomic pre-launch journal: encodes type, species, config, model, instruction hash, token hash
-- `spawn() to launch()` → `herdrwire.AgentStart`: Launches pane with env vars: agent name, readiness token, flock name for inheritance
-- `launch()` → `d.append() [spawned event]`: Journals PID, pane ID, workspace metadata from Herdr response; triggers ready-waiter notification
-- `ready()` → `readyDigest()`: One-use token to SHA-256 digest, constant-time comparison against stored hash
-- `ready() to d.consumeReadySignals()` → `File-bridge fallback: .fledge/flocks/<flock>/.ready/<name>`: Validates and atomically deletes file-based digest for sandboxed agents
-- `spawn() readiness loop` → `d.readyWaiters[name]`: Channel closed on ready() success; spawn() unblocks when agent reaches stateRunning
-- `spawn()` → `d.rollbackStarting()`: On readiness timeout: one-way transition from stateStarting to stateStopped, pane teardown
-- `stop()` → `d.cancelAgentWaitersLocked()`: Stopped agent releases any message.wait() calls parked on its behalf
-
-### Invariants
-
-- Spawn journals (registered, launching, spawned) are all-or-nothing atomically, so a clean journal replay never loses a launch intent
-- A one-use token is hashed before storage and before spawn returns it to the agent; raw token never persists in journal or filesystem
-- A stopped agent retains its identity token for message authentication but rejects all lifecycle operations (send, wait, reply, inbox)
-- Early readiness (before spawned event is journaled) waits for launch completion without holding d.mu, so stop can abort launch while readiness waits
-- A readiness timeout transitions only if current state is stateStarting; a concurrent stop that already transitioned is a no-op
-- File-bridge ready signals older than journaled tokens are consumed and discarded; unrelated signals are never journaled
-- Launched agents never create dangling Herdr resources: a spawn failure closes the pane/workspace immediately; a journal failure rolls back before returning
-- Concurrent spawns serialize through d.mu at reservation time, ensuring each type-species pair is issued exactly once until its previous holder stops
-
-### Tests
-
-- `internal/daemon/ready_test.go`: Token validation (valid/invalid/replayed), identity authentication for send/wait/reply, stopped-agent authorization failure, message delivery ordering (before/after ready), file-bridge signal consumption
-- `internal/daemon/spawn_test.go`: Spawn lifecycle: config/model/agent resolution, claude/codex/pi integrations, dedicated workspaces, launch failure rollbacks, journal atomicity, concurrent spawns, failed-launch species reuse, orchestrator readiness, bootstrap prompt injection
-- `internal/daemon/reply_test.go`: Structured reply: claimed message identity validation, wrong-identity reply rejection
-- `internal/daemon/serve_test.go`: Socket serve: listener error handling (temp vs non-temp), write deadline enforcement, shutdown sequencing, file-bridge drain ordering
-- `internal/daemon/socket_test.go`: Socket path stability, deep workspace handling, daemon concurrency election (one winner per flock), file/journal permissions, manifest flock directory tightening
-
-### Files
-
-#### internal/daemon/ready_signal.go
-
-_text._ Sandboxed readiness fallback: WriteReadySignal() atomically publishes SHA-256 digest in .fledge/flocks/<flock>/.ready/; consumeReadySignal() validates and removes; journal-replayed token map is authoritative for which signals may be consumed
-
-#### internal/daemon/ready_test.go
-
-_text._ Readiness tests: valid/invalid/replayed tokens, send/wait/reply authentication, stopped-agent lifecycle rejection, parked wait cancellation on stop, delivery ordering (queued-before-ready vs. sent-after-ready-wait-parks), file-bridge signal validation, spawn readiness timeout rollback, orchestrator readiness recovery
+_text._ Dedicated workspace spawn tests: verifies prompt-based launch path uses instructions without pane.send_input calls; tests readiness timeout handling with workspace rollback (workspace.close called on timeout).
 
 #### internal/daemon/reply_test.go
 
-_text._ Structured reply: derives sender and causality from claimed message ID, rejects reply from non-inbound identity, enforces claim-before-reply
+_text._ Structured reply validation tests: requires inbox claim before reply (claim derives inbound sender); verifies from/to/replyTo correlation; rejects replies from wrong identity (message inbound to different agent).
 
 #### internal/daemon/serve_test.go
 
-_text._ Serve harness: non-temporary Accept error stops Serve cleanly, temporary error retries, write deadline frees blocked writers, status reports daemon PID/version, file-bridge submit/await, shutdown sequences with active-request drain and file-bridge completion barriers
+_text._ Serve loop robustness tests: scripted listener for error injection; non-temporary accept errors terminate with error; temporary errors (EMFILE) retried; response write deadline protection for non-reading clients; status Op reports daemon PID/version; filebridge path support; shutdown semantics (releases waiters, drains active requests before ownership transfer).
 
 #### internal/daemon/socket_test.go
 
-_text._ Socket lifecycle: concurrent New() elects single winner per flock, stale-socket reclaim is atomic, socket path stable across equivalent roots, deep workspace support, file/journal permissions tightened on startup
-
-#### internal/daemon/spawn.go
-
-_text._ Spawn orchestration: reserveSpawn allocates name (type-species), launch() calls Herdr without d.mu, failLaunching() journals stopped on pre-spawn failure, ready() validates one-use token then transitions to running, rollbackStarting() on readiness timeout closes pane/workspace, stop() awaits launch latch then closes pane, file-bridge ready signal polling (50ms tick), orchestrator skips role-prompt delivery
-
-#### internal/daemon/spawn_test.go
-
-_text._ Spawn tests: config/model/profile/agent resolution, integration routing (claude/codex/pi), dedicated workspace creation/cleanup, launch failure rollback cascades (placement, journal), concurrent spawns get distinct names, failed launch releases slug, orphaned agent frees species, file-bridge spawn/message dispatching, message delivery doesn't depend on post-launch Herdr, readiness timeout and species reuse, orchestrator role injection, pi/claude role injection, bootstrap prompt, structured reply identity, pending message delivery exactly-once
+_text._ Socket path resolution and collision avoidance tests: concurrent New() serializes stale socket reclaim to one winner; permission hardening (0o700 dir, 0o600 journal); path stability across equivalent roots (relative, symlink resolution); deep workspace support (over 100 chars); worst-case path (max flock name in deep workspace) fits darwin 103-byte sun_path limit.
 
 #### internal/daemon/watch_test.go
 
-_text._ Session watch: probes liveness, retries title-set until foreground client attaches, stops on daemon close, unbound daemon sends no Herdr requests
+_text._ Session liveness and window branding tests: WatchSession probes session, exits Serve when gone, keeps serving while up; window title set once on client attachment and cached (no retries); retries before client attaches (no foreground client); unbound daemon (no session) sets no title; Close() stops watch goroutine gracefully (no leak).
 
 ## Subsystem: docs
 
-Design and decision documentation for Fledge Stage 0 (completed experiment: zero-inference Go orchestrator for Herdr/Pi/Claude-Code multi-agent coding stack). Four referential documents distilled from research snapshots (2026-07-17), three ADR logs recording architecture decisions and experiment findings, and comprehensive integration contracts for each surface. Core invariants: Go CLI as state authority (SQLite event log); Herdr as UI/pane plumbing (socket API); Pi as fully programmable lifecycle-aware GPT harness; Claude Code driven via hooks and screen-manifest detection, never as a lifecycle authority. Two hard unknowns (EXP1: authority override; EXP2: interactive input) de-risked and resolved via supervised experiments; one rate-limit ceiling (EXP3) measured but awaiting operator-driven re-run. All Stage 0 scope complete; Stage 1 (relay core) deliberately deferred to a new commissioned session.
+Legacy Stage 0 design documentation: complete specification of Fledge orchestrator authority model, zero-inference rule, integration surfaces (Herdr/Pi/Claude), and three resolved experiments. All docs carry forward verified findings; Stage 1 deferred. No Stage 1 placeholder packages created. Invariants: Go CLI is state authority; Herdr is UI/pane bus; Pi has native Herdr lifecycle authority; Claude panes use metadata-only to preserve screen-manifest blocked detection. All three experiments executed successfully on 2026-07-18; ADR-012/013/014 resolved.
 
-**Purpose:** Design and decision documentation: architecture notes, ADR-style decisions, experiment logs, integration contracts, and reference snapshots.
+**Purpose:** Legacy Stage 0 design docs and fixed reference snapshots under docs/
 
 ### Entry Points
 
-- `docs/ARCHITECTURE.md`: Zero-inference architectural invariants: Go CLI state authority, Herdr as plumbing, Pi/Claude lifecycle authority split, data/event flow paths (Figure 1), staged roadmap Stages 0–4
-- `docs/DECISIONS.md`: ADR log (newest first): ADR-017 (Herdr protocol v16 reconciliation, ADR-015/016 superseded), ADR-014 (no concurrent-pane cap, reactive rate-limit handling), ADR-013 (interactive pane submission reliable 3/3), ADR-012 (screen detection precedence over custom report), ADR-010 (git history not design input), ADR-001 (Stage 0 scope only)
-- `docs/EXPERIMENTS.md`: Experiment harness protocols and results: EXP1 (authority override — run 2026-07-18, screen detection unchanged despite custom report), EXP2 (interactive input — 3/3 gated submits reliable, 2026-07-18), EXP3 (rate limits — harnesses built, n=3 sustained load showed no throttle, operator-executed only, 2026-07-18)
-- `docs/INTEGRATION-CONTRACTS.md`: Three integration surfaces pinned and verified: Herdr v0.7.4/protocol 16 (socket API, authority arbitration, pane/agent lifecycle), Pi v0.80.x (RPC mode, Herdr extension integration, lifecycle authority), Claude Code v2.1.212 (hooks, headless -p, interactive input caveats, pooled rate limits)
-- `docs/handoff-stage0.md`: Stage 0 commission (historical): mission (skeleton + docs + three harnesses + type generation), ground rules (git history not design input, reference docs immutable, re-verify version claims), repo layout, definition of done — all completed except EXP3 operator execution
-- `docs/reference/ai-sdlc-scan.md`: Research snapshot 2026-07-17: TL;DR (Sonnet 5 + GPT-5.6 tokenizer shifts, runaway-cost governors, Herdr active + maintained), key findings (model layer biggest lever, multi-agent fan-out is first-class problem, encrypted Codex delegation audit risk, cross-vendor review consensus), version-bump table, recommendations, caveats
-- `docs/reference/integration-surfaces.md`: Deep research (2026-07-17): TL;DR (Herdr socket API complete orchestration surface, Pi most programmable, Claude constrained by rate limits and interactive input caveat), capability matrix, three workstreams (Herdr authority split, Pi programmatic driving, Claude Code hooks/headless), prior art (file-lock coordinators, worktree isolation substrate), Go building blocks, architecture fit mapping, staged recommendations
+- `docs/ARCHITECTURE.md`: Authority-split invariants, zero-inference rule, data/event flow diagram (3 paths), staged roadmap Stage 0–4.
+- `docs/DECISIONS.md`: 17-entry ADR log (newest first); all statuses resolved. Key: ADR-012 EXP1 (native detection overrides), ADR-013 EXP2 (3/3 reliable), ADR-014 EXP3 (no practical cap).
+- `docs/EXPERIMENTS.md`: Three supervised experiments with raw results: EXP1 (2026-07-18 02:46 UTC, custom report ineffective), EXP2 (02:48 UTC, 3/3 sends), EXP3 (n=2,3 no throttle observed).
+- `docs/INTEGRATION-CONTRACTS.md`: Pinned version snapshot (2026-07-17): Herdr v0.7.4 protocol 16, Pi v0.80.x, Claude Code ≥v2.1.212. Surface details, examples, soft spots. Herdr verified live 2026-07-18.
+- `docs/reference/integration-surfaces.md`: Immutable research snapshot (2026-07-17): four workstreams (Herdr socket API, Pi RPC/extensions, Claude hooks/headless, prior art + Go libraries), authority-split architecture fit, staged Stage 0–4 recommendations.
+- `docs/reference/ai-sdlc-scan.md`: Immutable research snapshot (2026-07-17): tooling evolution June 15–July 17 2026 (Claude Code, Codex, Herdr, Pi versions), model releases (Sonnet 5, GPT-5.6, Fable 5), recommendations.
 
 ### Key Symbols
 
-- `ADR-017` in `docs/DECISIONS.md` (decision): Herdr protocol v16 reconciliation (2026-07-17): live client vs. v15 research target, wire/shape drift corrected, ADR-015/016 superseded. Key findings: params mandatory, one-request-per-connection, results wrapped by kind, field/enum drift (argv vs. command, recent_unwrapped vs. recent-unwrapped), screen_detection_skipped boolean. Tests: snapshot, agent.start, pane.read, agent.get pass; explain payload + streaming not yet verified.
-- `ADR-012` in `docs/DECISIONS.md` (decision): EXP1 outcome (2026-07-17 resolved): authority override does NOT suppress screen detection on Claude panes. Verdict: native detection takes precedence, custom report accepted but ineffective on Claude. Conclusion: metadata-only safe; rule may be relaxed but state remains overridden by native detection. Side-finding: clear_agent_authority vs. release_agent semantics need Stage-1 verification.
-- `ADR-013` in `docs/DECISIONS.md` (decision): EXP2 outcome (2026-07-17 resolved): pane.send_input {text, keys:["enter"]} reliably submits (3/3 gated sends). Verdict: Claude workers run in visible panes, no fallback to -p/stream-json needed. Bare \r does not submit (Ink limitation); explicit Enter keypress required.
-- `ADR-014` in `docs/DECISIONS.md` (decision): EXP3 outcome (2026-07-18 operator-reported): no fixed concurrent-pane cap. Verdict: rate limits handled reactively (StopFailure/rate_limit hook authoritative) rather than pre-limited. n=3 sustained load showed no throttle; ceiling above practical needs. Revisit if sustained throttling observed in real use.
-- `EXP1 Result` in `docs/EXPERIMENTS.md` (experiment): Run 2026-07-18 02:46 UTC: spawned Claude pane, confirmed baseline screen_detection_skipped=false + blocked via screen manifest, issued pane.report_agent {custom:test, working, seq:1}, pane held screen_detection_skipped=false (unchanged), operator confirmed sidebar still blocked. Verdict: custom report does NOT suppress native screen detection on Claude. Control (shell pane): same call flipped agent from null→probe, status unknown→working, proving authority seizure on non-detected panes.
-- `EXP2 Result` in `docs/EXPERIMENTS.md` (experiment): Run 2026-07-18 02:48 UTC: spawned Claude pane, three gated rounds of pane.send_input {text, keys:["enter"]}, operator confirmed each submitted (3/3 success). Pane tail samples show prompt echoed and agent responses ('● pong'). Verdict: reliable submission; interactive Claude workers viable.
-- `EXP3 Result` in `docs/EXPERIMENTS.md` (experiment): Three runs (one invalid, two valid). First (2026-07-18 03:02): false positive (repo text matched throttle regex, no actual StopFailure hook). n=2 (2026-07-18 ~03:14, manual): no throttle, real work in neutral cwd (lru.go+test, sudoku.py+test), lower bound only (finite tasks, not sustained). n=3 --sustain (2026-07-18): no throttle under sustained load, operator aborted early. Verdict: no practical cap needed; ≥3 concurrent safe for fledge's needs. Revisit if sustained throttling observed in production.
-- `Herdr Surface` in `docs/INTEGRATION-CONTRACTS.md` (interface): v0.7.4 protocol 16 (verified live 2026-07-17). Methods: agent.start, pane.split/send_input/read/report_agent/clear_agent_authority/release_agent, session.snapshot, events.subscribe. Authority arbitration: one pane, one authority; custom report overrides built-in detection; native detection suppressed when authority seized. Caveat: clear vs. release semantics undocumented in live docs.
-- `Pi Surface` in `docs/INTEGRATION-CONTRACTS.md` (interface): v0.80.x (not yet live-verified). RPC mode stdin/stdout JSONL (LF-framed); commands: prompt/steer/follow_up/abort/session ops/tools/bash; events: agent_start/settled/turn/message/tool; Herdr integration v2: lifecycle authority (idle/working/blocked), native session restore. Extension API: tool registration, context rewrite, UI redraw.
-- `Claude Code Surface` in `docs/INTEGRATION-CONTRACTS.md` (interface): v2.1.212 (verified 2026-07-17). Hooks: Stop/Notification/PreToolUse/PermissionRequest (30+ events). Headless: -p mode, --output-format json|stream-json. Session: --session-id (first), --resume <id>, must resume from same cwd. Interactive: send_text + real Enter keypress (Ink limitation). Rate limits: 5-hour rolling + weekly cap, pooled across all Claude sessions + chat, shared account.
+- `Zero-inference invariant` in `docs/ARCHITECTURE.md` (principle): Go CLI may only: issue Herdr socket commands, consume Herdr/agent events, advance deterministic FSM, write event log. Must never: make LLM API calls (all inference in agent panes), treat Herdr as durable truth, hand-drive agents invisibly.
+- `Authority-split (Go/Herdr/Pi/Claude)` in `docs/ARCHITECTURE.md` (principle): Go CLI is state authority (SQLite log is truth). Herdr is UI/pane plumbing (events are input signals). Pi panes: Herdr's bundled extension is lifecycle authority (idle/working/blocked). Claude panes: no lifecycle authority in Herdr; use metadata-only to preserve screen-manifest blocked detection.
+- `pane.report_agent --source custom:*` in `docs/INTEGRATION-CONTRACTS.md` (operation): Herdr socket call that seizes lifecycle authority on a pane. On Claude panes, native screen-manifest detection takes precedence (EXP1 verdict); custom report accepted but ineffective. Must be paired with cleanup (pane.clear_agent_authority/pane.release_agent).
+- `pane.report_metadata` in `docs/ARCHITECTURE.md` (operation): Herdr socket call for display-only metadata (title, display_agent, state_labels, tokens). Does NOT seize authority. Recommended method for Claude panes under metadata-only strategy.
+- `pane.send_input {text, keys:[]}` in `docs/INTEGRATION-CONTRACTS.md` (operation): Herdr socket call to inject text + encoded keypresses in one request. EXP2 verified 3/3 reliable for interactive Claude panes. Real Enter keypress required (Ink TUI does not treat programmatic \r as submit).
+- `Rate-limit handling` in `docs/INTEGRATION-CONTRACTS.md` (concern): Claude Code subscription pooled: 5-hour rolling window + weekly cap shared across all Claude Code sessions and Claude chat on account. Parallel subagent fan-out documented exhaustion cause. Handle reactively via StopFailure/rate_limit hook (no pre-fixed concurrent-pane cap per EXP3).
+- `Worktree isolation` in `docs/reference/integration-surfaces.md` (pattern): Each agent gets isolated git worktree with shared .git object store. One-branch-at-a-time merge prevents .git/index.lock contention. File ownership declared upfront; shared files (lockfiles, migrations, config) sequenced, never parallelized.
+- `Cross-vendor review` in `docs/reference/ai-sdlc-scan.md` (pattern): Planner/writer from one vendor (Pi), reviewer from different vendor (Claude/Codex), Go orchestrator gates merge. Omnigent 'Polly' reference implementation (June 13 open-source).
+- `File-lock coordinator` in `docs/reference/integration-surfaces.md` (pattern): Out-of-process Go relay: FSM routing, SQLite event log + task/ownership tables, gofrs/flock namespace locks. Enforces one-agent-per-file-namespace; matches practitioner consensus pattern.
+- `ADR-012 verdict (EXP1)` in `docs/DECISIONS.md` (finding): Custom pane.report_agent on Claude pane does NOT suppress screen detection; native Herdr screen-manifest detection takes precedence. Custom report accepted but ineffective. Metadata-only rule (ADR-004) confirmed safe. Resolved 2026-07-18 02:46 UTC.
+- `ADR-013 verdict (EXP2)` in `docs/DECISIONS.md` (finding): pane.send_input {text, keys:["enter"]} submits reliably 3/3 times to interactive Claude pane. Ink TUI limitation (bare \r does not submit) confirmed overcome by real Enter keypress. Claude workers can run in visible panes. Resolved 2026-07-18 02:48 UTC.
+- `ADR-014 verdict (EXP3)` in `docs/DECISIONS.md` (finding): Concurrent Claude panes at n=2 and n=3 sustained showed no throttle signal before operator stopped. No practical concurrency ceiling found for Fledge's needs. Rate limits handled reactively via StopFailure/rate_limit hook, not pre-capping fan-out. Resolved 2026-07-18 ~03:14 UTC.
 
 ### Dependencies
 
-- Internal `docs/ARCHITECTURE.md`: References invariants from §3 and data-flow Figure 1, carried into every design doc
-- Internal `docs/DECISIONS.md`: Cross-references: ADR-017 (wire facts), ADR-012/013/014 (experiment thresholds), ADR-004 (Claude metadata-only rule), ADR-003/ADR-002 (authority-split invariants)
-- Internal `docs/EXPERIMENTS.md`: Results sections (EXP1/EXP2/EXP3) populated from supervised runs; flip thresholds mirror DECISIONS.md entries
-- Internal `docs/INTEGRATION-CONTRACTS.md`: Three sections (Herdr/Pi/Claude) distilled from reference/* snapshots; Last verified lines updated per experimental findings (ADR-017, EXP1, EXP2)
-- Internal `docs/handoff-stage0.md`: Commission document for Stage 0; defines scope, ground rules, definition of done — all addressed in completed docs
-- Internal `docs/reference/ai-sdlc-scan.md`: Research input (immutable): model releases (Sonnet 5, GPT-5.6), harness releases (Claude Code, Pi, Herdr in-window), cost governors, cross-vendor review pattern. Cited by INTEGRATION-CONTRACTS recommendations.
-- Internal `docs/reference/integration-surfaces.md`: Research input (immutable): 150-page deep integration study (Herdr/Pi/Claude), prior-art survey, Go building blocks, staged roadmap. Primary source for authority-split invariants, capability matrix, workstreams, EXP recommendations.
-- External `Herdr v0.7.4`: Terminal multiplexer / pane bus; socket API (protocol v16, verified 2026-07-17); pre-1.0, solo-maintained, AGPL-3.0
-- External `Pi v0.80.x`: Programmable GPT harness; RPC mode (JSONL, LF-framed), extension SDK, Herdr integration v2; open-core, MIT + Fair Source
-- External `Claude Code v2.1.212`: Anthropic sub; 30+ hook events, headless -p mode, interactive panes; v2.1.212 has background /fork, subagent caps (200), rate-limit pooling
-- External `Claude Sonnet 5`: Default model (June 30, 2026); 1M context, adaptive thinking on-by-default, new tokenizer (~1.28–1.4x tokens for English/Python vs. prior baseline)
-- External `GPT-5.6 (Sol/Terra/Luna)`: OpenAI model family (GA July 9, 2026); Sol/Terra use encrypted MultiAgentV2 (local audit visibility lost); Luna stays MultiAgentV1
-- External `Omnigent Polly`: Reference architecture (open-sourced June 13): multi-agent orchestrator, cross-vendor review (different vendor writes vs. reviews), git worktree isolation per agent
+- Internal `docs/DECISIONS.md`: Incorporates experiment results from EXPERIMENTS.md; ADRs reference handoff-stage0 commission + ground rules.
+- Internal `docs/EXPERIMENTS.md`: Procedures defined in handoff-stage0 §6; run results resolve experiment flip thresholds (ADR-012/013/014).
+- Internal `docs/INTEGRATION-CONTRACTS.md`: API surface details sourced from reference/integration-surfaces.md; verification status updated post-EXP1/EXP2.
+- Internal `docs/reference/integration-surfaces.md`: Foundation for all three integration-contract sections (Herdr, Pi, Claude); immutable research input (2026-07-17 snapshot).
+- Internal `docs/reference/ai-sdlc-scan.md`: Environmental context used by handoff and distilled docs; immutable snapshot (2026-07-17) documenting tooling evolution June 15–July 17 2026.
+- External `Herdr v0.7.4`: Socket protocol v16; schema dumped to internal/herdrclient/herdr-schema.json (committed); types generated. Verified live 2026-07-18 via EXP1/EXP2.
+- External `Pi v0.80.x`: RPC mode (JSONL), extension event bus, Herdr lifecycle integration v2. Pinned in INTEGRATION-CONTRACTS; not yet live-verified in Stage 0.
+- External `Claude Code v2.1.212+`: 30+ hook events, stream-json output, session resume by ID. Pinned in INTEGRATION-CONTRACTS; verified via EXP1/EXP2 runs.
 
 ### Data Flows
 
-- `Go Orchestrator (CLI)` → `Herdr server (socket)`: (1) Commands: agent.start, pane.split, pane.send_input, report_metadata (display only)
-- `Herdr server (socket)` → `Go Orchestrator (CLI)`: (3) Event subscriptions: pane.agent_status_changed, pane.output_matched, worktree.*, layout.updated, session.snapshot bootstrap
-- `Agent panes (Claude Code hooks, Pi RPC)` → `Go Orchestrator (CLI)`: (2) Callbacks: Claude hooks POST event JSON to relay HTTP endpoint; Pi RPC events read from subprocess stream
-- `Go Orchestrator (CLI)` → `SQLite event log`: Deterministic FSM routing, task state, namespace locks, ownership declared before dispatch
-- `SQLite event log` → `Go Orchestrator (CLI)`: Source of truth for orchestration state; survives Herdr restarts (Herdr does not restore token metadata across restart)
-- `Herdr session.snapshot + events.subscribe` → `Go Orchestrator in-memory cache`: Local mirror of pane/agent/workspace state; recoverable but not authoritative (Go CLI's SQLite log is truth)
+- `Go Orchestrator` → `Herdr server`: Socket commands: agent.start, pane.split, pane.send_input (text+keys), pane.report_metadata (display-only), events.subscribe setup. One request per connection; newline-delimited JSON.
+- `Agent panes` → `Go Orchestrator`: Claude: hooks POST event JSON to relay HTTP endpoint (Stop, Notification, PermissionRequest, StopFailure/rate_limit). Pi: RPC events stream to relay (subprocess JSONL, LF-framed).
+- `Herdr server` → `Go Orchestrator`: session.snapshot (one-time bootstrap: version/protocol/pane/agent records), events.subscribe (pane.agent_status_changed, pane.output_matched, worktree.*, layout.updated as input signals).
+- `Go Orchestrator` → `SQLite event log`: Write: agent lifecycle events, task state, file ownership, flock acquisitions. Read: source of truth for orchestration state. Log survives Herdr restarts.
+- `Go Orchestrator` → `gofrs/flock`: Acquire/release namespace locks per file; enforces one-writer-per-file-namespace. Non-blocking TryLock()/TryRLock() for concurrent tasks.
 
 ### Invariants
 
-- The Go CLI is the state authority. Herdr events and agent hook/RPC events are input signals only. Herdr's own store is never relied on for durable orchestration state (Herdr does not restore token metadata across server restart).
-- Zero-inference in the orchestrator: CLI issues socket commands, consumes events, advances FSM, writes event log; all LLM inference happens inside visible, interactable panes (Pi/Claude/Codex), never in the orchestrator.
-- Pi panes: Herdr's native Pi lifecycle authority (bundled extension v2) is trusted as the state source (idle/working/blocked). CLI reads this as input signal; does not report custom state onto Pi panes.
-- Claude panes: Claude Code is intentionally not a lifecycle authority in Herdr. Blocked/working come from screen-manifest detection. CLI uses pane.report_metadata (display-only) for sidebar updates; does NOT seize authority with pane.report_agent --source custom:* on Claude panes, preserving built-in blocked detection for permission prompts and human-escalation routing.
-- Herdr authority model: each pane has exactly one status authority. Custom socket report (pane.report_agent --source custom:*) overrides built-in detection and suppresses competing sources. Must be paired with pane.clear_agent_authority or pane.release_agent on exit to restore fallback.
-- Git history is not design input. Current HEAD is authoritative; prior iterations in git history are not excavated or resurrected for design purposes (ADR-010, ground rule 1).
-- Reference docs (docs/reference/*) are immutable research snapshots (2026-07-17). Version-specific claims must be re-verified against live binaries at build time. Corrections and re-verified facts go in distilled docs or DECISIONS.md.
-- Stage 0 scope only: skeleton, distilled docs, three experiment harnesses, Herdr type generation. Stage 1 (relay core: SQLite event log, FSM/workflow engine, Claude hook HTTP endpoint, Pi RPC subprocess manager) deliberately deferred to a new commissioned session.
-- EXP1 finding (ADR-012): custom pane.report_agent does NOT suppress screen detection on Claude panes. Native detection takes precedence. Metadata-only rule safe; can be relaxed but state remains overridden.
-- EXP2 finding (ADR-013): pane.send_input {text, keys:["enter"]} reliably submits (3/3 verified). Claude workers run in visible panes; no fallback to -p/stream-json needed.
-- EXP3 finding (ADR-014): no fixed concurrent-pane cap. Rate limits handled reactively (StopFailure/rate_limit hook). n=3 sustained load showed no throttle; no pre-limit warranted.
-- Herdr protocol v16 (not v15 as researched). Params mandatory on every method. One request per connection; no multiplexing. Results wrapped by kind. Wire shapes reconciled live (ADR-017).
-- Claude Code subscriptions: 5-hour rolling window + weekly cap, pooled across all Claude sessions + Claude chat on one account. Parallel subagent fan-out is documented cause of premature exhaustion. Rate limits are primary scaling risk; reactive backoff required (StopFailure hook).
+- Go CLI is the state authority. Herdr events and agent hook/RPC events are input signals only. SQLite event log + tasks are truth.
+- Pi panes: trust Herdr's native bundled-extension lifecycle authority (idle/working/blocked). Never report custom state onto Pi panes.
+- Claude panes: use pane.report_metadata (display-only) to preserve Herdr's screen-manifest blocked detection for permission prompts. Do NOT seize authority with pane.report_agent --source custom:* (unless deliberately taking over, paired with cleanup).
+- Zero-inference on Go CLI: issue Herdr socket commands, consume Herdr/agent events, advance deterministic FSM/workflow, write event log, acquire/release locks. NEVER: make LLM API calls (all inference in visible agent panes), treat Herdr as durable truth, hand-drive agents invisibly.
+- Authority seizure (if any): always pair pane.report_agent --source custom:* with pane.clear_agent_authority / pane.release_agent on exit to restore native detection.
+- Rate limits are pooled (5h rolling + weekly cap shared across all Claude Code sessions + Claude chat on account) and parallel-hostile. Handle reactively via StopFailure/rate_limit hook. No pre-fixed concurrent-pane cap.
+- Worktree isolation: each agent gets own git worktree with shared .git; one-branch-at-a-time merge; file ownership declared upfront; enforce with gofrs/flock per-namespace locks.
 
 ### Tests
 
-- `docs/EXPERIMENTS.md`: EXP1 (authority override) — supervised run 2026-07-18: spawned Claude pane, verified baseline screen_detection_skipped=false, issued pane.report_agent {custom:test, working}, re-checked explain payload (unchanged), operator confirmed sidebar still blocked, cleared authority, confirmed restoration. Verdict: native detection precedence confirmed.
-- `docs/EXPERIMENTS.md`: EXP2 (interactive input) — supervised run 2026-07-18: spawned Claude pane, three gated pane.send_input {text, keys:["enter"]} rounds, operator confirmed each submitted (3/3 success). Verdict: reliable submission confirmed.
-- `docs/EXPERIMENTS.md`: EXP3 (rate limits) — operator-run n=2 (2026-07-18 ~03:14): no throttle detected, real work completed (lru.go, sudoku.py with tests) in neutral cwd. n=3 --sustain (2026-07-18): no throttle under sustained re-fed load, operator aborted early. Verdict: ≥3 concurrent safe; no ceiling found.
-- `docs/INTEGRATION-CONTRACTS.md`: Herdr v0.7.4 live verification (2026-07-17): scripts/gen-herdr-types.sh run against live binary, schema dump committed, herdrclient types reconciled, ADR-017 wire-shape discrepancies documented. Verified methods: session.snapshot, agent.start, pane.read, agent.get, pane.close, multi-call reuse. Not yet verified: agent.explain success payload (needs Herdr-detected Claude pane), events.subscribe streaming.
+- `docs/EXPERIMENTS.md`: EXP1 (2026-07-18 02:46 UTC): supervised test of pane.report_agent authority override on Claude pane. Verdict: native detection takes precedence; custom report ineffective. Resolved ADR-012.
+- `docs/EXPERIMENTS.md`: EXP2 (2026-07-18 02:48 UTC): supervised test of pane.send_input {text, keys:["enter"]} reliability on interactive Claude pane. Verdict: 3/3 gated sends submitted successfully. Resolved ADR-013.
+- `docs/EXPERIMENTS.md`: EXP3 (2026-07-18 ~03:14 UTC): sustained-load test at n=2,3 concurrent Claude panes. Verdict: no throttle observed; no practical ceiling for orchestrator concurrency. Handle limits reactively. Resolved ADR-014.
 
 ### Files
 
 #### docs/ARCHITECTURE.md
 
-_text._ Zero-inference invariants (Go CLI state authority, Herdr plumbing, Pi/Claude authority split), zero-inference rule (what CLI may/must-not do), data/event flow Figure 1 (three paths: commands, callbacks, events), staged roadmap Stages 0–4 (Stage 0 marked in progress, Stage 1 relay core deferred).
+_text._ Distilled Stage 0 design: authority-split invariants (Go/Herdr/Pi/Claude), zero-inference rule, data/event flow (3 paths: Go→Herdr, Agent→Go, Herdr→Go), staged roadmap (Stage 0–4). Carries forward core findings; Stage 1 explicitly deferred.
 
 #### docs/DECISIONS.md
 
-_text._ ADR log newest-first. Accepted: ADR-010 (git history not design), ADR-007 (generated types committed), ADR-006 (reference docs immutable), ADR-004 (Claude metadata-only pending EXP1, EXP1 outcome resolved), ADR-003 (Pi lifecycle trusted), ADR-002 (Go CLI state authority), ADR-001 (Stage 0 scope). Open→Resolved: ADR-017 (Herdr v16 reconciliation, ADR-015/016 superseded), ADR-014 (no concurrent cap, reactive rate limits), ADR-013 (interactive input reliable), ADR-012 (screen detection precedence).
+_text._ ADR log (17 entries, newest first): accepted decisions (Stage 0 scope, Go authority, Pi/Claude splits, reference immutability, no Stage 1 packages) and three experiment flip thresholds, all now resolved with run verdicts (ADR-012/013/014 2026-07-18).
 
 #### docs/EXPERIMENTS.md
 
-_text._ EXP1 (authority override): procedure, preconditions, flip threshold. Results: 2026-07-18 run, screen_detection_skipped remained false after custom report, operator confirmed sidebar blocked throughout. Verdict: native detection precedence, metadata-only safe. EXP2 (interactive input): procedure, flip threshold. Results: 2026-07-18 run, 3/3 gated send_input submissions succeeded. Verdict: reliable, Claude workers in visible panes viable. EXP3 (rate limits): procedure, flip threshold. Results: n=2 no throttle (lower bound), n=3 sustained no throttle (upper bound). Verdict: reactive rate-limit handling, no pre-cap needed.
+_text._ Three supervised experiments: EXP1 (authority override, custom report ineffective, native detection overrides), EXP2 (interactive input 3/3 reliable), EXP3 (n=2,3 sustained no throttle). Raw observations, operator confirmations, verdicts. All complete 2026-07-18.
 
 #### docs/INTEGRATION-CONTRACTS.md
 
-_text._ Herdr v0.7.4 protocol 16 (Last verified 2026-07-17, ADR-017): socket API, methods, authority arbitration, pane lifecycle, sequencing, protocol versioning, soft spots (clear/release semantics undocumented, 32-source cap scope unknown). Pi v0.80.x (not live-verified): RPC mode, commands, events, Herdr integration v2 lifecycle authority, version caveats. Claude Code v2.1.212 (verified 2026-07-17): hooks, headless -p, interactive input caveat (real Enter), rate limits (pooled, parallel-hostile), version/stability caveats.
+_text._ Pinned version snapshot (2026-07-17, Herdr verified live 2026-07-18): three sections (Herdr v0.7.4 protocol 16, Pi v0.80.x, Claude Code ≥v2.1.212) with surface details, invocation examples, version/stability caveats, soft spots flagged.
 
 #### docs/handoff-stage0.md
 
-_text._ Stage 0 commission document (historical): mission (skeleton + docs + harnesses + type gen, Stage 1 deferred), ground rules (current HEAD authoritative, reference docs immutable, re-verify claims, never run EXP3, pause before live sessions, zero-inference applies to harnesses), authority-split invariants, repo layout, five referential docs per §5, three experiments per §6, Herdr types script per §7, definition of done checklist.
+_text._ Commission brief (now historical): mission (skeleton, docs, harnesses, types), ground rules (HEAD authoritative, reference immutable, re-verify claims, zero-inference, experiments in throwaway session), authority invariants, repo layout, referential docs requirements, experiment procedures, type-gen script, definition of done (all 8 items complete).
 
 #### docs/reference/ai-sdlc-scan.md
 
-_text._ Research snapshot 2026-06-15 to 2026-07-17. Key findings: Sonnet 5 (June 30, new tokenizer, 1M context, adaptive thinking on-by-default); GPT-5.6 (July 9, Sol/Terra/Luna, `ultra` multi-agent mode, encryption on Sol/Terra); runaway-delegation governors (Claude Code subagent caps 200, OpenCode nested subagents off, Codex token budgets); Herdr v0.7.x active (socket API, Pi detection); Omnigent Polly reference architecture; Codex encrypted delegation audit risk (July 14). Version-bump table. Recommendations: immediately bump + re-baseline Sonnet 5 tokens; adopt runaway-cost governors; build cross-vendor review; drive Herdr socket API; avoid Sol/Terra for auditability; September spend review (intro pricing expires Aug 31). Caveats: pre-1.0 surfaces, vendor-reported benchmarks, secondary sourcing on practitioner patterns.
+_text._ Immutable research snapshot (2026-07-17, flagged never-edit): tooling evolution June 15–July 17 2026. Claude Code v2.1.181→212, Codex v0.138→0.144.5, Herdr v0.7.0→0.7.4, Pi v0.80.x, models (Sonnet 5 tokenizer inflation 1.28–1.4x, GPT-5.6, Fable 5). Watch list, recommendations.
 
 #### docs/reference/integration-surfaces.md
 
-_text._ Deep integration research (150+ pages, 2026-07-17): TL;DR (Herdr complete surface, Pi most programmable, Claude constrained by rate limits and interactive caveat). Workstream 1 — Herdr: transport (NDJSON socket, one-request-per-conn), bootstrap (snapshot+subscribe), lifecycle (agent.start/pane.*/events), custom state authority (seizes on custom report; overrides built-in detection), giving authority back (clear/release). Workstream 2 — Pi: RPC mode + SDK + extensions, Herdr lifecycle integration v2 (native authority), version caveats. Workstream 3 — Claude Code: hooks (30+ events), headless vs. interactive (pane.send_input caveat), session threading (cwd-bound resume), rate limits (pooled, parallel-hostile). Workstream 4 — Prior art + Go building blocks (gofrs/flock, looplab/fsm, go-workflows, SQLite). Architecture fit: authority split mapping, planner/reviewer loop, parallel worktree isolation, zero-inference data flow Figure 1, staged recommendations (Stages 0–4). Caveats: pre-1.0, fast-moving, undocumented Herdr behavior, rate limits unpublished, secondary sourcing on orchestrators.
+_text._ Immutable research snapshot (2026-07-17, flagged never-edit): four workstreams (Herdr socket API lifecycle/authority, Pi RPC/extensions, Claude hooks/headless, prior art patterns + Go libraries). Authority-split architecture fit. Staged Stage 0–4 recommendations. Data flow diagram.
 
-## Subsystem: herdr-integration
+## Subsystem: internal-agentcfg
 
-Three-layer integration with Herdr pane-bus: herdr package shells out to the CLI for session lifecycle (start/stop/delete); herdrwire speaks the socket API directly for pane control and workspace management; filebridge provides a fallback RPC transport for sandboxed clients via atomic file exchanges.
+Package agentcfg provides configuration management for Fledge agents: loading/validating named agent profiles, routing models to integrations via fixed prefix table, parsing portable agent definitions from Markdown, and synchronizing generated JSON indexes atomically. It is the authority on what agents can be launched and how, enforcing namespace rules, integration-specific field isolation, and preventing profiles from overriding Fledge's orchestration control.
 
-**Purpose:** Herdr pane-bus integration: CLI shell-out (herdr), socket wire protocol (herdrwire), and sandboxed file bridge.
+**Purpose:** Agent configuration, model routing, and definition parsing in internal/agentcfg
 
 ### Entry Points
 
-- `internal/herdr/herdr.go`: Session lifecycle: List(), Find(), Ensure(), Recreate(), Remove(), Stop(), Delete(). Ensures Herdr server is running and ready before pane operations.
-- `internal/herdrwire/herdrwire.go`: Pane and workspace control: AgentStart(), AgentStartInWorkspace(), WorkspaceCreate(), TabCreate(), SendInput(), ProcessInfo(), PaneFocus(), PaneSwap(), AgentAlive(), WindowTitleSet(). One-shot request/response over unix socket per call.
-- `internal/filebridge/filebridge.go`: Sandboxed fallback RPC: Submit(), Take(), Await(), Respond(), Cleanup(). Atomic file-based request/response when unix sockets forbidden.
+- `internal/agentcfg/agentcfg.go`: Load() reads and merges resolved profiles; Route() maps models to integrations via static table; Validate/ValidateFields() enforce cross-checks; CommandArgv/LaunchArgv assemble launch commands; NewSessionID() generates UUIDs
+- `internal/agentcfg/definitions.go`: ParseDefinition() parses .agent.md files; Synchronize() rebuilds indexes atomically from Markdown; LoadDefinitions/FindDefinition() query agents and profiles; MigrateLegacyGenerated() handles legacy index reorganization
 
 ### Key Symbols
 
-- `Session` in `internal/herdr/herdr.go` (struct): Herdr session metadata from CLI list output: Name, Running, Default, SocketPath
-- `Ensure` in `internal/herdr/herdr.go` (func): Idempotent session resolution: reuses live session, starts new if missing, returns whether it started
-- `Recreate` in `internal/herdr/herdr.go` (func): Replaces a session record with fresh headless server, used for clean recovery on managed sessions
-- `Up` in `internal/herdr/herdr.go` (func): Probes session socket liveness; socket removal is only signal for session end
-- `Call` in `internal/herdrwire/herdrwire.go` (func): Core transport: dials socket, sends one request line, reads one response, decodes result or *wireError
-- `StartedAgent` in `internal/herdrwire/herdrwire.go` (struct): Result of agent.start: PaneID and TerminalID for pane identification
-- `CreatedWorkspace` in `internal/herdrwire/herdrwire.go` (struct): Result of workspace.create: WorkspaceID, TabID, RootPaneID all needed for rollback
-- `AgentAlive` in `internal/herdrwire/herdrwire.go` (func): Liveness check: distinguishes wireError (pane gone) from transport failure; only liveness-reportable
-- `AgentStatus` in `internal/herdrwire/herdrwire.go` (func): Screen-detected status from agent.get: 'unknown' on pane creation, transitions to TUI status as integration runs
-- `Pending` in `internal/filebridge/filebridge.go` (struct): Claimed request with ID awaiting dispatch
-- `pending` in `internal/filebridge/filebridge.go` (struct): Internal: request + PID for client liveness probing via signal 0
-- `Await` in `internal/filebridge/filebridge.go` (func): Client waits for acceptance then response; probes daemon aliveness during wait
-- `Respond` in `internal/filebridge/filebridge.go` (func): Daemon responds atomically; sweeps orphans when client liveness fails
+- `Config` in `internal/agentcfg/agentcfg.go` (type): Launchable agent configuration struct with Integration, Model, Provider, Cwd, PermissionMode, Sandbox, Argv, Env fields; validated to ensure provider/permission_mode/sandbox are only used with appropriate integrations
+- `Route` in `internal/agentcfg/agentcfg.go` (func): Maps model id to integration + provider via fixed prefix table; never guesses; returns error with remedy (fledge.profile reference or routable model prefix) for unknown models
+- `Definition` in `internal/agentcfg/definitions.go` (type): Parsed portable agent definition with Name, Description, Tools, Model, Profile, Prompt (authoritative body), Source, Managed flag, Launch config, and optional Workspace placement
+- `ParseDefinition` in `internal/agentcfg/definitions.go` (func): Parses .agent.md files: extracts YAML frontmatter with name/description/tools/model/fledge (profile/launch/workspace/worktree); validates workspace labels/tabs are trimmed/single-line; returns Definition with authoritative prompt body
+- `Synchronize` in `internal/agentcfg/definitions.go` (func): Scans user/ and fledge/ directories for definitions; parses and validates each; derives profiles by routing Model and merging Launch fields; writes user-agents.json and managed-agents.json atomically with version and deterministic layout
+- `AgentRecord` in `internal/agentcfg/definitions.go` (type): Deterministic projection of Definition for generated indexes: Source, Description, Tools, Profile, Workspace, PromptHash (SHA-256); lets consumers detect changes without duplicating prompt body
+- `Index` in `internal/agentcfg/definitions.go` (type): Generated index shape: Version (1), Agents (map[string]AgentRecord), Profiles (map[string]Config); loaded from user, managed, and catalog sources in order; coalesces identical declarations, rejects conflicts
 
 ### Dependencies
 
-- Internal `internal/flock`: Directory layout: filebridge builds .rpc paths under flock root
-- Internal `internal/protocol`: Shared request/response enums (OpSpawn, OpList, OpSend, OpWait) and types for filebridge marshaling
-- External `encoding/json`: Marshal/unmarshal request/response and Session metadata
-- External `net`: Unix socket dial, listen, connection lifecycle for herdrwire
-- External `os/exec`: Shell out to herdr CLI for session lifecycle (list, start, stop, delete)
-- External `syscall`: Setsid for session detach; signal-0 probe for filebridge PID liveness
+- Internal `internal/scaffold`: DirName constant (.fledge), Ensure() for directory creation; used by Load/Synchronize to locate .fledge/agents/ and .fledge/agents/fledge/
+- External `github.com/goccy/go-yaml`: YAML unmarshaling for frontmatter; chosen for embedded YAML slice/map support in definitions.go ParseDefinition
+- External `crypto/rand`: Random number generation for RFC-4122 v4 UUID in NewSessionID()
+- External `encoding/json`: JSON marshaling/unmarshaling for Index and Config serialization in Load and writeIndexAtomic
+- External `encoding/hex`: Hex encoding for SHA-256 PromptHash in Synchronize and AgentRecord
 
 ### Data Flows
 
-- `herdr.Ensure()` → `herdrwire.Call()`: Session resolved and socket obtained; herdrwire operations target that socket
-- `herdrwire.AgentStart()` → `internal/protocol`: Response unwrapped to StartedAgent; pane IDs used for subsequent pane ops
-- `herdrwire.WorkspaceCreate()` → `herdrwire.TabRename(), herdrwire.TabClose()`: CreatedWorkspace IDs enable label-and-setup or rollback workflow
-- `filebridge.Submit()` → `filebridge.Take()`: Client atomically writes inbox request with PID; daemon Take() claims and moves to accepted/
-- `filebridge.Respond()` → `filebridge.Awaiting()`: Daemon checks client liveness before writing response; orphan sweep on failure
-- `herdr.start()` → `herdr.Up()`: Daemon startup loop: polls socket until it appears or deadline expires
-- `herdrwire.nextID atomic counter` → `herdrwire.Call()`: Process-wide request ID generation, unique per connection
+- `Markdown definitions (.agent.md files)` → `Definition struct`: ParseDefinition() extracts YAML frontmatter + prompt body, validates name/description/workspace, returns Definition with authoritative Prompt field
+- `Definition + Model` → `Config (profile)`: deriveProfile() routes Model via Route(), then merges explicit Launch fields using mergeConfig(); validates result with validateProfile()
+- `Definition` → `AgentRecord`: Synchronize() projects Definition into AgentRecord: copies Source/Description/Tools/Profile/Workspace, computes SHA-256(Prompt) as PromptHash
+- `User + Managed + Catalog indexes` → `Profiles map`: Load() reads three Index files in order; first occurrence of a name wins (user shadows); identical declarations coalesce; differing conflicts are errors
+- `Config + sessionID + instructions + bootstrap` → `Process argv`: CommandArgv() builds integration-native base; LaunchArgv() adds profile argv + Fledge's instruction option + startup assets + bootstrap; profile argv placed before instructions so Fledge's identity always wins
+- `Model string` → `Integration + Provider or Error`: Route() uses fixed prefix table (claude*, gpt*/codex*/o-series, opencode* variants); unknown models return error with remedy suggestion
 
 ### Invariants
 
-- Session socket is the ONLY signal of session lifecycle: liveness probed by dial, absence means session ended; protocol 16 emits no session events
-- herdrwire.Call() is one-shot per connection: dial fresh for every operation, close after response
-- filebridge Await()/Respond() are deterministic state machines: accepted marker must appear before response, client removes marker only after reading
-- filebridge PID liveness probe (signal 0) is mandatory for Awaiting(); killed client cleanup is signal-0 only
-- Workspace/Tab/Pane IDs returned by create operations are stable and usable immediately for placement or rollback
-- ReportMetadata() never seizes agent authority: screen detection native to pane wins (EXP1)
-- SendInput with pressEnter=true sends keys:["enter"] which submits in TUI; bare \r does not (EXP2)
+- Markdown is authoritative for definitions: generated indexes rebuilt wholesale from .agent.md files; never merged back from generated JSON
+- Namespace enforcement: user agents/profiles forbidden from fledge-* prefix; managed agents required to use fledge-* prefix; fledge-orchestrator is the single reserved name exempt from naming rules
+- Fixed model routing: Route() uses static prefix table; no inference or defaults; unknown model is always an error, never a fallback
+- Profile coalescing over shadowing: Load reads user → managed → catalog; first occurrence of a name is kept; later occurrences ignored; differing declarations across sources are validation errors
+- Integration-specific field isolation: provider is pi-only; permission_mode is claude-only; sandbox is codex-only; cross-checks prevent invalid combinations
+- Interactive argv validation: profile argv cannot contain -- or integration flags that replace session/instruction ownership (--print, --resume, --session-id, --mode, etc.); prevents profiles from seizing control from Fledge orchestration
+- Profile argv placement: profile argv placed before Fledge's native instruction option so Fledge's assigned identity and role always win; profile cannot override
+- Atomic index writes: writeIndexAtomic uses temp file + fsync + atomic rename to ensure valid index on disk at all times; torn final line tolerated; malformed earlier line is corruption
+- Prompt body immutability: prompt hash computed from body; Definition holds full Prompt; AgentRecord holds only PromptHash for change detection without duplicating body
+- Path/name matching in definitions: folder + filename (without .agent.md) + frontmatter name must all be equal; enforced in scanDefinitions; rejected in Synchronize
 
 ### Tests
 
-- `internal/herdr/herdr_test.go`: Session lifecycle: List/Find/Ensure/Recreate/Remove/Stop/Delete with stubbed herdr CLI and unix socket probes
-- `internal/herdrwire/herdrwire_test.go`: Wire protocol: one-shot request/response envelope, params unwrapping, error handling, socket timeout, workspace/tab/pane placement
-- `internal/filebridge/filebridge_test.go`: File bridge atomicity: submit/take/respond lifecycle, orphan sweep, PID validation, unsafe ID rejection, daemon-stop abort, concurrent submit/take
+- `internal/agentcfg/agentcfg_test.go`: 14 test functions covering Route (model→integration routing with all prefix variants and error cases), Validate (integration cross-checks), CommandArgv (argv assembly for each integration), LaunchArgv (profile argv + instructions + bootstrap ordering), Load (file loading and shadowing), portable name validation (kebab-case enforcement), and NewSessionID (RFC-4122 v4 UUID uniqueness)
+- `internal/agentcfg/definitions_test.go`: 10 test functions covering ParseDefinition (YAML + prompt parsing, workspace validation), Synchronize (deterministic index rebuild, path/name matching, namespace enforcement, profile derivation, conflict detection), workspace indexing, legacy migration (legacy→managed directory reorganization, invalid canonical replacement), and reserved profile namespace enforcement
 
 ### Files
 
-#### internal/filebridge/filebridge.go
+#### internal/agentcfg/agentcfg.go
 
-_text._ Sandboxed fallback RPC: atomic file transport inbox/accepted/responses dirs. Submit() publishes with PID, Take() claims and checks liveness, Await() polls with daemon-stop abort, Respond() sweeps orphans. ID validation guards path traversal.
+_text._ Core configuration types and operations (~320 lines): Config struct with Integration/Model/Provider/PermissionMode/Sandbox/Argv/Env; Load() for reading three-source merged indexes; Route() for model→integration mapping via static prefix table; Validate()/ValidateFields() for cross-checks; CommandArgv/LaunchArgv for process assembly; NewSessionID() for UUID generation; validName/validPortableName for kebab-case enforcement; validateInteractiveArgv for preventing session/instruction control override
 
-#### internal/filebridge/filebridge_test.go
+#### internal/agentcfg/agentcfg_test.go
 
-_text._ File bridge lifecycle, orphan sweep on client abandonment, PID<=0 rejection for upgrades, unsafe ID rejection (traversal/separators/non-hex), concurrent submit/take, daemon-stop abort in await.
+_text._ Configuration tests (~380 lines): TestRoute (all prefix variants + error cases), TestRouteErrorPointsToWorkingRemedy (error message guidance), TestValidate (integration combinations and cross-checks), TestCommandArgv (argv assembly per integration), TestLaunchArgv (instruction ordering), TestValidateRejectsArgvDelimiter (-- not allowed), TestValidateRejectsProfileFlags (bans session/instruction flags), TestLoad* (file loading, shadowing, merging), TestNewSessionID (uniqueness), TestPortableNames (kebab-case enforcement)
 
-#### internal/herdr/herdr.go
+#### internal/agentcfg/definitions.go
 
-_text._ Session resolution via herdr CLI. Exports Session struct from list output, Ensure() for idempotent startup, Recreate() for recovery, Remove() for cleanup with stop/delete sequencing and liveness polling.
+_text._ Markdown definition parsing and synchronization (~555 lines): ParseDefinition() extracts YAML frontmatter + prompt, validates workspace; Definition/AgentRecord/Index types; Synchronize() scans user/ and fledge/ directories, parses definitions, derives profiles by routing Model and merging Launch, writes indexes atomically with deterministic layout; LoadDefinitions() and FindDefinition() for querying; MigrateLegacyGenerated() for one-time legacy index reorganization; helper functions for profile derivation, atomic JSON writing, and validation
 
-#### internal/herdr/herdr_test.go
+#### internal/agentcfg/definitions_test.go
 
-_text._ Stubbed-CLI tests for session list/find/ensure/recreate/remove/stop/delete. Tests directory/environment passing on start, polling retry logic, error wrapping.
+_text._ Parsing and synchronization tests (~366 lines): TestParseDefinition (YAML extraction, workspace/launch/tools parsing), TestParseDefinitionValidatesWorkspace (label/tab trimmed/single-line), TestParseDefinitionRejectsUnsupportedWorktree (worktree future-proofs), TestSynchronize* (deterministic rebuild, path/name matching, namespace rules, profile derivation, conflict detection), TestMigrateLegacy* (index reorganization, invalid canonical replacement), TestSync*Profiles (reserved namespace enforcement)
 
-#### internal/herdrwire/herdrwire.go
+## Subsystem: internal-misc-a
 
-_text._ Herdr socket API: Call() core one-shot transport, AgentStart/WorkspaceCreate/TabCreate for placement, SendInput/ProcessInfo for pane interaction, AgentAlive/AgentStatus for liveness and screen detection, PaneFocus/PaneSwap/PaneClose for layout.
+Four tightly coupled packages supporting daemon orchestration and context analysis. Catalog discovers models from installed integrations (claude, codex, pi) with deterministic collision resolution. Client provides unified RPC via Unix socket (primary) with transparent file-bridge fallback for sandboxed agents. Filebridge implements workspace-local atomic request/response handoff with client PID tracking for signal-0 liveness verification. Contextdoc validates analyzer requests/replies with strict JSON enforcement (no unknown fields, no duplicates), composes instructions from templates, and renders artifacts to project.md. Flock manages session identity derivation (workspace-prefixed) and flock name validation/selection for session isolation.
 
-#### internal/herdrwire/herdrwire_test.go
-
-_text._ Fake Herdr server tests for request envelope, one-shot per connection, agent/workspace/tab/pane params validation, wireError vs transport error, timeout on silent socket, concurrent ID uniqueness.
-
-## Subsystem: root-meta
-
-Fledge is a zero-inference Go orchestrator for multi-agent coding sessions. It manages isolated flocks (orchestration sessions), spawns agents into Herdr panes, carries messages between them, and maintains an authoritative append-only journal. The root-meta assignment covers repository infrastructure: CI/CD workflows, build/install scripts, module definitions, and high-level documentation.
-
-**Purpose:** Repo-level metadata: CI workflows, top-level docs, license, module files, and build/install/release scripts.
+**Purpose:** Model catalog, socket client, context document rendering/validation, file bridge, and flock lifecycle packages
 
 ### Entry Points
 
-- `scripts/build.sh`: Build entry point: compiles cmd/fledge to bin/fledge; repo root discovery via dirname and go build
-- `scripts/install.sh`: Installation entry point: builds with -tags dev (version suffix -dev) and installs to GOBIN or GOPATH/bin or override BINDIR
-- `README.md`: User-facing entry point: full command reference, quickstart (fledge init / start), concepts, configuration (.fledge layout, portable definitions), and development guide
+- `internal/catalog/catalog.go`: Discover() orchestrates exec-and-parse model discovery from three integrations with collision resolution and atomic catalog write
+- `internal/client/client.go`: Do() provides unified request/response RPC with socket priority and transparent file-bridge fallback
+- `internal/contextdoc/validate.go`: ValidateAnalyzerRequest() and ValidateAnalyzerReply() enforce strict JSON validation for request/reply correlation
+- `internal/contextdoc/render.go`: RenderProject() loads, validates, and atomically publishes analyzer artifacts to project context document
+- `internal/filebridge/filebridge.go`: Submit/Await/Take/Respond implement atomic file-based RPC transport with client PID tracking and orphan sweeping
+- `internal/flock/flock.go`: FromEnv() selects flock from environment; SessionName() derives workspace-prefixed herdr session identity
 
 ### Key Symbols
 
-- `fledge` in `README.md` (project): Zero-inference orchestrator for multi-agent coding. Launches agents into visible Herdr panes, maintains append-only journal as authoritative state, performs no LLM inference
-- `Flock` in `CLAUDE.md` (concept): One isolated orchestration session: own daemon, agent roster, journal, unix socket, and Herdr session. State in .fledge/flocks/<name>/
-- `Agent` in `CLAUDE.md` (concept): Named process tracked by daemon: <type>-<species> where species drawn from fixed penguin-slug pool. Self-registered or spawned. Exception: fledge-orchestrator (no species suffix)
-- `Journal` in `CLAUDE.md` (concept): Append-only journal.jsonl: written before client ack. Daemon rebuilds state by replay. Core invariant: nothing durable unless journaled
-- `Integration` in `CLAUDE.md` (concept): How agents launch and are talked to: claude, codex, pi. All pane-hosted in Herdr. Direct-message delivery via durable mailbox
-- `check-release-version.sh` in `scripts/check-release-version.sh` (script): Validates semantic version in internal/version/VERSION against git tags; gates both PR checks and release workflow
+- `Discover` in `internal/catalog/catalog.go` (function): Executes each integration binary in fixed order, parses outputs into entries, resolves collisions by source ordering, returns configs and notes
+- `Write` in `internal/catalog/catalog.go` (function): Atomically writes catalog to .fledge/agents/fledge/catalog.json via temp+rename with Chmod(0o644), producing deterministic bytes
+- `Do` in `internal/client/client.go` (function): Sends one request to daemon via socket (primary) or file bridge (fallback), blocks for response, returns error if not running
+- `Running` in `internal/client/client.go` (function): Probes daemon liveness via socket dial or file bridge Available() check
+- `ValidateAnalyzerRequest` in `internal/contextdoc/validate.go` (function): Validates request schema, group_id (kebab-case), purpose (nonempty), files (1-50, ≤256KB total, oversized singleton allowed), total_size match
+- `ValidateAnalyzerReply` in `internal/contextdoc/validate.go` (function): Validates reply status ('ok' or 'error'), correlates group_id with request, checks all arrays present, path references assigned, content_kind text/non-text
+- `ParseRequestTemplate` in `internal/contextdoc/compose.go` (function): Extracts instruction_before and instruction_after from XML-delimited template sections
+- `ComposeAnalyzerRequest` in `internal/contextdoc/compose.go` (function): Substitutes {group_id}, {purpose}, {worksheet_path} placeholders into template sections
+- `RenderProject` in `internal/contextdoc/render.go` (function): Loads and validates all analyzer artifacts, renders markdown from scan/requests/replies/synthesis, atomically publishes to project.md
+- `Submit` in `internal/filebridge/filebridge.go` (function): Generates random exchange id, publishes {id, request, pid} atomically to inbox directory
+- `Take` in `internal/filebridge/filebridge.go` (function): Scans inbox, validates each (id safety via validID, pid > 0), atomically moves to accepted marker with pid stamped
+- `Respond` in `internal/filebridge/filebridge.go` (function): Publishes response atomically, sweeps orphan if Awaiting(id) returns false (client abandoned)
+- `Awaiting` in `internal/filebridge/filebridge.go` (function): Checks if accepted marker exists and client pid is alive (signal-0 probe)
+- `SessionName` in `internal/flock/flock.go` (function): Derives 'fledge-' + workspace.Slug(root) + '-' + name to prevent cross-workspace session collisions
+- `Validate` in `internal/flock/flock.go` (function): Enforces flock name rules: lowercase alphanumeric, 1-32 chars, rejects traversals and special characters
+- `FromEnv` in `internal/flock/flock.go` (function): Reads FLEDGE_FLOCK, validates name, returns selected flock or hard error
 
 ### Dependencies
 
-- Internal `internal/daemon`: Per-flock server: spawning, journal, session watch, readiness validation
-- Internal `internal/protocol`: Request/response types for daemon socket contract
-- Internal `internal/client`: Daemon socket client
-- Internal `internal/agentcfg`: .agent.md parsing, index sync, portable definition routing
-- Internal `internal/catalog`: Model discovery from installed integrations (claude, pi, codex)
-- Internal `internal/herdr`: Herdr CLI wrapper for session lifecycle (no socket API)
-- Internal `internal/herdrwire`: Direct Herdr socket API speaking (protocol 16)
-- Internal `internal/version`: Embedded version authority: internal/version/VERSION single source of truth
-- Internal `internal/workspace`: Root discovery: git-style walk to .fledge/, then EvalSymlinks
-- Internal `internal/scaffold`: Creates .fledge/ tree on init
-- Internal `internal/ignore`: .fledgeignore matching (gitignore syntax + #include)
-- Internal `internal/scan`: Workspace file scanning with ignore rules
-- External `github.com/goccy/go-yaml`: YAML frontmatter parsing for .agent.md portable definitions
-- External `herdr`: CLI on PATH; protocol 16 verified at 0.7.4; session lifecycle and pane management
-- External `claude`: Claude Code CLI on PATH; optional, only needed for claude integration spawns
-- External `pi`: Pi CLI on PATH; optional, only needed for pi integration spawns (supports openai-codex, opencode, opencode-go providers)
-- External `codex`: Codex CLI on PATH; optional, only needed for codex integration spawns
+- Internal `internal/agentcfg`: Config types, validation rules, Index format for catalog merge
+- Internal `internal/scaffold`: Directory structure constants (DirName, CatalogName, AgentsDir)
+- Internal `internal/daemon`: SocketPath() helper for Unix socket location
+- Internal `internal/protocol`: Request and Response wire types for RPC exchange
+- Internal `internal/workspace`: Slug() for workspace identity in session naming; EvalSymlinks for canonical path
+- External `encoding/json`: Marshal/Unmarshal, DisallowUnknownFields decoder, duplicate-key rejection via manual Token walk
+- External `os/exec`: LookPath and CommandContext for integration binary discovery with timeouts
+- External `net`: Unix socket transport (Dial, Listen, Conn)
+- External `syscall`: Kill(pid, 0) for signal-0 liveness probes in filebridge; chmod/permission enforcement
+- External `crypto/rand`: Random bytes for exchange id generation (16 bytes, hex encoded)
+- External `time`: Deadlines and timeouts in discovery and file RPC polls
+- External `regexp`: Kebab-case pattern validation for group_id
+- External `io/fs`: ValidPath() for path safety checks in request/reply
+- External `os`: File operations, atomic temp+rename pattern, directory traversal (WalkDir)
 
 ### Data Flows
 
-- `.github/workflows/pull-request.yml` → `cmd/fledge, internal/version/VERSION`: PR validation: lint, vet, test coverage, and version check on every PR open/sync/reopen
-- `.github/workflows/release.yml` → `scripts/check-release-version.sh, cmd/fledge, internal/version/VERSION`: Release gate: version validation, build (amd64/arm64), archive creation, GitHub release with generated notes
-- `go.mod, go.sum` → `scripts/build.sh, scripts/install.sh`: Go module versioning: go build uses pinned goccy/go-yaml v1.19.2
-- `AGENTS.md` → `internal/agentcfg, internal/scaffold`: Repository guidelines for portable .agent.md definitions, namespacing, and profile layout
-- `.gitignore` → `build artifacts, .fledge state`: Excludes: *.exe, bin/, vendor/, .fledge/locks/, .fledge/flocks/, generated agents.json and catalog.json
-- `README.md` → `end users, developers`: Authoritative command reference, quickstart, concepts, configuration, and development guidelines
+- `catalog.Discover()` → `os/exec`: Executes claude --version, codex debug models, pi --list-models in fixed order
+- `os/exec output` → `parseClaudeVersion/parseCodexModels/parsePiModels`: Parses stdout into entry structs
+- `entries` → `catalog.Discover collision logic`: Applies sourceSuffix and slugName to resolve collisions deterministically
+- `config map` → `catalog.Write`: MarshalIndent config map and atomically publishes to catalog.json
+- `user request` → `client.Do`: Sends protocol.Request to daemon via socket (primary) or file bridge
+- `client.Do` → `net unix socket or filebridge`: Encodes request as JSON, sends to daemon, blocks for response
+- `filebridge.Submit` → `.rpc/inbox`: Writes {id, request, pid} atomically
+- `daemon` → `filebridge.Take`: Scans inbox, claims requests, atomically moves to accepted marker with pid
+- `daemon work` → `filebridge.Respond`: Writes response atomically, checks Awaiting for client liveness, sweeps orphans
+- `analyzer request template` → `ComposeAnalyzerRequest`: Substitutes {group_id}, {purpose}, {worksheet_path} into instruction sections
+- `composed request` → `analyzer`: Delivers request with both instruction fields required nonempty
+- `analyzer reply` → `ValidateAnalyzerReply`: Correlates with request, validates all arrays present, path references assigned
+- `validated artifacts` → `RenderProject`: Loads scan, requests, replies, synthesis; renders markdown; atomically publishes
+- `FLEDGE_FLOCK env` → `flock.FromEnv`: Reads and validates flock name; derives session name from workspace slug and flock name
 
 ### Invariants
 
-- Fledge's append-only journal is authoritative state. Herdr and agent events are input signals, never source of truth.
-- Zero inference in the orchestrator: no LLM calls in fledge code itself. All inference happens in visible agent processes.
-- Internal version/VERSION is single source of truth; bumped in every releasable PR; gates both PR checks and release workflow.
-- CI/CD workflow: PR runs lint/test/build independently; merge into main tags and publishes GitHub Release with amd64/arm64 archives.
-- Go 1.26+ required. Unix-only: unix sockets, setsid, signal-0 liveness probes. No third-party deps except goccy/go-yaml.
-- Portable .agent.md files are user-authored and tracked; generated JSON indexes and catalog are gitignored per-machine.
-- .fledgeignore: gitignore syntax + #include directive; defaults exclude dot-dirs except .github/ and .fledge/agents/user/
-- Flock naming: deterministic hash keyed on workspace path; socket under $XDG_RUNTIME_DIR (108-byte sun_path limit, NFS-safe).
-- Agent species: fixed penguin-slug pool, one per type, exception fledge-orchestrator (no species, no suffix).
-- Herdr protocol pinned to 16 (0.7.4); live-verified quirks documented inline; fast-moving pre-1.0 surface.
+- Catalog discovery writes deterministic bytes: exec order fixed, collision survivor by first source, MarshalIndent output stable
+- Client RPC prioritizes socket, always has file-bridge fallback; transparent to caller
+- Filebridge atomicity: Submit→Take→Respond→Cleanup form handoff; Respond sweeps orphans if Awaiting(id) false
+- Validation strictness: JSON decoders reject unknown fields and duplicate keys before unmarshal
+- Flock sessions isolated: SessionName includes workspace.Slug(root); two workspaces with same flock name get different herdr sessions
+- Path safety: fs.ValidPath checks; filebridge ids are 16 random bytes; request/reply paths must be in assigned file set
+- Liveness tracking: Client PID stored in filebridge accepted marker; signal-0 probe distinguishes live from dead clients
+- Instruction requirement: Composed analyzer requests must have both instruction fields nonempty before dispatch
+- All reply arrays present: ValidateAnalyzerReply requires EntryPoints, KeySymbols, Dependencies, DataFlows, Invariants, Tests, Files to never be nil
 
 ### Tests
 
-_None._
+- `internal/catalog/catalog_test.go`: Comprehensive discovery: all sources, missing/failing binaries, timeouts, collision detection, user-profile non-collision, stable writes
+- `internal/client/client_test.go`: Socket RPC lifecycle, file-bridge fallback, error propagation, Running() detection
+- `internal/contextdoc/compose_test.go`: Template parsing (duplicate/missing tags, empty sections), placeholder substitution, worksheet composition
+- `internal/contextdoc/contextdoc_test.go`: Request validation (schema, group_id, purpose, files, grouping bounds); reply validation (status, group_id match, path refs)
+- `internal/filebridge/filebridge_test.go`: Lifecycle, orphan sweep, path-traversal id rejection, concurrent submit/take with race detector, daemon-stop abort, pre-pid rejection
+- `internal/flock/flock_test.go`: Name validation (empty, too long, uppercase, special chars, traversals), list sorting, minting (gap filling), session derivation (workspace isolation), env selection
+
+### Files
+
+#### internal/catalog/catalog.go
+
+_text._ Model discovery orchestrator. Executes three integration binaries in fixed order, parses outputs into entries, resolves collisions by source ordering and suffix rules. Atomically writes merged catalog to .fledge/agents/fledge/catalog.json via temp+rename with deterministic MarshalIndent output.
+
+#### internal/catalog/catalog_test.go
+
+_text._ Comprehensive discovery tests using fake binaries on PATH. Validates all sources, missing/failing binaries, timeouts, collision detection, suffix application, user-profile non-collision, and stable writes across re-init.
+
+#### internal/client/client.go
+
+_text._ Unified RPC dispatcher to daemon. Do() attempts socket dial (primary); on failure, falls back to filebridge. Running() probes both transports. Transparent to caller: same function signature regardless of transport.
+
+#### internal/client/client_test.go
+
+_text._ Tests socket RPC lifecycle (JSON exchange), error propagation, malformed/closed connections, Running() detection via socket and file bridge, file fallback for sandboxed agents.
+
+#### internal/contextdoc/compose.go
+
+_text._ Template composition for analyzer requests. ParseRequestTemplate extracts <instructions_before> and <instructions_after> sections. ComposeAnalyzerRequest substitutes {group_id}, {purpose}, {worksheet_path} placeholders. ComposeWorksheet stamps file checklist.
+
+#### internal/contextdoc/compose_test.go
+
+_text._ Tests template parsing (duplicate/missing tags, empty sections, unknown placeholders), placeholder substitution with required worksheet_path, worksheet file list composition with byte counts.
+
+#### internal/contextdoc/contextdoc_test.go
+
+_text._ Tests request validation (schema version, group_id kebab-case, purpose nonempty, file limits 1-50 and ≤256KB, total_size match) and reply validation (status ok/error, group_id match, path references assigned, all arrays present).
+
+#### internal/contextdoc/render.go
+
+_text._ Artifact loading and rendering. Validates all files before atomic publication via temp+rename. Renders markdown from scan metadata, analyzer requests/replies, synthesis, and provenance. Returns RenderResult with SHA256 and warnings for best-effort cleanup failures.
+
+#### internal/contextdoc/types.go
+
+_text._ Wire contracts for context analysis. Defines Scan (file manifest), AnalyzerRequest (group_id, purpose, files, instructions), AnalyzerReply (ok: summary/entry_points/symbols/deps/flows/invariants/tests/files, or error: errors array), Synthesis (routing/cross-group flows), and Provenance (traceability).
+
+#### internal/contextdoc/validate.go
+
+_text._ Strict JSON validation. decodeExact uses DisallowUnknownFields and manual duplicate-key rejection via Token walk. Validates schema version, group_id (kebab-case), purpose (nonempty), file limits (1-50, ≤256KB, oversized singleton). Reply validation checks status, group_id match, all arrays present, path references assigned by request, content_kind text/non-text.
+
+#### internal/filebridge/filebridge.go
+
+_text._ File-based RPC transport for sandboxed clients. Submit publishes {id, request, pid} to .rpc/inbox atomically. Take claims inbox, validates id (16 random bytes hex) and pid > 0. Await polls accepted marker then response file. Respond writes response atomically and sweeps if !Awaiting (client abandoned). Cleanup removes all exchange files.
+
+#### internal/filebridge/filebridge_test.go
+
+_text._ Tests request/response lifecycle, orphan sweep (client abandonment), path-traversal id validation, concurrent submit/take with race detector, daemon-stop detection, pre-pid binary upgrade window.
+
+#### internal/flock/flock.go
+
+_text._ Flock lifecycle and session identity. Dir returns .fledge/flocks/<name> state path. SessionName derives 'fledge-' + workspace.Slug(root) + '-' + name for session isolation. Validate enforces name rules (lowercase alphanumeric, ≤32 chars). List returns sorted flocks. Mint finds lowest free flockN. FromEnv reads FLEDGE_FLOCK, validates, returns.
+
+#### internal/flock/flock_test.go
+
+_text._ Tests name validation (empty, too long, uppercase, special chars, dots, traversals, reserved), list sorting, minting (gap filling), session derivation (workspace isolation, stable across path spellings), env selection (hard error on unset, rejects bad names).
+
+## Subsystem: internal-misc-b
+
+Infrastructure for workspace management, session coordination, file filtering, and scaffolding. Layered system: foundation (version, species, workspace, protocol), file operations (ignore, scan), Herdr integration (herdr CLI wrapper, herdrwire socket API), setup (scaffold). All systems converge on workspace identity via FindRoot→EvalSymlinks→Hash to ensure daemon and CLI agree on socket namespace and session identity.
+
+**Purpose:** Herdr CLI/wire integration, ignore rules, wire protocol, scaffold templates, workspace scanning, species pool, versioning, and workspace root discovery
+
+### Entry Points
+
+- `internal/workspace/workspace.go`: FindRoot(dir): Walk up to .fledge, return canonical absolute path via EvalSymlinks
+- `internal/herdr/herdr.go`: Ensure(name, env, dir): Attach to or start named Herdr session with environment and working directory
+- `internal/herdrwire/herdrwire.go`: AgentStart(socket, name, cwd, argv, env, split): Launch pane-hosted agent via Herdr socket API
+- `internal/ignore/ignore.go`: ParseFile(path, root): Load .fledgeignore patterns with #include directive support
+- `internal/scan/scan.go`: Files(root, matcher): Walk directory tree, return non-ignored files with sizes in lexical order
+- `internal/scaffold/scaffold.go`: Ensure(root): Initialize or refresh .fledge directory structure and templates
+- `internal/version/version.go`: Get(): Return semantic version with optional -dev suffix based on build tag
+- `internal/species/species.go`: Pick(taken, requested): Select or validate agent species slug from 18-element penguin pool
+
+### Key Symbols
+
+- `Session` in `internal/herdr/herdr.go` (struct): Represents a Herdr session: Name, Running, Default, SocketPath
+- `Ensure` in `internal/herdr/herdr.go` (function): Attach to existing or start new Herdr session with environment and working directory
+- `Call` in `internal/herdrwire/herdrwire.go` (function): Single request/response over unix socket, newline-delimited JSON with fixed timeouts
+- `Matcher` in `internal/ignore/ignore.go` (struct): Holds compiled patterns from .fledgeignore, supports Match(path, isDir) with negation
+- `ParseFile` in `internal/ignore/ignore.go` (function): Load .fledgeignore patterns, resolving #include directives relative to root
+- `Ensure` in `internal/scaffold/scaffold.go` (function): Initialize or refresh .fledge directory: create subdirs, seed templates, replace managed definitions atomically
+- `Request` in `internal/protocol/protocol.go` (struct): Daemon-bound command: Op plus context-specific fields (agent, message, spawn, etc.)
+- `FindRoot` in `internal/workspace/workspace.go` (function): Walk up to .fledge directory, return canonical absolute path via EvalSymlinks
+- `Hash` in `internal/workspace/workspace.go` (function): Deterministic workspace identity: SHA256(abs(root))[:12] for socket namespace key
+- `Slugs` in `internal/species/species.go` (var): 18 penguin species in fixed order: emperor to southernrockhopper
+
+### Dependencies
+
+- Internal `internal/ignore`: ignore.Matcher used by scaffold and scan for .fledgeignore pattern matching
+- Internal `internal/protocol`: Protocol constants (Op*, Env*, JournalName, LogName) used throughout for daemon communication
+- External `stdlib`: encoding/json, os, filepath, net, strings, regexp, time, sync/atomic, crypto/sha256, syscall, io, bufio, errors
+
+### Data Flows
+
+- `command invocation` → `workspace.FindRoot`: Command runs in dir → FindRoot walks up → stat .fledge → EvalSymlinks → canonical root
+- `workspace.FindRoot` → `workspace.Hash`: Canonical root → Hash(root) → 12-char hex for socket namespace key
+- `herdr.Ensure` → `herdr.start`: Ensure checks for existing session, if missing: start detached herdr CLI → poll Find+Up until ready
+- `herdr.start` → `herdrwire.Call`: Once session socket is up, Herdr API calls use herdrwire.Call for pane/workspace ops
+- `scaffold.Ensure` → `ignore.ParseFile`: Scaffold loads .fledgeignore to check gitignore coverage during EnsureGitignore
+- `scan.Files` → `ignore.Matcher.Match`: Directory walk: match each rel path → SkipDir if ignored dir → append non-ignored files
+- `ignore.ParseFile` → `ignore.compile`: Pattern parsing: includeTarget directives resolved → parseLine → compile globs to regexps
+- `scaffold.Ensure` → `scaffold.replaceManagedDefinitions`: Managed definitions staged in temp files → sync → atomic Rename to avoid partial updates
+
+### Invariants
+
+- Workspace identity is stable: FindRoot(p1)==FindRoot(p2) iff canonical absolute paths are equal after EvalSymlinks
+- Socket namespace is deterministic: Hash(root)=hex(SHA256(abs(root)))[:12]; same workspace always gets same hash
+- Ignore semantics mirror gitignore: directories are pruned (fs.SkipDir), negation cannot re-include under ignored parent, last pattern wins
+- Herdr socket protocol: exactly one request/response per connection, newline-delimited JSON, server closes after response
+- Managed definitions are immutable during session: atomic staging replaces via temp file → sync → close → rename
+- User edits are preserved: .fledgeignore and user-agents.json written only if absent (writeIfAbsent)
+- Species slug pool is exhaustible: 18 fixed slugs, auto-assignment walks order, error when all taken
+- Pane liveness is definitive: Herdr removes socket when session ends, dial failure = down (no fallback polling)
+- Versions follow strict semver: MAJOR.MINOR.PATCH with no leading zeros, except bare 0; dev builds append -dev
+- File paths in .fledgeignore are relative to workspace root: slash-separated, matched via filepath.ToSlash(filepath.Rel)
+
+### Tests
+
+- `internal/herdr/herdr_test.go`: Session list, find, up probe, ensure reuse/start, recreate stop+delete+start, remove idempotent
+- `internal/herdrwire/herdrwire_test.go`: Call envelope (unique id, mandatory params), one-shot per connection, agent/workspace/tab/pane ops, error handling, timeout enforcement
+- `internal/ignore/ignore_test.go`: 60+ pattern match cases, include directives with cycle detection, edge cases (escapes, bracket classes, POSIX, negation)
+- `internal/scan/scan_test.go`: Directory walk, file size reporting, prune ignored dirs, negation, cannot re-include under pruned parent
+- `internal/species/species_test.go`: Pick auto/requested/exhausted/unknown, verifies 18 unique slugs
+- `internal/version/version_test.go`: Strict semver format validation (MAJOR.MINOR.PATCH with no leading zeros)
+- `internal/workspace/workspace_test.go`: FindRoot walks up, prefers nearest, canonicalizes symlinks, hash stability, slug sanitization
+- `internal/scaffold/scaffold_test.go`: Tree creation, template seeding, refresh managed definitions, remove obsolete, preserve edits, gitignore coverage
+
+### Files
+
+#### internal/herdr/herdr.go
+
+_text._ Session lifecycle CLI wrapper. Exported: SessionEnv, Session struct, List, Find, Up, Ensure, Recreate, Remove, Stop, Delete. Private: start (detach via setsid), detach. Verified on herdr 0.7.4/protocol 16. Protocol 16 emits no session-lifecycle events; probing socket is the only mechanism.
+
+#### internal/herdr/herdr_test.go
+
+_text._ Tests session operations via stubHerdr fake CLI. Tests list/find, up probe, ensure reuse/start, recreate stop+delete+start, remove idempotent, error wrapping.
+
+#### internal/herdrwire/herdrwire.go
+
+_text._ Unix socket client for Herdr API. Call function handles one request/response per connection with timeouts. Exported: Call, AgentStart, Workspace*, Tab*, Pane* ops, ProcessInfo, SendInput, AgentAlive, AgentStatus, ReleaseAgent, ReportMetadata, WindowTitleSet.
+
+#### internal/herdrwire/herdrwire_test.go
+
+_text._ Tests via fakeHerdr mock server. Tests Call envelope, one-shot per connection, agent/workspace/tab/pane operations, error handling, timeout enforcement, placement options.
+
+#### internal/ignore/ignore.go
+
+_text._ gitignore-style pattern matcher with #include support. Matcher holds compiled patterns. ParseFile loads .fledgeignore (missing ok), Parse from reader. compile translates globs to regexp with *, ?, [], **, escapes, bracket class handling. Match respects dir-only, negation, last pattern wins.
+
+#### internal/ignore/ignore_test.go
+
+_text._ Tests Match with 60+ cases (patterns, anchoring, dir-only, negation, **, escapes, bracket classes). ParseFile missing→empty, IncludeDirective with cycle detection, errors.
+
+#### internal/protocol/protocol.go
+
+_text._ Wire format: Op/Env constants, Request/Response structs, Agent struct (spawned+self-registered fields), Message struct, JournalName/LogName constants.
+
+#### internal/scaffold/agents_test.go
+
+_text._ External test verifying cross-package constant sync: scaffold.AgentsName==agentcfg.FileName, GitignoreEntries includes managed index, seeded stub parses under agentcfg.
+
+#### internal/scaffold/scaffold.go
+
+_text._ Initialize/refresh .fledge: Ensure creates subdirs, seeds templates (request, worksheet), stubs agents index, replaces managed defs atomically via staging, removes obsolete dirs, migrates legacy profiles. EnsureGitignore appends GitignoreEntries if not covered.
+
+#### internal/scaffold/scaffold_test.go
+
+_text._ Tests Ensure: tree creation, template seeds, refresh managed defs, remove obsolete, preserve edits, idempotent, gitignore coverage, legacy profile migration.
+
+#### internal/scan/scan.go
+
+_text._ Directory walk. File struct {Path, Size}. Files(root, matcher) returns non-ignored files in lexical order, prunes ignored directories. No re-include under pruned parent.
+
+#### internal/scan/scan_test.go
+
+_text._ Tests Files: walk behavior, size reporting, prune ignored dirs, negation, cannot re-include under pruned parent.
+
+#### internal/species/species.go
+
+_text._ 18 penguin species slugs in fixed order. Pick(taken, requested) auto-picks first free or validates requested. Exported: Slugs, Pick.
+
+#### internal/species/species_test.go
+
+_text._ Tests Pick auto/requested/exhausted/unknown. Verifies 18 unique slugs.
+
+#### internal/version/VERSION
+
+_text._ Embedded version string: 0.0.1
+
+#### internal/version/suffix.go
+
+_text._ Build-tag !dev: const suffix = ""
+
+#### internal/version/suffix_dev.go
+
+_text._ Build-tag dev: const suffix = "-dev"
+
+#### internal/version/version.go
+
+_text._ Get() returns embedded VERSION trimmed + conditional dev suffix. Exported: Get.
+
+#### internal/version/version_test.go
+
+_text._ Tests Get returns strict MAJOR.MINOR.PATCH (no leading zeros except bare 0).
+
+#### internal/workspace/workspace.go
+
+_text._ FindRoot(dir) walks up to .fledge, returns canonical absolute via EvalSymlinks. Hash(root)=hex(SHA256(abs))[:12] for socket namespace. Slug(root)=sanitized basename + 6-char hash suffix. Exported: FindRoot, Hash, Slug, ErrNotFound.
+
+#### internal/workspace/workspace_test.go
+
+_text._ Tests FindRoot: walk up, canonicalize symlinks, skip .fledge file. Hash: stable, distinct, 12-char. Slug: sanitization, hash suffix.
+
+## Subsystem: project-meta
+
+Fledge is a zero-inference Go orchestrator for launching and coordinating multi-agent coding sessions. It maintains three invariants: (1) the append-only journal is authoritative state, not Herdr; (2) the orchestrator itself performs no LLM inference; and (3) all visible coding work happens in Herdr panes the operator can watch and interrupt. The system spans a CLI, per-flock daemon, portable agent definitions, and integration contracts (Claude, Codex, Pi). CI/CD pipelines validate formatting, test coverage, semantic versioning, and produce static Linux binaries. The project is architected for minimal dependencies (stdlib + goccy/go-yaml) and Unix-only operation.
+
+**Purpose:** Top-level project metadata: README, CLAUDE.md, licensing, CI workflows, and build/install scripts
+
+### Entry Points
+
+- `README.md`: fledge init — scaffolds .fledge/ tree, generates agent indexes, discovers/catalogs installed integrations
+- `README.md`: fledge start — brings up a new flock with Herdr UI, launches orchestrator, optionally spawns watcher pane
+- `README.md`: fledge agent spawn — launches a named agent definition into the roster with resolved profile/model
+
+### Key Symbols
+
+- `Flock` in `README.md` (concept): Isolated orchestration session: own daemon, roster, journal, socket, and Herdr session state
+- `FLEDGE_FLOCK` in `README.md` (env-variable): Environment variable selecting ambient flock for scoped commands; exported by fledge start into session panes
+- `Agent` in `README.md` (concept): Named process with species-based naming; one exception: fledge-orchestrator (no species suffix)
+- `Species` in `README.md` (concept): 18 penguin slugs allocated per agent type; reused across instances
+- `Integration` in `README.md` (concept): Launch harness (Claude, Codex, Pi); all agents run in visible Herdr panes with instruction injection
+- `Orchestrator` in `README.md` (concept): The managed fledge-orchestrator agent; always present after flock start; receives role via native instruction
+- `Forager` in `README.md` (managed-agent): fledge-forager: coordinates multi-agent file analysis; spawns analyzers, validates requests/replies, publishes project.md
+- `Analyzer` in `README.md` (managed-agent): fledge-analyzer: reads assigned file subset, fills worksheet, returns structured findings
+
+### Dependencies
+
+- Internal `cmd/fledge`: CLI: hand-rolled dispatch, flag parsing
+- Internal `internal/daemon`: Per-flock server; spawning, journal, session watch, state machine
+- Internal `internal/protocol`: Request/response types for daemon socket
+- Internal `internal/client`: CLI dials the daemon socket
+- Internal `internal/flock`: Flock naming, layout, socket paths, FLEDGE_FLOCK resolution
+- Internal `internal/herdr`: Shells out to herdr CLI for session lifecycle
+- Internal `internal/herdrwire`: Speaks herdr socket API directly for pane operations
+- Internal `internal/agentcfg`: .agent.md parsing, index synchronization, profiles, model routing
+- Internal `internal/catalog`: Model discovery from installed integrations
+- Internal `internal/species`: 18-slug penguin pool management
+- Internal `internal/scaffold`: Creates .fledge/ tree structure
+- Internal `internal/ignore`: .fledgeignore matching rules
+- Internal `internal/scan`: Workspace file scanning and filtering
+- External `github.com/goccy/go-yaml`: v1.19.2 — YAML frontmatter parsing for .agent.md files
+- External `herdr`: CLI tool, protocol 16 (verified against 0.7.4); pane system, Herdr UI, session management
+- External `claude`: CLI for Claude Code integration; optional if not spawning Claude agents
+- External `codex`: CLI for Codex integration; optional if not spawning Codex agents
+- External `pi`: CLI for Pi integration (multi-provider: openai-codex, opencode, opencode-go); optional if not spawning Pi agents
+
+### Data Flows
+
+- `fledge init discovery` → `catalog.json`: Probe installed integrations, regenerate model catalog
+- `fledge start` → `daemon + journal`: Mint flock, start Herdr session, spawn daemon, launch orchestrator
+- `Agent spawn` → `journal.jsonl`: Parse definition, resolve profile/model, journal lifecycle events
+- `Forager orchestration` → `Analyzer instances`: Partition files, compose requests with instructions, dispatch, validate replies
+- `Analyzer` → `project.md + provenance.json`: Synthesize validated findings into published outputs
+
+### Invariants
+
+- Append-only journal is authoritative state; every operation journaled before client acknowledgment
+- Zero inference in orchestrator; fledge issues commands, consumes events, advances state machine, writes journal
+- All visible work in panes; operators watch and control agents through Herdr UI
+- Roster derived from journal replay; daemon rebuilds state by replaying journal on startup
+- Unix-only operation; sockets, setsid, signal-0 probes
+- Version is embedded source of truth (internal/version/VERSION)
+- Managed namespace reserved; fledge-* names owned by system
+- Species pool per type; 18 penguin slugs reused across agent types
+- Request/reply validation strict; correlation checks before delivery
+- Assigned files only; analyzers read only listed files
+
+### Tests
+
+- `.github/workflows/pull-request.yml`: PR validation: lint (gofmt, vet), test (coverage), build (amd64/arm64), version check
+- `.github/workflows/release.yml`: Post-merge release: gate, lint, test, build+package, release creation, tag management
 
 ### Files
 
 #### .github/workflows/pull-request.yml
 
-_text._ PR validation workflow: lint (gofmt/vet), test with coverage, build (amd64/arm64), version check. Runs on open/sync/reopen.
+_text._ PR validation workflow: gofmt/vet, test with coverage report, build static binaries (linux amd64/arm64), semantic version check
+
+#### .github/workflows/release-badge.yml
+
+_text._ Release badge workflow runs after release succeeds; computes latest tag, publishes JSON badge to orphan badges branch
 
 #### .github/workflows/release.yml
 
-_text._ Release automation: gate (version check), lint/test if release, build amd64/arm64, create/resume GitHub Release with archives (fledge_<version>_linux_*.tar.gz + SHA256SUMS).
+_text._ Post-merge release automation: gate check, lint/test, build tar.gz+SHA256SUMS, create/resume release, tag management
 
 #### .gitignore
 
-_text._ Excludes binaries (*.exe, *.so, *.dylib), build outputs (bin/), Go artifacts, vendor/, .fledge/{locks,flocks,agents/fledge,agents/fledge-agents.json,agents/catalog.json}, and .env
+_text._ Excludes build output, test binaries, coverage, vendor, .fledge runtime state (locks, flocks, context runs, managed agents, indexes)
 
 #### AGENTS.md
 
-_text._ Repository guidelines for portable agent definitions: single user so breaking changes ok, structure under internal/, colocation tests, hand-written parsing, reserved fledge-* namespace, gitignore portable .agent.md but generated indexes.
+_text._ Repository guidelines: single-user project, breaking changes acceptable; structure, build/test commands, style (gofmt, hand-rolled CLI), testing, commits, architecture
 
 #### CLAUDE.md
 
-_text._ Project-level instructions for Claude Code: architecture (CLI authority, zero inference), flock/daemon/journal concepts, integration shapes, portable definition schema, context scanning, and development commands/conventions.
+_text._ Developer guide: structure, CLI conventions (hand-rolled flags with unique short forms), testing, commits, architecture invariants, versioning, verification
 
 #### LICENSE
 
-_text._ GNU Affero General Public License v3.0
+_text._ GNU Affero General Public License v3.0 full text
 
 #### README.md
 
-_text._ Authoritative user-facing documentation: requirements, install, quickstart, concepts (Flock/Agent/Integration/Journal), full command surface with flags, configuration (.fledge layout, portable definitions, .fledgeignore, forager workflow), development (test/build/layout), and license.
+_text._ Authoritative command reference and architecture: CLI commands/flags, configuration, agent definitions, Forager/Analyzer orchestration, .fledgeignore, requirements, development
 
 #### go.mod
 
-_text._ Module declaration: github.com/Harrison-Blair/fledge, Go 1.26, single dependency: github.com/goccy/go-yaml v1.19.2
+_text._ Go 1.26 module with single dependency: github.com/goccy/go-yaml v1.19.2 (YAML frontmatter for agents)
 
 #### go.sum
 
-_text._ Pinned hash for goccy/go-yaml v1.19.2
+_text._ Checksum for goccy/go-yaml v1.19.2
 
 #### scripts/build.sh
 
-_text._ Builds cmd/fledge to bin/fledge; repo root discovery and go build -o invocation
+_text._ Build script: go build -o bin/fledge ./cmd/fledge
 
 #### scripts/check-release-version.sh
 
-_text._ Semantic version validator: reads internal/version/VERSION, gates new PR and release modes; ensures MAJOR.MINOR.PATCH format and monotonic tag progression
+_text._ Semantic version validator: strict MAJOR.MINOR.PATCH, must exceed existing tags; 'new' (PR) and 'release' (post-merge) modes
 
 #### scripts/install.sh
 
-_text._ Dev install script: builds with -tags dev (version suffix -dev), installs to GOBIN/GOPATH/bin, warns if not on PATH or shadowed
+_text._ Install script: build with -tags dev, install to GOBIN/GOPATH/bin (BINDIR override), verify PATH and shadowing
 
 #### scripts/reinstall.sh
 
-_text._ Convenience wrapper: calls build.sh then install.sh; accepts no arguments, BINDIR override only
-
-## Subsystem: support-libs
-
-Foundational infrastructure libraries providing wire protocol definitions, workspace/flock discovery and identity, file scanning with ignore-pattern matching (gitignore semantics), species-based agent naming, versioning with build-tag suffixes, and socket-based client communication with workspace-local fallback for sandboxed access.
-
-**Purpose:** Foundational internal support libraries: wire protocol types, socket client, workspace root discovery, ignore-pattern matching, species name pool, versioning, and flock config.
-
-### Entry Points
-
-- `internal/protocol/protocol.go`: Newline-delimited JSON wire format for CLI-daemon communication over Unix socket; defines Request/Response structs and operation opcodes
-- `internal/client/client.go`: Client library for exchanging protocol requests with the daemon; uses Unix socket when available, falls back to workspace-local file bridge for sandboxed agents
-- `internal/workspace/workspace.go`: Workspace root discovery (git-style walk to .fledge/), canonicalization via EvalSymlinks, hash identity, and human-readable slug generation
-- `internal/flock/flock.go`: Flock naming, validation, enumeration, minting, session name derivation with workspace scoping, and environment-based flock selection
-
-### Key Symbols
-
-- `Request` in `internal/protocol/protocol.go` (type): Client request: operation, agent identity, message routing, spawn config/model, ready token, stop command with optional workspace/tab placement
-- `Response` in `internal/protocol/protocol.go` (type): Daemon reply: error, agent name/id, agents list, point-to-point message, spawn pane id, daemon status and version
-- `Agent` in `internal/protocol/protocol.go` (type): Agent registry entry: name, type, species, pid, alive status, spawned metadata (integration, model, config, pane/workspace/tab ids, state)
-- `Message` in `internal/protocol/protocol.go` (type): Point-to-point message: id, from/to agents, body, optional reply_to correlation
-- `Do` in `internal/client/client.go` (function): Send one request to daemon, receive response; blocks for long operations like wait; attempts Unix socket then workspace file bridge fallback
-- `Running` in `internal/client/client.go` (function): Probe whether daemon is listening; checks socket and file-bridge liveness
-- `FindRoot` in `internal/workspace/workspace.go` (function): Walk up from dir to nearest .fledge directory, return canonical-absolute path with symlinks resolved; error instructs to run fledge init
-- `Hash` in `internal/workspace/workspace.go` (function): SHA-256 hash of workspace absolute path, first 12 hex chars; keys socket namespace and session names so client/daemon agree on identity
-- `Slug` in `internal/workspace/workspace.go` (function): Human-readable workspace identity: sanitized basename (lowercase, dashes, 16-char max) plus 6-char Hash suffix for collision handling
-- `Dir` in `internal/flock/flock.go` (function): State directory for one flock: .fledge/flocks/<name>
-- `SessionName` in `internal/flock/flock.go` (function): Herdr session name for a flock's default managed session: fledge-<workspace-slug>-<flock-name>; globally scoped in Herdr to prevent cross-workspace collisions
-- `Validate` in `internal/flock/flock.go` (function): Flock name validation: non-empty, ≤32 chars, lowercase alphanumerics only; usable as path segment and env var
-- `List` in `internal/flock/flock.go` (function): Enumerate flock state directories, sorted; returns empty list for missing workspace (not error)
-- `Mint` in `internal/flock/flock.go` (function): Auto-mint lowest flockN name with no state; always fresh (never resumes stale journal)
-- `FromEnv` in `internal/flock/flock.go` (function): Get flock from FLEDGE_FLOCK environment variable; hard error if unset or invalid (flock-scoped commands are useless without it)
-- `Files` in `internal/scan/scan.go` (function): Scan directory tree respecting .fledgeignore (gitignore semantics); prunes ignored dirs, returns lexically sorted File structs with path and size
-- `ParseFile` in `internal/ignore/ignore.go` (function): Parse .fledgeignore file; missing file yields empty matcher (graceful for un-initialized trees); #include directives resolve paths against root
-- `Parse` in `internal/ignore/ignore.go` (function): Parse patterns from io.Reader (one per line); gitignore semantics with #include support, last-match-wins negation, dir-only markers
-- `Matcher.Match` in `internal/ignore/ignore.go` (function): Test whether a slash-separated path is ignored; handles anchoring, wildcards (*, ?, [...]), deep wildcards (**), escaping, and negation
-- `Pick` in `internal/species/species.go` (function): Assign penguin species slug: if requested is non-empty it must be known and un-taken; otherwise auto-pick first free in Slugs order; error if all 18 taken
-- `Slugs` in `internal/species/species.go` (variable): Fixed list of 18 extant penguin species as lowercase slugs in auto-assignment order
-- `Get` in `internal/version/version.go` (function): Return fledge binary version: embedded VERSION file trimmed + build-tag suffix ("-dev" if built with dev tag, empty otherwise)
-
-### Dependencies
-
-- Internal `internal/daemon`: Socket path derivation for client connections (daemon.SocketPath); sandbox-aware fallback coordination
-- Internal `internal/scaffold`: Workspace structure constants (.fledge directory name) and initialization
-- Internal `internal/filebridge`: Workspace-local request/response file bridge for sandboxed agents that cannot access runtime-directory sockets
-- External `github.com/goccy/go-yaml`: YAML parsing for agent definitions and catalog (used indirectly by daemon/agentcfg)
-- External `regexp`: Pattern compilation for .fledgeignore glob-to-regex translation
-- External `crypto/sha256`: Workspace hash identity via SHA-256
-- External `encoding/json`: Wire protocol marshaling (Request/Response/Agent/Message)
-- External `net`: Unix socket dial/listen (client and test mocking)
-
-### Data Flows
-
-- `internal/workspace.FindRoot` → `internal/workspace.Hash + internal/workspace.Slug`: Workspace root determines session namespace identity; both daemon and CLI must canonicalize identically
-- `internal/flock.SessionName` → `internal/workspace.Slug`: Flock's managed session name embeds workspace slug to prevent cross-workspace collisions in global Herdr namespace
-- `internal/flock.FromEnv` → `internal/client.Do + internal/protocol.Request/Response`: Flock selection from environment gates all flock-scoped operations (register, send, wait, spawn, stop)
-- `internal/client.Do` → `internal/protocol.Request + internal/protocol.Response`: Client marshals request to JSON, sends over socket, unmarshals response; blocks for streaming operations
-- `internal/client.doFile` → `internal/filebridge`: Sandboxed agents use workspace-local file bridge when socket is unreachable
-- `internal/scan.Files` → `internal/ignore.Matcher.Match`: Directory walk filters each path/dir through ignore patterns; pruning directories is how git semantics work
-- `internal/ignore.ParseFile` → `internal/ignore.Parse + internal/ignore.compile`: File loading delegates to reader pipeline; patterns compiled lazily to regexps at parse time
-- `internal/version.Get` → `internal/protocol.Response.DaemonVersion`: Daemon reports its version at status; CLI uses this to detect mismatched binary after install + restart
-- `internal/species.Pick` → `internal/protocol.Agent.Species`: Species assignment happens at spawn time; self-registered agents pick one via this function
-
-### Invariants
-
-- Workspace root discovery must resolve symlinks so that client and daemon agree on hash regardless of spelling used to reach the workspace
-- Flock session names embed workspace slug so concurrent workspaces cannot collide in Herdr's global session namespace
-- Wire protocol is newline-delimited JSON with one request/response pair per connection; blocks for long operations like wait
-- Sandboxed agents try Unix socket first, then fall back to workspace-local file bridge; socket path uses XDG_RUNTIME_DIR to keep it outside workspace (108-byte sun_path limit)
-- Ignore patterns use gitignore semantics: last-match-wins for negation, directory pruning prevents re-inclusion of pruned subtrees, ** only spans directories as a whole segment
-- Species pool is fixed at 18 penguin species, auto-assigned in order, with explicit request-and-validate fallback; all 18 taken is a hard error
-- Version embeds VERSION file at build time with build-tag suffix; no ldflags, single source of truth
-- Flock names are ≤32 chars, lowercase alphanumerics only, usable as path segment and environment variable; reserved namespace fledge-* for managed entities
-- Agent lifecycle metadata (integration, model, config, pane/workspace/tab ids, state) recorded in protocol and journal at spawn/ready; spawned agents track session_id for Codex resume
-
-### Tests
-
-- `internal/protocol/protocol.go`: No tests in protocol.go itself; wire format is exercised by daemon e2e and client unit tests
-- `internal/scan/scan_test.go`: Tests directory scanning: no patterns, size reporting, pruning ignored dirs, single-file ignore, preventing re-inclusion under pruned parent
-- `internal/species/species_test.go`: Tests auto-pick first free, auto-pick with gaps, exhaustion, explicit request (free/taken/unknown), pool uniqueness and size (18)
-- `internal/version/version_test.go`: Tests Get() returns strict MAJOR.MINOR.PATCH semver (no whitespace, no leading zeros)
-- `internal/workspace/workspace_test.go`: Tests FindRoot walks up from nested dir, at root itself, prefers nearest ancestor, errors without .fledge, skips regular .fledge file, canonicalizes symlinks consistently; Hash stability and uniqueness; Slug sanitization (case/punctuation/truncation/collision suffix)
-- `internal/client/client_test.go`: Tests request/response JSON exchange, error mapping, malformed/closed responses, Running() socket probe, file-bridge fallback when socket inaccessible
-- `internal/flock/flock_test.go`: Tests Validate (valid/invalid names), List (sorted, empty workspace, missing), Mint (lowest free, gaps), FromEnv (unset, malformed), SessionName branding and workspace scoping, Slug stability
-- `internal/ignore/ignore_test.go`: Tests Match (comments, bare names, globs, dir-only, anchoring, wildcards, classes, escaping, negation, deep wildcards); ParseFile (missing is empty); includes (nested, cycles, directives, error cases); 66 match scenarios
-
-### Files
-
-#### internal/client/client.go
-
-_text._ Client RPC over Unix socket or file bridge: Do() sends request, unmarshals response, blocks for streaming; Running() probes socket then file-bridge; doFile() fallback for sandboxed agents with timeouts; ErrNotRunning is operator-facing instruction
-
-#### internal/client/client_test.go
-
-_text._ 5 tests: JSON exchange, daemon error mapping, malformed/closed response handling, Running() probe, file-bridge fallback (sandbox scenario with different XDG_RUNTIME_DIR); serveOnce() helper mocks listener
-
-#### internal/flock/flock.go
-
-_text._ Flock state and identity: Env constant FLEDGE_FLOCK, DirName "flocks", MaxName 32 (sun_path constraint); Dir() path to state; SessionName() derives fledge-<workspace-slug>-<name> (globally scoped); SessionPrefix() for cleanup; WindowTitle() for terminal; Validate() checks name constraints; List() enumeration; Mint() lowest free flockN; FromEnv() retrieves with validation
-
-#### internal/flock/flock_test.go
-
-_text._ 7 test groups: Validate (valid/invalid cases), List (sorted, empty, missing), Mint (lowest free, gaps, never existing), FromEnv (unset/malformed), SessionName/WindowTitle branding, workspace-scoped session identity, slug stability; scratch() helper creates scaffolded temp workspace
-
-#### internal/ignore/ignore.go
-
-_text._ Gitignore-style ignore-pattern matching: Matcher struct (patterns array), ParseFile() optional top-level, Parse() from reader, load() recursive includes with cycle detection, read() processes lines; pattern struct (regexp, negate, dirOnly); Match() applies patterns in order (last-match-wins); parseLine() handles negation (!), escaping (\#, \!), dir-only (/), anchoring (/prefix); compile() translates glob to regexp (*, ?, [...], **, literal escapes, gitignore semantics)
-
-#### internal/ignore/ignore_test.go
-
-_text._ 66+ match test cases covering comments/blanks, bare names, globs, wildcards, char classes (positive/negated/posix), escaping, negation/re-inclusion, deep wildcards, leading/interior/trailing **, anchoring, dir-only, separator rules; 4 include tests (nested, cycles, errors, directives); write() helper creates test files
-
-#### internal/protocol/protocol.go
-
-_text._ Newline-delimited JSON wire protocol: env vars (agent name, ready token, credential, codex thread), journal/log filenames, operation opcodes (register/list/status/send/reply/inbox/wait/peek/receive/ack/spawn/ready/stop/shutdown), Request struct with op-specific fields (agent id, send routing, spawn config/model/integration/workspace/tab/split/anchor/orchestrator, ready token/session id), Response struct with error handling, metadata (agent/pane/session), Agent struct (name/type/species/pid/alive + spawned metadata), Message struct (id/from/to/body/reply_to)
-
-#### internal/scan/scan.go
-
-_text._ Directory walker filtering by ignore patterns: File type (path, size), Files() function walks filepath tree, prunes ignored dirs, returns lexically sorted File array; used to report workspace contents
-
-#### internal/scan/scan_test.go
-
-_text._ 4 tests: no patterns, size reporting, directory pruning, single-file re-inclusion logic; helper tree() creates temp dir with paths, helper files() returns just paths for assertions
-
-#### internal/species/species.go
-
-_text._ Penguin species assignment: Slugs array (18 species in order), Pick() function validates requested slug or auto-picks first free, known() helper checks membership
-
-#### internal/species/species_test.go
-
-_text._ 6 Pick test cases + uniqueness/size test; takenSet() helper builds a predicate from slug list
-
-#### internal/version/VERSION
-
-_text._ Single line: 0.1.0 (semantic versioning, embedded at build time)
-
-#### internal/version/suffix.go
-
-_text._ Build-tag !dev variant: suffix constant empty string (production builds)
-
-#### internal/version/suffix_dev.go
-
-_text._ Build-tag dev variant: suffix constant "-dev" (local installs via scripts/install.sh)
-
-#### internal/version/version.go
-
-_text._ Package version reports fledge binary version: embeds VERSION file, Get() returns trimmed raw + build-tag suffix; no ldflags, single source of truth
-
-#### internal/version/version_test.go
-
-_text._ 1 test: Get() matches strict MAJOR.MINOR.PATCH regex (numeric, no leading zeros, no surrounding whitespace)
-
-#### internal/workspace/workspace.go
-
-_text._ Workspace root discovery and identity: FindRoot() walks up to .fledge dir, canonicalizes symlinks, ErrNotFound instructs fledge init; Hash() SHA-256 of absolute path (12 hex chars, keys socket namespace); Slug() basename sanitization + 6-char hash suffix; slugBase() handles case, punctuation, truncation, collapse runs, trim trailing dashes
-
-#### internal/workspace/workspace_test.go
-
-_text._ 8 FindRoot tests (nested walk, at root, nearest ancestor shadowing, hard error, regular file skip, symlink canonicalization); Hash tests (stability, uniqueness, length); Slug tests (sanitization cases, hash suffix format); helper mark() creates .fledge dir
+_text._ Convenience wrapper: build.sh + install.sh; no arguments; BINDIR override
