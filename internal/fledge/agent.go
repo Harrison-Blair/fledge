@@ -44,7 +44,7 @@ func (s *Service) listWithClient(ctx context.Context, client *herdr.Client) ([]A
 	}
 	panes := panesByID(snapshot)
 	out := make([]AgentView, 0, len(st.Agents))
-	pending, err := s.pendingMessageCounts(st.ActiveRunID)
+	pending, err := s.messages().pendingCounts(st.ActiveRunID)
 	if err != nil {
 		return nil, err
 	}
@@ -82,6 +82,7 @@ func (s *Service) withReconciledState(
 // deactivateExitedMessagingAgents retires the message activation of every
 // agent whose pane no longer hosts a running harness.
 func (s *Service) deactivateExitedMessagingAgents(agents map[string]state.Agent, live map[string]herdr.AgentInfo) error {
+	messages := s.messages()
 	for name, managed := range agents {
 		if managed.ActivationID == "" {
 			continue
@@ -89,7 +90,7 @@ func (s *Service) deactivateExitedMessagingAgents(agents map[string]state.Agent,
 		if agent, ok := live[managed.PaneID]; ok && agent.Agent != nil {
 			continue
 		}
-		if err := s.deactivateMessagingAgent(name, "recipient agent exited"); err != nil {
+		if err := messages.deactivateAgent(name, "recipient agent exited"); err != nil {
 			return err
 		}
 		managed.ActivationID = ""

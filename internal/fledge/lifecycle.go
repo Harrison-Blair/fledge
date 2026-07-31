@@ -11,7 +11,6 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/buildinfo"
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/messaging"
-	"github.com/Harrison-Blair/fledge/internal/project"
 	"github.com/Harrison-Blair/fledge/internal/state"
 )
 
@@ -70,7 +69,7 @@ func (s *Service) Start(ctx context.Context, timeout time.Duration) (StartResult
 	defer func() {
 		if !startedSuccessfully {
 			s.rollbackNewServer()
-			_ = s.closeMessageRun(runID, "startup_failed")
+			_ = s.messages().closeRun(runID, "startup_failed")
 		}
 	}()
 	startCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -141,26 +140,11 @@ func (s *Service) waitForServerReady(
 }
 
 func (s *Service) beginMessageRun(ctx context.Context, installed herdr.BinaryInfo) (string, error) {
-	if err := project.EnsureLogsIgnored(s.Project.Root); err != nil {
-		return "", Wrap("message_log_unavailable", err.Error(), err)
-	}
-	header := messaging.RunHeader{
+	return s.messages().beginRun(messaging.RunHeader{
 		Fledge: buildinfo.Current(), Herdr: installed.Version, Protocol: installed.Protocol,
 		ProjectRoot: s.Project.Root, Session: s.Project.Session, Git: inspectGit(ctx, s.Project.Root),
 		StartedAt: time.Now().UTC(),
-	}
-	runID, err := s.messageStore().StartRun(header)
-	if err != nil {
-		return "", messageStoreError(err)
-	}
-	if err := s.Store.WithLocked(s.Project.Session, s.Project.Root, func(st *state.Session) error {
-		st.ActiveRunID = runID
-		return nil
-	}); err != nil {
-		_ = s.closeMessageRun(runID, "state_persist_failed")
-		return "", Wrap("state_persist_failed", fmt.Sprintf("persist active message run: %v", err), err)
-	}
-	return runID, nil
+	})
 }
 
 func inspectGit(ctx context.Context, root string) messaging.GitInfo {
@@ -244,9 +228,8 @@ func (s *Service) prepareFreshStart(ctx context.Context, session herdr.SessionIn
 			}
 		}
 	}
-	if err := s.closeActiveMessageRun("abnormal prior run closed before fresh start"); err != nil {
-		var serviceErr *Error
-		if errors.As(err, &serviceErr) && strings.HasPrefix(serviceErr.Code, "message_") {
+	if err := s.messages().closeActiveRun("abnormal prior run closed before fresh start"); err != nil {
+		if isMessagingFailure(err) {
 			return err
 		}
 		return Wrap("state_persist_failed",
@@ -327,7 +310,7 @@ func (s *Service) Status(ctx context.Context) (StatusResult, error) {
 	if st, found, readErr := s.Store.ReadExisting(s.Project.Session, s.Project.Root); readErr != nil {
 		return StatusResult{}, Wrap("state_unavailable", readErr.Error(), readErr)
 	} else if found {
-		pending, countErr := s.pendingMessageCounts(st.ActiveRunID)
+		pending, countErr := s.messages().pendingCounts(st.ActiveRunID)
 		if countErr != nil {
 			return StatusResult{}, countErr
 		}

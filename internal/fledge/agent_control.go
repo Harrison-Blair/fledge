@@ -153,20 +153,20 @@ func (s *Service) StopAgent(ctx context.Context, name string, timeout time.Durat
 		if err := client.Call(ctx, "pane.close", map[string]any{"pane_id": managed.PaneID}, nil); err != nil {
 			return AgentStopResult{}, err
 		}
-		if err := s.deactivateMessagingAgent(name, "agent force-stopped"); err != nil {
+		if err := s.messages().deactivateAgent(name, "agent force-stopped"); err != nil {
 			return AgentStopResult{}, err
 		}
 		return stoppedResult(name, managed, true), nil
 	}
 	if stopped, _ := s.agentStopped(ctx, client, managed.PaneID); stopped {
-		if err := s.deactivateMessagingAgent(name, "agent already stopped"); err != nil {
+		if err := s.messages().deactivateAgent(name, "agent already stopped"); err != nil {
 			return AgentStopResult{}, err
 		}
 		return AgentStopResult{Agent: stoppedView(name, managed)}, nil
 	}
 	deadline := time.Now().Add(timeout)
 	if s.gracefullyStopPane(ctx, client, managed.PaneID, deadline) {
-		if err := s.deactivateMessagingAgent(name, "agent stopped"); err != nil {
+		if err := s.messages().deactivateAgent(name, "agent stopped"); err != nil {
 			return AgentStopResult{}, err
 		}
 		return stoppedResult(name, managed, false), nil

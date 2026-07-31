@@ -1,8 +1,6 @@
 package fledge
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -109,19 +107,6 @@ func fakeBinary(t *testing.T, socket string) (string, string) {
 		DeleteRemoves: existsMarker,
 	})
 	return path, runningMarker
-}
-
-func fakeBinarySessions(t *testing.T, sessions string) string {
-	t.Helper()
-	var compactSessions bytes.Buffer
-	if err := json.Compact(&compactSessions, []byte(sessions)); err != nil {
-		t.Fatalf("compact fake Herdr sessions JSON: %v", err)
-	}
-	sessions = compactSessions.String()
-	return herdrtest.WriteBinary(t, t.TempDir(), herdrtest.Options{
-		Version:  herdrtest.VersionOutput,
-		Sessions: []herdrtest.SessionCase{{Payload: sessions}},
-	})
 }
 
 func serviceSessionSocket(t *testing.T, binary herdr.Binary) string {

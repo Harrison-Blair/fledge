@@ -88,7 +88,7 @@ func TestMessageQueuedForStoppedAgentAndFailsAtRunClose(t *testing.T) {
 	if err != nil || result.Message.Status != messaging.StatusQueued {
 		t.Fatalf("send = %#v, %v", result, err)
 	}
-	if err := service.closeMessageRun(runID, "test close"); err != nil {
+	if err := service.messages().closeRun(runID, "test close"); err != nil {
 		t.Fatal(err)
 	}
 	message, err := service.ShowMessage(result.Message.ID)
@@ -275,7 +275,7 @@ func TestArchivedMessagesRejectEveryCommandWithItsOwnVerb(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.closeMessageRun(runID, "test close"); err != nil {
+	if err := service.messages().closeRun(runID, "test close"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -400,7 +400,7 @@ func TestPrepareMessagingActivationWithoutActiveRunReturnsZeroTarget(t *testing.
 	service, _ := newFakeLifecycle(t)
 	mustStartAgent(t, service, "worker")
 
-	target, err := service.prepareMessagingActivation("worker", "p1")
+	target, err := service.messages().prepareActivation("worker", "p1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +421,7 @@ func TestPrepareMessagingActivationRecordsActivationForActiveRun(t *testing.T) {
 	runID := startTestMessageRun(t, service)
 	mustStartAgent(t, service, "worker")
 
-	target, err := service.prepareMessagingActivation("worker", "p1")
+	target, err := service.messages().prepareActivation("worker", "p1")
 	if err != nil {
 		t.Fatal(err)
 	}

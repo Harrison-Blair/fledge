@@ -52,7 +52,7 @@ func (s *Service) SpawnAgent(ctx context.Context, opts AgentStartOptions) (Agent
 	if err != nil {
 		return AgentStartResult{}, err
 	}
-	if err := s.activateMessagingAgent(ctx, client, opts.Name, managed.PaneID); err != nil {
+	if err := s.messages().activateAgent(ctx, client, opts.Name, managed.PaneID); err != nil {
 		return AgentStartResult{}, err
 	}
 	return AgentStartResult{
@@ -264,7 +264,7 @@ func evictPaneOwners(st *state.Session, pane herdr.PaneInfo, name string) error 
 // activateSpawnMessaging opens the agent's mailbox and starts the background
 // deliverer that feeds it while the harness owns the pane.
 func (s *Service) activateSpawnMessaging(opts AgentStartOptions, paneID string) error {
-	target, err := s.prepareMessagingActivation(opts.Name, paneID)
+	target, err := s.messages().prepareActivation(opts.Name, paneID)
 	if err != nil {
 		return err
 	}
@@ -272,7 +272,7 @@ func (s *Service) activateSpawnMessaging(opts AgentStartOptions, paneID string) 
 		return nil
 	}
 	if err := s.launchDeliveryHelper(opts.Name, target.activationID, opts.Timeout); err != nil {
-		_ = s.deactivateMessagingAgent(opts.Name, "delivery helper failed to launch")
+		_ = s.messages().deactivateAgent(opts.Name, "delivery helper failed to launch")
 		return err
 	}
 	return nil
@@ -471,11 +471,11 @@ func (s *Service) createAgentPane(
 	expected := name
 	// Unlike the orchestrator path, a stale non-empty s.WorkspaceID skips
 	// st.WorkspaceID and goes straight to the project-wide search.
-	workspaceID, err := s.resolveWorkspaceID(snapshot, s.selectedWorkspaceID(st), fmt.Sprintf("agent %q", name))
+	workspaceID, err := resolveWorkspaceID(snapshot, s.Project, s.selectedWorkspaceID(st), fmt.Sprintf("agent %q", name))
 	if err != nil {
 		return state.Agent{}, err
 	}
-	workspaceID, tabID, paneID, err := s.allocateAgentPane(ctx, client, snapshot, workspaceID, cwd)
+	workspaceID, tabID, paneID, err := s.allocateAgentPane(ctx, client, workspaceID, cwd)
 	if err != nil {
 		return state.Agent{}, err
 	}
@@ -494,11 +494,10 @@ func (s *Service) createAgentPane(
 func (s *Service) allocateAgentPane(
 	ctx context.Context,
 	client *herdr.Client,
-	snapshot herdr.Snapshot,
 	workspaceID, cwd string,
 ) (string, string, string, error) {
 	if workspaceID == "" {
-		created, err := s.createProjectWorkspace(ctx, client, cwd)
+		created, err := createProjectWorkspace(ctx, client, s.Project.Root, cwd)
 		if err != nil {
 			return "", "", "", err
 		}

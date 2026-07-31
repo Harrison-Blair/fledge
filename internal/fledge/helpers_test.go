@@ -13,9 +13,12 @@ import (
 )
 
 // seedDisposableState fills every field a coordinated stop is expected to
-// clear, so assertDisposableStateCleared has something to prove.
+// clear, so assertDisposableStateCleared has something to prove. The active
+// run is a real one: a fabricated ID would make the run close a no-op and
+// leave the ActiveRunID assertion unproven.
 func seedDisposableState(t *testing.T, service *Service, generation uint64) {
 	t.Helper()
+	startTestMessageRun(t, service)
 	if err := service.Store.WithLocked(service.Project.Session, service.Project.Root, func(st *state.Session) error {
 		st.StopGeneration = generation
 		st.Socket = "/stale/socket"
@@ -36,7 +39,7 @@ func assertDisposableStateCleared(t *testing.T, st state.Session, wantGeneration
 	t.Helper()
 	if st.StopGeneration != wantGeneration || st.Socket != "" || st.WorkspaceID != "" ||
 		st.OrchestratorTabID != "" || st.OrchestratorPaneID != "" ||
-		st.OrchestratorInitialized || len(st.Agents) != 0 {
+		st.OrchestratorInitialized || st.ActiveRunID != "" || len(st.Agents) != 0 {
 		t.Fatalf("disposable state was not cleared at generation %d: %#v", wantGeneration, st)
 	}
 }
@@ -57,8 +60,7 @@ func mustStartAgent(t *testing.T, service *Service, name string) AgentStartResul
 // launchTestCleanupWorker returns a LaunchStopCleanup that runs the detached
 // finalizer in-process and reports its result on done. A non-zero timeout
 // overrides the one the request carries.
-func launchTestCleanupWorker(t *testing.T, done chan<- error, timeout time.Duration) func(StopCleanupRequest) error {
-	t.Helper()
+func launchTestCleanupWorker(done chan<- error, timeout time.Duration) func(StopCleanupRequest) error {
 	return func(request StopCleanupRequest) error {
 		workerStore, err := state.New(request.StateDir)
 		if err != nil {

@@ -37,6 +37,24 @@ func (s *Service) messageStore() *messaging.Store {
 	return messaging.NewStore(s.Project.Root)
 }
 
+// messages builds the durable-messaging collaborator from the fields the
+// caller configured. It is rebuilt per operation because CallerPaneID and the
+// store fields stay writable after the Service is constructed.
+func (s *Service) messages() *messenger {
+	return &messenger{
+		project:      s.Project,
+		store:        s.Store,
+		log:          s.messageStore(),
+		callerPaneID: s.CallerPaneID,
+		connect:      s.messagingClient,
+	}
+}
+
+func (s *Service) messagingClient(ctx context.Context) (*herdr.Client, error) {
+	_, _, client, err := s.running(ctx)
+	return client, err
+}
+
 func (s *Service) inspect(ctx context.Context) (herdr.BinaryInfo, error) {
 	if s.Installed != nil {
 		return *s.Installed, nil

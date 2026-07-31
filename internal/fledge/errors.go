@@ -2,6 +2,7 @@ package fledge
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 )
@@ -22,6 +23,14 @@ func NewError(code, message string) *Error {
 
 func Wrap(code, message string, cause error) *Error {
 	return &Error{Code: code, Message: message, Cause: cause}
+}
+
+// isMessagingFailure reports whether err is a durable-messaging failure.
+// Callers that would otherwise reclassify a run-close failure as a state
+// problem pass these through unchanged.
+func isMessagingFailure(err error) bool {
+	var serviceErr *Error
+	return errors.As(err, &serviceErr) && strings.HasPrefix(serviceErr.Code, "message_")
 }
 
 func Translate(err error) *Error {

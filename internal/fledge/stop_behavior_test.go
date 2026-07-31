@@ -23,7 +23,7 @@ func TestFailedServerStopDoesNotAdvanceGeneration(t *testing.T) {
 	fake.serverStopError = "refused by server"
 	fake.mu.Unlock()
 	workerDone := make(chan error, 1)
-	service.LaunchStopCleanup = launchTestCleanupWorker(t, workerDone, 150*time.Millisecond)
+	service.LaunchStopCleanup = launchTestCleanupWorker(workerDone, 150*time.Millisecond)
 
 	if _, err := service.Stop(t.Context(), false); err == nil {
 		t.Fatal("expected server stop failure")
@@ -70,7 +70,7 @@ func TestDetachedCleanupSurvivesCallerDisappearingAfterServerStop(t *testing.T) 
 	seedDisposableState(t, service, 4)
 
 	workerDone := make(chan error, 1)
-	service.LaunchStopCleanup = launchTestCleanupWorker(t, workerDone, 0)
+	service.LaunchStopCleanup = launchTestCleanupWorker(workerDone, 0)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	fake.mu.Lock()

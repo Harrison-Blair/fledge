@@ -2,7 +2,6 @@ package fledge
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -140,9 +139,8 @@ func (s *Service) cleanupStoppedSession(ctx context.Context, session herdr.Sessi
 			return StopResult{}, err
 		}
 	}
-	if err := s.closeActiveMessageRun("run closed during stopped-session cleanup"); err != nil {
-		var serviceErr *Error
-		if errors.As(err, &serviceErr) && strings.HasPrefix(serviceErr.Code, "message_") {
+	if err := s.messages().closeActiveRun("run closed during stopped-session cleanup"); err != nil {
+		if isMessagingFailure(err) {
 			return StopResult{}, err
 		}
 		return StopResult{}, Wrap("state_persist_failed",
@@ -247,7 +245,7 @@ func normalizeStopAgentInspection(agent StopAgentInspection) StopAgentInspection
 		agent.Harness = "unknown"
 	}
 	if agent.State == "" {
-		agent.State = "unknown"
+		agent.State = StateUnknown
 	}
 	return agent
 }
@@ -345,9 +343,8 @@ func (s *Service) finalizeStop(ctx context.Context, baseline uint64, timeout tim
 	if err := s.deleteSession(ctx, out); err != nil {
 		return err
 	}
-	if err := s.closeActiveMessageRun("run closed by fledge stop"); err != nil {
-		var serviceErr *Error
-		if errors.As(err, &serviceErr) && strings.HasPrefix(serviceErr.Code, "message_") {
+	if err := s.messages().closeActiveRun("run closed by fledge stop"); err != nil {
+		if isMessagingFailure(err) {
 			return err
 		}
 		return Wrap("state_persist_failed",
