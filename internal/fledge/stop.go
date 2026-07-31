@@ -2,6 +2,7 @@ package fledge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -140,7 +141,12 @@ func (s *Service) cleanupStoppedSession(ctx context.Context, session herdr.Sessi
 		}
 	}
 	if err := s.closeActiveMessageRun("run closed during stopped-session cleanup"); err != nil {
-		return StopResult{}, err
+		var serviceErr *Error
+		if errors.As(err, &serviceErr) && strings.HasPrefix(serviceErr.Code, "message_") {
+			return StopResult{}, err
+		}
+		return StopResult{}, Wrap("state_persist_failed",
+			fmt.Sprintf("Herdr session was deleted but the active message run could not be closed: %v", err), err)
 	}
 	if err := s.clearDisposableState(); err != nil {
 		return StopResult{}, Wrap("state_persist_failed",
@@ -340,7 +346,12 @@ func (s *Service) finalizeStop(ctx context.Context, baseline uint64, timeout tim
 		return err
 	}
 	if err := s.closeActiveMessageRun("run closed by fledge stop"); err != nil {
-		return err
+		var serviceErr *Error
+		if errors.As(err, &serviceErr) && strings.HasPrefix(serviceErr.Code, "message_") {
+			return err
+		}
+		return Wrap("state_persist_failed",
+			fmt.Sprintf("Herdr session was deleted but the active message run could not be closed: %v", err), err)
 	}
 	if err := s.finalizeStopState(baseline); err != nil {
 		return Wrap("state_persist_failed",
