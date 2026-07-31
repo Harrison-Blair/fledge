@@ -38,11 +38,15 @@ type SessionInfo struct {
 
 type Binary struct{ Path string }
 
-func (b Binary) Inspect(ctx context.Context) (BinaryInfo, error) {
-	path := b.Path
-	if path == "" {
-		path = "herdr"
+func (b Binary) path() string {
+	if b.Path == "" {
+		return "herdr"
 	}
+	return b.Path
+}
+
+func (b Binary) Inspect(ctx context.Context) (BinaryInfo, error) {
+	path := b.path()
 	versionOut, err := exec.CommandContext(ctx, path, "--version").CombinedOutput()
 	if err != nil {
 		return BinaryInfo{}, fmt.Errorf("run %s --version: %w", path, err)
@@ -96,10 +100,7 @@ func collectMethods(value any, methods map[string]bool) {
 }
 
 func (b Binary) Sessions(ctx context.Context) ([]SessionInfo, error) {
-	path := b.Path
-	if path == "" {
-		path = "herdr"
-	}
+	path := b.path()
 	out, err := exec.CommandContext(ctx, path, "session", "list", "--json").CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("list Herdr sessions: %w: %s", err, bytes.TrimSpace(out))
@@ -129,10 +130,7 @@ func (b Binary) FindSession(ctx context.Context, name string) (SessionInfo, bool
 // DeleteSession permanently removes a stopped named Herdr session and its
 // persisted restart state.
 func (b Binary) DeleteSession(ctx context.Context, name string) error {
-	path := b.Path
-	if path == "" {
-		path = "herdr"
-	}
+	path := b.path()
 	out, err := exec.CommandContext(ctx, path, "session", "delete", name, "--json").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("delete Herdr session %q: %w: %s", name, err, bytes.TrimSpace(out))
@@ -143,10 +141,7 @@ func (b Binary) DeleteSession(ctx context.Context, name string) error {
 // StartServer starts Herdr in its own process group and reports early process
 // failure on exited. The caller owns readiness polling.
 func (b Binary) StartServer(ctx context.Context, session, cwd string) (<-chan error, error) {
-	path := b.Path
-	if path == "" {
-		path = "herdr"
-	}
+	path := b.path()
 	// Do not bind the long-lived server to the caller's context. The server is
 	// deliberately detached and must survive after `fledge start` returns.
 	cmd := exec.Command(path, "--session", session, "server")
@@ -171,10 +166,7 @@ func (b Binary) StartServer(ctx context.Context, session, cwd string) (<-chan er
 }
 
 func (b Binary) Attach(ctx context.Context, session, target string, takeover bool) error {
-	path := b.Path
-	if path == "" {
-		path = "herdr"
-	}
+	path := b.path()
 	args := []string{"--session", session, "agent", "attach", target}
 	if takeover {
 		args = append(args, "--takeover")
@@ -185,10 +177,7 @@ func (b Binary) Attach(ctx context.Context, session, target string, takeover boo
 }
 
 func (b Binary) AttachSession(ctx context.Context, session, cwd string) error {
-	path := b.Path
-	if path == "" {
-		path = "herdr"
-	}
+	path := b.path()
 	cmd := exec.CommandContext(ctx, path, "session", "attach", session)
 	cmd.Dir = cwd
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr

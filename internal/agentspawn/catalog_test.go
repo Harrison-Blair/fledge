@@ -89,6 +89,26 @@ func TestPiOpenCodeModelsGroupByCreatorWithOtherLast(t *testing.T) {
 	}
 }
 
+func TestProviderlessModelsGroupByCreatorWithOtherLast(t *testing.T) {
+	models := normalizeAndSort([]Model{
+		{ID: "mystery-model", Name: "mystery-model"},
+		{ID: "glm-5", Name: "glm-5"},
+		{ID: "claude-4", Name: "claude-4"},
+	})
+	got := make([]string, 0, len(models))
+	for _, model := range models {
+		got = append(got, model.Maker+":"+model.Name)
+	}
+	want := []string{
+		"Claude:claude-4",
+		"Zhipu:glm-5",
+		"Other:mystery-model",
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("creator ordering = %v, want %v", got, want)
+	}
+}
+
 func TestParseOpenCodeModelsAndMakerNormalization(t *testing.T) {
 	models, err := ParseOpenCodeModels([]byte(
 		"openrouter/anthropic/claude-sonnet-4\n" +

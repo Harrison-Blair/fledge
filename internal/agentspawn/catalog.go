@@ -277,17 +277,14 @@ func normalizeAndSort(models []Model) []Model {
 			if comparison := compareProviders(out[i].Provider, out[j].Provider); comparison != 0 {
 				return comparison < 0
 			}
-			if providerUsesCreatorGroups(out[i].Provider) {
-				if comparison := compareMakers(out[i].Maker, out[j].Maker); comparison != 0 {
-					return comparison < 0
-				}
+			if !providerUsesCreatorGroups(out[i].Provider) {
+				return compareNames(out[i].Name, out[j].Name) < 0
 			}
-			return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
 		}
-		if out[i].Maker != out[j].Maker {
-			return strings.ToLower(out[i].Maker) < strings.ToLower(out[j].Maker)
+		if comparison := compareMakers(out[i].Maker, out[j].Maker); comparison != 0 {
+			return comparison < 0
 		}
-		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+		return compareNames(out[i].Name, out[j].Name) < 0
 	})
 	return out
 }
@@ -390,6 +387,10 @@ func compareMakers(left, right string) int {
 		}
 		return -1
 	}
+	return strings.Compare(strings.ToLower(left), strings.ToLower(right))
+}
+
+func compareNames(left, right string) int {
 	return strings.Compare(strings.ToLower(left), strings.ToLower(right))
 }
 

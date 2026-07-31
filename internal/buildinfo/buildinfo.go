@@ -24,9 +24,8 @@ type Info struct {
 // Current returns embedded release and Go VCS build metadata.
 func Current() Info {
 	out := Info{
-		Version:     strings.TrimSpace(version),
-		GoVersion:   runtime.Version(),
-		Development: true,
+		Version:   strings.TrimSpace(version),
+		GoVersion: runtime.Version(),
 	}
 	if bi, ok := debug.ReadBuildInfo(); ok {
 		for _, setting := range bi.Settings {
