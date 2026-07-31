@@ -25,6 +25,11 @@ type Agent struct {
 	ActivationID string `json:"activation_id,omitempty"`
 }
 
+type SpawnSelection struct {
+	Harness string `json:"harness"`
+	Model   string `json:"model,omitempty"`
+}
+
 type Session struct {
 	SchemaVersion           int              `json:"schema_version"`
 	ProjectRoot             string           `json:"project_root"`
@@ -36,6 +41,7 @@ type Session struct {
 	OrchestratorInitialized bool             `json:"orchestrator_initialized,omitempty"`
 	StopGeneration          uint64           `json:"stop_generation,omitempty"`
 	ActiveRunID             string           `json:"active_run_id,omitempty"`
+	LastSpawnSelection      *SpawnSelection  `json:"last_spawn_selection,omitempty"`
 	Agents                  map[string]Agent `json:"agents"`
 }
 
@@ -112,6 +118,10 @@ func (s *Store) Read(session, projectRoot string) (Session, error) {
 	var result Session
 	err := s.WithLocked(session, projectRoot, func(st *Session) error {
 		result = *st
+		if st.LastSpawnSelection != nil {
+			selection := *st.LastSpawnSelection
+			result.LastSpawnSelection = &selection
+		}
 		result.Agents = make(map[string]Agent, len(st.Agents))
 		for k, v := range st.Agents {
 			result.Agents[k] = v

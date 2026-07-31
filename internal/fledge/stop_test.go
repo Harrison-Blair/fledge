@@ -35,7 +35,7 @@ func TestStopDeletesStoppedSessionAndClearsMappings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertDisposableStateCleared(t, st, 7)
+	assertDisposableStateCleared(t, st, 7, &testSpawnSelection)
 }
 
 func TestStopMissingSessionIsSuccessfulAndClearsStaleMappings(t *testing.T) {
@@ -126,7 +126,7 @@ func TestConcurrentStopFinalizersDeleteIdempotentlyAndAdvanceGenerationOnce(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertDisposableStateCleared(t, st, 8)
+	assertDisposableStateCleared(t, st, 8, &testSpawnSelection)
 }
 
 func TestPrepareFreshStartDeletesStoppedSessionAndClearsMappings(t *testing.T) {
@@ -145,7 +145,7 @@ func TestPrepareFreshStartDeletesStoppedSessionAndClearsMappings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertDisposableStateCleared(t, st, 11)
+	assertDisposableStateCleared(t, st, 11, &testSpawnSelection)
 }
 
 func TestPrepareFreshStartAbortsWhenStoppedSessionCannotBeDeleted(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/Harrison-Blair/fledge/internal/fledge"
 	"github.com/Harrison-Blair/fledge/internal/messaging"
+	"github.com/Harrison-Blair/fledge/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -249,7 +250,9 @@ func newMessageShow(env *environment) *cobra.Command {
 			if err != nil {
 				return fledge.Translate(err)
 			}
-			return env.print(map[string]any{"message": message}, func(w io.Writer) { printMessageBlock(w, message) })
+			return env.print(map[string]any{"message": message}, func(w io.Writer, theme *ui.Theme) {
+				printMessageBlock(w, message, theme)
+			})
 		},
 	}
 }
@@ -272,19 +275,19 @@ func newMessageRuns(env *environment) *cobra.Command {
 			if err != nil {
 				return fledge.Translate(err)
 			}
-			return env.print(result, func(w io.Writer) {
+			return env.print(result, func(w io.Writer, theme *ui.Theme) {
 				if len(result.Runs) == 0 {
 					fmt.Fprintln(w, "No message runs")
 					return
 				}
-				fmt.Fprintln(w, "RUN\tSTARTED\tSTATE\tMESSAGES")
+				fmt.Fprintln(w, theme.Accent("RUN\tSTARTED\tSTATE\tMESSAGES"))
 				for _, run := range result.Runs {
 					state := "closed"
 					if run.Active {
 						state = "active"
 					}
 					fmt.Fprintf(w, "%s\t%s\t%s\t%d\n", run.ID, run.StartedAt.Format("2006-01-02T15:04:05Z07:00"),
-						state, len(run.Messages))
+						theme.Status(state), len(run.Messages))
 				}
 			})
 		},
@@ -339,15 +342,17 @@ func newMessageCancel(env *environment) *cobra.Command {
 
 func printMessageResult(env *environment, result fledge.MessageResult, action string) error {
 	if result.DeliveryError != "" && !env.json {
-		fmt.Fprintf(env.errOut, "Warning: message is durable but delivery was not confirmed: %s\n", result.DeliveryError)
+		fmt.Fprintf(env.errOut, "%s message is durable but delivery was not confirmed: %s\n",
+			env.stderrTheme().Warning("Warning:"), result.DeliveryError)
 	}
-	return env.print(result, func(w io.Writer) {
-		fmt.Fprintf(w, "%s message %s (%s)\n", action, result.Message.ID, result.Message.Status)
+	return env.print(result, func(w io.Writer, theme *ui.Theme) {
+		fmt.Fprintf(w, "%s message %s (%s)\n",
+			theme.Accent(action), result.Message.ID, theme.Status(result.Message.Status))
 	})
 }
 
 func printMessageCollection(env *environment, collection messaging.Collection) error {
-	return env.print(collection, func(w io.Writer) {
+	return env.print(collection, func(w io.Writer, theme *ui.Theme) {
 		if len(collection.Messages) == 0 {
 			fmt.Fprintln(w, "No messages")
 			return
@@ -356,24 +361,25 @@ func printMessageCollection(env *environment, collection messaging.Collection) e
 			if index > 0 {
 				fmt.Fprintln(w, strings.Repeat("-", 72))
 			}
-			printMessageBlock(w, message)
+			printMessageBlock(w, message, theme)
 		}
 	})
 }
 
-func printMessageBlock(w io.Writer, message *messaging.Message) {
+func printMessageBlock(w io.Writer, message *messaging.Message, themes ...*ui.Theme) {
+	theme := firstTheme(themes)
 	fmt.Fprintf(w, "%s  %s → %s  [%s]\n", message.CreatedAt.Format("2006-01-02 15:04:05Z07:00"),
-		message.Sender, message.Recipient, message.Status)
-	fmt.Fprintf(w, "ID: %s  Run: %s\n", message.ID, message.RunID)
+		message.Sender, message.Recipient, theme.Status(message.Status))
+	fmt.Fprintf(w, "%s %s  %s %s\n", theme.Accent("ID:"), message.ID, theme.Accent("Run:"), message.RunID)
 	if message.ReplyTo != "" {
-		fmt.Fprintf(w, "Reply to: %s\n", message.ReplyTo)
+		fmt.Fprintf(w, "%s %s\n", theme.Accent("Reply to:"), message.ReplyTo)
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, message.Body)
 	if len(message.DeliveryAttempts) > 0 {
-		fmt.Fprintln(w, "\nDelivery:")
+		fmt.Fprintln(w, "\n"+theme.Accent("Delivery:"))
 		for _, attempt := range message.DeliveryAttempts {
-			fmt.Fprintf(w, "  %s %s", attempt.Timestamp.Format("2006-01-02T15:04:05Z07:00"), attempt.Outcome)
+			fmt.Fprintf(w, "  %s %s", attempt.Timestamp.Format("2006-01-02T15:04:05Z07:00"), theme.Status(attempt.Outcome))
 			if attempt.Error != "" {
 				fmt.Fprintf(w, ": %s", attempt.Error)
 			}

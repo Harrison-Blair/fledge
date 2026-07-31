@@ -3,11 +3,18 @@ package picker
 import (
 	"bytes"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/Harrison-Blair/fledge/internal/ui"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/muesli/termenv"
 )
+
+var pickerANSIPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func stripPickerANSI(value string) string { return pickerANSIPattern.ReplaceAllString(value, "") }
 
 func TestFilterFuzzyMatchesMetadataAndPreservesOrdering(t *testing.T) {
 	items := []Item{
@@ -191,6 +198,31 @@ func TestInputAcceptsValueAndCancels(t *testing.T) {
 	}
 }
 
+func TestFlatViewSeparatesItemsWithoutAddingASelectableRow(t *testing.T) {
+	model := newSelectModel(Options{
+		Title: "Agent harness",
+		Items: []Item{
+			{ID: "last", Title: "Last used"},
+			{ID: "claude", Title: "Claude Code", SeparatorBefore: true},
+			{ID: "codex", Title: "Codex"},
+		},
+	})
+	want := "Agent harness\n\n> Last used\n\n  Claude Code\n  Codex\n" +
+		"\nType to filter • ↑/↓ to navigate • Enter to select • Esc to cancel\n"
+	if view := model.View(); view != want {
+		t.Fatalf("view =\n%q\nwant\n%q", view, want)
+	}
+	if len(model.rows) != 3 {
+		t.Fatalf("separator created a selectable row: %#v", model.rows)
+	}
+
+	model.query = "claude"
+	model.applyFilter()
+	if view := model.View(); strings.Contains(view, "claude\n\n\n") {
+		t.Fatalf("filtered view retained an orphan separator: %q", view)
+	}
+}
+
 func TestViewRendersEachModeByteForByte(t *testing.T) {
 	items := []Item{
 		{Title: "Harness default"},
@@ -302,5 +334,77 @@ func TestViewRendersEachModeByteForByte(t *testing.T) {
 				t.Fatalf("view =\n%q\nwant\n%q", view, test.want)
 			}
 		})
+	}
+}
+
+func TestStyledViewsPreservePickerStructure(t *testing.T) {
+	items := []Item{
+		{ID: "last", Title: "Last used — Codex · gpt", Description: "saved"},
+		{ID: "gpt", Title: "GPT", Description: "fast", Group: "OpenAI", SeparatorBefore: true},
+		{ID: "claude", Title: "Claude", Group: "OpenCode Go", Subgroup: "Anthropic"},
+	}
+	theme := ui.NewThemeWithProfile(&bytes.Buffer{}, termenv.TrueColor)
+
+	tests := []struct {
+		name  string
+		build func(*ui.Theme) selectModel
+	}{
+		{
+			name: "selection and last-used separator",
+			build: func(theme *ui.Theme) selectModel {
+				return newSelectModel(Options{Title: "Harness", Items: items, Theme: theme})
+			},
+		},
+		{
+			name: "filter and nested hierarchy",
+			build: func(theme *ui.Theme) selectModel {
+				model := newSelectModel(Options{Title: "Model", Items: items, CollapsibleGroups: true, Theme: theme})
+				model.query = "claude"
+				model.applyFilter()
+				return model
+			},
+		},
+		{
+			name: "expanded groups",
+			build: func(theme *ui.Theme) selectModel {
+				model := newSelectModel(Options{Title: "Model", Items: items, CollapsibleGroups: true, Theme: theme})
+				model.setGroupCollapsed(nodePath{group: "OpenAI"}, false)
+				return model
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			styled := test.build(theme).View()
+			plain := test.build(nil).View()
+			if !strings.Contains(styled, "\x1b[") {
+				t.Fatalf("styled view contains no ANSI: %q", styled)
+			}
+			if got := stripPickerANSI(styled); got != plain {
+				t.Fatalf("stripped styled view =\n%q\nplain view =\n%q", got, plain)
+			}
+		})
+	}
+}
+
+func TestInputUsesThemeForPromptAndSuppressesBuiltInColors(t *testing.T) {
+	styledTheme := ui.NewThemeWithProfile(&bytes.Buffer{}, termenv.TrueColor)
+	styled := newInputModel(Options{Title: "Agent name", Placeholder: "worker", Theme: styledTheme})
+	if !strings.Contains(styled.View(), "\x1b[") ||
+		!strings.Contains(styled.input.Cursor.Style.Render("x"), "\x1b[") {
+		t.Fatalf("input title, prompt, or cursor was not styled: %q", styled.View())
+	}
+
+	plainTheme := ui.NewThemeWithProfile(&bytes.Buffer{}, termenv.Ascii)
+	plain := newInputModel(Options{Title: "Agent name", Placeholder: "worker", Theme: plainTheme})
+	for name, rendered := range map[string]string{
+		"view":        plain.View(),
+		"prompt":      plain.input.PromptStyle.Render("> "),
+		"placeholder": plain.input.PlaceholderStyle.Render("worker"),
+		"cursor":      plain.input.Cursor.Style.Render("x"),
+	} {
+		if strings.Contains(rendered, "\x1b[") {
+			t.Fatalf("plain %s contains ANSI: %q", name, rendered)
+		}
 	}
 }

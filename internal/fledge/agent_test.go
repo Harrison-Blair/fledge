@@ -28,6 +28,7 @@ func TestSpawnAgentInCurrentPaneRenamesOnlyPaneAndPersistsSelection(t *testing.T
 	result, err := service.SpawnAgent(t.Context(), AgentStartOptions{
 		Name: "worker", Kind: "codex", Model: "custom/model", CurrentPaneID: "p1",
 		Executable: "/usr/bin/codex", Timeout: 30 * time.Second, Args: []string{"--sandbox", "read-only"},
+		RememberSelection: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -44,6 +45,10 @@ func TestSpawnAgentInCurrentPaneRenamesOnlyPaneAndPersistsSelection(t *testing.T
 	if st.Agents["worker"].PaneID != "p1" || st.Agents["worker"].Placement != "pane" {
 		t.Fatalf("state = %#v", st)
 	}
+	if st.LastSpawnSelection == nil || *st.LastSpawnSelection !=
+		(state.SpawnSelection{Harness: "codex", Model: "custom/model"}) {
+		t.Fatalf("remembered selection = %#v", st.LastSpawnSelection)
+	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	if fake.tabRenames != 0 || fake.paneRenames != 1 ||
@@ -56,11 +61,18 @@ func TestSpawnAgentInCurrentPaneRenamesOnlyPaneAndPersistsSelection(t *testing.T
 func TestSpawnAgentInCurrentPaneRollsBackMappingAndLabelOnExecFailure(t *testing.T) {
 	service, fake := newFakeLifecycle(t)
 	label := seedTakeoverPane(t, service, fake)
+	if err := service.Store.WithLocked(service.Project.Session, service.Project.Root, func(st *state.Session) error {
+		st.LastSpawnSelection = &state.SpawnSelection{Harness: "claude", Model: "sonnet"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	service.ExecAgent = func(string, []string, []string) error { return errors.New("exec exploded") }
 
 	_, err := service.SpawnAgent(t.Context(), AgentStartOptions{
-		Name: "worker", Kind: "codex", CurrentPaneID: "p1",
+		Name: "worker", Kind: "codex", Model: "gpt-5.6", CurrentPaneID: "p1",
 		Executable: "/usr/bin/codex", Timeout: 30 * time.Second,
+		RememberSelection: true,
 	})
 	if Translate(err).Code != "agent_exec_failed" {
 		t.Fatalf("error = %v", err)
@@ -72,10 +84,50 @@ func TestSpawnAgentInCurrentPaneRollsBackMappingAndLabelOnExecFailure(t *testing
 	if len(st.Agents) != 0 {
 		t.Fatalf("mapping was not rolled back: %#v", st.Agents)
 	}
+	if st.LastSpawnSelection == nil || *st.LastSpawnSelection !=
+		(state.SpawnSelection{Harness: "claude", Model: "sonnet"}) {
+		t.Fatalf("selection was not rolled back: %#v", st.LastSpawnSelection)
+	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	if fake.snapshot.Panes[0].Label == nil || *fake.snapshot.Panes[0].Label != label {
 		t.Fatalf("label was not restored: %#v", fake.snapshot.Panes[0])
+	}
+}
+
+func TestSpawnAgentInCurrentPaneRollsBackSelectionOnActivationFailure(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	startTestMessageRun(t, service)
+	seedTakeoverPane(t, service, fake)
+	want := state.SpawnSelection{Harness: "claude", Model: "sonnet"}
+	if err := service.Store.WithLocked(service.Project.Session, service.Project.Root, func(st *state.Session) error {
+		selection := want
+		st.LastSpawnSelection = &selection
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service.LaunchDeliveryHelper = func(string, string, time.Duration) error {
+		return errors.New("helper exploded")
+	}
+	service.ExecAgent = func(string, []string, []string) error {
+		t.Fatal("exec called after activation failure")
+		return nil
+	}
+
+	_, err := service.SpawnAgent(t.Context(), AgentStartOptions{
+		Name: "worker", Kind: "codex", Model: "gpt-5.6", CurrentPaneID: "p1",
+		Executable: "/usr/bin/codex", Timeout: 30 * time.Second, RememberSelection: true,
+	})
+	if Translate(err).Code != "agent_exec_failed" {
+		t.Fatalf("error = %v", err)
+	}
+	st, readErr := service.Store.Read(service.Project.Session, service.Project.Root)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if st.LastSpawnSelection == nil || *st.LastSpawnSelection != want || len(st.Agents) != 0 {
+		t.Fatalf("rollback state = %#v", st)
 	}
 }
 
@@ -161,7 +213,7 @@ func TestDedicatedSpawnUsesRawLabelsAndPersistsModel(t *testing.T) {
 	service, fake := newFakeLifecycle(t)
 	result, err := service.SpawnAgent(t.Context(), AgentStartOptions{
 		Name: "worker", Kind: "claude", Model: "sonnet", NewTab: true,
-		Executable: "/usr/bin/claude", Timeout: 30 * time.Second,
+		Executable: "/usr/bin/claude", Timeout: 30 * time.Second, RememberSelection: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -176,12 +228,54 @@ func TestDedicatedSpawnUsesRawLabelsAndPersistsModel(t *testing.T) {
 	if len(agents) != 1 || agents[0].Model != "sonnet" || agents[0].Placement != "tab" {
 		t.Fatalf("listed agents = %#v", agents)
 	}
+	st, err := service.Store.Read(service.Project.Session, service.Project.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.LastSpawnSelection == nil || *st.LastSpawnSelection !=
+		(state.SpawnSelection{Harness: "claude", Model: "sonnet"}) {
+		t.Fatalf("remembered selection = %#v", st.LastSpawnSelection)
+	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	if len(fake.snapshot.Tabs) != 1 || fake.snapshot.Tabs[0].Label != "worker" ||
 		len(fake.snapshot.Panes) != 1 || fake.snapshot.Panes[0].Label == nil ||
 		*fake.snapshot.Panes[0].Label != "worker" {
 		t.Fatalf("raw labels not applied: tabs=%#v panes=%#v", fake.snapshot.Tabs, fake.snapshot.Panes)
+	}
+}
+
+func TestDedicatedSpawnFailureAndExplicitSpawnDoNotChangeSelection(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	want := state.SpawnSelection{Harness: "claude", Model: "sonnet"}
+	if err := service.Store.WithLocked(service.Project.Session, service.Project.Root, func(st *state.Session) error {
+		selection := want
+		st.LastSpawnSelection = &selection
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	fake.failMethod = "agent.start"
+	if _, err := service.SpawnAgent(t.Context(), AgentStartOptions{
+		Name: "failed", Kind: "codex", Model: "gpt-5.6", NewTab: true,
+		Timeout: 30 * time.Second, RememberSelection: true,
+	}); err == nil {
+		t.Fatal("expected launch failure")
+	}
+	fake.failMethod = ""
+	if _, err := service.SpawnAgent(t.Context(), AgentStartOptions{
+		Name: "explicit", Kind: "codex", Model: "gpt-5.6", NewTab: true,
+		Timeout: 30 * time.Second,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := service.Store.Read(service.Project.Session, service.Project.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.LastSpawnSelection == nil || *st.LastSpawnSelection != want {
+		t.Fatalf("selection changed after failed or explicit spawn: %#v", st.LastSpawnSelection)
 	}
 }
 

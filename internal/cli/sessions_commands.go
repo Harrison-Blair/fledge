@@ -6,6 +6,7 @@ import (
 
 	"github.com/Harrison-Blair/fledge/internal/fledge"
 	"github.com/Harrison-Blair/fledge/internal/herdr"
+	"github.com/Harrison-Blair/fledge/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -71,14 +72,14 @@ func printJSONPruneResult(
 	result fledge.SessionPruneResult,
 ) error {
 	if result.DryRun {
-		return env.print(result, func(io.Writer) {})
+		return env.print(result, func(io.Writer, *ui.Theme) {})
 	}
 	var err error
 	result, err = fledge.PruneSessions(cmd.Context(), binary, result.Candidates)
 	if err != nil {
 		return err
 	}
-	return env.print(result, func(io.Writer) {})
+	return env.print(result, func(io.Writer, *ui.Theme) {})
 }
 
 func runInteractivePrune(
@@ -88,7 +89,7 @@ func runInteractivePrune(
 	result fledge.SessionPruneResult,
 	opts pruneOptions,
 ) error {
-	printPruneCandidates(env.out, result.Candidates)
+	printPruneCandidates(env.out, result.Candidates, env.stdoutTheme())
 	if opts.dryRun {
 		fmt.Fprintln(env.out, "Dry run; no sessions deleted.")
 		return nil
@@ -108,17 +109,18 @@ func runInteractivePrune(
 	}
 	result, err := fledge.PruneSessions(cmd.Context(), binary, result.Candidates)
 	for _, name := range result.Deleted {
-		fmt.Fprintf(env.out, "Deleted Herdr session %s\n", name)
+		fmt.Fprintf(env.out, "%s Herdr session %s\n", env.stdoutTheme().Accent("Deleted"), name)
 	}
 	return err
 }
 
-func printPruneCandidates(w io.Writer, candidates []string) {
+func printPruneCandidates(w io.Writer, candidates []string, themes ...*ui.Theme) {
+	theme := firstTheme(themes)
 	if len(candidates) == 0 {
 		fmt.Fprintln(w, "No stopped Herdr sessions are eligible for pruning.")
 		return
 	}
-	fmt.Fprintln(w, "Stopped Herdr sessions eligible for deletion:")
+	fmt.Fprintln(w, theme.Accent("Stopped Herdr sessions eligible for deletion:"))
 	for _, session := range candidates {
 		fmt.Fprintf(w, "  %s\n", session)
 	}

@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/Harrison-Blair/fledge/internal/ui"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -13,11 +14,12 @@ import (
 var ErrCancelled = errors.New("picker cancelled")
 
 type Item struct {
-	ID          string
-	Title       string
-	Description string
-	Group       string
-	Subgroup    string
+	ID              string
+	Title           string
+	Description     string
+	Group           string
+	Subgroup        string
+	SeparatorBefore bool
 }
 
 type Options struct {
@@ -27,13 +29,11 @@ type Options struct {
 	Input             io.Reader
 	Output            io.Writer
 	CollapsibleGroups bool
+	Theme             *ui.Theme
 }
 
 func Input(opts Options) (string, error) {
-	field := textinput.New()
-	field.Placeholder = opts.Placeholder
-	field.Focus()
-	model := inputModel{title: opts.Title, input: field}
+	model := newInputModel(opts)
 	result, err := tea.NewProgram(model, tea.WithInput(opts.Input), tea.WithOutput(opts.Output)).Run()
 	if err != nil {
 		return "", err
@@ -43,6 +43,20 @@ func Input(opts Options) (string, error) {
 		return "", ErrCancelled
 	}
 	return strings.TrimSpace(final.value), nil
+}
+
+func newInputModel(opts Options) inputModel {
+	field := textinput.New()
+	field.Placeholder = opts.Placeholder
+	field.PromptStyle = opts.Theme.Style(ui.RoleAccent)
+	field.TextStyle = opts.Theme.Plain()
+	field.PlaceholderStyle = opts.Theme.Plain()
+	field.CompletionStyle = opts.Theme.Plain()
+	field.Cursor.Style = opts.Theme.Style(ui.RoleAccent)
+	field.Cursor.TextStyle = opts.Theme.Plain()
+	field.CursorStyle = opts.Theme.Style(ui.RoleAccent)
+	field.Focus()
+	return inputModel{title: opts.Title, input: field, theme: opts.Theme}
 }
 
 func Select(opts Options) (Item, error) {
@@ -64,6 +78,7 @@ func Select(opts Options) (Item, error) {
 type inputModel struct {
 	title     string
 	input     textinput.Model
+	theme     *ui.Theme
 	value     string
 	cancelled bool
 }
@@ -89,7 +104,8 @@ func (m inputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m inputModel) View() string {
-	return fmt.Sprintf("%s\n\n%s\n\nEnter to continue • Esc to cancel\n", m.title, m.input.View())
+	return fmt.Sprintf("%s\n\n%s\n\nEnter to continue • Esc to cancel\n",
+		m.theme.Accent(m.title), m.input.View())
 }
 
 type nodePath struct {
@@ -116,6 +132,7 @@ type selectModel struct {
 	cursor            int
 	selected          *Item
 	cancelled         bool
+	theme             *ui.Theme
 }
 
 func newSelectModel(opts Options) selectModel {
@@ -123,6 +140,7 @@ func newSelectModel(opts Options) selectModel {
 		title: opts.Title, all: append([]Item(nil), opts.Items...),
 		collapsibleGroups: opts.CollapsibleGroups,
 		collapsed:         make(map[nodePath]bool),
+		theme:             opts.Theme,
 	}
 	if model.collapsibleGroups {
 		for _, item := range model.all {
@@ -275,9 +293,9 @@ func (m *selectModel) setGroupCollapsed(path nodePath, collapsed bool) {
 
 func (m selectModel) View() string {
 	var out strings.Builder
-	fmt.Fprintf(&out, "%s\n", m.title)
+	fmt.Fprintf(&out, "%s\n", m.theme.Accent(m.title))
 	if m.query != "" {
-		fmt.Fprintf(&out, "Filter: %s\n", m.query)
+		fmt.Fprintf(&out, "%s %s\n", m.theme.Accent("Filter:"), m.query)
 	}
 	if m.groupsAreCollapsible() {
 		m.renderCollapsibleRows(&out)
@@ -301,10 +319,10 @@ func (m selectModel) renderCollapsibleRows(out *strings.Builder) {
 			if row.subgroup != "" {
 				label = row.subgroup
 			}
-			fmt.Fprintf(out, "%s%s%s %s\n", prefix, strings.Repeat("  ", row.depth), indicator, label)
+			fmt.Fprintf(out, "%s%s%s %s\n", prefix, strings.Repeat("  ", row.depth), indicator, m.theme.Accent(label))
 			continue
 		}
-		writeItem(out, prefix+strings.Repeat("  ", row.depth), row.item)
+		writeItem(out, prefix+strings.Repeat("  ", row.depth), row.item, index == m.cursor, m.theme)
 	}
 }
 
@@ -313,15 +331,18 @@ func (m selectModel) renderFlatRows(out *strings.Builder) {
 	for index, row := range m.rows {
 		item := row.item
 		newGroup, newSubgroup := walk.advance(item)
+		if item.SeparatorBefore && index > 0 && !newGroup {
+			out.WriteByte('\n')
+		}
 		if newGroup {
 			if item.Group != "" {
-				fmt.Fprintf(out, "\n%s\n", item.Group)
+				fmt.Fprintf(out, "\n%s\n", m.theme.Accent(item.Group))
 			} else {
 				out.WriteByte('\n')
 			}
 		}
 		if newSubgroup && item.Subgroup != "" {
-			fmt.Fprintf(out, "  %s\n", item.Subgroup)
+			fmt.Fprintf(out, "  %s\n", m.theme.Accent(item.Subgroup))
 		}
 		prefix := m.cursorPrefix(index)
 		if m.collapsibleGroups && item.Group != "" {
@@ -330,13 +351,13 @@ func (m selectModel) renderFlatRows(out *strings.Builder) {
 		if item.Subgroup != "" {
 			prefix += "  "
 		}
-		writeItem(out, prefix, item)
+		writeItem(out, prefix, item, index == m.cursor, m.theme)
 	}
 }
 
 func (m selectModel) cursorPrefix(index int) string {
 	if index == m.cursor {
-		return "> "
+		return m.theme.Accent("> ")
 	}
 	return "  "
 }
@@ -348,8 +369,12 @@ func (m selectModel) writeFooter(out *strings.Builder, action string) {
 	fmt.Fprintf(out, "\nType to filter • ↑/↓ to navigate • %s • Esc to cancel\n", action)
 }
 
-func writeItem(out *strings.Builder, prefix string, item Item) {
-	fmt.Fprintf(out, "%s%s", prefix, item.Title)
+func writeItem(out *strings.Builder, prefix string, item Item, selected bool, theme *ui.Theme) {
+	title := item.Title
+	if selected {
+		title = theme.Accent(title)
+	}
+	fmt.Fprintf(out, "%s%s", prefix, title)
 	if item.Description != "" {
 		fmt.Fprintf(out, " — %s", item.Description)
 	}

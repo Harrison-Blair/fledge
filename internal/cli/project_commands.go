@@ -10,6 +10,7 @@ import (
 
 	"github.com/Harrison-Blair/fledge/internal/fledge"
 	"github.com/Harrison-Blair/fledge/internal/project"
+	"github.com/Harrison-Blair/fledge/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -32,13 +33,13 @@ func newInit(env *environment) *cobra.Command {
 			if err != nil {
 				return fledge.Wrap("project_init_failed", err.Error(), err)
 			}
-			return env.print(result, func(w io.Writer) {
+			return env.print(result, func(w io.Writer, theme *ui.Theme) {
 				action := "Initialized"
 				if !result.Initialized {
 					action = "Already initialized"
 				}
-				fmt.Fprintf(w, "%s Fledge project at %s\nMarker: %s\n",
-					action, result.ProjectRoot, result.MarkerPath)
+				fmt.Fprintf(w, "%s Fledge project at %s\n%s %s\n",
+					theme.Accent(action), result.ProjectRoot, theme.Accent("Marker:"), result.MarkerPath)
 			})
 		},
 	}
@@ -91,9 +92,11 @@ func runStart(cmd *cobra.Command, env *environment, timeout time.Duration, detac
 	if result.Started && !detach {
 		executable, executableErr := os.Executable()
 		if executableErr != nil {
-			fmt.Fprintf(env.errOut, "Warning: could not locate fledge executable for orchestrator picker: %v\n", executableErr)
+			fmt.Fprintf(env.errOut, "%s could not locate fledge executable for orchestrator picker: %v\n",
+				env.stderrTheme().Warning("Warning:"), executableErr)
 		} else if enqueueErr := service.EnqueueOrchestratorPicker(cmd.Context(), result.Socket, executable); enqueueErr != nil {
-			fmt.Fprintf(env.errOut, "Warning: could not open orchestrator picker: %v\n", enqueueErr)
+			fmt.Fprintf(env.errOut, "%s could not open orchestrator picker: %v\n",
+				env.stderrTheme().Warning("Warning:"), enqueueErr)
 		}
 	}
 	if err := printStartResult(env, result); err != nil {
@@ -106,14 +109,15 @@ func runStart(cmd *cobra.Command, env *environment, timeout time.Duration, detac
 }
 
 func printStartResult(env *environment, result fledge.StartResult) error {
-	return env.print(result, func(w io.Writer) {
+	return env.print(result, func(w io.Writer, theme *ui.Theme) {
 		action := "Started"
 		if !result.Started {
 			action = "Already running"
 		}
-		fmt.Fprintf(w, "%s Fledge session %s\nSocket: %s\nHerdr: %s (protocol %d)\n",
-			action, result.Session, result.Socket, result.Version, result.Protocol)
-		fmt.Fprintf(w, "Session source: %s\n", result.SessionSource)
+		fmt.Fprintf(w, "%s Fledge session %s\n%s %s\n%s %s (protocol %d)\n",
+			theme.Accent(action), result.Session, theme.Accent("Socket:"), result.Socket,
+			theme.Accent("Herdr:"), result.Version, result.Protocol)
+		fmt.Fprintf(w, "%s %s\n", theme.Accent("Session source:"), result.SessionSource)
 	})
 }
 
@@ -136,7 +140,8 @@ func attachStartedSession(
 				fmt.Sprintf("Herdr attachment exited and Fledge could not inspect coordinated-stop state: %v; check access to the Fledge state directory", stateErr), stateErr)
 		}
 		if stopped {
-			fmt.Fprintf(env.out, "Fledge session %s stopped; Herdr UI closed.\n", result.Session)
+			fmt.Fprintf(env.out, "Fledge session %s %s; Herdr UI closed.\n",
+				result.Session, env.stdoutTheme().Status("stopped"))
 			return nil
 		}
 		return fledge.Wrap("attach_failed", fmt.Sprintf("Herdr attachment failed: %v", err), err)
@@ -158,22 +163,26 @@ func newStatus(env *environment) *cobra.Command {
 			if err != nil {
 				return fledge.Translate(err)
 			}
-			return env.print(result, func(w io.Writer) {
-				fmt.Fprintf(w, "Project: %s\nSession: %s\nSession source: %s\nServer: %s\n",
-					result.ProjectRoot, result.Session, result.SessionSource, result.ServerState)
+			return env.print(result, func(w io.Writer, theme *ui.Theme) {
+				fmt.Fprintf(w, "%s %s\n%s %s\n%s %s\n%s %s\n",
+					theme.Accent("Project:"), result.ProjectRoot,
+					theme.Accent("Session:"), result.Session,
+					theme.Accent("Session source:"), result.SessionSource,
+					theme.Accent("Server:"), theme.Status(result.ServerState))
 				if result.Socket != "" {
-					fmt.Fprintf(w, "Socket: %s\n", result.Socket)
+					fmt.Fprintf(w, "%s %s\n", theme.Accent("Socket:"), result.Socket)
 				}
-				fmt.Fprintf(w, "Herdr: %s (protocol %d)\n", result.HerdrVersion, result.HerdrProtocol)
+				fmt.Fprintf(w, "%s %s (protocol %d)\n", theme.Accent("Herdr:"), result.HerdrVersion, result.HerdrProtocol)
 				if result.ServerState == "running" {
-					fmt.Fprintf(w, "Server: %s (protocol %d, compatible: %t)\n", result.ServerVersion, result.ServerProtocol, result.ProtocolCompatible)
+					fmt.Fprintf(w, "%s %s (protocol %d, compatible: %t)\n",
+						theme.Accent("Server:"), result.ServerVersion, result.ServerProtocol, result.ProtocolCompatible)
 				}
-				fmt.Fprint(w, "Agents:")
+				fmt.Fprint(w, theme.Accent("Agents:"))
 				for _, name := range fledge.ReportedStates {
-					fmt.Fprintf(w, " %s=%d", name, result.AgentStates[name])
+					fmt.Fprintf(w, " %s=%d", theme.Status(name), result.AgentStates[name])
 				}
 				fmt.Fprintln(w)
-				fmt.Fprintf(w, "User pending messages: %d\n", result.UserPendingMessages)
+				fmt.Fprintf(w, "%s %d\n", theme.Accent("User pending messages:"), result.UserPendingMessages)
 			})
 		},
 	}
@@ -206,7 +215,7 @@ func runStop(cmd *cobra.Command, env *environment, force bool) error {
 			return fledge.Translate(inspectErr)
 		}
 		if len(inspection.LiveAgents) > 0 {
-			printStopAgents(env.out, inspection.LiveAgents)
+			printStopAgents(env.out, inspection.LiveAgents, env.stdoutTheme())
 		}
 		confirmed, confirmErr := confirmStop(env, inspection)
 		if confirmErr != nil {
@@ -222,32 +231,61 @@ func runStop(cmd *cobra.Command, env *environment, force bool) error {
 	if err != nil {
 		return fledge.Translate(err)
 	}
-	return env.print(result, func(w io.Writer) { printStopResult(w, result) })
+	return env.print(result, func(w io.Writer, theme *ui.Theme) { printStopResult(w, result, theme) })
 }
 
-func printStopResult(w io.Writer, result fledge.StopResult) {
+func printStopResult(w io.Writer, result fledge.StopResult, themes ...*ui.Theme) {
+	theme := firstTheme(themes)
 	if len(result.ForcedAgents) > 0 {
-		fmt.Fprintf(w, "Agents requiring session shutdown: %s\n", strings.Join(result.ForcedAgents, ", "))
+		fmt.Fprintf(w, "%s %s\n", theme.Accent("Agents requiring session shutdown:"), strings.Join(result.ForcedAgents, ", "))
 	}
 	if result.Stopped {
-		fmt.Fprintf(w, "Stopped Fledge session %s\n", result.Session)
+		fmt.Fprintf(w, "%s Fledge session %s\n", theme.Accent("Stopped"), result.Session)
 	}
 	if result.Deleted {
-		fmt.Fprintf(w, "Deleted Fledge session %s\n", result.Session)
+		fmt.Fprintf(w, "%s Fledge session %s\n", theme.Accent("Deleted"), result.Session)
 	} else if !result.Stopped {
 		fmt.Fprintf(w, "Fledge session %s does not exist\n", result.Session)
 	}
 }
 
-func printStopAgents(w io.Writer, agents []fledge.StopAgentInspection) {
-	fmt.Fprintln(w, "Running agents:")
-	table := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
+func printStopAgents(w io.Writer, agents []fledge.StopAgentInspection, themes ...*ui.Theme) {
+	theme := firstTheme(themes)
+	fmt.Fprintln(w, theme.Accent("Running agents:"))
+	var buffer strings.Builder
+	table := tabwriter.NewWriter(&buffer, 0, 2, 2, ' ', 0)
 	fmt.Fprintln(table, "NAME\tHARNESS\tSTATE\tWORKSPACE\tPANE")
 	for _, agent := range agents {
 		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\n",
 			agent.Name, agent.Harness, agent.State, agent.WorkspaceID, agent.PaneID)
 	}
 	_ = table.Flush()
+	lines := strings.SplitAfter(buffer.String(), "\n")
+	stateColumn := strings.Index(buffer.String(), "STATE")
+	for index, line := range lines {
+		if line == "" {
+			continue
+		}
+		if index == 0 {
+			fmt.Fprint(w, theme.Accent(strings.TrimSuffix(line, "\n")), "\n")
+			continue
+		}
+		if index-1 < len(agents) {
+			state := agents[index-1].State
+			if stateColumn >= 0 && len(line) >= stateColumn+len(state) &&
+				line[stateColumn:stateColumn+len(state)] == state {
+				line = line[:stateColumn] + theme.Status(state) + line[stateColumn+len(state):]
+			}
+		}
+		fmt.Fprint(w, line)
+	}
+}
+
+func firstTheme(themes []*ui.Theme) *ui.Theme {
+	if len(themes) == 0 {
+		return nil
+	}
+	return themes[0]
 }
 
 func confirmStop(env *environment, inspection fledge.StopInspection) (bool, error) {

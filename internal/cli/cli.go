@@ -16,6 +16,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/project"
 	"github.com/Harrison-Blair/fledge/internal/state"
+	"github.com/Harrison-Blair/fledge/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -32,10 +33,13 @@ type environment struct {
 	cwd      string
 	stateDir string
 	json     bool
+	color    ui.ColorMode
 	herdrBin string
 	stdinTTY func() bool
 	lookPath func(string) (string, error)
 	getenv   func(string) string
+	outTheme *ui.Theme
+	errTheme *ui.Theme
 }
 
 type successEnvelope struct {
@@ -60,6 +64,7 @@ type errorBody struct {
 func Execute(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer) int {
 	env := &environment{
 		in: in, out: out, errOut: errOut,
+		color:    ui.ColorAuto,
 		stdinTTY: func() bool { return isTerminalReader(in) },
 		lookPath: exec.LookPath,
 		getenv:   os.Getenv,
@@ -77,6 +82,10 @@ func Execute(ctx context.Context, args []string, in io.Reader, out, errOut io.Wr
 	// Preserve the requested error format in that early-parser path.
 	if !env.json {
 		env.json = jsonRequested(args)
+	}
+	if mode, requested := colorRequested(args); requested {
+		env.color = mode
+		env.errTheme = nil
 	}
 	code := 1
 	body := errorBody{}
@@ -97,7 +106,8 @@ func Execute(ctx context.Context, args []string, in io.Reader, out, errOut io.Wr
 	if env.json {
 		_ = json.NewEncoder(errOut).Encode(errorEnvelope{SchemaVersion: schemaVersion, OK: false, Error: body})
 	} else {
-		fmt.Fprintf(errOut, "Error [%s]: %s\n", body.Code, body.Message)
+		theme := env.stderrTheme()
+		fmt.Fprintf(errOut, "%s: %s\n", theme.Error("Error ["+body.Code+"]"), body.Message)
 	}
 	return code
 }
@@ -118,7 +128,43 @@ func jsonRequested(args []string) bool {
 	return requested
 }
 
+func colorRequested(args []string) (ui.ColorMode, bool) {
+	var mode ui.ColorMode
+	requested := false
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if arg == "--" {
+			break
+		}
+		value := ""
+		switch {
+		case arg == "--color" || arg == "-c":
+			if index+1 >= len(args) {
+				continue
+			}
+			index++
+			value = args[index]
+		case strings.HasPrefix(arg, "--color="):
+			value = strings.TrimPrefix(arg, "--color=")
+		case strings.HasPrefix(arg, "-c="):
+			value = strings.TrimPrefix(arg, "-c=")
+		case strings.HasPrefix(arg, "-c") && len(arg) > 2:
+			value = strings.TrimPrefix(arg, "-c")
+		default:
+			continue
+		}
+		var parsed ui.ColorMode
+		if parsed.Set(value) == nil {
+			mode, requested = parsed, true
+		}
+	}
+	return mode, requested
+}
+
 func newRoot(env *environment) *cobra.Command {
+	if env.color == "" {
+		env.color = ui.ColorAuto
+	}
 	root := &cobra.Command{
 		Use:           "fledge",
 		Short:         "Manage project-scoped Herdr agent sessions",
@@ -126,6 +172,7 @@ func newRoot(env *environment) *cobra.Command {
 		SilenceUsage:  true,
 	}
 	root.PersistentFlags().BoolVarP(&env.json, "json", "j", false, "emit machine-readable JSON")
+	root.PersistentFlags().VarP(&env.color, "color", "c", "color output: auto, always, or never")
 	root.PersistentFlags().StringVarP(&env.herdrBin, "herdr-bin", "H", "herdr", "path to the Herdr executable")
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
 		return &usageError{message: err.Error()}
@@ -150,16 +197,16 @@ func newVersion(env *environment) *cobra.Command {
 		Args:  noArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			info := buildinfo.Current()
-			return env.print(info, func(w io.Writer) {
-				fmt.Fprintf(w, "fledge %s\n", info.Version)
+			return env.print(info, func(w io.Writer, theme *ui.Theme) {
+				fmt.Fprintf(w, "%s %s\n", theme.Accent("fledge"), info.Version)
 				if info.Revision != "" {
-					fmt.Fprintf(w, "revision: %s", info.Revision)
+					fmt.Fprintf(w, "%s %s", theme.Accent("revision:"), info.Revision)
 					if info.Modified {
 						fmt.Fprint(w, " (modified)")
 					}
 					fmt.Fprintln(w)
 				}
-				fmt.Fprintf(w, "go: %s\n", info.GoVersion)
+				fmt.Fprintf(w, "%s %s\n", theme.Accent("go:"), info.GoVersion)
 			})
 		},
 	}
@@ -267,12 +314,33 @@ func confirm(env *environment, prompt string) (bool, error) {
 	return strings.EqualFold(answer, "y") || strings.EqualFold(answer, "yes"), nil
 }
 
-func (e *environment) print(data any, human func(io.Writer)) error {
+func (e *environment) print(data any, human func(io.Writer, *ui.Theme)) error {
 	if e.json {
 		return json.NewEncoder(e.out).Encode(successEnvelope{SchemaVersion: schemaVersion, OK: true, Data: data})
 	}
-	human(e.out)
+	human(e.out, e.stdoutTheme())
 	return nil
+}
+
+func (e *environment) stdoutTheme() *ui.Theme {
+	if e.outTheme == nil {
+		e.outTheme = ui.NewTheme(e.out, e.colorMode(), e.json)
+	}
+	return e.outTheme
+}
+
+func (e *environment) stderrTheme() *ui.Theme {
+	if e.errTheme == nil {
+		e.errTheme = ui.NewTheme(e.errOut, e.colorMode(), e.json)
+	}
+	return e.errTheme
+}
+
+func (e *environment) colorMode() ui.ColorMode {
+	if e.color == "" {
+		return ui.ColorAuto
+	}
+	return e.color
 }
 
 func noArgs(_ *cobra.Command, args []string) error {

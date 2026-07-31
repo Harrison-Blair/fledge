@@ -295,5 +295,5 @@ func TestLocalHerdrStopFromOrchestratorPane(t *testing.T) {
 	// The shared assertion prints only the post-stop state; this restores the
 	// pre-stop context on failure without widening the helper's signature.
 	t.Logf("state before in-pane stop: %#v", before)
-	assertDisposableStateCleared(t, after, before.StopGeneration+1)
+	assertDisposableStateCleared(t, after, before.StopGeneration+1, nil)
 }

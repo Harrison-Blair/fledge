@@ -12,6 +12,8 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/state"
 )
 
+var testSpawnSelection = state.SpawnSelection{Harness: "codex", Model: "gpt-5.6"}
+
 // seedDisposableState fills every field a coordinated stop is expected to
 // clear, so assertDisposableStateCleared has something to prove. The active
 // run is a real one: a fabricated ID would make the run close a no-op and
@@ -26,6 +28,8 @@ func seedDisposableState(t *testing.T, service *Service, generation uint64) {
 		st.OrchestratorTabID = "stale-tab"
 		st.OrchestratorPaneID = "stale-pane"
 		st.OrchestratorInitialized = true
+		selection := testSpawnSelection
+		st.LastSpawnSelection = &selection
 		st.Agents["worker"] = state.Agent{Name: "worker", PaneID: "stale-agent-pane"}
 		return nil
 	}); err != nil {
@@ -34,13 +38,22 @@ func seedDisposableState(t *testing.T, service *Service, generation uint64) {
 }
 
 // assertDisposableStateCleared is the counterpart of seedDisposableState: every
-// disposable field is empty and only the stop generation survived.
-func assertDisposableStateCleared(t *testing.T, st state.Session, wantGeneration uint64) {
+// disposable field is empty while durable picker history survives.
+func assertDisposableStateCleared(
+	t *testing.T,
+	st state.Session,
+	wantGeneration uint64,
+	wantSelection *state.SpawnSelection,
+) {
 	t.Helper()
 	if st.StopGeneration != wantGeneration || st.Socket != "" || st.WorkspaceID != "" ||
 		st.OrchestratorTabID != "" || st.OrchestratorPaneID != "" ||
 		st.OrchestratorInitialized || st.ActiveRunID != "" || len(st.Agents) != 0 {
 		t.Fatalf("disposable state was not cleared at generation %d: %#v", wantGeneration, st)
+	}
+	if (st.LastSpawnSelection == nil) != (wantSelection == nil) ||
+		st.LastSpawnSelection != nil && *st.LastSpawnSelection != *wantSelection {
+		t.Fatalf("spawn selection after cleanup = %#v, want %#v", st.LastSpawnSelection, wantSelection)
 	}
 }
 

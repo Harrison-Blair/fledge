@@ -16,15 +16,16 @@ import (
 )
 
 type AgentStartOptions struct {
-	Name          string
-	Kind          string
-	Model         string
-	CWD           string
-	Timeout       time.Duration
-	Args          []string
-	NewTab        bool
-	CurrentPaneID string
-	Executable    string
+	Name              string
+	Kind              string
+	Model             string
+	CWD               string
+	Timeout           time.Duration
+	Args              []string
+	NewTab            bool
+	CurrentPaneID     string
+	Executable        string
+	RememberSelection bool
 }
 
 type AgentStartResult struct {
@@ -124,6 +125,7 @@ func (s *Service) startAgentLocked(
 		}
 		managed.Kind, managed.Model, managed.Placement, managed.CWD = opts.Kind, opts.Model, "tab", cwd
 		st.Agents[opts.Name] = managed
+		rememberSpawnSelection(st, opts)
 		return nil
 	})
 	return managed, startedInfo, err
@@ -132,9 +134,10 @@ func (s *Service) startAgentLocked(
 // paneClaim records the pane an in-pane spawn took over, together with the
 // state needed to undo the takeover.
 type paneClaim struct {
-	managed        state.Agent
-	previousAgents map[string]state.Agent
-	previousLabel  *string
+	managed                state.Agent
+	previousAgents         map[string]state.Agent
+	previousSpawnSelection *state.SpawnSelection
+	previousLabel          *string
 }
 
 func (s *Service) spawnAgentInCurrentPane(
@@ -193,6 +196,7 @@ func (s *Service) claimCurrentPane(
 			return err
 		}
 		claim.previousAgents = cloneAgents(st.Agents)
+		claim.previousSpawnSelection = cloneSpawnSelection(st.LastSpawnSelection)
 		claim.previousLabel = pane.Label
 		if err := evictPaneOwners(st, pane, opts.Name); err != nil {
 			return err
@@ -206,6 +210,7 @@ func (s *Service) claimCurrentPane(
 			CWD: cwd, TabID: pane.TabID, PaneID: pane.PaneID,
 		}
 		st.Agents[opts.Name] = claim.managed
+		rememberSpawnSelection(st, opts)
 		return nil
 	})
 	if err != nil {
@@ -334,6 +339,7 @@ func (s *Service) rollbackInPaneSpawn(
 ) error {
 	rollbackErr := s.Store.WithLocked(s.Project.Session, s.Project.Root, func(st *state.Session) error {
 		st.Agents = cloneAgents(claim.previousAgents)
+		st.LastSpawnSelection = cloneSpawnSelection(claim.previousSpawnSelection)
 		return nil
 	})
 	restorePaneLabel(ctx, client, paneID, claim.previousLabel)
@@ -358,6 +364,21 @@ func cloneAgents(agents map[string]state.Agent) map[string]state.Agent {
 		cloned[name] = agent
 	}
 	return cloned
+}
+
+func cloneSpawnSelection(selection *state.SpawnSelection) *state.SpawnSelection {
+	if selection == nil {
+		return nil
+	}
+	cloned := *selection
+	return &cloned
+}
+
+func rememberSpawnSelection(st *state.Session, opts AgentStartOptions) {
+	if !opts.RememberSelection {
+		return
+	}
+	st.LastSpawnSelection = &state.SpawnSelection{Harness: opts.Kind, Model: opts.Model}
 }
 
 func ensureAgentPaneAvailable(

@@ -98,7 +98,7 @@ func TestDetachedCleanupSurvivesCallerDisappearingAfterServerStop(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertDisposableStateCleared(t, st, 5)
+	assertDisposableStateCleared(t, st, 5, &testSpawnSelection)
 }
 
 func TestServerStopStillDeletesSessionWhenGenerationCannotBePersisted(t *testing.T) {

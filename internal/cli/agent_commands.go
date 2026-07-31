@@ -11,8 +11,12 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/agentspawn"
 	"github.com/Harrison-Blair/fledge/internal/fledge"
 	"github.com/Harrison-Blair/fledge/internal/picker"
+	"github.com/Harrison-Blair/fledge/internal/state"
+	"github.com/Harrison-Blair/fledge/internal/ui"
 	"github.com/spf13/cobra"
 )
+
+const lastSpawnSelectionItemID = "__fledge_last_spawn_selection__"
 
 func newAgent(env *environment) *cobra.Command {
 	cmd := &cobra.Command{Use: "agent", Short: "Manage logical agents"}
@@ -88,27 +92,19 @@ func runAgentSpawn(cmd *cobra.Command, env *environment, flags agentSpawnFlags) 
 	if len(installed) == 0 {
 		return fledge.NewError("no_harnesses_installed", "none of Claude Code, Codex, Pi, or OpenCode is installed")
 	}
-	var harness agentspawn.Harness
+	var lastSelection *state.SpawnSelection
 	if strings.TrimSpace(flags.harness) == "" {
-		selected, cancelled, err := selectHarness(env, installed)
-		if cancelled || err != nil {
+		var err error
+		lastSelection, err = readLastSpawnSelection(env)
+		if err != nil {
 			return err
-		}
-		harness = selected
-	} else {
-		var found bool
-		harness, found = agentspawn.Resolve(installed, flags.harness)
-		if !found {
-			return usage(fmt.Sprintf("harness %q is not installed", flags.harness))
 		}
 	}
-
-	if strings.TrimSpace(flags.model) == "" && tty {
-		model, cancelled, err := selectModel(cmd, env, harness)
-		if cancelled || err != nil {
-			return err
-		}
-		flags.model = model
+	selection, cancelled, err := resolveSpawnSelection(
+		cmd, env, installed, flags.harness, flags.model, lastSelection, tty,
+	)
+	if cancelled || err != nil {
+		return err
 	}
 
 	if strings.TrimSpace(flags.name) == "" {
@@ -133,20 +129,21 @@ func runAgentSpawn(cmd *cobra.Command, env *environment, flags agentSpawnFlags) 
 	}
 	currentPaneID := strings.TrimSpace(getenv("HERDR_PANE_ID"))
 	result, err := service.SpawnAgent(cmd.Context(), fledge.AgentStartOptions{
-		Name: flags.name, Kind: harness.ID, Model: strings.TrimSpace(flags.model),
+		Name: flags.name, Kind: selection.Harness.ID, Model: selection.Model,
 		CWD: flags.cwd, Timeout: flags.timeout, Args: append([]string(nil), flags.nativeArgs...),
-		NewTab: flags.newTab || currentPaneID == "", CurrentPaneID: currentPaneID, Executable: harness.Path,
+		NewTab: flags.newTab || currentPaneID == "", CurrentPaneID: currentPaneID, Executable: selection.Harness.Path,
+		RememberSelection: selection.Remember,
 	})
 	if err != nil {
 		return fledge.Translate(err)
 	}
-	return env.print(result, func(w io.Writer) {
+	return env.print(result, func(w io.Writer, theme *ui.Theme) {
 		modelDescription := ""
 		if result.Agent.Model != "" {
 			modelDescription = ", model " + result.Agent.Model
 		}
-		fmt.Fprintf(w, "Spawned %s (%s%s) in pane %s\n",
-			result.Agent.Name, result.Agent.Kind, modelDescription, result.Agent.PaneID)
+		fmt.Fprintf(w, "%s %s (%s%s) in pane %s\n",
+			theme.Accent("Spawned"), result.Agent.Name, result.Agent.Kind, modelDescription, result.Agent.PaneID)
 	})
 }
 
@@ -163,32 +160,127 @@ func handlePickerResult(env *environment, err error) (bool, error) {
 	return false, nil
 }
 
-func selectHarness(env *environment, installed []agentspawn.Harness) (agentspawn.Harness, bool, error) {
-	items := make([]picker.Item, 0, len(installed))
-	for _, candidate := range installed {
-		items = append(items, picker.Item{
-			ID: candidate.ID, Title: candidate.Name, Description: candidate.Description,
-		})
+type resolvedSpawnSelection struct {
+	Harness  agentspawn.Harness
+	Model    string
+	Remember bool
+}
+
+func readLastSpawnSelection(env *environment) (*state.SpawnSelection, error) {
+	service, err := env.messagingService()
+	if err != nil {
+		return nil, err
 	}
+	st, found, err := service.Store.ReadExisting(service.Project.Session, service.Project.Root)
+	if err != nil {
+		return nil, fledge.Wrap("state_unavailable", err.Error(), err)
+	}
+	if !found || st.LastSpawnSelection == nil {
+		return nil, nil
+	}
+	selection := *st.LastSpawnSelection
+	return &selection, nil
+}
+
+func resolveSpawnSelection(
+	cmd *cobra.Command,
+	env *environment,
+	installed []agentspawn.Harness,
+	requestedHarness string,
+	requestedModel string,
+	last *state.SpawnSelection,
+	tty bool,
+) (resolvedSpawnSelection, bool, error) {
+	selection := resolvedSpawnSelection{Model: strings.TrimSpace(requestedModel)}
+	savedModelApplied := false
+	if strings.TrimSpace(requestedHarness) == "" {
+		harness, usedLast, cancelled, err := selectHarness(env, installed, last)
+		if cancelled || err != nil {
+			return resolvedSpawnSelection{}, cancelled, err
+		}
+		selection.Harness = harness
+		selection.Remember = true
+		if usedLast && selection.Model == "" {
+			selection.Model = strings.TrimSpace(last.Model)
+			savedModelApplied = true
+		}
+	} else {
+		var found bool
+		selection.Harness, found = agentspawn.Resolve(installed, requestedHarness)
+		if !found {
+			return resolvedSpawnSelection{}, false,
+				usage(fmt.Sprintf("harness %q is not installed", requestedHarness))
+		}
+	}
+
+	if selection.Model == "" && tty && !savedModelApplied {
+		model, cancelled, err := selectModel(cmd, env, selection.Harness)
+		if cancelled || err != nil {
+			return resolvedSpawnSelection{}, cancelled, err
+		}
+		selection.Model = strings.TrimSpace(model)
+		selection.Remember = true
+	}
+	return selection, false, nil
+}
+
+func selectHarness(
+	env *environment,
+	installed []agentspawn.Harness,
+	last *state.SpawnSelection,
+) (agentspawn.Harness, bool, bool, error) {
+	items := harnessPickerItems(installed, last)
 	selected, selectErr := picker.Select(picker.Options{
-		Title: "Agent harness", Items: items, Input: env.in, Output: env.out,
+		Title: "Agent harness", Items: items, Input: env.in, Output: env.out, Theme: env.stdoutTheme(),
 	})
 	if cancelled, err := handlePickerResult(env, selectErr); cancelled || err != nil {
-		return agentspawn.Harness{}, cancelled, err
+		return agentspawn.Harness{}, false, cancelled, err
+	}
+	if selected.ID == lastSpawnSelectionItemID {
+		harness, found := agentspawn.Resolve(installed, last.Harness)
+		if !found {
+			return agentspawn.Harness{}, false, false,
+				fledge.NewError("picker_failed", "last-used harness is no longer installed")
+		}
+		return harness, true, false, nil
 	}
 	harness, _ := agentspawn.Resolve(installed, selected.ID)
-	return harness, false, nil
+	return harness, false, false, nil
+}
+
+func harnessPickerItems(installed []agentspawn.Harness, last *state.SpawnSelection) []picker.Item {
+	items := make([]picker.Item, 0, len(installed)+1)
+	if last != nil {
+		if harness, found := agentspawn.Resolve(installed, last.Harness); found {
+			model := strings.TrimSpace(last.Model)
+			if model == "" {
+				model = "default model"
+			}
+			items = append(items, picker.Item{
+				ID:          lastSpawnSelectionItemID,
+				Title:       fmt.Sprintf("Last used — %s · %s", harness.Name, model),
+				Description: "Reuse the last picker-selected harness and model",
+			})
+		}
+	}
+	for index, candidate := range installed {
+		items = append(items, picker.Item{
+			ID: candidate.ID, Title: candidate.Name, Description: candidate.Description,
+			SeparatorBefore: index == 0 && len(items) > 0,
+		})
+	}
+	return items
 }
 
 func selectModel(cmd *cobra.Command, env *environment, harness agentspawn.Harness) (string, bool, error) {
 	catalog := agentspawn.Discover(cmd.Context(), harness, nil)
 	if catalog.Warning != "" {
-		fmt.Fprintf(env.errOut, "Warning: %s\n", catalog.Warning)
+		fmt.Fprintf(env.errOut, "%s %s\n", env.stderrTheme().Warning("Warning:"), catalog.Warning)
 	}
 	items := modelPickerItems(harness.ID, catalog.Models)
 	selected, selectErr := picker.Select(picker.Options{
 		Title: harness.Name + " model", Items: items, Input: env.in, Output: env.out,
-		CollapsibleGroups: harness.ID == "pi",
+		CollapsibleGroups: harness.ID == "pi", Theme: env.stdoutTheme(),
 	})
 	if cancelled, err := handlePickerResult(env, selectErr); cancelled || err != nil {
 		return "", cancelled, err
@@ -198,7 +290,7 @@ func selectModel(cmd *cobra.Command, env *environment, harness agentspawn.Harnes
 
 func promptAgentName(env *environment) (string, bool, error) {
 	name, inputErr := picker.Input(picker.Options{
-		Title: "Agent name", Placeholder: "worker", Input: env.in, Output: env.out,
+		Title: "Agent name", Placeholder: "worker", Input: env.in, Output: env.out, Theme: env.stdoutTheme(),
 	})
 	if cancelled, err := handlePickerResult(env, inputErr); cancelled || err != nil {
 		return "", cancelled, err
@@ -254,11 +346,11 @@ func newAgentStop(env *environment) *cobra.Command {
 			if err != nil {
 				return fledge.Translate(err)
 			}
-			return env.print(result, func(w io.Writer) {
+			return env.print(result, func(w io.Writer, theme *ui.Theme) {
 				if result.Forced {
-					fmt.Fprintf(w, "Force-closed pane for agent %s\n", result.Agent.Name)
+					fmt.Fprintf(w, "%s pane for agent %s\n", theme.Accent("Force-closed"), result.Agent.Name)
 				} else {
-					fmt.Fprintf(w, "Stopped agent %s; pane %s retained\n", result.Agent.Name, result.Agent.PaneID)
+					fmt.Fprintf(w, "%s agent %s; pane %s retained\n", theme.Accent("Stopped"), result.Agent.Name, result.Agent.PaneID)
 				}
 			})
 		},
@@ -316,19 +408,19 @@ func newAgentStatus(env *environment) *cobra.Command {
 }
 
 func printAgents(env *environment, agents []fledge.AgentView) error {
-	return env.print(map[string]any{"agents": agents}, func(w io.Writer) {
+	return env.print(map[string]any{"agents": agents}, func(w io.Writer, theme *ui.Theme) {
 		if len(agents) == 0 {
 			fmt.Fprintln(w, "No managed agents")
 			return
 		}
-		fmt.Fprintln(w, "NAME\tHARNESS\tMODEL\tSTATE\tPENDING\tPLACEMENT\tPANE\tCWD")
+		fmt.Fprintln(w, theme.Accent("NAME\tHARNESS\tMODEL\tSTATE\tPENDING\tPLACEMENT\tPANE\tCWD"))
 		for _, agent := range agents {
 			model := agent.Model
 			if model == "" {
 				model = "default"
 			}
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
-				agent.Name, agent.Kind, model, agent.State, agent.PendingMessages, agent.Placement, agent.PaneID, agent.CWD)
+				agent.Name, agent.Kind, model, theme.Status(agent.State), agent.PendingMessages, agent.Placement, agent.PaneID, agent.CWD)
 		}
 	})
 }
@@ -390,11 +482,11 @@ func runAgentPrompt(cmd *cobra.Command, env *environment, args []string, opts pr
 	if err != nil {
 		return fledge.Translate(err)
 	}
-	return env.print(map[string]any{"agent": agent}, func(w io.Writer) {
+	return env.print(map[string]any{"agent": agent}, func(w io.Writer, theme *ui.Theme) {
 		if opts.wait {
-			fmt.Fprintf(w, "Prompt completed for %s: %s\n", agent.Name, agent.State)
+			fmt.Fprintf(w, "%s for %s: %s\n", theme.Accent("Prompt completed"), agent.Name, theme.Status(agent.State))
 		} else {
-			fmt.Fprintf(w, "Prompt submitted to %s\n", agent.Name)
+			fmt.Fprintf(w, "%s to %s\n", theme.Accent("Prompt submitted"), agent.Name)
 		}
 	})
 }
@@ -438,8 +530,8 @@ func newAgentWait(env *environment) *cobra.Command {
 			if err != nil {
 				return fledge.Translate(err)
 			}
-			return env.print(map[string]any{"agent": agent}, func(w io.Writer) {
-				fmt.Fprintf(w, "%s reached %s\n", agent.Name, agent.State)
+			return env.print(map[string]any{"agent": agent}, func(w io.Writer, theme *ui.Theme) {
+				fmt.Fprintf(w, "%s reached %s\n", agent.Name, theme.Status(agent.State))
 			})
 		},
 	}
@@ -485,7 +577,9 @@ func newAgentRead(env *environment) *cobra.Command {
 			if err != nil {
 				return fledge.Translate(err)
 			}
-			return env.print(result, func(w io.Writer) { fmt.Fprint(w, result.Text) })
+			// Agent terminal content is an opaque payload and must never receive
+			// Fledge presentation styling.
+			return env.print(result, func(w io.Writer, _ *ui.Theme) { fmt.Fprint(w, result.Text) })
 		},
 	}
 	cmd.Flags().StringVarP(&source, "source", "S", "recent-unwrapped", "output source: visible, recent, recent-unwrapped, detection")

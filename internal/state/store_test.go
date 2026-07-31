@@ -117,6 +117,9 @@ func TestLegacySchemaV1StateLoadsNewFieldsAsZeroValues(t *testing.T) {
 	if st.OrchestratorInitialized || st.OrchestratorTabID != "" || st.OrchestratorPaneID != "" {
 		t.Fatalf("legacy orchestrator state was not optional: %#v", st)
 	}
+	if st.LastSpawnSelection != nil {
+		t.Fatalf("legacy spawn selection was not optional: %#v", st.LastSpawnSelection)
+	}
 }
 
 func TestOrchestratorStatePersistsInSchemaV1(t *testing.T) {
@@ -137,6 +140,24 @@ func TestOrchestratorStatePersistsInSchemaV1(t *testing.T) {
 	if st.SchemaVersion != 1 || st.OrchestratorTabID != "tab" ||
 		st.OrchestratorPaneID != "pane" || !st.OrchestratorInitialized {
 		t.Fatalf("persisted orchestrator state = %#v", st)
+	}
+}
+
+func TestSpawnSelectionPersistsInSchemaV1(t *testing.T) {
+	store, _ := New(t.TempDir())
+	if err := store.WithLocked("session", "/project", func(st *Session) error {
+		st.LastSpawnSelection = &SpawnSelection{Harness: "codex", Model: "gpt-5.6"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Read("session", "/project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.SchemaVersion != 1 || st.LastSpawnSelection == nil ||
+		st.LastSpawnSelection.Harness != "codex" || st.LastSpawnSelection.Model != "gpt-5.6" {
+		t.Fatalf("persisted spawn selection = %#v", st)
 	}
 }
 

@@ -104,8 +104,9 @@ repurposing unrelated user tabs.
 A stopped deterministic session is disposable. The next `fledge start`
 deletes its saved Herdr namespace and clears stale workspace, orchestrator,
 socket, and agent mappings before launching a clean server. The coordinated
-stop generation counter is retained so an attached client can recognize an
-intentional shutdown.
+stop generation counter and the last picker-selected harness/model are retained
+so an attached client can recognize an intentional shutdown and the next
+interactive spawn can reuse the prior choice.
 
 Fledge searches upward from the invocation directory for the closest marker,
 so commands work in any project subdirectory:
@@ -200,8 +201,14 @@ tab label untouched; use `--new-tab | -N` to request a dedicated tab.
 
 Running `fledge agent spawn` interactively opens fuzzy-searchable pickers for
 the missing installed harness and model, then asks for the missing agent name
-last. Pi models are grouped under collapsible provider headers; OpenCode Go and
-OpenCode Zen providers contain a second level of collapsible model-creator
+last. After a harness or model picker contributes to a successful launch, its
+resolved harness/model pair is saved for that project. The next harness picker
+shows `Last used — <harness> · <model>` first; selecting it reuses both values
+and skips the model picker (`default model` means the harness default). The
+shortcut is hidden when that harness is no longer installed. Explicit flags
+still win, and prompting only for an agent name does not update the saved
+choice. Pi models are grouped under collapsible provider headers; OpenCode Go
+and OpenCode Zen providers contain a second level of collapsible model-creator
 headers. The supported harnesses are Claude Code, Codex, Pi, and OpenCode.
 Non-interactive use requires `--name | -n` and `--harness | -k`; omitting
 `--model | -m` uses the harness default. Native harness arguments follow `--`:
