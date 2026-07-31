@@ -64,7 +64,7 @@ func TestCollapsibleGroupsStartCollapsedAndCanExpand(t *testing.T) {
 	model.cursor = 1
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(selectModel)
-	if len(model.rows) != 5 || model.collapsed["OpenAI"] {
+	if len(model.rows) != 5 || model.collapsed[nodePath{group: "OpenAI"}] {
 		t.Fatalf("expanded rows = %#v collapsed=%v", model.rows, model.collapsed)
 	}
 	if view := model.View(); !strings.Contains(view, "▼ OpenAI") ||
@@ -117,7 +117,7 @@ func TestNestedGroupsExpandOneLevelAtATime(t *testing.T) {
 	if len(model.rows) != 4 || !model.rows[3].header || model.rows[3].subgroup != "Claude" {
 		t.Fatalf("provider expansion rows = %#v", model.rows)
 	}
-	if !model.collapsed[subgroupPath("OpenCode Go", "Claude")] {
+	if !model.collapsed[nodePath{group: "OpenCode Go", subgroup: "Claude"}] {
 		t.Fatalf("creator should remain collapsed: %v", model.collapsed)
 	}
 
@@ -138,14 +138,14 @@ func TestNestedCollapseStateUsesCompletePath(t *testing.T) {
 		},
 		CollapsibleGroups: true,
 	})
-	model.setGroupCollapsed(groupPath("OpenCode Go"), false)
-	model.setGroupCollapsed(groupPath("OpenCode Zen"), false)
-	model.setGroupCollapsed(subgroupPath("OpenCode Go", "Claude"), false)
+	model.setGroupCollapsed(nodePath{group: "OpenCode Go"}, false)
+	model.setGroupCollapsed(nodePath{group: "OpenCode Zen"}, false)
+	model.setGroupCollapsed(nodePath{group: "OpenCode Go", subgroup: "Claude"}, false)
 
-	if model.collapsed[subgroupPath("OpenCode Go", "Claude")] {
+	if model.collapsed[nodePath{group: "OpenCode Go", subgroup: "Claude"}] {
 		t.Fatal("Go creator remained collapsed")
 	}
-	if !model.collapsed[subgroupPath("OpenCode Zen", "Claude")] {
+	if !model.collapsed[nodePath{group: "OpenCode Zen", subgroup: "Claude"}] {
 		t.Fatal("Zen creator collapse state changed with Go creator")
 	}
 }
@@ -188,5 +188,119 @@ func TestInputAcceptsValueAndCancels(t *testing.T) {
 	})
 	if !errors.Is(err, ErrCancelled) {
 		t.Fatalf("cancel error = %v", err)
+	}
+}
+
+func TestViewRendersEachModeByteForByte(t *testing.T) {
+	items := []Item{
+		{Title: "Harness default"},
+		{ID: "openai/gpt", Title: "GPT", Description: "fast", Group: "OpenAI"},
+		{ID: "openai/o3", Title: "o3", Group: "OpenAI"},
+		{ID: "go/claude", Title: "Claude Go", Group: "OpenCode Go", Subgroup: "Claude"},
+		{ID: "go/gemini", Title: "Gemini Go", Group: "OpenCode Go", Subgroup: "Google"},
+		{ID: "zen/claude", Title: "Claude Zen", Group: "OpenCode Zen", Subgroup: "Claude"},
+	}
+	sharedSubgroup := []Item{
+		{ID: "go/claude", Title: "Claude Go", Group: "OpenCode Go", Subgroup: "Claude"},
+		{ID: "zen/claude", Title: "Claude Zen", Group: "OpenCode Zen", Subgroup: "Claude"},
+	}
+	collapsibleFooter := "\nType to filter • ↑/↓ to navigate • Enter/←/→ to expand/collapse • Esc to cancel\n"
+	flatFooter := "\nType to filter • ↑/↓ to navigate • Enter to select • Esc to cancel\n"
+
+	tests := []struct {
+		name  string
+		build func() selectModel
+		want  string
+	}{
+		{
+			name: "collapsed",
+			build: func() selectModel {
+				return newSelectModel(Options{Title: "Pi model", Items: items, CollapsibleGroups: true})
+			},
+			want: "Pi model\n> Harness default\n  ▶ OpenAI\n  ▶ OpenCode Go\n  ▶ OpenCode Zen\n" +
+				collapsibleFooter,
+		},
+		{
+			name: "nested expansion",
+			build: func() selectModel {
+				model := newSelectModel(Options{Title: "Pi model", Items: items, CollapsibleGroups: true})
+				model.setGroupCollapsed(nodePath{group: "OpenCode Go"}, false)
+				model.setGroupCollapsed(nodePath{group: "OpenCode Go", subgroup: "Claude"}, false)
+				return model
+			},
+			want: "Pi model\n  Harness default\n  ▶ OpenAI\n  ▼ OpenCode Go\n>   ▼ Claude\n" +
+				"      Claude Go\n    ▶ Google\n  ▶ OpenCode Zen\n" + collapsibleFooter,
+		},
+		{
+			name: "collapsible filtered falls back to flat rendering",
+			build: func() selectModel {
+				model := newSelectModel(Options{Title: "Pi model", Items: items, CollapsibleGroups: true})
+				model.query = "claude"
+				model.applyFilter()
+				return model
+			},
+			want: "Pi model\nFilter: claude\n\nOpenCode Go\n  Claude\n>     Claude Go\n" +
+				"\nOpenCode Zen\n  Claude\n      Claude Zen\n" + flatFooter,
+		},
+		{
+			name: "flat",
+			build: func() selectModel {
+				model := newSelectModel(Options{Title: "Pi model", Items: items})
+				model.cursor = 3
+				return model
+			},
+			want: "Pi model\n\n  Harness default\n\nOpenAI\n  GPT — fast\n  o3\n\nOpenCode Go\n" +
+				"  Claude\n>   Claude Go\n  Google\n    Gemini Go\n\nOpenCode Zen\n  Claude\n" +
+				"    Claude Zen\n" + flatFooter,
+		},
+		{
+			name: "flat without matches",
+			build: func() selectModel {
+				model := newSelectModel(Options{Title: "Pi model", Items: items})
+				model.query = "xyzzy"
+				model.applyFilter()
+				return model
+			},
+			want: "Pi model\nFilter: xyzzy\n\n  No matches\n" + flatFooter,
+		},
+		{
+			name: "flat repeats a subgroup name shared with the previous group",
+			build: func() selectModel {
+				return newSelectModel(Options{Title: "Pi model", Items: sharedSubgroup})
+			},
+			want: "Pi model\n\nOpenCode Go\n  Claude\n>   Claude Go\n\nOpenCode Zen\n  Claude\n" +
+				"    Claude Zen\n" + flatFooter,
+		},
+		{
+			name: "collapsible repeats a subgroup name shared with the previous group",
+			build: func() selectModel {
+				model := newSelectModel(Options{
+					Title: "Pi model", Items: sharedSubgroup, CollapsibleGroups: true,
+				})
+				for _, path := range []nodePath{
+					{group: "OpenCode Go"}, {group: "OpenCode Go", subgroup: "Claude"},
+					{group: "OpenCode Zen"}, {group: "OpenCode Zen", subgroup: "Claude"},
+				} {
+					model.setGroupCollapsed(path, false)
+				}
+				return model
+			},
+			want: "Pi model\n  ▼ OpenCode Go\n    ▼ Claude\n      Claude Go\n  ▼ OpenCode Zen\n" +
+				">   ▼ Claude\n      Claude Zen\n" + collapsibleFooter,
+		},
+		{
+			name: "collapsible without items",
+			build: func() selectModel {
+				return newSelectModel(Options{Title: "Empty", CollapsibleGroups: true})
+			},
+			want: "Empty\n\n  No matches\n" + collapsibleFooter,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if view := test.build().View(); view != test.want {
+				t.Fatalf("view =\n%q\nwant\n%q", view, test.want)
+			}
+		})
 	}
 }

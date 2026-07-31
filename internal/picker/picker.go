@@ -92,11 +92,16 @@ func (m inputModel) View() string {
 	return fmt.Sprintf("%s\n\n%s\n\nEnter to continue • Esc to cancel\n", m.title, m.input.View())
 }
 
+type nodePath struct {
+	group    string
+	subgroup string
+}
+
 type selectRow struct {
 	item     Item
 	group    string
 	subgroup string
-	path     string
+	path     nodePath
 	depth    int
 	header   bool
 }
@@ -105,10 +110,9 @@ type selectModel struct {
 	title             string
 	query             string
 	all               []Item
-	visible           []Item
 	rows              []selectRow
 	collapsibleGroups bool
-	collapsed         map[string]bool
+	collapsed         map[nodePath]bool
 	cursor            int
 	selected          *Item
 	cancelled         bool
@@ -118,15 +122,15 @@ func newSelectModel(opts Options) selectModel {
 	model := selectModel{
 		title: opts.Title, all: append([]Item(nil), opts.Items...),
 		collapsibleGroups: opts.CollapsibleGroups,
-		collapsed:         make(map[string]bool),
+		collapsed:         make(map[nodePath]bool),
 	}
 	if model.collapsibleGroups {
 		for _, item := range model.all {
 			if item.Group != "" {
-				model.collapsed[groupPath(item.Group)] = true
+				model.collapsed[nodePath{group: item.Group}] = true
 			}
 			if item.Group != "" && item.Subgroup != "" {
-				model.collapsed[subgroupPath(item.Group, item.Subgroup)] = true
+				model.collapsed[nodePath{group: item.Group, subgroup: item.Subgroup}] = true
 			}
 		}
 	}
@@ -187,69 +191,78 @@ func (m selectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *selectModel) applyFilter() {
-	m.visible = Filter(m.all, m.query)
-	m.rows = m.rows[:0]
-	if !m.collapsibleGroups || m.query != "" {
-		for _, item := range m.visible {
-			m.rows = append(m.rows, selectRow{
-				item: item, group: item.Group, subgroup: item.Subgroup,
-			})
-		}
+	visible := Filter(m.all, m.query)
+	rows := m.rows[:0]
+	if m.groupsAreCollapsible() {
+		m.rows = m.appendGroupedRows(rows, visible)
 	} else {
-		lastGroup := "\x00"
-		lastSubgroup := "\x00"
-		for _, item := range m.visible {
-			if item.Group != lastGroup {
-				if item.Group != "" {
-					path := groupPath(item.Group)
-					m.rows = append(m.rows, selectRow{
-						group: item.Group, path: path, header: true,
-					})
-				}
-				lastGroup = item.Group
-				lastSubgroup = "\x00"
-			}
-			if item.Group != "" && m.collapsed[groupPath(item.Group)] {
-				continue
-			}
-			if item.Subgroup != lastSubgroup {
-				if item.Subgroup != "" {
-					path := subgroupPath(item.Group, item.Subgroup)
-					m.rows = append(m.rows, selectRow{
-						group: item.Group, subgroup: item.Subgroup, path: path,
-						depth: 1, header: true,
-					})
-				}
-				lastSubgroup = item.Subgroup
-			}
-			if item.Subgroup != "" && m.collapsed[subgroupPath(item.Group, item.Subgroup)] {
-				continue
-			}
-			depth := 0
-			if item.Group != "" {
-				depth++
-			}
-			if item.Subgroup != "" {
-				depth++
-			}
-			m.rows = append(m.rows, selectRow{
-				item: item, group: item.Group, subgroup: item.Subgroup, depth: depth,
-			})
-		}
+		m.rows = appendItemRows(rows, visible)
 	}
 	if m.cursor >= len(m.rows) {
 		m.cursor = max(0, len(m.rows)-1)
 	}
 }
 
-func (m *selectModel) currentHeader() (string, bool) {
+func (m selectModel) groupsAreCollapsible() bool {
+	return m.collapsibleGroups && m.query == ""
+}
+
+func appendItemRows(rows []selectRow, items []Item) []selectRow {
+	for _, item := range items {
+		rows = append(rows, selectRow{
+			item: item, group: item.Group, subgroup: item.Subgroup,
+		})
+	}
+	return rows
+}
+
+func (m selectModel) appendGroupedRows(rows []selectRow, items []Item) []selectRow {
+	var walk groupWalk
+	for _, item := range items {
+		newGroup, newSubgroup := walk.advance(item)
+		groupKey := nodePath{group: item.Group}
+		subgroupKey := nodePath{group: item.Group, subgroup: item.Subgroup}
+		if newGroup && item.Group != "" {
+			rows = append(rows, selectRow{group: item.Group, path: groupKey, header: true})
+		}
+		if item.Group != "" && m.collapsed[groupKey] {
+			continue
+		}
+		if newSubgroup && item.Subgroup != "" {
+			rows = append(rows, selectRow{
+				group: item.Group, subgroup: item.Subgroup, path: subgroupKey,
+				depth: 1, header: true,
+			})
+		}
+		if item.Subgroup != "" && m.collapsed[subgroupKey] {
+			continue
+		}
+		rows = append(rows, selectRow{
+			item: item, group: item.Group, subgroup: item.Subgroup, depth: itemDepth(item),
+		})
+	}
+	return rows
+}
+
+func itemDepth(item Item) int {
+	depth := 0
+	if item.Group != "" {
+		depth++
+	}
+	if item.Subgroup != "" {
+		depth++
+	}
+	return depth
+}
+
+func (m *selectModel) currentHeader() (nodePath, bool) {
 	if m.query != "" || m.cursor < 0 || m.cursor >= len(m.rows) || !m.rows[m.cursor].header {
-		return "", false
+		return nodePath{}, false
 	}
 	return m.rows[m.cursor].path, true
 }
 
-func (m *selectModel) setGroupCollapsed(path string, collapsed bool) {
+func (m *selectModel) setGroupCollapsed(path nodePath, collapsed bool) {
 	m.collapsed[path] = collapsed
 	m.applyFilter()
 	for index, row := range m.rows {
@@ -266,69 +279,73 @@ func (m selectModel) View() string {
 	if m.query != "" {
 		fmt.Fprintf(&out, "Filter: %s\n", m.query)
 	}
-	if m.collapsibleGroups && m.query == "" {
-		for index, row := range m.rows {
-			prefix := "  "
-			if index == m.cursor {
-				prefix = "> "
-			}
-			if row.header {
-				indicator := "▶"
-				if !m.collapsed[row.path] {
-					indicator = "▼"
-				}
-				label := row.group
-				if row.subgroup != "" {
-					label = row.subgroup
-				}
-				fmt.Fprintf(&out, "%s%s%s %s\n", prefix, strings.Repeat("  ", row.depth), indicator, label)
-				continue
-			}
-			writeItem(&out, prefix+strings.Repeat("  ", row.depth), row.item)
-		}
-		if len(m.rows) == 0 {
-			out.WriteString("\n  No matches\n")
-		}
-		out.WriteString("\nType to filter • ↑/↓ to navigate • Enter/←/→ to expand/collapse • Esc to cancel\n")
-		return out.String()
+	if m.groupsAreCollapsible() {
+		m.renderCollapsibleRows(&out)
+		m.writeFooter(&out, "Enter/←/→ to expand/collapse")
+	} else {
+		m.renderFlatRows(&out)
+		m.writeFooter(&out, "Enter to select")
 	}
+	return out.String()
+}
 
-	lastGroup := "\x00"
-	lastSubgroup := "\x00"
+func (m selectModel) renderCollapsibleRows(out *strings.Builder) {
+	for index, row := range m.rows {
+		prefix := m.cursorPrefix(index)
+		if row.header {
+			indicator := "▶"
+			if !m.collapsed[row.path] {
+				indicator = "▼"
+			}
+			label := row.group
+			if row.subgroup != "" {
+				label = row.subgroup
+			}
+			fmt.Fprintf(out, "%s%s%s %s\n", prefix, strings.Repeat("  ", row.depth), indicator, label)
+			continue
+		}
+		writeItem(out, prefix+strings.Repeat("  ", row.depth), row.item)
+	}
+}
+
+func (m selectModel) renderFlatRows(out *strings.Builder) {
+	var walk groupWalk
 	for index, row := range m.rows {
 		item := row.item
-		if item.Group != lastGroup {
+		newGroup, newSubgroup := walk.advance(item)
+		if newGroup {
 			if item.Group != "" {
-				fmt.Fprintf(&out, "\n%s\n", item.Group)
+				fmt.Fprintf(out, "\n%s\n", item.Group)
 			} else {
 				out.WriteByte('\n')
 			}
-			lastGroup = item.Group
-			lastSubgroup = "\x00"
 		}
-		if item.Subgroup != lastSubgroup {
-			if item.Subgroup != "" {
-				fmt.Fprintf(&out, "  %s\n", item.Subgroup)
-			}
-			lastSubgroup = item.Subgroup
+		if newSubgroup && item.Subgroup != "" {
+			fmt.Fprintf(out, "  %s\n", item.Subgroup)
 		}
-		prefix := "  "
-		if index == m.cursor {
-			prefix = "> "
-		}
+		prefix := m.cursorPrefix(index)
 		if m.collapsibleGroups && item.Group != "" {
 			prefix += "  "
 		}
 		if item.Subgroup != "" {
 			prefix += "  "
 		}
-		writeItem(&out, prefix, item)
+		writeItem(out, prefix, item)
 	}
+}
+
+func (m selectModel) cursorPrefix(index int) string {
+	if index == m.cursor {
+		return "> "
+	}
+	return "  "
+}
+
+func (m selectModel) writeFooter(out *strings.Builder, action string) {
 	if len(m.rows) == 0 {
 		out.WriteString("\n  No matches\n")
 	}
-	out.WriteString("\nType to filter • ↑/↓ to navigate • Enter to select • Esc to cancel\n")
-	return out.String()
+	fmt.Fprintf(out, "\nType to filter • ↑/↓ to navigate • %s • Esc to cancel\n", action)
 }
 
 func writeItem(out *strings.Builder, prefix string, item Item) {
@@ -369,12 +386,20 @@ func itemHaystack(item Item) string {
 		item.Group + " " + item.Subgroup + " " + item.ID)
 }
 
-func groupPath(group string) string {
-	return group
+// groupWalk tracks group and subgroup boundaries while items are visited in
+// order, so row building and flat rendering share one notion of where a
+// heading starts.
+type groupWalk struct {
+	path    nodePath
+	started bool
 }
 
-func subgroupPath(group, subgroup string) string {
-	return groupPath(group) + "\x00" + subgroup
+func (w *groupWalk) advance(item Item) (newGroup, newSubgroup bool) {
+	newGroup = !w.started || item.Group != w.path.group
+	newSubgroup = newGroup || item.Subgroup != w.path.subgroup
+	w.path = nodePath{group: item.Group, subgroup: item.Subgroup}
+	w.started = true
+	return newGroup, newSubgroup
 }
 
 func fuzzyMatch(value, query string) bool {
