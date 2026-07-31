@@ -30,13 +30,8 @@ func (s *Service) ListAgents(ctx context.Context) ([]AgentView, error) {
 }
 
 func (s *Service) listWithClient(ctx context.Context, client *herdr.Client) ([]AgentView, error) {
-	snapshot, err := client.Snapshot(ctx)
-	if err != nil {
-		return nil, err
-	}
 	var st state.Session
-	err = s.Store.WithLocked(s.Project.Session, s.Project.Root, func(current *state.Session) error {
-		reconcileMappings(current, snapshot, s.Project.Root, s.Project.Session, s.WorkspaceID)
+	snapshot, err := s.withReconciledState(ctx, client, func(current *state.Session) error {
 		st = cloneState(*current)
 		return nil
 	})
@@ -44,16 +39,8 @@ func (s *Service) listWithClient(ctx context.Context, client *herdr.Client) ([]A
 		return nil, err
 	}
 	live := agentsByPane(snapshot)
-	for name, managed := range st.Agents {
-		if managed.ActivationID != "" {
-			if agent, ok := live[managed.PaneID]; !ok || agent.Agent == nil {
-				if err := s.deactivateMessagingAgent(name, "recipient agent exited"); err != nil {
-					return nil, err
-				}
-				managed.ActivationID = ""
-				st.Agents[name] = managed
-			}
-		}
+	if err := s.deactivateExitedMessagingAgents(st.Agents, live); err != nil {
+		return nil, err
 	}
 	panes := panesByID(snapshot)
 	out := make([]AgentView, 0, len(st.Agents))
@@ -62,27 +49,82 @@ func (s *Service) listWithClient(ctx context.Context, client *herdr.Client) ([]A
 		return nil, err
 	}
 	for name, managed := range st.Agents {
-		view := AgentView{
-			Name: name, Kind: managed.Kind, Model: managed.Model, Placement: managed.Placement,
-			CWD: managed.CWD, State: "unknown", PaneID: managed.PaneID, TabID: managed.TabID,
-			PendingMessages: pending[name],
-		}
-		if pane, ok := panes[managed.PaneID]; ok {
-			view.State = pane.AgentStatus
-			if pane.Agent == nil {
-				view.State = "stopped"
-			}
-			if agent, ok := live[managed.PaneID]; ok && agent.AgentStatus != "" {
-				view.State = agent.AgentStatus
-				if agent.Agent == nil {
-					view.State = "stopped"
-				}
-			}
-		}
+		view := baseView(name, managed)
+		view.State = resolveAgentState(panes, live, managed.PaneID)
+		view.PendingMessages = pending[name]
 		out = append(out, view)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+// withReconciledState snapshots the server, then reconciles the persisted
+// mappings against it under the state lock before running fn.
+func (s *Service) withReconciledState(
+	ctx context.Context,
+	client *herdr.Client,
+	fn func(st *state.Session) error,
+) (herdr.Snapshot, error) {
+	snapshot, err := client.Snapshot(ctx)
+	if err != nil {
+		return herdr.Snapshot{}, err
+	}
+	err = s.Store.WithLocked(s.Project.Session, s.Project.Root, func(st *state.Session) error {
+		reconcileMappings(st, snapshot, s.Project.Root, s.Project.Session, s.WorkspaceID)
+		return fn(st)
+	})
+	if err != nil {
+		return herdr.Snapshot{}, err
+	}
+	return snapshot, nil
+}
+
+// deactivateExitedMessagingAgents retires the message activation of every
+// agent whose pane no longer hosts a running harness.
+func (s *Service) deactivateExitedMessagingAgents(agents map[string]state.Agent, live map[string]herdr.AgentInfo) error {
+	for name, managed := range agents {
+		if managed.ActivationID == "" {
+			continue
+		}
+		if agent, ok := live[managed.PaneID]; ok && agent.Agent != nil {
+			continue
+		}
+		if err := s.deactivateMessagingAgent(name, "recipient agent exited"); err != nil {
+			return err
+		}
+		managed.ActivationID = ""
+		agents[name] = managed
+	}
+	return nil
+}
+
+// resolveAgentState reports the lifecycle state of paneID, preferring the
+// agent record over the pane's cached status.
+func resolveAgentState(panes map[string]herdr.PaneInfo, live map[string]herdr.AgentInfo, paneID string) string {
+	pane, ok := panes[paneID]
+	if !ok {
+		return StateUnknown
+	}
+	status := pane.AgentStatus
+	if pane.Agent == nil {
+		status = StateStopped
+	}
+	if agent, ok := live[paneID]; ok && agent.AgentStatus != "" {
+		status = agent.AgentStatus
+		if agent.Agent == nil {
+			status = StateStopped
+		}
+	}
+	return status
+}
+
+// baseView projects the durable fields of a managed agent; callers supply the
+// lifecycle state.
+func baseView(name string, managed state.Agent) AgentView {
+	return AgentView{
+		Name: name, Kind: managed.Kind, Model: managed.Model, Placement: managed.Placement,
+		CWD: managed.CWD, PaneID: managed.PaneID, TabID: managed.TabID,
+	}
 }
 
 func reconcileMappings(st *state.Session, snapshot herdr.Snapshot, root, session, preferredWorkspace string) {
@@ -155,14 +197,9 @@ func agentsByPane(snapshot herdr.Snapshot) map[string]herdr.AgentInfo {
 }
 
 func (s *Service) managed(ctx context.Context, client *herdr.Client, name string) (state.Agent, error) {
-	snapshot, err := client.Snapshot(ctx)
-	if err != nil {
-		return state.Agent{}, err
-	}
 	var managed state.Agent
 	var ok bool
-	err = s.Store.WithLocked(s.Project.Session, s.Project.Root, func(st *state.Session) error {
-		reconcileMappings(st, snapshot, s.Project.Root, s.Project.Session, s.WorkspaceID)
+	snapshot, err := s.withReconciledState(ctx, client, func(st *state.Session) error {
 		managed, ok = st.Agents[name]
 		return nil
 	})

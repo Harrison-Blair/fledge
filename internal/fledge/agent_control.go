@@ -71,12 +71,11 @@ func (s *Service) Wait(ctx context.Context, name string, until []string, timeout
 func viewFromInfo(name string, managed state.Agent, info herdr.AgentInfo) AgentView {
 	status := info.AgentStatus
 	if status == "" {
-		status = "unknown"
+		status = StateUnknown
 	}
-	return AgentView{
-		Name: name, Kind: managed.Kind, Model: managed.Model, Placement: managed.Placement,
-		CWD: managed.CWD, State: status, PaneID: managed.PaneID, TabID: managed.TabID,
-	}
+	view := baseView(name, managed)
+	view.State = status
+	return view
 }
 
 type ReadResult struct {
@@ -199,7 +198,7 @@ func (s *Service) gracefullyStopPane(ctx context.Context, client *herdr.Client, 
 		settle := remaining / 2
 		var ignored herdr.Result
 		_ = client.Call(stopCtx, "agent.wait", map[string]any{
-			"target": paneID, "until": []string{"idle", "done", "blocked"}, "timeout_ms": settle.Milliseconds(),
+			"target": paneID, "until": stopSettleStates, "timeout_ms": settle.Milliseconds(),
 		}, &ignored)
 	}
 	_ = client.Call(stopCtx, "agent.send_keys", map[string]any{"target": paneID, "keys": []string{"Ctrl+D"}}, nil)
@@ -214,10 +213,9 @@ func stoppedResult(name string, managed state.Agent, forced bool) AgentStopResul
 }
 
 func stoppedView(name string, managed state.Agent) AgentView {
-	return AgentView{
-		Name: name, Kind: managed.Kind, Model: managed.Model, Placement: managed.Placement,
-		CWD: managed.CWD, State: "stopped", PaneID: managed.PaneID, TabID: managed.TabID,
-	}
+	view := baseView(name, managed)
+	view.State = StateStopped
+	return view
 }
 
 func (s *Service) pollStopped(ctx context.Context, client *herdr.Client, paneID string, deadline time.Time, budget time.Duration) bool {

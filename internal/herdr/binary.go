@@ -45,6 +45,10 @@ func (b Binary) path() string {
 	return b.Path
 }
 
+// ResolvedPath is the executable this Binary invokes, including the default
+// used when Path is unset.
+func (b Binary) ResolvedPath() string { return b.path() }
+
 func (b Binary) Inspect(ctx context.Context) (BinaryInfo, error) {
 	path := b.path()
 	versionOut, err := exec.CommandContext(ctx, path, "--version").CombinedOutput()

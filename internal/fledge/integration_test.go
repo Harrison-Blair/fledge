@@ -93,7 +93,11 @@ func TestLocalHerdrLifecycle(t *testing.T) {
 		t.Fatalf("orchestrator layout has workspaces=%d tabs=%d, want one of each: %#v",
 			len(snapshot.Workspaces), len(snapshot.Tabs), snapshot)
 	}
-	tab, found := orchestratorTab(snapshot, service.WorkspaceID, "")
+	persisted, err := store.Read(session, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tab, found := tabInWorkspace(snapshot, service.WorkspaceID, persisted.OrchestratorTabID)
 	if !found || tab.Label != orchestratorLabel {
 		t.Fatalf("orchestrator tab was not created: %#v", snapshot.Tabs)
 	}

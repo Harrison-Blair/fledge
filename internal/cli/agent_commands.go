@@ -360,7 +360,8 @@ func newAgentPrompt(env *environment) *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&opts.file, "file", "F", "", "read prompt from a file, or - for stdin")
 	cmd.Flags().BoolVarP(&opts.wait, "wait", "w", false, "wait atomically after submitting")
-	cmd.Flags().StringSliceVarP(&opts.until, "until", "u", nil, "settled state(s): idle, done, blocked, working, unknown")
+	cmd.Flags().StringSliceVarP(&opts.until, "until", "u", nil,
+		"settled state(s): "+strings.Join(fledge.WaitStates, ", "))
 	cmd.Flags().DurationVarP(&opts.timeout, "timeout", "t", 0, "server-side wait timeout")
 	return cmd
 }
@@ -448,7 +449,10 @@ func newAgentWait(env *environment) *cobra.Command {
 }
 
 func validateStates(states []string) error {
-	valid := map[string]bool{"idle": true, "working": true, "blocked": true, "done": true, "unknown": true}
+	valid := make(map[string]bool, len(fledge.WaitStates))
+	for _, name := range fledge.WaitStates {
+		valid[name] = true
+	}
 	for _, stateName := range states {
 		if !valid[stateName] {
 			return usage(fmt.Sprintf("invalid agent state %q", stateName))

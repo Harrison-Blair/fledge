@@ -354,5 +354,9 @@ func (s *Service) Status(ctx context.Context) (StatusResult, error) {
 }
 
 func emptyCounts() map[string]int {
-	return map[string]int{"idle": 0, "working": 0, "blocked": 0, "done": 0, "unknown": 0, "stopped": 0}
+	counts := make(map[string]int, len(ReportedStates))
+	for _, name := range ReportedStates {
+		counts[name] = 0
+	}
+	return counts
 }

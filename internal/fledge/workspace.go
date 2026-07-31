@@ -111,31 +111,22 @@ func (s *Service) resolveOrCreateOrchestratorWorkspace(
 	snapshot herdr.Snapshot,
 	cwd string,
 ) (orchestratorWorkspace, error) {
-	workspaceID := s.WorkspaceID
-	if !hasWorkspace(snapshot, workspaceID) {
-		workspaceID = st.WorkspaceID
+	// Unlike the agent path, a stale s.WorkspaceID falls back to the
+	// persisted mapping before the project-wide search.
+	preferred := s.WorkspaceID
+	if !hasWorkspace(snapshot, preferred) {
+		preferred = st.WorkspaceID
 	}
-	if !hasWorkspace(snapshot, workspaceID) {
-		workspaceID = ""
-		if matched, found, err := matchingWorkspace(snapshot, s.Project.Root); err != nil {
-			return orchestratorWorkspace{}, fmt.Errorf("resolve Herdr workspace for orchestrator: %w", err)
-		} else if found {
-			workspaceID = matched.WorkspaceID
-		}
-	}
-	if workspaceID == "" {
-		if workspace, found := fallbackWorkspace(snapshot, s.Project.Root, s.Project.Session); found {
-			workspaceID = workspace.WorkspaceID
-		}
+	workspaceID, err := s.resolveWorkspaceID(snapshot, preferred, "orchestrator")
+	if err != nil {
+		return orchestratorWorkspace{}, err
 	}
 	if workspaceID != "" {
 		return orchestratorWorkspace{id: workspaceID}, nil
 	}
 
-	var created herdr.Result
-	if err := client.Call(ctx, "workspace.create", map[string]any{
-		"cwd": cwd, "focus": false, "label": project.WorkspaceLabel(s.Project.Root),
-	}, &created); err != nil {
+	created, err := s.createProjectWorkspace(ctx, client, cwd)
+	if err != nil {
 		return orchestratorWorkspace{}, fmt.Errorf("create Herdr workspace at %s: %w", cwd, err)
 	}
 	workspace := orchestratorWorkspace{
@@ -260,16 +251,45 @@ func (s *Service) persistOrchestratorLayout(st *state.Session, workspaceID, tabI
 	st.OrchestratorInitialized = true
 }
 
-func orchestratorTab(snapshot herdr.Snapshot, workspaceID, persistedID string) (herdr.TabInfo, bool) {
-	if tab, found := tabInWorkspace(snapshot, workspaceID, persistedID); found {
-		return tab, true
+// selectedWorkspaceID is the workspace agent operations act on: the one this
+// service resolved at startup, falling back to the persisted mapping.
+func (s *Service) selectedWorkspaceID(st *state.Session) string {
+	if s.WorkspaceID != "" {
+		return s.WorkspaceID
 	}
-	for _, tab := range snapshot.Tabs {
-		if tab.WorkspaceID == workspaceID && tab.Label == orchestratorLabel {
-			return tab, true
+	return st.WorkspaceID
+}
+
+// resolveWorkspaceID returns preferred when the server still knows it, and
+// otherwise searches for this project's workspace by worktree metadata and
+// then by label. An empty result means the workspace must be created. purpose
+// names the caller in the error returned when worktree metadata is unreadable.
+func (s *Service) resolveWorkspaceID(snapshot herdr.Snapshot, preferred, purpose string) (string, error) {
+	if hasWorkspace(snapshot, preferred) {
+		return preferred, nil
+	}
+	workspaceID := ""
+	if matched, found, err := matchingWorkspace(snapshot, s.Project.Root); err != nil {
+		return "", fmt.Errorf("resolve Herdr workspace for %s: %w", purpose, err)
+	} else if found {
+		workspaceID = matched.WorkspaceID
+	}
+	if workspaceID == "" {
+		if workspace, found := fallbackWorkspace(snapshot, s.Project.Root, s.Project.Session); found {
+			workspaceID = workspace.WorkspaceID
 		}
 	}
-	return herdr.TabInfo{}, false
+	return workspaceID, nil
+}
+
+// createProjectWorkspace opens an unfocused workspace at cwd labelled for this
+// project. Callers wrap the error with their own context.
+func (s *Service) createProjectWorkspace(ctx context.Context, client *herdr.Client, cwd string) (herdr.Result, error) {
+	var created herdr.Result
+	err := client.Call(ctx, "workspace.create", map[string]any{
+		"cwd": cwd, "focus": false, "label": project.WorkspaceLabel(s.Project.Root),
+	}, &created)
+	return created, err
 }
 
 func tabInWorkspace(snapshot herdr.Snapshot, workspaceID, tabID string) (herdr.TabInfo, bool) {

@@ -168,9 +168,11 @@ func newStatus(env *environment) *cobra.Command {
 				if result.ServerState == "running" {
 					fmt.Fprintf(w, "Server: %s (protocol %d, compatible: %t)\n", result.ServerVersion, result.ServerProtocol, result.ProtocolCompatible)
 				}
-				fmt.Fprintf(w, "Agents: idle=%d working=%d blocked=%d done=%d unknown=%d stopped=%d\n",
-					result.AgentStates["idle"], result.AgentStates["working"], result.AgentStates["blocked"],
-					result.AgentStates["done"], result.AgentStates["unknown"], result.AgentStates["stopped"])
+				fmt.Fprint(w, "Agents:")
+				for _, name := range fledge.ReportedStates {
+					fmt.Fprintf(w, " %s=%d", name, result.AgentStates[name])
+				}
+				fmt.Fprintln(w)
 				fmt.Fprintf(w, "User pending messages: %d\n", result.UserPendingMessages)
 			})
 		},

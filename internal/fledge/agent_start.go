@@ -136,103 +136,172 @@ func (s *Service) startAgentLocked(
 	return managed, startedInfo, err
 }
 
+// paneClaim records the pane an in-pane spawn took over, together with the
+// state needed to undo the takeover.
+type paneClaim struct {
+	managed        state.Agent
+	previousAgents map[string]state.Agent
+	previousLabel  *string
+}
+
 func (s *Service) spawnAgentInCurrentPane(
 	ctx context.Context,
 	client *herdr.Client,
 	opts AgentStartOptions,
 	cwd string,
 	forwardedArgs []string,
-) (AgentStartResult, error) {
+) (result AgentStartResult, err error) {
 	if opts.Executable == "" {
 		return AgentStartResult{}, NewError("harness_not_installed", fmt.Sprintf("harness %q has no executable", opts.Kind))
 	}
-	var managed state.Agent
-	var previousAgents map[string]state.Agent
-	var previousLabel *string
+	claim, err := s.claimCurrentPane(ctx, client, opts, cwd)
+	if err != nil {
+		return AgentStartResult{}, err
+	}
+	// Every failure past the claim leaves the pane renamed and the agent
+	// recorded, so each one unwinds through the same rollback.
+	defer func() {
+		if err != nil {
+			err = s.rollbackInPaneSpawn(ctx, client, claim, opts.CurrentPaneID, err)
+		}
+	}()
+	if err = s.activateSpawnMessaging(opts, claim.managed.PaneID); err != nil {
+		return AgentStartResult{}, err
+	}
+	if err = s.execIntoHarness(opts.Executable, forwardedArgs, cwd); err != nil {
+		return AgentStartResult{}, err
+	}
+	return AgentStartResult{
+		Agent: viewFromInfo(opts.Name, claim.managed, herdr.AgentInfo{AgentStatus: StateUnknown}),
+		Argv:  forwardedArgs,
+	}, nil
+}
+
+// claimCurrentPane records opts.Name as the owner of the caller's pane and
+// renames the pane to match. A failure after the pane's previous owners were
+// captured restores its label before reporting.
+func (s *Service) claimCurrentPane(
+	ctx context.Context,
+	client *herdr.Client,
+	opts AgentStartOptions,
+	cwd string,
+) (paneClaim, error) {
+	var claim paneClaim
 	err := s.Store.WithLocked(s.Project.Session, s.Project.Root, func(st *state.Session) error {
 		snapshot, err := client.Snapshot(ctx)
 		if err != nil {
 			return err
 		}
-		pane, ok := panesByID(snapshot)[opts.CurrentPaneID]
-		if !ok {
-			return NewError("invalid_herdr_pane",
-				fmt.Sprintf("HERDR_PANE_ID %q does not belong to the current Fledge session", opts.CurrentPaneID))
+		pane, err := s.spawnablePane(snapshot, st, opts.CurrentPaneID)
+		if err != nil {
+			return err
 		}
-		workspaceID := s.WorkspaceID
-		if workspaceID == "" {
-			workspaceID = st.WorkspaceID
+		if err := agentNameAvailable(st, snapshot, opts.Name, opts.CurrentPaneID); err != nil {
+			return err
 		}
-		if workspaceID != "" && pane.WorkspaceID != workspaceID {
-			return NewError("invalid_herdr_pane",
-				fmt.Sprintf("HERDR_PANE_ID %q is outside the current Fledge workspace", opts.CurrentPaneID))
-		}
-		if existing, ok := st.Agents[opts.Name]; ok && existing.PaneID != opts.CurrentPaneID {
-			if _, live := panesByID(snapshot)[existing.PaneID]; live {
-				return NewError("agent_name_conflict",
-					fmt.Sprintf("agent name %q is already owned by pane %s", opts.Name, existing.PaneID))
-			}
-		}
-		previousAgents = cloneAgents(st.Agents)
-		previousLabel = pane.Label
-		for name, existing := range st.Agents {
-			if name != opts.Name && existing.PaneID == opts.CurrentPaneID {
-				if pane.Agent != nil {
-					return NewError("pane_occupied",
-						fmt.Sprintf("pane %s is still owned by running agent %q", opts.CurrentPaneID, name))
-				}
-				delete(st.Agents, name)
-			}
+		claim.previousAgents = cloneAgents(st.Agents)
+		claim.previousLabel = pane.Label
+		if err := evictPaneOwners(st, pane, opts.Name); err != nil {
+			return err
 		}
 		if err := client.Call(ctx, "pane.rename",
 			map[string]any{"pane_id": opts.CurrentPaneID, "label": opts.Name}, nil); err != nil {
 			return err
 		}
-		managed = state.Agent{
+		claim.managed = state.Agent{
 			Name: opts.Name, Kind: opts.Kind, Model: opts.Model, Placement: "pane",
 			CWD: cwd, TabID: pane.TabID, PaneID: pane.PaneID,
 		}
-		st.Agents[opts.Name] = managed
+		st.Agents[opts.Name] = claim.managed
 		return nil
 	})
 	if err != nil {
-		if previousAgents != nil {
-			restorePaneLabel(ctx, client, opts.CurrentPaneID, previousLabel)
+		if claim.previousAgents != nil {
+			restorePaneLabel(ctx, client, opts.CurrentPaneID, claim.previousLabel)
 		}
-		return AgentStartResult{}, err
+		return paneClaim{}, err
 	}
-	target, err := s.prepareMessagingActivation(opts.Name, managed.PaneID)
-	if err != nil {
-		return AgentStartResult{}, s.rollbackInPaneSpawn(ctx, client, previousAgents, previousLabel, opts.CurrentPaneID, err)
-	}
-	if target.activationID != "" {
-		if err := s.launchDeliveryHelper(opts.Name, target.activationID, opts.Timeout); err != nil {
-			_ = s.deactivateMessagingAgent(opts.Name, "delivery helper failed to launch")
-			return AgentStartResult{}, s.rollbackInPaneSpawn(ctx, client, previousAgents, previousLabel, opts.CurrentPaneID, err)
-		}
-	}
+	return claim, nil
+}
 
+// spawnablePane returns paneID when it belongs to this session's workspace.
+func (s *Service) spawnablePane(snapshot herdr.Snapshot, st *state.Session, paneID string) (herdr.PaneInfo, error) {
+	pane, ok := panesByID(snapshot)[paneID]
+	if !ok {
+		return herdr.PaneInfo{}, NewError("invalid_herdr_pane",
+			fmt.Sprintf("HERDR_PANE_ID %q does not belong to the current Fledge session", paneID))
+	}
+	if workspaceID := s.selectedWorkspaceID(st); workspaceID != "" && pane.WorkspaceID != workspaceID {
+		return herdr.PaneInfo{}, NewError("invalid_herdr_pane",
+			fmt.Sprintf("HERDR_PANE_ID %q is outside the current Fledge workspace", paneID))
+	}
+	return pane, nil
+}
+
+// agentNameAvailable rejects a takeover that would steal a name whose recorded
+// pane is still live elsewhere.
+func agentNameAvailable(st *state.Session, snapshot herdr.Snapshot, name, paneID string) error {
+	existing, ok := st.Agents[name]
+	if !ok || existing.PaneID == paneID {
+		return nil
+	}
+	if _, live := panesByID(snapshot)[existing.PaneID]; live {
+		return NewError("agent_name_conflict",
+			fmt.Sprintf("agent name %q is already owned by pane %s", name, existing.PaneID))
+	}
+	return nil
+}
+
+// evictPaneOwners drops the state entries of other agents recorded against
+// pane, refusing while one of them still has a harness running there.
+func evictPaneOwners(st *state.Session, pane herdr.PaneInfo, name string) error {
+	for owner, existing := range st.Agents {
+		if owner == name || existing.PaneID != pane.PaneID {
+			continue
+		}
+		if pane.Agent != nil {
+			return NewError("pane_occupied",
+				fmt.Sprintf("pane %s is still owned by running agent %q", pane.PaneID, owner))
+		}
+		delete(st.Agents, owner)
+	}
+	return nil
+}
+
+// activateSpawnMessaging opens the agent's mailbox and starts the background
+// deliverer that feeds it while the harness owns the pane.
+func (s *Service) activateSpawnMessaging(opts AgentStartOptions, paneID string) error {
+	target, err := s.prepareMessagingActivation(opts.Name, paneID)
+	if err != nil {
+		return err
+	}
+	if target.activationID == "" {
+		return nil
+	}
+	if err := s.launchDeliveryHelper(opts.Name, target.activationID, opts.Timeout); err != nil {
+		_ = s.deactivateMessagingAgent(opts.Name, "delivery helper failed to launch")
+		return err
+	}
+	return nil
+}
+
+// execIntoHarness replaces this process with the harness, rooted at cwd. It
+// returns only when the exec fails.
+func (s *Service) execIntoHarness(executable string, forwardedArgs []string, cwd string) error {
 	execAgent := s.ExecAgent
 	if execAgent == nil {
 		execAgent = syscall.Exec
 	}
-	argv := append([]string{opts.Executable}, forwardedArgs...)
-	oldCWD, cwdErr := os.Getwd()
-	if cwdErr != nil {
-		return AgentStartResult{}, s.rollbackInPaneSpawn(ctx, client, previousAgents, previousLabel, opts.CurrentPaneID, cwdErr)
+	oldCWD, err := os.Getwd()
+	if err != nil {
+		return err
 	}
 	if err := os.Chdir(cwd); err != nil {
-		return AgentStartResult{}, s.rollbackInPaneSpawn(ctx, client, previousAgents, previousLabel, opts.CurrentPaneID, err)
+		return err
 	}
-	err = execAgent(opts.Executable, argv, os.Environ())
+	err = execAgent(executable, append([]string{executable}, forwardedArgs...), os.Environ())
 	_ = os.Chdir(oldCWD)
-	if err != nil {
-		return AgentStartResult{}, s.rollbackInPaneSpawn(ctx, client, previousAgents, previousLabel, opts.CurrentPaneID, err)
-	}
-	return AgentStartResult{
-		Agent: viewFromInfo(opts.Name, managed, herdr.AgentInfo{AgentStatus: "unknown"}),
-		Argv:  forwardedArgs,
-	}, nil
+	return err
 }
 
 func (s *Service) launchDeliveryHelper(name, activationID string, timeout time.Duration) error {
@@ -243,12 +312,8 @@ func (s *Service) launchDeliveryHelper(name, activationID string, timeout time.D
 	if err != nil {
 		return fmt.Errorf("locate fledge executable: %w", err)
 	}
-	herdrPath := s.Binary.Path
-	if herdrPath == "" {
-		herdrPath = "herdr"
-	}
 	cmd := exec.Command(executable,
-		"--herdr-bin", herdrPath,
+		"--herdr-bin", s.Binary.ResolvedPath(),
 		"agent", "message", "deliver", name, activationID,
 		"--timeout", timeout.String(),
 	)
@@ -270,16 +335,15 @@ func (s *Service) launchDeliveryHelper(name, activationID string, timeout time.D
 func (s *Service) rollbackInPaneSpawn(
 	ctx context.Context,
 	client *herdr.Client,
-	agents map[string]state.Agent,
-	label *string,
+	claim paneClaim,
 	paneID string,
 	cause error,
 ) error {
 	rollbackErr := s.Store.WithLocked(s.Project.Session, s.Project.Root, func(st *state.Session) error {
-		st.Agents = cloneAgents(agents)
+		st.Agents = cloneAgents(claim.previousAgents)
 		return nil
 	})
-	restorePaneLabel(ctx, client, paneID, label)
+	restorePaneLabel(ctx, client, paneID, claim.previousLabel)
 	message := fmt.Sprintf("exec agent harness: %v", cause)
 	if rollbackErr != nil {
 		message += fmt.Sprintf("; rollback state: %v", rollbackErr)
@@ -373,10 +437,7 @@ func (s *Service) reusableAgentPane(
 ) (state.Agent, bool, error) {
 	expected := agentLabelPrefix + name
 	panes := panesByID(snapshot)
-	selectedWorkspace := s.WorkspaceID
-	if selectedWorkspace == "" {
-		selectedWorkspace = st.WorkspaceID
-	}
+	selectedWorkspace := s.selectedWorkspaceID(st)
 	_, hadState := st.Agents[name]
 	if existing, ok := st.Agents[name]; ok {
 		if pane, valid := panes[existing.PaneID]; valid &&
@@ -415,22 +476,11 @@ func (s *Service) createAgentPane(
 	name, kind, cwd string,
 ) (state.Agent, error) {
 	expected := name
-	workspaceID := s.WorkspaceID
-	if workspaceID == "" {
-		workspaceID = st.WorkspaceID
-	}
-	if !hasWorkspace(snapshot, workspaceID) {
-		workspaceID = ""
-		if matched, found, err := matchingWorkspace(snapshot, s.Project.Root); err != nil {
-			return state.Agent{}, fmt.Errorf("resolve Herdr workspace for agent %q: %w", name, err)
-		} else if found {
-			workspaceID = matched.WorkspaceID
-		}
-	}
-	if workspaceID == "" {
-		if workspace, found := fallbackWorkspace(snapshot, s.Project.Root, s.Project.Session); found {
-			workspaceID = workspace.WorkspaceID
-		}
+	// Unlike the orchestrator path, a stale non-empty s.WorkspaceID skips
+	// st.WorkspaceID and goes straight to the project-wide search.
+	workspaceID, err := s.resolveWorkspaceID(snapshot, s.selectedWorkspaceID(st), fmt.Sprintf("agent %q", name))
+	if err != nil {
+		return state.Agent{}, err
 	}
 	workspaceID, tabID, paneID, err := s.allocateAgentPane(ctx, client, snapshot, workspaceID, cwd)
 	if err != nil {
@@ -455,10 +505,8 @@ func (s *Service) allocateAgentPane(
 	workspaceID, cwd string,
 ) (string, string, string, error) {
 	if workspaceID == "" {
-		var created herdr.Result
-		if err := client.Call(ctx, "workspace.create", map[string]any{
-			"cwd": cwd, "focus": false, "label": project.WorkspaceLabel(s.Project.Root),
-		}, &created); err != nil {
+		created, err := s.createProjectWorkspace(ctx, client, cwd)
+		if err != nil {
 			return "", "", "", err
 		}
 		return created.Workspace.WorkspaceID, created.Tab.TabID, created.RootPane.PaneID, nil
