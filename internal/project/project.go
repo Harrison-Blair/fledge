@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/Harrison-Blair/fledge/internal/fsutil"
 )
 
 const (
@@ -161,38 +163,8 @@ func writeConfig(path string) error {
 	if err != nil {
 		return fmt.Errorf("encode Fledge marker: %w", err)
 	}
-	data = append(data, '\n')
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create temporary marker: %w", err)
-	}
-	tmpName := tmp.Name()
-	ok := false
-	defer func() {
-		_ = tmp.Close()
-		if !ok {
-			_ = os.Remove(tmpName)
-		}
-	}()
-	if err := tmp.Chmod(0o644); err != nil {
-		return fmt.Errorf("set marker permissions: %w", err)
-	}
-	if _, err := tmp.Write(data); err != nil {
-		return fmt.Errorf("write marker: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		return fmt.Errorf("sync marker: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close marker: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("replace marker: %w", err)
-	}
-	ok = true
-	if dir, err := os.Open(filepath.Dir(path)); err == nil {
-		_ = dir.Sync()
-		_ = dir.Close()
+	if err := fsutil.WriteFileAtomic(path, append(data, '\n'), 0o644); err != nil {
+		return fmt.Errorf("persist Fledge marker: %w", err)
 	}
 	return nil
 }

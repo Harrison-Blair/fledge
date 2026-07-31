@@ -56,7 +56,7 @@ func Reconstruct(runID string, events []Event) (*Run, error) {
 			}
 			message.DeliveryAttempts = append(message.DeliveryAttempts, DeliveryAttempt{
 				ID: event.AttemptID, Sequence: event.Sequence, Timestamp: event.Timestamp,
-				ActivationID: event.ActivationID, Outcome: "attempted",
+				ActivationID: event.ActivationID, Outcome: OutcomeAttempted,
 			})
 			if message.Status != StatusAcknowledged && message.Status != StatusCancelled {
 				// The attempt is synced before the external write. If the
@@ -84,17 +84,17 @@ func Reconstruct(runID string, events []Event) (*Run, error) {
 			attempt.CompletedAt, attempt.Error = &t, event.Error
 			switch event.Type {
 			case EventDeliveryInjected:
-				attempt.Outcome = "injected"
+				attempt.Outcome = OutcomeInjected
 				if message.Status != StatusAcknowledged && message.Status != StatusCancelled {
 					message.Status = StatusAwaitingAck
 				}
 			case EventDeliveryFailed:
-				attempt.Outcome = "failed"
+				attempt.Outcome = OutcomeFailed
 				if message.Status != StatusAcknowledged && message.Status != StatusCancelled {
 					message.Status = StatusQueued
 				}
 			case EventDeliveryUncertain:
-				attempt.Outcome = "uncertain"
+				attempt.Outcome = OutcomeUncertain
 				if message.Status != StatusAcknowledged && message.Status != StatusCancelled {
 					message.Status = StatusUncertain
 				}

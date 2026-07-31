@@ -12,8 +12,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
+
+	"github.com/Harrison-Blair/fledge/internal/fsutil"
 )
 
 var (
@@ -36,16 +37,15 @@ func (s *Store) WithLifecycleLock(runID string, fn func() error) error {
 	if err := s.Ensure(); err != nil {
 		return err
 	}
-	lock, err := os.OpenFile(s.runPath(runID)+".lifecycle.lock", os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return fmt.Errorf("%w: open lifecycle lock: %v", ErrUnavailable, err)
+	ran := false
+	err := fsutil.WithFlock(s.runPath(runID)+".lifecycle.lock", func() error {
+		ran = true
+		return fn()
+	})
+	if !ran && errors.Is(err, fsutil.ErrLock) {
+		return fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
-	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		return fmt.Errorf("%w: lock lifecycle: %v", ErrUnavailable, err)
-	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) //nolint:errcheck
-	return fn()
+	return err
 }
 
 func NewStore(projectRoot string) *Store {
@@ -126,16 +126,21 @@ func (s *Store) Append(runID string, event Event) (Event, error) {
 	if err := s.Ensure(); err != nil {
 		return Event{}, err
 	}
-	lock, err := os.OpenFile(s.runPath(runID)+".lock", os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return Event{}, fmt.Errorf("%w: open log lock: %v", ErrUnavailable, err)
+	var appended Event
+	ran := false
+	err := fsutil.WithFlock(s.runPath(runID)+".lock", func() error {
+		ran = true
+		var err error
+		appended, err = s.appendLocked(runID, event)
+		return err
+	})
+	if !ran && errors.Is(err, fsutil.ErrLock) {
+		return Event{}, fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
-	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		return Event{}, fmt.Errorf("%w: lock log: %v", ErrUnavailable, err)
-	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) //nolint:errcheck
+	return appended, err
+}
 
+func (s *Store) appendLocked(runID string, event Event) (Event, error) {
 	file, err := os.OpenFile(s.runPath(runID), os.O_RDWR, 0o600)
 	if err != nil {
 		return Event{}, fmt.Errorf("%w: open run log: %v", ErrUnavailable, err)
@@ -244,24 +249,28 @@ func (s *Store) readEvents(runID string) ([]Event, error) {
 	if !validRunID(runID) {
 		return nil, fs.ErrNotExist
 	}
-	lock, err := os.OpenFile(s.runPath(runID)+".lock", os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("%w: open log lock: %v", ErrUnavailable, err)
-	}
-	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		return nil, fmt.Errorf("%w: lock log: %v", ErrUnavailable, err)
-	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) //nolint:errcheck
-	file, err := os.OpenFile(s.runPath(runID), os.O_RDWR, 0o600)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, err
+	var events []Event
+	ran := false
+	err := fsutil.WithFlock(s.runPath(runID)+".lock", func() error {
+		ran = true
+		file, err := os.OpenFile(s.runPath(runID), os.O_RDWR, 0o600)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+			return fmt.Errorf("%w: open run log: %v", ErrUnavailable, err)
 		}
-		return nil, fmt.Errorf("%w: open run log: %v", ErrUnavailable, err)
+		defer file.Close()
+		events, err = readAndRepair(file, runID)
+		return err
+	})
+	if !ran && errors.Is(err, fsutil.ErrLock) {
+		return nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
-	defer file.Close()
-	return readAndRepair(file, runID)
+	if err != nil {
+		return nil, err
+	}
+	return events, nil
 }
 
 func readAndRepair(file *os.File, runID string) ([]Event, error) {

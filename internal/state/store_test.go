@@ -70,7 +70,7 @@ func TestAtomicPersistenceAndPermissions(t *testing.T) {
 	if err := json.Unmarshal(data, &persisted); err != nil {
 		t.Fatalf("state is not valid JSON: %v", err)
 	}
-	matches, _ := filepath.Glob(filepath.Join(root, ".state-*.tmp"))
+	matches, _ := filepath.Glob(filepath.Join(root, ".*.tmp"))
 	if len(matches) != 0 {
 		t.Fatalf("temporary files remain: %v", matches)
 	}

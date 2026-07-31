@@ -37,6 +37,13 @@ const (
 	StatusCancelled    = "cancelled"
 )
 
+const (
+	OutcomeAttempted = "attempted"
+	OutcomeInjected  = "injected"
+	OutcomeFailed    = "failed"
+	OutcomeUncertain = "uncertain"
+)
+
 type GitInfo struct {
 	Head   string `json:"head,omitempty"`
 	Branch string `json:"branch,omitempty"`

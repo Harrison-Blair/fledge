@@ -150,6 +150,16 @@ func TestReconstructDeliveryReplyAndClosure(t *testing.T) {
 	}
 }
 
+// Delivery outcomes are printed verbatim to users, so the constant values are
+// part of the wire format and must not drift.
+func TestOutcomeConstantValues(t *testing.T) {
+	if OutcomeAttempted != "attempted" || OutcomeInjected != "injected" ||
+		OutcomeFailed != "failed" || OutcomeUncertain != "uncertain" {
+		t.Fatalf("outcome constants drifted: %q %q %q %q",
+			OutcomeAttempted, OutcomeInjected, OutcomeFailed, OutcomeUncertain)
+	}
+}
+
 func fileMode(t *testing.T, path string) os.FileMode {
 	t.Helper()
 	info, err := os.Stat(filepath.Clean(path))

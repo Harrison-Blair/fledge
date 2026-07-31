@@ -8,7 +8,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"syscall"
+
+	"github.com/Harrison-Blair/fledge/internal/fsutil"
 )
 
 const SchemaVersion = 1
@@ -72,41 +73,39 @@ func (s *Store) path(session string) string {
 // callback is persisted using fsync and atomic rename.
 func (s *Store) WithLocked(session, projectRoot string, fn func(*Session) error) error {
 	path := s.path(session)
-	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return fmt.Errorf("open state lock: %w", err)
-	}
-	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+	ran := false
+	err := fsutil.WithFlock(path+".lock", func() error {
+		ran = true
+		st := Session{
+			SchemaVersion: SchemaVersion,
+			ProjectRoot:   projectRoot,
+			Session:       session,
+			Agents:        map[string]Agent{},
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr == nil {
+			if err := json.Unmarshal(data, &st); err != nil {
+				return fmt.Errorf("decode state: %w", err)
+			}
+			if st.Agents == nil {
+				st.Agents = map[string]Agent{}
+			}
+		} else if !errors.Is(readErr, fs.ErrNotExist) {
+			return fmt.Errorf("read state: %w", readErr)
+		}
+		if err := validateSession(st, session, projectRoot); err != nil {
+			return err
+		}
+		if err := fn(&st); err != nil {
+			return err
+		}
+		st.SchemaVersion, st.ProjectRoot, st.Session = SchemaVersion, projectRoot, session
+		return writeAtomic(path, st)
+	})
+	if !ran && errors.Is(err, fsutil.ErrLock) {
 		return fmt.Errorf("lock state: %w", err)
 	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) //nolint:errcheck
-
-	st := Session{
-		SchemaVersion: SchemaVersion,
-		ProjectRoot:   projectRoot,
-		Session:       session,
-		Agents:        map[string]Agent{},
-	}
-	data, readErr := os.ReadFile(path)
-	if readErr == nil {
-		if err := json.Unmarshal(data, &st); err != nil {
-			return fmt.Errorf("decode state: %w", err)
-		}
-		if st.Agents == nil {
-			st.Agents = map[string]Agent{}
-		}
-	} else if !errors.Is(readErr, fs.ErrNotExist) {
-		return fmt.Errorf("read state: %w", readErr)
-	}
-	if err := validateSession(st, session, projectRoot); err != nil {
-		return err
-	}
-	if err := fn(&st); err != nil {
-		return err
-	}
-	st.SchemaVersion, st.ProjectRoot, st.Session = SchemaVersion, projectRoot, session
-	return writeAtomic(path, st)
+	return err
 }
 
 func (s *Store) Read(session, projectRoot string) (Session, error) {
@@ -158,38 +157,8 @@ func writeAtomic(path string, value any) error {
 	if err != nil {
 		return fmt.Errorf("encode state: %w", err)
 	}
-	data = append(data, '\n')
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".state-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create temporary state: %w", err)
-	}
-	tmpName := tmp.Name()
-	ok := false
-	defer func() {
-		tmp.Close()
-		if !ok {
-			os.Remove(tmpName)
-		}
-	}()
-	if err := tmp.Chmod(0o600); err != nil {
-		return fmt.Errorf("secure temporary state: %w", err)
-	}
-	if _, err := tmp.Write(data); err != nil {
-		return fmt.Errorf("write temporary state: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		return fmt.Errorf("sync temporary state: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temporary state: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("replace state: %w", err)
-	}
-	ok = true
-	if dir, err := os.Open(filepath.Dir(path)); err == nil {
-		_ = dir.Sync()
-		_ = dir.Close()
+	if err := fsutil.WriteFileAtomic(path, append(data, '\n'), 0o600); err != nil {
+		return fmt.Errorf("persist state: %w", err)
 	}
 	return nil
 }
