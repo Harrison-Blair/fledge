@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -302,48 +301,18 @@ func fakeLiveStopBinary(
 	snapshot herdr.Snapshot,
 ) (string, *atomic.Int32) {
 	t.Helper()
-	temp := t.TempDir()
-	socket := filepath.Join(temp, "herdr.sock")
-	listener, err := net.Listen("unix", socket)
-	if err != nil {
-		t.Skipf("sandbox does not permit Unix-domain listeners: %v", err)
-	}
-	t.Cleanup(func() { _ = listener.Close() })
 	var serverStops atomic.Int32
-	go func() {
-		for {
-			conn, acceptErr := listener.Accept()
-			if acceptErr != nil {
-				return
+	socket := herdrtest.Server{
+		Snapshot: &snapshot,
+		Observe: func(call herdrtest.Call) {
+			if call.Method == "server.stop" {
+				serverStops.Add(1)
 			}
-			go func() {
-				defer conn.Close()
-				var request struct {
-					ID     string `json:"id"`
-					Method string `json:"method"`
-				}
-				if json.NewDecoder(conn).Decode(&request) != nil {
-					return
-				}
-				var result any
-				switch request.Method {
-				case "ping":
-					result = herdr.Pong{Type: "pong", Version: "0.7.5", Protocol: 17}
-				case "session.snapshot":
-					result = herdr.Result{Type: "session_snapshot", Snapshot: snapshot}
-				case "server.stop":
-					serverStops.Add(1)
-					result = map[string]any{"type": "ok"}
-				default:
-					return
-				}
-				_ = json.NewEncoder(conn).Encode(map[string]any{"id": request.ID, "result": result})
-			}()
-		}
-	}()
+		},
+	}.Start(t)
 	sessions := fmt.Sprintf(`{"sessions":[{"name":%s,"running":true,"socket_path":%s}]}`,
 		strconv.Quote(session), strconv.Quote(socket))
-	binary := herdrtest.WriteBinary(t, temp, herdrtest.Options{
+	binary := herdrtest.WriteBinary(t, t.TempDir(), herdrtest.Options{
 		Version:  herdrtest.VersionOutput,
 		Sessions: []herdrtest.SessionCase{{Payload: sessions}},
 	})
@@ -515,5 +484,25 @@ func TestStatusFromNestedDirectoryUsesMarkerAndReportsSessionSource(t *testing.T
 	after, err := os.ReadFile(legacyAssociation)
 	if err != nil || !bytes.Equal(after, legacyContents) {
 		t.Fatalf("legacy association file was read or rewritten: %q, %v", after, err)
+	}
+}
+
+func TestStatusTextReportsEveryAgentState(t *testing.T) {
+	root := initializedProject(t)
+	t.Chdir(root)
+	binary := herdrtest.WriteBinary(t, t.TempDir(), herdrtest.Options{
+		Version:  herdrtest.VersionOutput,
+		Sessions: []herdrtest.SessionCase{{Payload: `{"sessions":[]}`}},
+	})
+
+	var stdout, stderr bytes.Buffer
+	code := Execute(context.Background(), []string{"status", "--herdr-bin", binary},
+		bytes.NewBuffer(nil), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(),
+		"Agents: idle=0 working=0 blocked=0 done=0 unknown=0 stopped=0\n") {
+		t.Fatalf("status did not report every agent state in order: %s", stdout.String())
 	}
 }

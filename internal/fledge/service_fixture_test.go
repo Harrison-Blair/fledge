@@ -3,14 +3,12 @@ package fledge
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
-	"syscall"
 	"testing"
 
 	"github.com/Harrison-Blair/fledge/internal/herdr"
@@ -18,6 +16,9 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/project"
 	"github.com/Harrison-Blair/fledge/internal/state"
 )
+
+// okResult is what Herdr answers a method that reports nothing of its own.
+var okResult = map[string]any{"type": "ok"}
 
 type fakeLifecycle struct {
 	mu               sync.Mutex
@@ -56,29 +57,24 @@ type fakeLifecycle struct {
 
 func newFakeLifecycle(t *testing.T) (*Service, *fakeLifecycle) {
 	t.Helper()
-	socket := filepath.Join(t.TempDir(), "herdr.sock")
-	listener, err := net.Listen("unix", socket)
-	if err != nil {
-		if os.IsPermission(err) || errors.Is(err, syscall.EPERM) {
-			t.Skip("sandbox does not permit Unix-domain listeners")
-		}
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { listener.Close() })
+	fake := &fakeLifecycle{snapshot: herdrtest.EmptySnapshot(), pongProtocol: herdrtest.Protocol}
+	socket := herdrtest.Server{
+		Snapshot: &fake.snapshot,
+		Mutex:    &fake.mu,
+		IDs: herdrtest.IDs{
+			Workspace: "w1", WorkspaceTab: "t1", WorkspacePane: "p1",
+			Tab: "t-new", TabPane: "p-new", SplitPane: "p-right",
+		},
+		Observe: fake.record,
+		Handle:  fake.handle,
+		Unknown: okResult,
+	}.Start(t)
 	binary, runningMarker := fakeBinary(t, socket)
-	fake := &fakeLifecycle{snapshot: herdr.Snapshot{
-		Version: "0.7.5", Protocol: 17, Workspaces: []herdr.WorkspaceInfo{},
-		Tabs: []herdr.TabInfo{}, Panes: []herdr.PaneInfo{}, Agents: []herdr.AgentInfo{},
-	}, pongProtocol: 17, runningMarker: runningMarker}
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			go fake.serve(conn)
-		}
-	}()
+	// The socket has to exist before the binary can name it, so the marker is
+	// the one field assigned once handle can already be reading it.
+	fake.mu.Lock()
+	fake.runningMarker = runningMarker
+	fake.mu.Unlock()
 	store, err := state.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -137,225 +133,143 @@ func serviceSessionSocket(t *testing.T, binary herdr.Binary) string {
 	return sessions[0].SocketPath
 }
 
-func (f *fakeLifecycle) serve(conn net.Conn) {
-	defer conn.Close()
-	var request struct {
-		ID     string         `json:"id"`
-		Method string         `json:"method"`
-		Params map[string]any `json:"params"`
-	}
-	if json.NewDecoder(conn).Decode(&request) != nil {
-		return
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.methodCalls = append(f.methodCalls, request.Method)
-	if request.Method == f.dropMethod {
-		return
-	}
-	if request.Method == f.failMethod {
-		_ = json.NewEncoder(conn).Encode(map[string]any{
-			"id": request.ID,
-			"error": map[string]any{
-				"code": "injected_failure", "message": "injected " + request.Method + " failure",
-			},
-		})
-		return
-	}
-	result := map[string]any{"type": "ok"}
-	switch request.Method {
-	case "ping":
-		result = map[string]any{"type": "pong", "version": "0.7.5", "protocol": f.pongProtocol}
-	case "session.snapshot":
-		result = map[string]any{"type": "session_snapshot", "snapshot": f.snapshot}
+// record instruments every request the shared server receives, including the
+// ones handle then drops or fails.
+func (f *fakeLifecycle) record(call herdrtest.Call) {
+	f.methodCalls = append(f.methodCalls, call.Method)
+	switch call.Method {
 	case "workspace.create":
 		f.workspaceCreates++
-		label, _ := request.Params["label"].(string)
-		f.workspaceCWD, _ = request.Params["cwd"].(string)
-		f.snapshot.Workspaces = []herdr.WorkspaceInfo{{WorkspaceID: "w1", Label: label}}
-		f.snapshot.Tabs = []herdr.TabInfo{{TabID: "t1", WorkspaceID: "w1"}}
-		cwd := f.workspaceCWD
-		f.snapshot.Panes = []herdr.PaneInfo{{
-			PaneID: "p1", TabID: "t1", WorkspaceID: "w1", CWD: &cwd, AgentStatus: "unknown",
-		}}
-		result = map[string]any{
-			"type": "workspace_created", "workspace": f.snapshot.Workspaces[0],
-			"tab": f.snapshot.Tabs[0], "root_pane": f.snapshot.Panes[0],
-		}
+		f.workspaceCWD = call.Text("cwd")
 	case "tab.create":
 		f.tabCreates++
-		label, _ := request.Params["label"].(string)
-		workspaceID, _ := request.Params["workspace_id"].(string)
-		tab := herdr.TabInfo{TabID: "t-new", WorkspaceID: workspaceID, Label: label}
-		cwd, _ := request.Params["cwd"].(string)
-		pane := herdr.PaneInfo{
-			PaneID: "p-new", TabID: tab.TabID, WorkspaceID: workspaceID, CWD: &cwd, AgentStatus: "unknown",
-		}
-		f.snapshot.Tabs = append(f.snapshot.Tabs, tab)
-		f.snapshot.Panes = append(f.snapshot.Panes, pane)
-		result = map[string]any{"type": "tab_created", "tab": tab, "root_pane": pane}
 	case "tab.rename":
 		f.tabRenames++
-		tabID, _ := request.Params["tab_id"].(string)
-		for i := range f.snapshot.Tabs {
-			if f.snapshot.Tabs[i].TabID == tabID {
-				f.snapshot.Tabs[i].Label, _ = request.Params["label"].(string)
-				result = map[string]any{"type": "tab_info", "tab": f.snapshot.Tabs[i]}
-				break
-			}
-		}
 	case "pane.rename":
 		f.paneRenames++
-		paneID, _ := request.Params["pane_id"].(string)
-		label, _ := request.Params["label"].(string)
-		for i := range f.snapshot.Panes {
-			if f.snapshot.Panes[i].PaneID == paneID {
-				f.snapshot.Panes[i].Label = &label
-				result = map[string]any{"type": "pane_info", "pane": f.snapshot.Panes[i]}
-				break
-			}
-		}
 	case "pane.split":
 		f.paneSplits++
-		f.splitParams = request.Params
-		targetID, _ := request.Params["target_pane_id"].(string)
-		var target herdr.PaneInfo
-		for _, pane := range f.snapshot.Panes {
-			if pane.PaneID == targetID {
-				target = pane
-				break
-			}
-		}
-		cwd, _ := request.Params["cwd"].(string)
-		pane := herdr.PaneInfo{
-			PaneID: "p-right", TabID: target.TabID, WorkspaceID: target.WorkspaceID,
-			CWD: &cwd, AgentStatus: "unknown",
-		}
-		f.snapshot.Panes = append(f.snapshot.Panes, pane)
-		result = map[string]any{"type": "pane_created", "pane": pane}
+		f.splitParams = call.Params
 	case "pane.focus":
-		paneID, _ := request.Params["pane_id"].(string)
-		f.focusedPaneIDs = append(f.focusedPaneIDs, paneID)
+		f.focusedPaneIDs = append(f.focusedPaneIDs, call.Text("pane_id"))
+	case "pane.send_input":
+		f.sendInputCalls++
+		f.sendInputPaneID = call.Text("pane_id")
+		f.sendInputText = call.Text("text")
+		f.sendInputKeys = appendStrings(f.sendInputKeys[:0], call.Params["keys"])
+	}
+}
+
+// handle injects the failures a test asks for and answers the agent and server
+// methods that only Fledge's service drives.
+func (f *fakeLifecycle) handle(conn net.Conn, call herdrtest.Call) bool {
+	if call.Method == f.dropMethod {
+		return true
+	}
+	if call.Method == f.failMethod {
+		herdrtest.WriteInjectedFailure(conn, call)
+		return true
+	}
+	switch call.Method {
+	case "ping":
+		herdrtest.WriteResult(conn, call, map[string]any{
+			"type": "pong", "version": herdrtest.Version, "protocol": f.pongProtocol,
+		})
 	case "pane.process_info":
-		result = map[string]any{
+		herdrtest.WriteResult(conn, call, map[string]any{
 			"type": "pane_process_info",
 			"process_info": map[string]any{
 				"pane_id": "p1", "shell_pid": 10,
 				"foreground_processes": []map[string]any{{"pid": 10, "name": "bash"}},
 			},
-		}
+		})
 	case "agent.start":
 		f.startCalls++
-		rawArgs, present := request.Params["args"].([]any)
-		if present {
-			for _, arg := range rawArgs {
-				f.startArgs = append(f.startArgs, arg.(string))
-			}
-		}
+		rawArgs := call.Params["args"]
+		f.startArgs = appendStrings(f.startArgs, rawArgs)
 		kind := "codex"
-		name, _ := request.Params["name"].(string)
+		name := call.Text("name")
 		f.snapshot.Panes[0].Agent = &kind
 		f.snapshot.Panes[0].AgentStatus = "idle"
 		f.snapshot.Agents = []herdr.AgentInfo{{
 			Agent: &kind, AgentStatus: "idle", Name: &name, PaneID: "p1", TabID: "t1", WorkspaceID: "w1",
 		}}
-		result = map[string]any{"type": "agent_started", "agent": f.snapshot.Agents[0], "argv": rawArgs}
+		herdrtest.WriteResult(conn, call, map[string]any{
+			"type": "agent_started", "agent": f.snapshot.Agents[0], "argv": rawArgs,
+		})
 	case "agent.prompt":
-		f.promptTarget, _ = request.Params["target"].(string)
-		if wait, ok := request.Params["wait"].(map[string]any); ok {
+		f.promptTarget = call.Text("target")
+		if wait, ok := call.Params["wait"].(map[string]any); ok {
 			f.promptWait = wait
 		}
-		result = map[string]any{"type": "agent_prompted", "agent": f.snapshot.Agents[0]}
+		herdrtest.WriteResult(conn, call, map[string]any{
+			"type": "agent_prompted", "agent": f.snapshot.Agents[0],
+		})
 	case "agent.read":
-		f.readTarget, _ = request.Params["target"].(string)
-		result = map[string]any{
+		f.readTarget = call.Text("target")
+		herdrtest.WriteResult(conn, call, map[string]any{
 			"type": "agent_read",
 			"read": map[string]any{
 				"pane_id": f.readTarget, "source": "recent_unwrapped",
 				"format": "text", "text": "output", "truncated": false, "revision": 1,
 			},
-		}
+		})
 	case "agent.send_keys":
-		f.sendKeysTarget, _ = request.Params["target"].(string)
+		f.sendKeysTarget = call.Text("target")
 		f.sendKeysTargets = append(f.sendKeysTargets, f.sendKeysTarget)
-		if raw, ok := request.Params["keys"].([]any); ok {
-			f.sendKeys = f.sendKeys[:0]
-			for _, key := range raw {
-				f.sendKeys = append(f.sendKeys, key.(string))
-			}
+		if keys, ok := call.Params["keys"].([]any); ok {
+			f.sendKeys = appendStrings(f.sendKeys[:0], keys)
 		}
 		if !f.ignoreExit {
-			for i := range f.snapshot.Panes {
-				if f.snapshot.Panes[i].PaneID == f.sendKeysTarget {
-					f.snapshot.Panes[i].Agent = nil
-					f.snapshot.Panes[i].AgentStatus = "unknown"
-				}
-			}
-			remaining := f.snapshot.Agents[:0]
-			for _, agent := range f.snapshot.Agents {
-				if agent.PaneID != f.sendKeysTarget {
-					remaining = append(remaining, agent)
-				}
-			}
-			f.snapshot.Agents = remaining
+			f.exitAgent(f.sendKeysTarget)
 		}
-	case "pane.send_input":
-		f.sendInputCalls++
-		var valid bool
-		f.sendInputPaneID, valid = request.Params["pane_id"].(string)
-		if !valid || len(request.Params) != 3 {
-			f.writeInvalidParams(conn, request.ID, request.Method)
-			return
-		}
-		f.sendInputText, valid = request.Params["text"].(string)
-		if !valid {
-			f.writeInvalidParams(conn, request.ID, request.Method)
-			return
-		}
-		rawKeys, valid := request.Params["keys"].([]any)
-		if !valid || len(rawKeys) != 1 {
-			f.writeInvalidParams(conn, request.ID, request.Method)
-			return
-		}
-		f.sendInputKeys = f.sendInputKeys[:0]
-		for _, rawKey := range rawKeys {
-			key, ok := rawKey.(string)
-			if !ok {
-				f.writeInvalidParams(conn, request.ID, request.Method)
-				return
-			}
-			f.sendInputKeys = append(f.sendInputKeys, key)
-		}
+		herdrtest.WriteResult(conn, call, okResult)
 	case "agent.wait":
-		f.waitTarget, _ = request.Params["target"].(string)
-		result = map[string]any{"type": "agent_info"}
+		f.waitTarget = call.Text("target")
+		herdrtest.WriteResult(conn, call, map[string]any{"type": "agent_info"})
 	case "pane.close":
 		f.snapshot.Panes, f.snapshot.Agents = nil, nil
-		result = map[string]any{"type": "pane_closed", "pane_id": "p1", "workspace_id": "w1"}
+		herdrtest.WriteResult(conn, call, map[string]any{
+			"type": "pane_closed", "pane_id": "p1", "workspace_id": "w1",
+		})
 	case "server.stop":
 		if f.serverStopError != "" {
-			_ = json.NewEncoder(conn).Encode(map[string]any{
-				"id": request.ID,
-				"error": map[string]any{
-					"code": "stop_failed", "message": f.serverStopError,
-				},
-			})
-			return
+			herdrtest.WriteError(conn, call, "stop_failed", f.serverStopError)
+			return true
 		}
 		f.serverStopped = true
 		_ = os.Remove(f.runningMarker)
 		if f.serverStopHook != nil {
 			f.serverStopHook()
 		}
+		herdrtest.WriteResult(conn, call, okResult)
+	default:
+		return false
 	}
-	_ = json.NewEncoder(conn).Encode(map[string]any{"id": request.ID, "result": result})
+	return true
 }
 
-func (f *fakeLifecycle) writeInvalidParams(conn net.Conn, id, method string) {
-	_ = json.NewEncoder(conn).Encode(map[string]any{
-		"id": id,
-		"error": map[string]any{
-			"code": "invalid_params", "message": "invalid parameters for " + method,
-		},
-	})
+func (f *fakeLifecycle) exitAgent(paneID string) {
+	for i := range f.snapshot.Panes {
+		if f.snapshot.Panes[i].PaneID == paneID {
+			f.snapshot.Panes[i].Agent = nil
+			f.snapshot.Panes[i].AgentStatus = "unknown"
+		}
+	}
+	remaining := f.snapshot.Agents[:0]
+	for _, agent := range f.snapshot.Agents {
+		if agent.PaneID != paneID {
+			remaining = append(remaining, agent)
+		}
+	}
+	f.snapshot.Agents = remaining
+}
+
+func appendStrings(into []string, raw any) []string {
+	values, _ := raw.([]any)
+	for _, value := range values {
+		text, _ := value.(string)
+		into = append(into, text)
+	}
+	return into
 }

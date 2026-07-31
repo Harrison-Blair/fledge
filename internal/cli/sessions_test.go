@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/Harrison-Blair/fledge/internal/herdrtest"
 )
 
 func TestSessionsPruneRequiresSafeguardWithoutTTY(t *testing.T) {
@@ -151,26 +153,19 @@ func fakePruneBinary(t *testing.T, sessions, failSession, log string) string {
 	if err := json.Compact(&compact, []byte(sessions)); err != nil {
 		t.Fatal(err)
 	}
-	sessions = compact.String()
-	script := `#!/bin/sh
-printf '%s\n' "$*" >> ` + strconv.Quote(log) + `
-if [ "$1" = "session" ] && [ "$2" = "list" ]; then
-  printf '%s\n' ` + strconv.Quote(sessions) + `
-elif [ "$1" = "session" ] && [ "$2" = "delete" ]; then
-  if [ "$3" = ` + strconv.Quote(failSession) + ` ]; then
-    echo "injected delete failure" >&2
-    exit 4
-  fi
-  printf '%s\n' '{"deleted":true}'
-else
-  exit 2
+	deleteBody := `if [ "$3" = ` + strconv.Quote(failSession) + ` ]; then
+  echo "injected delete failure" >&2
+  exit 4
 fi
+printf '%s\n' '{"deleted":true}'
 `
-	path := filepath.Join(t.TempDir(), "herdr-prune-fake")
-	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	return path
+	return herdrtest.WriteBinary(t, t.TempDir(), herdrtest.Options{
+		InvocationLog: log,
+		Sessions:      []herdrtest.SessionCase{{Payload: compact.String()}},
+		Branches: []herdrtest.Branch{
+			{Condition: `[ "$1" = "session" ] && [ "$2" = "delete" ]`, Body: deleteBody},
+		},
+	})
 }
 
 func stringSlice(value any) []string {

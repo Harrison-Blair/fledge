@@ -90,6 +90,9 @@ func TestStartNewSessionAttachesAfterReadiness(t *testing.T) {
 		!strings.Contains(pickerCommand, " agent spawn --name fledge-orchestrator|enter\n") {
 		t.Fatalf("orchestrator picker command = %q", pickerCommand)
 	}
+	if strings.Contains(stderr.String(), "could not open orchestrator picker") {
+		t.Fatalf("orchestrator picker was rejected: %s", stderr.String())
+	}
 	if !strings.Contains(stdout.String(), "Started Fledge session "+session+"\n") {
 		t.Fatalf("unexpected diagnostics: %s", stdout.String())
 	}

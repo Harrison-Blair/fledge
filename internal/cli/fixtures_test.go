@@ -1,14 +1,11 @@
 package cli
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -56,11 +53,7 @@ func fakeStartBinary(t *testing.T, root, session string, opts startOptions) (str
 	attachLog := filepath.Join(temp, "attach.log")
 	workspaceLog := filepath.Join(temp, "workspace.log")
 	pidFile := filepath.Join(temp, "server.pid")
-	var setupFailure []string
-	if opts.SetupFailure != "" {
-		setupFailure = append(setupFailure, opts.SetupFailure)
-	}
-	socket := fakeStartSocket(t, root, opts.WorkspacePresent, workspaceLog, setupFailure...)
+	socket := fakeStartSocket(t, root, workspaceLog, opts)
 	if opts.Running {
 		if err := os.WriteFile(runningMarker, nil, 0o600); err != nil {
 			t.Fatal(err)
@@ -109,74 +102,34 @@ func fakeCoordinatedStopBinary(t *testing.T, root, session string) (binary, atta
 			t.Fatal(err)
 		}
 	}
-	socket := filepath.Join(temp, "herdr.sock")
-	listener, err := net.Listen("unix", socket)
-	if err != nil {
-		if os.IsPermission(err) || errors.Is(err, syscall.EPERM) {
-			t.Skip("sandbox does not permit Unix-domain listeners")
-		}
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = listener.Close() })
-
-	snapshot := herdr.Snapshot{
-		Version: "0.7.5", Protocol: 17,
-		Workspaces: []herdr.WorkspaceInfo{{
-			WorkspaceID: "workspace-1",
-			Worktree:    &herdr.WorkspaceWorktreeInfo{CheckoutPath: root, RepoRoot: root},
-		}},
-		Tabs: []herdr.TabInfo{{
-			TabID: "orchestrator-tab", WorkspaceID: "workspace-1", Label: "orchestrator",
-		}},
-		Panes: []herdr.PaneInfo{
-			{
-				PaneID: "orchestrator-left", TabID: "orchestrator-tab",
-				WorkspaceID: "workspace-1", Label: stringPointer("orchestrator"), CWD: &root,
-			},
-			{
-				PaneID: "orchestrator-right", TabID: "orchestrator-tab",
-				WorkspaceID: "workspace-1", CWD: &root,
-			},
+	snapshot := herdrtest.EmptySnapshot()
+	snapshot.Workspaces = []herdr.WorkspaceInfo{{
+		WorkspaceID: "workspace-1",
+		Worktree:    &herdr.WorkspaceWorktreeInfo{CheckoutPath: root, RepoRoot: root},
+	}}
+	snapshot.Tabs = []herdr.TabInfo{{
+		TabID: "orchestrator-tab", WorkspaceID: "workspace-1", Label: "orchestrator",
+	}}
+	snapshot.Panes = []herdr.PaneInfo{
+		{
+			PaneID: "orchestrator-left", TabID: "orchestrator-tab",
+			WorkspaceID: "workspace-1", Label: stringPointer("orchestrator"), CWD: &root,
 		},
-		Agents: []herdr.AgentInfo{},
+		{
+			PaneID: "orchestrator-right", TabID: "orchestrator-tab",
+			WorkspaceID: "workspace-1", CWD: &root,
+		},
 	}
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
+	// The marker disappears just before the stop is answered, so the fake
+	// "session attach" branch can notice the shutdown as soon as it happens.
+	socket := herdrtest.Server{
+		Snapshot: &snapshot,
+		Observe: func(call herdrtest.Call) {
+			if call.Method == "server.stop" {
+				_ = os.Remove(running)
 			}
-			go func() {
-				defer conn.Close()
-				var request struct {
-					ID     string `json:"id"`
-					Method string `json:"method"`
-				}
-				if json.NewDecoder(conn).Decode(&request) != nil {
-					return
-				}
-				var result any
-				switch request.Method {
-				case "ping":
-					result = herdr.Pong{Type: "pong", Version: "0.7.5", Protocol: 17}
-				case "session.snapshot":
-					result = herdr.Result{Type: "session_snapshot", Snapshot: snapshot}
-				case "pane.focus", "workspace.focus":
-					result = map[string]any{"type": "focused"}
-				case "server.stop":
-					result = map[string]any{"type": "ok"}
-				default:
-					return
-				}
-				if json.NewEncoder(conn).Encode(map[string]any{"id": request.ID, "result": result}) != nil {
-					return
-				}
-				if request.Method == "server.stop" {
-					_ = os.Remove(running)
-				}
-			}()
-		}
-	}()
+		},
+	}.Start(t)
 
 	sessions := fmt.Sprintf(`{"sessions":[{"name":%s,"running":true,"socket_path":%s}]}`,
 		strconv.Quote(session), strconv.Quote(socket))
@@ -213,177 +166,55 @@ func waitForFile(t *testing.T, path string) {
 	}
 }
 
-func fakeStartSocket(
-	t *testing.T,
-	root string,
-	workspacePresent bool,
-	workspaceLog string,
-	setupFailure ...string,
-) string {
+func fakeStartSocket(t *testing.T, root, workspaceLog string, opts startOptions) string {
 	t.Helper()
-	socket := filepath.Join(t.TempDir(), "herdr.sock")
-	listener, err := net.Listen("unix", socket)
-	if err != nil {
-		if os.IsPermission(err) || errors.Is(err, syscall.EPERM) {
-			t.Skip("sandbox does not permit Unix-domain listeners")
-		}
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = listener.Close() })
-	snapshot := herdr.Snapshot{
-		Version:  "0.7.5",
-		Protocol: 17,
-		Tabs:     []herdr.TabInfo{},
-		Panes:    []herdr.PaneInfo{},
-		Agents:   []herdr.AgentInfo{},
-	}
-	if workspacePresent {
+	snapshot := herdrtest.EmptySnapshot()
+	if opts.WorkspacePresent {
 		snapshot.Workspaces = []herdr.WorkspaceInfo{{
 			WorkspaceID: "workspace-1",
 			Worktree:    &herdr.WorkspaceWorktreeInfo{CheckoutPath: root, RepoRoot: root},
 		}}
-	} else {
-		snapshot.Workspaces = []herdr.WorkspaceInfo{}
 	}
-	var mu sync.Mutex
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
+	return herdrtest.Server{
+		Snapshot: &snapshot,
+		IDs: herdrtest.IDs{
+			Workspace: "workspace-created", WorkspaceTab: "tab-created", WorkspacePane: "pane-created",
+			Tab: "tab-created", TabPane: "pane-created", SplitPane: "pane-right",
+		},
+		Observe: func(call herdrtest.Call) { logStartCall(workspaceLog, call) },
+		Handle: func(conn net.Conn, call herdrtest.Call) bool {
+			if call.Method != opts.SetupFailure {
+				return false
 			}
-			go func() {
-				defer conn.Close()
-				var request struct {
-					ID     string         `json:"id"`
-					Method string         `json:"method"`
-					Params map[string]any `json:"params"`
-				}
-				if json.NewDecoder(conn).Decode(&request) != nil {
-					return
-				}
-				mu.Lock()
-				defer mu.Unlock()
-				if len(setupFailure) > 0 && request.Method == setupFailure[0] {
-					_ = json.NewEncoder(conn).Encode(map[string]any{
-						"id": request.ID,
-						"error": map[string]any{
-							"code": "injected_failure", "message": "injected " + request.Method + " failure",
-						},
-					})
-					return
-				}
-				var result any
-				switch request.Method {
-				case "ping":
-					result = herdr.Pong{Type: "pong", Version: "0.7.5", Protocol: 17}
-				case "pane.focus", "workspace.focus":
-					result = map[string]any{"type": "focused"}
-				case "session.snapshot":
-					result = herdr.Result{
-						Type:     "session_snapshot",
-						Snapshot: snapshot,
-					}
-				case "workspace.create":
-					cwd, _ := request.Params["cwd"].(string)
-					if err := os.WriteFile(workspaceLog, []byte(cwd+"\n"), 0o600); err != nil {
-						return
-					}
-					workspace := herdr.WorkspaceInfo{WorkspaceID: "workspace-created", Label: "fledge:test"}
-					tab := herdr.TabInfo{TabID: "tab-created", WorkspaceID: workspace.WorkspaceID}
-					pane := herdr.PaneInfo{
-						PaneID: "pane-created", TabID: tab.TabID, WorkspaceID: workspace.WorkspaceID, CWD: &cwd,
-					}
-					snapshot.Workspaces = []herdr.WorkspaceInfo{workspace}
-					snapshot.Tabs = []herdr.TabInfo{tab}
-					snapshot.Panes = []herdr.PaneInfo{pane}
-					result = herdr.Result{
-						Type: "workspace_created", Workspace: workspace, Tab: tab, RootPane: pane,
-					}
-				case "tab.create":
-					cwd, _ := request.Params["cwd"].(string)
-					label, _ := request.Params["label"].(string)
-					workspaceID, _ := request.Params["workspace_id"].(string)
-					tab := herdr.TabInfo{
-						TabID: "tab-created", WorkspaceID: workspaceID, Label: label,
-					}
-					pane := herdr.PaneInfo{
-						PaneID: "pane-created", TabID: tab.TabID, WorkspaceID: workspaceID, CWD: &cwd,
-					}
-					snapshot.Tabs = append(snapshot.Tabs, tab)
-					snapshot.Panes = append(snapshot.Panes, pane)
-					result = herdr.Result{Type: "tab_created", Tab: tab, RootPane: pane}
-				case "tab.rename":
-					tabID, _ := request.Params["tab_id"].(string)
-					label, _ := request.Params["label"].(string)
-					for i := range snapshot.Tabs {
-						if snapshot.Tabs[i].TabID == tabID {
-							snapshot.Tabs[i].Label = label
-							result = herdr.Result{Type: "tab_info", Tab: snapshot.Tabs[i]}
-							break
-						}
-					}
-				case "pane.rename":
-					paneID, _ := request.Params["pane_id"].(string)
-					label, _ := request.Params["label"].(string)
-					for i := range snapshot.Panes {
-						if snapshot.Panes[i].PaneID == paneID {
-							snapshot.Panes[i].Label = &label
-							result = map[string]any{"type": "pane_info", "pane": snapshot.Panes[i]}
-							break
-						}
-					}
-				case "pane.split":
-					targetID, _ := request.Params["target_pane_id"].(string)
-					cwd, _ := request.Params["cwd"].(string)
-					var target herdr.PaneInfo
-					for _, pane := range snapshot.Panes {
-						if pane.PaneID == targetID {
-							target = pane
-							break
-						}
-					}
-					pane := herdr.PaneInfo{
-						PaneID: "pane-right", TabID: target.TabID,
-						WorkspaceID: target.WorkspaceID, CWD: &cwd,
-					}
-					snapshot.Panes = append(snapshot.Panes, pane)
-					result = map[string]any{"type": "pane_created", "pane": pane}
-				case "pane.send_input":
-					paneID, paneOK := request.Params["pane_id"].(string)
-					text, textOK := request.Params["text"].(string)
-					keys, keysOK := request.Params["keys"].([]any)
-					if len(request.Params) != 3 || !paneOK || !textOK || !keysOK ||
-						len(keys) != 1 || keys[0] != "enter" {
-						_ = json.NewEncoder(conn).Encode(map[string]any{
-							"id": request.ID,
-							"error": map[string]any{
-								"code":    "invalid_params",
-								"message": "pane.send_input requires pane_id, text, and keys: [\"enter\"]",
-							},
-						})
-						return
-					}
-					pickerLog, err := os.OpenFile(workspaceLog+".picker",
-						os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-					if err != nil {
-						return
-					}
-					_, writeErr := fmt.Fprintf(pickerLog, "%s|%s|%s|%s\n",
-						request.Method, paneID, text, keys[0])
-					closeErr := pickerLog.Close()
-					if writeErr != nil || closeErr != nil {
-						return
-					}
-					result = map[string]any{"type": "input_sent"}
-				default:
-					return
-				}
-				_ = json.NewEncoder(conn).Encode(map[string]any{"id": request.ID, "result": result})
-			}()
+			herdrtest.WriteInjectedFailure(conn, call)
+			return true
+		},
+	}.Start(t)
+}
+
+// logStartCall records the two session-setup requests start's tests read back
+// from disk.
+func logStartCall(workspaceLog string, call herdrtest.Call) {
+	switch call.Method {
+	case "workspace.create":
+		_ = os.WriteFile(workspaceLog, []byte(call.Text("cwd")+"\n"), 0o600)
+	case "pane.send_input":
+		keys, _ := call.Params["keys"].([]any)
+		if len(keys) != 1 {
+			return
 		}
-	}()
-	return socket
+		appendLine(workspaceLog+".picker", fmt.Sprintf("%s|%s|%s|%s\n",
+			call.Method, call.Text("pane_id"), call.Text("text"), keys[0]))
+	}
+}
+
+func appendLine(path, line string) {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return
+	}
+	_, _ = file.WriteString(line)
+	_ = file.Close()
 }
 
 func stringPointer(value string) *string {

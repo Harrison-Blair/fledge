@@ -1,5 +1,5 @@
-// Package herdrtest renders fake herdr binaries for tests that drive Fledge
-// through the herdr command line.
+// Package herdrtest fakes herdr for tests: WriteBinary renders fake herdr
+// command-line binaries, and Server answers the JSON-RPC socket protocol.
 package herdrtest
 
 import (
@@ -14,10 +14,12 @@ import (
 )
 
 const (
+	// Version is the herdr version a fake reports over the wire.
+	Version = "0.7.5"
 	// VersionOutput is what a fake herdr reports for "--version".
-	VersionOutput = "herdr 0.7.5"
-	// protocol is the wire protocol Schema advertises.
-	protocol = 17
+	VersionOutput = "herdr " + Version
+	// Protocol is the wire protocol Schema and Server advertise.
+	Protocol = 17
 	// emptySessions is the shell-quoted "session list" payload of a herdr with
 	// no sessions.
 	emptySessions = `'{"sessions":[]}'`
@@ -29,7 +31,7 @@ func Schema() string {
 	for _, method := range herdr.RequiredMethods {
 		methods = append(methods, fmt.Sprintf(`{"method":{"const":%s}}`, strconv.Quote(method)))
 	}
-	return fmt.Sprintf(`{"protocol":%d,"requests":[%s]}`, protocol, strings.Join(methods, ","))
+	return fmt.Sprintf(`{"protocol":%d,"requests":[%s]}`, Protocol, strings.Join(methods, ","))
 }
 
 // SessionCase is one "session list" answer: Payload is printed when Marker
