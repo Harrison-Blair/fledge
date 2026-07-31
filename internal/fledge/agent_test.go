@@ -10,20 +10,14 @@ import (
 	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/herdr"
+	"github.com/Harrison-Blair/fledge/internal/messaging"
+	"github.com/Harrison-Blair/fledge/internal/project"
 	"github.com/Harrison-Blair/fledge/internal/state"
 )
 
 func TestSpawnAgentInCurrentPaneRenamesOnlyPaneAndPersistsSelection(t *testing.T) {
 	service, fake := newFakeLifecycle(t)
-	service.WorkspaceID = "w1"
-	label := "orchestrator"
-	fake.mu.Lock()
-	fake.snapshot.Workspaces = []herdr.WorkspaceInfo{{WorkspaceID: "w1"}}
-	fake.snapshot.Tabs = []herdr.TabInfo{{TabID: "t1", WorkspaceID: "w1", Label: "orchestrator"}}
-	fake.snapshot.Panes = []herdr.PaneInfo{{
-		PaneID: "p1", TabID: "t1", WorkspaceID: "w1", Label: &label,
-	}}
-	fake.mu.Unlock()
+	seedTakeoverPane(t, service, fake)
 	var execPath string
 	var execArgv []string
 	service.ExecAgent = func(path string, argv, _ []string) error {
@@ -61,15 +55,7 @@ func TestSpawnAgentInCurrentPaneRenamesOnlyPaneAndPersistsSelection(t *testing.T
 
 func TestSpawnAgentInCurrentPaneRollsBackMappingAndLabelOnExecFailure(t *testing.T) {
 	service, fake := newFakeLifecycle(t)
-	service.WorkspaceID = "w1"
-	label := "orchestrator"
-	fake.mu.Lock()
-	fake.snapshot.Workspaces = []herdr.WorkspaceInfo{{WorkspaceID: "w1"}}
-	fake.snapshot.Tabs = []herdr.TabInfo{{TabID: "t1", WorkspaceID: "w1", Label: label}}
-	fake.snapshot.Panes = []herdr.PaneInfo{{
-		PaneID: "p1", TabID: "t1", WorkspaceID: "w1", Label: &label,
-	}}
-	fake.mu.Unlock()
+	label := seedTakeoverPane(t, service, fake)
 	service.ExecAgent = func(string, []string, []string) error { return errors.New("exec exploded") }
 
 	_, err := service.SpawnAgent(t.Context(), AgentStartOptions{
@@ -254,21 +240,19 @@ func TestLegacyPrefixedLabelIsRecoveredAndRenamed(t *testing.T) {
 	}
 }
 
-func TestModelArgumentsGeneratedForEveryHarness(t *testing.T) {
-	for _, harness := range []string{"claude", "codex", "pi", "opencode"} {
-		t.Run(harness, func(t *testing.T) {
-			got := modelArgs("provider/model", []string{"--native"})
-			if strings.Join(got, " ") != "--model provider/model --native" {
-				t.Fatalf("args = %v", got)
-			}
-		})
+// modelArgs is harness-independent, so one assertion covers every harness.
+func TestModelArgumentsPrecedeNativeArguments(t *testing.T) {
+	got := modelArgs("provider/model", []string{"--native"})
+	if strings.Join(got, " ") != "--model provider/model --native" {
+		t.Fatalf("args = %v", got)
 	}
 }
 
-func TestStartAgentAllocatesOnceAndForwardsNativeArgs(t *testing.T) {
+func TestDedicatedSpawnAllocatesOnceAndForwardsNativeArgs(t *testing.T) {
 	service, fake := newFakeLifecycle(t)
-	result, err := service.StartAgent(t.Context(), AgentStartOptions{
-		Name: "worker", Kind: "codex", Args: []string{"--model", "gpt-5"}, Timeout: 30 * time.Second,
+	result, err := service.SpawnAgent(t.Context(), AgentStartOptions{
+		Name: "worker", Kind: "codex", NewTab: true,
+		Args: []string{"--model", "gpt-5"}, Timeout: 30 * time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -290,11 +274,7 @@ func TestAgentWorkspaceCreationUsesProjectFolderLabel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := service.StartAgent(t.Context(), AgentStartOptions{
-		Name: "worker", Kind: "codex", Timeout: 30 * time.Second,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	mustStartAgent(t, service, "worker")
 
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
@@ -312,7 +292,9 @@ func TestConcurrentDuplicateAgentStartAllocatesOnlyOnce(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := service.StartAgent(t.Context(), AgentStartOptions{Name: "same", Kind: "codex", Timeout: 30 * time.Second})
+			_, err := service.SpawnAgent(t.Context(), AgentStartOptions{
+				Name: "same", Kind: "codex", NewTab: true, Timeout: 30 * time.Second,
+			})
 			errs <- err
 		}()
 	}
@@ -335,15 +317,15 @@ func TestConcurrentDuplicateAgentStartAllocatesOnlyOnce(t *testing.T) {
 	}
 }
 
-func TestStartAgentAddsTabToAdoptedWorkspaceWithoutCreatingWorkspace(t *testing.T) {
+func TestDedicatedSpawnAddsTabToAdoptedWorkspaceWithoutCreatingWorkspace(t *testing.T) {
 	service, fake := newFakeLifecycle(t)
 	service.WorkspaceID = "w-adopted"
 	fake.mu.Lock()
 	fake.snapshot.Workspaces = []herdr.WorkspaceInfo{{WorkspaceID: "w-adopted", Label: "independent"}}
 	fake.mu.Unlock()
 
-	result, err := service.StartAgent(t.Context(), AgentStartOptions{
-		Name: "worker", Kind: "codex", Timeout: 30 * time.Second,
+	result, err := service.SpawnAgent(t.Context(), AgentStartOptions{
+		Name: "worker", Kind: "codex", NewTab: true, Timeout: 30 * time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -358,7 +340,7 @@ func TestStartAgentAddsTabToAdoptedWorkspaceWithoutCreatingWorkspace(t *testing.
 	}
 }
 
-func TestStartAgentReusesLabeledPaneInAdoptedWorkspace(t *testing.T) {
+func TestDedicatedSpawnReusesLabeledPaneInAdoptedWorkspace(t *testing.T) {
 	service, fake := newFakeLifecycle(t)
 	service.WorkspaceID = "w-adopted"
 	label := "fledge-agent:worker"
@@ -370,8 +352,8 @@ func TestStartAgentReusesLabeledPaneInAdoptedWorkspace(t *testing.T) {
 	}}
 	fake.mu.Unlock()
 
-	result, err := service.StartAgent(t.Context(), AgentStartOptions{
-		Name: "worker", Kind: "codex", Timeout: 30 * time.Second,
+	result, err := service.SpawnAgent(t.Context(), AgentStartOptions{
+		Name: "worker", Kind: "codex", NewTab: true, Timeout: 30 * time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -389,9 +371,7 @@ func TestStartAgentReusesLabeledPaneInAdoptedWorkspace(t *testing.T) {
 
 func TestPromptDefaultWaitStatesRemainServerOwned(t *testing.T) {
 	service, fake := newFakeLifecycle(t)
-	if _, err := service.StartAgent(t.Context(), AgentStartOptions{Name: "worker", Kind: "codex", Timeout: 30 * time.Second}); err != nil {
-		t.Fatal(err)
-	}
+	mustStartAgent(t, service, "worker")
 	if _, err := service.Prompt(t.Context(), PromptOptions{Name: "worker", Text: "hello", Wait: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -410,11 +390,7 @@ func TestPromptDefaultWaitStatesRemainServerOwned(t *testing.T) {
 
 func TestControlOperationsUsePersistedPaneID(t *testing.T) {
 	service, fake := newFakeLifecycle(t)
-	if _, err := service.StartAgent(t.Context(), AgentStartOptions{
-		Name: "worker", Kind: "codex", Timeout: 30 * time.Second,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	mustStartAgent(t, service, "worker")
 	if _, err := service.Wait(t.Context(), "worker", nil, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -430,11 +406,7 @@ func TestControlOperationsUsePersistedPaneID(t *testing.T) {
 
 func TestForceStopRejectsSavedOrchestratorPane(t *testing.T) {
 	service, _ := newFakeLifecycle(t)
-	if _, err := service.StartAgent(t.Context(), AgentStartOptions{
-		Name: "fledge-orchestrator", Kind: "codex", Timeout: 30 * time.Second,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	mustStartAgent(t, service, "fledge-orchestrator")
 	if err := service.Store.WithLocked(service.Project.Session, service.Project.Root, func(st *state.Session) error {
 		st.OrchestratorPaneID = st.Agents["fledge-orchestrator"].PaneID
 		return nil
@@ -486,9 +458,7 @@ func TestServerStopRefusesLiveAgentAndForceStopClosesPane(t *testing.T) {
 		cleanupLaunches++
 		return nil
 	}
-	if _, err := service.StartAgent(t.Context(), AgentStartOptions{Name: "worker", Kind: "codex", Timeout: 30 * time.Second}); err != nil {
-		t.Fatal(err)
-	}
+	mustStartAgent(t, service, "worker")
 	if _, err := service.Stop(t.Context(), false); Translate(err).Code != "live_agents" {
 		t.Fatalf("unexpected stop error: %v", err)
 	}
@@ -546,5 +516,270 @@ func TestReconcileMappingsReclaimsRestoredLabeledPane(t *testing.T) {
 	reconcileMappings(&st, snapshot, "/source/test", "test-session", "")
 	if st.WorkspaceID != "new-workspace" || st.Agents["worker"].PaneID != "new-pane" || st.Agents["worker"].TabID != "new-tab" {
 		t.Fatalf("mapping was not reclaimed: %#v", st)
+	}
+}
+
+// seedTakeoverPane gives the fake a single workspace holding one labeled pane,
+// the layout an in-pane spawn takes over. It returns the pane's original label
+// so callers can assert it was renamed or restored.
+func seedTakeoverPane(t *testing.T, service *Service, fake *fakeLifecycle) string {
+	t.Helper()
+	service.WorkspaceID = "w1"
+	label := "orchestrator"
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.snapshot.Workspaces = []herdr.WorkspaceInfo{{WorkspaceID: "w1"}}
+	fake.snapshot.Tabs = []herdr.TabInfo{{TabID: "t1", WorkspaceID: "w1", Label: label}}
+	fake.snapshot.Panes = []herdr.PaneInfo{{PaneID: "p1", TabID: "t1", WorkspaceID: "w1", Label: &label}}
+	return label
+}
+
+func TestInPaneSpawnLaunchesDeliveryHelperForTheActiveRun(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	startTestMessageRun(t, service)
+	seedTakeoverPane(t, service, fake)
+	var launches int
+	var launchedName, launchedActivation string
+	var launchedTimeout time.Duration
+	service.LaunchDeliveryHelper = func(name, activationID string, timeout time.Duration) error {
+		launches++
+		launchedName, launchedActivation, launchedTimeout = name, activationID, timeout
+		return nil
+	}
+	service.ExecAgent = func(string, []string, []string) error { return nil }
+
+	if _, err := service.SpawnAgent(t.Context(), AgentStartOptions{
+		Name: "worker", Kind: "codex", CurrentPaneID: "p1",
+		Executable: "/usr/bin/codex", Timeout: 7 * time.Second,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := service.Store.Read(service.Project.Session, service.Project.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if launches != 1 || launchedName != "worker" || launchedTimeout != 7*time.Second ||
+		launchedActivation == "" || launchedActivation != st.Agents["worker"].ActivationID {
+		t.Fatalf("launches=%d name=%q activation=%q timeout=%s persisted=%#v",
+			launches, launchedName, launchedActivation, launchedTimeout, st.Agents["worker"])
+	}
+}
+
+func TestInPaneSpawnWithoutAnActiveRunSkipsTheDeliveryHelper(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	seedTakeoverPane(t, service, fake)
+	launches := 0
+	service.LaunchDeliveryHelper = func(string, string, time.Duration) error {
+		launches++
+		return nil
+	}
+	service.ExecAgent = func(string, []string, []string) error { return nil }
+
+	if _, err := service.SpawnAgent(t.Context(), AgentStartOptions{
+		Name: "worker", Kind: "codex", CurrentPaneID: "p1",
+		Executable: "/usr/bin/codex", Timeout: 7 * time.Second,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := service.Store.Read(service.Project.Session, service.Project.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if launches != 0 || st.Agents["worker"].ActivationID != "" {
+		t.Fatalf("launches=%d persisted=%#v", launches, st.Agents["worker"])
+	}
+}
+
+func TestInPaneSpawnExecsFromTheAgentWorkingDirectoryAndRestoresIt(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	seedTakeoverPane(t, service, fake)
+	nested := filepath.Join(service.Project.Root, "nested")
+	if err := os.Mkdir(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var execCWD string
+	service.ExecAgent = func(string, []string, []string) error {
+		execCWD, err = os.Getwd()
+		return err
+	}
+
+	if _, err := service.SpawnAgent(t.Context(), AgentStartOptions{
+		Name: "worker", Kind: "codex", CWD: nested, CurrentPaneID: "p1",
+		Executable: "/usr/bin/codex", Timeout: 30 * time.Second,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	want, err := project.Canonical(nested)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if execCWD != want {
+		t.Fatalf("harness exec cwd = %q, want %q", execCWD, want)
+	}
+	after, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("working directory was not restored: %q, want %q", after, before)
+	}
+}
+
+func TestResolveAgentStatePrefersTheAgentRecordOverThePane(t *testing.T) {
+	codex := "codex"
+	for _, testCase := range []struct {
+		name  string
+		panes map[string]herdr.PaneInfo
+		live  map[string]herdr.AgentInfo
+		want  string
+	}{
+		{
+			name:  "missing pane is unknown",
+			panes: map[string]herdr.PaneInfo{},
+			want:  StateUnknown,
+		},
+		{
+			name:  "pane without a harness is stopped",
+			panes: map[string]herdr.PaneInfo{"p1": {PaneID: "p1", AgentStatus: StateIdle}},
+			want:  StateStopped,
+		},
+		{
+			name:  "agent record overrides the pane status",
+			panes: map[string]herdr.PaneInfo{"p1": {PaneID: "p1", Agent: &codex, AgentStatus: StateIdle}},
+			live:  map[string]herdr.AgentInfo{"p1": {PaneID: "p1", Agent: &codex, AgentStatus: StateWorking}},
+			want:  StateWorking,
+		},
+		{
+			name:  "agent record without a harness is stopped",
+			panes: map[string]herdr.PaneInfo{"p1": {PaneID: "p1", Agent: &codex, AgentStatus: StateWorking}},
+			live:  map[string]herdr.AgentInfo{"p1": {PaneID: "p1", AgentStatus: StateIdle}},
+			want:  StateStopped,
+		},
+		{
+			name:  "an empty live status does not override the pane",
+			panes: map[string]herdr.PaneInfo{"p1": {PaneID: "p1", Agent: &codex, AgentStatus: StateWorking}},
+			live:  map[string]herdr.AgentInfo{"p1": {PaneID: "p1", Agent: &codex}},
+			want:  StateWorking,
+		},
+		{
+			// Herdr always reports a status for a live harness, so this
+			// pins today's passthrough rather than a chosen fallback.
+			name:  "an empty status on a live pane is reported verbatim",
+			panes: map[string]herdr.PaneInfo{"p1": {PaneID: "p1", Agent: &codex}},
+			live:  map[string]herdr.AgentInfo{"p1": {PaneID: "p1", Agent: &codex}},
+			want:  "",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := resolveAgentState(testCase.panes, testCase.live, "p1"); got != testCase.want {
+				t.Fatalf("state = %q, want %q", got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestEvictPaneOwnersRefusesAPaneWithARunningHarness(t *testing.T) {
+	codex := "codex"
+	st := state.Session{Agents: map[string]state.Agent{
+		"other":     {Name: "other", PaneID: "p1"},
+		"elsewhere": {Name: "elsewhere", PaneID: "p2"},
+	}}
+
+	err := evictPaneOwners(&st, herdr.PaneInfo{PaneID: "p1", Agent: &codex}, "new")
+	if translated := Translate(err); translated.Code != "pane_occupied" ||
+		translated.Message != `pane p1 is still owned by running agent "other"` {
+		t.Fatalf("occupied error = %#v", translated)
+	}
+	if _, retained := st.Agents["other"]; !retained {
+		t.Fatalf("refused eviction still dropped the owner: %#v", st.Agents)
+	}
+
+	if err := evictPaneOwners(&st, herdr.PaneInfo{PaneID: "p1"}, "new"); err != nil {
+		t.Fatal(err)
+	}
+	if _, evicted := st.Agents["other"]; evicted {
+		t.Fatalf("vacant pane owner was not evicted: %#v", st.Agents)
+	}
+	if _, retained := st.Agents["elsewhere"]; !retained {
+		t.Fatalf("eviction reached another pane: %#v", st.Agents)
+	}
+
+	// The incoming name owns the pane it is claiming, so it must survive.
+	claimant := state.Session{Agents: map[string]state.Agent{"new": {Name: "new", PaneID: "p1"}}}
+	if err := evictPaneOwners(&claimant, herdr.PaneInfo{PaneID: "p1"}, "new"); err != nil {
+		t.Fatal(err)
+	}
+	if _, retained := claimant.Agents["new"]; !retained {
+		t.Fatalf("eviction dropped the claiming agent itself: %#v", claimant.Agents)
+	}
+}
+
+func TestListAgentsRetiresActivationsWhoseHarnessExited(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	startTestMessageRun(t, service)
+	mustStartAgent(t, service, "worker")
+	sent, err := service.SendMessage(t.Context(), "worker", "hello")
+	if err != nil || sent.Message.Status != messaging.StatusAwaitingAck {
+		t.Fatalf("sent = %#v, %v", sent, err)
+	}
+	fake.mu.Lock()
+	fake.snapshot.Agents = nil
+	fake.snapshot.Panes[0].Agent = nil
+	fake.mu.Unlock()
+
+	if _, err := service.ListAgents(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := service.Store.Read(service.Project.Session, service.Project.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Agents["worker"].ActivationID != "" {
+		t.Fatalf("activation was not retired: %#v", st.Agents["worker"])
+	}
+	message, err := service.ShowMessage(sent.Message.ID)
+	if err != nil || message.Status != messaging.StatusFailed {
+		t.Fatalf("undelivered message = %#v, %v", message, err)
+	}
+}
+
+func TestListAgentsPersistsTheReconciledPaneMapping(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	label := agentLabelPrefix + "worker"
+	fake.mu.Lock()
+	fake.snapshot.Workspaces = []herdr.WorkspaceInfo{{WorkspaceID: "w1"}}
+	fake.snapshot.Panes = []herdr.PaneInfo{{
+		PaneID: "new-pane", TabID: "new-tab", WorkspaceID: "w1", Label: &label,
+	}}
+	fake.mu.Unlock()
+	if err := service.Store.WithLocked(service.Project.Session, service.Project.Root, func(st *state.Session) error {
+		st.WorkspaceID = "w1"
+		st.Agents["worker"] = state.Agent{Name: "worker", PaneID: "old-pane", TabID: "old-tab"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	agents, err := service.ListAgents(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(agents) != 1 || agents[0].PaneID != "new-pane" || agents[0].TabID != "new-tab" {
+		t.Fatalf("listed agents = %#v", agents)
+	}
+	st, err := service.Store.Read(service.Project.Session, service.Project.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Agents["worker"].PaneID != "new-pane" || st.Agents["worker"].TabID != "new-tab" {
+		t.Fatalf("reconciliation was not persisted: %#v", st.Agents["worker"])
 	}
 }

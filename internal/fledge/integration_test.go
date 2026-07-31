@@ -22,30 +22,9 @@ import (
 // before start and verifies marker discovery, deterministic session ownership,
 // and the fresh one-tab orchestrator layout.
 func TestLocalHerdrLifecycle(t *testing.T) {
-	if os.Getenv("FLEDGE_INTEGRATION") != "1" {
-		t.Skip("set FLEDGE_INTEGRATION=1 to run against local Herdr")
-	}
-	if _, err := exec.LookPath("herdr"); err != nil {
-		t.Skip("herdr is not installed")
-	}
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	session := project.SessionName(root)
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = exec.CommandContext(ctx, "herdr", "--session", session, "server", "stop").Run()
-		_ = exec.CommandContext(ctx, "herdr", "session", "stop", session).Run()
-		_ = exec.CommandContext(ctx, "herdr", "session", "delete", session, "--json").Run()
-	})
-	if err := exec.Command("git", "-C", root, "init", "-q").Run(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := project.Init(root); err != nil {
-		t.Fatal(err)
-	}
+	herdrPath := requireIntegrationHerdr(t)
+	root, session := newIntegrationRepo(t)
+	registerHerdrCleanup(t, herdrPath, session)
 	nested := filepath.Join(root, "src", "component")
 	if err := os.MkdirAll(nested, 0o755); err != nil {
 		t.Fatal(err)
@@ -58,7 +37,7 @@ func TestLocalHerdrLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	binary := herdr.Binary{Path: "herdr"}
+	binary := herdr.Binary{Path: herdrPath}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	resolution, err := ResolveSession(ctx, discovered.Root, binary)
@@ -85,7 +64,80 @@ func TestLocalHerdrLifecycle(t *testing.T) {
 	if err := service.EnsureAttachmentWorkspace(ctx, started.Socket, nested); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := (&herdr.Client{Socket: started.Socket}).Snapshot(ctx)
+	assertOrchestratorLayout(t, ctx, &service, started.Socket)
+	status, err := service.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.ServerState != "running" || !status.ProtocolCompatible || status.SessionSource != "derived" {
+		t.Fatalf("unexpected status: %#v", status)
+	}
+	runOptionalAgentLifecycle(t, ctx, &service)
+	if _, err := service.Stop(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := binary.FindSession(ctx, session); err != nil || found {
+		t.Fatalf("disposable session remains after lifecycle: found=%t err=%v", found, err)
+	}
+	runs, err := service.MessageRuns(0)
+	if err != nil || len(runs.Runs) != 1 || runs.Runs[0].Active {
+		t.Fatalf("archived message run = %#v, %v", runs, err)
+	}
+	assertRunIsolationAfterRestart(t, ctx, &service, runs.Runs[0].ID)
+	if _, err := service.Stop(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// requireIntegrationHerdr skips unless the opt-in flag is set and a real Herdr
+// is installed, returning its resolved path.
+func requireIntegrationHerdr(t *testing.T) string {
+	t.Helper()
+	if os.Getenv("FLEDGE_INTEGRATION") != "1" {
+		t.Skip("set FLEDGE_INTEGRATION=1 to run against local Herdr")
+	}
+	herdrPath, err := exec.LookPath("herdr")
+	if err != nil {
+		t.Skip("herdr is not installed")
+	}
+	return herdrPath
+}
+
+// newIntegrationRepo initializes a project in a fresh temporary directory and
+// returns its canonical root together with the session name derived from it.
+func newIntegrationRepo(t *testing.T) (string, string) {
+	t.Helper()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := exec.Command("git", "-C", root, "init", "-q").Run(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := project.Init(root); err != nil {
+		t.Fatal(err)
+	}
+	return root, project.SessionName(root)
+}
+
+// registerHerdrCleanup tears the session down however far the test got. It
+// must be registered before the server is started.
+func registerHerdrCleanup(t *testing.T, herdrPath, session string) {
+	t.Helper()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = exec.CommandContext(ctx, herdrPath, "--session", session, "server", "stop").Run()
+		_ = exec.CommandContext(ctx, herdrPath, "session", "stop", session).Run()
+		_ = exec.CommandContext(ctx, herdrPath, "session", "delete", session, "--json").Run()
+	})
+}
+
+// assertOrchestratorLayout verifies the fresh session owns exactly one
+// workspace and one tab, split into a named primary pane and an unlabeled one.
+func assertOrchestratorLayout(t *testing.T, ctx context.Context, service *Service, socket string) {
+	t.Helper()
+	snapshot, err := (&herdr.Client{Socket: socket}).Snapshot(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +145,7 @@ func TestLocalHerdrLifecycle(t *testing.T) {
 		t.Fatalf("orchestrator layout has workspaces=%d tabs=%d, want one of each: %#v",
 			len(snapshot.Workspaces), len(snapshot.Tabs), snapshot)
 	}
-	persisted, err := store.Read(session, root)
+	persisted, err := service.Store.Read(service.Project.Session, service.Project.Root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,38 +166,33 @@ func TestLocalHerdrLifecycle(t *testing.T) {
 			t.Fatalf("orchestrator right pane was unexpectedly labeled: %#v", panes)
 		}
 	}
-	status, err := service.Status(ctx)
-	if err != nil {
+}
+
+// runOptionalAgentLifecycle spawns, inspects and force-stops a real agent when
+// a harness is installed, and is a no-op otherwise.
+func runOptionalAgentLifecycle(t *testing.T, ctx context.Context, service *Service) {
+	t.Helper()
+	if _, err := exec.LookPath("codex"); err != nil {
+		return
+	}
+	if _, err := service.SpawnAgent(ctx, AgentStartOptions{
+		Name: "integration-agent", Kind: "codex", NewTab: true, Timeout: 30 * time.Second,
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if status.ServerState != "running" || !status.ProtocolCompatible || status.SessionSource != "derived" {
-		t.Fatalf("unexpected status: %#v", status)
+	agents, err := service.ListAgents(ctx)
+	if err != nil || len(agents) != 1 {
+		t.Fatalf("agent lifecycle inspection = %#v, %v", agents, err)
 	}
-	if _, err := exec.LookPath("codex"); err == nil {
-		if _, err := service.StartAgent(ctx, AgentStartOptions{
-			Name: "integration-agent", Kind: "codex", Timeout: 30 * time.Second,
-		}); err != nil {
-			t.Fatal(err)
-		}
-		agents, err := service.ListAgents(ctx)
-		if err != nil || len(agents) != 1 {
-			t.Fatalf("agent lifecycle inspection = %#v, %v", agents, err)
-		}
-		if _, err := service.StopAgent(ctx, "integration-agent", 3*time.Second, true); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := service.Stop(ctx, true); err != nil {
+	if _, err := service.StopAgent(ctx, "integration-agent", 3*time.Second, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, found, err := binary.FindSession(ctx, session); err != nil || found {
-		t.Fatalf("disposable session remains after lifecycle: found=%t err=%v", found, err)
-	}
-	runs, err := service.MessageRuns(0)
-	if err != nil || len(runs.Runs) != 1 || runs.Runs[0].Active {
-		t.Fatalf("archived message run = %#v, %v", runs, err)
-	}
-	firstRunID := runs.Runs[0].ID
+}
+
+// assertRunIsolationAfterRestart restarts the stopped session and verifies it
+// opens a message run distinct from the archived one.
+func assertRunIsolationAfterRestart(t *testing.T, ctx context.Context, service *Service, archivedRunID string) {
+	t.Helper()
 	restarted, err := service.Start(ctx, 10*time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -153,15 +200,12 @@ func TestLocalHerdrLifecycle(t *testing.T) {
 	if !restarted.Started {
 		t.Fatalf("fresh restart = %#v", restarted)
 	}
-	restartedState, err := store.Read(session, root)
+	restartedState, err := service.Store.Read(service.Project.Session, service.Project.Root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if restartedState.ActiveRunID == "" || restartedState.ActiveRunID == firstRunID {
+	if restartedState.ActiveRunID == "" || restartedState.ActiveRunID == archivedRunID {
 		t.Fatalf("restart did not isolate message runs: %#v", restartedState)
-	}
-	if _, err := service.Stop(ctx, true); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -169,13 +213,7 @@ func TestLocalHerdrLifecycle(t *testing.T) {
 // server.stop tears down the pane that is running Fledge before the foreground
 // process can clean up the stopped namespace.
 func TestLocalHerdrStopFromOrchestratorPane(t *testing.T) {
-	if os.Getenv("FLEDGE_INTEGRATION") != "1" {
-		t.Skip("set FLEDGE_INTEGRATION=1 to run against local Herdr")
-	}
-	herdrPath, err := exec.LookPath("herdr")
-	if err != nil {
-		t.Skip("herdr is not installed")
-	}
+	herdrPath := requireIntegrationHerdr(t)
 	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
@@ -187,17 +225,7 @@ func TestLocalHerdrStopFromOrchestratorPane(t *testing.T) {
 		t.Fatalf("build Fledge: %v: %s", err, out)
 	}
 
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := exec.Command("git", "-C", root, "init", "-q").Run(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := project.Init(root); err != nil {
-		t.Fatal(err)
-	}
-	session := project.SessionName(root)
+	root, session := newIntegrationRepo(t)
 	stateHome := t.TempDir()
 	commandEnv := make([]string, 0, len(os.Environ())+1)
 	for _, value := range os.Environ() {
@@ -206,13 +234,7 @@ func TestLocalHerdrStopFromOrchestratorPane(t *testing.T) {
 		}
 	}
 	commandEnv = append(commandEnv, "XDG_STATE_HOME="+stateHome)
-	t.Cleanup(func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = exec.CommandContext(cleanupCtx, herdrPath, "--session", session, "server", "stop").Run()
-		_ = exec.CommandContext(cleanupCtx, herdrPath, "session", "stop", session).Run()
-		_ = exec.CommandContext(cleanupCtx, herdrPath, "session", "delete", session, "--json").Run()
-	})
+	registerHerdrCleanup(t, herdrPath, session)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -270,10 +292,8 @@ func TestLocalHerdrStopFromOrchestratorPane(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.StopGeneration != before.StopGeneration+1 ||
-		after.Socket != "" || after.WorkspaceID != "" ||
-		after.OrchestratorTabID != "" || after.OrchestratorPaneID != "" ||
-		after.OrchestratorInitialized || len(after.Agents) != 0 {
-		t.Fatalf("in-pane cleanup left stale state: before=%#v after=%#v", before, after)
-	}
+	// The shared assertion prints only the post-stop state; this restores the
+	// pre-stop context on failure without widening the helper's signature.
+	t.Logf("state before in-pane stop: %#v", before)
+	assertDisposableStateCleared(t, after, before.StopGeneration+1)
 }

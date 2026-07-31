@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/herdr"
-	"github.com/Harrison-Blair/fledge/internal/project"
 	"github.com/Harrison-Blair/fledge/internal/state"
 )
 
@@ -24,21 +23,7 @@ func TestFailedServerStopDoesNotAdvanceGeneration(t *testing.T) {
 	fake.serverStopError = "refused by server"
 	fake.mu.Unlock()
 	workerDone := make(chan error, 1)
-	service.LaunchStopCleanup = func(request StopCleanupRequest) error {
-		workerStore, err := state.New(request.StateDir)
-		if err != nil {
-			return err
-		}
-		worker := &Service{
-			Project: project.Info{Root: request.ProjectRoot, Session: request.Session},
-			Binary:  herdr.Binary{Path: request.HerdrBinary},
-			Store:   workerStore,
-		}
-		go func() {
-			workerDone <- worker.FinalizeStop(context.Background(), request.BaseGeneration, 150*time.Millisecond)
-		}()
-		return nil
-	}
+	service.LaunchStopCleanup = launchTestCleanupWorker(t, workerDone, 150*time.Millisecond)
 
 	if _, err := service.Stop(t.Context(), false); err == nil {
 		t.Fatal("expected server stop failure")
@@ -82,35 +67,10 @@ func TestCleanupWorkerLaunchFailureLeavesServerRunning(t *testing.T) {
 
 func TestDetachedCleanupSurvivesCallerDisappearingAfterServerStop(t *testing.T) {
 	service, fake := newFakeLifecycle(t)
-	if err := service.Store.WithLocked(service.Project.Session, service.Project.Root, func(st *state.Session) error {
-		st.StopGeneration = 4
-		st.Socket = "/old/socket"
-		st.WorkspaceID = "workspace"
-		st.OrchestratorTabID = "tab"
-		st.OrchestratorPaneID = "pane"
-		st.OrchestratorInitialized = true
-		st.Agents["worker"] = state.Agent{Name: "worker", PaneID: "agent-pane"}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
+	seedDisposableState(t, service, 4)
 
 	workerDone := make(chan error, 1)
-	service.LaunchStopCleanup = func(request StopCleanupRequest) error {
-		workerStore, err := state.New(request.StateDir)
-		if err != nil {
-			return err
-		}
-		worker := &Service{
-			Project: project.Info{Root: request.ProjectRoot, Session: request.Session},
-			Binary:  herdr.Binary{Path: request.HerdrBinary},
-			Store:   workerStore,
-		}
-		go func() {
-			workerDone <- worker.FinalizeStop(context.Background(), request.BaseGeneration, request.Timeout)
-		}()
-		return nil
-	}
+	service.LaunchStopCleanup = launchTestCleanupWorker(t, workerDone, 0)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	fake.mu.Lock()
@@ -138,11 +98,7 @@ func TestDetachedCleanupSurvivesCallerDisappearingAfterServerStop(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.StopGeneration != 5 || st.Socket != "" || st.WorkspaceID != "" ||
-		st.OrchestratorTabID != "" || st.OrchestratorPaneID != "" ||
-		st.OrchestratorInitialized || len(st.Agents) != 0 {
-		t.Fatalf("detached cleanup left stale state: %#v", st)
-	}
+	assertDisposableStateCleared(t, st, 5)
 }
 
 func TestServerStopStillDeletesSessionWhenGenerationCannotBePersisted(t *testing.T) {
@@ -168,13 +124,19 @@ func TestServerStopStillDeletesSessionWhenGenerationCannotBePersisted(t *testing
 	}
 }
 
+func TestCoordinatedStopSurfacesCorruptMessageLog(t *testing.T) {
+	service, _ := newFakeLifecycle(t)
+	corruptMessageRun(t, service, startTestMessageRun(t, service))
+
+	_, err := service.Stop(t.Context(), false)
+	if translated := Translate(err); translated.Code != "message_log_corrupt" {
+		t.Fatalf("coordinated stop error = %#v", translated)
+	}
+}
+
 func TestForcedServerStopDeletesSession(t *testing.T) {
 	service, _ := newFakeLifecycle(t)
-	if _, err := service.StartAgent(t.Context(), AgentStartOptions{
-		Name: "worker", Kind: "codex", Timeout: 30 * time.Second,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	mustStartAgent(t, service, "worker")
 	result, err := service.Stop(t.Context(), true)
 	if err != nil {
 		t.Fatal(err)
@@ -465,9 +427,7 @@ func TestGracefulStopAgentsClassifiesSharedBudgetTimeouts(t *testing.T) {
 
 func TestGracefulAgentStopRetainsPane(t *testing.T) {
 	service, fake := newFakeLifecycle(t)
-	if _, err := service.StartAgent(t.Context(), AgentStartOptions{Name: "worker", Kind: "codex", Timeout: 30 * time.Second}); err != nil {
-		t.Fatal(err)
-	}
+	mustStartAgent(t, service, "worker")
 	result, err := service.StopAgent(t.Context(), "worker", time.Second, false)
 	if err != nil {
 		t.Fatal(err)
@@ -482,9 +442,7 @@ func TestGracefulAgentStopRetainsPane(t *testing.T) {
 
 func TestAgentStopTimeoutPreservesPane(t *testing.T) {
 	service, fake := newFakeLifecycle(t)
-	if _, err := service.StartAgent(t.Context(), AgentStartOptions{Name: "worker", Kind: "codex", Timeout: 30 * time.Second}); err != nil {
-		t.Fatal(err)
-	}
+	mustStartAgent(t, service, "worker")
 	fake.mu.Lock()
 	fake.ignoreExit = true
 	fake.mu.Unlock()

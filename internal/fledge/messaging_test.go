@@ -32,11 +32,7 @@ func startTestMessageRun(t *testing.T, service *Service) string {
 func TestMessageSendInjectAckAndLinkedReply(t *testing.T) {
 	service, fake := newFakeLifecycle(t)
 	startTestMessageRun(t, service)
-	if _, err := service.StartAgent(t.Context(), AgentStartOptions{
-		Name: "worker", Kind: "codex", Timeout: 30 * time.Second,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	mustStartAgent(t, service, "worker")
 	sent, err := service.SendMessage(t.Context(), "worker", "do the thing")
 	if err != nil {
 		t.Fatal(err)
@@ -104,11 +100,7 @@ func TestMessageQueuedForStoppedAgentAndFailsAtRunClose(t *testing.T) {
 func TestMessageDeliveryClassifiesDefiniteAndAmbiguousFailures(t *testing.T) {
 	service, fake := newFakeLifecycle(t)
 	startTestMessageRun(t, service)
-	if _, err := service.StartAgent(t.Context(), AgentStartOptions{
-		Name: "worker", Kind: "codex", Timeout: 30 * time.Second,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	mustStartAgent(t, service, "worker")
 	fake.mu.Lock()
 	fake.failMethod = "agent.prompt"
 	fake.mu.Unlock()
@@ -148,11 +140,7 @@ func TestQueuedReplayAndUnacknowledgedActivationFailure(t *testing.T) {
 	if err != nil || queued.Message.Status != messaging.StatusQueued {
 		t.Fatalf("queued = %#v, %v", queued, err)
 	}
-	if _, err := service.StartAgent(t.Context(), AgentStartOptions{
-		Name: "worker", Kind: "codex", Timeout: 30 * time.Second,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	mustStartAgent(t, service, "worker")
 	injected, err := service.ShowMessage(queued.Message.ID)
 	if err != nil || injected.Status != messaging.StatusAwaitingAck ||
 		len(injected.DeliveryAttempts) != 1 {
@@ -165,11 +153,7 @@ func TestQueuedReplayAndUnacknowledgedActivationFailure(t *testing.T) {
 	if err != nil || failed.Status != messaging.StatusFailed {
 		t.Fatalf("failed = %#v, %v", failed, err)
 	}
-	if _, err := service.StartAgent(t.Context(), AgentStartOptions{
-		Name: "worker", Kind: "codex", Timeout: 30 * time.Second,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	mustStartAgent(t, service, "worker")
 	replayed, err := service.ShowMessage(queued.Message.ID)
 	if err != nil || replayed.Status != messaging.StatusAwaitingAck ||
 		len(replayed.DeliveryAttempts) != 2 {
@@ -180,11 +164,7 @@ func TestQueuedReplayAndUnacknowledgedActivationFailure(t *testing.T) {
 func TestRetryForceAndCancellation(t *testing.T) {
 	service, _ := newFakeLifecycle(t)
 	startTestMessageRun(t, service)
-	if _, err := service.StartAgent(t.Context(), AgentStartOptions{
-		Name: "worker", Kind: "codex", Timeout: 30 * time.Second,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	mustStartAgent(t, service, "worker")
 	sent, err := service.SendMessage(t.Context(), "worker", "hello")
 	if err != nil {
 		t.Fatal(err)
@@ -207,11 +187,7 @@ func TestRetryForceAndCancellation(t *testing.T) {
 func TestPendingMessageCountsAppearInAgentAndProjectStatus(t *testing.T) {
 	service, _ := newFakeLifecycle(t)
 	startTestMessageRun(t, service)
-	if _, err := service.StartAgent(t.Context(), AgentStartOptions{
-		Name: "worker", Kind: "codex", Timeout: 30 * time.Second,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	mustStartAgent(t, service, "worker")
 	inbound, err := service.SendMessage(t.Context(), "worker", "pending")
 	if err != nil || inbound.Message.Status != messaging.StatusAwaitingAck {
 		t.Fatalf("inbound = %#v, %v", inbound, err)
@@ -258,5 +234,203 @@ func TestMessageValidationAndAuthority(t *testing.T) {
 	}
 	if err := ValidateMessageBody(string(make([]byte, MaxMessageBodyBytes+1))); err == nil {
 		t.Fatal("accepted oversized body")
+	}
+}
+
+// messageCommands are the four per-message commands that share the
+// active-run resolution and, for two of them, the sender authorization.
+type messageCommand struct {
+	name       string
+	verb       string
+	invoke     func(t *testing.T, service *Service, messageID string) error
+	authorized bool
+}
+
+func messageCommands() []messageCommand {
+	return []messageCommand{
+		{"reply", "replied to", func(t *testing.T, service *Service, id string) error {
+			_, err := service.ReplyMessage(t.Context(), id, "answer")
+			return err
+		}, false},
+		{"ack", "acknowledged", func(t *testing.T, service *Service, id string) error {
+			_, err := service.AckMessage(t.Context(), id)
+			return err
+		}, false},
+		{"retry", "retried", func(t *testing.T, service *Service, id string) error {
+			_, err := service.RetryMessage(t.Context(), id, true)
+			return err
+		}, true},
+		{"cancel", "cancelled", func(t *testing.T, service *Service, id string) error {
+			_, err := service.CancelMessage(t.Context(), id, "obsolete")
+			return err
+		}, true},
+	}
+}
+
+func TestArchivedMessagesRejectEveryCommandWithItsOwnVerb(t *testing.T) {
+	service, _ := newFakeLifecycle(t)
+	runID := startTestMessageRun(t, service)
+	mustStartAgent(t, service, "worker")
+	sent, err := service.SendMessage(t.Context(), "worker", "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.closeMessageRun(runID, "test close"); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, command := range messageCommands() {
+		t.Run(command.name, func(t *testing.T) {
+			want := "archived messages cannot be " + command.verb
+			translated := Translate(command.invoke(t, service, sent.Message.ID))
+			if translated == nil || translated.Code != "message_state_conflict" || translated.Message != want {
+				t.Fatalf("error = %#v, want %q", translated, want)
+			}
+		})
+	}
+}
+
+func TestMessagesFromAnEarlierRunAreRejectedByEveryCommand(t *testing.T) {
+	service, _ := newFakeLifecycle(t)
+	startTestMessageRun(t, service)
+	mustStartAgent(t, service, "worker")
+	sent, err := service.SendMessage(t.Context(), "worker", "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The first run stays open on disk but is no longer the session's run.
+	startTestMessageRun(t, service)
+
+	// Every command rejects identically here, so one flat loop reports all
+	// four rather than four subtests asserting the same string.
+	for _, command := range messageCommands() {
+		translated := Translate(command.invoke(t, service, sent.Message.ID))
+		if translated == nil || translated.Code != "message_state_conflict" ||
+			translated.Message != "message is not part of the active run" {
+			t.Errorf("%s error = %#v", command.name, translated)
+		}
+	}
+}
+
+func TestRetryAndCancelAreRestrictedToTheSenderOrUser(t *testing.T) {
+	service, _ := newFakeLifecycle(t)
+	startTestMessageRun(t, service)
+	mustStartAgent(t, service, "worker")
+	fromUser, err := service.SendMessage(t.Context(), "worker", "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	service.CallerPaneID = "p1"
+	for _, command := range messageCommands() {
+		if !command.authorized {
+			continue
+		}
+		t.Run("denied/"+command.name, func(t *testing.T) {
+			want := "only the sender or user can " + command.name + " this message"
+			translated := Translate(command.invoke(t, service, fromUser.Message.ID))
+			if translated == nil || translated.Code != "message_forbidden" || translated.Message != want {
+				t.Fatalf("error = %#v, want %q", translated, want)
+			}
+		})
+	}
+
+	fromWorker, err := service.SendMessage(t.Context(), "user", "question")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RetryMessage(t.Context(), fromWorker.Message.ID, true); err != nil {
+		t.Fatalf("sender was not allowed to retry its own message: %v", err)
+	}
+	if _, err := service.CancelMessage(t.Context(), fromWorker.Message.ID, "obsolete"); err != nil {
+		t.Fatalf("sender was not allowed to cancel its own message: %v", err)
+	}
+
+	service.CallerPaneID = ""
+	if _, err := service.CancelMessage(t.Context(), fromUser.Message.ID, "obsolete"); err != nil {
+		t.Fatalf("user was not allowed to cancel a message it sent: %v", err)
+	}
+
+	// The user's authority is not merely "is the sender": it extends to
+	// messages somebody else sent.
+	service.CallerPaneID = "p1"
+	fromAgent, err := service.SendMessage(t.Context(), "user", "another")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.CallerPaneID = ""
+	if _, err := service.CancelMessage(t.Context(), fromAgent.Message.ID, "obsolete"); err != nil {
+		t.Fatalf("user was not allowed to cancel an agent's message: %v", err)
+	}
+}
+
+func TestMessageRecipientRulesRejectTheWrongCaller(t *testing.T) {
+	service, _ := newFakeLifecycle(t)
+	startTestMessageRun(t, service)
+	mustStartAgent(t, service, "worker")
+	sent, err := service.SendMessage(t.Context(), "worker", "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.ReplyMessage(t.Context(), sent.Message.ID, "answer")
+	if translated := Translate(err); translated.Code != "message_wrong_recipient" ||
+		translated.Message != "only the message recipient can reply" {
+		t.Fatalf("reply error = %#v", translated)
+	}
+	_, err = service.AckMessage(t.Context(), sent.Message.ID)
+	if translated := Translate(err); translated.Code != "message_wrong_recipient" ||
+		translated.Message != "only the message recipient can acknowledge it" {
+		t.Fatalf("ack error = %#v", translated)
+	}
+	_, err = service.SendMessage(t.Context(), "ghost", "hello")
+	if translated := Translate(err); translated.Code != "message_wrong_recipient" ||
+		translated.Message != `recipient "ghost" is not known in the active run` {
+		t.Fatalf("unknown recipient error = %#v", translated)
+	}
+	service.CallerPaneID = "p1"
+	_, err = service.SendMessage(t.Context(), "worker", "hello")
+	if translated := Translate(err); translated.Code != "message_wrong_recipient" ||
+		translated.Message != "cannot send a message to yourself" {
+		t.Fatalf("self-addressed error = %#v", translated)
+	}
+}
+
+func TestPrepareMessagingActivationWithoutActiveRunReturnsZeroTarget(t *testing.T) {
+	service, _ := newFakeLifecycle(t)
+	mustStartAgent(t, service, "worker")
+
+	target, err := service.prepareMessagingActivation("worker", "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != (deliveryTarget{}) {
+		t.Fatalf("target without an active run = %#v", target)
+	}
+	st, err := service.Store.Read(service.Project.Session, service.Project.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Agents["worker"].ActivationID != "" {
+		t.Fatalf("activation was recorded without a run: %#v", st.Agents)
+	}
+}
+
+func TestPrepareMessagingActivationRecordsActivationForActiveRun(t *testing.T) {
+	service, _ := newFakeLifecycle(t)
+	runID := startTestMessageRun(t, service)
+	mustStartAgent(t, service, "worker")
+
+	target, err := service.prepareMessagingActivation("worker", "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := service.Store.Read(service.Project.Session, service.Project.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.runID != runID || target.agent != "worker" || target.paneID != "p1" ||
+		target.activationID == "" || target.activationID != st.Agents["worker"].ActivationID {
+		t.Fatalf("target = %#v, persisted agent = %#v", target, st.Agents["worker"])
 	}
 }

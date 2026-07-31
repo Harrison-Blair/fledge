@@ -32,13 +32,6 @@ type AgentStartResult struct {
 	Argv  []string  `json:"native_args"`
 }
 
-// StartAgent retains the dedicated-tab service entrypoint for callers that do
-// not participate in interactive pane takeover.
-func (s *Service) StartAgent(ctx context.Context, opts AgentStartOptions) (AgentStartResult, error) {
-	opts.NewTab = true
-	return s.SpawnAgent(ctx, opts)
-}
-
 func (s *Service) SpawnAgent(ctx context.Context, opts AgentStartOptions) (AgentStartResult, error) {
 	if err := ValidateAgentName(opts.Name); err != nil {
 		return AgentStartResult{}, err

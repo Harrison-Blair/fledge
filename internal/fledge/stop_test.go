@@ -19,18 +19,7 @@ import (
 
 func TestStopDeletesStoppedSessionAndClearsMappings(t *testing.T) {
 	service, exists, _ := newStoppedService(t, true, false)
-	if err := service.Store.WithLocked(service.Project.Session, service.Project.Root, func(st *state.Session) error {
-		st.StopGeneration = 7
-		st.Socket = "/old/socket"
-		st.WorkspaceID = "workspace"
-		st.OrchestratorTabID = "tab"
-		st.OrchestratorPaneID = "pane"
-		st.OrchestratorInitialized = true
-		st.Agents["worker"] = state.Agent{Name: "worker", PaneID: "agent-pane"}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
+	seedDisposableState(t, service, 7)
 
 	result, err := service.Stop(t.Context(), false)
 	if err != nil {
@@ -46,11 +35,7 @@ func TestStopDeletesStoppedSessionAndClearsMappings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.StopGeneration != 7 || st.Socket != "" || st.WorkspaceID != "" ||
-		st.OrchestratorTabID != "" || st.OrchestratorPaneID != "" ||
-		st.OrchestratorInitialized || len(st.Agents) != 0 {
-		t.Fatalf("disposable state was not cleared while retaining generation: %#v", st)
-	}
+	assertDisposableStateCleared(t, st, 7)
 }
 
 func TestStopMissingSessionIsSuccessfulAndClearsStaleMappings(t *testing.T) {
@@ -109,18 +94,7 @@ func TestStopDeleteFailureCanBeRetried(t *testing.T) {
 
 func TestConcurrentStopFinalizersDeleteIdempotentlyAndAdvanceGenerationOnce(t *testing.T) {
 	service, exists, _ := newStoppedService(t, true, false)
-	if err := service.Store.WithLocked(service.Project.Session, service.Project.Root, func(st *state.Session) error {
-		st.StopGeneration = 7
-		st.Socket = "/old/socket"
-		st.WorkspaceID = "workspace"
-		st.OrchestratorTabID = "tab"
-		st.OrchestratorPaneID = "pane"
-		st.OrchestratorInitialized = true
-		st.Agents["worker"] = state.Agent{Name: "worker", PaneID: "agent-pane"}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
+	seedDisposableState(t, service, 7)
 
 	start := make(chan struct{})
 	errs := make(chan error, 2)
@@ -152,27 +126,12 @@ func TestConcurrentStopFinalizersDeleteIdempotentlyAndAdvanceGenerationOnce(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.StopGeneration != 8 || st.Socket != "" || st.WorkspaceID != "" ||
-		st.OrchestratorTabID != "" || st.OrchestratorPaneID != "" ||
-		st.OrchestratorInitialized || len(st.Agents) != 0 {
-		t.Fatalf("racing finalizers left inconsistent state: %#v", st)
-	}
+	assertDisposableStateCleared(t, st, 8)
 }
 
 func TestPrepareFreshStartDeletesStoppedSessionAndClearsMappings(t *testing.T) {
 	service, exists, _ := newStoppedService(t, true, false)
-	if err := service.Store.WithLocked(service.Project.Session, service.Project.Root, func(st *state.Session) error {
-		st.StopGeneration = 11
-		st.Socket = "/stale/socket"
-		st.WorkspaceID = "stale-workspace"
-		st.OrchestratorTabID = "stale-tab"
-		st.OrchestratorPaneID = "stale-pane"
-		st.OrchestratorInitialized = true
-		st.Agents["worker"] = state.Agent{Name: "worker", PaneID: "stale-agent-pane"}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
+	seedDisposableState(t, service, 11)
 
 	if err := service.prepareFreshStart(t.Context(), herdr.SessionInfo{
 		Name: service.Project.Session, Running: false,
@@ -186,11 +145,7 @@ func TestPrepareFreshStartDeletesStoppedSessionAndClearsMappings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.StopGeneration != 11 || st.Socket != "" || st.WorkspaceID != "" ||
-		st.OrchestratorTabID != "" || st.OrchestratorPaneID != "" ||
-		st.OrchestratorInitialized || len(st.Agents) != 0 {
-		t.Fatalf("fresh-start state was not reset: %#v", st)
-	}
+	assertDisposableStateCleared(t, st, 11)
 }
 
 func TestPrepareFreshStartAbortsWhenStoppedSessionCannotBeDeleted(t *testing.T) {
@@ -216,18 +171,65 @@ func TestPrepareFreshStartAbortsWhenStaleMappingsCannotBeCleared(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	corruptStateFile(t, service)
+
+	err := service.prepareFreshStart(t.Context(), herdr.SessionInfo{})
+	if translated := Translate(err); translated.Code != "state_persist_failed" ||
+		!strings.Contains(translated.Message, "before startup") {
+		t.Fatalf("unexpected state cleanup error: %#v", translated)
+	}
+}
+
+func TestStoppedSessionCleanupReportsUnreadableStateAsPersistFailure(t *testing.T) {
+	service, exists, _ := newStoppedService(t, true, false)
+	corruptStateFile(t, service)
+
+	_, err := service.Stop(t.Context(), false)
+	translated := Translate(err)
+	if translated.Code != "state_persist_failed" ||
+		!strings.Contains(translated.Message, "active message run could not be closed") {
+		t.Fatalf("stopped-session cleanup error = %#v", translated)
+	}
+	if _, statErr := os.Stat(exists); !os.IsNotExist(statErr) {
+		t.Fatalf("session was not deleted before the state failure: %v", statErr)
+	}
+}
+
+func TestStoppedSessionCleanupSurfacesCorruptMessageLog(t *testing.T) {
+	service, _, _ := newStoppedService(t, true, false)
+	corruptMessageRun(t, service, startTestMessageRun(t, service))
+
+	_, err := service.Stop(t.Context(), false)
+	if translated := Translate(err); translated.Code != "message_log_corrupt" {
+		t.Fatalf("stopped-session cleanup error = %#v", translated)
+	}
+}
+
+func TestPrepareFreshStartSurfacesCorruptMessageLog(t *testing.T) {
+	service, _, _ := newStoppedService(t, false, false)
+	corruptMessageRun(t, service, startTestMessageRun(t, service))
+
+	err := service.prepareFreshStart(t.Context(), herdr.SessionInfo{})
+	if translated := Translate(err); translated.Code != "message_log_corrupt" {
+		t.Fatalf("fresh-start error = %#v", translated)
+	}
+}
+
+// corruptStateFile replaces the persisted session with unparseable JSON. The
+// leading Read is load-bearing: it materializes the state file, and the glob
+// below asserts exactly one exists, so a caller cannot silently "corrupt"
+// nothing and still see the error it expected from some other cause.
+func corruptStateFile(t *testing.T, service *Service) {
+	t.Helper()
+	if _, err := service.Store.Read(service.Project.Session, service.Project.Root); err != nil {
+		t.Fatal(err)
+	}
 	files, err := filepath.Glob(filepath.Join(service.Store.Root, "*.json"))
 	if err != nil || len(files) != 1 {
 		t.Fatalf("state files = %v, %v", files, err)
 	}
 	if err := os.WriteFile(files[0], []byte("{broken\n"), 0o600); err != nil {
 		t.Fatal(err)
-	}
-
-	err = service.prepareFreshStart(t.Context(), herdr.SessionInfo{})
-	if translated := Translate(err); translated.Code != "state_persist_failed" ||
-		!strings.Contains(translated.Message, "before startup") {
-		t.Fatalf("unexpected state cleanup error: %#v", translated)
 	}
 }
 
