@@ -8,13 +8,13 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/herdr"
+	"github.com/Harrison-Blair/fledge/internal/herdrtest"
 	"github.com/Harrison-Blair/fledge/internal/project"
 )
 
@@ -38,21 +38,30 @@ func initializedProject(t *testing.T) string {
 	return root
 }
 
-func fakeStartBinary(
-	t *testing.T,
-	root, session string,
-	running, workspacePresent bool,
-	attachExit int,
-	setupFailure ...string,
-) (string, string, string) {
+// startOptions varies the fake herdr built by fakeStartBinary: whether the
+// session is already Running, whether the workspace is already present, the
+// status the "session attach" branch exits with, and the socket method whose
+// failure is injected during session setup.
+type startOptions struct {
+	Running          bool
+	WorkspacePresent bool
+	AttachExit       int
+	SetupFailure     string
+}
+
+func fakeStartBinary(t *testing.T, root, session string, opts startOptions) (string, string, string) {
 	t.Helper()
 	temp := t.TempDir()
 	runningMarker := filepath.Join(temp, "running")
 	attachLog := filepath.Join(temp, "attach.log")
 	workspaceLog := filepath.Join(temp, "workspace.log")
 	pidFile := filepath.Join(temp, "server.pid")
-	socket := fakeStartSocket(t, root, workspacePresent, workspaceLog, setupFailure...)
-	if running {
+	var setupFailure []string
+	if opts.SetupFailure != "" {
+		setupFailure = append(setupFailure, opts.SetupFailure)
+	}
+	socket := fakeStartSocket(t, root, opts.WorkspacePresent, workspaceLog, setupFailure...)
+	if opts.Running {
 		if err := os.WriteFile(runningMarker, nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -68,41 +77,24 @@ func fakeStartBinary(
 		}
 	})
 
-	methods := make([]string, 0, len(herdr.RequiredMethods))
-	for _, method := range herdr.RequiredMethods {
-		methods = append(methods, fmt.Sprintf(`{"method":{"const":%s}}`, strconv.Quote(method)))
-	}
-	schema := fmt.Sprintf(`{"protocol":17,"requests":[%s]}`, strings.Join(methods, ","))
 	sessions := fmt.Sprintf(`{"sessions":[{"name":%s,"running":true,"socket_path":%s}]}`,
 		strconv.Quote(session), strconv.Quote(socket))
-	script := fmt.Sprintf(`#!/bin/sh
-if [ "$1" = "--version" ]; then
-  echo "herdr 0.7.5"
-elif [ "$1" = "api" ] && [ "$2" = "schema" ]; then
-  printf '%%s\n' %s
-elif [ "$1" = "session" ] && [ "$2" = "list" ]; then
-  if [ -f %s ]; then
-    printf '%%s\n' %s
-  else
-    printf '%%s\n' '{"sessions":[]}'
-  fi
-elif [ "$1" = "session" ] && [ "$2" = "attach" ]; then
-  printf '%%s|%%s\n' "$PWD" "$*" >> %s
-  exit %d
-elif [ "$1" = "--session" ] && [ "$3" = "server" ]; then
-  printf '%%s' "$$" > %s
-  touch %s
-  trap 'exit 0' TERM INT
-  while :; do sleep 1; done
-else
-  exit 2
-fi
-`, strconv.Quote(schema), strconv.Quote(runningMarker), strconv.Quote(sessions),
-		strconv.Quote(attachLog), attachExit, strconv.Quote(pidFile), strconv.Quote(runningMarker))
-	binary := filepath.Join(temp, "herdr-fake")
-	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	attachBody := fmt.Sprintf(`printf '%%s|%%s\n' "$PWD" "$*" >> %s
+exit %d
+`, strconv.Quote(attachLog), opts.AttachExit)
+	serverBody := fmt.Sprintf(`printf '%%s' "$$" > %s
+touch %s
+trap 'exit 0' TERM INT
+while :; do sleep 1; done
+`, strconv.Quote(pidFile), strconv.Quote(runningMarker))
+	binary := herdrtest.WriteBinary(t, temp, herdrtest.Options{
+		Version:  herdrtest.VersionOutput,
+		Sessions: []herdrtest.SessionCase{{Marker: runningMarker, Payload: sessions}},
+		Branches: []herdrtest.Branch{
+			{Condition: `[ "$1" = "session" ] && [ "$2" = "attach" ]`, Body: attachBody},
+			{Condition: `[ "$1" = "--session" ] && [ "$3" = "server" ]`, Body: serverBody},
+		},
+	})
 	return binary, attachLog, workspaceLog
 }
 
@@ -186,44 +178,24 @@ func fakeCoordinatedStopBinary(t *testing.T, root, session string) (binary, atta
 		}
 	}()
 
-	methods := make([]string, 0, len(herdr.RequiredMethods))
-	for _, method := range herdr.RequiredMethods {
-		methods = append(methods, fmt.Sprintf(`{"method":{"const":%s}}`, strconv.Quote(method)))
-	}
-	schema := fmt.Sprintf(`{"protocol":17,"requests":[%s]}`, strings.Join(methods, ","))
 	sessions := fmt.Sprintf(`{"sessions":[{"name":%s,"running":true,"socket_path":%s}]}`,
 		strconv.Quote(session), strconv.Quote(socket))
 	stoppedSessions := fmt.Sprintf(`{"sessions":[{"name":%s,"running":false}]}`, strconv.Quote(session))
-	script := fmt.Sprintf(`#!/bin/sh
-if [ "$1" = "--version" ]; then
-  echo "herdr 0.7.5"
-elif [ "$1" = "api" ] && [ "$2" = "schema" ]; then
-  printf '%%s\n' %s
-elif [ "$1" = "session" ] && [ "$2" = "list" ]; then
-  if [ -f %s ]; then
-    printf '%%s\n' %s
-  elif [ -f %s ]; then
-    printf '%%s\n' %s
-  else
-    printf '%%s\n' '{"sessions":[]}'
-  fi
-elif [ "$1" = "session" ] && [ "$2" = "delete" ]; then
-  rm -f %s
-  printf '%%s\n' '{"deleted":true}'
-elif [ "$1" = "session" ] && [ "$2" = "attach" ]; then
-  touch %s
-  while [ -f %s ]; do sleep 0.02; done
-  exit 9
-else
-  exit 2
-fi
-`, strconv.Quote(schema), strconv.Quote(running), strconv.Quote(sessions),
-		strconv.Quote(exists), strconv.Quote(stoppedSessions), strconv.Quote(exists),
-		strconv.Quote(attached), strconv.Quote(running))
-	binary = filepath.Join(temp, "herdr-fake")
-	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	attachBody := fmt.Sprintf(`touch %s
+while [ -f %s ]; do sleep 0.02; done
+exit 9
+`, strconv.Quote(attached), strconv.Quote(running))
+	binary = herdrtest.WriteBinary(t, temp, herdrtest.Options{
+		Version: herdrtest.VersionOutput,
+		Sessions: []herdrtest.SessionCase{
+			{Marker: running, Payload: sessions},
+			{Marker: exists, Payload: stoppedSessions},
+		},
+		DeleteRemoves: exists,
+		Branches: []herdrtest.Branch{
+			{Condition: `[ "$1" = "session" ] && [ "$2" = "attach" ]`, Body: attachBody},
+		},
+	})
 	return binary, attached, running
 }
 

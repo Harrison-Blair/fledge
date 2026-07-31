@@ -6,13 +6,13 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/herdr"
+	"github.com/Harrison-Blair/fledge/internal/herdrtest"
 	"github.com/Harrison-Blair/fledge/internal/project"
 	"github.com/Harrison-Blair/fledge/internal/state"
 )
@@ -254,30 +254,12 @@ func newStoppedService(t *testing.T, exists, failOnce bool) (*Service, string, s
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := `#!/bin/sh
-printf '%s\n' "$*" >> ` + strconv.Quote(log) + `
-if [ "$1" = "session" ] && [ "$2" = "list" ]; then
-  if [ -f ` + strconv.Quote(existsPath) + ` ]; then
-    printf '%s\n' ` + strconv.Quote(string(payload)) + `
-  else
-    printf '%s\n' '{"sessions":[]}'
-  fi
-elif [ "$1" = "session" ] && [ "$2" = "delete" ]; then
-  if [ -f ` + strconv.Quote(failPath) + ` ]; then
-    rm -f ` + strconv.Quote(failPath) + `
-    echo "injected deletion failure" >&2
-    exit 4
-  fi
-  rm -f ` + strconv.Quote(existsPath) + `
-  printf '%s\n' '{"deleted":true}'
-else
-  exit 2
-fi
-`
-	binaryPath := filepath.Join(temp, "herdr-fake")
-	if err := os.WriteFile(binaryPath, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	binaryPath := herdrtest.WriteBinary(t, temp, herdrtest.Options{
+		InvocationLog:  log,
+		Sessions:       []herdrtest.SessionCase{{Marker: existsPath, Payload: string(payload)}},
+		DeleteRemoves:  existsPath,
+		DeleteFailOnce: failPath,
+	})
 	store, err := state.New(filepath.Join(temp, "state"))
 	if err != nil {
 		t.Fatal(err)

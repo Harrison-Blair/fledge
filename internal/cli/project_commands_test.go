@@ -17,6 +17,7 @@ import (
 
 	"github.com/Harrison-Blair/fledge/internal/fledge"
 	"github.com/Harrison-Blair/fledge/internal/herdr"
+	"github.com/Harrison-Blair/fledge/internal/herdrtest"
 	"github.com/Harrison-Blair/fledge/internal/project"
 	"github.com/Harrison-Blair/fledge/internal/state"
 )
@@ -25,42 +26,7 @@ func TestStopJSONDeletesStoppedDeterministicSession(t *testing.T) {
 	root := initializedProject(t)
 	t.Chdir(root)
 	session := project.SessionName(root)
-	temp := t.TempDir()
-	exists := filepath.Join(temp, "exists")
-	deleteLog := filepath.Join(temp, "delete.log")
-	if err := os.WriteFile(exists, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	methods := make([]string, 0, len(herdr.RequiredMethods))
-	for _, method := range herdr.RequiredMethods {
-		methods = append(methods, fmt.Sprintf(`{"method":{"const":%s}}`, strconv.Quote(method)))
-	}
-	schema := fmt.Sprintf(`{"protocol":17,"requests":[%s]}`, strings.Join(methods, ","))
-	sessions := fmt.Sprintf(`{"sessions":[{"name":%s,"running":false}]}`, strconv.Quote(session))
-	script := fmt.Sprintf(`#!/bin/sh
-if [ "$1" = "--version" ]; then
-  echo "herdr 0.7.5"
-elif [ "$1" = "api" ] && [ "$2" = "schema" ]; then
-  printf '%%s\n' %s
-elif [ "$1" = "session" ] && [ "$2" = "list" ]; then
-  if [ -f %s ]; then
-    printf '%%s\n' %s
-  else
-    printf '%%s\n' '{"sessions":[]}'
-  fi
-elif [ "$1" = "session" ] && [ "$2" = "delete" ]; then
-  printf '%%s\n' "$*" > %s
-  rm -f %s
-  printf '%%s\n' '{"deleted":true}'
-else
-  exit 2
-fi
-`, strconv.Quote(schema), strconv.Quote(exists), strconv.Quote(sessions),
-		strconv.Quote(deleteLog), strconv.Quote(exists))
-	binary := filepath.Join(temp, "herdr-fake")
-	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	binary, deleteLog := fakeStoppedStopBinary(t, session, true)
 
 	var stdout, stderr bytes.Buffer
 	code := Execute(context.Background(), []string{"stop", "--json", "--herdr-bin", binary},
@@ -320,32 +286,13 @@ func fakeStoppedStopBinary(t *testing.T, session string, exists bool) (string, s
 			t.Fatal(err)
 		}
 	}
-	schema := fakeHerdrSchema()
 	sessions := fmt.Sprintf(`{"sessions":[{"name":%s,"running":false}]}`, strconv.Quote(session))
-	script := fmt.Sprintf(`#!/bin/sh
-if [ "$1" = "--version" ]; then
-  echo "herdr 0.7.5"
-elif [ "$1" = "api" ] && [ "$2" = "schema" ]; then
-  printf '%%s\n' %s
-elif [ "$1" = "session" ] && [ "$2" = "list" ]; then
-  if [ -f %s ]; then
-    printf '%%s\n' %s
-  else
-    printf '%%s\n' '{"sessions":[]}'
-  fi
-elif [ "$1" = "session" ] && [ "$2" = "delete" ]; then
-  printf '%%s\n' "$*" > %s
-  rm -f %s
-  printf '%%s\n' '{"deleted":true}'
-else
-  exit 2
-fi
-`, strconv.Quote(schema), strconv.Quote(existsMarker), strconv.Quote(sessions),
-		strconv.Quote(deleteLog), strconv.Quote(existsMarker))
-	binary := filepath.Join(temp, "herdr-fake")
-	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	binary := herdrtest.WriteBinary(t, temp, herdrtest.Options{
+		Version:       herdrtest.VersionOutput,
+		Sessions:      []herdrtest.SessionCase{{Marker: existsMarker, Payload: sessions}},
+		DeleteRemoves: existsMarker,
+		DeleteLog:     deleteLog,
+	})
 	return binary, deleteLog
 }
 
@@ -396,30 +343,11 @@ func fakeLiveStopBinary(
 	}()
 	sessions := fmt.Sprintf(`{"sessions":[{"name":%s,"running":true,"socket_path":%s}]}`,
 		strconv.Quote(session), strconv.Quote(socket))
-	script := fmt.Sprintf(`#!/bin/sh
-if [ "$1" = "--version" ]; then
-  echo "herdr 0.7.5"
-elif [ "$1" = "api" ] && [ "$2" = "schema" ]; then
-  printf '%%s\n' %s
-elif [ "$1" = "session" ] && [ "$2" = "list" ]; then
-  printf '%%s\n' %s
-else
-  exit 2
-fi
-`, strconv.Quote(fakeHerdrSchema()), strconv.Quote(sessions))
-	binary := filepath.Join(temp, "herdr-fake")
-	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	binary := herdrtest.WriteBinary(t, temp, herdrtest.Options{
+		Version:  herdrtest.VersionOutput,
+		Sessions: []herdrtest.SessionCase{{Payload: sessions}},
+	})
 	return binary, &serverStops
-}
-
-func fakeHerdrSchema() string {
-	methods := make([]string, 0, len(herdr.RequiredMethods))
-	for _, method := range herdr.RequiredMethods {
-		methods = append(methods, fmt.Sprintf(`{"method":{"const":%s}}`, strconv.Quote(method)))
-	}
-	return fmt.Sprintf(`{"protocol":17,"requests":[%s]}`, strings.Join(methods, ","))
 }
 
 func TestInternalStopCleanupFinalizesExactSessionAndState(t *testing.T) {
@@ -448,24 +376,10 @@ func TestInternalStopCleanupFinalizesExactSessionAndState(t *testing.T) {
 		t.Fatal(err)
 	}
 	sessions := fmt.Sprintf(`{"sessions":[{"name":%s,"running":false}]}`, strconv.Quote(session))
-	script := fmt.Sprintf(`#!/bin/sh
-if [ "$1" = "session" ] && [ "$2" = "list" ]; then
-  if [ -f %s ]; then
-    printf '%%s\n' %s
-  else
-    printf '%%s\n' '{"sessions":[]}'
-  fi
-elif [ "$1" = "session" ] && [ "$2" = "delete" ]; then
-  rm -f %s
-  printf '%%s\n' '{"deleted":true}'
-else
-  exit 2
-fi
-`, strconv.Quote(exists), strconv.Quote(sessions), strconv.Quote(exists))
-	binary := filepath.Join(temp, "herdr-fake")
-	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	binary := herdrtest.WriteBinary(t, temp, herdrtest.Options{
+		Sessions:      []herdrtest.SessionCase{{Marker: exists, Payload: sessions}},
+		DeleteRemoves: exists,
+	})
 
 	var stdout, stderr bytes.Buffer
 	code := Execute(context.Background(), []string{
@@ -572,26 +486,12 @@ func TestStatusFromNestedDirectoryUsesMarkerAndReportsSessionSource(t *testing.T
 		t.Fatal(err)
 	}
 
-	methods := make([]string, 0, len(herdr.RequiredMethods))
-	for _, method := range herdr.RequiredMethods {
-		methods = append(methods, fmt.Sprintf(`{"method":{"const":%s}}`, strconv.Quote(method)))
-	}
-	schema := fmt.Sprintf(`{"protocol":17,"requests":[%s]}`, strings.Join(methods, ","))
-	script := fmt.Sprintf(`#!/bin/sh
-if [ "$1" = "--version" ]; then
-  echo "herdr test"
-elif [ "$1" = "api" ] && [ "$2" = "schema" ]; then
-  printf '%%s\n' %s
-elif [ "$1" = "session" ] && [ "$2" = "list" ]; then
-  printf '%%s\n' '{"sessions":[{"name":"unrelated-session","running":true,"socket_path":"/missing/unrelated.sock"}]}'
-else
-  exit 2
-fi
-`, strconv.Quote(schema))
-	binary := filepath.Join(t.TempDir(), "herdr-fake")
-	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	unrelated := `{"sessions":[{"name":"unrelated-session","running":true,` +
+		`"socket_path":"/missing/unrelated.sock"}]}`
+	binary := herdrtest.WriteBinary(t, t.TempDir(), herdrtest.Options{
+		Version:  "herdr test",
+		Sessions: []herdrtest.SessionCase{{Payload: unrelated}},
+	})
 
 	var stdout, stderr bytes.Buffer
 	code := Execute(context.Background(), []string{"status", "--json", "--herdr-bin", binary},

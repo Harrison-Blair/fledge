@@ -18,7 +18,8 @@ func TestStartAttachesResolvedRunningSession(t *testing.T) {
 	root := initializedProject(t)
 	t.Chdir(root)
 	session := project.SessionName(root)
-	binary, attachLog, workspaceLog := fakeStartBinary(t, root, session, true, true, 0)
+	binary, attachLog, workspaceLog := fakeStartBinary(t, root, session,
+		startOptions{Running: true, WorkspacePresent: true})
 
 	var stdout, stderr bytes.Buffer
 	code := Execute(context.Background(), []string{"start", "--herdr-bin", binary}, bytes.NewBuffer(nil), &stdout, &stderr)
@@ -44,7 +45,7 @@ func TestFreshDetachedStartSkipsOrchestratorPicker(t *testing.T) {
 	root := initializedProject(t)
 	t.Chdir(root)
 	session := project.SessionName(root)
-	binary, attachLog, workspaceLog := fakeStartBinary(t, root, session, false, false, 0)
+	binary, attachLog, workspaceLog := fakeStartBinary(t, root, session, startOptions{})
 
 	var stdout, stderr bytes.Buffer
 	code := Execute(context.Background(), []string{
@@ -68,7 +69,7 @@ func TestStartNewSessionAttachesAfterReadiness(t *testing.T) {
 	}
 	t.Chdir(nested)
 	session := project.SessionName(root)
-	binary, attachLog, workspaceLog := fakeStartBinary(t, root, session, false, false, 0)
+	binary, attachLog, workspaceLog := fakeStartBinary(t, root, session, startOptions{})
 
 	var stdout, stderr bytes.Buffer
 	code := Execute(context.Background(), []string{
@@ -98,9 +99,7 @@ func TestFreshStartPickerFailureWarnsAndStillAttaches(t *testing.T) {
 	root := initializedProject(t)
 	t.Chdir(root)
 	session := project.SessionName(root)
-	binary, attachLog, _ := fakeStartBinary(
-		t, root, session, false, false, 0, "pane.send_input",
-	)
+	binary, attachLog, _ := fakeStartBinary(t, root, session, startOptions{SetupFailure: "pane.send_input"})
 
 	var stdout, stderr bytes.Buffer
 	code := Execute(context.Background(), []string{
@@ -131,7 +130,8 @@ func TestStartDetachPreservesHumanAndJSONOutputWithoutAttaching(t *testing.T) {
 			root := initializedProject(t)
 			t.Chdir(root)
 			session := project.SessionName(root)
-			binary, attachLog, _ := fakeStartBinary(t, root, session, true, true, 0)
+			binary, attachLog, _ := fakeStartBinary(t, root, session,
+				startOptions{Running: true, WorkspacePresent: true})
 			args := []string{"start", "--detach", "--herdr-bin", binary}
 			if test.json {
 				args = append(args, "--json")
@@ -172,7 +172,8 @@ func TestStartReportsAttachFailureAfterDiagnostics(t *testing.T) {
 	root := initializedProject(t)
 	t.Chdir(root)
 	session := project.SessionName(root)
-	binary, _, _ := fakeStartBinary(t, root, session, true, true, 9)
+	binary, _, _ := fakeStartBinary(t, root, session,
+		startOptions{Running: true, WorkspacePresent: true, AttachExit: 9})
 
 	var stdout, stderr bytes.Buffer
 	code := Execute(context.Background(), []string{"start", "--herdr-bin", binary},
@@ -188,9 +189,9 @@ func TestStartReportsAttachFailureAfterDiagnostics(t *testing.T) {
 func TestStartSetupFailurePreventsAttachment(t *testing.T) {
 	root := initializedProject(t)
 	t.Chdir(root)
-	binary, attachLog, _ := fakeStartBinary(
-		t, root, project.SessionName(root), true, true, 0, "pane.split",
-	)
+	binary, attachLog, _ := fakeStartBinary(t, root, project.SessionName(root), startOptions{
+		Running: true, WorkspacePresent: true, SetupFailure: "pane.split",
+	})
 
 	var stdout, stderr bytes.Buffer
 	code := Execute(context.Background(), []string{"start", "--herdr-bin", binary},
@@ -207,9 +208,9 @@ func TestStartSetupFailurePreventsAttachment(t *testing.T) {
 func TestStartDetachStillPreparesOrchestratorLayout(t *testing.T) {
 	root := initializedProject(t)
 	t.Chdir(root)
-	binary, attachLog, _ := fakeStartBinary(
-		t, root, project.SessionName(root), true, true, 0, "pane.split",
-	)
+	binary, attachLog, _ := fakeStartBinary(t, root, project.SessionName(root), startOptions{
+		Running: true, WorkspacePresent: true, SetupFailure: "pane.split",
+	})
 
 	var stdout, stderr bytes.Buffer
 	code := Execute(context.Background(), []string{"start", "--detach", "--herdr-bin", binary},

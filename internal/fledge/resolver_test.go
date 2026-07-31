@@ -1,14 +1,13 @@
 package fledge
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/Harrison-Blair/fledge/internal/herdr"
+	"github.com/Harrison-Blair/fledge/internal/herdrtest"
 	"github.com/Harrison-Blair/fledge/internal/project"
 )
 
@@ -37,25 +36,11 @@ func TestMatchingWorkspaceUsesOnlyCanonicalWorkspaceMetadata(t *testing.T) {
 func TestResolveSessionAlwaysDerivesNameWithoutListingSessions(t *testing.T) {
 	root := t.TempDir()
 	log := filepath.Join(t.TempDir(), "invocations")
-	methods := make([]string, 0, len(herdr.RequiredMethods))
-	for _, method := range herdr.RequiredMethods {
-		methods = append(methods, fmt.Sprintf(`{"method":{"const":%s}}`, strconv.Quote(method)))
-	}
-	schema := fmt.Sprintf(`{"protocol":17,"requests":[%s]}`, strings.Join(methods, ","))
-	script := fmt.Sprintf(`#!/bin/sh
-printf '%%s\n' "$*" >> %s
-if [ "$1" = "--version" ]; then
-  echo "herdr 0.7.5"
-elif [ "$1" = "api" ] && [ "$2" = "schema" ]; then
-  printf '%%s\n' %s
-else
-  exit 77
-fi
-`, strconv.Quote(log), strconv.Quote(schema))
-	binaryPath := filepath.Join(t.TempDir(), "herdr-fake")
-	if err := os.WriteFile(binaryPath, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	binaryPath := herdrtest.WriteBinary(t, t.TempDir(), herdrtest.Options{
+		InvocationLog: log,
+		Version:       herdrtest.VersionOutput,
+		UnknownExit:   77,
+	})
 
 	resolved, err := ResolveSession(t.Context(), root, herdr.Binary{Path: binaryPath})
 	if err != nil {

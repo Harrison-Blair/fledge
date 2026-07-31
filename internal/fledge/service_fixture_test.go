@@ -9,12 +9,12 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"testing"
 
 	"github.com/Harrison-Blair/fledge/internal/herdr"
+	"github.com/Harrison-Blair/fledge/internal/herdrtest"
 	"github.com/Harrison-Blair/fledge/internal/project"
 	"github.com/Harrison-Blair/fledge/internal/state"
 )
@@ -102,38 +102,16 @@ func fakeBinary(t *testing.T, socket string) (string, string) {
 	if err := os.WriteFile(runningMarker, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	methods := make([]string, 0, len(herdr.RequiredMethods))
-	for _, method := range herdr.RequiredMethods {
-		methods = append(methods, fmt.Sprintf(`{"method":{"const":%s}}`, strconv.Quote(method)))
-	}
-	schema := fmt.Sprintf(`{"protocol":17,"requests":[%s]}`, strings.Join(methods, ","))
 	running := fmt.Sprintf(`{"sessions":[{"name":"test-session","running":true,"socket_path":%s}]}`, strconv.Quote(socket))
 	stopped := `{"sessions":[{"name":"test-session","running":false}]}`
-	script := fmt.Sprintf(`#!/bin/sh
-if [ "$1" = "--version" ]; then
-  echo "herdr 0.7.5"
-elif [ "$1" = "api" ] && [ "$2" = "schema" ]; then
-  printf '%%s\n' %s
-elif [ "$1" = "session" ] && [ "$2" = "list" ]; then
-  if [ -f %s ]; then
-    printf '%%s\n' %s
-  elif [ -f %s ]; then
-    printf '%%s\n' %s
-  else
-    printf '%%s\n' '{"sessions":[]}'
-  fi
-elif [ "$1" = "session" ] && [ "$2" = "delete" ]; then
-  rm -f %s
-  printf '%%s\n' '{"deleted":true}'
-else
-  exit 2
-fi
-`, strconv.Quote(schema), strconv.Quote(runningMarker), strconv.Quote(running),
-		strconv.Quote(existsMarker), strconv.Quote(stopped), strconv.Quote(existsMarker))
-	path := filepath.Join(temp, "herdr-fake")
-	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	path := herdrtest.WriteBinary(t, temp, herdrtest.Options{
+		Version: herdrtest.VersionOutput,
+		Sessions: []herdrtest.SessionCase{
+			{Marker: runningMarker, Payload: running},
+			{Marker: existsMarker, Payload: stopped},
+		},
+		DeleteRemoves: existsMarker,
+	})
 	return path, runningMarker
 }
 
@@ -144,27 +122,10 @@ func fakeBinarySessions(t *testing.T, sessions string) string {
 		t.Fatalf("compact fake Herdr sessions JSON: %v", err)
 	}
 	sessions = compactSessions.String()
-	methods := make([]string, 0, len(herdr.RequiredMethods))
-	for _, method := range herdr.RequiredMethods {
-		methods = append(methods, fmt.Sprintf(`{"method":{"const":%s}}`, strconv.Quote(method)))
-	}
-	schema := fmt.Sprintf(`{"protocol":17,"requests":[%s]}`, strings.Join(methods, ","))
-	script := fmt.Sprintf(`#!/bin/sh
-if [ "$1" = "--version" ]; then
-  echo "herdr 0.7.5"
-elif [ "$1" = "api" ] && [ "$2" = "schema" ]; then
-  printf '%%s\n' %s
-elif [ "$1" = "session" ] && [ "$2" = "list" ]; then
-  printf '%%s\n' %s
-else
-  exit 2
-fi
-`, strconv.Quote(schema), strconv.Quote(sessions))
-	path := filepath.Join(t.TempDir(), "herdr-fake")
-	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	return path
+	return herdrtest.WriteBinary(t, t.TempDir(), herdrtest.Options{
+		Version:  herdrtest.VersionOutput,
+		Sessions: []herdrtest.SessionCase{{Payload: sessions}},
+	})
 }
 
 func serviceSessionSocket(t *testing.T, binary herdr.Binary) string {
