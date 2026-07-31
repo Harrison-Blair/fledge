@@ -1,11 +1,8 @@
 package cli
 
 import (
-	"bufio"
-	"errors"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/Harrison-Blair/fledge/internal/fledge"
 	"github.com/Harrison-Blair/fledge/internal/herdr"
@@ -100,7 +97,7 @@ func runInteractivePrune(
 		return nil
 	}
 	if !opts.yes {
-		confirmed, err := confirmPrune(env)
+		confirmed, err := confirm(env, "Delete these sessions? [y/N] ")
 		if err != nil {
 			return err
 		}
@@ -114,16 +111,6 @@ func runInteractivePrune(
 		fmt.Fprintf(env.out, "Deleted Herdr session %s\n", name)
 	}
 	return err
-}
-
-func confirmPrune(env *environment) (bool, error) {
-	fmt.Fprint(env.out, "Delete these sessions? [y/N] ")
-	answer, err := bufio.NewReader(env.in).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return false, fledge.Wrap("input_failed", fmt.Sprintf("read confirmation: %v", err), err)
-	}
-	answer = strings.TrimSpace(answer)
-	return strings.EqualFold(answer, "y") || strings.EqualFold(answer, "yes"), nil
 }
 
 func printPruneCandidates(w io.Writer, candidates []string) {

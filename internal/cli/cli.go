@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -169,16 +170,13 @@ func (e *environment) service(ctx context.Context) (*fledge.Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	info, err := project.Discover(cwd)
+	info, err := discoverProject(cwd)
 	if err != nil {
-		if errors.Is(err, project.ErrNotInitialized) {
-			return nil, fledge.Wrap("project_not_initialized", err.Error(), err)
-		}
-		return nil, fledge.Wrap("project_discovery_failed", err.Error(), err)
+		return nil, err
 	}
-	store, err := state.New(e.stateDir)
+	store, err := e.newStore()
 	if err != nil {
-		return nil, fledge.Wrap("state_unavailable", err.Error(), err)
+		return nil, err
 	}
 	binary := herdr.Binary{Path: e.herdrBin}
 	resolution, err := fledge.ResolveSession(ctx, info.Root, binary)
@@ -199,12 +197,9 @@ func (e *environment) auditService() (*fledge.Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	info, err := project.Discover(cwd)
+	info, err := discoverProject(cwd)
 	if err != nil {
-		if errors.Is(err, project.ErrNotInitialized) {
-			return nil, fledge.Wrap("project_not_initialized", err.Error(), err)
-		}
-		return nil, fledge.Wrap("project_discovery_failed", err.Error(), err)
+		return nil, err
 	}
 	info.Session, info.SessionSource = project.SessionName(info.Root), "derived"
 	return &fledge.Service{Project: info}, nil
@@ -215,14 +210,33 @@ func (e *environment) messagingService() (*fledge.Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	store, err := state.New(e.stateDir)
+	store, err := e.newStore()
 	if err != nil {
-		return nil, fledge.Wrap("state_unavailable", err.Error(), err)
+		return nil, err
 	}
 	service.Store = store
 	service.Binary = herdr.Binary{Path: e.herdrBin}
 	service.CallerPaneID = strings.TrimSpace(e.getenvValue("HERDR_PANE_ID"))
 	return service, nil
+}
+
+func discoverProject(cwd string) (project.Info, error) {
+	info, err := project.Discover(cwd)
+	if errors.Is(err, project.ErrNotInitialized) {
+		return info, fledge.Wrap("project_not_initialized", err.Error(), err)
+	}
+	if err != nil {
+		return info, fledge.Wrap("project_discovery_failed", err.Error(), err)
+	}
+	return info, nil
+}
+
+func (e *environment) newStore() (*state.Store, error) {
+	store, err := state.New(e.stateDir)
+	if err != nil {
+		return nil, fledge.Wrap("state_unavailable", err.Error(), err)
+	}
+	return store, nil
 }
 
 func (e *environment) getenvValue(name string) string {
@@ -241,6 +255,16 @@ func (e *environment) workingDirectory() (string, error) {
 		return "", fledge.Wrap("project_discovery_failed", err.Error(), err)
 	}
 	return cwd, nil
+}
+
+func confirm(env *environment, prompt string) (bool, error) {
+	fmt.Fprint(env.out, prompt)
+	answer, err := bufio.NewReader(env.in).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, fledge.Wrap("input_failed", fmt.Sprintf("read confirmation: %v", err), err)
+	}
+	answer = strings.TrimSpace(answer)
+	return strings.EqualFold(answer, "y") || strings.EqualFold(answer, "yes"), nil
 }
 
 func (e *environment) print(data any, human func(io.Writer)) error {

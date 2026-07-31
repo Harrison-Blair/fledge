@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"bufio"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -251,17 +249,11 @@ func printStopAgents(w io.Writer, agents []fledge.StopAgentInspection) {
 }
 
 func confirmStop(env *environment, inspection fledge.StopInspection) (bool, error) {
+	prompt := fmt.Sprintf("Shut down and delete Fledge session %s? [y/N] ", inspection.Session)
 	if len(inspection.LiveAgents) > 0 {
-		fmt.Fprintf(env.out,
+		prompt = fmt.Sprintf(
 			"Running agents will be shut down. Are you sure you want to shut down Fledge session %s? [y/N] ",
 			inspection.Session)
-	} else {
-		fmt.Fprintf(env.out, "Shut down and delete Fledge session %s? [y/N] ", inspection.Session)
 	}
-	answer, err := bufio.NewReader(env.in).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return false, fledge.Wrap("input_failed", fmt.Sprintf("read confirmation: %v", err), err)
-	}
-	answer = strings.TrimSpace(answer)
-	return strings.EqualFold(answer, "y") || strings.EqualFold(answer, "yes"), nil
+	return confirm(env, prompt)
 }

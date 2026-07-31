@@ -88,26 +88,13 @@ func runAgentSpawn(cmd *cobra.Command, env *environment, flags agentSpawnFlags) 
 	if len(installed) == 0 {
 		return fledge.NewError("no_harnesses_installed", "none of Claude Code, Codex, Pi, or OpenCode is installed")
 	}
-	var err error
 	var harness agentspawn.Harness
 	if strings.TrimSpace(flags.harness) == "" {
-		items := make([]picker.Item, 0, len(installed))
-		for _, candidate := range installed {
-			items = append(items, picker.Item{
-				ID: candidate.ID, Title: candidate.Name, Description: candidate.Description,
-			})
+		selected, cancelled, err := selectHarness(env, installed)
+		if cancelled || err != nil {
+			return err
 		}
-		selected, selectErr := picker.Select(picker.Options{
-			Title: "Agent harness", Items: items, Input: env.in, Output: env.out,
-		})
-		if errors.Is(selectErr, picker.ErrCancelled) {
-			fmt.Fprintln(env.out, "Cancelled.")
-			return nil
-		}
-		if selectErr != nil {
-			return fledge.Wrap("picker_failed", selectErr.Error(), selectErr)
-		}
-		harness, _ = agentspawn.Resolve(installed, selected.ID)
+		harness = selected
 	} else {
 		var found bool
 		harness, found = agentspawn.Resolve(installed, flags.harness)
@@ -117,36 +104,19 @@ func runAgentSpawn(cmd *cobra.Command, env *environment, flags agentSpawnFlags) 
 	}
 
 	if strings.TrimSpace(flags.model) == "" && tty {
-		catalog := agentspawn.Discover(cmd.Context(), harness, nil)
-		if catalog.Warning != "" {
-			fmt.Fprintf(env.errOut, "Warning: %s\n", catalog.Warning)
+		model, cancelled, err := selectModel(cmd, env, harness)
+		if cancelled || err != nil {
+			return err
 		}
-		items := modelPickerItems(harness.ID, catalog.Models)
-		selected, selectErr := picker.Select(picker.Options{
-			Title: harness.Name + " model", Items: items, Input: env.in, Output: env.out,
-			CollapsibleGroups: harness.ID == "pi",
-		})
-		if errors.Is(selectErr, picker.ErrCancelled) {
-			fmt.Fprintln(env.out, "Cancelled.")
-			return nil
-		}
-		if selectErr != nil {
-			return fledge.Wrap("picker_failed", selectErr.Error(), selectErr)
-		}
-		flags.model = selected.ID
+		flags.model = model
 	}
 
 	if strings.TrimSpace(flags.name) == "" {
-		flags.name, err = picker.Input(picker.Options{
-			Title: "Agent name", Placeholder: "worker", Input: env.in, Output: env.out,
-		})
-		if errors.Is(err, picker.ErrCancelled) {
-			fmt.Fprintln(env.out, "Cancelled.")
-			return nil
+		name, cancelled, err := promptAgentName(env)
+		if cancelled || err != nil {
+			return err
 		}
-		if err != nil {
-			return fledge.Wrap("picker_failed", err.Error(), err)
-		}
+		flags.name = name
 	}
 	flags.name = strings.TrimSpace(flags.name)
 	if flags.name == "" {
@@ -178,6 +148,62 @@ func runAgentSpawn(cmd *cobra.Command, env *environment, flags agentSpawnFlags) 
 		fmt.Fprintf(w, "Spawned %s (%s%s) in pane %s\n",
 			result.Agent.Name, result.Agent.Kind, modelDescription, result.Agent.PaneID)
 	})
+}
+
+// handlePickerResult reports whether the user cancelled a picker, printing the
+// cancellation notice, and otherwise translates a picker failure.
+func handlePickerResult(env *environment, err error) (bool, error) {
+	if errors.Is(err, picker.ErrCancelled) {
+		fmt.Fprintln(env.out, "Cancelled.")
+		return true, nil
+	}
+	if err != nil {
+		return false, fledge.Wrap("picker_failed", err.Error(), err)
+	}
+	return false, nil
+}
+
+func selectHarness(env *environment, installed []agentspawn.Harness) (agentspawn.Harness, bool, error) {
+	items := make([]picker.Item, 0, len(installed))
+	for _, candidate := range installed {
+		items = append(items, picker.Item{
+			ID: candidate.ID, Title: candidate.Name, Description: candidate.Description,
+		})
+	}
+	selected, selectErr := picker.Select(picker.Options{
+		Title: "Agent harness", Items: items, Input: env.in, Output: env.out,
+	})
+	if cancelled, err := handlePickerResult(env, selectErr); cancelled || err != nil {
+		return agentspawn.Harness{}, cancelled, err
+	}
+	harness, _ := agentspawn.Resolve(installed, selected.ID)
+	return harness, false, nil
+}
+
+func selectModel(cmd *cobra.Command, env *environment, harness agentspawn.Harness) (string, bool, error) {
+	catalog := agentspawn.Discover(cmd.Context(), harness, nil)
+	if catalog.Warning != "" {
+		fmt.Fprintf(env.errOut, "Warning: %s\n", catalog.Warning)
+	}
+	items := modelPickerItems(harness.ID, catalog.Models)
+	selected, selectErr := picker.Select(picker.Options{
+		Title: harness.Name + " model", Items: items, Input: env.in, Output: env.out,
+		CollapsibleGroups: harness.ID == "pi",
+	})
+	if cancelled, err := handlePickerResult(env, selectErr); cancelled || err != nil {
+		return "", cancelled, err
+	}
+	return selected.ID, false, nil
+}
+
+func promptAgentName(env *environment) (string, bool, error) {
+	name, inputErr := picker.Input(picker.Options{
+		Title: "Agent name", Placeholder: "worker", Input: env.in, Output: env.out,
+	})
+	if cancelled, err := handlePickerResult(env, inputErr); cancelled || err != nil {
+		return "", cancelled, err
+	}
+	return name, false, nil
 }
 
 func modelPickerItems(harnessID string, models []agentspawn.Model) []picker.Item {

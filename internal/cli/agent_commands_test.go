@@ -3,11 +3,15 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/agentspawn"
+	"github.com/Harrison-Blair/fledge/internal/fledge"
+	"github.com/Harrison-Blair/fledge/internal/picker"
 )
 
 func TestPromptRequiresExactlyOneSource(t *testing.T) {
@@ -130,5 +134,57 @@ func TestUnknownIsOnlySentWhenExplicitlySelected(t *testing.T) {
 	}
 	if err := validateStates([]string{"stopped"}); err == nil {
 		t.Fatal("expected stopped to be rejected as a Herdr wait state")
+	}
+}
+
+func TestHandlePickerResultTranslatesCancellationAndFailure(t *testing.T) {
+	failure := errors.New("terminal unavailable")
+	for _, test := range []struct {
+		name          string
+		err           error
+		wantCancelled bool
+		wantOutput    string
+		wantCode      string
+	}{
+		{name: "selection made", err: nil},
+		{name: "cancelled", err: picker.ErrCancelled, wantCancelled: true, wantOutput: "Cancelled.\n"},
+		{
+			name: "wrapped cancellation", err: fmt.Errorf("harness picker: %w", picker.ErrCancelled),
+			wantCancelled: true, wantOutput: "Cancelled.\n",
+		},
+		{name: "picker failure", err: failure, wantCode: "picker_failed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			env := &environment{out: &stdout, errOut: &stderr}
+
+			cancelled, err := handlePickerResult(env, test.err)
+
+			if cancelled != test.wantCancelled {
+				t.Fatalf("cancelled=%t want %t", cancelled, test.wantCancelled)
+			}
+			if stdout.String() != test.wantOutput {
+				t.Fatalf("output=%q want %q", stdout.String(), test.wantOutput)
+			}
+			if stderr.String() != "" {
+				t.Fatalf("stderr=%q want empty", stderr.String())
+			}
+			if test.wantCode == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			var serviceErr *fledge.Error
+			if !errors.As(err, &serviceErr) || serviceErr.Code != test.wantCode {
+				t.Fatalf("error=%v want code %s", err, test.wantCode)
+			}
+			if serviceErr.Message != test.err.Error() {
+				t.Fatalf("message=%q want %q", serviceErr.Message, test.err.Error())
+			}
+			if !errors.Is(err, test.err) {
+				t.Fatal("wrapped error lost its cause")
+			}
+		})
 	}
 }
