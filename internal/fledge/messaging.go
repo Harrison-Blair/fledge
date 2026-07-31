@@ -17,6 +17,9 @@ import (
 
 const MaxMessageBodyBytes = 256 << 10
 
+// userMailbox is the reserved identity for the project owner's mailbox.
+const userMailbox = "user"
+
 type MessageResult struct {
 	Message       *messaging.Message `json:"message"`
 	DeliveryError string             `json:"delivery_error,omitempty"`
@@ -32,7 +35,7 @@ type MessageHistoryOptions struct {
 }
 
 func ValidateAgentName(name string) error {
-	if name == "user" {
+	if name == userMailbox {
 		return NewError("invalid_agent_name", `"user" is reserved for the project owner mailbox`)
 	}
 	if len(name) == 0 || len(name) > 64 {
@@ -69,7 +72,7 @@ func (s *Service) SendMessage(ctx context.Context, recipient, body string) (Mess
 	if err != nil {
 		return MessageResult{}, err
 	}
-	if recipient != "user" {
+	if recipient != userMailbox {
 		if err := validateMailboxName(recipient); err != nil {
 			return MessageResult{}, err
 		}
@@ -98,19 +101,9 @@ func (s *Service) ReplyMessage(ctx context.Context, messageID, body string) (Mes
 	if err := ValidateMessageBody(body); err != nil {
 		return MessageResult{}, err
 	}
-	target, run, err := s.messageStore().FindMessage(messageID)
-	if err != nil {
-		return MessageResult{}, messageLookupError(messageID, err)
-	}
-	if !run.Active {
-		return MessageResult{}, NewError("message_state_conflict", "archived messages cannot be replied to")
-	}
-	active, err := s.activeMessaging(ctx)
+	target, active, err := s.resolveActiveMessage(ctx, messageID, "replied to")
 	if err != nil {
 		return MessageResult{}, err
-	}
-	if run.ID != active.runID {
-		return MessageResult{}, NewError("message_state_conflict", "message is not part of the active run")
 	}
 	if target.Recipient != active.actor {
 		return MessageResult{}, NewError("message_wrong_recipient", "only the message recipient can reply")
@@ -133,19 +126,9 @@ func (s *Service) ReplyMessage(ctx context.Context, messageID, body string) (Mes
 }
 
 func (s *Service) AckMessage(ctx context.Context, messageID string) (MessageResult, error) {
-	message, run, err := s.messageStore().FindMessage(messageID)
-	if err != nil {
-		return MessageResult{}, messageLookupError(messageID, err)
-	}
-	if !run.Active {
-		return MessageResult{}, NewError("message_state_conflict", "archived messages cannot be acknowledged")
-	}
-	active, err := s.activeMessaging(ctx)
+	message, active, err := s.resolveActiveMessage(ctx, messageID, "acknowledged")
 	if err != nil {
 		return MessageResult{}, err
-	}
-	if run.ID != active.runID {
-		return MessageResult{}, NewError("message_state_conflict", "message is not part of the active run")
 	}
 	if message.Recipient != active.actor {
 		return MessageResult{}, NewError("message_wrong_recipient", "only the message recipient can acknowledge it")
@@ -166,22 +149,12 @@ func (s *Service) AckMessage(ctx context.Context, messageID string) (MessageResu
 }
 
 func (s *Service) RetryMessage(ctx context.Context, messageID string, force bool) (MessageResult, error) {
-	message, run, err := s.messageStore().FindMessage(messageID)
-	if err != nil {
-		return MessageResult{}, messageLookupError(messageID, err)
-	}
-	if !run.Active {
-		return MessageResult{}, NewError("message_state_conflict", "archived messages cannot be retried")
-	}
-	active, err := s.activeMessaging(ctx)
+	message, active, err := s.resolveActiveMessage(ctx, messageID, "retried")
 	if err != nil {
 		return MessageResult{}, err
 	}
-	if run.ID != active.runID {
-		return MessageResult{}, NewError("message_state_conflict", "message is not part of the active run")
-	}
-	if active.actor != "user" && active.actor != message.Sender {
-		return MessageResult{}, NewError("message_forbidden", "only the sender or user can retry this message")
+	if err := authorizeSenderOrUser(active, message, "retry"); err != nil {
+		return MessageResult{}, err
 	}
 	switch message.Status {
 	case messaging.StatusQueued, messaging.StatusFailed:
@@ -198,22 +171,12 @@ func (s *Service) RetryMessage(ctx context.Context, messageID string, force bool
 }
 
 func (s *Service) CancelMessage(ctx context.Context, messageID, reason string) (MessageResult, error) {
-	message, run, err := s.messageStore().FindMessage(messageID)
-	if err != nil {
-		return MessageResult{}, messageLookupError(messageID, err)
-	}
-	if !run.Active {
-		return MessageResult{}, NewError("message_state_conflict", "archived messages cannot be cancelled")
-	}
-	active, err := s.activeMessaging(ctx)
+	message, active, err := s.resolveActiveMessage(ctx, messageID, "cancelled")
 	if err != nil {
 		return MessageResult{}, err
 	}
-	if run.ID != active.runID {
-		return MessageResult{}, NewError("message_state_conflict", "message is not part of the active run")
-	}
-	if active.actor != "user" && active.actor != message.Sender {
-		return MessageResult{}, NewError("message_forbidden", "only the sender or user can cancel this message")
+	if err := authorizeSenderOrUser(active, message, "cancel"); err != nil {
+		return MessageResult{}, err
 	}
 	if message.Status == messaging.StatusAcknowledged || message.Status == messaging.StatusCancelled {
 		return MessageResult{}, NewError("message_state_conflict",
@@ -304,10 +267,10 @@ func (s *Service) MessageInbox(ctx context.Context, identity string, limit int) 
 	}
 	if identity == "" {
 		identity = active.actor
-	} else if identity != active.actor && active.actor != "user" {
+	} else if identity != active.actor && active.actor != userMailbox {
 		return messaging.Collection{}, NewError("message_forbidden", "only user can inspect another mailbox")
 	}
-	if identity != "user" {
+	if identity != userMailbox {
 		if err := validateMailboxName(identity); err != nil {
 			return messaging.Collection{}, err
 		}
@@ -342,6 +305,41 @@ type activeMessagingContext struct {
 	client   *herdr.Client
 }
 
+// resolveActiveMessage looks up a message and the messaging context it belongs
+// to, rejecting messages that are archived or outside the active run.
+// archivedVerb completes "archived messages cannot be %s".
+func (s *Service) resolveActiveMessage(
+	ctx context.Context, messageID, archivedVerb string,
+) (*messaging.Message, activeMessagingContext, error) {
+	message, run, err := s.messageStore().FindMessage(messageID)
+	if err != nil {
+		return nil, activeMessagingContext{}, messageLookupError(messageID, err)
+	}
+	if !run.Active {
+		return nil, activeMessagingContext{}, NewError("message_state_conflict",
+			fmt.Sprintf("archived messages cannot be %s", archivedVerb))
+	}
+	active, err := s.activeMessaging(ctx)
+	if err != nil {
+		return nil, activeMessagingContext{}, err
+	}
+	if run.ID != active.runID {
+		return nil, activeMessagingContext{}, NewError("message_state_conflict",
+			"message is not part of the active run")
+	}
+	return message, active, nil
+}
+
+// authorizeSenderOrUser allows only the message sender or the project owner.
+// action completes "only the sender or user can %s this message".
+func authorizeSenderOrUser(active activeMessagingContext, message *messaging.Message, action string) error {
+	if active.actor != userMailbox && active.actor != message.Sender {
+		return NewError("message_forbidden",
+			fmt.Sprintf("only the sender or user can %s this message", action))
+	}
+	return nil
+}
+
 func (s *Service) appendActiveRunEvent(runID string, event messaging.Event) (messaging.Event, error) {
 	var appended messaging.Event
 	err := s.messageStore().WithLifecycleLock(runID, func() error {
@@ -359,11 +357,7 @@ func (s *Service) appendActiveRunEvent(runID string, event messaging.Event) (mes
 		return nil
 	})
 	if err != nil {
-		var serviceErr *Error
-		if errors.As(err, &serviceErr) {
-			return messaging.Event{}, err
-		}
-		return messaging.Event{}, messageStoreError(err)
+		return messaging.Event{}, asServiceOrStoreError(err)
 	}
 	return appended, nil
 }
@@ -400,7 +394,7 @@ func (s *Service) activeMessaging(ctx context.Context) (activeMessagingContext, 
 
 func inferActor(paneID string, st state.Session, snapshot herdr.Snapshot) string {
 	if paneID == "" {
-		return "user"
+		return userMailbox
 	}
 	live := agentsByPane(snapshot)
 	for name, managed := range st.Agents {
@@ -409,7 +403,15 @@ func inferActor(paneID string, st state.Session, snapshot herdr.Snapshot) string
 			return name
 		}
 	}
-	return "user"
+	return userMailbox
+}
+
+// deliveryTarget identifies the agent activation a message is delivered to.
+type deliveryTarget struct {
+	runID        string
+	agent        string
+	paneID       string
+	activationID string
 }
 
 func (s *Service) deliverIfLive(
@@ -420,12 +422,15 @@ func (s *Service) deliverIfLive(
 	managed, known := active.state.Agents[recipient]
 	live := agentsByPane(active.snapshot)
 	agent, running := live[managed.PaneID]
-	if recipient == "user" || !known || !running || agent.Agent == nil {
+	if recipient == userMailbox || !known || !running || agent.Agent == nil {
 		message, err := s.messageInRun(active.runID, messageID)
 		return MessageResult{Message: message}, err
 	}
-	message, deliveryErr, err := s.deliver(ctx, active.runID, messageID, recipient,
-		managed.PaneID, managed.ActivationID, active.client)
+	target := deliveryTarget{
+		runID: active.runID, agent: recipient,
+		paneID: managed.PaneID, activationID: managed.ActivationID,
+	}
+	message, deliveryErr, err := s.deliver(ctx, target, messageID, active.client)
 	if err != nil {
 		return MessageResult{}, err
 	}
@@ -434,13 +439,14 @@ func (s *Service) deliverIfLive(
 
 func (s *Service) deliver(
 	ctx context.Context,
-	runID, messageID, recipient, paneID, activationID string,
+	target deliveryTarget,
+	messageID string,
 	client *herdr.Client,
 ) (*messaging.Message, string, error) {
 	var message *messaging.Message
 	var deliveryError string
-	err := s.messageStore().WithLifecycleLock(runID, func() error {
-		run, err := s.messageStore().ReadRun(runID)
+	err := s.messageStore().WithLifecycleLock(target.runID, func() error {
+		run, err := s.messageStore().ReadRun(target.runID)
 		if err != nil {
 			return messageStoreError(err)
 		}
@@ -458,28 +464,22 @@ func (s *Service) deliver(
 			return nil
 		}
 		var innerErr error
-		message, deliveryError, innerErr = s.deliverLocked(
-			ctx, runID, message, recipient, paneID, activationID, client,
-		)
+		message, deliveryError, innerErr = s.deliverLocked(ctx, target, message, client)
 		return innerErr
 	})
 	if err != nil {
-		var serviceErr *Error
-		if errors.As(err, &serviceErr) {
-			return nil, "", err
-		}
-		return nil, "", messageStoreError(err)
+		return nil, "", asServiceOrStoreError(err)
 	}
 	return message, deliveryError, nil
 }
 
 func (s *Service) deliverLocked(
 	ctx context.Context,
-	runID string,
+	target deliveryTarget,
 	message *messaging.Message,
-	recipient, paneID, activationID string,
 	client *herdr.Client,
 ) (*messaging.Message, string, error) {
+	runID := target.runID
 	messageID := message.ID
 	attemptID, err := messaging.NewID("try_")
 	if err != nil {
@@ -487,14 +487,14 @@ func (s *Service) deliverLocked(
 	}
 	if _, err := s.messageStore().Append(runID, messaging.Event{
 		Type: messaging.EventDeliveryAttempted, MessageID: messageID,
-		AttemptID: attemptID, Agent: recipient, ActivationID: activationID, PaneID: paneID,
+		AttemptID: attemptID, Agent: target.agent, ActivationID: target.activationID, PaneID: target.paneID,
 	}); err != nil {
 		return message, fmt.Sprintf("delivery was not attempted: %v", err), nil
 	}
 	callCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	callErr := client.Call(callCtx, "agent.prompt", map[string]any{
-		"target": paneID, "text": messageEnvelope(message),
+		"target": target.paneID, "text": messageEnvelope(message),
 	}, nil)
 	outcome := messaging.EventDeliveryInjected
 	errorKind, errorText := "", ""
@@ -508,7 +508,7 @@ func (s *Service) deliverLocked(
 	}
 	if _, err := s.messageStore().Append(runID, messaging.Event{
 		Type: outcome, MessageID: messageID, AttemptID: attemptID,
-		Agent: recipient, ActivationID: activationID, PaneID: paneID,
+		Agent: target.agent, ActivationID: target.activationID, PaneID: target.paneID,
 		Error: errorText, ErrorKind: errorKind,
 	}); err != nil {
 		current, readErr := s.messageInRun(runID, messageID)
@@ -557,60 +557,63 @@ func messageEnvelope(message *messaging.Message) string {
 func (s *Service) activateMessagingAgent(
 	ctx context.Context, client *herdr.Client, name, paneID string,
 ) error {
-	runID, activationID, err := s.prepareMessagingActivation(name, paneID)
-	if err != nil || runID == "" {
+	target, err := s.prepareMessagingActivation(name, paneID)
+	if err != nil || target.runID == "" {
 		return err
 	}
-	return s.drainAgentMessages(ctx, client, runID, name, paneID, activationID)
+	return s.drainAgentMessages(ctx, client, target)
 }
 
-func (s *Service) prepareMessagingActivation(name, paneID string) (string, string, error) {
+// prepareMessagingActivation returns the zero deliveryTarget when the session
+// has no active message run.
+func (s *Service) prepareMessagingActivation(name, paneID string) (deliveryTarget, error) {
 	if st, found, err := s.Store.ReadExisting(s.Project.Session, s.Project.Root); err != nil {
-		return "", "", err
+		return deliveryTarget{}, err
 	} else if found {
 		if managed, ok := st.Agents[name]; ok && managed.ActivationID != "" {
 			if err := s.deactivateMessagingAgent(name, "activation superseded"); err != nil {
-				return "", "", err
+				return deliveryTarget{}, err
 			}
 		}
 	}
-	var runID, activationID string
+	var target deliveryTarget
 	err := s.Store.WithLocked(s.Project.Session, s.Project.Root, func(st *state.Session) error {
-		runID = st.ActiveRunID
-		if runID == "" {
+		target.runID = st.ActiveRunID
+		if target.runID == "" {
 			return nil
 		}
 		var err error
-		activationID, err = messaging.NewID("act_")
+		target.activationID, err = messaging.NewID("act_")
 		if err != nil {
 			return err
 		}
 		managed := st.Agents[name]
-		managed.ActivationID = activationID
+		managed.ActivationID = target.activationID
 		st.Agents[name] = managed
 		return nil
 	})
 	if err != nil {
-		return "", "", err
+		return deliveryTarget{}, err
 	}
-	if runID == "" {
-		return "", "", nil
+	if target.runID == "" {
+		return deliveryTarget{}, nil
 	}
-	if _, err := s.appendActiveRunEvent(runID, messaging.Event{
-		Type: messaging.EventAgentActivated, Agent: name,
-		ActivationID: activationID, PaneID: paneID,
+	target.agent, target.paneID = name, paneID
+	if _, err := s.appendActiveRunEvent(target.runID, messaging.Event{
+		Type: messaging.EventAgentActivated, Agent: target.agent,
+		ActivationID: target.activationID, PaneID: target.paneID,
 	}); err != nil {
 		_ = s.Store.WithLocked(s.Project.Session, s.Project.Root, func(st *state.Session) error {
 			managed := st.Agents[name]
-			if managed.ActivationID == activationID {
+			if managed.ActivationID == target.activationID {
 				managed.ActivationID = ""
 				st.Agents[name] = managed
 			}
 			return nil
 		})
-		return "", "", err
+		return deliveryTarget{}, err
 	}
-	return runID, activationID, nil
+	return target, nil
 }
 
 // DeliverActivation is used by the bounded hidden helper launched immediately
@@ -632,8 +635,10 @@ func (s *Service) DeliverActivation(ctx context.Context, name, activationID stri
 			if snapshotErr == nil {
 				if live, ok := agentsByPane(snapshot)[managed.PaneID]; ok && live.Agent != nil &&
 					live.InteractiveReady {
-					return s.drainAgentMessages(ctx, client, st.ActiveRunID, name,
-						managed.PaneID, activationID)
+					return s.drainAgentMessages(ctx, client, deliveryTarget{
+						runID: st.ActiveRunID, agent: name,
+						paneID: managed.PaneID, activationID: activationID,
+					})
 				}
 			}
 		}
@@ -651,19 +656,19 @@ func (s *Service) DeliverActivation(ctx context.Context, name, activationID stri
 }
 
 func (s *Service) drainAgentMessages(
-	ctx context.Context, client *herdr.Client, runID, name, paneID, activationID string,
+	ctx context.Context, client *herdr.Client, target deliveryTarget,
 ) error {
-	run, err := s.messageStore().ReadRun(runID)
+	run, err := s.messageStore().ReadRun(target.runID)
 	if err != nil {
 		return messageStoreError(err)
 	}
 	for _, message := range run.Messages {
-		if message.Recipient != name ||
+		if message.Recipient != target.agent ||
 			(message.Status != messaging.StatusQueued && message.Status != messaging.StatusFailed) ||
-			attemptedInActivation(message, activationID) {
+			attemptedInActivation(message, target.activationID) {
 			continue
 		}
-		_, deliveryErr, err := s.deliver(ctx, runID, message.ID, name, paneID, activationID, client)
+		_, deliveryErr, err := s.deliver(ctx, target, message.ID, client)
 		if err != nil {
 			return err
 		}
@@ -729,11 +734,7 @@ func (s *Service) deactivateMessagingAgent(name, reason string) error {
 		return nil
 	})
 	if err != nil {
-		var serviceErr *Error
-		if errors.As(err, &serviceErr) {
-			return err
-		}
-		return messageStoreError(err)
+		return asServiceOrStoreError(err)
 	}
 	return nil
 }
@@ -769,11 +770,7 @@ func (s *Service) closeMessageRun(runID, reason string) error {
 	if err == nil {
 		return nil
 	}
-	var serviceErr *Error
-	if errors.As(err, &serviceErr) {
-		return err
-	}
-	return messageStoreError(err)
+	return asServiceOrStoreError(err)
 }
 
 func (s *Service) closeActiveMessageRun(reason string) error {
@@ -850,7 +847,7 @@ func messageBetween(message *messaging.Message, first, second string) bool {
 }
 
 func validateMailboxName(name string) error {
-	if name == "user" {
+	if name == userMailbox {
 		return nil
 	}
 	if err := ValidateAgentName(name); err != nil {
@@ -864,6 +861,16 @@ func messageStoreError(err error) error {
 		return Wrap("message_log_corrupt", err.Error(), err)
 	}
 	return Wrap("message_log_unavailable", err.Error(), err)
+}
+
+// asServiceOrStoreError passes a service error through unchanged and wraps
+// anything else as a message store failure.
+func asServiceOrStoreError(err error) error {
+	var serviceErr *Error
+	if errors.As(err, &serviceErr) {
+		return err
+	}
+	return messageStoreError(err)
 }
 
 func messageStoreErrorIf(err error) error {

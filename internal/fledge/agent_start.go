@@ -201,12 +201,12 @@ func (s *Service) spawnAgentInCurrentPane(
 		}
 		return AgentStartResult{}, err
 	}
-	_, activationID, err := s.prepareMessagingActivation(opts.Name, managed.PaneID)
+	target, err := s.prepareMessagingActivation(opts.Name, managed.PaneID)
 	if err != nil {
 		return AgentStartResult{}, s.rollbackInPaneSpawn(ctx, client, previousAgents, previousLabel, opts.CurrentPaneID, err)
 	}
-	if activationID != "" {
-		if err := s.launchDeliveryHelper(opts.Name, activationID, opts.Timeout); err != nil {
+	if target.activationID != "" {
+		if err := s.launchDeliveryHelper(opts.Name, target.activationID, opts.Timeout); err != nil {
 			_ = s.deactivateMessagingAgent(opts.Name, "delivery helper failed to launch")
 			return AgentStartResult{}, s.rollbackInPaneSpawn(ctx, client, previousAgents, previousLabel, opts.CurrentPaneID, err)
 		}

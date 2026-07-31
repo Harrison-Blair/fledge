@@ -331,7 +331,7 @@ func (s *Service) Status(ctx context.Context) (StatusResult, error) {
 		if countErr != nil {
 			return StatusResult{}, countErr
 		}
-		out.UserPendingMessages = pending["user"]
+		out.UserPendingMessages = pending[userMailbox]
 	}
 	session, client, pong, err := s.session(ctx, installed, false)
 	if err != nil {
