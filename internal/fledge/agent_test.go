@@ -790,10 +790,12 @@ func TestInPaneSpawnExecsFromTheAgentWorkingDirectoryAndRestoresIt(t *testing.T)
 }
 
 func TestHarnessExecDoesNotInheritNoColor(t *testing.T) {
+	root := t.TempDir()
 	t.Setenv("NO_COLOR", "1")
 	t.Setenv("TERM", "fledge-term")
 	t.Setenv("COLORTERM", "fledge-truecolor")
 	t.Setenv("FLEDGE_UNRELATED", "unchanged")
+	t.Setenv("TMPDIR", "/inherited/tmp")
 
 	var captured []string
 	service := Service{
@@ -802,7 +804,8 @@ func TestHarnessExecDoesNotInheritNoColor(t *testing.T) {
 			return nil
 		},
 	}
-	if err := service.execIntoHarness("/usr/bin/codex", nil, t.TempDir()); err != nil {
+	service.Project.Root = root
+	if err := service.execIntoHarness("/usr/bin/codex", nil, root); err != nil {
 		t.Fatal(err)
 	}
 	environ := make(map[string]string, len(captured))
@@ -816,7 +819,8 @@ func TestHarnessExecDoesNotInheritNoColor(t *testing.T) {
 		t.Fatalf("NO_COLOR was forwarded: %q", environ["NO_COLOR"])
 	}
 	for name, want := range map[string]string{
-		"TERM": "fledge-term", "COLORTERM": "fledge-truecolor", "FLEDGE_UNRELATED": "unchanged",
+		"TERM": "fledge-term", "COLORTERM": "fledge-truecolor",
+		"FLEDGE_UNRELATED": "unchanged", "TMPDIR": project.TempDir(root),
 	} {
 		if got := environ[name]; got != want {
 			t.Fatalf("%s = %q, want %q", name, got, want)

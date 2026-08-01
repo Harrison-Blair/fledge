@@ -51,3 +51,25 @@ func TestWithoutNoColor(t *testing.T) {
 		})
 	}
 }
+
+func TestManagedReplacesTempDirAndDoesNotMutateInput(t *testing.T) {
+	source := []string{
+		"TERM=xterm-256color", "TMPDIR=/inherited", "NO_COLOR=1",
+		"FLEDGE_UNRELATED=unchanged", "TMPDIR=/duplicate",
+	}
+	original := slices.Clone(source)
+	got := Managed(source, "/project/.fledge/tmp")
+	want := []string{
+		"TERM=xterm-256color", "FLEDGE_UNRELATED=unchanged", "TMPDIR=/project/.fledge/tmp",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("managed environment = %q, want %q", got, want)
+	}
+	if !slices.Equal(source, original) {
+		t.Fatalf("source environment mutated: got %q, want %q", source, original)
+	}
+	got[0] = "CHANGED=1"
+	if !slices.Equal(source, original) {
+		t.Fatalf("result aliases source environment: got %q, want %q", source, original)
+	}
+}

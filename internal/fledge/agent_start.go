@@ -300,7 +300,8 @@ func (s *Service) execIntoHarness(executable string, forwardedArgs []string, cwd
 	if err := os.Chdir(cwd); err != nil {
 		return err
 	}
-	err = execAgent(executable, append([]string{executable}, forwardedArgs...), processenv.WithoutNoColor(os.Environ()))
+	err = execAgent(executable, append([]string{executable}, forwardedArgs...),
+		processenv.Managed(os.Environ(), project.TempDir(s.Project.Root)))
 	_ = os.Chdir(oldCWD)
 	return err
 }

@@ -410,6 +410,9 @@ func TestInitJSONAndIdempotency(t *testing.T) {
 
 func TestUninitializedProjectReturnsStableActionableError(t *testing.T) {
 	root := t.TempDir()
+	// A dogfooded test process may create t.TempDir below .fledge/tmp. HOME is
+	// the intentional discovery boundary and keeps this fixture uninitialized.
+	t.Setenv("HOME", root)
 	old, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)

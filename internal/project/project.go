@@ -59,7 +59,7 @@ func Init(path string) (InitResult, error) {
 
 	marker := filepath.Join(root, markerDir, markerFile)
 	if _, err := readConfig(marker); err == nil {
-		if err := EnsureLogsIgnored(root); err != nil {
+		if err := EnsureRuntimeIgnored(root); err != nil {
 			return InitResult{}, err
 		}
 		return InitResult{ProjectRoot: root, MarkerPath: marker, Initialized: false}, nil
@@ -72,15 +72,15 @@ func Init(path string) (InitResult, error) {
 	if err := writeConfig(marker); err != nil {
 		return InitResult{}, err
 	}
-	if err := EnsureLogsIgnored(root); err != nil {
+	if err := EnsureRuntimeIgnored(root); err != nil {
 		return InitResult{}, err
 	}
 	return InitResult{ProjectRoot: root, MarkerPath: marker, Initialized: true}, nil
 }
 
-// EnsureLogsIgnored idempotently excludes private, project-local audit logs
-// without disturbing any unrelated ignore entries.
-func EnsureLogsIgnored(root string) error {
+// EnsureRuntimeIgnored idempotently excludes private, project-local runtime
+// data without disturbing any unrelated ignore entries.
+func EnsureRuntimeIgnored(root string) error {
 	dir := filepath.Join(root, markerDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create Fledge marker directory: %w", err)
@@ -90,19 +90,59 @@ func EnsureLogsIgnored(root string) error {
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("read %s: %w", path, err)
 	}
+	existing := make(map[string]bool)
 	for _, line := range strings.Split(string(data), "\n") {
-		if strings.TrimSpace(line) == "/logs/" {
-			return nil
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "/logs/" || trimmed == "/tmp/" {
+			existing[trimmed] = true
 		}
+	}
+	if existing["/logs/"] && existing["/tmp/"] {
+		return nil
 	}
 	if len(data) > 0 && data[len(data)-1] != '\n' {
 		data = append(data, '\n')
 	}
-	data = append(data, []byte("/logs/\n")...)
+	for _, entry := range []string{"/logs/", "/tmp/"} {
+		if !existing[entry] {
+			data = append(data, entry...)
+			data = append(data, '\n')
+		}
+	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return fmt.Errorf("update %s: %w", path, err)
 	}
 	return nil
+}
+
+// TempDir returns the absolute project-local directory used for disposable
+// files by Fledge-managed processes.
+func TempDir(root string) string {
+	path := filepath.Join(root, markerDir, "tmp")
+	if absolute, err := filepath.Abs(path); err == nil {
+		return filepath.Clean(absolute)
+	}
+	return filepath.Clean(path)
+}
+
+// ResetTempDir removes all project-local temporary contents and recreates the
+// directory with owner-only permissions. os.RemoveAll removes a leaf symlink
+// itself rather than following it outside the project.
+func ResetTempDir(root string) (string, error) {
+	if err := EnsureRuntimeIgnored(root); err != nil {
+		return "", err
+	}
+	dir := TempDir(root)
+	if err := os.RemoveAll(dir); err != nil {
+		return "", fmt.Errorf("reset project temp directory %s: %w", dir, err)
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create project temp directory %s: %w", dir, err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return "", fmt.Errorf("secure project temp directory %s: %w", dir, err)
+	}
+	return dir, nil
 }
 
 // Discover canonicalizes dir and walks upward to the closest valid project

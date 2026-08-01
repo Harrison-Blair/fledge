@@ -16,6 +16,13 @@ import (
 
 func TestStartAttachesResolvedRunningSession(t *testing.T) {
 	root := initializedProject(t)
+	if err := os.MkdirAll(project.TempDir(root), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	kept := filepath.Join(project.TempDir(root), "keep")
+	if err := os.WriteFile(kept, []byte("preserve"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	t.Chdir(root)
 	session := project.SessionName(root)
 	binary, attachLog, workspaceLog := fakeStartBinary(t, root, session,
@@ -33,8 +40,13 @@ func TestStartAttachesResolvedRunningSession(t *testing.T) {
 		t.Fatalf("reused session enqueued picker: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "Already running Fledge session "+session+"\n") ||
-		!strings.Contains(stdout.String(), "Session source: derived\n") {
+		!strings.Contains(stdout.String(), "Session source: derived\n") ||
+		!strings.Contains(stdout.String(), "Temp: "+project.TempDir(root)+"\n") ||
+		!strings.Contains(stdout.String(), "Temp cleanup: preserved (session already running)\n") {
 		t.Fatalf("unexpected diagnostics: %s", stdout.String())
+	}
+	if data, err := os.ReadFile(kept); err != nil || string(data) != "preserve" {
+		t.Fatalf("running-session temp content changed: data=%q err=%v", data, err)
 	}
 	if strings.Contains(stdout.String(), "Herdr UI closed") {
 		t.Fatalf("normal attachment exit reported a coordinated stop: %s", stdout.String())
@@ -43,6 +55,17 @@ func TestStartAttachesResolvedRunningSession(t *testing.T) {
 
 func TestFreshDetachedStartSkipsOrchestratorPicker(t *testing.T) {
 	root := initializedProject(t)
+	ignore := filepath.Join(root, ".fledge", ".gitignore")
+	if err := os.WriteFile(ignore, []byte("/logs/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(project.TempDir(root), "nested", "stale")
+	if err := os.MkdirAll(filepath.Dir(stale), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stale, []byte("discard"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	t.Chdir(root)
 	session := project.SessionName(root)
 	binary, attachLog, workspaceLog := fakeStartBinary(t, root, session, startOptions{})
@@ -58,6 +81,50 @@ func TestFreshDetachedStartSkipsOrchestratorPicker(t *testing.T) {
 		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("detached start unexpectedly used %s: %v", path, err)
 		}
+	}
+	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("fresh start preserved stale temp content: %v", err)
+	}
+	info, err := os.Stat(project.TempDir(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Fatalf("fresh temp directory mode = %v", info.Mode())
+	}
+	if !strings.Contains(stdout.String(), "Temp cleanup: cleaned before start\n") {
+		t.Fatalf("fresh cleanup was not reported: %s", stdout.String())
+	}
+	ignoreData, err := os.ReadFile(ignore)
+	if err != nil || string(ignoreData) != "/logs/\n/tmp/\n" {
+		t.Fatalf("fresh start did not update runtime ignores: %q, %v", ignoreData, err)
+	}
+}
+
+func TestFreshDetachedStartJSONReportsTempCleanup(t *testing.T) {
+	root := initializedProject(t)
+	t.Chdir(root)
+	session := project.SessionName(root)
+	binary, _, _ := fakeStartBinary(t, root, session, startOptions{})
+
+	var stdout, stderr bytes.Buffer
+	code := Execute(context.Background(), []string{
+		"start", "--detach", "--json", "--herdr-bin", binary, "--timeout", "2s",
+	}, bytes.NewBuffer(nil), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	var envelope struct {
+		SchemaVersion int                 `json:"schema_version"`
+		OK            bool                `json:"ok"`
+		Data          fledgeStartEnvelope `json:"data"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.SchemaVersion != 1 || !envelope.OK || envelope.Data.Session != session ||
+		!envelope.Data.Started || !envelope.Data.TempCleaned || envelope.Data.TempDir != project.TempDir(root) {
+		t.Fatalf("unexpected envelope: %#v", envelope)
 	}
 }
 
@@ -164,7 +231,8 @@ func TestStartDetachPreservesHumanAndJSONOutputWithoutAttaching(t *testing.T) {
 				t.Fatal(err)
 			}
 			if envelope.SchemaVersion != 1 || !envelope.OK ||
-				envelope.Data.Session != session || envelope.Data.Started {
+				envelope.Data.Session != session || envelope.Data.Started || envelope.Data.TempCleaned ||
+				envelope.Data.TempDir != project.TempDir(root) {
 				t.Fatalf("unexpected envelope: %#v", envelope)
 			}
 		})

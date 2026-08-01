@@ -11,6 +11,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/buildinfo"
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/messaging"
+	"github.com/Harrison-Blair/fledge/internal/project"
 	"github.com/Harrison-Blair/fledge/internal/state"
 )
 
@@ -22,6 +23,8 @@ type StartResult struct {
 	Started       bool   `json:"started"`
 	Version       string `json:"herdr_version"`
 	Protocol      int    `json:"protocol"`
+	TempDir       string `json:"temp_dir"`
+	TempCleaned   bool   `json:"temp_cleaned"`
 }
 
 type StatusResult struct {
@@ -41,6 +44,7 @@ type StatusResult struct {
 }
 
 func (s *Service) Start(ctx context.Context, timeout time.Duration) (StartResult, error) {
+	s.Binary.TempDir = project.TempDir(s.Project.Root)
 	installed, err := s.inspect(ctx)
 	if err != nil {
 		return StartResult{}, err
@@ -53,7 +57,7 @@ func (s *Service) Start(ctx context.Context, timeout time.Duration) (StartResult
 		if err := s.saveSocket(session.SocketPath); err != nil {
 			return StartResult{}, Wrap("state_persist_failed", fmt.Sprintf("server is running but its socket could not be persisted: %v", err), err)
 		}
-		return s.startResult(session.SocketPath, false, pong), nil
+		return s.startResult(session.SocketPath, false, false, pong), nil
 	}
 	if session.Name != "" && session.Running {
 		return StartResult{}, NewError("session_not_running",
@@ -206,13 +210,14 @@ func (s *Service) inspectStartedServer(ctx context.Context, installed herdr.Bina
 		return StartResult{}, true, Wrap("state_persist_failed",
 			fmt.Sprintf("server started but its socket could not be persisted: %v", err), err)
 	}
-	return s.startResult(candidate.SocketPath, true, ready), true, nil
+	return s.startResult(candidate.SocketPath, true, true, ready), true, nil
 }
 
-func (s *Service) startResult(socket string, started bool, pong herdr.Pong) StartResult {
+func (s *Service) startResult(socket string, started, tempCleaned bool, pong herdr.Pong) StartResult {
 	return StartResult{
 		ProjectRoot: s.Project.Root, Session: s.Project.Session, SessionSource: s.Project.SessionSource,
 		Socket: socket, Started: started, Version: pong.Version, Protocol: pong.Protocol,
+		TempDir: project.TempDir(s.Project.Root), TempCleaned: tempCleaned,
 	}
 }
 
@@ -220,6 +225,9 @@ func (s *Service) startResult(socket string, started bool, pong herdr.Pong) Star
 // disposable mappings. Only the coordinated-stop generation survives between
 // server lifecycles.
 func (s *Service) prepareFreshStart(ctx context.Context, session herdr.SessionInfo) error {
+	if _, err := project.ResetTempDir(s.Project.Root); err != nil {
+		return Wrap("temp_clean_failed", fmt.Sprintf("cannot prepare project temp directory before startup: %v", err), err)
+	}
 	if session.Name != "" {
 		if err := s.Binary.DeleteSession(ctx, s.Project.Session); err != nil {
 			if _, found, findErr := s.Binary.FindSession(ctx, s.Project.Session); findErr != nil || found {

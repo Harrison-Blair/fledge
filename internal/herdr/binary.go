@@ -38,7 +38,10 @@ type SessionInfo struct {
 	SocketPath string `json:"socket_path"`
 }
 
-type Binary struct{ Path string }
+type Binary struct {
+	Path    string
+	TempDir string
+}
 
 func (b Binary) path() string {
 	if b.Path == "" {
@@ -152,7 +155,7 @@ func (b Binary) StartServer(ctx context.Context, session, cwd string) (<-chan er
 	// deliberately detached and must survive after `fledge start` returns.
 	cmd := exec.Command(path, "--session", session, "server")
 	cmd.Dir = cwd
-	cmd.Env = processenv.WithoutNoColor(os.Environ())
+	cmd.Env = processenv.Managed(os.Environ(), b.TempDir)
 	cmd.Stdin = nil
 	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
@@ -179,7 +182,7 @@ func (b Binary) Attach(ctx context.Context, session, target string, takeover boo
 		args = append(args, "--takeover")
 	}
 	cmd := exec.CommandContext(ctx, path, args...)
-	cmd.Env = processenv.WithoutNoColor(os.Environ())
+	cmd.Env = processenv.Managed(os.Environ(), b.TempDir)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
 }
@@ -188,7 +191,7 @@ func (b Binary) AttachSession(ctx context.Context, session, cwd string) error {
 	path := b.path()
 	cmd := exec.CommandContext(ctx, path, "session", "attach", session)
 	cmd.Dir = cwd
-	cmd.Env = processenv.WithoutNoColor(os.Environ())
+	cmd.Env = processenv.Managed(os.Environ(), b.TempDir)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
 }

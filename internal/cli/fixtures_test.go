@@ -23,6 +23,8 @@ type fledgeStartEnvelope struct {
 	Started       bool   `json:"started"`
 	Version       string `json:"herdr_version"`
 	Protocol      int    `json:"protocol"`
+	TempDir       string `json:"temp_dir"`
+	TempCleaned   bool   `json:"temp_cleaned"`
 }
 
 func initializedProject(t *testing.T) string {

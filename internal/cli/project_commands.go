@@ -118,7 +118,46 @@ func printStartResult(env *environment, result fledge.StartResult) error {
 			theme.Accent(action), result.Session, theme.Accent("Socket:"), result.Socket,
 			theme.Accent("Herdr:"), result.Version, result.Protocol)
 		fmt.Fprintf(w, "%s %s\n", theme.Accent("Session source:"), result.SessionSource)
+		fmt.Fprintf(w, "%s %s\n", theme.Accent("Temp:"), result.TempDir)
+		cleanup := "preserved (session already running)"
+		if result.TempCleaned {
+			cleanup = "cleaned before start"
+		}
+		fmt.Fprintf(w, "%s %s\n", theme.Accent("Temp cleanup:"), cleanup)
 	})
+}
+
+func newTemp(env *environment) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "temp",
+		Short: "Manage project-local temporary files",
+	}
+	cmd.AddCommand(newTempClean(env))
+	return cmd
+}
+
+func newTempClean(env *environment) *cobra.Command {
+	return &cobra.Command{
+		Use:   "clean",
+		Short: "Clean the stopped project's temporary directory",
+		Args:  noArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			service, err := env.service(cmd.Context())
+			if err != nil {
+				return err
+			}
+			result, err := service.CleanTemp(cmd.Context())
+			if err != nil {
+				return fledge.Translate(err)
+			}
+			return env.print(result, func(w io.Writer, theme *ui.Theme) {
+				fmt.Fprintln(w, theme.Accent("Cleaned project temp directory"))
+				fmt.Fprintf(w, "%s %s\n%s %s\n",
+					theme.Accent("Project:"), result.ProjectRoot,
+					theme.Accent("Temp:"), result.TempDir)
+			})
+		},
+	}
 }
 
 func attachStartedSession(

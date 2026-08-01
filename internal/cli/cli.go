@@ -178,6 +178,7 @@ func newRoot(env *environment) *cobra.Command {
 		newStart(env),
 		newStatus(env),
 		newStop(env),
+		newTemp(env),
 		newSessions(env),
 		newAgent(env),
 		newStopCleanup(env),
@@ -221,7 +222,7 @@ func (e *environment) service(ctx context.Context) (*fledge.Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	binary := herdr.Binary{Path: e.herdrBin}
+	binary := herdr.Binary{Path: e.herdrBin, TempDir: project.TempDir(info.Root)}
 	resolution, err := fledge.ResolveSession(ctx, info.Root, binary)
 	if err != nil {
 		return nil, err

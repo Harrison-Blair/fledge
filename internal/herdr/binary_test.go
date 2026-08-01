@@ -68,8 +68,10 @@ func TestManagedHerdrProcessesDoNotInheritNoColor(t *testing.T) {
 			t.Setenv("TERM", "fledge-term")
 			t.Setenv("COLORTERM", "fledge-truecolor")
 			t.Setenv("FLEDGE_UNRELATED", "unchanged")
+			t.Setenv("TMPDIR", "/inherited/tmp")
+			projectTemp := filepath.Join(dir, "project", ".fledge", "tmp")
 
-			if err := test.run(Binary{Path: executable}, dir); err != nil {
+			if err := test.run(Binary{Path: executable, TempDir: projectTemp}, dir); err != nil {
 				t.Fatal(err)
 			}
 			environ := readCapturedEnvironment(t, capture)
@@ -77,7 +79,8 @@ func TestManagedHerdrProcessesDoNotInheritNoColor(t *testing.T) {
 				t.Fatalf("NO_COLOR was forwarded: %q", environ["NO_COLOR"])
 			}
 			for name, want := range map[string]string{
-				"TERM": "fledge-term", "COLORTERM": "fledge-truecolor", "FLEDGE_UNRELATED": "unchanged",
+				"TERM": "fledge-term", "COLORTERM": "fledge-truecolor",
+				"FLEDGE_UNRELATED": "unchanged", "TMPDIR": projectTemp,
 			} {
 				if got := environ[name]; got != want {
 					t.Fatalf("%s = %q, want %q", name, got, want)

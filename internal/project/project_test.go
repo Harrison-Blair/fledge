@@ -57,8 +57,104 @@ func TestInitPreservesAndMaintainsFledgeGitignore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != "/keep/\n/logs/\n" {
+	if string(data) != "/keep/\n/logs/\n/tmp/\n" {
 		t.Fatalf("gitignore = %q", data)
+	}
+}
+
+func TestEnsureRuntimeIgnoredAddsOnlyMissingEntries(t *testing.T) {
+	root := t.TempDir()
+	fledgeDir := filepath.Join(root, ".fledge")
+	if err := os.Mkdir(fledgeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ignore := filepath.Join(fledgeDir, ".gitignore")
+	if err := os.WriteFile(ignore, []byte("/tmp/\n/custom"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureRuntimeIgnored(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureRuntimeIgnored(root); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(ignore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(data), "/tmp/\n/custom\n/logs/\n"; got != want {
+		t.Fatalf("gitignore = %q, want %q", got, want)
+	}
+}
+
+func TestResetTempDirRecursivelyCleansAndSecuresDirectory(t *testing.T) {
+	root := t.TempDir()
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	tempDir := TempDir(root)
+	nested := filepath.Join(tempDir, "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "artifact"), []byte("discard"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(tempDir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+
+	for range 2 {
+		got, err := ResetTempDir(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != tempDir || !filepath.IsAbs(got) {
+			t.Fatalf("temp dir = %q, want absolute %q", got, tempDir)
+		}
+		entries, err := os.ReadDir(tempDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("temp directory is not empty: %#v", entries)
+		}
+		info, err := os.Stat(tempDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gotMode := info.Mode().Perm(); gotMode != 0o700 {
+			t.Fatalf("temp permissions = %o, want 700", gotMode)
+		}
+	}
+}
+
+func TestResetTempDirRemovesLeafSymlinkWithoutFollowingIt(t *testing.T) {
+	root := t.TempDir()
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	kept := filepath.Join(outside, "keep")
+	if err := os.WriteFile(kept, []byte("safe"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, TempDir(root)); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ResetTempDir(root); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(kept); err != nil || string(data) != "safe" {
+		t.Fatalf("outside target changed: data=%q err=%v", data, err)
+	}
+	info, err := os.Lstat(TempDir(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("temp path was not recreated as a directory: %v", info.Mode())
 	}
 }
 
@@ -151,7 +247,12 @@ func TestDiscoverRejectsInvalidClosestMarkerInsteadOfSkippingIt(t *testing.T) {
 }
 
 func TestDiscoverUninitializedIsActionable(t *testing.T) {
-	_, err := Discover(t.TempDir())
+	root := t.TempDir()
+	// TMPDIR may itself be project-local when the suite is run through
+	// Fledge. Treat this isolated directory as HOME so discovery deliberately
+	// stops before reaching any marker above the test fixture.
+	t.Setenv("HOME", root)
+	_, err := Discover(root)
 	if err == nil || !strings.Contains(err.Error(), "fledge init") {
 		t.Fatalf("unexpected error: %v", err)
 	}

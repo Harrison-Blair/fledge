@@ -519,7 +519,7 @@ func messageEnvelope(message *messaging.Message) string {
 // beginRun opens the durable run this server lifecycle records against and
 // publishes it as the session's active run.
 func (m *messenger) beginRun(header messaging.RunHeader) (string, error) {
-	if err := project.EnsureLogsIgnored(m.project.Root); err != nil {
+	if err := project.EnsureRuntimeIgnored(m.project.Root); err != nil {
 		return "", Wrap("message_log_unavailable", err.Error(), err)
 	}
 	runID, err := m.log.StartRun(header)

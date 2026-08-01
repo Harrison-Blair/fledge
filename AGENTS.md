@@ -1,3 +1,13 @@
+# Dogfooding and Delegation
+- All implementation, review, research, and testing subagents for this repository must be spawned and managed through the inherited Fledge session.
+- Delegated work must use `fledge agent spawn --new-tab` so the coordinator keeps its own pane.
+- Treat the inherited `HERDR_*` environment variables as the current-session identity. Never hard-code a session name, unset those variables, or substitute another session.
+- Do not use native or platform subagent mechanisms when the current Fledge session is available.
+- Do not run `fledge start`, directly create a Herdr server/session, or bootstrap nested orchestration for repository work.
+- If the inherited session is missing or Fledge cannot reach it, stop and ask the user. Do not silently implement locally or create a replacement session.
+- Tests may create isolated fake or real sessions only within their scoped lifecycle and must tear them down. Never reuse a test session to orchestrate development.
+- Use the inherited `TMPDIR` for disposable artifacts; do not create ad hoc temporary directories.
+
 # Project Overview
 This is a `go` CLI tool aimed to make agentic engineering more efficient
 
