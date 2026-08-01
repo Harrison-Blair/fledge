@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Harrison-Blair/fledge/internal/processenv"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 )
@@ -133,14 +134,7 @@ func selectProfile(
 type withoutNoColor struct{}
 
 func (withoutNoColor) Environ() []string {
-	environ := os.Environ()
-	filtered := environ[:0]
-	for _, entry := range environ {
-		if !strings.HasPrefix(entry, "NO_COLOR=") {
-			filtered = append(filtered, entry)
-		}
-	}
-	return filtered
+	return processenv.WithoutNoColor(os.Environ())
 }
 
 func (withoutNoColor) Getenv(name string) string {

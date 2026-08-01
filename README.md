@@ -217,6 +217,88 @@ Non-interactive use requires `--name | -n` and `--harness | -k`; omitting
 fledge agent spawn -n reviewer -k claude -m sonnet -- --permission-mode plan
 ```
 
+## Managed agent profiles
+
+Managed profiles keep an agent's launch identity in the project at
+`.fledge/profiles/<name>.toml`. The filename supplies the profile name; `name`
+is therefore not allowed inside the TOML document. A complete schema-version 1
+profile looks like this:
+
+```toml
+schema_version = 1
+description = "Reviews changes against project conventions"
+harness = "codex"
+model = "gpt-5.6"
+effort = "high"
+native_args = ["--image=architecture.png"]
+instructions = """
+Review for correctness, determinism, and missing tests.
+Report concrete findings before suggesting refinements.
+"""
+```
+
+Create a profile from fields or from a strict TOML file. Explicit field flags
+overlay the file, which makes scripted customization deterministic. `-` reads
+the TOML from stdin:
+
+```sh
+fledge agent profile create reviewer \
+  --harness codex --model gpt-5.6 --effort high \
+  --instructions "Review correctness and tests."
+fledge agent profile create reviewer --file reviewer.toml --model gpt-5.6
+cat reviewer.toml | fledge agent profile create reviewer --file -
+```
+
+Updates preserve unspecified stored fields when no file is supplied. With
+`--file | -f`, the file becomes the new base and explicit field flags overlay
+it. `--native-arg | -a` is repeatable and replaces the native argument list
+when supplied.
+
+```sh
+fledge agent profile update reviewer --effort xhigh
+fledge agent profile list
+fledge agent profile show reviewer
+fledge agent profile validate reviewer
+fledge agent profile validate candidate --file candidate.toml
+fledge agent profile delete reviewer
+```
+
+Launch a profile by passing its name to `spawn`. The logical agent name
+defaults to the profile name and can be changed per launch. Profile agents
+always start at the discovered project root, even when invoked from a nested
+directory:
+
+```sh
+fledge agent spawn reviewer
+fledge agent spawn reviewer --name review-auth --new-tab --timeout 1m
+fledge agent spawn reviewer --json
+```
+
+The profile owns `harness`, `model`, `effort`, `instructions`, and
+`native_args`. A profiled launch rejects per-launch `--harness | -k`,
+`--model | -m`, `--cwd | -C`, and any extra arguments after `--`. Put native
+arguments in the profile instead; Fledge validates them for collisions with
+managed identity, instructions, reasoning, working-directory, placement, and
+permission settings before starting anything. `--name | -n`,
+`--new-tab | -N`, and `--timeout | -t` remain per-launch controls.
+
+Managed effort and instructions use each harness's reliable interactive
+transport:
+
+- Claude Code supports both effort and instructions.
+- Codex supports both through native configuration arguments.
+- OpenCode profiles may select a model and safe native arguments, but its
+  interactive TUI cannot reliably transport managed effort or instructions;
+  profiles containing either are rejected before launch.
+- Pi supports managed effort. Managed instructions are rejected because Pi
+  may interpret the instruction value as a file path.
+
+Every profile command supports `--json | -j`. Profile spawn JSON includes the
+profile provenance and the exact final native argument vector. Agent list,
+agent status, and project status JSON use the same provenance projection; human
+agent tables add a `PROFILE` column whenever at least one displayed agent came
+from a profile.
+
 On the first attached `fledge start`, the picker is opened automatically in
 the left orchestrator pane with the name `fledge-orchestrator`. The right pane
 remains an ordinary control shell. Detached starts and attachments to an

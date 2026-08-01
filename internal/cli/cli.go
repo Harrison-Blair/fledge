@@ -138,7 +138,7 @@ func colorRequested(args []string) (ui.ColorMode, bool) {
 		}
 		value := ""
 		switch {
-		case arg == "--color" || arg == "-c":
+		case arg == "--color":
 			if index+1 >= len(args) {
 				continue
 			}
@@ -146,10 +146,6 @@ func colorRequested(args []string) (ui.ColorMode, bool) {
 			value = args[index]
 		case strings.HasPrefix(arg, "--color="):
 			value = strings.TrimPrefix(arg, "--color=")
-		case strings.HasPrefix(arg, "-c="):
-			value = strings.TrimPrefix(arg, "-c=")
-		case strings.HasPrefix(arg, "-c") && len(arg) > 2:
-			value = strings.TrimPrefix(arg, "-c")
 		default:
 			continue
 		}
@@ -172,7 +168,7 @@ func newRoot(env *environment) *cobra.Command {
 		SilenceUsage:  true,
 	}
 	root.PersistentFlags().BoolVarP(&env.json, "json", "j", false, "emit machine-readable JSON")
-	root.PersistentFlags().VarP(&env.color, "color", "c", "color output: auto, always, or never")
+	root.PersistentFlags().Var(&env.color, "color", "color output: auto, always, or never")
 	root.PersistentFlags().StringVarP(&env.herdrBin, "herdr-bin", "H", "herdr", "path to the Herdr executable")
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
 		return &usageError{message: err.Error()}

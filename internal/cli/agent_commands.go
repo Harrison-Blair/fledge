@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Harrison-Blair/fledge/internal/agentprofile"
 	"github.com/Harrison-Blair/fledge/internal/agentspawn"
 	"github.com/Harrison-Blair/fledge/internal/fledge"
 	"github.com/Harrison-Blair/fledge/internal/picker"
@@ -22,6 +23,7 @@ func newAgent(env *environment) *cobra.Command {
 	cmd := &cobra.Command{Use: "agent", Short: "Manage logical agents"}
 	cmd.AddCommand(
 		newAgentSpawn(env),
+		newAgentProfile(env),
 		newAgentStop(env),
 		newAgentList(env),
 		newAgentStatus(env),
@@ -39,13 +41,16 @@ func newAgentSpawn(env *environment) *cobra.Command {
 	var newTab bool
 	var timeout time.Duration
 	cmd := &cobra.Command{
-		Use:   "spawn [-- <native-args...>]",
+		Use:   "spawn [profile] [-- <native-args...>]",
 		Short: "Choose and launch an agent harness",
-		Args:  nativeArgsAfterDash,
+		Args:  validateSpawnArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			profileName, nativeArgs := splitSpawnArgs(cmd, args)
 			return runAgentSpawn(cmd, env, agentSpawnFlags{
-				name: name, harness: harnessName, model: model, cwd: cwd,
-				newTab: newTab, timeout: timeout, nativeArgs: args,
+				name: name, harness: harnessName, model: model, cwd: cwd, profile: profileName,
+				newTab: newTab, timeout: timeout, nativeArgs: nativeArgs,
+				harnessSet: cmd.Flags().Changed("harness"), modelSet: cmd.Flags().Changed("model"),
+				cwdSet: cmd.Flags().Changed("cwd"),
 			})
 		},
 	}
@@ -60,21 +65,49 @@ func newAgentSpawn(env *environment) *cobra.Command {
 
 type agentSpawnFlags struct {
 	name, harness, model, cwd string
+	profile                   string
 	newTab                    bool
 	timeout                   time.Duration
 	nativeArgs                []string
+	harnessSet, modelSet      bool
+	cwdSet                    bool
 }
 
-func nativeArgsAfterDash(cmd *cobra.Command, args []string) error {
-	if len(args) > 0 && cmd.ArgsLenAtDash() < 0 {
-		return usage("native harness arguments must follow --")
+func validateSpawnArgs(cmd *cobra.Command, args []string) error {
+	beforeDash := len(args)
+	if cmd.ArgsLenAtDash() >= 0 {
+		beforeDash = cmd.ArgsLenAtDash()
+	}
+	if beforeDash > 1 {
+		if cmd.ArgsLenAtDash() < 0 {
+			return usage("fledge agent spawn accepts at most one profile name; native harness arguments must follow --")
+		}
+		return usage("fledge agent spawn accepts at most one profile name before --")
 	}
 	return nil
+}
+
+func splitSpawnArgs(cmd *cobra.Command, args []string) (string, []string) {
+	dash := cmd.ArgsLenAtDash()
+	if dash < 0 {
+		if len(args) == 1 {
+			return args[0], nil
+		}
+		return "", nil
+	}
+	profileName := ""
+	if dash == 1 {
+		profileName = args[0]
+	}
+	return profileName, append([]string(nil), args[dash:]...)
 }
 
 func runAgentSpawn(cmd *cobra.Command, env *environment, flags agentSpawnFlags) error {
 	if flags.timeout <= 3*time.Second || flags.timeout > 5*time.Minute {
 		return usage("--timeout must be greater than 3s and no more than 5m")
+	}
+	if flags.profile != "" {
+		return runProfileAgentSpawn(cmd, env, flags)
 	}
 	if duplicateModelFlag(flags.nativeArgs) {
 		return usage("native passthrough arguments must not contain --model or -m; use fledge agent spawn --model")
@@ -137,13 +170,89 @@ func runAgentSpawn(cmd *cobra.Command, env *environment, flags agentSpawnFlags) 
 	if err != nil {
 		return fledge.Translate(err)
 	}
+	return printAgentSpawnResult(env, result)
+}
+
+func runProfileAgentSpawn(cmd *cobra.Command, env *environment, flags agentSpawnFlags) error {
+	if flags.harnessSet {
+		return usage(fmt.Sprintf("--harness is locked by agent profile %q; native harness arguments must follow --", flags.profile))
+	}
+	if flags.modelSet {
+		return usage(fmt.Sprintf("--model is locked by agent profile %q", flags.profile))
+	}
+	if flags.cwdSet {
+		return usage(fmt.Sprintf("--cwd is locked by agent profile %q; profile agents always launch at the project root", flags.profile))
+	}
+	if len(flags.nativeArgs) > 0 {
+		return usage(fmt.Sprintf("agent profile %q does not accept extra -- arguments; configure native_args in the profile", flags.profile))
+	}
+
+	var profileRoot string
+	var profileHarness, profileModel string
+	var profileArgs []string
+	err := withProfileStore(env, func(store *agentprofile.Store) error {
+		profile, err := store.Load(flags.profile)
+		if err != nil {
+			return translateProfileError(err)
+		}
+		profileArgs, err = agentspawn.BuildProfileArgs(agentspawn.ProfileLaunchOptions{
+			Harness: profile.Harness, Effort: profile.Effort,
+			Instructions: profile.Instructions, NativeArgs: profile.NativeArgs,
+		})
+		if err != nil {
+			return fledge.Wrap("profile_launch_invalid",
+				fmt.Sprintf("agent profile %q cannot be launched: %v", flags.profile, err), err)
+		}
+		profileRoot = store.ProjectRoot()
+		profileHarness, profileModel = profile.Harness, profile.Model
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	installed := agentspawn.Installed(env.lookPath)
+	harness, found := agentspawn.Resolve(installed, profileHarness)
+	if !found {
+		return fledge.NewError("profile_harness_not_installed",
+			fmt.Sprintf("agent profile %q requires harness %q, but it is not installed", flags.profile, profileHarness))
+	}
+	name := strings.TrimSpace(flags.name)
+	if name == "" {
+		name = flags.profile
+	}
+	if env.json {
+		flags.newTab = true
+	}
+	service, err := env.service(cmd.Context())
+	if err != nil {
+		return err
+	}
+	currentPaneID := strings.TrimSpace(env.getenvValue("HERDR_PANE_ID"))
+	result, err := service.SpawnAgent(cmd.Context(), fledge.AgentStartOptions{
+		Name: name, Kind: harness.ID, Model: profileModel, Profile: flags.profile,
+		CWD: profileRoot, Timeout: flags.timeout, Args: append([]string(nil), profileArgs...),
+		NewTab: flags.newTab || currentPaneID == "", CurrentPaneID: currentPaneID, Executable: harness.Path,
+	})
+	if err != nil {
+		return fledge.Translate(err)
+	}
+	return printAgentSpawnResult(env, result)
+}
+
+func printAgentSpawnResult(env *environment, result fledge.AgentStartResult) error {
 	return env.print(result, func(w io.Writer, theme *ui.Theme) {
 		modelDescription := ""
 		if result.Agent.Model != "" {
 			modelDescription = ", model " + result.Agent.Model
 		}
-		fmt.Fprintf(w, "%s %s (%s%s) in pane %s\n",
-			theme.Accent("Spawned"), result.Agent.Name, result.Agent.Kind, modelDescription, result.Agent.PaneID)
+		profileDescription := ""
+		if result.Agent.Profile != "" {
+			profileDescription = ", profile " + result.Agent.Profile
+		}
+		fmt.Fprintf(w, "%s %s (%s%s%s) in pane %s\n",
+			theme.Accent("Spawned"), terminalSafeText(result.Agent.Name), terminalSafeText(result.Agent.Kind),
+			terminalSafeText(modelDescription), terminalSafeText(profileDescription), terminalSafeText(result.Agent.PaneID))
 	})
 }
 
@@ -409,20 +518,50 @@ func newAgentStatus(env *environment) *cobra.Command {
 
 func printAgents(env *environment, agents []fledge.AgentView) error {
 	return env.print(map[string]any{"agents": agents}, func(w io.Writer, theme *ui.Theme) {
-		if len(agents) == 0 {
-			fmt.Fprintln(w, "No managed agents")
-			return
-		}
-		fmt.Fprintln(w, theme.Accent("NAME\tHARNESS\tMODEL\tSTATE\tPENDING\tPLACEMENT\tPANE\tCWD"))
-		for _, agent := range agents {
-			model := agent.Model
-			if model == "" {
-				model = "default"
-			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
-				agent.Name, agent.Kind, model, theme.Status(agent.State), agent.PendingMessages, agent.Placement, agent.PaneID, agent.CWD)
-		}
+		printAgentTable(w, agents, theme, true)
 	})
+}
+
+func printAgentTable(w io.Writer, agents []fledge.AgentView, theme *ui.Theme, showEmpty bool) {
+	if len(agents) == 0 {
+		if showEmpty {
+			fmt.Fprintln(w, "No managed agents")
+		}
+		return
+	}
+	showProfile := false
+	for _, agent := range agents {
+		if agent.Profile != "" {
+			showProfile = true
+			break
+		}
+	}
+	if showProfile {
+		fmt.Fprintln(w, theme.Accent("NAME\tHARNESS\tMODEL\tPROFILE\tSTATE\tPENDING\tPLACEMENT\tPANE\tCWD"))
+	} else {
+		fmt.Fprintln(w, theme.Accent("NAME\tHARNESS\tMODEL\tSTATE\tPENDING\tPLACEMENT\tPANE\tCWD"))
+	}
+	for _, agent := range agents {
+		model := agent.Model
+		if model == "" {
+			model = "default"
+		}
+		if showProfile {
+			profile := agent.Profile
+			if profile == "" {
+				profile = "-"
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
+				terminalSafeText(agent.Name), terminalSafeText(agent.Kind), terminalSafeText(model),
+				terminalSafeText(profile), theme.Status(terminalSafeText(agent.State)), agent.PendingMessages,
+				terminalSafeText(agent.Placement), terminalSafeText(agent.PaneID), terminalSafeText(agent.CWD))
+			continue
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
+			terminalSafeText(agent.Name), terminalSafeText(agent.Kind), terminalSafeText(model),
+			theme.Status(terminalSafeText(agent.State)), agent.PendingMessages,
+			terminalSafeText(agent.Placement), terminalSafeText(agent.PaneID), terminalSafeText(agent.CWD))
+	}
 }
 
 type promptOptions struct {

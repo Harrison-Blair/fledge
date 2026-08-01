@@ -36,6 +36,7 @@ type StatusResult struct {
 	ProtocolCompatible  bool           `json:"protocol_compatible"`
 	ServerState         string         `json:"server_state"`
 	AgentStates         map[string]int `json:"agent_states"`
+	Agents              []AgentView    `json:"agents,omitempty"`
 	UserPendingMessages int            `json:"user_pending_messages"`
 }
 
@@ -333,6 +334,7 @@ func (s *Service) Status(ctx context.Context) (StatusResult, error) {
 	for _, agent := range agents {
 		out.AgentStates[agent.State]++
 	}
+	out.Agents = agents
 	return out, nil
 }
 

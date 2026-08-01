@@ -1,6 +1,7 @@
 package fledge
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -26,14 +27,14 @@ func TestSpawnAgentInCurrentPaneRenamesOnlyPaneAndPersistsSelection(t *testing.T
 	}
 
 	result, err := service.SpawnAgent(t.Context(), AgentStartOptions{
-		Name: "worker", Kind: "codex", Model: "custom/model", CurrentPaneID: "p1",
+		Name: "worker", Kind: "codex", Model: "custom/model", Profile: "reviewer", CurrentPaneID: "p1",
 		Executable: "/usr/bin/codex", Timeout: 30 * time.Second, Args: []string{"--sandbox", "read-only"},
 		RememberSelection: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Agent.Placement != "pane" || result.Agent.Model != "custom/model" ||
+	if result.Agent.Placement != "pane" || result.Agent.Model != "custom/model" || result.Agent.Profile != "reviewer" ||
 		execPath != "/usr/bin/codex" ||
 		strings.Join(execArgv, " ") != "/usr/bin/codex --model custom/model --sandbox read-only" {
 		t.Fatalf("result=%#v path=%q argv=%v", result, execPath, execArgv)
@@ -42,7 +43,8 @@ func TestSpawnAgentInCurrentPaneRenamesOnlyPaneAndPersistsSelection(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Agents["worker"].PaneID != "p1" || st.Agents["worker"].Placement != "pane" {
+	if st.Agents["worker"].PaneID != "p1" || st.Agents["worker"].Placement != "pane" ||
+		st.Agents["worker"].Profile != "reviewer" {
 		t.Fatalf("state = %#v", st)
 	}
 	if st.LastSpawnSelection == nil || *st.LastSpawnSelection !=
@@ -63,6 +65,7 @@ func TestSpawnAgentInCurrentPaneRollsBackMappingAndLabelOnExecFailure(t *testing
 	label := seedTakeoverPane(t, service, fake)
 	if err := service.Store.WithLocked(service.Project.Session, service.Project.Root, func(st *state.Session) error {
 		st.LastSpawnSelection = &state.SpawnSelection{Harness: "claude", Model: "sonnet"}
+		st.Agents["prior"] = state.Agent{Name: "prior", Profile: "original", PaneID: "p1", TabID: "t1"}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -70,7 +73,7 @@ func TestSpawnAgentInCurrentPaneRollsBackMappingAndLabelOnExecFailure(t *testing
 	service.ExecAgent = func(string, []string, []string) error { return errors.New("exec exploded") }
 
 	_, err := service.SpawnAgent(t.Context(), AgentStartOptions{
-		Name: "worker", Kind: "codex", Model: "gpt-5.6", CurrentPaneID: "p1",
+		Name: "worker", Kind: "codex", Model: "gpt-5.6", Profile: "replacement", CurrentPaneID: "p1",
 		Executable: "/usr/bin/codex", Timeout: 30 * time.Second,
 		RememberSelection: true,
 	})
@@ -81,7 +84,7 @@ func TestSpawnAgentInCurrentPaneRollsBackMappingAndLabelOnExecFailure(t *testing
 	if readErr != nil {
 		t.Fatal(readErr)
 	}
-	if len(st.Agents) != 0 {
+	if len(st.Agents) != 1 || st.Agents["prior"].Profile != "original" {
 		t.Fatalf("mapping was not rolled back: %#v", st.Agents)
 	}
 	if st.LastSpawnSelection == nil || *st.LastSpawnSelection !=
@@ -103,6 +106,7 @@ func TestSpawnAgentInCurrentPaneRollsBackSelectionOnActivationFailure(t *testing
 	if err := service.Store.WithLocked(service.Project.Session, service.Project.Root, func(st *state.Session) error {
 		selection := want
 		st.LastSpawnSelection = &selection
+		st.Agents["prior"] = state.Agent{Name: "prior", Profile: "original", PaneID: "p1", TabID: "t1"}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -116,7 +120,7 @@ func TestSpawnAgentInCurrentPaneRollsBackSelectionOnActivationFailure(t *testing
 	}
 
 	_, err := service.SpawnAgent(t.Context(), AgentStartOptions{
-		Name: "worker", Kind: "codex", Model: "gpt-5.6", CurrentPaneID: "p1",
+		Name: "worker", Kind: "codex", Model: "gpt-5.6", Profile: "replacement", CurrentPaneID: "p1",
 		Executable: "/usr/bin/codex", Timeout: 30 * time.Second, RememberSelection: true,
 	})
 	if Translate(err).Code != "agent_exec_failed" {
@@ -126,7 +130,8 @@ func TestSpawnAgentInCurrentPaneRollsBackSelectionOnActivationFailure(t *testing
 	if readErr != nil {
 		t.Fatal(readErr)
 	}
-	if st.LastSpawnSelection == nil || *st.LastSpawnSelection != want || len(st.Agents) != 0 {
+	if st.LastSpawnSelection == nil || *st.LastSpawnSelection != want || len(st.Agents) != 1 ||
+		st.Agents["prior"].Profile != "original" {
 		t.Fatalf("rollback state = %#v", st)
 	}
 }
@@ -212,21 +217,34 @@ func TestSpawnAgentRejectsNameOwnedByAnotherPane(t *testing.T) {
 func TestDedicatedSpawnUsesRawLabelsAndPersistsModel(t *testing.T) {
 	service, fake := newFakeLifecycle(t)
 	result, err := service.SpawnAgent(t.Context(), AgentStartOptions{
-		Name: "worker", Kind: "claude", Model: "sonnet", NewTab: true,
+		Name: "worker", Kind: "claude", Model: "sonnet", Profile: "reviewer", NewTab: true,
 		Executable: "/usr/bin/claude", Timeout: 30 * time.Second, RememberSelection: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Agent.Model != "sonnet" || result.Agent.Placement != "tab" {
+	if result.Agent.Model != "sonnet" || result.Agent.Profile != "reviewer" || result.Agent.Placement != "tab" {
 		t.Fatalf("result = %#v", result)
+	}
+	spawnJSON, err := json.Marshal(result)
+	if err != nil || !strings.Contains(string(spawnJSON), `"profile":"reviewer"`) {
+		t.Fatalf("spawn JSON = %s, %v", spawnJSON, err)
 	}
 	agents, err := service.ListAgents(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(agents) != 1 || agents[0].Model != "sonnet" || agents[0].Placement != "tab" {
+	if len(agents) != 1 || agents[0].Model != "sonnet" || agents[0].Profile != "reviewer" ||
+		agents[0].Placement != "tab" {
 		t.Fatalf("listed agents = %#v", agents)
+	}
+	status, err := service.AgentStatus(t.Context(), "worker")
+	if err != nil || len(status) != 1 || status[0].Profile != "reviewer" {
+		t.Fatalf("agent status = %#v, %v", status, err)
+	}
+	projectStatus, err := service.Status(t.Context())
+	if err != nil || len(projectStatus.Agents) != 1 || projectStatus.Agents[0].Profile != "reviewer" {
+		t.Fatalf("project status agents = %#v, %v", projectStatus.Agents, err)
 	}
 	st, err := service.Store.Read(service.Project.Session, service.Project.Root)
 	if err != nil {
@@ -236,12 +254,57 @@ func TestDedicatedSpawnUsesRawLabelsAndPersistsModel(t *testing.T) {
 		(state.SpawnSelection{Harness: "claude", Model: "sonnet"}) {
 		t.Fatalf("remembered selection = %#v", st.LastSpawnSelection)
 	}
+	if st.Agents["worker"].Profile != "reviewer" {
+		t.Fatalf("persisted profile = %#v", st.Agents["worker"])
+	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	if len(fake.snapshot.Tabs) != 1 || fake.snapshot.Tabs[0].Label != "worker" ||
 		len(fake.snapshot.Panes) != 1 || fake.snapshot.Panes[0].Label == nil ||
 		*fake.snapshot.Panes[0].Label != "worker" {
 		t.Fatalf("raw labels not applied: tabs=%#v panes=%#v", fake.snapshot.Tabs, fake.snapshot.Panes)
+	}
+}
+
+func TestDedicatedRespawnReplacesAndClearsProfileOnRetainedPane(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	first, err := service.SpawnAgent(t.Context(), AgentStartOptions{
+		Name: "worker", Kind: "codex", Profile: "reviewer", NewTab: true, Timeout: 30 * time.Second,
+	})
+	if err != nil || first.Agent.Profile != "reviewer" {
+		t.Fatalf("profiled spawn = %#v, %v", first, err)
+	}
+	fake.mu.Lock()
+	fake.exitAgent(first.Agent.PaneID)
+	fake.mu.Unlock()
+
+	adhoc, err := service.SpawnAgent(t.Context(), AgentStartOptions{
+		Name: "worker", Kind: "codex", NewTab: true, Timeout: 30 * time.Second,
+	})
+	if err != nil || adhoc.Agent.Profile != "" || adhoc.Agent.PaneID != first.Agent.PaneID {
+		t.Fatalf("ad-hoc respawn = %#v, %v", adhoc, err)
+	}
+	adhocJSON, err := json.Marshal(adhoc)
+	if err != nil || strings.Contains(string(adhocJSON), `"profile"`) {
+		t.Fatalf("ad-hoc spawn JSON = %s, %v", adhocJSON, err)
+	}
+	st, err := service.Store.Read(service.Project.Session, service.Project.Root)
+	if err != nil || st.Agents["worker"].Profile != "" {
+		t.Fatalf("ad-hoc persisted state = %#v, %v", st.Agents["worker"], err)
+	}
+
+	fake.mu.Lock()
+	fake.exitAgent(adhoc.Agent.PaneID)
+	fake.mu.Unlock()
+	profiled, err := service.SpawnAgent(t.Context(), AgentStartOptions{
+		Name: "worker", Kind: "codex", Profile: "builder", NewTab: true, Timeout: 30 * time.Second,
+	})
+	if err != nil || profiled.Agent.Profile != "builder" || profiled.Agent.PaneID != first.Agent.PaneID {
+		t.Fatalf("profiled respawn = %#v, %v", profiled, err)
+	}
+	st, err = service.Store.Read(service.Project.Session, service.Project.Root)
+	if err != nil || st.Agents["worker"].Profile != "builder" {
+		t.Fatalf("profiled persisted state = %#v, %v", st.Agents["worker"], err)
 	}
 }
 
@@ -723,6 +786,41 @@ func TestInPaneSpawnExecsFromTheAgentWorkingDirectoryAndRestoresIt(t *testing.T)
 	}
 	if after != before {
 		t.Fatalf("working directory was not restored: %q, want %q", after, before)
+	}
+}
+
+func TestHarnessExecDoesNotInheritNoColor(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	t.Setenv("TERM", "fledge-term")
+	t.Setenv("COLORTERM", "fledge-truecolor")
+	t.Setenv("FLEDGE_UNRELATED", "unchanged")
+
+	var captured []string
+	service := Service{
+		ExecAgent: func(_ string, _, environ []string) error {
+			captured = append([]string(nil), environ...)
+			return nil
+		},
+	}
+	if err := service.execIntoHarness("/usr/bin/codex", nil, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	environ := make(map[string]string, len(captured))
+	for _, entry := range captured {
+		name, value, found := strings.Cut(entry, "=")
+		if found {
+			environ[name] = value
+		}
+	}
+	if _, found := environ["NO_COLOR"]; found {
+		t.Fatalf("NO_COLOR was forwarded: %q", environ["NO_COLOR"])
+	}
+	for name, want := range map[string]string{
+		"TERM": "fledge-term", "COLORTERM": "fledge-truecolor", "FLEDGE_UNRELATED": "unchanged",
+	} {
+		if got := environ[name]; got != want {
+			t.Fatalf("%s = %q, want %q", name, got, want)
+		}
 	}
 }
 

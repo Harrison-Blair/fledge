@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/herdr"
+	"github.com/Harrison-Blair/fledge/internal/processenv"
 	"github.com/Harrison-Blair/fledge/internal/project"
 	"github.com/Harrison-Blair/fledge/internal/state"
 )
@@ -19,6 +20,7 @@ type AgentStartOptions struct {
 	Name              string
 	Kind              string
 	Model             string
+	Profile           string `json:"profile,omitempty"`
 	CWD               string
 	Timeout           time.Duration
 	Args              []string
@@ -112,7 +114,7 @@ func (s *Service) startAgentLocked(
 		if err != nil {
 			return err
 		}
-		managed, err = s.ensureAgentPane(ctx, client, st, snapshot, opts.Name, opts.Kind, cwd)
+		managed, err = s.ensureAgentPane(ctx, client, st, snapshot, opts.Name, opts.Kind, opts.Profile, cwd)
 		if err != nil {
 			return err
 		}
@@ -123,7 +125,8 @@ func (s *Service) startAgentLocked(
 		if err != nil {
 			return err
 		}
-		managed.Kind, managed.Model, managed.Placement, managed.CWD = opts.Kind, opts.Model, "tab", cwd
+		managed.Kind, managed.Model, managed.Profile, managed.Placement, managed.CWD =
+			opts.Kind, opts.Model, opts.Profile, "tab", cwd
 		st.Agents[opts.Name] = managed
 		rememberSpawnSelection(st, opts)
 		return nil
@@ -206,7 +209,7 @@ func (s *Service) claimCurrentPane(
 			return err
 		}
 		claim.managed = state.Agent{
-			Name: opts.Name, Kind: opts.Kind, Model: opts.Model, Placement: "pane",
+			Name: opts.Name, Kind: opts.Kind, Model: opts.Model, Profile: opts.Profile, Placement: "pane",
 			CWD: cwd, TabID: pane.TabID, PaneID: pane.PaneID,
 		}
 		st.Agents[opts.Name] = claim.managed
@@ -297,7 +300,7 @@ func (s *Service) execIntoHarness(executable string, forwardedArgs []string, cwd
 	if err := os.Chdir(cwd); err != nil {
 		return err
 	}
-	err = execAgent(executable, append([]string{executable}, forwardedArgs...), os.Environ())
+	err = execAgent(executable, append([]string{executable}, forwardedArgs...), processenv.WithoutNoColor(os.Environ()))
 	_ = os.Chdir(oldCWD)
 	return err
 }
@@ -435,11 +438,11 @@ func paneHasUnrelatedForegroundProcess(info herdr.ProcessInfo) bool {
 	return false
 }
 
-func (s *Service) ensureAgentPane(ctx context.Context, client *herdr.Client, st *state.Session, snapshot herdr.Snapshot, name, kind, cwd string) (state.Agent, error) {
-	if managed, found, err := s.reusableAgentPane(ctx, client, st, snapshot, name, kind, cwd); found || err != nil {
+func (s *Service) ensureAgentPane(ctx context.Context, client *herdr.Client, st *state.Session, snapshot herdr.Snapshot, name, kind, profile, cwd string) (state.Agent, error) {
+	if managed, found, err := s.reusableAgentPane(ctx, client, st, snapshot, name, kind, profile, cwd); found || err != nil {
 		return managed, err
 	}
-	return s.createAgentPane(ctx, client, st, snapshot, name, kind, cwd)
+	return s.createAgentPane(ctx, client, st, snapshot, name, kind, profile, cwd)
 }
 
 func (s *Service) reusableAgentPane(
@@ -447,7 +450,7 @@ func (s *Service) reusableAgentPane(
 	client *herdr.Client,
 	st *state.Session,
 	snapshot herdr.Snapshot,
-	name, kind, cwd string,
+	name, kind, profile, cwd string,
 ) (state.Agent, bool, error) {
 	expected := agentLabelPrefix + name
 	panes := panesByID(snapshot)
@@ -465,13 +468,14 @@ func (s *Service) reusableAgentPane(
 					return state.Agent{}, true, err
 				}
 			}
+			existing.Profile = profile
 			return existing, true, nil
 		}
 	}
 	for _, pane := range snapshot.Panes {
 		if pane.Label != nil && (*pane.Label == expected || (hadState && *pane.Label == name)) &&
 			(selectedWorkspace == "" || pane.WorkspaceID == selectedWorkspace) {
-			managed := state.Agent{Name: name, Kind: kind, CWD: cwd, TabID: pane.TabID, PaneID: pane.PaneID}
+			managed := state.Agent{Name: name, Kind: kind, Profile: profile, CWD: cwd, TabID: pane.TabID, PaneID: pane.PaneID}
 			st.Agents[name] = managed
 			if err := renameAgentLabels(ctx, client, pane.TabID, pane.PaneID, name); err != nil {
 				return state.Agent{}, true, err
@@ -487,7 +491,7 @@ func (s *Service) createAgentPane(
 	client *herdr.Client,
 	st *state.Session,
 	snapshot herdr.Snapshot,
-	name, kind, cwd string,
+	name, kind, profile, cwd string,
 ) (state.Agent, error) {
 	expected := name
 	// Unlike the orchestrator path, a stale non-empty s.WorkspaceID skips
@@ -507,7 +511,7 @@ func (s *Service) createAgentPane(
 	if err := client.Call(ctx, "pane.rename", map[string]any{"pane_id": paneID, "label": expected}, nil); err != nil {
 		return state.Agent{}, err
 	}
-	managed := state.Agent{Name: name, Kind: kind, Placement: "tab", CWD: cwd, TabID: tabID, PaneID: paneID}
+	managed := state.Agent{Name: name, Kind: kind, Profile: profile, Placement: "tab", CWD: cwd, TabID: tabID, PaneID: paneID}
 	st.Agents[name] = managed
 	return managed, nil
 }

@@ -13,6 +13,7 @@ type AgentView struct {
 	Name            string `json:"name"`
 	Kind            string `json:"kind,omitempty"`
 	Model           string `json:"model"`
+	Profile         string `json:"profile,omitempty"`
 	Placement       string `json:"placement,omitempty"`
 	CWD             string `json:"cwd,omitempty"`
 	State           string `json:"state"`
@@ -123,7 +124,7 @@ func resolveAgentState(panes map[string]herdr.PaneInfo, live map[string]herdr.Ag
 // lifecycle state.
 func baseView(name string, managed state.Agent) AgentView {
 	return AgentView{
-		Name: name, Kind: managed.Kind, Model: managed.Model, Placement: managed.Placement,
+		Name: name, Kind: managed.Kind, Model: managed.Model, Profile: managed.Profile, Placement: managed.Placement,
 		CWD: managed.CWD, PaneID: managed.PaneID, TabID: managed.TabID,
 	}
 }

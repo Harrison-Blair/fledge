@@ -18,6 +18,7 @@ type Agent struct {
 	Name         string `json:"name"`
 	Kind         string `json:"kind"`
 	Model        string `json:"model,omitempty"`
+	Profile      string `json:"profile,omitempty"`
 	Placement    string `json:"placement,omitempty"`
 	CWD          string `json:"cwd"`
 	TabID        string `json:"tab_id"`

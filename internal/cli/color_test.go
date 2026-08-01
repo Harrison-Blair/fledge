@@ -19,7 +19,7 @@ var cliANSIPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func stripCLIANSI(value string) string { return cliANSIPattern.ReplaceAllString(value, "") }
 
-func TestColorFlagModesAndShortForm(t *testing.T) {
+func TestColorFlagModes(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 	for _, test := range []struct {
 		name string
@@ -29,7 +29,6 @@ func TestColorFlagModesAndShortForm(t *testing.T) {
 		{name: "auto redirected", args: []string{"version"}},
 		{name: "never", args: []string{"version", "--color", "never"}},
 		{name: "always overrides environment", args: []string{"version", "--color", "always"}, ansi: true},
-		{name: "short always", args: []string{"version", "-c", "always"}, ansi: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
@@ -96,8 +95,22 @@ func TestHelpRemainsUnstyledWithColorAlways(t *testing.T) {
 	if code != 0 || stderr.Len() != 0 {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 	}
-	if strings.Contains(stdout.String(), "\x1b[") || !strings.Contains(stdout.String(), "--color color") {
+	if strings.Contains(stdout.String(), "\x1b[") || !strings.Contains(stdout.String(), "--color color") ||
+		strings.Contains(stdout.String(), "-c, --color") {
 		t.Fatalf("unexpected help output: %q", stdout.String())
+	}
+}
+
+func TestFallbackColorParserIgnoresNativeCFlag(t *testing.T) {
+	for _, args := range [][]string{
+		{"nonsense", "-c", "model_reasoning_effort=high"},
+		{"nonsense", "-c=approval_policy=never"},
+		{"nonsense", "-cmodel_reasoning_effort=high"},
+		{"agent", "spawn", "--", "-c", "model_reasoning_effort=high", "--color", "always"},
+	} {
+		if mode, requested := colorRequested(args); requested {
+			t.Fatalf("colorRequested(%q) = %q, true; want no Fledge color request", args, mode)
+		}
 	}
 }
 

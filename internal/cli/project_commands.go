@@ -183,6 +183,10 @@ func newStatus(env *environment) *cobra.Command {
 				}
 				fmt.Fprintln(w)
 				fmt.Fprintf(w, "%s %d\n", theme.Accent("User pending messages:"), result.UserPendingMessages)
+				if len(result.Agents) > 0 {
+					fmt.Fprintln(w, theme.Accent("Managed agents:"))
+					printAgentTable(w, result.Agents, theme, false)
+				}
 			})
 		},
 	}

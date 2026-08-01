@@ -101,7 +101,15 @@ func TestLegacySchemaV1StateLoadsNewFieldsAsZeroValues(t *testing.T) {
   "schema_version": 1,
   "project_root": "/p",
   "session": "legacy",
-  "agents": {}
+  "agents": {
+    "worker": {
+      "name": "worker",
+      "kind": "codex",
+      "cwd": "/p",
+      "tab_id": "tab",
+      "pane_id": "pane"
+    }
+  }
 }
 `)
 	if err := os.WriteFile(store.path("legacy"), legacy, 0o600); err != nil {
@@ -119,6 +127,37 @@ func TestLegacySchemaV1StateLoadsNewFieldsAsZeroValues(t *testing.T) {
 	}
 	if st.LastSpawnSelection != nil {
 		t.Fatalf("legacy spawn selection was not optional: %#v", st.LastSpawnSelection)
+	}
+	if st.Agents["worker"].Profile != "" {
+		t.Fatalf("legacy agent profile = %q, want empty", st.Agents["worker"].Profile)
+	}
+}
+
+func TestAgentProfilePersistsInSchemaV1AndAdHocAgentsOmitIt(t *testing.T) {
+	store, _ := New(t.TempDir())
+	if err := store.WithLocked("session", "/project", func(st *Session) error {
+		st.Agents["managed"] = Agent{Name: "managed", Profile: "reviewer", PaneID: "p1"}
+		st.Agents["adhoc"] = Agent{Name: "adhoc", PaneID: "p2"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Read("session", "/project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.SchemaVersion != 1 || st.Agents["managed"].Profile != "reviewer" || st.Agents["adhoc"].Profile != "" {
+		t.Fatalf("persisted agents = %#v", st.Agents)
+	}
+	data, err := os.ReadFile(store.path("session"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"profile": "reviewer"`) {
+		t.Fatalf("managed profile missing from JSON:\n%s", data)
+	}
+	if strings.Count(string(data), `"profile"`) != 1 {
+		t.Fatalf("ad-hoc profile was not omitted from JSON:\n%s", data)
 	}
 }
 

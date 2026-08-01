@@ -10,6 +10,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/Harrison-Blair/fledge/internal/processenv"
 )
 
 const MinimumProtocol = 17
@@ -150,6 +152,7 @@ func (b Binary) StartServer(ctx context.Context, session, cwd string) (<-chan er
 	// deliberately detached and must survive after `fledge start` returns.
 	cmd := exec.Command(path, "--session", session, "server")
 	cmd.Dir = cwd
+	cmd.Env = processenv.WithoutNoColor(os.Environ())
 	cmd.Stdin = nil
 	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
@@ -176,6 +179,7 @@ func (b Binary) Attach(ctx context.Context, session, target string, takeover boo
 		args = append(args, "--takeover")
 	}
 	cmd := exec.CommandContext(ctx, path, args...)
+	cmd.Env = processenv.WithoutNoColor(os.Environ())
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
 }
@@ -184,6 +188,7 @@ func (b Binary) AttachSession(ctx context.Context, session, cwd string) error {
 	path := b.path()
 	cmd := exec.CommandContext(ctx, path, "session", "attach", session)
 	cmd.Dir = cwd
+	cmd.Env = processenv.WithoutNoColor(os.Environ())
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
 }
