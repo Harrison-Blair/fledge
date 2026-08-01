@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Harrison-Blair/fledge/internal/agentprofile"
 	"github.com/Harrison-Blair/fledge/internal/project"
 )
 
@@ -165,6 +166,135 @@ func TestStartNewSessionAttachesAfterReadiness(t *testing.T) {
 	}
 }
 
+func TestFreshAttachedStartInjectsUsableOrchestratorProfile(t *testing.T) {
+	root := initializedProject(t)
+	store, err := agentprofile.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(agentprofile.Profile{
+		Name: "orchestrator", SchemaVersion: 1, Instructions: "Use inherited Fledge only.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	session := project.SessionName(root)
+	binary, _, workspaceLog := fakeStartBinary(t, root, session, startOptions{})
+	env := &environment{
+		in: bytes.NewBuffer(nil), out: &bytes.Buffer{}, errOut: &bytes.Buffer{},
+		cwd: root, stateDir: t.TempDir(), herdrBin: binary,
+		lookPath: func(name string) (string, error) {
+			if name == "codex" {
+				return "/bin/codex", nil
+			}
+			return "", os.ErrNotExist
+		},
+	}
+	cmd := newStart(env)
+	cmd.SetArgs([]string{"--timeout", "2s"})
+	if err := cmd.ExecuteContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	command := readFile(t, workspaceLog+".picker")
+	if !strings.Contains(command, " agent spawn orchestrator --name fledge-orchestrator|enter\n") {
+		t.Fatalf("profile startup command = %q", command)
+	}
+}
+
+func TestStartupOrchestratorProfileFallbacks(t *testing.T) {
+	write := func(t *testing.T, root, contents string, mode os.FileMode) string {
+		t.Helper()
+		dir := filepath.Join(root, ".fledge", "profiles")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, "orchestrator.toml")
+		if err := os.WriteFile(path, []byte(contents), mode); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	valid := "schema_version = 1\ninstructions = \"Managed.\"\n"
+	tests := []struct {
+		name      string
+		prepare   func(*testing.T, string)
+		installed map[string]bool
+		want      string
+		wantWarn  bool
+	}{
+		{name: "missing"},
+		{name: "usable", prepare: func(t *testing.T, root string) { write(t, root, valid, 0o600) },
+			installed: map[string]bool{"claude": true}, want: "orchestrator"},
+		{name: "malformed", prepare: func(t *testing.T, root string) { write(t, root, "schema_version = [\n", 0o600) }, wantWarn: true},
+		{name: "unreadable", prepare: func(t *testing.T, root string) {
+			path := write(t, root, valid, 0o600)
+			if err := os.Chmod(path, 0); err != nil {
+				t.Fatal(err)
+			}
+		}, installed: map[string]bool{"codex": true}, wantWarn: true},
+		{name: "Pi-only instructions profile", prepare: func(t *testing.T, root string) { write(t, root, valid, 0o600) },
+			installed: map[string]bool{"pi": true}, want: "orchestrator"},
+		{name: "context-backed OpenCode", prepare: func(t *testing.T, root string) { write(t, root, valid, 0o600) },
+			installed: map[string]bool{"opencode": true}, want: "orchestrator"},
+		{name: "no installed harness", prepare: func(t *testing.T, root string) { write(t, root, valid, 0o600) }, wantWarn: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := initializedProject(t)
+			if test.prepare != nil {
+				test.prepare(t, root)
+			}
+			env := &environment{lookPath: func(name string) (string, error) {
+				if test.installed[name] {
+					return "/bin/" + name, nil
+				}
+				return "", os.ErrNotExist
+			}}
+			got, err := startupOrchestratorProfile(env, root)
+			if got != test.want || (err != nil) != test.wantWarn {
+				t.Fatalf("profile/warning = %q / %v, want %q / warning=%t", got, err, test.want, test.wantWarn)
+			}
+		})
+	}
+}
+
+func TestFreshAttachedStartWarnsAndFallsBackForInvalidOrchestratorProfile(t *testing.T) {
+	root := initializedProject(t)
+	profiles := filepath.Join(root, ".fledge", "profiles")
+	if err := os.MkdirAll(profiles, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(profiles, "orchestrator.toml"), []byte("schema_version = [\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	session := project.SessionName(root)
+	binary, attachLog, workspaceLog := fakeStartBinary(t, root, session, startOptions{})
+	var stdout, stderr bytes.Buffer
+	env := &environment{
+		in: bytes.NewBuffer(nil), out: &stdout, errOut: &stderr,
+		cwd: root, stateDir: t.TempDir(), herdrBin: binary,
+		lookPath: func(name string) (string, error) { return "/bin/" + name, nil },
+	}
+	cmd := newStart(env)
+	cmd.SetArgs([]string{"--timeout", "2s"})
+	if err := cmd.ExecuteContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, workspaceLog+".picker"); !strings.Contains(got, " agent spawn --name fledge-orchestrator|enter\n") ||
+		strings.Contains(got, " agent spawn orchestrator ") {
+		t.Fatalf("fallback startup command = %q", got)
+	}
+	if got := readFile(t, attachLog); got != root+"|session attach "+session+"\n" {
+		t.Fatalf("attachment args = %q", got)
+	}
+	if !strings.Contains(stderr.String(), "Warning: could not use orchestrator profile; opening ad-hoc picker:") ||
+		!strings.Contains(stderr.String(), "load orchestrator profile") {
+		t.Fatalf("fallback warning = %q", stderr.String())
+	}
+}
+
 func TestFreshStartPickerFailureWarnsAndStillAttaches(t *testing.T) {
 	root := initializedProject(t)
 	t.Chdir(root)
@@ -296,6 +426,7 @@ func TestStartDetachStillPreparesOrchestratorLayout(t *testing.T) {
 }
 
 func TestConcurrentStopMakesAttachedStartACleanExit(t *testing.T) {
+	enableStopCleanupHelperProcess(t)
 	root := initializedProject(t)
 	t.Chdir(root)
 	session := project.SessionName(root)
@@ -329,6 +460,7 @@ func TestConcurrentStopMakesAttachedStartACleanExit(t *testing.T) {
 }
 
 func TestAttachFailureWithUnreadableStopStateIsActionable(t *testing.T) {
+	enableStopCleanupHelperProcess(t)
 	root := initializedProject(t)
 	t.Chdir(root)
 	binary, attached, running := fakeCoordinatedStopBinary(t, root, project.SessionName(root))

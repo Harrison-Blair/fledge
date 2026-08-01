@@ -11,10 +11,10 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/state"
 )
 
-// EnqueueOrchestratorPicker submits the spawn picker command to the saved
-// primary orchestrator pane. The command itself owns picker cancellation and
-// catalog warnings, so those do not affect the outer attached start.
-func (s *Service) EnqueueOrchestratorPicker(ctx context.Context, socket, executable string) error {
+// EnqueueOrchestratorSpawn submits a spawn command to the saved primary
+// orchestrator pane. An empty profile opens the ad-hoc picker; a nonempty
+// profile launches through that profile's unset-field pickers.
+func (s *Service) EnqueueOrchestratorSpawn(ctx context.Context, socket, executable, profile string) error {
 	st, err := s.Store.Read(s.Project.Session, s.Project.Root)
 	if err != nil {
 		return err
@@ -22,12 +22,22 @@ func (s *Service) EnqueueOrchestratorPicker(ctx context.Context, socket, executa
 	if st.OrchestratorPaneID == "" {
 		return errors.New("orchestrator pane is not initialized")
 	}
-	command := shellQuote(executable) + " agent spawn --name fledge-orchestrator"
+	command := shellQuote(executable) + " agent spawn"
+	if profile != "" {
+		command += " " + shellQuote(profile)
+	}
+	command += " --name fledge-orchestrator"
 	return (&herdr.Client{Socket: socket}).Call(ctx, "pane.send_input", map[string]any{
 		"pane_id": st.OrchestratorPaneID,
 		"text":    command,
 		"keys":    []string{"enter"},
 	}, nil)
+}
+
+// EnqueueOrchestratorPicker preserves the ad-hoc picker entry point for
+// callers that do not select a managed profile.
+func (s *Service) EnqueueOrchestratorPicker(ctx context.Context, socket, executable string) error {
+	return s.EnqueueOrchestratorSpawn(ctx, socket, executable, "")
 }
 
 func shellQuote(value string) string {

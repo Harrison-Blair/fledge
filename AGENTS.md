@@ -27,3 +27,17 @@ This project seeks to:
 
 # Reference Docs
 - `docs/reference/` — condensed refactoring.guru references (code smells, refactoring techniques, Go design patterns) for planning, refactoring, and review work
+
+<!-- <fledge-managed-orchestrator> -->
+## Fledge Orchestrator (managed)
+
+Use only the inherited Fledge session for subagent orchestration.
+Spawn subagents with `fledge agent spawn --new-tab`.
+Use `fledge agent` commands for prompts, messages, waits, reads, and stops.
+Submit work and wait in one atomic operation with `fledge agent prompt <name> <text> --wait --until idle,done,blocked`, or use one `fledge agent wait <name> --until idle,done,blocked` call for an already-running agent.
+Do not poll with repeated `fledge agent status` or `fledge agent read` calls, and do not send messages merely to check progress.
+Prompt or message an agent again only when there is genuinely new task information.
+Avoid artificial short waiting cycles or repeated timeout-driven checks; let the single atomic wait settle.
+Never use harness-native subagents or start nested Fledge or Herdr sessions.
+If Fledge is unavailable, stop and ask the user.
+<!-- </fledge-managed-orchestrator> -->

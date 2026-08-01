@@ -94,9 +94,16 @@ func runStart(cmd *cobra.Command, env *environment, timeout time.Duration, detac
 		if executableErr != nil {
 			fmt.Fprintf(env.errOut, "%s could not locate fledge executable for orchestrator picker: %v\n",
 				env.stderrTheme().Warning("Warning:"), executableErr)
-		} else if enqueueErr := service.EnqueueOrchestratorPicker(cmd.Context(), result.Socket, executable); enqueueErr != nil {
-			fmt.Fprintf(env.errOut, "%s could not open orchestrator picker: %v\n",
-				env.stderrTheme().Warning("Warning:"), enqueueErr)
+		} else {
+			profile, profileErr := startupOrchestratorProfile(env, service.Project.Root)
+			if profileErr != nil {
+				fmt.Fprintf(env.errOut, "%s could not use orchestrator profile; opening ad-hoc picker: %v\n",
+					env.stderrTheme().Warning("Warning:"), profileErr)
+			}
+			if enqueueErr := service.EnqueueOrchestratorSpawn(cmd.Context(), result.Socket, executable, profile); enqueueErr != nil {
+				fmt.Fprintf(env.errOut, "%s could not open orchestrator picker: %v\n",
+					env.stderrTheme().Warning("Warning:"), enqueueErr)
+			}
 		}
 	}
 	if err := printStartResult(env, result); err != nil {

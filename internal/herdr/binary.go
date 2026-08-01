@@ -18,7 +18,7 @@ const MinimumProtocol = 17
 
 var RequiredMethods = []string{
 	"ping", "server.stop", "session.snapshot", "workspace.create", "workspace.focus",
-	"tab.create", "tab.rename", "pane.focus", "pane.rename", "pane.split", "pane.process_info", "pane.send_input", "pane.close",
+	"tab.create", "tab.rename", "tab.close", "pane.focus", "pane.rename", "pane.split", "pane.process_info", "pane.send_input", "pane.close",
 	"agent.start", "agent.list", "agent.get", "agent.read", "agent.send_keys",
 	"agent.prompt", "agent.wait",
 }

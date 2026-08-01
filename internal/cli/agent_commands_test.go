@@ -38,6 +38,19 @@ func TestAgentStartWasRemoved(t *testing.T) {
 	}
 }
 
+func TestAgentStopHelpDescribesDefaultDedicatedTabCleanup(t *testing.T) {
+	cmd := newAgentStop(&environment{})
+	if !strings.Contains(cmd.Short, "clean up its dedicated tab") {
+		t.Fatalf("stop help = %q", cmd.Short)
+	}
+	if got := cmd.Flags().Lookup("force").Usage; !strings.Contains(got, "skip graceful shutdown") {
+		t.Fatalf("force help = %q", got)
+	}
+	if cmd.Flags().Lookup("close-tab") != nil {
+		t.Fatal("stop unexpectedly exposes an opt-in close-tab flag")
+	}
+}
+
 func TestSpawnNonTTYRequiresNameAndHarnessBeforeRuntimeAccess(t *testing.T) {
 	for _, args := range [][]string{
 		{"agent", "spawn"},
@@ -251,7 +264,7 @@ func TestReadLastSpawnSelectionIsIsolatedPerProject(t *testing.T) {
 func TestSpawnNativeArgumentsRequireDelimiter(t *testing.T) {
 	var stderr bytes.Buffer
 	code := Execute(context.Background(), []string{
-		"agent", "spawn", "--name", "worker", "--harness", "codex", "prompt",
+		"agent", "spawn", "profile", "prompt",
 	}, bytes.NewBuffer(nil), &bytes.Buffer{}, &stderr)
 	if code != 2 || !strings.Contains(stderr.String(), "must follow --") {
 		t.Fatalf("exit=%d stderr=%s", code, stderr.String())

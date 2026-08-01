@@ -386,24 +386,36 @@ func printProfiles(w io.Writer, profiles []agentprofile.Profile, theme *ui.Theme
 	table := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
 	fmt.Fprintln(table, theme.Accent("NAME\tHARNESS\tMODEL\tEFFORT\tDESCRIPTION"))
 	for _, profile := range profiles {
-		model, effort := profile.Model, profile.Effort
+		harness, model, effort := profile.Harness, profile.Model, profile.Effort
+		if harness == "" {
+			harness = "launch-time"
+		}
 		if model == "" {
 			model = "default"
+			if profile.Harness == "" {
+				model = "launch-time"
+			}
 		}
 		if effort == "" {
 			effort = "default"
 		}
 		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\n",
-			terminalSafeText(profile.Name), terminalSafeText(profile.Harness),
+			terminalSafeText(profile.Name), terminalSafeText(harness),
 			terminalSafeText(model), terminalSafeText(effort), terminalSafeText(profile.Description))
 	}
 	_ = table.Flush()
 }
 
 func printProfile(w io.Writer, profile agentprofile.Profile, theme *ui.Theme) {
-	model, effort := profile.Model, profile.Effort
+	harness, model, effort := profile.Harness, profile.Model, profile.Effort
+	if harness == "" {
+		harness = "launch-time"
+	}
 	if model == "" {
 		model = "default"
+		if profile.Harness == "" {
+			model = "launch-time"
+		}
 	}
 	if effort == "" {
 		effort = "default"
@@ -411,7 +423,7 @@ func printProfile(w io.Writer, profile agentprofile.Profile, theme *ui.Theme) {
 	fmt.Fprintf(w, "%s %s\n%s %d\n%s %s\n%s %s\n%s %s\n",
 		theme.Accent("Profile:"), terminalSafeText(profile.Name),
 		theme.Accent("Schema:"), profile.SchemaVersion,
-		theme.Accent("Harness:"), terminalSafeText(profile.Harness),
+		theme.Accent("Harness:"), terminalSafeText(harness),
 		theme.Accent("Model:"), terminalSafeText(model),
 		theme.Accent("Effort:"), terminalSafeText(effort))
 	if profile.Description != "" {

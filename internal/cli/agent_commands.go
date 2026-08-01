@@ -11,6 +11,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/agentprofile"
 	"github.com/Harrison-Blair/fledge/internal/agentspawn"
 	"github.com/Harrison-Blair/fledge/internal/fledge"
+	"github.com/Harrison-Blair/fledge/internal/orchestratorcontext"
 	"github.com/Harrison-Blair/fledge/internal/picker"
 	"github.com/Harrison-Blair/fledge/internal/state"
 	"github.com/Harrison-Blair/fledge/internal/ui"
@@ -174,12 +175,6 @@ func runAgentSpawn(cmd *cobra.Command, env *environment, flags agentSpawnFlags) 
 }
 
 func runProfileAgentSpawn(cmd *cobra.Command, env *environment, flags agentSpawnFlags) error {
-	if flags.harnessSet {
-		return usage(fmt.Sprintf("--harness is locked by agent profile %q; native harness arguments must follow --", flags.profile))
-	}
-	if flags.modelSet {
-		return usage(fmt.Sprintf("--model is locked by agent profile %q", flags.profile))
-	}
 	if flags.cwdSet {
 		return usage(fmt.Sprintf("--cwd is locked by agent profile %q; profile agents always launch at the project root", flags.profile))
 	}
@@ -188,41 +183,118 @@ func runProfileAgentSpawn(cmd *cobra.Command, env *environment, flags agentSpawn
 	}
 
 	var profileRoot string
-	var profileHarness, profileModel string
-	var profileArgs []string
+	var profile agentprofile.Profile
 	err := withProfileStore(env, func(store *agentprofile.Store) error {
-		profile, err := store.Load(flags.profile)
+		var err error
+		profile, err = store.Load(flags.profile)
 		if err != nil {
 			return translateProfileError(err)
 		}
-		profileArgs, err = agentspawn.BuildProfileArgs(agentspawn.ProfileLaunchOptions{
-			Harness: profile.Harness, Effort: profile.Effort,
-			Instructions: profile.Instructions, NativeArgs: profile.NativeArgs,
-		})
-		if err != nil {
-			return fledge.Wrap("profile_launch_invalid",
-				fmt.Sprintf("agent profile %q cannot be launched: %v", flags.profile, err), err)
-		}
 		profileRoot = store.ProjectRoot()
-		profileHarness, profileModel = profile.Harness, profile.Model
 		return nil
 	})
 	if err != nil {
 		return err
 	}
+	if flags.harnessSet && profile.Harness != "" {
+		return usage(fmt.Sprintf("--harness is locked by agent profile %q; configure native_args in the profile", flags.profile))
+	}
+	if flags.modelSet && profile.Model != "" {
+		return usage(fmt.Sprintf("--model is locked by agent profile %q", flags.profile))
+	}
+	launchInstructions := profileLaunchInstructions(profile)
+	if profile.Harness != "" {
+		if err := agentspawn.ValidateProfileLaunch(agentspawn.ProfileLaunchOptions{
+			Harness: profile.Harness, Effort: profile.Effort,
+			Instructions: launchInstructions, NativeArgs: profile.NativeArgs,
+		}); err != nil {
+			return fledge.Wrap("profile_launch_invalid",
+				fmt.Sprintf("agent profile %q cannot be launched: %v", flags.profile, err), err)
+		}
+	}
+
+	requestedHarness, requestedModel := profile.Harness, profile.Model
+	if flags.harnessSet {
+		requestedHarness = flags.harness
+	}
+	if flags.modelSet {
+		requestedModel = flags.model
+	}
+	tty := env.stdinTTY != nil && env.stdinTTY()
+	if env.json {
+		flags.newTab = true
+		tty = false
+	}
+	if profile.Harness == "" && flags.harnessSet && strings.TrimSpace(flags.harness) == "" {
+		return usage("--harness must not be empty")
+	}
+	if !tty && strings.TrimSpace(requestedHarness) == "" {
+		return usage(fmt.Sprintf("--harness is required when agent profile %q omits harness and prompting is unavailable", flags.profile))
+	}
 
 	installed := agentspawn.Installed(env.lookPath)
-	harness, found := agentspawn.Resolve(installed, profileHarness)
-	if !found {
+	if profile.Harness != "" {
+		if _, found := agentspawn.Resolve(installed, profile.Harness); !found {
+			return fledge.NewError("profile_harness_not_installed",
+				fmt.Sprintf("agent profile %q requires harness %q, but it is not installed", flags.profile, profile.Harness))
+		}
+	}
+	compatible := compatibleProfileHarnesses(installed, profile)
+	if requestedHarness != "" {
+		if _, found := agentspawn.Resolve(installed, requestedHarness); !found {
+			return usage(fmt.Sprintf("harness %q is not installed", requestedHarness))
+		}
+		if _, found := agentspawn.Resolve(compatible, requestedHarness); !found {
+			return usage(fmt.Sprintf("harness %q is not compatible with agent profile %q", requestedHarness, flags.profile))
+		}
+	}
+	if len(compatible) == 0 {
+		return fledge.NewError("profile_launch_invalid",
+			fmt.Sprintf("agent profile %q has no compatible installed harness", flags.profile))
+	}
+	var lastSelection *state.SpawnSelection
+	if requestedHarness == "" {
+		lastSelection, err = readLastSpawnSelection(env)
+		if err != nil {
+			return err
+		}
+	}
+	selection, cancelled, err := resolveSpawnSelection(
+		cmd, env, compatible, requestedHarness, requestedModel, lastSelection, tty,
+	)
+	if cancelled || err != nil {
+		return err
+	}
+	instructionsFile := ""
+	if selection.Harness.ID == "pi" && launchInstructions != "" {
+		instructionsFile, err = agentspawn.MaterializeProfileInstructions(profileRoot, launchInstructions)
+		if err != nil {
+			return fledge.Wrap("profile_launch_invalid",
+				fmt.Sprintf("agent profile %q could not prepare Pi instructions: %v", flags.profile, err), err)
+		}
+	}
+	profileArgs, err := agentspawn.BuildProfileArgs(agentspawn.ProfileLaunchOptions{
+		Harness: selection.Harness.ID, Effort: profile.Effort,
+		Instructions: launchInstructions, InstructionsFile: instructionsFile,
+		NativeArgs: profile.NativeArgs,
+	})
+	if err != nil {
+		return fledge.Wrap("profile_launch_invalid",
+			fmt.Sprintf("agent profile %q cannot be launched: %v", flags.profile, err), err)
+	}
+	if selection.Harness.ID == "" {
 		return fledge.NewError("profile_harness_not_installed",
-			fmt.Sprintf("agent profile %q requires harness %q, but it is not installed", flags.profile, profileHarness))
+			fmt.Sprintf("agent profile %q did not resolve an installed harness", flags.profile))
+	}
+	if profile.Name == orchestratorProfileName {
+		if err := orchestratorcontext.Synchronize(profileRoot, profile.Instructions); err != nil {
+			return fledge.Wrap("profile_launch_invalid",
+				fmt.Sprintf("agent profile %q could not synchronize managed repository context: %v", flags.profile, err), err)
+		}
 	}
 	name := strings.TrimSpace(flags.name)
 	if name == "" {
 		name = flags.profile
-	}
-	if env.json {
-		flags.newTab = true
 	}
 	service, err := env.service(cmd.Context())
 	if err != nil {
@@ -230,14 +302,40 @@ func runProfileAgentSpawn(cmd *cobra.Command, env *environment, flags agentSpawn
 	}
 	currentPaneID := strings.TrimSpace(env.getenvValue("HERDR_PANE_ID"))
 	result, err := service.SpawnAgent(cmd.Context(), fledge.AgentStartOptions{
-		Name: name, Kind: harness.ID, Model: profileModel, Profile: flags.profile,
+		Name: name, Kind: selection.Harness.ID, Model: selection.Model, Profile: flags.profile,
 		CWD: profileRoot, Timeout: flags.timeout, Args: append([]string(nil), profileArgs...),
-		NewTab: flags.newTab || currentPaneID == "", CurrentPaneID: currentPaneID, Executable: harness.Path,
+		NewTab: flags.newTab || currentPaneID == "", CurrentPaneID: currentPaneID, Executable: selection.Harness.Path,
+		RememberSelection: selection.Remember,
 	})
 	if err != nil {
 		return fledge.Translate(err)
 	}
 	return printAgentSpawnResult(env, result)
+}
+
+func compatibleProfileHarnesses(installed []agentspawn.Harness, profile agentprofile.Profile) []agentspawn.Harness {
+	launchInstructions := profileLaunchInstructions(profile)
+	compatible := make([]agentspawn.Harness, 0, len(installed))
+	for _, harness := range installed {
+		if profile.Harness != "" && harness.ID != profile.Harness {
+			continue
+		}
+		err := agentspawn.ValidateProfileLaunch(agentspawn.ProfileLaunchOptions{
+			Harness: harness.ID, Effort: profile.Effort,
+			Instructions: launchInstructions, NativeArgs: profile.NativeArgs,
+		})
+		if err == nil {
+			compatible = append(compatible, harness)
+		}
+	}
+	return compatible
+}
+
+func profileLaunchInstructions(profile agentprofile.Profile) string {
+	if profile.Name == orchestratorProfileName {
+		return ""
+	}
+	return profile.Instructions
 }
 
 func printAgentSpawnResult(env *environment, result fledge.AgentStartResult) error {
@@ -441,7 +539,7 @@ func newAgentStop(env *environment) *cobra.Command {
 	var force bool
 	cmd := &cobra.Command{
 		Use:   "stop <name>",
-		Short: "Gracefully stop an agent while retaining its pane",
+		Short: "Stop an agent and clean up its dedicated tab",
 		Args:  exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if timeout <= 0 {
@@ -457,7 +555,15 @@ func newAgentStop(env *environment) *cobra.Command {
 			}
 			return env.print(result, func(w io.Writer, theme *ui.Theme) {
 				if result.Forced {
-					fmt.Fprintf(w, "%s pane for agent %s\n", theme.Accent("Force-closed"), result.Agent.Name)
+					if result.TabClosed {
+						fmt.Fprintf(w, "%s agent %s and closed dedicated tab %s\n",
+							theme.Accent("Force-stopped"), result.Agent.Name, result.Agent.TabID)
+					} else {
+						fmt.Fprintf(w, "%s pane for agent %s\n", theme.Accent("Force-closed"), result.Agent.Name)
+					}
+				} else if result.TabClosed {
+					fmt.Fprintf(w, "%s agent %s; closed dedicated tab %s\n",
+						theme.Accent("Stopped"), result.Agent.Name, result.Agent.TabID)
 				} else {
 					fmt.Fprintf(w, "%s agent %s; pane %s retained\n", theme.Accent("Stopped"), result.Agent.Name, result.Agent.PaneID)
 				}
@@ -465,7 +571,7 @@ func newAgentStop(env *environment) *cobra.Command {
 		},
 	}
 	cmd.Flags().DurationVarP(&timeout, "timeout", "t", 10*time.Second, "graceful stop timeout")
-	cmd.Flags().BoolVarP(&force, "force", "f", false, "close the pane if graceful stop times out")
+	cmd.Flags().BoolVarP(&force, "force", "f", false, "skip graceful shutdown and close the pane or safe dedicated tab")
 	return cmd
 }
 

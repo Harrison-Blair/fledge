@@ -219,7 +219,7 @@ fledge agent spawn -n reviewer -k claude -m sonnet -- --permission-mode plan
 
 ## Managed agent profiles
 
-Managed profiles keep an agent's launch identity in the project at
+Managed profiles keep an agent's launch settings and provenance in the project at
 `.fledge/profiles/<name>.toml`. The filename supplies the profile name; `name`
 is therefore not allowed inside the TOML document. A complete schema-version 1
 profile looks like this:
@@ -274,24 +274,28 @@ fledge agent spawn reviewer --name review-auth --new-tab --timeout 1m
 fledge agent spawn reviewer --json
 ```
 
-The profile owns `harness`, `model`, `effort`, `instructions`, and
-`native_args`. A profiled launch rejects per-launch `--harness | -k`,
-`--model | -m`, `--cwd | -C`, and any extra arguments after `--`. Put native
-arguments in the profile instead; Fledge validates them for collisions with
-managed identity, instructions, reasoning, working-directory, placement, and
-permission settings before starting anything. `--name | -n`,
-`--new-tab | -N`, and `--timeout | -t` remain per-launch controls.
+Profiles may omit both `harness` and `model` to leave them as launch-time
+selections. Interactive launches reuse the normal installed-harness/model
+pickers and project-local last-used shortcut, filtered to harnesses that can
+transport the profile's managed settings. Non-interactive and JSON launches
+of a profile without a harness require `--harness | -k`; an omitted model uses
+that harness's default. Explicit harness/model flags can fill only fields the
+profile omits. Fields present in the profile remain locked. Profile agents
+also reject `--cwd | -C` and extra arguments after `--`; put native arguments
+in the profile instead. `--name | -n`, `--new-tab | -N`, and `--timeout | -t`
+remain per-launch controls.
 
-Managed effort and instructions use each harness's reliable interactive
-transport:
+Except for the reserved `orchestrator` profile described below, managed effort
+and instructions use each harness's reliable interactive transport:
 
 - Claude Code supports both effort and instructions.
 - Codex supports both through native configuration arguments.
 - OpenCode profiles may select a model and safe native arguments, but its
   interactive TUI cannot reliably transport managed effort or instructions;
   profiles containing either are rejected before launch.
-- Pi supports managed effort. Managed instructions are rejected because Pi
-  may interpret the instruction value as a file path.
+- Pi supports managed effort and instructions. Fledge writes instructions to a
+  private content-addressed file under `.fledge/tmp/profile-instructions/` and
+  passes its absolute path through Pi's `--append-system-prompt` option.
 
 Every profile command supports `--json | -j`. Profile spawn JSON includes the
 profile provenance and the exact final native argument vector. Agent list,
@@ -299,10 +303,61 @@ agent status, and project status JSON use the same provenance projection; human
 agent tables add a `PROFILE` column whenever at least one displayed agent came
 from a profile.
 
-On the first attached `fledge start`, the picker is opened automatically in
-the left orchestrator pane with the name `fledge-orchestrator`. The right pane
-remains an ordinary control shell. Detached starts and attachments to an
-existing session do not open it.
+On the first attached `fledge start`, Fledge launches the project-local
+`orchestrator` profile in the left orchestrator pane with the reserved name
+`fledge-orchestrator`. The supplied profile contains only managed instructions,
+so its compatible harness/model are selected at launch. A missing profile
+silently opens the ad-hoc picker; an invalid, unreadable, or incompatible
+profile warns before doing the same. Cancelling either picker leaves the pane
+as a shell. The right pane remains an ordinary control shell. Detached starts
+and attachments to an existing session do not launch a picker or profile.
+
+The reserved profile keeps `.fledge/profiles/orchestrator.toml` as its canonical
+instruction source but delivers those instructions through repository context,
+not native launch arguments. Immediately before every `agent spawn
+orchestrator`, Fledge synchronizes this block in root `AGENTS.md`:
+
+```md
+<!-- <fledge-managed-orchestrator> -->
+## Fledge Orchestrator (managed)
+
+<instructions from orchestrator.toml>
+<!-- </fledge-managed-orchestrator> -->
+```
+
+It also maintains a Claude bridge in root `CLAUDE.md`:
+
+```md
+<!-- <fledge-managed-orchestrator> -->
+@AGENTS.md
+<!-- </fledge-managed-orchestrator> -->
+```
+
+An existing `@AGENTS.md` import or a `CLAUDE.md` symlink to `AGENTS.md` needs no
+bridge. Synchronization is serialized with a Fledge lock and uses atomic file
+replacement. Existing line endings and permissions are retained, and every
+byte outside a valid managed block remains project-owned. Content inside the
+markers is Fledge-owned and is refreshed from the profile. Missing, duplicate,
+reordered, inline, or partially edited markers fail with
+`profile_launch_invalid`; Fledge does not guess at the overwrite boundary or
+launch the orchestrator. Profile instructions containing the reserved marker
+text are rejected for the same reason.
+
+Clearing the profile's instructions removes only the Fledge-owned blocks. A
+generated context file is deleted only when the managed block is its complete
+contents. Because Codex, Claude Code, Pi, and OpenCode reload this repository
+context, the orchestrator policy survives their native clear/new-context
+workflow without restarting the harness. Other project agents can see the root
+block, but its wording applies specifically when coordinating delegated work.
+
+The orchestrator profile requires atomic waiting: submit work with one
+`fledge agent prompt <name> <text> --wait --until idle,done,blocked` operation,
+or use one `fledge agent wait <name> --until idle,done,blocked` call for an
+already-running agent.
+Coordinators must not poll with repeated status/read calls, send messages merely
+to check progress, or create short timeout-driven wait cycles. They prompt or
+message again only when genuinely new task information is available and let
+the single atomic wait settle.
 
 The home directory itself cannot be a Fledge project root. Searches made below
 the home directory stop before inspecting it; searches elsewhere continue to
@@ -339,9 +394,12 @@ requested with `--until unknown`.
 - `stopped`: Fledge's retained pane is at its shell with no active agent
 
 `fledge agent stop` first sends `Ctrl+D`. If necessary it interrupts with
-`Ctrl+C`, waits for a settled state, and retries `Ctrl+D`. On timeout the pane
-is preserved and the command returns `agent_stop_timeout`. `--force | -f`
-explicitly closes the pane instead.
+`Ctrl+C`, waits for a settled state, and retries `Ctrl+D`. After a successful
+stop, a one-pane dedicated agent tab is closed by default so stopped-agent tabs
+do not accumulate. In-pane placements and tabs that have become shared are
+left intact. JSON reports this as `tab_closed`. On timeout the pane is preserved
+and the command returns `agent_stop_timeout`. `--force | -f` forcibly stops the
+agent and also closes its safe dedicated tab.
 The saved `fledge-orchestrator` pane cannot be force-closed through
 `agent stop`; use `fledge stop --force` for a coordinated shutdown.
 

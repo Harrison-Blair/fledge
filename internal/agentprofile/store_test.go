@@ -414,7 +414,7 @@ func TestStrictTOMLAndStructuralValidation(t *testing.T) {
 		{name: "trailing invalid content", toml: validTOML("codex") + "this is not valid TOML\n"},
 		{name: "missing schema", toml: `harness = "codex"` + "\n"},
 		{name: "unsupported schema", toml: "schema_version = 2\nharness = \"codex\"\n"},
-		{name: "missing harness", toml: "schema_version = 1\n"},
+		{name: "model without harness", toml: "schema_version = 1\nmodel = \"gpt\"\n"},
 		{name: "unsupported harness", toml: validTOML("cursor")},
 		{name: "invalid effort", toml: validTOML("codex") + `effort = "extreme"` + "\n"},
 		{name: "empty native arg", toml: validTOML("codex") + `native_args = [""]` + "\n"},
@@ -427,6 +427,25 @@ func TestStrictTOMLAndStructuralValidation(t *testing.T) {
 			_, err := store.Load("review")
 			assertKind(t, err, ErrInvalid, KindInvalid)
 		})
+	}
+}
+
+func TestInstructionOnlyProfileRoundTrip(t *testing.T) {
+	store := newTestStore(t, t.TempDir())
+	want := Profile{
+		Name: "orchestrator", SchemaVersion: SchemaVersion,
+		Instructions: "Use inherited Fledge only.", NativeArgs: []string{},
+	}
+	created, err := store.Create(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load(want.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(created, loaded) || !reflect.DeepEqual(loaded, want) {
+		t.Fatalf("round trip = %#v / %#v, want %#v", created, loaded, want)
 	}
 }
 

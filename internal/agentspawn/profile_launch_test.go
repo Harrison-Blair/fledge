@@ -1,7 +1,6 @@
 package agentspawn
 
 import (
-	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -32,8 +31,15 @@ func TestBuildProfileArgsMappings(t *testing.T) {
 		},
 		{
 			name: "pi",
-			opts: ProfileLaunchOptions{Harness: "pi", Effort: "high"},
-			want: []string{"--thinking", "high"},
+			opts: ProfileLaunchOptions{
+				Harness: "pi", Effort: "high", Instructions: "Follow the profile.",
+				InstructionsFile: filepath.Join(string(filepath.Separator), "private", "pi-profile.txt"),
+				NativeArgs:       []string{"--offline"},
+			},
+			want: []string{
+				"--thinking", "high", "--append-system-prompt",
+				filepath.Join(string(filepath.Separator), "private", "pi-profile.txt"), "--offline",
+			},
 		},
 	}
 
@@ -106,20 +112,23 @@ func TestBuildProfileArgsRejectsUnsupportedOpenCodeProfileControls(t *testing.T)
 	}
 }
 
-func TestBuildProfileArgsRejectsPiInstructionsMatchingExistingFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "AGENTS.md")
-	if err := os.WriteFile(path, []byte("file contents must not replace literal instructions"), 0o600); err != nil {
+func TestValidateProfileLaunchAcceptsPiInstructionsBeforeMaterialization(t *testing.T) {
+	t.Parallel()
+
+	if err := ValidateProfileLaunch(ProfileLaunchOptions{
+		Harness: "pi", Instructions: "AGENTS.md",
+	}); err != nil {
 		t.Fatal(err)
 	}
+}
 
-	_, err := BuildProfileArgs(ProfileLaunchOptions{Harness: "pi", Instructions: path})
-	if err == nil {
-		t.Fatal("expected unsupported Pi instruction transport error")
-	}
-	for _, fragment := range []string{"pi", "managed instructions", "file paths", "unsupported"} {
-		if !strings.Contains(err.Error(), fragment) {
-			t.Fatalf("error %q does not contain %q", err, fragment)
-		}
+func TestBuildProfileArgsRequiresPreparedPiInstructionFile(t *testing.T) {
+	t.Parallel()
+
+	_, err := BuildProfileArgs(ProfileLaunchOptions{Harness: "pi", Instructions: "Managed."})
+	if err == nil || !strings.Contains(err.Error(), "prepared instruction file before launch") ||
+		!strings.Contains(err.Error(), "pi") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

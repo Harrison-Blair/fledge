@@ -35,13 +35,13 @@ func (c Call) Text(key string) string {
 // each, so both are skipped here.
 func Listen(t *testing.T, handle func(net.Conn, Call)) string {
 	t.Helper()
-	socket := filepath.Join(t.TempDir(), "herdr.sock")
+	socket := socketPath(t)
 	listener, err := net.Listen("unix", socket)
 	if err != nil {
 		if os.IsPermission(err) || errors.Is(err, syscall.EPERM) {
 			t.Skip("sandbox does not permit Unix-domain listeners")
 		}
-		t.Fatal(err)
+		t.Fatalf("listen on Unix socket %q (%d bytes): %v", socket, len([]byte(socket)), err)
 	}
 	t.Cleanup(func() { _ = listener.Close() })
 	go func() {
@@ -60,6 +60,20 @@ func Listen(t *testing.T, handle func(net.Conn, Call)) string {
 		}
 	}()
 	return socket
+}
+
+func socketPath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "fht-")
+	if err != nil {
+		t.Fatalf("allocate Unix socket directory in %q: %v", os.TempDir(), err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Errorf("remove Unix socket directory %q: %v", dir, err)
+		}
+	})
+	return filepath.Join(dir, "h.sock")
 }
 
 // IDs names the objects a Server's creation methods synthesize. Fixtures

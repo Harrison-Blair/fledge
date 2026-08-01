@@ -3,6 +3,7 @@ package fledge
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -389,6 +390,41 @@ func TestCoordinatedStopGracefullySignalsEveryLiveAgentBeforeServerStop(t *testi
 	}
 }
 
+func TestGracefullyStopPaneSendsCanonicalCtrlD(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	started := mustStartAgent(t, service, "worker")
+	client := &herdr.Client{Socket: serviceSessionSocket(t, service.Binary)}
+
+	if !service.gracefullyStopPane(t.Context(), client, started.Agent.PaneID, time.Now().Add(time.Second)) {
+		t.Fatal("responsive agent did not stop")
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	want := [][]string{{"ctrl+d"}}
+	if !reflect.DeepEqual(fake.sendKeyCalls, want) {
+		t.Fatalf("shutdown keys = %v, want %v", fake.sendKeyCalls, want)
+	}
+}
+
+func TestGracefullyStopPaneSendsCanonicalFallbackSequence(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	started := mustStartAgent(t, service, "worker")
+	fake.mu.Lock()
+	fake.ignoreExit = true
+	fake.mu.Unlock()
+	client := &herdr.Client{Socket: serviceSessionSocket(t, service.Binary)}
+
+	if service.gracefullyStopPane(t.Context(), client, started.Agent.PaneID, time.Now().Add(500*time.Millisecond)) {
+		t.Fatal("unresponsive agent unexpectedly stopped")
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	want := [][]string{{"ctrl+d"}, {"ctrl+c"}, {"ctrl+d"}}
+	if !reflect.DeepEqual(fake.sendKeyCalls, want) {
+		t.Fatalf("shutdown keys = %v, want %v", fake.sendKeyCalls, want)
+	}
+}
+
 func TestGracefulStopAgentsClassifiesSharedBudgetTimeouts(t *testing.T) {
 	service, fake := newFakeLifecycle(t)
 	codex := "codex"
@@ -425,7 +461,7 @@ func TestGracefulStopAgentsClassifiesSharedBudgetTimeouts(t *testing.T) {
 	}
 }
 
-func TestGracefulAgentStopRetainsPane(t *testing.T) {
+func TestGracefulAgentStopClosesDedicatedTabByDefault(t *testing.T) {
 	service, fake := newFakeLifecycle(t)
 	mustStartAgent(t, service, "worker")
 	result, err := service.StopAgent(t.Context(), "worker", time.Second, false)
@@ -433,10 +469,131 @@ func TestGracefulAgentStopRetainsPane(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake.mu.Lock()
-	paneCount := len(fake.snapshot.Panes)
+	paneCount, tabCount := len(fake.snapshot.Panes), len(fake.snapshot.Tabs)
 	fake.mu.Unlock()
-	if result.Forced || result.Agent.State != "stopped" || paneCount != 1 {
-		t.Fatalf("unexpected retained stop: result=%#v panes=%d", result, paneCount)
+	if result.Forced || !result.TabClosed || result.Agent.State != "stopped" || paneCount != 0 || tabCount != 0 {
+		t.Fatalf("unexpected dedicated-tab stop: result=%#v panes=%d tabs=%d", result, paneCount, tabCount)
+	}
+}
+
+func TestAgentStopRetainsSharedPanePlacement(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	mustStartAgent(t, service, "worker")
+	if err := service.Store.WithLocked(service.Project.Session, service.Project.Root, func(st *state.Session) error {
+		managed := st.Agents["worker"]
+		managed.Placement = "pane"
+		st.Agents["worker"] = managed
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.StopAgent(t.Context(), "worker", time.Second, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if result.TabClosed || len(fake.snapshot.Tabs) != 1 || len(fake.snapshot.Panes) != 1 {
+		t.Fatalf("shared placement was closed: result=%#v snapshot=%#v", result, fake.snapshot)
+	}
+}
+
+func TestAgentStopDoesNotCloseTabAfterItBecomesShared(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	started := mustStartAgent(t, service, "worker")
+	fake.mu.Lock()
+	fake.snapshot.Panes = append(fake.snapshot.Panes, herdr.PaneInfo{
+		PaneID: "user-pane", TabID: started.Agent.TabID, WorkspaceID: "w1",
+	})
+	fake.mu.Unlock()
+	result, err := service.StopAgent(t.Context(), "worker", time.Second, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if result.TabClosed || len(fake.snapshot.Tabs) != 1 || len(fake.snapshot.Panes) != 2 {
+		t.Fatalf("shared tab was closed: result=%#v snapshot=%#v", result, fake.snapshot)
+	}
+}
+
+func TestAgentStopRechecksTabAfterGracefulExit(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	started := mustStartAgent(t, service, "worker")
+	fake.mu.Lock()
+	fake.agentExitHook = func() {
+		fake.snapshot.Panes = append(fake.snapshot.Panes, herdr.PaneInfo{
+			PaneID: "late-user-pane", TabID: started.Agent.TabID, WorkspaceID: "w1",
+		})
+		fake.agentExitHook = nil
+	}
+	fake.mu.Unlock()
+
+	result, err := service.StopAgent(t.Context(), "worker", time.Second, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if result.TabClosed || len(fake.snapshot.Tabs) != 1 || len(fake.snapshot.Panes) != 2 {
+		t.Fatalf("tab shared during shutdown was closed: result=%#v snapshot=%#v", result, fake.snapshot)
+	}
+}
+
+func TestAgentStopNeverClosesSavedOrchestratorTab(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	started := mustStartAgent(t, service, "worker")
+	if err := service.Store.WithLocked(service.Project.Session, service.Project.Root, func(st *state.Session) error {
+		st.OrchestratorTabID = started.Agent.TabID
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.StopAgent(t.Context(), "worker", time.Second, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if result.TabClosed || len(fake.snapshot.Tabs) != 1 || len(fake.snapshot.Panes) != 1 {
+		t.Fatalf("saved orchestrator tab was closed: result=%#v snapshot=%#v", result, fake.snapshot)
+	}
+}
+
+func TestForceStopClosesDedicatedTabAndReportsJSON(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	mustStartAgent(t, service, "worker")
+	result, err := service.StopAgent(t.Context(), "worker", time.Second, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if !result.Forced || !result.TabClosed || !strings.Contains(string(data), `"tab_closed":true`) ||
+		len(fake.snapshot.Tabs) != 0 || len(fake.snapshot.Panes) != 0 {
+		t.Fatalf("force result/snapshot = %#v / %#v, JSON=%s", result, fake.snapshot, data)
+	}
+}
+
+func TestAgentStopSurfacesDedicatedTabCloseFailure(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	mustStartAgent(t, service, "worker")
+	fake.mu.Lock()
+	fake.failMethod = "tab.close"
+	fake.mu.Unlock()
+	_, err := service.StopAgent(t.Context(), "worker", time.Second, false)
+	if translated := Translate(err); translated.Code != "agent_tab_close_failed" ||
+		!strings.Contains(translated.Message, "agent \"worker\" stopped") {
+		t.Fatalf("error = %#v", translated)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.snapshot.Tabs) != 1 || len(fake.snapshot.Panes) != 1 || fake.snapshot.Panes[0].Agent != nil {
+		t.Fatalf("close failure did not preserve stopped tab: %#v", fake.snapshot)
 	}
 }
 

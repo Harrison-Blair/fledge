@@ -126,8 +126,9 @@ func (s *Service) ReadAgent(ctx context.Context, name, source string, lines int,
 }
 
 type AgentStopResult struct {
-	Agent  AgentView `json:"agent"`
-	Forced bool      `json:"forced"`
+	Agent     AgentView `json:"agent"`
+	Forced    bool      `json:"forced"`
+	TabClosed bool      `json:"tab_closed"`
 }
 
 func (s *Service) StopAgent(ctx context.Context, name string, timeout time.Duration, force bool) (AgentStopResult, error) {
@@ -150,31 +151,111 @@ func (s *Service) StopAgent(ctx context.Context, name string, timeout time.Durat
 					"cannot force-close the saved orchestrator pane; use `fledge stop --force` for coordinated shutdown")
 			}
 		}
-		if err := client.Call(ctx, "pane.close", map[string]any{"pane_id": managed.PaneID}, nil); err != nil {
+		closeDedicatedTab, err := s.canCloseDedicatedAgentTab(ctx, client, name, managed)
+		if err != nil {
+			return AgentStopResult{}, err
+		}
+		method, params := "pane.close", map[string]any{"pane_id": managed.PaneID}
+		if closeDedicatedTab {
+			method, params = "tab.close", map[string]any{"tab_id": managed.TabID}
+		}
+		if err := client.Call(ctx, method, params, nil); err != nil {
+			if closeDedicatedTab {
+				return AgentStopResult{}, agentTabCloseError(name, managed, false, err)
+			}
 			return AgentStopResult{}, err
 		}
 		if err := s.messages().deactivateAgent(name, "agent force-stopped"); err != nil {
 			return AgentStopResult{}, err
 		}
-		return stoppedResult(name, managed, true), nil
+		return stoppedResult(name, managed, true, closeDedicatedTab), nil
 	}
 	if stopped, _ := s.agentStopped(ctx, client, managed.PaneID); stopped {
 		if err := s.messages().deactivateAgent(name, "agent already stopped"); err != nil {
 			return AgentStopResult{}, err
 		}
-		return AgentStopResult{Agent: stoppedView(name, managed)}, nil
+		return s.finishStoppedAgent(ctx, client, name, managed, false)
 	}
 	deadline := time.Now().Add(timeout)
 	if s.gracefullyStopPane(ctx, client, managed.PaneID, deadline) {
 		if err := s.messages().deactivateAgent(name, "agent stopped"); err != nil {
 			return AgentStopResult{}, err
 		}
-		return stoppedResult(name, managed, false), nil
+		return s.finishStoppedAgent(ctx, client, name, managed, false)
 	}
 	return AgentStopResult{}, &Error{
 		Code:    "agent_stop_timeout",
 		Message: fmt.Sprintf("agent %q did not stop within %s; its pane was preserved", name, timeout),
 		Details: map[string]any{"name": name, "pane_id": managed.PaneID},
+	}
+}
+
+func (s *Service) canCloseDedicatedAgentTab(
+	ctx context.Context,
+	client *herdr.Client,
+	name string,
+	managed state.Agent,
+) (bool, error) {
+	if managed.Placement != "tab" || managed.TabID == "" {
+		return false, nil
+	}
+	st, err := s.Store.Read(s.Project.Session, s.Project.Root)
+	if err != nil {
+		return false, err
+	}
+	if st.OrchestratorTabID == managed.TabID ||
+		(name == "fledge-orchestrator" && st.OrchestratorPaneID == managed.PaneID) {
+		return false, nil
+	}
+	snapshot, err := client.Snapshot(ctx)
+	if err != nil {
+		return false, err
+	}
+	panes := 0
+	for _, pane := range snapshot.Panes {
+		if pane.TabID != managed.TabID {
+			continue
+		}
+		panes++
+		if pane.PaneID != managed.PaneID {
+			return false, nil
+		}
+	}
+	return panes == 1, nil
+}
+
+func (s *Service) finishStoppedAgent(
+	ctx context.Context,
+	client *herdr.Client,
+	name string,
+	managed state.Agent,
+	forced bool,
+) (AgentStopResult, error) {
+	// Eligibility must be checked after the agent exits. A user can split the
+	// tab while graceful shutdown is in progress, and closing based on an
+	// earlier snapshot would destroy that newly shared pane.
+	closeDedicatedTab, err := s.canCloseDedicatedAgentTab(ctx, client, name, managed)
+	if err != nil {
+		return AgentStopResult{}, err
+	}
+	if closeDedicatedTab {
+		if err := client.Call(ctx, "tab.close", map[string]any{"tab_id": managed.TabID}, nil); err != nil {
+			return AgentStopResult{}, agentTabCloseError(name, managed, true, err)
+		}
+	}
+	return stoppedResult(name, managed, forced, closeDedicatedTab), nil
+}
+
+func agentTabCloseError(name string, managed state.Agent, stopped bool, err error) error {
+	message := fmt.Sprintf("agent %q could not be force-stopped by closing its dedicated tab %s: %v", name, managed.TabID, err)
+	if stopped {
+		message = fmt.Sprintf("agent %q stopped, but its dedicated tab %s could not be closed: %v", name, managed.TabID, err)
+	}
+	return &Error{
+		Code:    "agent_tab_close_failed",
+		Message: message,
+		Details: map[string]any{"name": name, "pane_id": managed.PaneID, "tab_id": managed.TabID},
+		Cause:   err,
 	}
 }
 
@@ -187,12 +268,12 @@ func (s *Service) gracefullyStopPane(ctx context.Context, client *herdr.Client, 
 	if stopped, _ := s.agentStopped(stopCtx, client, paneID); stopped {
 		return true
 	}
-	_ = client.Call(stopCtx, "agent.send_keys", map[string]any{"target": paneID, "keys": []string{"Ctrl+D"}}, nil)
+	_ = client.Call(stopCtx, "agent.send_keys", map[string]any{"target": paneID, "keys": []string{"ctrl+d"}}, nil)
 	firstBudget := time.Until(deadline) / 3
 	if s.pollStopped(stopCtx, client, paneID, deadline, firstBudget) {
 		return true
 	}
-	_ = client.Call(stopCtx, "agent.send_keys", map[string]any{"target": paneID, "keys": []string{"Ctrl+C"}}, nil)
+	_ = client.Call(stopCtx, "agent.send_keys", map[string]any{"target": paneID, "keys": []string{"ctrl+c"}}, nil)
 	remaining := time.Until(deadline)
 	if remaining > 0 {
 		settle := remaining / 2
@@ -201,14 +282,15 @@ func (s *Service) gracefullyStopPane(ctx context.Context, client *herdr.Client, 
 			"target": paneID, "until": stopSettleStates, "timeout_ms": settle.Milliseconds(),
 		}, &ignored)
 	}
-	_ = client.Call(stopCtx, "agent.send_keys", map[string]any{"target": paneID, "keys": []string{"Ctrl+D"}}, nil)
+	_ = client.Call(stopCtx, "agent.send_keys", map[string]any{"target": paneID, "keys": []string{"ctrl+d"}}, nil)
 	return s.pollStopped(stopCtx, client, paneID, deadline, time.Until(deadline))
 }
 
-func stoppedResult(name string, managed state.Agent, forced bool) AgentStopResult {
+func stoppedResult(name string, managed state.Agent, forced, tabClosed bool) AgentStopResult {
 	return AgentStopResult{
-		Agent:  stoppedView(name, managed),
-		Forced: forced,
+		Agent:     stoppedView(name, managed),
+		Forced:    forced,
+		TabClosed: tabClosed,
 	}
 }
 

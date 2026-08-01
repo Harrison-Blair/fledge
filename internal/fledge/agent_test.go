@@ -602,6 +602,26 @@ func TestEnqueueOrchestratorPickerTargetsSavedPaneAndQuotesExecutable(t *testing
 	}
 }
 
+func TestEnqueueOrchestratorSpawnIncludesManagedProfile(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	if err := service.Store.WithLocked(service.Project.Session, service.Project.Root, func(st *state.Session) error {
+		st.OrchestratorPaneID = "p-left"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.EnqueueOrchestratorSpawn(
+		t.Context(), serviceSessionSocket(t, service.Binary), "/usr/bin/fledge", "orchestrator",
+	); err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.sendInputText != "/usr/bin/fledge agent spawn orchestrator --name fledge-orchestrator" {
+		t.Fatalf("profile command = %q", fake.sendInputText)
+	}
+}
+
 func TestShellQuoteEscapesSingleQuotes(t *testing.T) {
 	if got := shellQuote("/opt/user's tools/fledge"); got != "'/opt/user'\"'\"'s tools/fledge'" {
 		t.Fatalf("quoted path = %q", got)

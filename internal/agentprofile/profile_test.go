@@ -19,6 +19,9 @@ func TestValidate(t *testing.T) {
 		{name: "optional values absent", mutate: func(p *Profile) {
 			p.Description, p.Model, p.Effort, p.Instructions = "", "", "", ""
 		}},
+		{name: "generic harness and model absent", mutate: func(p *Profile) {
+			p.Harness, p.Model = "", ""
+		}},
 		{name: "name absent", mutate: func(p *Profile) { p.Name = "" }, field: "name", wantErr: true},
 		{name: "name traversal", mutate: func(p *Profile) { p.Name = "../review" }, field: "name", wantErr: true},
 		{name: "name slash", mutate: func(p *Profile) { p.Name = "team/review" }, field: "name", wantErr: true},
@@ -28,7 +31,7 @@ func TestValidate(t *testing.T) {
 		{name: "long name", mutate: func(p *Profile) { p.Name = strings.Repeat("a", maxNameBytes+1) }, field: "name", wantErr: true},
 		{name: "schema absent", mutate: func(p *Profile) { p.SchemaVersion = 0 }, field: "schema_version", wantErr: true},
 		{name: "future schema", mutate: func(p *Profile) { p.SchemaVersion = 2 }, field: "schema_version", wantErr: true},
-		{name: "harness absent", mutate: func(p *Profile) { p.Harness = "" }, field: "harness", wantErr: true},
+		{name: "model without harness", mutate: func(p *Profile) { p.Harness = "" }, field: "model", wantErr: true},
 		{name: "harness unsupported", mutate: func(p *Profile) { p.Harness = "cursor" }, field: "harness", wantErr: true},
 		{name: "harness whitespace", mutate: func(p *Profile) { p.Harness = " codex" }, field: "harness", wantErr: true},
 		{name: "effort unsupported", mutate: func(p *Profile) { p.Effort = "maximum" }, field: "effort", wantErr: true},
@@ -98,6 +101,31 @@ func TestProfileSerializationKeepsNameOutOfTOMLAndInJSON(t *testing.T) {
 	}
 	if !strings.Contains(string(jsonData), `"name":"review"`) {
 		t.Fatalf("JSON missing logical name: %s", jsonData)
+	}
+}
+
+func TestInstructionOnlyProfileOmitsLaunchSelectionsAndEmptyFields(t *testing.T) {
+	profile := Profile{
+		Name: "orchestrator", SchemaVersion: SchemaVersion,
+		Instructions: "Use only the inherited Fledge session.",
+	}
+	data, err := encode(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, omitted := range []string{"harness", "model", "effort", "description", "native_args"} {
+		if strings.Contains(string(data), omitted) {
+			t.Fatalf("instruction-only TOML contains %q:\n%s", omitted, data)
+		}
+	}
+	jsonData, err := json.Marshal(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, omitted := range []string{`"harness"`, `"model"`, `"effort"`, `"description"`, `"native_args"`} {
+		if strings.Contains(string(jsonData), omitted) {
+			t.Fatalf("instruction-only JSON contains %q: %s", omitted, jsonData)
+		}
 	}
 }
 

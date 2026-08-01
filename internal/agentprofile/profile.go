@@ -47,10 +47,10 @@ type Profile struct {
 	Name          string   `toml:"-" json:"name"`
 	SchemaVersion int      `toml:"schema_version" json:"schema_version"`
 	Description   string   `toml:"description,omitempty" json:"description,omitempty"`
-	Harness       string   `toml:"harness" json:"harness"`
+	Harness       string   `toml:"harness,omitempty" json:"harness,omitempty"`
 	Model         string   `toml:"model,omitempty" json:"model,omitempty"`
 	Effort        string   `toml:"effort,omitempty" json:"effort,omitempty"`
-	NativeArgs    []string `toml:"native_args" json:"native_args"`
+	NativeArgs    []string `toml:"native_args,omitempty" json:"native_args,omitempty"`
 	Instructions  string   `toml:"instructions,omitempty" multiline:"true" json:"instructions,omitempty"`
 }
 
@@ -63,13 +63,16 @@ func Validate(p Profile) error {
 		return fieldError("schema_version", "unsupported version %d (want %d)", p.SchemaVersion, SchemaVersion)
 	}
 	if p.Harness == "" {
-		return fieldError("harness", "is required")
-	}
-	if p.Harness != strings.TrimSpace(p.Harness) {
-		return fieldError("harness", "must not contain surrounding whitespace")
-	}
-	if _, ok := supportedHarnesses[p.Harness]; !ok {
-		return fieldError("harness", "unsupported harness %q", p.Harness)
+		if p.Model != "" {
+			return fieldError("model", "requires harness to be set")
+		}
+	} else {
+		if p.Harness != strings.TrimSpace(p.Harness) {
+			return fieldError("harness", "must not contain surrounding whitespace")
+		}
+		if _, ok := supportedHarnesses[p.Harness]; !ok {
+			return fieldError("harness", "unsupported harness %q", p.Harness)
+		}
 	}
 	if p.Effort != "" {
 		if _, ok := supportedEfforts[p.Effort]; !ok {
@@ -145,7 +148,7 @@ func prepareForWrite(p Profile) (Profile, error) {
 	if p.SchemaVersion == 0 {
 		p.SchemaVersion = SchemaVersion
 	}
-	if p.NativeArgs == nil {
+	if len(p.NativeArgs) == 0 {
 		p.NativeArgs = []string{}
 	} else {
 		p.NativeArgs = append([]string(nil), p.NativeArgs...)

@@ -3,6 +3,7 @@ package agentspawn
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 )
@@ -10,10 +11,11 @@ import (
 // ProfileLaunchOptions contains the harness-independent parts of a managed
 // profile launch. Model selection is deliberately left to the spawn layer.
 type ProfileLaunchOptions struct {
-	Harness      string
-	Effort       string
-	Instructions string
-	NativeArgs   []string
+	Harness          string
+	Effort           string
+	Instructions     string
+	InstructionsFile string
+	NativeArgs       []string
 }
 
 var supportedProfileEfforts = map[string]struct{}{
@@ -185,29 +187,30 @@ var nativeShortBooleanFlags = map[string]map[string]struct{}{
 	"pi": {"-ne": {}, "-np": {}, "-ns": {}},
 }
 
-// BuildProfileArgs translates managed profile controls into harness-native
-// arguments and appends validated native passthrough arguments in their
-// original order.
-func BuildProfileArgs(opts ProfileLaunchOptions) ([]string, error) {
+// ValidateProfileLaunch checks whether a managed profile can be represented by
+// a harness. It deliberately does not require launch-time artifacts such as
+// Pi's prepared instruction file, so callers can use it for compatibility
+// filtering before a harness is selected.
+func ValidateProfileLaunch(opts ProfileLaunchOptions) error {
 	if _, ok := controlledShortFlags[opts.Harness]; !ok {
-		return nil, fmt.Errorf(
+		return fmt.Errorf(
 			"unsupported profile launch harness %q; supported harnesses are claude, codex, opencode, and pi",
 			opts.Harness,
 		)
 	}
 	if opts.Effort != "" {
 		if _, ok := supportedProfileEfforts[opts.Effort]; !ok {
-			return nil, fmt.Errorf(
+			return fmt.Errorf(
 				"unsupported profile effort %q for harness %q; supported efforts are low, medium, high, xhigh, and max",
 				opts.Effort, opts.Harness,
 			)
 		}
 	}
 	if !utf8.ValidString(opts.Instructions) {
-		return nil, fmt.Errorf("profile instructions for harness %q are not valid UTF-8", opts.Harness)
+		return fmt.Errorf("profile instructions for harness %q are not valid UTF-8", opts.Harness)
 	}
 	if strings.IndexByte(opts.Instructions, 0) >= 0 {
-		return nil, fmt.Errorf("profile instructions for harness %q contain a NUL byte", opts.Harness)
+		return fmt.Errorf("profile instructions for harness %q contain a NUL byte", opts.Harness)
 	}
 	// OpenCode exposes --variant only on its non-interactive run command, while
 	// the TUI's --prompt is an initial user message rather than managed context.
@@ -220,25 +223,40 @@ func BuildProfileArgs(opts ProfileLaunchOptions) ([]string, error) {
 			setting = "effort"
 			verb = "is"
 		}
-		return nil, fmt.Errorf(
+		return fmt.Errorf(
 			"managed %s for harness %q %s unsupported: the interactive OpenCode TUI has no reliable native transport",
 			setting, opts.Harness, verb,
 		)
 	}
-	// Pi overloads --append-system-prompt: an existing path is read as a file,
-	// and it provides no argv escape that forces literal text. Rejecting every
-	// nonempty value keeps the result independent of the launch-time cwd.
-	if opts.Harness == "pi" && opts.Instructions != "" {
-		return nil, fmt.Errorf(
-			"managed instructions for harness %q are unsupported: Pi may interpret --append-system-prompt values as file paths instead of literal text",
-			opts.Harness,
-		)
-	}
 	if err := validateNativeArgs(opts.Harness, opts.NativeArgs); err != nil {
+		return err
+	}
+	return nil
+}
+
+// BuildProfileArgs translates managed profile controls into harness-native
+// arguments and appends validated native passthrough arguments in their
+// original order.
+func BuildProfileArgs(opts ProfileLaunchOptions) ([]string, error) {
+	if err := ValidateProfileLaunch(opts); err != nil {
 		return nil, err
 	}
+	if opts.Harness == "pi" && opts.Instructions != "" {
+		if opts.InstructionsFile == "" {
+			return nil, fmt.Errorf(
+				"profile instructions for harness %q require a prepared instruction file before launch",
+				opts.Harness,
+			)
+		}
+		if !filepath.IsAbs(opts.InstructionsFile) {
+			return nil, fmt.Errorf(
+				"prepared instruction file for harness %q must be an absolute path",
+				opts.Harness,
+			)
+		}
+	}
 
-	args := make([]string, 0, len(opts.NativeArgs)+4)
+	args := make([]string, 0, len(opts.NativeArgs)+6)
 	switch opts.Harness {
 	case "claude":
 		args = appendProfileValue(args, "--effort", opts.Effort)
@@ -253,6 +271,9 @@ func BuildProfileArgs(opts ProfileLaunchOptions) ([]string, error) {
 	case "opencode":
 	case "pi":
 		args = appendProfileValue(args, "--thinking", opts.Effort)
+		if opts.Instructions != "" {
+			args = append(args, "--append-system-prompt", opts.InstructionsFile)
+		}
 	}
 
 	return append(args, opts.NativeArgs...), nil

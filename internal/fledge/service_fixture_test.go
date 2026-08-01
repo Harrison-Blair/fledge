@@ -39,6 +39,7 @@ type fakeLifecycle struct {
 	readTarget       string
 	sendKeysTarget   string
 	sendKeys         []string
+	sendKeyCalls     [][]string
 	sendKeysTargets  []string
 	methodCalls      []string
 	sendInputCalls   int
@@ -51,6 +52,7 @@ type fakeLifecycle struct {
 	runningMarker    string
 	pongProtocol     int
 	ignoreExit       bool
+	agentExitHook    func()
 }
 
 func newFakeLifecycle(t *testing.T) (*Service, *fakeLifecycle) {
@@ -202,11 +204,13 @@ func (f *fakeLifecycle) handle(conn net.Conn, call herdrtest.Call) bool {
 	case "agent.send_keys":
 		f.sendKeysTarget = call.Text("target")
 		f.sendKeysTargets = append(f.sendKeysTargets, f.sendKeysTarget)
-		if keys, ok := call.Params["keys"].([]any); ok {
-			f.sendKeys = appendStrings(f.sendKeys[:0], keys)
-		}
+		f.sendKeys = appendStrings(f.sendKeys[:0], call.Params["keys"])
+		f.sendKeyCalls = append(f.sendKeyCalls, append([]string(nil), f.sendKeys...))
 		if !f.ignoreExit {
 			f.exitAgent(f.sendKeysTarget)
+			if f.agentExitHook != nil {
+				f.agentExitHook()
+			}
 		}
 		herdrtest.WriteResult(conn, call, okResult)
 	case "agent.wait":
@@ -216,6 +220,32 @@ func (f *fakeLifecycle) handle(conn net.Conn, call herdrtest.Call) bool {
 		f.snapshot.Panes, f.snapshot.Agents = nil, nil
 		herdrtest.WriteResult(conn, call, map[string]any{
 			"type": "pane_closed", "pane_id": "p1", "workspace_id": "w1",
+		})
+	case "tab.close":
+		tabID := call.Text("tab_id")
+		tabs := f.snapshot.Tabs[:0]
+		for _, tab := range f.snapshot.Tabs {
+			if tab.TabID != tabID {
+				tabs = append(tabs, tab)
+			}
+		}
+		f.snapshot.Tabs = tabs
+		panes := f.snapshot.Panes[:0]
+		for _, pane := range f.snapshot.Panes {
+			if pane.TabID != tabID {
+				panes = append(panes, pane)
+			}
+		}
+		f.snapshot.Panes = panes
+		agents := f.snapshot.Agents[:0]
+		for _, agent := range f.snapshot.Agents {
+			if agent.TabID != tabID {
+				agents = append(agents, agent)
+			}
+		}
+		f.snapshot.Agents = agents
+		herdrtest.WriteResult(conn, call, map[string]any{
+			"type": "tab_closed", "tab_id": tabID, "workspace_id": "w1",
 		})
 	case "server.stop":
 		if f.serverStopError != "" {
