@@ -1,5 +1,7 @@
 # Fledge
 
+[![release](https://img.shields.io/github/v/release/Harrison-Blair/fledge?color=brightgreen)](https://github.com/Harrison-Blair/fledge/releases)
+
 Fledge is a Linux CLI for running project-scoped AI agents in a deterministic
 [Herdr](https://herdr.dev/) session. It provides a small lifecycle harness:
 discover the project, start named agents, exchange durable asynchronous
