@@ -1,0 +1,171 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Gate
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.decide.outputs.release }}
+      tag: ${{ steps.decide.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Decide whether to release
+        id: decide
+        shell: bash
+        run: |
+          set +e
+          tag="$(bash scripts/check-release-version.sh "$GITHUB_SHA" 2>reason.txt)"
+          status=$?
+          set -e
+          case "$status" in
+            0)
+              echo "release=true" >> "$GITHUB_OUTPUT"
+              echo "tag=$tag" >> "$GITHUB_OUTPUT"
+              ;;
+            3)
+              echo "release=false" >> "$GITHUB_OUTPUT"
+              cat reason.txt
+              ;;
+            *)
+              cat reason.txt >&2
+              exit "$status"
+              ;;
+          esac
+
+  lint:
+    name: Lint
+    needs: gate
+    if: needs.gate.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Check formatting
+        shell: bash
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [[ -n "$unformatted" ]]; then
+            echo "The following files need gofmt:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+      - name: Vet
+        run: go vet ./...
+
+  test:
+    name: Test
+    needs: gate
+    if: needs.gate.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test
+        run: go test -trimpath -buildvcs=true -race ./...
+
+  release:
+    name: Release
+    needs: [gate, lint, test]
+    if: needs.gate.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      MERGE_SHA: ${{ github.sha }}
+      TAG: ${{ needs.gate.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Validate release version
+        run: test "$(bash scripts/check-release-version.sh "$MERGE_SHA")" = "$TAG"
+      - name: Build release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            package="fledge_${version}_linux_${arch}"
+            package_dir="$RUNNER_TEMP/$package"
+            mkdir -p "$package_dir"
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
+              go build -trimpath -buildvcs=true -o "$package_dir/fledge" ./cmd/fledge
+            chmod 0755 "$package_dir/fledge"
+            install -m 0644 LICENSE "$package_dir/LICENSE"
+            tar -C "$package_dir" -czf "dist/$package.tar.gz" fledge LICENSE
+          done
+          cd dist
+          sha256sum ./*.tar.gz > SHA256SUMS
+      - name: Create or resume GitHub release
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_info="$(
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq '.[] | select(.tag_name == env.TAG) | [.id, .draft, .html_url] | @tsv'
+          )"
+
+          tag_exists=false
+          if git show-ref --verify --quiet "refs/tags/$TAG"; then
+            tag_exists=true
+          fi
+
+          if [[ -n "$release_info" ]]; then
+            if [[ "$release_info" == *$'\n'* ]]; then
+              echo "multiple releases use $TAG" >&2
+              exit 1
+            fi
+            IFS=$'\t' read -r release_id is_draft release_url <<< "$release_info"
+            if [[ "$tag_exists" != true ]]; then
+              echo "release $release_id uses $TAG, but the tag is missing" >&2
+              exit 1
+            fi
+            if [[ "$is_draft" != true ]]; then
+              echo "$TAG is already published: $release_url"
+              exit 0
+            fi
+
+            gh release upload "$TAG" dist/* --clobber
+            gh release edit "$TAG" --title "$TAG" --draft=false
+            exit 0
+          fi
+
+          if [[ "$tag_exists" != true ]]; then
+            git tag "$TAG" "$MERGE_SHA"
+            git push origin "refs/tags/$TAG"
+          fi
+
+          gh release create "$TAG" dist/* \
+            --verify-tag \
+            --target "$MERGE_SHA" \
+            --title "$TAG" \
+            --generate-notes \
+            --draft
+          gh release edit "$TAG" --draft=false
