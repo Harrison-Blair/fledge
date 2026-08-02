@@ -448,3 +448,7 @@ requires either `--yes | -y` or `--dry-run | -n`.
 Set `FLEDGE_INTEGRATION=1` to enable the isolated local Herdr integration test.
 It requires Herdr 0.7.5+, creates a temporary initialized project and its
 deterministic session, and verifies that the session is deleted at the end.
+
+## License
+
+GNU Affero General Public License v3.0. See [LICENSE](LICENSE).

@@ -32,3 +32,21 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		}
 	}
 }
+
+func TestReleaseLicenseContract(t *testing.T) {
+	path := filepath.Join("..", "..", "LICENSE")
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read release license: %v", err)
+	}
+
+	license := string(contents)
+	for _, fragment := range []string{
+		"GNU AFFERO GENERAL PUBLIC LICENSE",
+		"Version 3, 19 November 2007",
+	} {
+		if !strings.Contains(license, fragment) {
+			t.Errorf("release license is missing %q", fragment)
+		}
+	}
+}
