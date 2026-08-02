@@ -45,7 +45,19 @@ func TestRepositoryContextMatchesCanonicalOrchestratorProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := filepath.Clean(filepath.Join(cwd, "..", ".."))
-	store, err := agentprofile.New(root)
+	canonical, err := os.ReadFile(filepath.Join(root, ".fledge", "profiles", "orchestrator.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureRoot := t.TempDir()
+	fixtureProfiles := filepath.Join(fixtureRoot, ".fledge", "profiles")
+	if err := os.MkdirAll(fixtureProfiles, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fixtureProfiles, "orchestrator.toml"), canonical, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := agentprofile.New(fixtureRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
