@@ -21,15 +21,16 @@ import (
 const lastSpawnSelectionItemID = "__fledge_last_spawn_selection__"
 
 func newAgent(env *environment) *cobra.Command {
-	cmd := &cobra.Command{Use: "agent", Short: "Manage logical agents"}
+	cmd := &cobra.Command{
+		Use: "agent", Short: "Manage logical agents", Args: noArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
+	}
 	cmd.AddCommand(
 		newAgentSpawn(env),
 		newAgentProfile(env),
 		newAgentStop(env),
 		newAgentList(env),
 		newAgentStatus(env),
-		newAgentPrompt(env),
-		newAgentWait(env),
 		newAgentRead(env),
 		newAgentAttach(env),
 		newAgentMessage(env),
@@ -668,134 +669,6 @@ func printAgentTable(w io.Writer, agents []fledge.AgentView, theme *ui.Theme, sh
 			theme.Status(terminalSafeText(agent.State)), agent.PendingMessages,
 			terminalSafeText(agent.Placement), terminalSafeText(agent.PaneID), terminalSafeText(agent.CWD))
 	}
-}
-
-type promptOptions struct {
-	file    string
-	wait    bool
-	until   []string
-	timeout time.Duration
-}
-
-func newAgentPrompt(env *environment) *cobra.Command {
-	var opts promptOptions
-	cmd := &cobra.Command{
-		Use:   "prompt <name> [text]",
-		Short: "Submit a prompt, optionally waiting atomically for a lifecycle state",
-		Args: func(_ *cobra.Command, args []string) error {
-			if len(args) < 1 || len(args) > 2 {
-				return usage("agent prompt requires a name and at most one positional prompt")
-			}
-			if (len(args) == 2) == (opts.file != "") {
-				return usage("provide exactly one prompt source: positional text or --file path|-")
-			}
-			return nil
-		},
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAgentPrompt(cmd, env, args, opts)
-		},
-	}
-	cmd.Flags().StringVarP(&opts.file, "file", "F", "", "read prompt from a file, or - for stdin")
-	cmd.Flags().BoolVarP(&opts.wait, "wait", "w", false, "wait atomically after submitting")
-	cmd.Flags().StringSliceVarP(&opts.until, "until", "u", nil,
-		"settled state(s): "+strings.Join(fledge.WaitStates, ", "))
-	cmd.Flags().DurationVarP(&opts.timeout, "timeout", "t", 0, "server-side wait timeout")
-	return cmd
-}
-
-func runAgentPrompt(cmd *cobra.Command, env *environment, args []string, opts promptOptions) error {
-	if err := validateStates(opts.until); err != nil {
-		return err
-	}
-	if opts.timeout < 0 {
-		return usage("--timeout must not be negative")
-	}
-	if (len(opts.until) > 0 || cmd.Flags().Changed("timeout")) && !opts.wait {
-		return usage("--until and --timeout require --wait")
-	}
-	text, err := readPromptInput(env, args, opts.file)
-	if err != nil {
-		return err
-	}
-	service, err := env.service(cmd.Context())
-	if err != nil {
-		return err
-	}
-	agent, err := service.Prompt(cmd.Context(), fledge.PromptOptions{
-		Name: args[0], Text: text, Wait: opts.wait, Until: opts.until, Timeout: opts.timeout,
-	})
-	if err != nil {
-		return fledge.Translate(err)
-	}
-	return env.print(map[string]any{"agent": agent}, func(w io.Writer, theme *ui.Theme) {
-		if opts.wait {
-			fmt.Fprintf(w, "%s for %s: %s\n", theme.Accent("Prompt completed"), agent.Name, theme.Status(agent.State))
-		} else {
-			fmt.Fprintf(w, "%s to %s\n", theme.Accent("Prompt submitted"), agent.Name)
-		}
-	})
-}
-
-func readPromptInput(env *environment, args []string, file string) (string, error) {
-	if len(args) == 2 {
-		return args[1], nil
-	}
-	var data []byte
-	var err error
-	if file == "-" {
-		data, err = io.ReadAll(env.in)
-	} else {
-		data, err = os.ReadFile(file)
-	}
-	if err != nil {
-		return "", fledge.Wrap("prompt_read_failed", fmt.Sprintf("read prompt: %v", err), err)
-	}
-	return string(data), nil
-}
-
-func newAgentWait(env *environment) *cobra.Command {
-	var until []string
-	var timeout time.Duration
-	cmd := &cobra.Command{
-		Use:   "wait <name>",
-		Short: "Wait for an agent lifecycle state",
-		Args:  exactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := validateStates(until); err != nil {
-				return err
-			}
-			if timeout < 0 {
-				return usage("--timeout must not be negative")
-			}
-			service, err := env.service(cmd.Context())
-			if err != nil {
-				return err
-			}
-			agent, err := service.Wait(cmd.Context(), args[0], until, timeout)
-			if err != nil {
-				return fledge.Translate(err)
-			}
-			return env.print(map[string]any{"agent": agent}, func(w io.Writer, theme *ui.Theme) {
-				fmt.Fprintf(w, "%s reached %s\n", agent.Name, theme.Status(agent.State))
-			})
-		},
-	}
-	cmd.Flags().StringSliceVarP(&until, "until", "u", nil, "target state(s); defaults to idle, done, or blocked")
-	cmd.Flags().DurationVarP(&timeout, "timeout", "t", 0, "server-side wait timeout")
-	return cmd
-}
-
-func validateStates(states []string) error {
-	valid := make(map[string]bool, len(fledge.WaitStates))
-	for _, name := range fledge.WaitStates {
-		valid[name] = true
-	}
-	for _, stateName := range states {
-		if !valid[stateName] {
-			return usage(fmt.Sprintf("invalid agent state %q", stateName))
-		}
-	}
-	return nil
 }
 
 func newAgentRead(env *environment) *cobra.Command {

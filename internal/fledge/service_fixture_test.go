@@ -33,8 +33,8 @@ type fakeLifecycle struct {
 	failMethod       string
 	dropMethod       string
 	startArgs        []string
-	promptWait       map[string]any
 	promptTarget     string
+	promptText       string
 	waitTarget       string
 	readTarget       string
 	sendKeysTarget   string
@@ -186,9 +186,7 @@ func (f *fakeLifecycle) handle(conn net.Conn, call herdrtest.Call) bool {
 		})
 	case "agent.prompt":
 		f.promptTarget = call.Text("target")
-		if wait, ok := call.Params["wait"].(map[string]any); ok {
-			f.promptWait = wait
-		}
+		f.promptText = call.Text("text")
 		herdrtest.WriteResult(conn, call, map[string]any{
 			"type": "agent_prompted", "agent": f.snapshot.Agents[0],
 		})

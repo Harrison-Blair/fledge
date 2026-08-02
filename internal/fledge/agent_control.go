@@ -10,64 +10,6 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/state"
 )
 
-type PromptOptions struct {
-	Name    string
-	Text    string
-	Wait    bool
-	Until   []string
-	Timeout time.Duration
-}
-
-func (s *Service) Prompt(ctx context.Context, opts PromptOptions) (AgentView, error) {
-	_, _, client, err := s.running(ctx)
-	if err != nil {
-		return AgentView{}, err
-	}
-	managed, err := s.managed(ctx, client, opts.Name)
-	if err != nil {
-		return AgentView{}, err
-	}
-	params := map[string]any{"target": managed.PaneID, "text": opts.Text}
-	if opts.Wait {
-		wait := map[string]any{}
-		if len(opts.Until) > 0 {
-			wait["until"] = opts.Until
-		}
-		if timeout := herdr.Milliseconds(opts.Timeout); timeout != nil {
-			wait["timeout_ms"] = *timeout
-		}
-		params["wait"] = wait
-	}
-	var result herdr.Result
-	if err := client.Call(ctx, "agent.prompt", params, &result); err != nil {
-		return AgentView{}, err
-	}
-	return viewFromInfo(opts.Name, managed, result.Agent), nil
-}
-
-func (s *Service) Wait(ctx context.Context, name string, until []string, timeout time.Duration) (AgentView, error) {
-	_, _, client, err := s.running(ctx)
-	if err != nil {
-		return AgentView{}, err
-	}
-	managed, err := s.managed(ctx, client, name)
-	if err != nil {
-		return AgentView{}, err
-	}
-	params := map[string]any{"target": managed.PaneID}
-	if len(until) > 0 {
-		params["until"] = until
-	}
-	if value := herdr.Milliseconds(timeout); value != nil {
-		params["timeout_ms"] = *value
-	}
-	var result herdr.Result
-	if err := client.Call(ctx, "agent.wait", params, &result); err != nil {
-		return AgentView{}, err
-	}
-	return viewFromInfo(name, managed, result.Agent), nil
-}
-
 func viewFromInfo(name string, managed state.Agent, info herdr.AgentInfo) AgentView {
 	status := info.AgentStatus
 	if status == "" {

@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+
+	"github.com/Harrison-Blair/fledge/internal/buildinfo"
 )
 
 func TestVersionRequiresNeitherProjectNorHerdr(t *testing.T) {
@@ -22,7 +24,7 @@ func TestVersionRequiresNeitherProjectNorHerdr(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &envelope); err != nil {
 		t.Fatal(err)
 	}
-	if !envelope.OK || envelope.Data.Version != "v0.0.1" {
+	if !envelope.OK || envelope.Data.Version != buildinfo.Version() {
 		t.Fatalf("envelope = %#v", envelope)
 	}
 }

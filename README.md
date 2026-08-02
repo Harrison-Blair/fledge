@@ -2,8 +2,8 @@
 
 Fledge is a Linux CLI for running project-scoped AI agents in a deterministic
 [Herdr](https://herdr.dev/) session. It provides a small lifecycle harness:
-discover the project, start named agents, prompt or wait for them atomically,
-read their output, and dispose of the session when the work is done.
+discover the project, start named agents, exchange durable asynchronous
+messages, read their output, and dispose of the session when the work is done.
 
 Phase one requires Go 1.26 and an independently installed Herdr 0.7.5 or newer
 (socket protocol 17+). Fledge never installs Herdr or changes its integrations
@@ -123,8 +123,8 @@ From a project subdirectory in another terminal:
 cd /path/to/project/src/component
 fledge status
 fledge agent spawn --name implementer --harness codex --model gpt-5
-fledge agent prompt implementer "Run the tests and fix the failure." --wait
-fledge agent wait implementer --until idle,done,blocked --timeout 10m
+fledge agent message send implementer "Run the tests and fix the failure."
+fledge agent message inbox
 fledge agent read implementer --source recent-unwrapped --lines 120
 fledge agent attach implementer
 fledge agent stop implementer
@@ -141,9 +141,10 @@ recipient must acknowledge it or send a linked reply before it becomes
 
 ```text
 queued ──inject──▶ awaiting_ack ──ack/reply──▶ acknowledged
-   ▲                    │
-   │                    └─agent exits──▶ failed ──new activation──┐
-   └────definite delivery failure─────────────────────────────────┘
+   ▲                    │                         │
+   │                    └─agent exits──▶ failed ──┼─new activation─┐
+   │                                              └─system notice──▶ sender
+   └────definite delivery failure──────────────────────────────────┘
 
 ambiguous transport ──▶ uncertain     sender/user ──▶ cancelled
 ```
@@ -157,9 +158,17 @@ fledge agent message ack msg_example
 fledge agent message reply msg_example "Done; see the linked changes."
 ```
 
+Delegated work uses `message send` and `message reply`. Sending returns after
+the durable write and a bounded delivery handshake; it never waits for task
+completion. A reply acknowledges the original task and is injected into the
+live sender pane as soon as it arrives. If a worker activation ends before
+replying, Fledge sends the original sender a correlated system notification;
+system notifications are acknowledged rather than replied to.
+
 The sender is inferred from `HERDR_PANE_ID` only when both the saved mapping
 and live Herdr snapshot prove it; otherwise the sender is `user`. Agent names
-are portable identifiers, and `user` is reserved for the owner mailbox.
+are portable identifiers; `user` is reserved for the owner mailbox and
+`fledge` for durable system notifications.
 Messages to stopped agents remain queued and replay oldest-first on their next
 activation. Messages do not replay into a later server run.
 
@@ -174,7 +183,7 @@ fledge agent message runs
 
 Use `retry --force` only when deliberately reinjecting a message already
 awaiting acknowledgement. Cancellation prevents future replay but cannot
-retract text already injected into an agent prompt.
+retract text already injected into a recipient harness.
 
 `fledge status` and `fledge start` report the selected session and retain
 `session_source: "derived"` in human and JSON output for compatibility.
@@ -350,39 +359,33 @@ context, the orchestrator policy survives their native clear/new-context
 workflow without restarting the harness. Other project agents can see the root
 block, but its wording applies specifically when coordinating delegated work.
 
-The orchestrator profile requires atomic waiting: submit work with one
-`fledge agent prompt <name> <text> --wait --until idle,done,blocked` operation,
-or use one `fledge agent wait <name> --until idle,done,blocked` call for an
-already-running agent.
-Coordinators must not poll with repeated status/read calls, send messages merely
-to check progress, or create short timeout-driven wait cycles. They prompt or
-message again only when genuinely new task information is available and let
-the single atomic wait settle.
+The orchestrator profile requires durable asynchronous delegation. Tasks use
+`fledge agent message send <name> <task>` and results return through correlated
+`message reply` operations. Sending returns after a bounded delivery handshake;
+the coordinator continues useful work or returns control instead of waiting
+for task completion. Fledge injects replies and system failure notifications
+into the sender pane as they arrive. Coordinators never use status/read polling
+or background waits to detect completion.
 
 The home directory itself cannot be a Fledge project root. Searches made below
 the home directory stop before inspecting it; searches elsewhere continue to
 the filesystem root.
 
-## Output and prompt input
+## Output and message input
 
 Every non-interactive command supports `--json | -j`. JSON output has
 `schema_version: 1`, an `ok` boolean, and either `data` or a stable `error`
 object. Usage failures exit 2; runtime, safety, transport, and Herdr failures
 exit 1. Interactive `fledge start` and `agent attach` reject JSON mode;
 `fledge start --detach --json` retains the standard start JSON envelope.
-`fledge version` requires neither a Fledge project nor Herdr.
-
-Prompts accept exactly one source:
+`fledge version` requires neither a Fledge project nor Herdr. Message sends and
+replies accept exactly one source:
 
 ```sh
-fledge agent prompt reviewer "Review the staged diff."
-fledge agent prompt reviewer --file review.md
-cat review.md | fledge agent prompt reviewer --file -
+fledge agent message send reviewer "Review the staged diff."
+fledge agent message send reviewer --file review.md
+cat review.md | fledge agent message send reviewer --file -
 ```
-
-`prompt --wait` and `agent wait` leave Herdr's settled-state default intact:
-`idle`, `done`, or `blocked`. The `unknown` state matches only when explicitly
-requested with `--until unknown`.
 
 ## Lifecycle states and stopping
 

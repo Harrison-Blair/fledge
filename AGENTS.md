@@ -33,11 +33,12 @@ This project seeks to:
 
 Use only the inherited Fledge session for subagent orchestration.
 Spawn subagents with `fledge agent spawn --new-tab`.
-Use `fledge agent` commands for prompts, messages, waits, reads, and stops.
-Submit work and wait in one atomic operation with `fledge agent prompt <name> <text> --wait --until idle,done,blocked`, or use one `fledge agent wait <name> --until idle,done,blocked` call for an already-running agent.
-Do not poll with repeated `fledge agent status` or `fledge agent read` calls, and do not send messages merely to check progress.
-Prompt or message an agent again only when there is genuinely new task information.
-Avoid artificial short waiting cycles or repeated timeout-driven checks; let the single atomic wait settle.
+Delegate every task with `fledge agent message send <name> <task>` and let the command return after its bounded delivery handshake.
+Never use direct prompts, waits, repeated status/read calls, or background polling to detect task completion.
+After sending a task, continue other useful work or return control; Fledge injects replies into your pane as they arrive.
+When you receive a delegated task, complete it and respond with `fledge agent message reply <message-id> <result>`; the reply both acknowledges the task and returns its result.
+Use `fledge agent message ack <message-id>` only for informational messages that require no result.
+Send another message only when there is genuinely new task information.
 Never use harness-native subagents or start nested Fledge or Herdr sessions.
 If Fledge is unavailable, stop and ask the user.
 <!-- </fledge-managed-orchestrator> -->

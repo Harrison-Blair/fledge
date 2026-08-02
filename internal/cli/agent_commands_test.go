@@ -16,10 +16,10 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/state"
 )
 
-func TestPromptRequiresExactlyOneSource(t *testing.T) {
+func TestMessageSendRequiresExactlyOneSource(t *testing.T) {
 	for _, args := range [][]string{
-		{"agent", "prompt", "worker"},
-		{"agent", "prompt", "worker", "hello", "--file", "prompt.txt"},
+		{"agent", "message", "send", "worker"},
+		{"agent", "message", "send", "worker", "hello", "--file", "message.txt"},
 	} {
 		var stderr bytes.Buffer
 		if code := Execute(context.Background(), args, bytes.NewBuffer(nil), &bytes.Buffer{}, &stderr); code != 2 {
@@ -302,18 +302,6 @@ func TestSpawnRejectsNativeModelFlagAndAcceptsCustomTopLevelModel(t *testing.T) 
 	})
 	if err == nil || strings.Contains(err.Error(), "model") {
 		t.Fatalf("custom model was rejected during validation: %v", err)
-	}
-}
-
-func TestUnknownIsOnlySentWhenExplicitlySelected(t *testing.T) {
-	if err := validateStates(nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := validateStates([]string{"unknown"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := validateStates([]string{"stopped"}); err == nil {
-		t.Fatal("expected stopped to be rejected as a Herdr wait state")
 	}
 }
 

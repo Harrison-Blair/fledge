@@ -12,8 +12,12 @@ import (
 
 const MaxMessageBodyBytes = 256 << 10
 
-// userMailbox is the reserved identity for the project owner's mailbox.
-const userMailbox = "user"
+// Reserved mailbox identities distinguish the project owner and Fledge-authored
+// lifecycle notifications from managed agents.
+const (
+	userMailbox   = "user"
+	systemMailbox = "fledge"
+)
 
 type MessageResult struct {
 	Message       *messaging.Message `json:"message"`
@@ -30,8 +34,8 @@ type MessageHistoryOptions struct {
 }
 
 func ValidateAgentName(name string) error {
-	if name == userMailbox {
-		return NewError("invalid_agent_name", `"user" is reserved for the project owner mailbox`)
+	if name == userMailbox || name == systemMailbox {
+		return NewError("invalid_agent_name", fmt.Sprintf("%q is a reserved mailbox identity", name))
 	}
 	if len(name) == 0 || len(name) > 64 {
 		return NewError("invalid_agent_name", "agent names must contain 1 to 64 characters")

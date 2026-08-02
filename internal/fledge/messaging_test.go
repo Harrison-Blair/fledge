@@ -1,10 +1,12 @@
 package fledge
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/buildinfo"
+	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/messaging"
 	"github.com/Harrison-Blair/fledge/internal/state"
 )
@@ -27,6 +29,55 @@ func startTestMessageRun(t *testing.T, service *Service) string {
 		t.Fatal(err)
 	}
 	return runID
+}
+
+func seedLiveMessagingAgent(
+	t *testing.T,
+	service *Service,
+	fake *fakeLifecycle,
+	runID, name, paneID, tabID, activationID string,
+) {
+	t.Helper()
+	if err := service.Store.WithLocked(service.Project.Session, service.Project.Root, func(st *state.Session) error {
+		st.Agents[name] = state.Agent{
+			Name: name, PaneID: paneID, TabID: tabID, Placement: "tab",
+			ActivationID: activationID, CWD: service.Project.Root,
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	kind, agentName := "codex", name
+	fake.mu.Lock()
+	fake.snapshot.Panes = append(fake.snapshot.Panes, herdr.PaneInfo{
+		PaneID: paneID, TabID: tabID, WorkspaceID: "w1", Agent: &kind, AgentStatus: StateIdle,
+	})
+	fake.snapshot.Agents = append(fake.snapshot.Agents, herdr.AgentInfo{
+		Agent: &kind, AgentStatus: StateIdle, Name: &agentName,
+		PaneID: paneID, TabID: tabID, WorkspaceID: "w1", InteractiveReady: true,
+	})
+	fake.mu.Unlock()
+	if _, err := service.messageStore().Append(runID, messaging.Event{
+		Type: messaging.EventAgentActivated, Agent: name,
+		ActivationID: activationID, PaneID: paneID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func messageBySender(t *testing.T, service *Service, runID, sender string) *messaging.Message {
+	t.Helper()
+	run, err := service.messageStore().ReadRun(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range run.Messages {
+		if message.Sender == sender {
+			return message
+		}
+	}
+	t.Fatalf("run contains no message from %q: %#v", sender, run.Messages)
+	return nil
 }
 
 func TestMessageSendInjectAckAndLinkedReply(t *testing.T) {
@@ -161,6 +212,106 @@ func TestQueuedReplayAndUnacknowledgedActivationFailure(t *testing.T) {
 	}
 }
 
+func TestUnansweredTaskPushesCorrelatedSystemFailureWithoutRecursion(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	runID := startTestMessageRun(t, service)
+	coordinator := mustStartAgent(t, service, "coordinator")
+	seedLiveMessagingAgent(t, service, fake, runID, "worker", "p-worker", "t-worker", "act-worker")
+
+	service.CallerPaneID = coordinator.Agent.PaneID
+	sent, err := service.SendMessage(t.Context(), "worker", "complete the task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.messages().deactivateAgent("worker", "recipient agent exited"); err != nil {
+		t.Fatal(err)
+	}
+
+	original, err := service.ShowMessage(sent.Message.ID)
+	if err != nil || original.Status != messaging.StatusFailed {
+		t.Fatalf("original task = %#v, %v", original, err)
+	}
+	notification := messageBySender(t, service, runID, systemMailbox)
+	if notification.Recipient != "coordinator" || notification.ReplyTo != original.ID ||
+		notification.Status != messaging.StatusAwaitingAck ||
+		!strings.Contains(notification.Body, original.ID) || !strings.Contains(notification.Body, `agent "worker"`) {
+		t.Fatalf("system notification = %#v", notification)
+	}
+	fake.mu.Lock()
+	promptTarget, promptText := fake.promptTarget, fake.promptText
+	fake.mu.Unlock()
+	if promptTarget != coordinator.Agent.PaneID || !strings.Contains(promptText, "[Fledge system message]") ||
+		strings.Contains(promptText, "message reply") {
+		t.Fatalf("system delivery target/text = %q / %q", promptTarget, promptText)
+	}
+
+	if _, err := service.ReplyMessage(t.Context(), notification.ID, "retry it"); Translate(err).Code != "message_state_conflict" {
+		t.Fatalf("system notification reply error = %v", err)
+	}
+	if err := service.messages().deactivateAgent("coordinator", "recipient agent exited"); err != nil {
+		t.Fatal(err)
+	}
+	run, err := service.messageStore().ReadRun(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(run.Messages) != 2 {
+		t.Fatalf("system failure recursively created notifications: %#v", run.Messages)
+	}
+	notification = messageBySender(t, service, runID, systemMailbox)
+	if notification.Status != messaging.StatusFailed {
+		t.Fatalf("undelivered system notification = %#v", notification)
+	}
+	acked, err := service.AckMessage(t.Context(), notification.ID)
+	if err != nil || acked.Message.Status != messaging.StatusAcknowledged {
+		t.Fatalf("system notification acknowledgement = %#v, %v", acked, err)
+	}
+}
+
+func TestSystemFailureQueuesForInactiveSenderAndReplaysOnActivation(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	runID := startTestMessageRun(t, service)
+	coordinator := mustStartAgent(t, service, "coordinator")
+	seedLiveMessagingAgent(t, service, fake, runID, "worker", "p-worker", "t-worker", "act-worker")
+	service.CallerPaneID = coordinator.Agent.PaneID
+	if _, err := service.SendMessage(t.Context(), "worker", "complete the task"); err != nil {
+		t.Fatal(err)
+	}
+
+	fake.mu.Lock()
+	fake.snapshot.Agents = fake.snapshot.Agents[1:]
+	fake.snapshot.Panes[0].Agent = nil
+	fake.mu.Unlock()
+	if err := service.messages().deactivateAgent("worker", "recipient agent exited"); err != nil {
+		t.Fatal(err)
+	}
+	notification := messageBySender(t, service, runID, systemMailbox)
+	if notification.Status != messaging.StatusQueued {
+		t.Fatalf("inactive-sender notification = %#v", notification)
+	}
+
+	kind, name := "codex", "coordinator"
+	fake.mu.Lock()
+	fake.snapshot.Panes[0].Agent = &kind
+	fake.snapshot.Panes[0].AgentStatus = StateIdle
+	fake.snapshot.Agents = append(fake.snapshot.Agents, herdr.AgentInfo{
+		Agent: &kind, AgentStatus: StateIdle, Name: &name,
+		PaneID: coordinator.Agent.PaneID, TabID: coordinator.Agent.TabID,
+		WorkspaceID: "w1", InteractiveReady: true,
+	})
+	fake.mu.Unlock()
+	client := &herdr.Client{Socket: serviceSessionSocket(t, service.Binary)}
+	if err := service.messages().activateAgent(
+		t.Context(), client, "coordinator", coordinator.Agent.PaneID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	notification = messageBySender(t, service, runID, systemMailbox)
+	if notification.Status != messaging.StatusAwaitingAck {
+		t.Fatalf("replayed system notification = %#v", notification)
+	}
+}
+
 func TestRetryForceAndCancellation(t *testing.T) {
 	service, _ := newFakeLifecycle(t)
 	startTestMessageRun(t, service)
@@ -216,7 +367,7 @@ func TestPreFeatureSessionRejectsMessaging(t *testing.T) {
 }
 
 func TestMessageValidationAndAuthority(t *testing.T) {
-	for _, name := range []string{"", "-bad", "bad/name", "user", "has space"} {
+	for _, name := range []string{"", "-bad", "bad/name", "user", "fledge", "has space"} {
 		if err := ValidateAgentName(name); err == nil {
 			t.Errorf("accepted agent name %q", name)
 		}

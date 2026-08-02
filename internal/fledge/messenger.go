@@ -70,6 +70,10 @@ func (m *messenger) reply(ctx context.Context, messageID, body string) (MessageR
 	if target.Recipient != active.actor {
 		return MessageResult{}, NewError("message_wrong_recipient", "only the message recipient can reply")
 	}
+	if target.Sender == systemMailbox {
+		return MessageResult{}, NewError("message_state_conflict",
+			"Fledge system notifications cannot be replied to; acknowledge the notification instead")
+	}
 	if target.Status == messaging.StatusCancelled {
 		return MessageResult{}, NewError("message_state_conflict", "cancelled messages cannot be replied to")
 	}
@@ -507,6 +511,15 @@ func deliveryIsUncertain(err error) bool {
 }
 
 func messageEnvelope(message *messaging.Message) string {
+	if message.Sender == systemMailbox {
+		return fmt.Sprintf(
+			"[Fledge system message]\nID: %s\nTo: %s\nTimestamp: %s\nRelated message: %s\n\n%s\n\n"+
+				"Acknowledge exactly with:\nfledge agent message ack %s",
+			message.ID, message.Recipient,
+			message.CreatedAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00"),
+			message.ReplyTo, message.Body, message.ID,
+		)
+	}
 	return fmt.Sprintf(
 		"[Fledge message]\nID: %s\nFrom: %s\nTo: %s\nTimestamp: %s\n\n%s\n\n"+
 			"Acknowledge exactly with:\nfledge agent message ack %s\n"+
@@ -670,6 +683,10 @@ func attemptedInActivation(message *messaging.Message, activationID string) bool
 
 func (m *messenger) deactivateAgent(name, reason string) error {
 	var runID, activationID, paneID string
+	type notification struct {
+		id, recipient string
+	}
+	var notifications []notification
 	err := m.store.WithLocked(m.project.Session, m.project.Root, func(st *state.Session) error {
 		runID = st.ActiveRunID
 		managed := st.Agents[name]
@@ -702,18 +719,61 @@ func (m *messenger) deactivateAgent(name, reason string) error {
 		for _, message := range run.Messages {
 			if message.Recipient == name && message.Status == messaging.StatusAwaitingAck &&
 				attemptedInActivation(message, activationID) {
+				failureReason := "recipient activation ended without acknowledgement"
 				if _, err := m.log.Append(runID, messaging.Event{
 					Type: messaging.EventMessageFailed, MessageID: message.ID,
-					ActivationID: activationID, Reason: "recipient activation ended without acknowledgement",
+					ActivationID: activationID, Reason: failureReason,
 				}); err != nil {
 					return messageStoreError(err)
 				}
+				if message.Sender == systemMailbox {
+					continue
+				}
+				notificationID, err := messaging.NewID("msg_")
+				if err != nil {
+					return messageStoreError(err)
+				}
+				body := fmt.Sprintf(
+					"Delegated task %s for agent %q failed: %s.",
+					message.ID, name, failureReason,
+				)
+				if _, err := m.log.Append(runID, messaging.Event{
+					Type: messaging.EventMessageCreated, MessageID: notificationID,
+					Sender: systemMailbox, Recipient: message.Sender,
+					ReplyTo: message.ID, Body: body,
+				}); err != nil {
+					return messageStoreError(err)
+				}
+				notifications = append(notifications, notification{
+					id: notificationID, recipient: message.Sender,
+				})
 			}
 		}
 		return nil
 	})
 	if err != nil {
 		return asServiceOrStoreError(err)
+	}
+	if len(notifications) == 0 {
+		return nil
+	}
+	deliveryCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	active, err := m.activeContext(deliveryCtx)
+	if err != nil || active.runID != runID {
+		// The notification is durable and will replay on the sender's next
+		// activation even when the immediate best-effort delivery is unavailable.
+		return nil
+	}
+	for _, notification := range notifications {
+		if notification.recipient == userMailbox {
+			continue
+		}
+		if _, err := m.deliverIfLive(
+			deliveryCtx, active, notification.id, notification.recipient,
+		); err != nil {
+			return err
+		}
 	}
 	return nil
 }

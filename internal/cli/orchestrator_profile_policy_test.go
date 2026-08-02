@@ -4,15 +4,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/Harrison-Blair/fledge/internal/agentprofile"
-	"github.com/spf13/cobra"
 )
 
-func TestRepositoryOrchestratorProfilePinsAtomicWaitPolicy(t *testing.T) {
+func TestRepositoryOrchestratorProfilePinsAsynchronousMessagingPolicy(t *testing.T) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -24,13 +22,19 @@ func TestRepositoryOrchestratorProfilePinsAtomicWaitPolicy(t *testing.T) {
 	}
 	text := string(data)
 	for _, required := range []string{
-		"Submit work and wait in one atomic operation with `fledge agent prompt <name> <text> --wait --until idle,done,blocked`, or use one `fledge agent wait <name> --until idle,done,blocked` call for an already-running agent.",
-		"Do not poll with repeated `fledge agent status` or `fledge agent read` calls, and do not send messages merely to check progress.",
-		"Prompt or message an agent again only when there is genuinely new task information.",
-		"Avoid artificial short waiting cycles or repeated timeout-driven checks; let the single atomic wait settle.",
+		"Delegate every task with `fledge agent message send <name> <task>`",
+		"Never use direct prompts, waits, repeated status/read calls, or background polling to detect task completion.",
+		"Fledge injects replies into your pane as they arrive.",
+		"respond with `fledge agent message reply <message-id> <result>`",
+		"Use `fledge agent message ack <message-id>` only for informational messages that require no result.",
 	} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("orchestrator profile is missing policy wording %q:\n%s", required, text)
+		}
+	}
+	for _, prohibited := range []string{"prompt --wait", "agent wait", "single atomic wait"} {
+		if strings.Contains(text, prohibited) {
+			t.Fatalf("orchestrator profile retains wait policy wording %q:\n%s", prohibited, text)
 		}
 	}
 }
@@ -71,45 +75,27 @@ func TestRepositoryContextMatchesCanonicalOrchestratorProfile(t *testing.T) {
 	}
 }
 
-func TestAtomicWaitPolicyCommaSeparatedUntilSyntaxMatchesCLI(t *testing.T) {
-	want := []string{"idle", "done", "blocked"}
-	tests := []struct {
-		cmd      *cobra.Command
-		args     []string
-		wantArgs []string
-		wantWait bool
-	}{
-		{
-			cmd:      newAgentPrompt(&environment{}),
-			args:     []string{"worker", "task", "--wait", "--until", "idle,done,blocked"},
-			wantArgs: []string{"worker", "task"}, wantWait: true,
-		},
-		{
-			cmd:      newAgentWait(&environment{}),
-			args:     []string{"worker", "--until", "idle,done,blocked"},
-			wantArgs: []string{"worker"},
-		},
+func TestAgentCommandExposesMessagingButNoPromptOrWait(t *testing.T) {
+	commands := map[string]bool{}
+	for _, command := range newAgent(&environment{}).Commands() {
+		commands[command.Name()] = true
 	}
-	for _, test := range tests {
-		cmd := test.cmd
-		if err := cmd.Flags().Parse(test.args); err != nil {
-			t.Fatalf("%s parse comma-separated --until: %v", cmd.Name(), err)
+	if !commands["message"] {
+		t.Fatal("agent message command is missing")
+	}
+	for _, removed := range []string{"prompt", "wait"} {
+		if commands[removed] {
+			t.Fatalf("removed agent %s command is still registered", removed)
 		}
-		if got := cmd.Flags().Args(); !reflect.DeepEqual(got, test.wantArgs) {
-			t.Fatalf("%s positional args = %v, want %v", cmd.Name(), got, test.wantArgs)
-		}
-		if err := cmd.Args(cmd, cmd.Flags().Args()); err != nil {
-			t.Fatalf("%s policy command shape is invalid: %v", cmd.Name(), err)
-		}
-		got, err := cmd.Flags().GetStringSlice("until")
-		if err != nil {
-			t.Fatalf("%s read --until: %v", cmd.Name(), err)
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("%s --until = %v, want %v", cmd.Name(), got, want)
-		}
-		if wait, err := cmd.Flags().GetBool("wait"); err == nil && wait != test.wantWait {
-			t.Fatalf("%s --wait = %t, want %t", cmd.Name(), wait, test.wantWait)
+	}
+}
+
+func TestRemovedPromptAndWaitCommandsFailAsUsageErrors(t *testing.T) {
+	for _, removed := range []string{"prompt", "wait"} {
+		var stdout, stderr strings.Builder
+		code := Execute(t.Context(), []string{"agent", removed, "worker"}, nil, &stdout, &stderr)
+		if code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "accepts no arguments") {
+			t.Fatalf("agent %s: exit=%d stdout=%q stderr=%q", removed, code, stdout.String(), stderr.String())
 		}
 	}
 }

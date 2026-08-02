@@ -15,7 +15,7 @@ import (
 
 func TestUsageErrorsUseExitTwoAndJSONEnvelope(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := Execute(context.Background(), []string{"--json", "agent", "prompt", "worker"}, bytes.NewBuffer(nil), &stdout, &stderr)
+	code := Execute(context.Background(), []string{"--json", "agent", "message", "send", "worker"}, bytes.NewBuffer(nil), &stdout, &stderr)
 	if code != 2 {
 		t.Fatalf("exit = %d, stderr=%s", code, stderr.String())
 	}

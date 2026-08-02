@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Harrison-Blair/fledge/internal/buildinfo"
 	"github.com/Harrison-Blair/fledge/internal/fledge"
 	"github.com/Harrison-Blair/fledge/internal/messaging"
 	"github.com/Harrison-Blair/fledge/internal/ui"
@@ -39,7 +40,8 @@ func TestColorFlagModes(t *testing.T) {
 			if got := strings.Contains(stdout.String(), "\x1b["); got != test.ansi {
 				t.Fatalf("ANSI=%t want=%t output=%q", got, test.ansi, stdout.String())
 			}
-			if !strings.HasPrefix(stripCLIANSI(stdout.String()), "fledge v0.0.1\n") {
+			wantPrefix := "fledge " + buildinfo.Version() + "\n"
+			if !strings.HasPrefix(stripCLIANSI(stdout.String()), wantPrefix) {
 				t.Fatalf("plain output changed: %q", stripCLIANSI(stdout.String()))
 			}
 		})
@@ -66,7 +68,7 @@ func TestJSONDisablesColorForSuccessAndError(t *testing.T) {
 			out: func(stdout, _ *bytes.Buffer) *bytes.Buffer { return stdout },
 		},
 		{
-			name: "error", args: []string{"agent", "prompt", "worker", "--json", "--color", "always"}, code: 2,
+			name: "error", args: []string{"agent", "message", "send", "worker", "--json", "--color", "always"}, code: 2,
 			out: func(_, stderr *bytes.Buffer) *bytes.Buffer { return stderr },
 		},
 	}
@@ -161,7 +163,7 @@ func TestStyledMessageBlockLeavesBodyUntouched(t *testing.T) {
 func TestHumanErrorUsesErrorRole(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Execute(context.Background(), []string{
-		"agent", "prompt", "worker", "--color", "always",
+		"agent", "message", "send", "worker", "--color", "always",
 	}, nil, &stdout, &stderr)
 	if code != 2 || !strings.Contains(stderr.String(), "\x1b[") {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())

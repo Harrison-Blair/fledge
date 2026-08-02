@@ -526,38 +526,16 @@ func TestDedicatedSpawnReusesLabeledPaneInAdoptedWorkspace(t *testing.T) {
 	}
 }
 
-func TestPromptDefaultWaitStatesRemainServerOwned(t *testing.T) {
-	service, fake := newFakeLifecycle(t)
-	mustStartAgent(t, service, "worker")
-	if _, err := service.Prompt(t.Context(), PromptOptions{Name: "worker", Text: "hello", Wait: true}); err != nil {
-		t.Fatal(err)
-	}
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	if fake.promptWait == nil {
-		t.Fatal("prompt did not request atomic wait")
-	}
-	if _, present := fake.promptWait["until"]; present {
-		t.Fatalf("client overrode Herdr default settled states: %#v", fake.promptWait)
-	}
-	if fake.promptTarget != "p1" {
-		t.Fatalf("prompt target = %q, want pane ID", fake.promptTarget)
-	}
-}
-
 func TestControlOperationsUsePersistedPaneID(t *testing.T) {
 	service, fake := newFakeLifecycle(t)
 	mustStartAgent(t, service, "worker")
-	if _, err := service.Wait(t.Context(), "worker", nil, 0); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := service.ReadAgent(t.Context(), "worker", "recent-unwrapped", 10, false); err != nil {
 		t.Fatal(err)
 	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	if fake.waitTarget != "p1" || fake.readTarget != "p1" {
-		t.Fatalf("wait target=%q read target=%q", fake.waitTarget, fake.readTarget)
+	if fake.readTarget != "p1" {
+		t.Fatalf("read target=%q, want pane ID", fake.readTarget)
 	}
 }
 
