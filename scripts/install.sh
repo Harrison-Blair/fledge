@@ -1,31 +1,39 @@
 #!/usr/bin/env bash
-# Builds a local dev binary (version suffixed "-dev" via the dev build tag)
-# and installs it onto PATH.
-# Destination defaults to GOBIN, else GOPATH/bin. Override with BINDIR=...
+
 set -euo pipefail
 
-repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-src="$(mktemp)"
-trap 'rm -f "$src"' EXIT
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+repo_root="$(cd -- "${script_dir}/.." && pwd -P)"
+source_path="${repo_root}/bin/fledge"
 
-(cd "$repo" && go build -tags dev -o "$src" ./cmd/fledge)
-
-bindir="${BINDIR:-$(go env GOBIN)}"
-if [[ -z "$bindir" ]]; then
-	bindir="$(go env GOPATH)/bin"
+if [[ ! -x "${source_path}" ]]; then
+  printf 'error: %s is missing or not executable; run scripts/build.sh first\n' \
+    "${source_path}" >&2
+  exit 1
 fi
 
-mkdir -p "$bindir"
-install -m 0755 "$src" "$bindir/fledge"
+destination_dir="$(go env GOBIN)"
+if [[ -z "${destination_dir}" ]]; then
+  gopath="$(go env GOPATH)"
+  if [[ -z "${gopath}" ]]; then
+    printf 'error: could not determine GOPATH for binary installation\n' >&2
+    exit 1
+  fi
 
-echo "installed $bindir/fledge"
-
-if [[ ":$PATH:" != *":$bindir:"* ]]; then
-	echo "warning: $bindir is not on your PATH" >&2
+  if [[ "$(go env GOOS)" == "windows" ]]; then
+    destination_dir="${gopath%%;*}/bin"
+  else
+    destination_dir="${gopath%%:*}/bin"
+  fi
 fi
 
-# A copy earlier on PATH would shadow what we just installed.
-found="$(command -v fledge || true)"
-if [[ -n "$found" && "$found" != "$bindir/fledge" ]]; then
-	echo "warning: $found shadows $bindir/fledge on PATH" >&2
-fi
+mkdir -p "${destination_dir}"
+
+temporary_path="${destination_dir}/.fledge.install.$$"
+trap 'rm -f "${temporary_path}"' EXIT
+cp "${source_path}" "${temporary_path}"
+chmod 0755 "${temporary_path}"
+mv -f "${temporary_path}" "${destination_dir}/fledge"
+trap - EXIT
+
+printf 'Installed fledge to %s\n' "${destination_dir}/fledge"
