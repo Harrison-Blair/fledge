@@ -107,20 +107,26 @@ func (s *Service) StopAgent(ctx context.Context, name string, timeout time.Durat
 			}
 			return AgentStopResult{}, err
 		}
-		if err := s.messages().deactivateAgent(name, "agent force-stopped"); err != nil {
+		if err := s.messages().deactivateActivation(
+			name, managed.ActivationID, managed.PaneID, "agent force-stopped",
+		); err != nil {
 			return AgentStopResult{}, err
 		}
 		return stoppedResult(name, managed, true, closeDedicatedTab), nil
 	}
 	if stopped, _ := s.agentStopped(ctx, client, managed.PaneID); stopped {
-		if err := s.messages().deactivateAgent(name, "agent already stopped"); err != nil {
+		if err := s.messages().deactivateActivation(
+			name, managed.ActivationID, managed.PaneID, "agent already stopped",
+		); err != nil {
 			return AgentStopResult{}, err
 		}
 		return s.finishStoppedAgent(ctx, client, name, managed, false)
 	}
 	deadline := time.Now().Add(timeout)
 	if s.gracefullyStopPane(ctx, client, managed.PaneID, deadline) {
-		if err := s.messages().deactivateAgent(name, "agent stopped"); err != nil {
+		if err := s.messages().deactivateActivation(
+			name, managed.ActivationID, managed.PaneID, "agent stopped",
+		); err != nil {
 			return AgentStopResult{}, err
 		}
 		return s.finishStoppedAgent(ctx, client, name, managed, false)
@@ -278,9 +284,12 @@ func (s *Service) agentStopped(ctx context.Context, client *herdr.Client, paneID
 	if err != nil {
 		return false, err
 	}
-	if agent, ok := agentsByPane(snapshot)[paneID]; ok && agent.Agent != nil {
-		return false, nil
+	if _, ok := panesByID(snapshot)[paneID]; !ok {
+		return true, nil
 	}
-	pane, ok := panesByID(snapshot)[paneID]
-	return !ok || pane.Agent == nil, nil
+	info, err := paneProcessInfo(ctx, client, paneID)
+	if err != nil {
+		return false, err
+	}
+	return !paneHasNonShellForegroundProcess(info), nil
 }

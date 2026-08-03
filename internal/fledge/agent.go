@@ -40,7 +40,7 @@ func (s *Service) listWithClient(ctx context.Context, client *herdr.Client) ([]A
 		return nil, err
 	}
 	live := agentsByPane(snapshot)
-	if err := s.deactivateExitedMessagingAgents(st.Agents, live); err != nil {
+	if err := s.deactivateExitedMessagingAgents(ctx, client, st.Agents, panesByID(snapshot), live); err != nil {
 		return nil, err
 	}
 	panes := panesByID(snapshot)
@@ -82,7 +82,13 @@ func (s *Service) withReconciledState(
 
 // deactivateExitedMessagingAgents retires the message activation of every
 // agent whose pane no longer hosts a running harness.
-func (s *Service) deactivateExitedMessagingAgents(agents map[string]state.Agent, live map[string]herdr.AgentInfo) error {
+func (s *Service) deactivateExitedMessagingAgents(
+	ctx context.Context,
+	client *herdr.Client,
+	agents map[string]state.Agent,
+	panes map[string]herdr.PaneInfo,
+	live map[string]herdr.AgentInfo,
+) error {
 	messages := s.messages()
 	for name, managed := range agents {
 		if managed.ActivationID == "" {
@@ -91,7 +97,17 @@ func (s *Service) deactivateExitedMessagingAgents(agents map[string]state.Agent,
 		if agent, ok := live[managed.PaneID]; ok && agent.Agent != nil {
 			continue
 		}
-		if err := messages.deactivateAgent(name, "recipient agent exited"); err != nil {
+		if _, paneExists := panes[managed.PaneID]; paneExists {
+			info, err := paneProcessInfo(ctx, client, managed.PaneID)
+			if err != nil || paneHasNonShellForegroundProcess(info) {
+				// An unavailable observation or any foreground process is not
+				// positive exit evidence; preserve the exact activation.
+				continue
+			}
+		}
+		if err := messages.deactivateActivation(
+			name, managed.ActivationID, managed.PaneID, "recipient agent exited",
+		); err != nil {
 			return err
 		}
 		managed.ActivationID = ""
@@ -139,22 +155,8 @@ func reconcileMappings(st *state.Session, snapshot herdr.Snapshot, root, session
 			st.WorkspaceID = workspace.WorkspaceID
 		}
 	}
-	panes := panesByID(snapshot)
-	for name, managed := range st.Agents {
-		if pane, exists := panes[managed.PaneID]; exists &&
-			(st.WorkspaceID == "" || pane.WorkspaceID == st.WorkspaceID) {
-			continue
-		}
-		expected := agentLabelPrefix + name
-		for _, pane := range snapshot.Panes {
-			if pane.Label != nil && (*pane.Label == expected || *pane.Label == name) &&
-				(st.WorkspaceID == "" || pane.WorkspaceID == st.WorkspaceID) {
-				managed.PaneID, managed.TabID = pane.PaneID, pane.TabID
-				st.Agents[name] = managed
-				break
-			}
-		}
-	}
+	// Agent ownership is never reconstructed from a human-readable label.
+	// Only the durable pane ID can authorize later launch cleanup.
 }
 
 func cloneState(st state.Session) state.Session {

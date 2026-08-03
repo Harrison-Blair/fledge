@@ -336,6 +336,10 @@ orchestrator`, Fledge synchronizes this block in root `AGENTS.md`:
 <!-- </fledge-managed-orchestrator> -->
 ```
 
+The canonical policy also directs orchestrators to run `fledge agent stop
+<name>` after receiving a completed delegate's result, preventing finished
+agent tabs from accumulating across a session.
+
 It also maintains a Claude bridge in root `CLAUDE.md`:
 
 ```md

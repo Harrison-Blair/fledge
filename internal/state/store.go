@@ -15,15 +15,19 @@ import (
 const SchemaVersion = 1
 
 type Agent struct {
-	Name         string `json:"name"`
-	Kind         string `json:"kind"`
-	Model        string `json:"model,omitempty"`
-	Profile      string `json:"profile,omitempty"`
-	Placement    string `json:"placement,omitempty"`
-	CWD          string `json:"cwd"`
-	TabID        string `json:"tab_id"`
-	PaneID       string `json:"pane_id"`
-	ActivationID string `json:"activation_id,omitempty"`
+	Name             string `json:"name"`
+	Kind             string `json:"kind"`
+	Model            string `json:"model,omitempty"`
+	Profile          string `json:"profile,omitempty"`
+	Placement        string `json:"placement,omitempty"`
+	CWD              string `json:"cwd"`
+	TabID            string `json:"tab_id"`
+	PaneID           string `json:"pane_id"`
+	ActivationID     string `json:"activation_id,omitempty"`
+	LaunchID         string `json:"launch_id,omitempty"`
+	LaunchPhase      string `json:"launch_phase,omitempty"`
+	LaunchPID        int    `json:"launch_pid,omitempty"`
+	LaunchExecutable string `json:"launch_executable,omitempty"`
 }
 
 type SpawnSelection struct {
@@ -32,18 +36,19 @@ type SpawnSelection struct {
 }
 
 type Session struct {
-	SchemaVersion           int              `json:"schema_version"`
-	ProjectRoot             string           `json:"project_root"`
-	Session                 string           `json:"session"`
-	Socket                  string           `json:"socket,omitempty"`
-	WorkspaceID             string           `json:"workspace_id,omitempty"`
-	OrchestratorTabID       string           `json:"orchestrator_tab_id,omitempty"`
-	OrchestratorPaneID      string           `json:"orchestrator_pane_id,omitempty"`
-	OrchestratorInitialized bool             `json:"orchestrator_initialized,omitempty"`
-	StopGeneration          uint64           `json:"stop_generation,omitempty"`
-	ActiveRunID             string           `json:"active_run_id,omitempty"`
-	LastSpawnSelection      *SpawnSelection  `json:"last_spawn_selection,omitempty"`
-	Agents                  map[string]Agent `json:"agents"`
+	SchemaVersion            int              `json:"schema_version"`
+	ProjectRoot              string           `json:"project_root"`
+	Session                  string           `json:"session"`
+	Socket                   string           `json:"socket,omitempty"`
+	WorkspaceID              string           `json:"workspace_id,omitempty"`
+	OrchestratorTabID        string           `json:"orchestrator_tab_id,omitempty"`
+	OrchestratorPaneID       string           `json:"orchestrator_pane_id,omitempty"`
+	OrchestratorInitialized  bool             `json:"orchestrator_initialized,omitempty"`
+	StopGeneration           uint64           `json:"stop_generation,omitempty"`
+	ActiveRunID              string           `json:"active_run_id,omitempty"`
+	LastSpawnSelection       *SpawnSelection  `json:"last_spawn_selection,omitempty"`
+	SpawnSelectionGeneration uint64           `json:"spawn_selection_generation,omitempty"`
+	Agents                   map[string]Agent `json:"agents"`
 }
 
 type Store struct {

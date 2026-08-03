@@ -546,6 +546,142 @@ func TestSystemFailureQueuesForInactiveSenderAndReplaysOnActivation(t *testing.T
 	}
 }
 
+func TestDeactivateExactActivationPreservesReplacementAndIsIdempotent(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	runID := startTestMessageRun(t, service)
+	seedLiveMessagingAgent(t, service, fake, runID, "worker", "p-old", "t-worker", "act-old")
+	sent, err := service.SendMessage(t.Context(), "worker", "complete the task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Store.WithLocked(service.Project.Session, service.Project.Root, func(st *state.Session) error {
+		managed := st.Agents["worker"]
+		managed.PaneID, managed.ActivationID = "p-new", "act-new"
+		st.Agents["worker"] = managed
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.messageStore().Append(runID, messaging.Event{
+		Type: messaging.EventAgentActivated, Agent: "worker",
+		ActivationID: "act-new", PaneID: "p-new",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m := service.messages()
+	if err := m.deactivateActivation("worker", "act-old", "p-old", "recipient agent exited"); err != nil {
+		t.Fatal(err)
+	}
+	first, err := service.messageStore().ReadRun(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.deactivateActivation("worker", "act-old", "p-old", "recipient agent exited"); err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.messageStore().ReadRun(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := service.Store.Read(service.Project.Session, service.Project.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if managed := st.Agents["worker"]; managed.ActivationID != "act-new" || managed.PaneID != "p-new" {
+		t.Fatalf("replacement activation was changed: %#v", managed)
+	}
+	if first.Activations["act-old"].DeactivatedAt == nil ||
+		first.Activations["act-new"].DeactivatedAt != nil {
+		t.Fatalf("activations after exact deactivation = %#v", first.Activations)
+	}
+	if first.LastSequence != second.LastSequence {
+		t.Fatalf("repeated deactivation appended events: first=%d second=%d", first.LastSequence, second.LastSequence)
+	}
+	failed, err := service.ShowMessage(sent.Message.ID)
+	if err != nil || failed.Status != messaging.StatusFailed ||
+		failed.Failure == nil || failed.Failure.ActivationID != "act-old" {
+		t.Fatalf("failed task = %#v, %v", failed, err)
+	}
+	if len(second.Messages) != 2 || second.Messages[1].Sender != systemMailbox ||
+		second.Messages[1].ReplyTo != sent.Message.ID {
+		t.Fatalf("sender notification was not singular and correlated: %#v", second.Messages)
+	}
+}
+
+func TestDeactivateExactActivationRequiresMatchingPane(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	runID := startTestMessageRun(t, service)
+	seedLiveMessagingAgent(t, service, fake, runID, "worker", "p-worker", "t-worker", "act-worker")
+	sent, err := service.SendMessage(t.Context(), "worker", "complete the task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := service.messageStore().ReadRun(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.messages().deactivateActivation(
+		"worker", "act-worker", "p-other", "recipient agent exited",
+	); err != nil {
+		t.Fatal(err)
+	}
+	after, err := service.messageStore().ReadRun(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := service.Store.Read(service.Project.Session, service.Project.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Agents["worker"].ActivationID != "act-worker" ||
+		after.Activations["act-worker"].DeactivatedAt != nil ||
+		after.LastSequence != before.LastSequence {
+		t.Fatalf("mismatched cleanup changed activation: state=%#v run=%#v", st.Agents["worker"], after)
+	}
+	message, err := service.ShowMessage(sent.Message.ID)
+	if err != nil || message.Status != messaging.StatusAwaitingAck {
+		t.Fatalf("message changed after mismatched cleanup = %#v, %v", message, err)
+	}
+}
+
+func TestDeactivateExactActivationRetainsStateWhenLogCleanupFails(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	runID := startTestMessageRun(t, service)
+	seedLiveMessagingAgent(t, service, fake, runID, "worker", "p-worker", "t-worker", "act-worker")
+	path := filepath.Join(service.messageStore().Dir, runID+".jsonl")
+	backup := path + ".backup"
+	if err := os.Rename(path, backup); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.messages().deactivateActivation(
+		"worker", "act-worker", "p-worker", "recipient agent exited",
+	); err == nil {
+		t.Fatal("expected corrupt message-log cleanup failure")
+	}
+	st, err := service.Store.Read(service.Project.Session, service.Project.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Agents["worker"].ActivationID != "act-worker" {
+		t.Fatalf("failed cleanup orphaned activation identity: %#v", st.Agents["worker"])
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(backup, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.messages().deactivateActivation(
+		"worker", "act-worker", "p-worker", "recipient agent exited",
+	); err != nil {
+		t.Fatalf("retry exact cleanup: %v", err)
+	}
+}
+
 func TestRetryForceAndCancellation(t *testing.T) {
 	service, _ := newFakeLifecycle(t)
 	startTestMessageRun(t, service)

@@ -58,8 +58,8 @@ func TestProfileSpawnUsesDefaultAndOverrideNamesExactArgvRootCWDAndProvenance(t 
 			}
 			// The profile owns harness, model, cwd, and native args, so the
 			// injected bootstrap carries only the profile, name, and timeout.
-			wantCommand := " agent spawn reviewer --name " + test.wantName + " --timeout 30s"
-			if !strings.HasSuffix(gotCommand, wantCommand) {
+			wantCommand := " agent spawn reviewer --name " + test.wantName + " --timeout 30s --no-pickers"
+			if !strings.Contains(gotCommand, wantCommand+" --launch-id launch_") {
 				t.Fatalf("bootstrap command = %q, want suffix %q", gotCommand, wantCommand)
 			}
 			if gotCWD != root {
@@ -161,8 +161,8 @@ func TestGenericProfileExplicitSelectionsTransportInstructionsAndRecordProvenanc
 	gotCommand, gotCWD := observation.command, observation.cwd
 	observation.mu.Unlock()
 	// Nothing is locked by the profile, so the explicit selections travel.
-	wantCommand := " agent spawn generic --name generic --harness codex --model gpt-custom --timeout 30s"
-	if !strings.HasSuffix(gotCommand, wantCommand) || gotCWD != root {
+	wantCommand := " agent spawn generic --name generic --harness codex --model gpt-custom --timeout 30s --no-pickers"
+	if !strings.Contains(gotCommand, wantCommand+" --launch-id launch_") || gotCWD != root {
 		t.Fatalf("command/cwd = %q / %q, want suffix %q / %q", gotCommand, gotCWD, wantCommand, root)
 	}
 	wantArgs := []string{
@@ -216,8 +216,8 @@ func TestGenericProfilePickerFiltersCompatibilityAndReusesLastSelection(t *testi
 	observation.mu.Lock()
 	got := observation.command
 	observation.mu.Unlock()
-	want := " agent spawn generic --name generic --harness codex --model gpt-last --timeout 30s"
-	if !strings.HasSuffix(got, want) {
+	want := " agent spawn generic --name generic --harness codex --model gpt-last --timeout 30s --no-pickers"
+	if !strings.Contains(got, want+" --launch-id launch_") {
 		t.Fatalf("command = %q, want suffix %q", got, want)
 	}
 	output := env.out.(*bytes.Buffer).String()
@@ -244,8 +244,8 @@ func TestGenericProfileUsesPickersForUnsetSelections(t *testing.T) {
 		observation.mu.Lock()
 		got := observation.command
 		observation.mu.Unlock()
-		want := " agent spawn generic --name generic --harness claude --model sonnet --timeout 30s"
-		if !strings.HasSuffix(got, want) {
+		want := " agent spawn generic --name generic --harness claude --model sonnet --timeout 30s --no-pickers"
+		if !strings.Contains(got, want+" --launch-id launch_") {
 			t.Fatalf("command = %q, want suffix %q", got, want)
 		}
 		if output := env.out.(*bytes.Buffer).String(); !strings.Contains(output, "Agent harness") {
@@ -270,12 +270,58 @@ func TestGenericProfileUsesPickersForUnsetSelections(t *testing.T) {
 		observation.mu.Lock()
 		got := observation.command
 		observation.mu.Unlock()
-		want := " agent spawn generic --name generic --harness claude --timeout 30s"
-		if !strings.HasSuffix(got, want) || strings.Contains(got, "--model") {
+		want := " agent spawn generic --name generic --harness claude --timeout 30s --no-pickers"
+		if !strings.Contains(got, want+" --launch-id launch_") || strings.Contains(got, "--model") {
 			t.Fatalf("command = %q, want suffix %q without a model", got, want)
 		}
 		if output := env.out.(*bytes.Buffer).String(); !strings.Contains(output, "Claude Code model") {
 			t.Fatalf("missing generic profile model picker: %q", output)
+		}
+	})
+}
+
+// The dedicated-tab bootstrap passes --no-pickers because the in-pane child
+// runs on a tty: without it, an intentionally unset model would block forever
+// on the interactive model picker inside a pane nobody is watching.
+func TestNoPickersMakesASpawnNonInteractive(t *testing.T) {
+	t.Run("generic spawn refuses to prompt", func(t *testing.T) {
+		env := &environment{
+			in: strings.NewReader(""), out: &bytes.Buffer{}, errOut: &bytes.Buffer{},
+			stdinTTY: func() bool { return true },
+		}
+		cmd := newAgentSpawn(env)
+		cmd.SetContext(t.Context())
+		err := runAgentSpawn(cmd, env, agentSpawnFlags{noPickers: true, timeout: 30 * time.Second})
+		var useErr *usageError
+		if !errors.As(err, &useErr) || !strings.Contains(err.Error(), "--name and --harness are required") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+
+	t.Run("unset model launches the harness default without prompting", func(t *testing.T) {
+		env, observation, _, _ := profileSpawnFixture(t, agentprofile.Profile{
+			Name: "generic", SchemaVersion: 1, Instructions: "Managed instructions.",
+		})
+		env.json = false
+		env.stdinTTY = func() bool { return true }
+		env.in = strings.NewReader("") // any picker would fail on the empty input
+		cmd := newAgentSpawn(env)
+		cmd.SetContext(t.Context())
+		if err := runAgentSpawn(cmd, env, agentSpawnFlags{
+			profile: "generic", harness: "claude", harnessSet: true,
+			noPickers: true, newTab: true, timeout: 30 * time.Second,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		observation.mu.Lock()
+		got := observation.command
+		observation.mu.Unlock()
+		want := " agent spawn generic --name generic --harness claude --timeout 30s --no-pickers"
+		if !strings.Contains(got, want+" --launch-id launch_") || strings.Contains(got, "--model") {
+			t.Fatalf("command = %q, want suffix %q without a model", got, want)
+		}
+		if output := env.out.(*bytes.Buffer).String(); strings.Contains(output, "Claude Code model") {
+			t.Fatalf("no-pickers spawn opened the model picker: %q", output)
 		}
 	})
 }
@@ -515,8 +561,8 @@ func TestProfileSpawnFlagsOnlyFillFieldsTheProfileDoesNotOwn(t *testing.T) {
 		observation.mu.Lock()
 		defer observation.mu.Unlock()
 		// The profile locks the harness, so only the explicit model travels.
-		want := " agent spawn partial --name partial --model gpt-explicit --timeout 30s"
-		if !strings.HasSuffix(observation.command, want) || strings.Contains(observation.command, "--harness") {
+		want := " agent spawn partial --name partial --model gpt-explicit --timeout 30s --no-pickers"
+		if !strings.Contains(observation.command, want+" --launch-id launch_") || strings.Contains(observation.command, "--harness") {
 			t.Fatalf("command = %q, want suffix %q without a harness flag", observation.command, want)
 		}
 	})
@@ -628,6 +674,7 @@ type profileSpawnObservation struct {
 	injections       int
 	cwd              string
 	processInfoCalls int
+	childExecutable  string
 	agentsAtInject   string
 	claudeAtInject   string
 }
@@ -652,6 +699,12 @@ func profileSpawnFixture(
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
+	stateDir := t.TempDir()
+	ledgerStore, err := state.New(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := project.SessionName(root)
 
 	snapshot := herdrtest.EmptySnapshot()
 	snapshot.Workspaces = []herdr.WorkspaceInfo{{
@@ -677,9 +730,22 @@ func profileSpawnFixture(
 				if data, err := os.ReadFile(filepath.Join(root, "CLAUDE.md")); err == nil {
 					observation.claudeAtInject = string(data)
 				}
-				// The injected bootstrap takes the pane over; Herdr's process
-				// detection then reports the harness, confirming the spawn.
+				// Simulate the injected child's authoritative claim and exec.
 				kind := "codex"
+				_ = ledgerStore.WithLocked(session, root, func(st *state.Session) error {
+					for name, managed := range st.Agents {
+						if managed.PaneID != call.Text("pane_id") || managed.LaunchID == "" {
+							continue
+						}
+						kind = managed.Kind
+						managed.LaunchPhase = "execing"
+						managed.LaunchPID = 52
+						managed.LaunchExecutable = "/bin/" + managed.Kind
+						observation.childExecutable = managed.LaunchExecutable
+						st.Agents[name] = managed
+					}
+					return nil
+				})
 				for i := range snapshot.Panes {
 					if snapshot.Panes[i].PaneID == call.Text("pane_id") {
 						snapshot.Panes[i].Agent = &kind
@@ -701,6 +767,16 @@ func profileSpawnFixture(
 				if !booting {
 					shell := 41
 					info.ShellPID = &shell
+					info.ForegroundProcesses = []herdr.Process{{PID: shell, Name: "bash", Argv: []string{"/bin/bash"}}}
+					observation.mu.Lock()
+					executable := observation.childExecutable
+					observation.mu.Unlock()
+					if executable != "" {
+						argv0 := executable
+						info.ForegroundProcesses = append(info.ForegroundProcesses, herdr.Process{
+							PID: 52, Name: filepath.Base(executable), Argv0: &argv0, Argv: []string{executable},
+						})
+					}
 				}
 				herdrtest.WriteResult(conn, call, map[string]any{
 					"type": "process_info", "process_info": info,
@@ -712,14 +788,12 @@ func profileSpawnFixture(
 		},
 	}
 	socket := server.Start(t)
-	session := project.SessionName(root)
 	sessions := fmt.Sprintf(`{"sessions":[{"name":%s,"running":true,"socket_path":%s}]}`,
 		strconv.Quote(session), strconv.Quote(socket))
 	binary := herdrtest.WriteBinary(t, t.TempDir(), herdrtest.Options{
 		Version:  herdrtest.VersionOutput,
 		Sessions: []herdrtest.SessionCase{{Payload: sessions}},
 	})
-	stateDir := t.TempDir()
 	env := &environment{
 		in: strings.NewReader(""), out: &bytes.Buffer{}, errOut: &bytes.Buffer{},
 		cwd: nested, stateDir: stateDir, herdrBin: binary, json: true,

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/project"
@@ -15,6 +14,15 @@ import (
 // orchestrator pane. An empty profile opens the ad-hoc picker; a nonempty
 // profile launches through that profile's unset-field pickers.
 func (s *Service) EnqueueOrchestratorSpawn(ctx context.Context, socket, executable, profile string) error {
+	argv := []string{executable, "agent", "spawn"}
+	if profile != "" {
+		argv = append(argv, profile)
+	}
+	argv = append(argv, "--name", "fledge-orchestrator")
+	command, err := renderPTYCommand(argv)
+	if err != nil {
+		return err
+	}
 	st, err := s.Store.Read(s.Project.Session, s.Project.Root)
 	if err != nil {
 		return err
@@ -22,11 +30,6 @@ func (s *Service) EnqueueOrchestratorSpawn(ctx context.Context, socket, executab
 	if st.OrchestratorPaneID == "" {
 		return errors.New("orchestrator pane is not initialized")
 	}
-	command := shellQuote(executable) + " agent spawn"
-	if profile != "" {
-		command += " " + shellQuote(profile)
-	}
-	command += " --name fledge-orchestrator"
 	return (&herdr.Client{Socket: socket}).Call(ctx, "pane.send_input", map[string]any{
 		"pane_id": st.OrchestratorPaneID,
 		"text":    command,
@@ -38,13 +41,6 @@ func (s *Service) EnqueueOrchestratorSpawn(ctx context.Context, socket, executab
 // callers that do not select a managed profile.
 func (s *Service) EnqueueOrchestratorPicker(ctx context.Context, socket, executable string) error {
 	return s.EnqueueOrchestratorSpawn(ctx, socket, executable, "")
-}
-
-func shellQuote(value string) string {
-	if value != "" && !strings.ContainsAny(value, " \t\n'\"\\$`!&|;()<>*?[]{}") {
-		return value
-	}
-	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 // EnsureAttachmentWorkspace prepares and focuses the session's dedicated

@@ -27,6 +27,7 @@ func TestRepositoryOrchestratorProfilePinsAsynchronousMessagingPolicy(t *testing
 		"Fledge injects replies into your pane as they arrive.",
 		"respond with `fledge agent message reply <message-id> <result>`",
 		"Use `fledge agent message ack <message-id>` only for informational messages that require no result.",
+		"After a delegated task is complete and its result has been received, run `fledge agent stop <name>` to tear down that completed agent and its dedicated tab.",
 	} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("orchestrator profile is missing policy wording %q:\n%s", required, text)

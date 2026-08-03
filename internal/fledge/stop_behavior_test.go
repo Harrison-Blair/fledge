@@ -235,8 +235,8 @@ func TestStopRecoversSavedNamesWithoutMutatingState(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []StopAgentInspection{
-		{Name: "alpha", Harness: "codex", State: "idle", WorkspaceID: "workspace-new", PaneID: "pane-alpha"},
 		{Name: "fledge-orchestrator", Harness: "codex", State: "working", WorkspaceID: "workspace-new", PaneID: "w1:p1"},
+		{Name: "pane-alpha", Harness: "codex", State: "idle", WorkspaceID: "workspace-new", PaneID: "pane-alpha"},
 	}
 	if !reflect.DeepEqual(inspection.LiveAgents, want) {
 		t.Fatalf("live agents = %#v, want %#v", inspection.LiveAgents, want)
@@ -255,7 +255,7 @@ func TestStopRecoversSavedNamesWithoutMutatingState(t *testing.T) {
 		t.Fatalf("stop error = %#v", translated)
 	}
 	details, ok := translated.Details.(map[string]any)
-	if !ok || !reflect.DeepEqual(details["agents"], []string{"alpha", "fledge-orchestrator"}) {
+	if !ok || !reflect.DeepEqual(details["agents"], []string{"fledge-orchestrator", "pane-alpha"}) {
 		t.Fatalf("live-agent details = %#v", translated.Details)
 	}
 	stateAfterConflict, err := os.ReadFile(stateFiles[0])
@@ -270,8 +270,8 @@ func TestStopRecoversSavedNamesWithoutMutatingState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(result.Agents, []string{"alpha", "fledge-orchestrator"}) ||
-		!reflect.DeepEqual(result.GracefullyStoppedAgents, []string{"alpha", "fledge-orchestrator"}) ||
+	if !reflect.DeepEqual(result.Agents, []string{"fledge-orchestrator", "pane-alpha"}) ||
+		!reflect.DeepEqual(result.GracefullyStoppedAgents, []string{"fledge-orchestrator", "pane-alpha"}) ||
 		len(result.ForcedAgents) != 0 {
 		t.Fatalf("stop result names = %#v", result)
 	}

@@ -39,8 +39,8 @@ func newAgent(env *environment) *cobra.Command {
 }
 
 func newAgentSpawn(env *environment) *cobra.Command {
-	var name, harnessName, model, cwd string
-	var newTab bool
+	var name, harnessName, model, cwd, launchID string
+	var newTab, noPickers bool
 	var timeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "spawn [profile] [-- <native-args...>]",
@@ -50,7 +50,7 @@ func newAgentSpawn(env *environment) *cobra.Command {
 			profileName, nativeArgs := splitSpawnArgs(cmd, args)
 			return runAgentSpawn(cmd, env, agentSpawnFlags{
 				name: name, harness: harnessName, model: model, cwd: cwd, profile: profileName,
-				newTab: newTab, timeout: timeout, nativeArgs: nativeArgs,
+				newTab: newTab, noPickers: noPickers, launchID: launchID, timeout: timeout, nativeArgs: nativeArgs,
 				harnessSet: cmd.Flags().Changed("harness"), modelSet: cmd.Flags().Changed("model"),
 				cwdSet: cmd.Flags().Changed("cwd"),
 			})
@@ -62,6 +62,13 @@ func newAgentSpawn(env *environment) *cobra.Command {
 	cmd.Flags().BoolVarP(&newTab, "new-tab", "N", false, "launch in a dedicated tab")
 	cmd.Flags().StringVarP(&cwd, "cwd", "C", "", "working directory (defaults to project root)")
 	cmd.Flags().DurationVarP(&timeout, "timeout", "t", 30*time.Second, "agent startup timeout")
+	// Plumbing for the dedicated-tab bootstrap: the injected in-pane child
+	// runs on a tty but must never block on an interactive picker, so unset
+	// selections fall through to the harness defaults instead of prompting.
+	cmd.Flags().BoolVar(&noPickers, "no-pickers", false, "never open interactive pickers; unset selections use defaults")
+	_ = cmd.Flags().MarkHidden("no-pickers")
+	cmd.Flags().StringVar(&launchID, "launch-id", "", "claim a reserved dedicated-pane launch")
+	_ = cmd.Flags().MarkHidden("launch-id")
 	return cmd
 }
 
@@ -69,6 +76,8 @@ type agentSpawnFlags struct {
 	name, harness, model, cwd string
 	profile                   string
 	newTab                    bool
+	noPickers                 bool
+	launchID                  string
 	timeout                   time.Duration
 	nativeArgs                []string
 	harnessSet, modelSet      bool
@@ -119,6 +128,9 @@ func runAgentSpawn(cmd *cobra.Command, env *environment, flags agentSpawnFlags) 
 		flags.newTab = true
 		tty = false
 	}
+	if flags.noPickers {
+		tty = false
+	}
 	if !tty && (strings.TrimSpace(flags.name) == "" || strings.TrimSpace(flags.harness) == "") {
 		return usage("--name and --harness are required when prompting is unavailable")
 	}
@@ -167,7 +179,7 @@ func runAgentSpawn(cmd *cobra.Command, env *environment, flags agentSpawnFlags) 
 		Name: flags.name, Kind: selection.Harness.ID, Model: selection.Model,
 		CWD: flags.cwd, Timeout: flags.timeout, Args: append([]string(nil), flags.nativeArgs...),
 		NewTab: flags.newTab || currentPaneID == "", CurrentPaneID: currentPaneID, Executable: selection.Harness.Path,
-		RememberSelection: selection.Remember,
+		RememberSelection: selection.Remember, LaunchID: flags.launchID,
 	})
 	if err != nil {
 		return fledge.Translate(err)
@@ -224,6 +236,9 @@ func runProfileAgentSpawn(cmd *cobra.Command, env *environment, flags agentSpawn
 	tty := env.stdinTTY != nil && env.stdinTTY()
 	if env.json {
 		flags.newTab = true
+		tty = false
+	}
+	if flags.noPickers {
 		tty = false
 	}
 	if profile.Harness == "" && flags.harnessSet && strings.TrimSpace(flags.harness) == "" {
@@ -307,7 +322,7 @@ func runProfileAgentSpawn(cmd *cobra.Command, env *environment, flags agentSpawn
 		ProfileLocksHarness: profile.Harness != "", ProfileLocksModel: profile.Model != "",
 		CWD: profileRoot, Timeout: flags.timeout, Args: append([]string(nil), profileArgs...),
 		NewTab: flags.newTab || currentPaneID == "", CurrentPaneID: currentPaneID, Executable: selection.Harness.Path,
-		RememberSelection: selection.Remember,
+		RememberSelection: selection.Remember, LaunchID: flags.launchID,
 	})
 	if err != nil {
 		return fledge.Translate(err)

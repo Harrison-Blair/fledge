@@ -128,8 +128,15 @@ func TestLegacySchemaV1StateLoadsNewFieldsAsZeroValues(t *testing.T) {
 	if st.LastSpawnSelection != nil {
 		t.Fatalf("legacy spawn selection was not optional: %#v", st.LastSpawnSelection)
 	}
+	if st.SpawnSelectionGeneration != 0 {
+		t.Fatalf("legacy spawn selection generation = %d, want 0", st.SpawnSelectionGeneration)
+	}
 	if st.Agents["worker"].Profile != "" {
 		t.Fatalf("legacy agent profile = %q, want empty", st.Agents["worker"].Profile)
+	}
+	legacyAgent := st.Agents["worker"]
+	if legacyAgent.LaunchID != "" || legacyAgent.LaunchPhase != "" || legacyAgent.LaunchPID != 0 || legacyAgent.LaunchExecutable != "" {
+		t.Fatalf("legacy launch metadata was not optional: %#v", legacyAgent)
 	}
 }
 
@@ -161,6 +168,25 @@ func TestAgentProfilePersistsInSchemaV1AndAdHocAgentsOmitIt(t *testing.T) {
 	}
 }
 
+func TestLaunchLedgerPersistsInSchemaV1(t *testing.T) {
+	store, _ := New(t.TempDir())
+	want := Agent{
+		Name: "worker", Kind: "codex", PaneID: "p1", TabID: "t1",
+		LaunchID: "launch_test", LaunchPhase: "execing", LaunchPID: 42,
+		LaunchExecutable: "/usr/bin/codex",
+	}
+	if err := store.WithLocked("session", "/project", func(st *Session) error {
+		st.Agents["worker"] = want
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Read("session", "/project")
+	if err != nil || st.SchemaVersion != 1 || st.Agents["worker"] != want {
+		t.Fatalf("persisted launch ledger = %#v, %v", st.Agents["worker"], err)
+	}
+}
+
 func TestOrchestratorStatePersistsInSchemaV1(t *testing.T) {
 	store, _ := New(t.TempDir())
 	if err := store.WithLocked("session", "/project", func(st *Session) error {
@@ -186,6 +212,7 @@ func TestSpawnSelectionPersistsInSchemaV1(t *testing.T) {
 	store, _ := New(t.TempDir())
 	if err := store.WithLocked("session", "/project", func(st *Session) error {
 		st.LastSpawnSelection = &SpawnSelection{Harness: "codex", Model: "gpt-5.6"}
+		st.SpawnSelectionGeneration = 9
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -195,7 +222,8 @@ func TestSpawnSelectionPersistsInSchemaV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	if st.SchemaVersion != 1 || st.LastSpawnSelection == nil ||
-		st.LastSpawnSelection.Harness != "codex" || st.LastSpawnSelection.Model != "gpt-5.6" {
+		st.LastSpawnSelection.Harness != "codex" || st.LastSpawnSelection.Model != "gpt-5.6" ||
+		st.SpawnSelectionGeneration != 9 {
 		t.Fatalf("persisted spawn selection = %#v", st)
 	}
 }

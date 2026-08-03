@@ -28,6 +28,8 @@ type fakeLifecycle struct {
 	workspaceCreates int
 	workspaceCWD     string
 	tabCreates       int
+	tabCloses        int
+	paneCloses       int
 	tabRenames       int
 	paneRenames      int
 	paneSplits       int
@@ -42,12 +44,23 @@ type fakeLifecycle struct {
 	// report a shell-less booting pane; later calls report a ready shell.
 	bootingProcessInfoCalls int
 	processInfoCalls        int
-	// spawnAppearsAfterPolls delays the simulated in-pane spawn a
-	// pane.send_input bootstrap command triggers: the harness appears after
-	// this many session.snapshot polls (0 = immediately, negative = never).
+	dropProcessInfoAfter    int
+	// spawnAppearsAfterPolls delays the simulated exec transition by this many
+	// pane.process_info polls (0 = immediately, negative = bootstrap forever).
 	spawnAppearsAfterPolls int
 	pendingSpawnPaneID     string
 	pendingSpawnPolls      int
+	childExeced            bool
+	childExecutable        string
+	staleAgentCaches       bool
+	phantomAgentCache      bool
+	foregroundByPane       map[string][]herdr.Process
+	childClaim             func(string) string
+	childWG                sync.WaitGroup
+	// childPaneID names the pane whose foreground carries the simulated
+	// bootstrap child (and then its harness), mirroring a real pane's process
+	// timeline from the injection until the harness exits.
+	childPaneID string
 	// shellProbesAtSendInput records how many pane.process_info probes had
 	// answered when the bootstrap command was injected, proving the spawn
 	// waited for the pane's shell first.
@@ -111,6 +124,28 @@ func newFakeLifecycle(t *testing.T) (*Service, *fakeLifecycle) {
 		defer cancel()
 		return service.DeliverActivation(ctx, name, activationID, timeout)
 	}
+	fake.mu.Lock()
+	fake.childClaim = func(paneID string) string {
+		executable := ""
+		_ = store.WithLocked(service.Project.Session, service.Project.Root, func(st *state.Session) error {
+			for name, managed := range st.Agents {
+				if managed.PaneID != paneID || managed.LaunchPhase != launchReserved {
+					continue
+				}
+				managed.LaunchPhase = launchExecing
+				managed.LaunchPID = 11
+				managed.LaunchExecutable = "/usr/bin/" + managed.Kind
+				executable = managed.LaunchExecutable
+				st.Agents[name] = managed
+			}
+			return nil
+		})
+		return executable
+	}
+	fake.mu.Unlock()
+	// Simulated children must finish before the test's state and socket
+	// directories are torn down under them.
+	t.Cleanup(fake.childWG.Wait)
 	return service, fake
 }
 
@@ -172,30 +207,58 @@ func (f *fakeLifecycle) record(call herdrtest.Call) {
 		f.sendInputText = call.Text("text")
 		f.sendInputKeys = appendStrings(f.sendInputKeys[:0], call.Params["keys"])
 		f.shellProbesAtSendInput = f.processInfoCalls
-		if strings.Contains(f.sendInputText, " agent spawn") && f.spawnAppearsAfterPolls >= 0 {
-			f.pendingSpawnPaneID = f.sendInputPaneID
-			f.pendingSpawnPolls = f.spawnAppearsAfterPolls
-			if f.pendingSpawnPolls == 0 {
-				f.simulateInPaneSpawn()
+		if strings.Contains(f.sendInputText, " agent spawn") &&
+			f.failMethod != "pane.send_input" && f.dropMethod != "pane.send_input" {
+			f.childPaneID = f.sendInputPaneID
+			if f.phantomAgentCache {
+				kind := "codex"
+				for i := range f.snapshot.Panes {
+					if f.snapshot.Panes[i].PaneID == f.sendInputPaneID {
+						f.snapshot.Panes[i].Agent = &kind
+						f.snapshot.Panes[i].AgentStatus = StateIdle
+					}
+				}
 			}
+			f.childWG.Add(1)
+			go f.runInPaneChild(f.sendInputPaneID)
 		}
 	case "session.snapshot":
 		if f.pendingSpawnPaneID != "" && f.pendingSpawnPolls > 0 {
-			f.pendingSpawnPolls--
-			if f.pendingSpawnPolls == 0 {
-				f.simulateInPaneSpawn()
-			}
+			// Kept intentionally stale: launch authority comes only from
+			// pane.process_info, not either Herdr cache view.
 		}
 	}
 }
 
-// simulateInPaneSpawn stands in for the injected `fledge agent spawn` child:
-// the pane's harness starts and Herdr's detection reports it as a live,
+// runInPaneChild stands in for the injected `fledge agent spawn` child
+// process. Like the real child's claimCurrentPane it first blocks on the
+// session flock, so the harness can only ever appear after the parent has
+// persisted the provisional record and released the lock — the only timeline
+// production can produce. Once through the flock, the harness appears
+// spawnAppearsAfterPolls session.snapshot polls later.
+func (f *fakeLifecycle) runInPaneChild(paneID string) {
+	defer f.childWG.Done()
+	executable := f.childClaim(paneID)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pendingSpawnPaneID = paneID
+	f.pendingSpawnPolls = f.spawnAppearsAfterPolls
+	f.childExecutable = executable
+	if f.pendingSpawnPolls == 0 {
+		f.childExeced = true
+		if !f.staleAgentCaches {
+			f.simulateInPaneSpawn()
+		}
+	}
+}
+
+// simulateInPaneSpawn stands in for the exec into the harness: the pane's
+// harness starts and Herdr's detection reports it as a live,
 // interactive-ready agent named after the pane's label.
 func (f *fakeLifecycle) simulateInPaneSpawn() {
 	paneID := f.pendingSpawnPaneID
 	f.pendingSpawnPaneID = ""
-	kind := "codex"
+	kind := filepath.Base(f.childExecutable)
 	for i := range f.snapshot.Panes {
 		if f.snapshot.Panes[i].PaneID != paneID {
 			continue
@@ -239,10 +302,52 @@ func (f *fakeLifecycle) handle(conn net.Conn, call herdrtest.Call) bool {
 		})
 	case "pane.process_info":
 		f.processInfoCalls++
-		info := map[string]any{"pane_id": "p1"}
+		if f.dropProcessInfoAfter > 0 && f.processInfoCalls >= f.dropProcessInfoAfter {
+			return true
+		}
+		if f.pendingSpawnPaneID == call.Text("pane_id") && f.pendingSpawnPolls > 0 {
+			f.pendingSpawnPolls--
+			if f.pendingSpawnPolls == 0 {
+				f.childExeced = true
+				if !f.staleAgentCaches {
+					f.simulateInPaneSpawn()
+				}
+			}
+		}
+		info := map[string]any{"pane_id": call.Text("pane_id")}
 		if f.processInfoCalls > f.bootingProcessInfoCalls {
 			info["shell_pid"] = 10
-			info["foreground_processes"] = []map[string]any{{"pid": 10, "name": "bash"}}
+			foreground := []map[string]any{{"pid": 10, "name": "bash", "argv": []string{"/bin/bash"}}}
+			// From the injection until the harness exits, the pane's
+			// foreground carries the bootstrap child (and then the harness),
+			// exactly like a real injected spawn.
+			if f.childPaneID != "" && f.childPaneID == call.Text("pane_id") {
+				if f.childExeced {
+					kind := filepath.Base(f.childExecutable)
+					foreground = append(foreground, map[string]any{
+						"pid": 11, "name": kind, "argv0": "/usr/bin/" + kind, "argv": []string{"/usr/bin/" + kind},
+					})
+				} else {
+					foreground = append(foreground, map[string]any{"pid": 11, "name": "fledge", "argv0": "/usr/bin/fledge", "argv": []string{"/usr/bin/fledge"}})
+				}
+			} else {
+				for _, pane := range f.snapshot.Panes {
+					if pane.PaneID == call.Text("pane_id") && pane.Agent != nil {
+						executable := "/usr/bin/" + *pane.Agent
+						foreground = append(foreground, map[string]any{
+							"pid": 12, "name": *pane.Agent, "argv0": executable, "argv": []string{executable},
+						})
+					}
+				}
+			}
+			for _, process := range f.foregroundByPane[call.Text("pane_id")] {
+				entry := map[string]any{"pid": process.PID, "name": process.Name, "argv": process.Argv}
+				if process.Argv0 != nil {
+					entry["argv0"] = *process.Argv0
+				}
+				foreground = append(foreground, entry)
+			}
+			info["foreground_processes"] = foreground
 		}
 		herdrtest.WriteResult(conn, call, map[string]any{
 			"type": "pane_process_info", "process_info": info,
@@ -286,11 +391,27 @@ func (f *fakeLifecycle) handle(conn net.Conn, call herdrtest.Call) bool {
 		f.waitTarget = call.Text("target")
 		herdrtest.WriteResult(conn, call, map[string]any{"type": "agent_info"})
 	case "pane.close":
-		f.snapshot.Panes, f.snapshot.Agents = nil, nil
+		f.paneCloses++
+		paneID := call.Text("pane_id")
+		panes := f.snapshot.Panes[:0]
+		for _, pane := range f.snapshot.Panes {
+			if pane.PaneID != paneID {
+				panes = append(panes, pane)
+			}
+		}
+		f.snapshot.Panes = panes
+		agents := f.snapshot.Agents[:0]
+		for _, agent := range f.snapshot.Agents {
+			if agent.PaneID != paneID {
+				agents = append(agents, agent)
+			}
+		}
+		f.snapshot.Agents = agents
 		herdrtest.WriteResult(conn, call, map[string]any{
-			"type": "pane_closed", "pane_id": "p1", "workspace_id": "w1",
+			"type": "pane_closed", "pane_id": paneID, "workspace_id": "w1",
 		})
 	case "tab.close":
+		f.tabCloses++
 		tabID := call.Text("tab_id")
 		tabs := f.snapshot.Tabs[:0]
 		for _, tab := range f.snapshot.Tabs {
@@ -334,6 +455,10 @@ func (f *fakeLifecycle) handle(conn net.Conn, call herdrtest.Call) bool {
 }
 
 func (f *fakeLifecycle) exitAgent(paneID string) {
+	if f.childPaneID == paneID {
+		f.childPaneID = ""
+		f.childExeced = false
+	}
 	for i := range f.snapshot.Panes {
 		if f.snapshot.Panes[i].PaneID == paneID {
 			f.snapshot.Panes[i].Agent = nil

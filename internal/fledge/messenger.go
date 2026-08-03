@@ -594,7 +594,9 @@ func (m *messenger) prepareActivation(name, paneID string) (deliveryTarget, erro
 		return deliveryTarget{}, err
 	} else if found {
 		if managed, ok := st.Agents[name]; ok && managed.ActivationID != "" {
-			if err := m.deactivateAgent(name, "activation superseded"); err != nil {
+			if err := m.deactivateActivation(
+				name, managed.ActivationID, managed.PaneID, "activation superseded",
+			); err != nil {
 				return deliveryTarget{}, err
 			}
 		}
@@ -761,54 +763,84 @@ func attemptedInActivation(message *messaging.Message, activationID string) bool
 	return false
 }
 
+// deactivateAgent preserves the name-based cleanup API for callers that do
+// not already hold an activation identity. The exact operation below makes a
+// stale cleanup harmless once the identity has been captured.
 func (m *messenger) deactivateAgent(name, reason string) error {
-	var runID, activationID, paneID string
+	st, found, err := m.store.ReadExisting(m.project.Session, m.project.Root)
+	if err != nil || !found {
+		return err
+	}
+	managed, found := st.Agents[name]
+	if !found || managed.ActivationID == "" {
+		return nil
+	}
+	return m.deactivateActivation(name, managed.ActivationID, managed.PaneID, reason)
+}
+
+// deactivateActivation retires one exact messaging activation. It only
+// clears the persisted mapping when all three identity fields still match,
+// so delayed cleanup cannot erase a replacement activation. The lifecycle
+// lock and reconstructed deactivation state make retries idempotent while
+// still completing any awaiting-ack failures left by a partial attempt.
+func (m *messenger) deactivateActivation(name, activationID, paneID, reason string) error {
+	if name == "" || activationID == "" {
+		return nil
+	}
+	st, found, err := m.store.ReadExisting(m.project.Session, m.project.Root)
+	if err != nil || !found {
+		return err
+	}
+	runID := st.ActiveRunID
 	type notification struct {
 		id, recipient string
 	}
 	var notifications []notification
-	err := m.store.WithLocked(m.project.Session, m.project.Root, func(st *state.Session) error {
-		runID = st.ActiveRunID
-		managed := st.Agents[name]
-		activationID, paneID = managed.ActivationID, managed.PaneID
-		managed.ActivationID = ""
-		st.Agents[name] = managed
-		return nil
-	})
-	if err != nil || runID == "" || activationID == "" {
-		return err
-	}
-	err = m.log.WithLifecycleLock(runID, func() error {
-		run, err := m.log.ReadRun(runID)
-		if err != nil {
-			return messageStoreError(err)
-		}
-		if !run.Active {
-			return nil
-		}
-		if _, err := m.log.Append(runID, messaging.Event{
-			Type: messaging.EventAgentDeactivated, Agent: name,
-			ActivationID: activationID, PaneID: paneID, Reason: reason,
-		}); err != nil {
-			return messageStoreError(err)
-		}
-		run, err = m.log.ReadRun(runID)
-		if err != nil {
-			return messageStoreError(err)
-		}
-		for _, message := range run.Messages {
-			if message.Recipient == name && message.Status == messaging.StatusAwaitingAck &&
-				attemptedInActivation(message, activationID) {
-				failureReason := "recipient activation ended without acknowledgement"
+	if runID != "" {
+		err = m.log.WithLifecycleLock(runID, func() error {
+			run, err := m.log.ReadRun(runID)
+			if err != nil {
+				return messageStoreError(err)
+			}
+			if !run.Active {
+				return nil
+			}
+			activation := run.Activations[activationID]
+			if activation == nil || activation.Agent != name || activation.PaneID != paneID {
+				return nil
+			}
+			if activation.DeactivatedAt == nil {
 				if _, err := m.log.Append(runID, messaging.Event{
-					Type: messaging.EventMessageFailed, MessageID: message.ID,
-					ActivationID: activationID, Reason: failureReason,
+					Type: messaging.EventAgentDeactivated, Agent: name,
+					ActivationID: activationID, PaneID: paneID, Reason: reason,
 				}); err != nil {
 					return messageStoreError(err)
 				}
-				if message.Sender == systemMailbox {
+			}
+			run, err = m.log.ReadRun(runID)
+			if err != nil {
+				return messageStoreError(err)
+			}
+			for _, message := range run.Messages {
+				if message.Recipient != name || !attemptedInActivation(message, activationID) {
 					continue
 				}
+				failedInActivation := message.Status == messaging.StatusFailed && message.Failure != nil &&
+					message.Failure.ActivationID == activationID
+				if message.Status == messaging.StatusAwaitingAck {
+					failureReason := "recipient activation ended without acknowledgement"
+					if _, err := m.log.Append(runID, messaging.Event{
+						Type: messaging.EventMessageFailed, MessageID: message.ID,
+						ActivationID: activationID, Reason: failureReason,
+					}); err != nil {
+						return messageStoreError(err)
+					}
+					failedInActivation = true
+				}
+				if !failedInActivation || message.Sender == systemMailbox || hasFailureNotification(run.Messages, message.ID) {
+					continue
+				}
+				failureReason := "recipient activation ended without acknowledgement"
 				notificationID, err := messaging.NewID("msg_")
 				if err != nil {
 					return messageStoreError(err)
@@ -828,11 +860,22 @@ func (m *messenger) deactivateAgent(name, reason string) error {
 					id: notificationID, recipient: message.Sender,
 				})
 			}
+			return nil
+		})
+		if err != nil {
+			// Keep the exact activation in state so cleanup can be retried.
+			return asServiceOrStoreError(err)
+		}
+	}
+	if err := m.store.WithLocked(m.project.Session, m.project.Root, func(st *state.Session) error {
+		managed, found := st.Agents[name]
+		if found && managed.ActivationID == activationID && managed.PaneID == paneID {
+			managed.ActivationID = ""
+			st.Agents[name] = managed
 		}
 		return nil
-	})
-	if err != nil {
-		return asServiceOrStoreError(err)
+	}); err != nil {
+		return err
 	}
 	if len(notifications) == 0 {
 		return nil
@@ -856,6 +899,15 @@ func (m *messenger) deactivateAgent(name, reason string) error {
 		}
 	}
 	return nil
+}
+
+func hasFailureNotification(messages []*messaging.Message, failedMessageID string) bool {
+	for _, candidate := range messages {
+		if candidate.Sender == systemMailbox && candidate.ReplyTo == failedMessageID {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *messenger) closeRun(runID, reason string) error {
@@ -896,15 +948,19 @@ func (m *messenger) closeActiveRun(reason string) error {
 	if err != nil || !found {
 		return err
 	}
-	names := make([]string, 0)
+	targets := make([]deliveryTarget, 0)
 	for name, managed := range st.Agents {
 		if managed.ActivationID != "" {
-			names = append(names, name)
+			targets = append(targets, deliveryTarget{
+				agent: name, activationID: managed.ActivationID, paneID: managed.PaneID,
+			})
 		}
 	}
-	sort.Strings(names)
-	for _, name := range names {
-		if err := m.deactivateAgent(name, reason); err != nil {
+	sort.Slice(targets, func(i, j int) bool { return targets[i].agent < targets[j].agent })
+	for _, target := range targets {
+		if err := m.deactivateActivation(
+			target.agent, target.activationID, target.paneID, reason,
+		); err != nil {
 			return err
 		}
 	}
