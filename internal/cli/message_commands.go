@@ -340,6 +340,9 @@ func newMessageCancel(env *environment) *cobra.Command {
 	return cmd
 }
 
+// userMailboxName mirrors the fledge package's unexported user mailbox name.
+const userMailboxName = "user"
+
 func printMessageResult(env *environment, result fledge.MessageResult, action string) error {
 	if result.DeliveryError != "" && !env.json {
 		fmt.Fprintf(env.errOut, "%s message is durable but delivery was not confirmed: %s\n",
@@ -349,7 +352,7 @@ func printMessageResult(env *environment, result fledge.MessageResult, action st
 		fmt.Fprintf(w, "%s message %s (%s)\n",
 			theme.Accent(action), result.Message.ID, theme.Status(result.Message.Status))
 		if result.DeliveryError == "" && result.Message.Status == messaging.StatusQueued &&
-			result.Message.Recipient != "user" {
+			result.Message.Recipient != userMailboxName {
 			fmt.Fprintf(w, "Queued until agent %q is ready; Fledge delivers it automatically.\n",
 				result.Message.Recipient)
 		}

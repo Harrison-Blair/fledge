@@ -33,7 +33,7 @@ func Reconstruct(runID string, events []Event) (*Run, error) {
 				t := event.Timestamp
 				activation.DeactivatedAt = &t
 			}
-		case EventDeliveryExpired:
+		case EventAgentDeliveryExpired:
 			// Diagnostic only: the bounded deliverer gave up before the agent
 			// became ready. Message state is unchanged.
 		case EventMessageCreated, EventMessageReplied:

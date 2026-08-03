@@ -52,7 +52,11 @@ func TestProfileSpawnUsesDefaultAndOverrideNamesExactArgvRootCWDAndProvenance(t 
 			observation.mu.Lock()
 			gotArgs := append([]string(nil), observation.args...)
 			gotCWD, gotName := observation.cwd, observation.name
+			gotShellProbes := observation.processInfoCalls
 			observation.mu.Unlock()
+			if gotShellProbes < 2 {
+				t.Fatalf("spawn skipped the shell-readiness poll: process_info calls = %d", gotShellProbes)
+			}
 			wantArgs := []string{
 				"--model", "gpt-5.6",
 				"--config", `model_reasoning_effort="high"`,

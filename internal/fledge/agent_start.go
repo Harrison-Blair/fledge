@@ -56,7 +56,10 @@ func (s *Service) SpawnAgent(ctx context.Context, opts AgentStartOptions) (Agent
 		return AgentStartResult{}, err
 	}
 	if err := s.activateSpawnMessaging(opts, managed.PaneID); err != nil {
-		return AgentStartResult{}, err
+		return AgentStartResult{}, Wrap("agent_deliverer_failed",
+			fmt.Sprintf("agent %q started, but its message deliverer did not launch: %v; "+
+				"queued messages will not inject automatically — recover them with `fledge agent message retry`",
+				opts.Name, err), err)
 	}
 	return AgentStartResult{
 		Agent: viewFromInfo(opts.Name, managed, started),
@@ -117,9 +120,14 @@ func (s *Service) startAgentLocked(
 		var createdTab bool
 		managed, createdTab, err = s.ensureAgentPane(ctx, client, st, snapshot, opts.Name, opts.Kind, opts.Profile, cwd)
 		if err != nil {
-			return err
+			return rollbackCreatedAgentTab(ctx, client, opts.Name, managed, createdTab, err)
 		}
-		if err := ensureAgentPaneAvailable(ctx, client, snapshot, managed, opts.Name, opts.Timeout/3); err != nil {
+		// A third of the spawn timeout waits for the pane's shell; the rest is
+		// left for agent.start itself. The poll runs while this closure holds
+		// the session flock — a conscious tradeoff, bounded by shellBudget,
+		// that keeps concurrent spawns from racing the half-configured pane.
+		shellBudget := opts.Timeout / 3
+		if err := ensureAgentPaneAvailable(ctx, client, snapshot, managed, opts.Name, shellBudget); err != nil {
 			return rollbackCreatedAgentTab(ctx, client, opts.Name, managed, createdTab, err)
 		}
 		startedInfo, err = startAgentInPane(ctx, client, opts, managed.PaneID, forwardedArgs)
@@ -422,6 +430,10 @@ func awaitPaneShell(
 ) (herdr.ProcessInfo, error) {
 	deadline := time.Now().Add(budget)
 	for {
+		if ctx.Err() != nil {
+			return herdr.ProcessInfo{}, NewError("agent_pane_unready",
+				fmt.Sprintf("wait for a shell in managed pane %s was cancelled: %v", paneID, ctx.Err()))
+		}
 		var result herdr.Result
 		if err := client.Call(ctx, "pane.process_info", map[string]any{"pane_id": paneID}, &result); err != nil {
 			return herdr.ProcessInfo{}, err
@@ -429,18 +441,16 @@ func awaitPaneShell(
 		if result.ProcessInfo.ShellPID != nil {
 			return result.ProcessInfo, nil
 		}
-		if time.Now().After(deadline) || ctx.Err() != nil {
+		if time.Now().After(deadline) {
 			return herdr.ProcessInfo{}, NewError("agent_pane_unready",
 				fmt.Sprintf("managed pane %s has no shell after %s", paneID, budget))
 		}
 		timer := time.NewTimer(100 * time.Millisecond)
 		select {
 		case <-ctx.Done():
-			timer.Stop()
-			return herdr.ProcessInfo{}, NewError("agent_pane_unready",
-				fmt.Sprintf("managed pane %s has no shell after %s", paneID, budget))
 		case <-timer.C:
 		}
+		timer.Stop()
 	}
 }
 
@@ -458,14 +468,13 @@ func rollbackCreatedAgentTab(
 	if !created {
 		return cause
 	}
-	if err := client.Call(ctx, "tab.close", map[string]any{"tab_id": managed.TabID}, nil); err != nil {
-		return &Error{
-			Code: "agent_tab_close_failed",
-			Message: fmt.Sprintf("agent %q failed to start (%v); its freshly created tab %s could not be closed: %v",
-				name, cause, managed.TabID, err),
-			Details: map[string]any{"name": name, "pane_id": managed.PaneID, "tab_id": managed.TabID},
-			Cause:   cause,
-		}
+	// The spawn may be failing precisely because ctx was cancelled; the close
+	// must still run, or the freshly created tab is orphaned.
+	closeCtx := context.WithoutCancel(ctx)
+	if err := client.Call(closeCtx, "tab.close", map[string]any{"tab_id": managed.TabID}, nil); err != nil {
+		message := fmt.Sprintf("agent %q failed to start (%v); its freshly created tab %s could not be closed: %v",
+			name, cause, managed.TabID, err)
+		return newAgentTabCloseError(name, managed, message, cause)
 	}
 	return cause
 }
@@ -506,8 +515,7 @@ func (s *Service) ensureAgentPane(ctx context.Context, client *herdr.Client, st 
 	if managed, found, err := s.reusableAgentPane(ctx, client, st, snapshot, name, kind, profile, cwd); found || err != nil {
 		return managed, false, err
 	}
-	managed, err := s.createAgentPane(ctx, client, st, snapshot, name, kind, profile, cwd)
-	return managed, err == nil, err
+	return s.createAgentPane(ctx, client, st, snapshot, name, kind, profile, cwd)
 }
 
 func (s *Service) reusableAgentPane(
@@ -551,34 +559,37 @@ func (s *Service) reusableAgentPane(
 	return state.Agent{}, false, nil
 }
 
+// createAgentPane reports created=true from the moment the tab exists, even
+// when a rename below fails: a label-less orphan can never be re-adopted, so
+// the caller's rollback must know to close it.
 func (s *Service) createAgentPane(
 	ctx context.Context,
 	client *herdr.Client,
 	st *state.Session,
 	snapshot herdr.Snapshot,
 	name, kind, profile, cwd string,
-) (state.Agent, error) {
+) (state.Agent, bool, error) {
 	expected := name
 	// Unlike the orchestrator path, a stale non-empty s.WorkspaceID skips
 	// st.WorkspaceID and goes straight to the project-wide search.
 	workspaceID, err := resolveWorkspaceID(snapshot, s.Project, s.selectedWorkspaceID(st), fmt.Sprintf("agent %q", name))
 	if err != nil {
-		return state.Agent{}, err
+		return state.Agent{}, false, err
 	}
 	workspaceID, tabID, paneID, err := s.allocateAgentPane(ctx, client, workspaceID, cwd)
 	if err != nil {
-		return state.Agent{}, err
+		return state.Agent{}, false, err
 	}
 	st.WorkspaceID = workspaceID
+	managed := state.Agent{Name: name, Kind: kind, Profile: profile, Placement: "tab", CWD: cwd, TabID: tabID, PaneID: paneID}
 	if err := client.Call(ctx, "tab.rename", map[string]any{"tab_id": tabID, "label": expected}, nil); err != nil {
-		return state.Agent{}, err
+		return managed, true, err
 	}
 	if err := client.Call(ctx, "pane.rename", map[string]any{"pane_id": paneID, "label": expected}, nil); err != nil {
-		return state.Agent{}, err
+		return managed, true, err
 	}
-	managed := state.Agent{Name: name, Kind: kind, Profile: profile, Placement: "tab", CWD: cwd, TabID: tabID, PaneID: paneID}
 	st.Agents[name] = managed
-	return managed, nil
+	return managed, true, nil
 }
 
 func (s *Service) allocateAgentPane(

@@ -193,11 +193,19 @@ func agentTabCloseError(name string, managed state.Agent, stopped bool, err erro
 	if stopped {
 		message = fmt.Sprintf("agent %q stopped, but its dedicated tab %s could not be closed: %v", name, managed.TabID, err)
 	}
+	return newAgentTabCloseError(name, managed, message, err)
+}
+
+// newAgentTabCloseError is the one constructor for agent_tab_close_failed.
+// Callers pick the wrapped cause deliberately: the stop paths wrap the close
+// failure itself, while the spawn rollback wraps the original spawn failure
+// so the close error does not mask why the spawn died.
+func newAgentTabCloseError(name string, managed state.Agent, message string, cause error) error {
 	return &Error{
 		Code:    "agent_tab_close_failed",
 		Message: message,
 		Details: map[string]any{"name": name, "pane_id": managed.PaneID, "tab_id": managed.TabID},
-		Cause:   err,
+		Cause:   cause,
 	}
 }
 

@@ -90,6 +90,24 @@ func seedMessagingAgent(
 	}
 }
 
+// activateAgentForTest records a fresh messaging activation for name and
+// synchronously drains its queued backlog, standing in for the bounded
+// deliverer production spawns launch out of process.
+func activateAgentForTest(t *testing.T, service *Service, client *herdr.Client, name, paneID string) {
+	t.Helper()
+	m := service.messages()
+	target, err := m.prepareActivation(name, paneID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.runID == "" {
+		t.Fatalf("agent %q has no active run to activate against", name)
+	}
+	if err := m.drainAgentMessages(t.Context(), client, target); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func messageBySender(t *testing.T, service *Service, runID, sender string) *messaging.Message {
 	t.Helper()
 	run, err := service.messageStore().ReadRun(runID)
@@ -319,7 +337,7 @@ func TestDeliverActivationExpiryIsRecordedInTheRunLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), messaging.EventDeliveryExpired) {
+	if !strings.Contains(string(data), messaging.EventAgentDeliveryExpired) {
 		t.Fatalf("run log has no expiry event: %s", data)
 	}
 	if _, err := service.messageStore().ReadRun(runID); err != nil {
@@ -484,11 +502,7 @@ func TestSystemFailureQueuesForInactiveSenderAndReplaysOnActivation(t *testing.T
 	})
 	fake.mu.Unlock()
 	client := &herdr.Client{Socket: serviceSessionSocket(t, service.Binary)}
-	if err := service.messages().activateAgent(
-		t.Context(), client, "coordinator", coordinator.Agent.PaneID,
-	); err != nil {
-		t.Fatal(err)
-	}
+	activateAgentForTest(t, service, client, "coordinator", coordinator.Agent.PaneID)
 	notification = messageBySender(t, service, runID, systemMailbox)
 	if notification.Status != messaging.StatusAwaitingAck {
 		t.Fatalf("replayed system notification = %#v", notification)

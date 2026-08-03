@@ -1,6 +1,7 @@
 package fledge
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -416,6 +417,64 @@ func TestDedicatedSpawnRollbackSurfacesTabCloseFailure(t *testing.T) {
 		!strings.Contains(translated.Message, `agent "worker" failed to start`) ||
 		!strings.Contains(translated.Message, "could not be closed") {
 		t.Fatalf("error = %#v", translated)
+	}
+}
+
+func TestDedicatedSpawnClosesCreatedTabWhenRenameFails(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	fake.mu.Lock()
+	fake.failMethod = "tab.rename"
+	fake.mu.Unlock()
+
+	_, err := service.SpawnAgent(t.Context(), AgentStartOptions{
+		Name: "worker", Kind: "codex", NewTab: true, Timeout: 30 * time.Second,
+	})
+	if err == nil {
+		t.Fatal("expected the tab.rename failure to fail the spawn")
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.startCalls != 0 || len(fake.snapshot.Tabs) != 0 || len(fake.snapshot.Panes) != 0 {
+		t.Fatalf("rename failure left layout behind: starts=%d tabs=%#v panes=%#v",
+			fake.startCalls, fake.snapshot.Tabs, fake.snapshot.Panes)
+	}
+}
+
+func TestDedicatedSpawnCancellationStillClosesCreatedTab(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	fake.mu.Lock()
+	fake.bootingProcessInfoCalls = 1 << 30
+	fake.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// Cancel once the shell poll has issued its first probe, i.e. mid-wait.
+	go func() {
+		for {
+			fake.mu.Lock()
+			probes := fake.processInfoCalls
+			fake.mu.Unlock()
+			if probes >= 1 {
+				cancel()
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+
+	_, err := service.SpawnAgent(ctx, AgentStartOptions{
+		Name: "worker", Kind: "codex", NewTab: true, Timeout: 30 * time.Second,
+	})
+	translated := Translate(err)
+	if translated == nil || translated.Code != "agent_pane_unready" ||
+		!strings.Contains(translated.Message, "cancelled") {
+		t.Fatalf("error = %#v", translated)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.startCalls != 0 || len(fake.snapshot.Tabs) != 0 || len(fake.snapshot.Panes) != 0 {
+		t.Fatalf("cancelled spawn left layout behind: starts=%d tabs=%#v panes=%#v",
+			fake.startCalls, fake.snapshot.Tabs, fake.snapshot.Panes)
 	}
 }
 

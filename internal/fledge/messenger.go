@@ -392,6 +392,11 @@ func (m *messenger) deliverIfLive(
 		message, err := m.messageInRun(active.runID, messageID)
 		return MessageResult{Message: message}, err
 	}
+	// The readiness check above ran on a snapshot taken before deliver takes
+	// the run's lifecycle lock, so the harness can exit or restart before the
+	// agent.prompt lands (TOCTOU). Accepted: a prompt into a dead pane comes
+	// back as a definite failure that stays queued and retryable, and
+	// re-snapshotting under the lock could not close the window either.
 	target := deliveryTarget{
 		runID: active.runID, agent: recipient,
 		paneID: managed.PaneID, activationID: managed.ActivationID,
@@ -549,14 +554,6 @@ func (m *messenger) beginRun(header messaging.RunHeader) (string, error) {
 	return runID, nil
 }
 
-func (m *messenger) activateAgent(ctx context.Context, client *herdr.Client, name, paneID string) error {
-	target, err := m.prepareActivation(name, paneID)
-	if err != nil || target.runID == "" {
-		return err
-	}
-	return m.drainAgentMessages(ctx, client, target)
-}
-
 // prepareActivation returns the zero deliveryTarget when the session has no
 // active message run.
 func (m *messenger) prepareActivation(name, paneID string) (deliveryTarget, error) {
@@ -660,7 +657,7 @@ func (m *messenger) recordDeliveryExpiry(name, activationID string) error {
 		return nil
 	}
 	_, err = m.appendActiveRunEvent(st.ActiveRunID, messaging.Event{
-		Type: messaging.EventDeliveryExpired, Agent: name,
+		Type: messaging.EventAgentDeliveryExpired, Agent: name,
 		ActivationID: activationID, PaneID: managed.PaneID,
 		Reason: "delivery deadline expired before the agent became ready",
 	})
@@ -690,7 +687,7 @@ func (m *messenger) drainAgentMessages(
 		// A definite non-injection only loses this message; later ones may
 		// still deliver. Anything else stops the drain: an uncertain outcome
 		// may already sit in the pane, and bookkeeping failures would repeat.
-		if delivered == nil || !lastAttemptFailedIn(delivered, target.activationID) {
+		if delivered == nil || attemptedInActivation(delivered, target.activationID) {
 			break
 		}
 	}
@@ -710,17 +707,6 @@ func attemptedInActivation(message *messaging.Message, activationID string) bool
 	for _, attempt := range message.DeliveryAttempts {
 		if attempt.ActivationID == activationID && attempt.Outcome != messaging.OutcomeFailed {
 			return true
-		}
-	}
-	return false
-}
-
-// lastAttemptFailedIn reports whether the newest delivery attempt this
-// activation made was a definite non-injection.
-func lastAttemptFailedIn(message *messaging.Message, activationID string) bool {
-	for i := len(message.DeliveryAttempts) - 1; i >= 0; i-- {
-		if attempt := message.DeliveryAttempts[i]; attempt.ActivationID == activationID {
-			return attempt.Outcome == messaging.OutcomeFailed
 		}
 	}
 	return false

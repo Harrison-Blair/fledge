@@ -13,20 +13,20 @@ import (
 const SchemaVersion = 1
 
 const (
-	EventRunStarted          = "run.started"
-	EventRunClosed           = "run.closed"
-	EventAgentActivated      = "agent.activated"
-	EventAgentDeactivated    = "agent.deactivated"
-	EventMessageCreated      = "message.created"
-	EventMessageReplied      = "message.replied"
-	EventDeliveryAttempted   = "message.delivery.attempted"
-	EventDeliveryInjected    = "message.delivery.injected"
-	EventDeliveryFailed      = "message.delivery.failed"
-	EventDeliveryUncertain   = "message.delivery.uncertain"
-	EventDeliveryExpired     = "agent.delivery.expired"
-	EventMessageAcknowledged = "message.acknowledged"
-	EventMessageCancelled    = "message.cancelled"
-	EventMessageFailed       = "message.failed"
+	EventRunStarted           = "run.started"
+	EventRunClosed            = "run.closed"
+	EventAgentActivated       = "agent.activated"
+	EventAgentDeactivated     = "agent.deactivated"
+	EventMessageCreated       = "message.created"
+	EventMessageReplied       = "message.replied"
+	EventDeliveryAttempted    = "message.delivery.attempted"
+	EventDeliveryInjected     = "message.delivery.injected"
+	EventDeliveryFailed       = "message.delivery.failed"
+	EventDeliveryUncertain    = "message.delivery.uncertain"
+	EventAgentDeliveryExpired = "agent.delivery.expired"
+	EventMessageAcknowledged  = "message.acknowledged"
+	EventMessageCancelled     = "message.cancelled"
+	EventMessageFailed        = "message.failed"
 )
 
 const (
