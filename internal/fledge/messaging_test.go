@@ -38,6 +38,29 @@ func seedLiveMessagingAgent(
 	runID, name, paneID, tabID, activationID string,
 ) {
 	t.Helper()
+	seedMessagingAgent(t, service, fake, runID, name, paneID, tabID, activationID, true)
+}
+
+// seedBootingMessagingAgent seeds an agent whose harness process is running
+// but has not yet become interactive-ready.
+func seedBootingMessagingAgent(
+	t *testing.T,
+	service *Service,
+	fake *fakeLifecycle,
+	runID, name, paneID, tabID, activationID string,
+) {
+	t.Helper()
+	seedMessagingAgent(t, service, fake, runID, name, paneID, tabID, activationID, false)
+}
+
+func seedMessagingAgent(
+	t *testing.T,
+	service *Service,
+	fake *fakeLifecycle,
+	runID, name, paneID, tabID, activationID string,
+	interactiveReady bool,
+) {
+	t.Helper()
 	if err := service.Store.WithLocked(service.Project.Session, service.Project.Root, func(st *state.Session) error {
 		st.Agents[name] = state.Agent{
 			Name: name, PaneID: paneID, TabID: tabID, Placement: "tab",
@@ -54,7 +77,7 @@ func seedLiveMessagingAgent(
 	})
 	fake.snapshot.Agents = append(fake.snapshot.Agents, herdr.AgentInfo{
 		Agent: &kind, AgentStatus: StateIdle, Name: &agentName,
-		PaneID: paneID, TabID: tabID, WorkspaceID: "w1", InteractiveReady: true,
+		PaneID: paneID, TabID: tabID, WorkspaceID: "w1", InteractiveReady: interactiveReady,
 	})
 	fake.mu.Unlock()
 	if _, err := service.messageStore().Append(runID, messaging.Event{

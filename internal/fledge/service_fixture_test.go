@@ -1,13 +1,16 @@
 package fledge
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/herdrtest"
@@ -32,7 +35,18 @@ type fakeLifecycle struct {
 	focusedPaneIDs   []string
 	failMethod       string
 	dropMethod       string
-	startArgs        []string
+	// failPromptContaining fails agent.prompt calls whose text contains this
+	// substring with a definite (non-transport) error.
+	failPromptContaining string
+	// bootingProcessInfoCalls makes the first N pane.process_info responses
+	// report a shell-less booting pane; later calls report a ready shell.
+	bootingProcessInfoCalls int
+	processInfoCalls        int
+	// startBusyWhileBooting rejects agent.start with agent_pane_busy while the
+	// pane still reports a booting shell.
+	startBusyWhileBooting bool
+	startBusyRejections   int
+	startArgs             []string
 	promptTarget     string
 	promptText       string
 	waitTarget       string
@@ -79,12 +93,20 @@ func newFakeLifecycle(t *testing.T) (*Service, *fakeLifecycle) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Service{
+	service := &Service{
 		Project:           project.Info{Root: t.TempDir(), Session: "test-session"},
 		Binary:            herdr.Binary{Path: binary},
 		Store:             store,
 		LaunchStopCleanup: func(StopCleanupRequest) error { return nil },
-	}, fake
+	}
+	// The default deliverer runs the bounded delivery helper synchronously
+	// in-process, so tests observe its effect as soon as the spawn returns.
+	service.LaunchDeliveryHelper = func(name, activationID string, timeout time.Duration) error {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		return service.DeliverActivation(ctx, name, activationID, timeout)
+	}
+	return service, fake
 }
 
 func fakeBinary(t *testing.T, socket string) (string, string) {
@@ -163,28 +185,46 @@ func (f *fakeLifecycle) handle(conn net.Conn, call herdrtest.Call) bool {
 			"type": "pong", "version": herdrtest.Version, "protocol": f.pongProtocol,
 		})
 	case "pane.process_info":
+		f.processInfoCalls++
+		info := map[string]any{"pane_id": "p1"}
+		if f.processInfoCalls > f.bootingProcessInfoCalls {
+			info["shell_pid"] = 10
+			info["foreground_processes"] = []map[string]any{{"pid": 10, "name": "bash"}}
+		}
 		herdrtest.WriteResult(conn, call, map[string]any{
-			"type": "pane_process_info",
-			"process_info": map[string]any{
-				"pane_id": "p1", "shell_pid": 10,
-				"foreground_processes": []map[string]any{{"pid": 10, "name": "bash"}},
-			},
+			"type": "pane_process_info", "process_info": info,
 		})
 	case "agent.start":
+		if f.startBusyWhileBooting && f.processInfoCalls <= f.bootingProcessInfoCalls {
+			f.startBusyRejections++
+			herdrtest.WriteError(conn, call, "agent_pane_busy", "pane p1 has no shell yet")
+			return true
+		}
 		f.startCalls++
 		rawArgs := call.Params["args"]
 		f.startArgs = appendStrings(f.startArgs, rawArgs)
 		kind := "codex"
 		name := call.Text("name")
-		f.snapshot.Panes[0].Agent = &kind
-		f.snapshot.Panes[0].AgentStatus = "idle"
+		paneID, tabID := call.Text("pane_id"), ""
+		for i := range f.snapshot.Panes {
+			if f.snapshot.Panes[i].PaneID == paneID {
+				f.snapshot.Panes[i].Agent = &kind
+				f.snapshot.Panes[i].AgentStatus = "idle"
+				tabID = f.snapshot.Panes[i].TabID
+			}
+		}
 		f.snapshot.Agents = []herdr.AgentInfo{{
-			Agent: &kind, AgentStatus: "idle", Name: &name, PaneID: "p1", TabID: "t1", WorkspaceID: "w1",
+			Agent: &kind, AgentStatus: "idle", Name: &name, PaneID: paneID, TabID: tabID, WorkspaceID: "w1",
+			InteractiveReady: true,
 		}}
 		herdrtest.WriteResult(conn, call, map[string]any{
 			"type": "agent_started", "agent": f.snapshot.Agents[0], "argv": rawArgs,
 		})
 	case "agent.prompt":
+		if f.failPromptContaining != "" && strings.Contains(call.Text("text"), f.failPromptContaining) {
+			herdrtest.WriteInjectedFailure(conn, call)
+			return true
+		}
 		f.promptTarget = call.Text("target")
 		f.promptText = call.Text("text")
 		herdrtest.WriteResult(conn, call, map[string]any{
