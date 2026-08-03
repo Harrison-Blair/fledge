@@ -721,6 +721,35 @@ func TestInPaneSpawnLaunchesDeliveryHelperForTheActiveRun(t *testing.T) {
 	}
 }
 
+func TestNewTabSpawnLaunchesDeliveryHelperForTheActiveRun(t *testing.T) {
+	service, _ := newFakeLifecycle(t)
+	startTestMessageRun(t, service)
+	var launches int
+	var launchedName, launchedActivation string
+	var launchedTimeout time.Duration
+	service.LaunchDeliveryHelper = func(name, activationID string, timeout time.Duration) error {
+		launches++
+		launchedName, launchedActivation, launchedTimeout = name, activationID, timeout
+		return nil
+	}
+
+	if _, err := service.SpawnAgent(t.Context(), AgentStartOptions{
+		Name: "worker", Kind: "codex", NewTab: true, Timeout: 7 * time.Second,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := service.Store.Read(service.Project.Session, service.Project.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if launches != 1 || launchedName != "worker" || launchedTimeout != 7*time.Second ||
+		launchedActivation == "" || launchedActivation != st.Agents["worker"].ActivationID {
+		t.Fatalf("launches=%d name=%q activation=%q timeout=%s persisted=%#v",
+			launches, launchedName, launchedActivation, launchedTimeout, st.Agents["worker"])
+	}
+}
+
 func TestInPaneSpawnWithoutAnActiveRunSkipsTheDeliveryHelper(t *testing.T) {
 	service, fake := newFakeLifecycle(t)
 	seedTakeoverPane(t, service, fake)

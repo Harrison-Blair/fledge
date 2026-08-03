@@ -388,7 +388,7 @@ func (m *messenger) deliverIfLive(
 	managed, known := active.state.Agents[recipient]
 	live := agentsByPane(active.snapshot)
 	agent, running := live[managed.PaneID]
-	if recipient == userMailbox || !known || !running || agent.Agent == nil {
+	if recipient == userMailbox || !known || !running || !agentInteractiveReady(agent) {
 		message, err := m.messageInRun(active.runID, messageID)
 		return MessageResult{Message: message}, err
 	}
@@ -626,8 +626,7 @@ func (m *messenger) deliverActivation(ctx context.Context, name, activationID st
 			}
 			snapshot, snapshotErr := client.Snapshot(ctx)
 			if snapshotErr == nil {
-				if live, ok := agentsByPane(snapshot)[managed.PaneID]; ok && live.Agent != nil &&
-					live.InteractiveReady {
+				if live, ok := agentsByPane(snapshot)[managed.PaneID]; ok && agentInteractiveReady(live) {
 					return m.drainAgentMessages(ctx, client, deliveryTarget{
 						runID: st.ActiveRunID, agent: name,
 						paneID: managed.PaneID, activationID: activationID,
@@ -636,7 +635,7 @@ func (m *messenger) deliverActivation(ctx context.Context, name, activationID st
 			}
 		}
 		if !time.Now().Before(deadline) {
-			return nil
+			return m.recordDeliveryExpiry(name, activationID)
 		}
 		timer := time.NewTimer(100 * time.Millisecond)
 		select {
@@ -646,6 +645,26 @@ func (m *messenger) deliverActivation(ctx context.Context, name, activationID st
 		case <-timer.C:
 		}
 	}
+}
+
+// recordDeliveryExpiry leaves a durable trace when the bounded deliverer gave
+// up before the agent became ready, so an undelivered backlog is diagnosable
+// from the run log.
+func (m *messenger) recordDeliveryExpiry(name, activationID string) error {
+	st, err := m.store.Read(m.project.Session, m.project.Root)
+	if err != nil {
+		return err
+	}
+	managed, exists := st.Agents[name]
+	if !exists || managed.ActivationID != activationID || st.ActiveRunID == "" {
+		return nil
+	}
+	_, err = m.appendActiveRunEvent(st.ActiveRunID, messaging.Event{
+		Type: messaging.EventDeliveryExpired, Agent: name,
+		ActivationID: activationID, PaneID: managed.PaneID,
+		Reason: "delivery deadline expired before the agent became ready",
+	})
+	return err
 }
 
 func (m *messenger) drainAgentMessages(
@@ -661,21 +680,47 @@ func (m *messenger) drainAgentMessages(
 			attemptedInActivation(message, target.activationID) {
 			continue
 		}
-		_, deliveryErr, err := m.deliver(ctx, target, message.ID, client)
+		delivered, deliveryErr, err := m.deliver(ctx, target, message.ID, client)
 		if err != nil {
 			return err
 		}
-		if deliveryErr != "" {
+		if deliveryErr == "" {
+			continue
+		}
+		// A definite non-injection only loses this message; later ones may
+		// still deliver. Anything else stops the drain: an uncertain outcome
+		// may already sit in the pane, and bookkeeping failures would repeat.
+		if delivered == nil || !lastAttemptFailedIn(delivered, target.activationID) {
 			break
 		}
 	}
 	return nil
 }
 
+// agentInteractiveReady reports whether the pane's harness can accept an
+// injected prompt: launched, past its launch handshake, and interactive.
+func agentInteractiveReady(agent herdr.AgentInfo) bool {
+	return agent.Agent != nil && agent.InteractiveReady && !agent.LaunchPending
+}
+
+// attemptedInActivation reports whether this activation already has an
+// attempt that may have reached the agent. A definite non-injection leaves
+// the message retryable within the same activation.
 func attemptedInActivation(message *messaging.Message, activationID string) bool {
 	for _, attempt := range message.DeliveryAttempts {
-		if attempt.ActivationID == activationID {
+		if attempt.ActivationID == activationID && attempt.Outcome != messaging.OutcomeFailed {
 			return true
+		}
+	}
+	return false
+}
+
+// lastAttemptFailedIn reports whether the newest delivery attempt this
+// activation made was a definite non-injection.
+func lastAttemptFailedIn(message *messaging.Message, activationID string) bool {
+	for i := len(message.DeliveryAttempts) - 1; i >= 0; i-- {
+		if attempt := message.DeliveryAttempts[i]; attempt.ActivationID == activationID {
+			return attempt.Outcome == messaging.OutcomeFailed
 		}
 	}
 	return false

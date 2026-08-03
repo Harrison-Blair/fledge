@@ -1,6 +1,8 @@
 package fledge
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -198,6 +200,164 @@ func TestMessageDeliveryClassifiesDefiniteAndAmbiguousFailures(t *testing.T) {
 	if _, err := service.RetryMessage(t.Context(), ambiguous.Message.ID, true); err == nil ||
 		Translate(err).Code != "message_state_conflict" {
 		t.Fatalf("uncertain retry error = %v", err)
+	}
+}
+
+func TestSendToBootingAgentStaysQueuedWithoutDeliveryAttempt(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	runID := startTestMessageRun(t, service)
+	seedBootingMessagingAgent(t, service, fake, runID, "worker", "p-worker", "t-worker", "act-worker")
+
+	result, err := service.SendMessage(t.Context(), "worker", "task before readiness")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Message.Status != messaging.StatusQueued || result.DeliveryError != "" ||
+		len(result.Message.DeliveryAttempts) != 0 {
+		t.Fatalf("send to booting agent = %#v", result)
+	}
+	fake.mu.Lock()
+	promptTarget := fake.promptTarget
+	fake.mu.Unlock()
+	if promptTarget != "" {
+		t.Fatalf("prompt was injected into booting pane %q", promptTarget)
+	}
+}
+
+func TestAgentInteractiveReadinessPredicate(t *testing.T) {
+	kind := "codex"
+	for _, testCase := range []struct {
+		name  string
+		agent herdr.AgentInfo
+		want  bool
+	}{
+		{"ready harness", herdr.AgentInfo{Agent: &kind, InteractiveReady: true}, true},
+		{"no harness", herdr.AgentInfo{InteractiveReady: true}, false},
+		{"not interactive yet", herdr.AgentInfo{Agent: &kind}, false},
+		{"launch still pending", herdr.AgentInfo{Agent: &kind, InteractiveReady: true, LaunchPending: true}, false},
+	} {
+		if got := agentInteractiveReady(testCase.agent); got != testCase.want {
+			t.Errorf("%s: ready = %t, want %t", testCase.name, got, testCase.want)
+		}
+	}
+}
+
+func TestFailedAttemptIsRetriedByTheNextDrainInTheSameActivation(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	runID := startTestMessageRun(t, service)
+	mustStartAgent(t, service, "worker")
+	fake.mu.Lock()
+	fake.failMethod = "agent.prompt"
+	fake.mu.Unlock()
+	sent, err := service.SendMessage(t.Context(), "worker", "flaky delivery")
+	if err != nil || sent.Message.Status != messaging.StatusQueued || sent.DeliveryError == "" {
+		t.Fatalf("failed send = %#v, %v", sent, err)
+	}
+	fake.mu.Lock()
+	fake.failMethod = ""
+	fake.mu.Unlock()
+
+	st, err := service.Store.Read(service.Project.Session, service.Project.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &herdr.Client{Socket: serviceSessionSocket(t, service.Binary)}
+	if err := service.messages().drainAgentMessages(t.Context(), client, deliveryTarget{
+		runID: runID, agent: "worker", paneID: "p1",
+		activationID: st.Agents["worker"].ActivationID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	message, err := service.ShowMessage(sent.Message.ID)
+	if err != nil || message.Status != messaging.StatusAwaitingAck || len(message.DeliveryAttempts) != 2 {
+		t.Fatalf("redelivered = %#v, %v", message, err)
+	}
+}
+
+func TestDrainDeliversLaterMessagesPastADefiniteFailure(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	startTestMessageRun(t, service)
+	if err := service.Store.WithLocked(service.Project.Session, service.Project.Root, func(st *state.Session) error {
+		st.Agents["worker"] = state.Agent{Name: "worker", PaneID: "gone", CWD: service.Project.Root}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	poisoned, err := service.SendMessage(t.Context(), "worker", "poisoned delivery")
+	if err != nil || poisoned.Message.Status != messaging.StatusQueued {
+		t.Fatalf("poisoned = %#v, %v", poisoned, err)
+	}
+	second, err := service.SendMessage(t.Context(), "worker", "healthy delivery")
+	if err != nil || second.Message.Status != messaging.StatusQueued {
+		t.Fatalf("second = %#v, %v", second, err)
+	}
+	fake.mu.Lock()
+	fake.failPromptContaining = "poisoned"
+	fake.mu.Unlock()
+
+	mustStartAgent(t, service, "worker")
+
+	failed, err := service.ShowMessage(poisoned.Message.ID)
+	if err != nil || failed.Status != messaging.StatusQueued || len(failed.DeliveryAttempts) != 1 {
+		t.Fatalf("poisoned after drain = %#v, %v", failed, err)
+	}
+	delivered, err := service.ShowMessage(second.Message.ID)
+	if err != nil || delivered.Status != messaging.StatusAwaitingAck {
+		t.Fatalf("later message = %#v, %v", delivered, err)
+	}
+}
+
+func TestDeliverActivationExpiryIsRecordedInTheRunLog(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	runID := startTestMessageRun(t, service)
+	seedBootingMessagingAgent(t, service, fake, runID, "worker", "p-worker", "t-worker", "act-worker")
+
+	if err := service.DeliverActivation(t.Context(), "worker", "act-worker", 200*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(service.messageStore().Dir, runID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), messaging.EventDeliveryExpired) {
+		t.Fatalf("run log has no expiry event: %s", data)
+	}
+	if _, err := service.messageStore().ReadRun(runID); err != nil {
+		t.Fatalf("run log no longer reconstructs: %v", err)
+	}
+}
+
+func TestDeliverActivationWaitsForInteractiveReadiness(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	runID := startTestMessageRun(t, service)
+	seedBootingMessagingAgent(t, service, fake, runID, "worker", "p-worker", "t-worker", "act-worker")
+	queued, err := service.SendMessage(t.Context(), "worker", "waits for readiness")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusBeforeReady := make(chan string, 1)
+	go func() {
+		time.Sleep(250 * time.Millisecond)
+		if message, showErr := service.ShowMessage(queued.Message.ID); showErr == nil {
+			statusBeforeReady <- message.Status
+		} else {
+			statusBeforeReady <- showErr.Error()
+		}
+		fake.mu.Lock()
+		for i := range fake.snapshot.Agents {
+			fake.snapshot.Agents[i].InteractiveReady = true
+		}
+		fake.mu.Unlock()
+	}()
+	if err := service.DeliverActivation(t.Context(), "worker", "act-worker", 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if status := <-statusBeforeReady; status != messaging.StatusQueued {
+		t.Fatalf("message left the queue before the harness was ready: %s", status)
+	}
+	message, err := service.ShowMessage(queued.Message.ID)
+	if err != nil || message.Status != messaging.StatusAwaitingAck {
+		t.Fatalf("message after readiness = %#v, %v", message, err)
 	}
 }
 

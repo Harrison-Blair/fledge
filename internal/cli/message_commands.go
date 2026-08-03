@@ -348,6 +348,11 @@ func printMessageResult(env *environment, result fledge.MessageResult, action st
 	return env.print(result, func(w io.Writer, theme *ui.Theme) {
 		fmt.Fprintf(w, "%s message %s (%s)\n",
 			theme.Accent(action), result.Message.ID, theme.Status(result.Message.Status))
+		if result.DeliveryError == "" && result.Message.Status == messaging.StatusQueued &&
+			result.Message.Recipient != "user" {
+			fmt.Fprintf(w, "Queued until agent %q is ready; Fledge delivers it automatically.\n",
+				result.Message.Recipient)
+		}
 	})
 }
 

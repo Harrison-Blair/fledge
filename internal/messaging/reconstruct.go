@@ -33,6 +33,9 @@ func Reconstruct(runID string, events []Event) (*Run, error) {
 				t := event.Timestamp
 				activation.DeactivatedAt = &t
 			}
+		case EventDeliveryExpired:
+			// Diagnostic only: the bounded deliverer gave up before the agent
+			// became ready. Message state is unchanged.
 		case EventMessageCreated, EventMessageReplied:
 			if _, exists := byID[event.MessageID]; exists {
 				return nil, fmt.Errorf("%w: duplicate message %s", ErrCorrupt, event.MessageID)

@@ -55,7 +55,7 @@ func (s *Service) SpawnAgent(ctx context.Context, opts AgentStartOptions) (Agent
 	if err != nil {
 		return AgentStartResult{}, err
 	}
-	if err := s.messages().activateAgent(ctx, client, opts.Name, managed.PaneID); err != nil {
+	if err := s.activateSpawnMessaging(opts, managed.PaneID); err != nil {
 		return AgentStartResult{}, err
 	}
 	return AgentStartResult{
