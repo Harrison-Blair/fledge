@@ -595,13 +595,14 @@ func TestAgentHumanViewsShowProfileOnlyWhenProvenanceExists(t *testing.T) {
 }
 
 type profileSpawnObservation struct {
-	mu            sync.Mutex
-	args          []string
-	cwd           string
-	name          string
-	starts        int
-	agentsAtStart string
-	claudeAtStart string
+	mu               sync.Mutex
+	args             []string
+	cwd              string
+	name             string
+	starts           int
+	processInfoCalls int
+	agentsAtStart    string
+	claudeAtStart    string
 }
 
 func profileSpawnFixture(
@@ -659,8 +660,19 @@ func profileSpawnFixture(
 		Handle: func(conn net.Conn, call herdrtest.Call) bool {
 			switch call.Method {
 			case "pane.process_info":
+				// The fresh pane's shell appears on the second probe, so the
+				// spawn exercises its shell-readiness poll.
+				observation.mu.Lock()
+				observation.processInfoCalls++
+				booting := observation.processInfoCalls == 1
+				observation.mu.Unlock()
+				info := herdr.ProcessInfo{PaneID: call.Text("pane_id")}
+				if !booting {
+					shell := 41
+					info.ShellPID = &shell
+				}
 				herdrtest.WriteResult(conn, call, map[string]any{
-					"type": "process_info", "process_info": herdr.ProcessInfo{PaneID: call.Text("pane_id")},
+					"type": "process_info", "process_info": info,
 				})
 				return true
 			case "agent.start":

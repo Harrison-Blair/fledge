@@ -326,6 +326,12 @@ func TestDedicatedSpawnFailureAndExplicitSpawnDoNotChangeSelection(t *testing.T)
 	}); err == nil {
 		t.Fatal("expected launch failure")
 	}
+	fake.mu.Lock()
+	if len(fake.snapshot.Tabs) != 0 || len(fake.snapshot.Panes) != 0 {
+		fake.mu.Unlock()
+		t.Fatalf("failed spawn left its freshly created tab open: %#v", fake.snapshot.Tabs)
+	}
+	fake.mu.Unlock()
 	fake.failMethod = ""
 	if _, err := service.SpawnAgent(t.Context(), AgentStartOptions{
 		Name: "explicit", Kind: "codex", Model: "gpt-5.6", NewTab: true,
@@ -339,6 +345,77 @@ func TestDedicatedSpawnFailureAndExplicitSpawnDoNotChangeSelection(t *testing.T)
 	}
 	if st.LastSpawnSelection == nil || *st.LastSpawnSelection != want {
 		t.Fatalf("selection changed after failed or explicit spawn: %#v", st.LastSpawnSelection)
+	}
+}
+
+func TestDedicatedSpawnWaitsForBootingPaneShell(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	fake.mu.Lock()
+	fake.bootingProcessInfoCalls = 2
+	fake.startBusyWhileBooting = true
+	fake.mu.Unlock()
+
+	if _, err := service.SpawnAgent(t.Context(), AgentStartOptions{
+		Name: "worker", Kind: "codex", NewTab: true, Timeout: 30 * time.Second,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.startBusyRejections != 0 || fake.startCalls != 1 || fake.processInfoCalls < 3 {
+		t.Fatalf("busy rejections=%d starts=%d shell probes=%d",
+			fake.startBusyRejections, fake.startCalls, fake.processInfoCalls)
+	}
+	if fake.workspaceCreates != 1 || fake.tabCreates != 0 {
+		t.Fatalf("boot race duplicated layout: workspace creates=%d tab creates=%d",
+			fake.workspaceCreates, fake.tabCreates)
+	}
+}
+
+func TestDedicatedSpawnClosesCreatedTabWhenShellNeverAppears(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	fake.mu.Lock()
+	fake.bootingProcessInfoCalls = 1 << 30
+	fake.mu.Unlock()
+
+	_, err := service.SpawnAgent(t.Context(), AgentStartOptions{
+		Name: "worker", Kind: "codex", NewTab: true, Timeout: 300 * time.Millisecond,
+	})
+	if translated := Translate(err); translated == nil || translated.Code != "agent_pane_unready" {
+		t.Fatalf("error = %v", err)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.startCalls != 0 || len(fake.snapshot.Tabs) != 0 || len(fake.snapshot.Panes) != 0 {
+		t.Fatalf("failed spawn left layout behind: starts=%d tabs=%#v panes=%#v",
+			fake.startCalls, fake.snapshot.Tabs, fake.snapshot.Panes)
+	}
+	st, err := service.Store.Read(service.Project.Session, service.Project.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, recorded := st.Agents["worker"]; recorded {
+		t.Fatalf("failed spawn persisted its mapping: %#v", st.Agents)
+	}
+}
+
+func TestDedicatedSpawnRollbackSurfacesTabCloseFailure(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	fake.mu.Lock()
+	fake.bootingProcessInfoCalls = 1 << 30
+	fake.failMethod = "tab.close"
+	fake.mu.Unlock()
+
+	_, err := service.SpawnAgent(t.Context(), AgentStartOptions{
+		Name: "worker", Kind: "codex", NewTab: true, Timeout: 300 * time.Millisecond,
+	})
+	translated := Translate(err)
+	if translated == nil || translated.Code != "agent_tab_close_failed" ||
+		!strings.Contains(translated.Message, `agent "worker" failed to start`) ||
+		!strings.Contains(translated.Message, "could not be closed") {
+		t.Fatalf("error = %#v", translated)
 	}
 }
 
