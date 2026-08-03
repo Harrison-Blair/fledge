@@ -467,6 +467,10 @@ func (m *messenger) deliverLocked(
 	callErr := client.Call(callCtx, "agent.prompt", map[string]any{
 		"target": target.paneID, "text": messageEnvelope(message),
 	}, nil)
+	var submitErr error
+	if callErr == nil {
+		submitErr = submitInjectedPrompt(callCtx, client, target.paneID)
+	}
 	outcome := messaging.EventDeliveryInjected
 	errorKind, errorText := "", ""
 	if callErr != nil {
@@ -476,6 +480,11 @@ func (m *messenger) deliverLocked(
 		} else {
 			outcome, errorKind = messaging.EventDeliveryFailed, "definite_non_injection"
 		}
+	} else if submitErr != nil {
+		// The envelope already sits pasted in the pane, so a failed submit is
+		// never a definite non-injection.
+		outcome, errorKind = messaging.EventDeliveryUncertain, "ambiguous_transport"
+		errorText = submitErr.Error()
 	}
 	if _, err := m.log.Append(runID, messaging.Event{
 		Type: outcome, MessageID: messageID, AttemptID: attemptID,
@@ -495,6 +504,30 @@ func (m *messenger) deliverLocked(
 		return message, fmt.Sprintf("delivery succeeded but its result could not be re-read: %v", err), nil
 	}
 	return current, errorText, nil
+}
+
+// promptSubmitSettle gives the harness's TUI time to ingest the pasted
+// envelope before the submitting keypress: an enter inside or immediately
+// after the paste burst reads as a newline, not a submission.
+var promptSubmitSettle = 500 * time.Millisecond
+
+// submitInjectedPrompt presses enter after an agent.prompt paste. Herdr
+// delivers the prompt into the composer of a detected in-pane harness without
+// submitting it, so this distinct keypress is what hands the envelope to the
+// agent.
+func submitInjectedPrompt(ctx context.Context, client *herdr.Client, paneID string) error {
+	timer := time.NewTimer(promptSubmitSettle)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("prompt was pasted but its submit was cancelled: %w", ctx.Err())
+	case <-timer.C:
+	}
+	if err := client.Call(ctx, "agent.send_keys",
+		map[string]any{"target": paneID, "keys": []string{"enter"}}, nil); err != nil {
+		return fmt.Errorf("prompt was pasted but its submitting enter failed: %w", err)
+	}
+	return nil
 }
 
 func (m *messenger) messageInRun(runID, messageID string) (*messaging.Message, error) {
@@ -695,9 +728,25 @@ func (m *messenger) drainAgentMessages(
 }
 
 // agentInteractiveReady reports whether the pane's harness can accept an
-// injected prompt: launched, past its launch handshake, and interactive.
+// injected prompt. An RPC-started agent reports a launch handshake and is
+// ready once it is past it and interactive. Herdr's process detection reports
+// no handshake at all for agents recognized inside a pane, so those are ready
+// once detection settles on an interactive lifecycle status.
 func agentInteractiveReady(agent herdr.AgentInfo) bool {
-	return agent.Agent != nil && agent.InteractiveReady && !agent.LaunchPending
+	if agent.Agent == nil {
+		return false
+	}
+	if agent.LaunchPending != nil && *agent.LaunchPending {
+		return false
+	}
+	if agent.InteractiveReady != nil {
+		return *agent.InteractiveReady
+	}
+	switch agent.AgentStatus {
+	case StateIdle, StateWorking, StateBlocked, StateDone:
+		return true
+	}
+	return false
 }
 
 // attemptedInActivation reports whether this activation already has an

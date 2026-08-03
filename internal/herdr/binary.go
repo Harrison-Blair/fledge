@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/processenv"
 )
@@ -19,7 +18,7 @@ const MinimumProtocol = 17
 var RequiredMethods = []string{
 	"ping", "server.stop", "session.snapshot", "workspace.create", "workspace.focus",
 	"tab.create", "tab.rename", "tab.close", "pane.focus", "pane.rename", "pane.split", "pane.process_info", "pane.send_input", "pane.close",
-	"agent.start", "agent.list", "agent.get", "agent.read", "agent.send_keys",
+	"agent.list", "agent.get", "agent.read", "agent.send_keys",
 	"agent.prompt", "agent.wait",
 }
 
@@ -194,12 +193,4 @@ func (b Binary) AttachSession(ctx context.Context, session, cwd string) error {
 	cmd.Env = processenv.Managed(os.Environ(), b.TempDir)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
-}
-
-func Milliseconds(d time.Duration) *int64 {
-	if d <= 0 {
-		return nil
-	}
-	v := d.Milliseconds()
-	return &v
 }

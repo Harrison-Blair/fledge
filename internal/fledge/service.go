@@ -26,8 +26,11 @@ type Service struct {
 	LaunchStopCleanup    func(StopCleanupRequest) error
 	ExecAgent            func(path string, argv, env []string) error
 	LaunchDeliveryHelper func(name, activationID string, timeout time.Duration) error
-	MessageStore         *messaging.Store
-	CallerPaneID         string
+	// FledgeExecutable overrides the binary the dedicated-tab bootstrap
+	// re-invokes in the prepared pane; empty means the running executable.
+	FledgeExecutable string
+	MessageStore     *messaging.Store
+	CallerPaneID     string
 }
 
 func (s *Service) messageStore() *messaging.Store {

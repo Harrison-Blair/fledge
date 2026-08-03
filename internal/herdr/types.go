@@ -12,12 +12,16 @@ type Pong struct {
 }
 
 type AgentInfo struct {
-	Agent            *string           `json:"agent"`
-	AgentStatus      string            `json:"agent_status"`
-	CWD              *string           `json:"cwd"`
-	DisplayAgent     *string           `json:"display_agent"`
-	InteractiveReady bool              `json:"interactive_ready"`
-	LaunchPending    bool              `json:"launch_pending"`
+	Agent        *string `json:"agent"`
+	AgentStatus  string  `json:"agent_status"`
+	CWD          *string `json:"cwd"`
+	DisplayAgent *string `json:"display_agent"`
+	// InteractiveReady and LaunchPending describe the launch handshake of an
+	// RPC-started agent. Herdr omits both for agents its process detection
+	// recognized inside a pane, so absence must stay distinguishable from
+	// false.
+	InteractiveReady *bool             `json:"interactive_ready"`
+	LaunchPending    *bool             `json:"launch_pending"`
 	Name             *string           `json:"name"`
 	PaneID           string            `json:"pane_id"`
 	TabID            string            `json:"tab_id"`

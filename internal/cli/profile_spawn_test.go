@@ -50,24 +50,26 @@ func TestProfileSpawnUsesDefaultAndOverrideNamesExactArgvRootCWDAndProvenance(t 
 			}
 
 			observation.mu.Lock()
-			gotArgs := append([]string(nil), observation.args...)
-			gotCWD, gotName := observation.cwd, observation.name
+			gotCommand, gotCWD := observation.command, observation.cwd
 			gotShellProbes := observation.processInfoCalls
 			observation.mu.Unlock()
 			if gotShellProbes < 2 {
 				t.Fatalf("spawn skipped the shell-readiness poll: process_info calls = %d", gotShellProbes)
+			}
+			// The profile owns harness, model, cwd, and native args, so the
+			// injected bootstrap carries only the profile, name, and timeout.
+			wantCommand := " agent spawn reviewer --name " + test.wantName + " --timeout 30s"
+			if !strings.HasSuffix(gotCommand, wantCommand) {
+				t.Fatalf("bootstrap command = %q, want suffix %q", gotCommand, wantCommand)
+			}
+			if gotCWD != root {
+				t.Fatalf("launch cwd = %q, want %q", gotCWD, root)
 			}
 			wantArgs := []string{
 				"--model", "gpt-5.6",
 				"--config", `model_reasoning_effort="high"`,
 				"--config", `developer_instructions="Review deterministically."`,
 				"--image=diagram.png",
-			}
-			if !reflect.DeepEqual(gotArgs, wantArgs) {
-				t.Fatalf("native argv = %#v, want %#v", gotArgs, wantArgs)
-			}
-			if gotCWD != root || gotName != test.wantName {
-				t.Fatalf("launch cwd/name = %q/%q, want %q/%q", gotCWD, gotName, root, test.wantName)
 			}
 
 			var envelope struct {
@@ -156,14 +158,25 @@ func TestGenericProfileExplicitSelectionsTransportInstructionsAndRecordProvenanc
 		t.Fatal(err)
 	}
 	observation.mu.Lock()
-	gotArgs, gotCWD := append([]string(nil), observation.args...), observation.cwd
+	gotCommand, gotCWD := observation.command, observation.cwd
 	observation.mu.Unlock()
+	// Nothing is locked by the profile, so the explicit selections travel.
+	wantCommand := " agent spawn generic --name generic --harness codex --model gpt-custom --timeout 30s"
+	if !strings.HasSuffix(gotCommand, wantCommand) || gotCWD != root {
+		t.Fatalf("command/cwd = %q / %q, want suffix %q / %q", gotCommand, gotCWD, wantCommand, root)
+	}
 	wantArgs := []string{
 		"--model", "gpt-custom",
 		"--config", `developer_instructions="Use only inherited Fledge orchestration."`,
 	}
-	if !reflect.DeepEqual(gotArgs, wantArgs) || gotCWD != root {
-		t.Fatalf("args/cwd = %#v / %q, want %#v / %q", gotArgs, gotCWD, wantArgs, root)
+	var envelope struct {
+		Data fledge.AgentStartResult `json:"data"`
+	}
+	if err := json.Unmarshal(env.out.(*bytes.Buffer).Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(envelope.Data.Argv, wantArgs) {
+		t.Fatalf("native argv = %#v, want %#v", envelope.Data.Argv, wantArgs)
 	}
 	stored, err := state.New(stateDir)
 	if err != nil {
@@ -201,11 +214,11 @@ func TestGenericProfilePickerFiltersCompatibilityAndReusesLastSelection(t *testi
 		t.Fatal(err)
 	}
 	observation.mu.Lock()
-	got := append([]string(nil), observation.args...)
+	got := observation.command
 	observation.mu.Unlock()
-	want := []string{"--model", "gpt-last", "--config", `developer_instructions="Managed instructions."`}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("args = %#v, want %#v", got, want)
+	want := " agent spawn generic --name generic --harness codex --model gpt-last --timeout 30s"
+	if !strings.HasSuffix(got, want) {
+		t.Fatalf("command = %q, want suffix %q", got, want)
 	}
 	output := env.out.(*bytes.Buffer).String()
 	if !strings.Contains(output, "Last used — Codex · gpt-last") || !strings.Contains(output, "Pi coding agent") || strings.Contains(output, "OpenCode") {
@@ -229,11 +242,11 @@ func TestGenericProfileUsesPickersForUnsetSelections(t *testing.T) {
 			t.Fatal(err)
 		}
 		observation.mu.Lock()
-		got := append([]string(nil), observation.args...)
+		got := observation.command
 		observation.mu.Unlock()
-		want := []string{"--model", "sonnet", "--append-system-prompt", "Managed instructions."}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("Claude instruction transport = %#v, want %#v", got, want)
+		want := " agent spawn generic --name generic --harness claude --model sonnet --timeout 30s"
+		if !strings.HasSuffix(got, want) {
+			t.Fatalf("command = %q, want suffix %q", got, want)
 		}
 		if output := env.out.(*bytes.Buffer).String(); !strings.Contains(output, "Agent harness") {
 			t.Fatalf("missing generic profile harness picker: %q", output)
@@ -255,11 +268,11 @@ func TestGenericProfileUsesPickersForUnsetSelections(t *testing.T) {
 			t.Fatal(err)
 		}
 		observation.mu.Lock()
-		got := append([]string(nil), observation.args...)
+		got := observation.command
 		observation.mu.Unlock()
-		want := []string{"--append-system-prompt", "Managed instructions."}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("Claude instruction transport = %#v, want %#v", got, want)
+		want := " agent spawn generic --name generic --harness claude --timeout 30s"
+		if !strings.HasSuffix(got, want) || strings.Contains(got, "--model") {
+			t.Fatalf("command = %q, want suffix %q without a model", got, want)
 		}
 		if output := env.out.(*bytes.Buffer).String(); !strings.Contains(output, "Claude Code model") {
 			t.Fatalf("missing generic profile model picker: %q", output)
@@ -297,18 +310,23 @@ func TestOrchestratorProfileUsesRepositoryContextForEveryHarness(t *testing.T) {
 			}
 
 			observation.mu.Lock()
-			gotArgs := append([]string(nil), observation.args...)
-			agentsAtStart, claudeAtStart := observation.agentsAtStart, observation.claudeAtStart
+			agentsAtInject, claudeAtInject := observation.agentsAtInject, observation.claudeAtInject
 			observation.mu.Unlock()
-			if len(gotArgs) != 0 {
-				t.Fatalf("orchestrator native args = %#v, want no duplicate instruction transport", gotArgs)
+			var envelope struct {
+				Data fledge.AgentStartResult `json:"data"`
+			}
+			if err := json.Unmarshal(env.out.(*bytes.Buffer).Bytes(), &envelope); err != nil {
+				t.Fatal(err)
+			}
+			if len(envelope.Data.Argv) != 0 {
+				t.Fatalf("orchestrator native args = %#v, want no duplicate instruction transport", envelope.Data.Argv)
 			}
 			for path, contents := range map[string]string{
-				"AGENTS.md": agentsAtStart,
-				"CLAUDE.md": claudeAtStart,
+				"AGENTS.md": agentsAtInject,
+				"CLAUDE.md": claudeAtInject,
 			} {
 				if !strings.Contains(contents, "fledge-managed-orchestrator") {
-					t.Fatalf("%s was not synchronized before agent.start: %q", path, contents)
+					t.Fatalf("%s was not synchronized before the bootstrap injection: %q", path, contents)
 				}
 			}
 			if got := readFile(t, filepath.Join(root, "AGENTS.md")); !strings.Contains(got, instructions) {
@@ -368,8 +386,8 @@ func TestOrchestratorContextFailurePreventsHarnessLaunch(t *testing.T) {
 			}
 			observation.mu.Lock()
 			defer observation.mu.Unlock()
-			if observation.starts != 0 {
-				t.Fatalf("harness start calls = %d, want 0", observation.starts)
+			if observation.injections != 0 {
+				t.Fatalf("bootstrap injections = %d, want 0", observation.injections)
 			}
 		})
 	}
@@ -377,7 +395,7 @@ func TestOrchestratorContextFailurePreventsHarnessLaunch(t *testing.T) {
 
 func TestProfileSpawnMaterializesPiInstructionsAndUsesPreparedPath(t *testing.T) {
 	instructions := "AGENTS.md\nUse inherited Fledge only."
-	env, observation, root, _ := profileSpawnFixture(t, agentprofile.Profile{
+	env, _, root, _ := profileSpawnFixture(t, agentprofile.Profile{
 		Name: "managed", SchemaVersion: 1, Effort: "high", Instructions: instructions,
 		NativeArgs: []string{"--offline"},
 	})
@@ -391,9 +409,13 @@ func TestProfileSpawnMaterializesPiInstructionsAndUsesPreparedPath(t *testing.T)
 		t.Fatal(err)
 	}
 
-	observation.mu.Lock()
-	got := append([]string(nil), observation.args...)
-	observation.mu.Unlock()
+	var envelope struct {
+		Data fledge.AgentStartResult `json:"data"`
+	}
+	if err := json.Unmarshal(env.out.(*bytes.Buffer).Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	got := envelope.Data.Argv
 	if len(got) != 7 || got[0] != "--model" || got[1] != "openai/gpt-5.6" ||
 		got[2] != "--thinking" || got[3] != "high" ||
 		got[4] != "--append-system-prompt" || got[6] != "--offline" {
@@ -434,8 +456,8 @@ func TestProfileSpawnReportsPiInstructionPreparationFailureBeforeLaunch(t *testi
 	}
 	observation.mu.Lock()
 	defer observation.mu.Unlock()
-	if observation.starts != 0 {
-		t.Fatalf("harness start calls = %d, want 0", observation.starts)
+	if observation.injections != 0 {
+		t.Fatalf("bootstrap injections = %d, want 0", observation.injections)
 	}
 }
 
@@ -492,8 +514,10 @@ func TestProfileSpawnFlagsOnlyFillFieldsTheProfileDoesNotOwn(t *testing.T) {
 		}
 		observation.mu.Lock()
 		defer observation.mu.Unlock()
-		if !reflect.DeepEqual(observation.args, []string{"--model", "gpt-explicit"}) {
-			t.Fatalf("args = %#v", observation.args)
+		// The profile locks the harness, so only the explicit model travels.
+		want := " agent spawn partial --name partial --model gpt-explicit --timeout 30s"
+		if !strings.HasSuffix(observation.command, want) || strings.Contains(observation.command, "--harness") {
+			t.Fatalf("command = %q, want suffix %q without a harness flag", observation.command, want)
 		}
 	})
 
@@ -600,13 +624,12 @@ func TestAgentHumanViewsShowProfileOnlyWhenProvenanceExists(t *testing.T) {
 
 type profileSpawnObservation struct {
 	mu               sync.Mutex
-	args             []string
+	command          string
+	injections       int
 	cwd              string
-	name             string
-	starts           int
 	processInfoCalls int
-	agentsAtStart    string
-	claudeAtStart    string
+	agentsAtInject   string
+	claudeAtInject   string
 }
 
 func profileSpawnFixture(
@@ -645,19 +668,23 @@ func profileSpawnFixture(
 			if call.Method == "tab.create" {
 				observation.cwd = call.Text("cwd")
 			}
-			if call.Method == "agent.start" {
-				observation.starts++
-				observation.name = call.Text("name")
+			if call.Method == "pane.send_input" {
+				observation.injections++
+				observation.command = call.Text("text")
 				if data, err := os.ReadFile(filepath.Join(root, "AGENTS.md")); err == nil {
-					observation.agentsAtStart = string(data)
+					observation.agentsAtInject = string(data)
 				}
 				if data, err := os.ReadFile(filepath.Join(root, "CLAUDE.md")); err == nil {
-					observation.claudeAtStart = string(data)
+					observation.claudeAtInject = string(data)
 				}
-				values, _ := call.Params["args"].([]any)
-				observation.args = observation.args[:0]
-				for _, value := range values {
-					observation.args = append(observation.args, value.(string))
+				// The injected bootstrap takes the pane over; Herdr's process
+				// detection then reports the harness, confirming the spawn.
+				kind := "codex"
+				for i := range snapshot.Panes {
+					if snapshot.Panes[i].PaneID == call.Text("pane_id") {
+						snapshot.Panes[i].Agent = &kind
+						snapshot.Panes[i].AgentStatus = "idle"
+					}
 				}
 			}
 		},
@@ -677,16 +704,6 @@ func profileSpawnFixture(
 				}
 				herdrtest.WriteResult(conn, call, map[string]any{
 					"type": "process_info", "process_info": info,
-				})
-				return true
-			case "agent.start":
-				kind, name := call.Text("kind"), call.Text("name")
-				herdrtest.WriteResult(conn, call, map[string]any{
-					"type": "agent_started",
-					"agent": herdr.AgentInfo{
-						Agent: &kind, Name: &name, AgentStatus: "idle", PaneID: call.Text("pane_id"),
-						TabID: "agent-tab", WorkspaceID: "workspace-1",
-					},
 				})
 				return true
 			default:

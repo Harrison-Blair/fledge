@@ -175,6 +175,19 @@ func runOptionalAgentLifecycle(t *testing.T, ctx context.Context, service *Servi
 	if _, err := exec.LookPath("codex"); err != nil {
 		return
 	}
+	// The dedicated-tab spawn re-invokes the fledge binary inside the pane,
+	// and this process is a test binary, so a real one has to be built.
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fledgeBinary := filepath.Join(t.TempDir(), "fledge")
+	build := exec.Command("go", "build", "-o", fledgeBinary, "./cmd/fledge")
+	build.Dir = repoRoot
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build Fledge: %v: %s", err, out)
+	}
+	service.FledgeExecutable = fledgeBinary
 	if _, err := service.SpawnAgent(ctx, AgentStartOptions{
 		Name: "integration-agent", Kind: "codex", NewTab: true, Timeout: 30 * time.Second,
 	}); err != nil {

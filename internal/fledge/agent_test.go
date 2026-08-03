@@ -320,7 +320,7 @@ func TestDedicatedSpawnFailureAndExplicitSpawnDoNotChangeSelection(t *testing.T)
 		t.Fatal(err)
 	}
 
-	fake.failMethod = "agent.start"
+	fake.failMethod = "pane.send_input"
 	if _, err := service.SpawnAgent(t.Context(), AgentStartOptions{
 		Name: "failed", Kind: "codex", Model: "gpt-5.6", NewTab: true,
 		Timeout: 30 * time.Second, RememberSelection: true,
@@ -353,7 +353,6 @@ func TestDedicatedSpawnWaitsForBootingPaneShell(t *testing.T) {
 	service, fake := newFakeLifecycle(t)
 	fake.mu.Lock()
 	fake.bootingProcessInfoCalls = 2
-	fake.startBusyWhileBooting = true
 	fake.mu.Unlock()
 
 	if _, err := service.SpawnAgent(t.Context(), AgentStartOptions{
@@ -364,13 +363,190 @@ func TestDedicatedSpawnWaitsForBootingPaneShell(t *testing.T) {
 
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	if fake.startBusyRejections != 0 || fake.startCalls != 1 || fake.processInfoCalls < 3 {
-		t.Fatalf("busy rejections=%d starts=%d shell probes=%d",
-			fake.startBusyRejections, fake.startCalls, fake.processInfoCalls)
+	if fake.sendInputCalls != 1 || fake.shellProbesAtSendInput < 3 {
+		t.Fatalf("bootstrap was injected before the shell appeared: injections=%d shell probes=%d",
+			fake.sendInputCalls, fake.shellProbesAtSendInput)
 	}
 	if fake.workspaceCreates != 1 || fake.tabCreates != 0 {
 		t.Fatalf("boot race duplicated layout: workspace creates=%d tab creates=%d",
 			fake.workspaceCreates, fake.tabCreates)
+	}
+}
+
+func TestDedicatedSpawnInjectsQuotedBootstrapCommandWithoutAgentStart(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	service.FledgeExecutable = "/opt/Fledge Tools/fledge"
+	root, err := project.Canonical(service.Project.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.SpawnAgent(t.Context(), AgentStartOptions{
+		Name: "worker", Kind: "claude", Model: "claude-opus-4-8", NewTab: true,
+		Timeout: 30 * time.Second, Args: []string{"--append-system-prompt", "stay focused"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "'/opt/Fledge Tools/fledge' agent spawn --name worker --harness claude" +
+		" --model claude-opus-4-8 --cwd " + shellQuote(root) +
+		" --timeout 30s -- --append-system-prompt 'stay focused'"
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.sendInputCalls != 1 || fake.sendInputPaneID != result.Agent.PaneID ||
+		fake.sendInputText != want ||
+		len(fake.sendInputKeys) != 1 || fake.sendInputKeys[0] != "enter" {
+		t.Fatalf("injections=%d pane=%q command=%q, want %q keys=%v",
+			fake.sendInputCalls, fake.sendInputPaneID, fake.sendInputText, want, fake.sendInputKeys)
+	}
+	for _, method := range fake.methodCalls {
+		if method == "agent.start" {
+			t.Fatal("dedicated-tab spawn still calls agent.start")
+		}
+	}
+}
+
+func TestDedicatedProfileSpawnBootstrapOmitsLockedAndProfileOwnedFlags(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	service.FledgeExecutable = "/usr/bin/fledge"
+	if _, err := service.SpawnAgent(t.Context(), AgentStartOptions{
+		Name: "reviewer", Kind: "claude", Model: "sonnet", Profile: "review-profile",
+		ProfileLocksHarness: true, NewTab: true, Timeout: 30 * time.Second,
+		Args: []string{"--append-system-prompt", "profile instructions"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The harness flag is locked by the profile; cwd and native args are
+	// always profile-owned. The unlocked model still travels.
+	want := "/usr/bin/fledge agent spawn review-profile --name reviewer --model sonnet --timeout 30s"
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.sendInputText != want {
+		t.Fatalf("profile bootstrap = %q, want %q", fake.sendInputText, want)
+	}
+}
+
+func TestDedicatedSpawnWaitsForTheInjectedCommandToTakeThePane(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	fake.mu.Lock()
+	fake.spawnAppearsAfterPolls = 3
+	fake.mu.Unlock()
+
+	result, err := service.SpawnAgent(t.Context(), AgentStartOptions{
+		Name: "worker", Kind: "codex", NewTab: true, Timeout: 30 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Agent.State != StateIdle {
+		t.Fatalf("state after confirmed launch = %q, want %q", result.Agent.State, StateIdle)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.pendingSpawnPaneID != "" || len(fake.snapshot.Agents) != 1 {
+		t.Fatalf("simulated launch did not complete: pending=%q agents=%#v",
+			fake.pendingSpawnPaneID, fake.snapshot.Agents)
+	}
+}
+
+func TestDedicatedSpawnUnconfirmedLaunchRollsBackTheCreatedTab(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	fake.mu.Lock()
+	fake.spawnAppearsAfterPolls = -1
+	fake.mu.Unlock()
+
+	_, err := service.SpawnAgent(t.Context(), AgentStartOptions{
+		Name: "worker", Kind: "codex", NewTab: true, Timeout: 600 * time.Millisecond,
+	})
+	if translated := Translate(err); translated == nil || translated.Code != "agent_launch_unconfirmed" {
+		t.Fatalf("error = %v", err)
+	}
+
+	fake.mu.Lock()
+	if fake.sendInputCalls != 1 || len(fake.snapshot.Tabs) != 0 || len(fake.snapshot.Panes) != 0 {
+		fake.mu.Unlock()
+		t.Fatalf("unconfirmed spawn left layout behind: injections=%d tabs=%#v panes=%#v",
+			fake.sendInputCalls, fake.snapshot.Tabs, fake.snapshot.Panes)
+	}
+	fake.mu.Unlock()
+	st, err := service.Store.Read(service.Project.Session, service.Project.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, recorded := st.Agents["worker"]; recorded {
+		t.Fatalf("unconfirmed spawn persisted its mapping: %#v", st.Agents)
+	}
+}
+
+func TestDedicatedSpawnRollsBackWhenTheBootstrapCannotBeSent(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	fake.mu.Lock()
+	fake.failMethod = "pane.send_input"
+	fake.mu.Unlock()
+
+	_, err := service.SpawnAgent(t.Context(), AgentStartOptions{
+		Name: "worker", Kind: "codex", NewTab: true, Timeout: 30 * time.Second,
+	})
+	if err == nil {
+		t.Fatal("expected the send_input failure to fail the spawn")
+	}
+
+	fake.mu.Lock()
+	if len(fake.snapshot.Tabs) != 0 || len(fake.snapshot.Panes) != 0 {
+		fake.mu.Unlock()
+		t.Fatalf("failed injection left layout behind: tabs=%#v panes=%#v",
+			fake.snapshot.Tabs, fake.snapshot.Panes)
+	}
+	fake.mu.Unlock()
+	st, err := service.Store.Read(service.Project.Session, service.Project.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, recorded := st.Agents["worker"]; recorded {
+		t.Fatalf("failed injection persisted its mapping: %#v", st.Agents)
+	}
+}
+
+// The in-pane child of a dedicated-tab spawn claims a pane the parent already
+// labelled with the child's own name and recorded provisionally; the claim
+// must succeed and keep the dedicated-tab placement.
+func TestInPaneClaimOfItsOwnPreparedTabKeepsDedicatedPlacement(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	service.WorkspaceID = "w1"
+	label := "worker"
+	fake.mu.Lock()
+	fake.snapshot.Workspaces = []herdr.WorkspaceInfo{{WorkspaceID: "w1"}}
+	fake.snapshot.Tabs = []herdr.TabInfo{{TabID: "t-agent", WorkspaceID: "w1", Label: label}}
+	fake.snapshot.Panes = []herdr.PaneInfo{{PaneID: "p-agent", TabID: "t-agent", WorkspaceID: "w1", Label: &label}}
+	fake.mu.Unlock()
+	if err := service.Store.WithLocked(service.Project.Session, service.Project.Root, func(st *state.Session) error {
+		st.WorkspaceID = "w1"
+		st.Agents["worker"] = state.Agent{
+			Name: "worker", Kind: "codex", Placement: "tab",
+			CWD: service.Project.Root, TabID: "t-agent", PaneID: "p-agent",
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service.ExecAgent = func(string, []string, []string) error { return nil }
+
+	result, err := service.SpawnAgent(t.Context(), AgentStartOptions{
+		Name: "worker", Kind: "codex", CurrentPaneID: "p-agent",
+		Executable: "/usr/bin/codex", Timeout: 30 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Agent.Placement != "tab" || result.Agent.PaneID != "p-agent" {
+		t.Fatalf("claim result = %#v", result.Agent)
+	}
+	st, err := service.Store.Read(service.Project.Session, service.Project.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Agents["worker"].Placement != "tab" || st.Agents["worker"].PaneID != "p-agent" ||
+		st.Agents["worker"].TabID != "t-agent" {
+		t.Fatalf("claimed state = %#v", st.Agents["worker"])
 	}
 }
 
@@ -389,9 +565,9 @@ func TestDedicatedSpawnClosesCreatedTabWhenShellNeverAppears(t *testing.T) {
 
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	if fake.startCalls != 0 || len(fake.snapshot.Tabs) != 0 || len(fake.snapshot.Panes) != 0 {
-		t.Fatalf("failed spawn left layout behind: starts=%d tabs=%#v panes=%#v",
-			fake.startCalls, fake.snapshot.Tabs, fake.snapshot.Panes)
+	if fake.sendInputCalls != 0 || len(fake.snapshot.Tabs) != 0 || len(fake.snapshot.Panes) != 0 {
+		t.Fatalf("failed spawn left layout behind: injections=%d tabs=%#v panes=%#v",
+			fake.sendInputCalls, fake.snapshot.Tabs, fake.snapshot.Panes)
 	}
 	st, err := service.Store.Read(service.Project.Session, service.Project.Root)
 	if err != nil {
@@ -434,9 +610,9 @@ func TestDedicatedSpawnClosesCreatedTabWhenRenameFails(t *testing.T) {
 	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	if fake.startCalls != 0 || len(fake.snapshot.Tabs) != 0 || len(fake.snapshot.Panes) != 0 {
-		t.Fatalf("rename failure left layout behind: starts=%d tabs=%#v panes=%#v",
-			fake.startCalls, fake.snapshot.Tabs, fake.snapshot.Panes)
+	if fake.sendInputCalls != 0 || len(fake.snapshot.Tabs) != 0 || len(fake.snapshot.Panes) != 0 {
+		t.Fatalf("rename failure left layout behind: injections=%d tabs=%#v panes=%#v",
+			fake.sendInputCalls, fake.snapshot.Tabs, fake.snapshot.Panes)
 	}
 }
 
@@ -472,9 +648,9 @@ func TestDedicatedSpawnCancellationStillClosesCreatedTab(t *testing.T) {
 	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	if fake.startCalls != 0 || len(fake.snapshot.Tabs) != 0 || len(fake.snapshot.Panes) != 0 {
-		t.Fatalf("cancelled spawn left layout behind: starts=%d tabs=%#v panes=%#v",
-			fake.startCalls, fake.snapshot.Tabs, fake.snapshot.Panes)
+	if fake.sendInputCalls != 0 || len(fake.snapshot.Tabs) != 0 || len(fake.snapshot.Panes) != 0 {
+		t.Fatalf("cancelled spawn left layout behind: injections=%d tabs=%#v panes=%#v",
+			fake.sendInputCalls, fake.snapshot.Tabs, fake.snapshot.Panes)
 	}
 }
 
@@ -555,8 +731,8 @@ func TestDedicatedSpawnAllocatesOnceAndForwardsNativeArgs(t *testing.T) {
 	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	if fake.startCalls != 1 || strings.Join(fake.startArgs, " ") != "--model gpt-5" {
-		t.Fatalf("start calls=%d args=%v", fake.startCalls, fake.startArgs)
+	if fake.sendInputCalls != 1 || !strings.HasSuffix(fake.sendInputText, " -- --model gpt-5") {
+		t.Fatalf("injections=%d command=%q", fake.sendInputCalls, fake.sendInputText)
 	}
 }
 
@@ -603,10 +779,10 @@ func TestConcurrentDuplicateAgentStartAllocatesOnlyOnce(t *testing.T) {
 		}
 	}
 	fake.mu.Lock()
-	starts := fake.startCalls
+	injections := fake.sendInputCalls
 	fake.mu.Unlock()
-	if failures != 1 || starts != 1 {
-		t.Fatalf("failures=%d start calls=%d", failures, starts)
+	if failures != 1 || injections != 1 {
+		t.Fatalf("failures=%d bootstrap injections=%d", failures, injections)
 	}
 }
 
@@ -857,15 +1033,15 @@ func TestInPaneSpawnLaunchesDeliveryHelperForTheActiveRun(t *testing.T) {
 	}
 }
 
-func TestNewTabSpawnLaunchesDeliveryHelperForTheActiveRun(t *testing.T) {
+// The parent's dedicated-tab spawn only prepares the tab and injects the
+// bootstrap command; messaging activation and the delivery helper belong to
+// the in-pane child that command starts.
+func TestNewTabSpawnDefersMessagingActivationToTheInPaneChild(t *testing.T) {
 	service, _ := newFakeLifecycle(t)
 	startTestMessageRun(t, service)
-	var launches int
-	var launchedName, launchedActivation string
-	var launchedTimeout time.Duration
-	service.LaunchDeliveryHelper = func(name, activationID string, timeout time.Duration) error {
+	launches := 0
+	service.LaunchDeliveryHelper = func(string, string, time.Duration) error {
 		launches++
-		launchedName, launchedActivation, launchedTimeout = name, activationID, timeout
 		return nil
 	}
 
@@ -879,10 +1055,32 @@ func TestNewTabSpawnLaunchesDeliveryHelperForTheActiveRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if launches != 1 || launchedName != "worker" || launchedTimeout != 7*time.Second ||
+	if launches != 0 || st.Agents["worker"].ActivationID != "" {
+		t.Fatalf("parent activated messaging itself: launches=%d persisted=%#v", launches, st.Agents["worker"])
+	}
+}
+
+func TestNewTabSpawnChildClaimLaunchesDeliveryHelperForTheActiveRun(t *testing.T) {
+	service, _ := newFakeLifecycle(t)
+	startTestMessageRun(t, service)
+	var launches int
+	var launchedName, launchedActivation string
+	service.LaunchDeliveryHelper = func(name, activationID string, _ time.Duration) error {
+		launches++
+		launchedName, launchedActivation = name, activationID
+		return nil
+	}
+
+	mustStartAgent(t, service, "worker")
+
+	st, err := service.Store.Read(service.Project.Session, service.Project.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if launches != 1 || launchedName != "worker" ||
 		launchedActivation == "" || launchedActivation != st.Agents["worker"].ActivationID {
-		t.Fatalf("launches=%d name=%q activation=%q timeout=%s persisted=%#v",
-			launches, launchedName, launchedActivation, launchedTimeout, st.Agents["worker"])
+		t.Fatalf("launches=%d name=%q activation=%q persisted=%#v",
+			launches, launchedName, launchedActivation, st.Agents["worker"])
 	}
 }
 

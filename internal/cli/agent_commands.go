@@ -304,6 +304,7 @@ func runProfileAgentSpawn(cmd *cobra.Command, env *environment, flags agentSpawn
 	currentPaneID := strings.TrimSpace(env.getenvValue("HERDR_PANE_ID"))
 	result, err := service.SpawnAgent(cmd.Context(), fledge.AgentStartOptions{
 		Name: name, Kind: selection.Harness.ID, Model: selection.Model, Profile: flags.profile,
+		ProfileLocksHarness: profile.Harness != "", ProfileLocksModel: profile.Model != "",
 		CWD: profileRoot, Timeout: flags.timeout, Args: append([]string(nil), profileArgs...),
 		NewTab: flags.newTab || currentPaneID == "", CurrentPaneID: currentPaneID, Executable: selection.Harness.Path,
 		RememberSelection: selection.Remember,

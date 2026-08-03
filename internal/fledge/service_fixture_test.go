@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,7 +25,6 @@ var okResult = map[string]any{"type": "ok"}
 type fakeLifecycle struct {
 	mu               sync.Mutex
 	snapshot         herdr.Snapshot
-	startCalls       int
 	workspaceCreates int
 	workspaceCWD     string
 	tabCreates       int
@@ -42,31 +42,36 @@ type fakeLifecycle struct {
 	// report a shell-less booting pane; later calls report a ready shell.
 	bootingProcessInfoCalls int
 	processInfoCalls        int
-	// startBusyWhileBooting rejects agent.start with agent_pane_busy while the
-	// pane still reports a booting shell.
-	startBusyWhileBooting bool
-	startBusyRejections   int
-	startArgs             []string
-	promptTarget     string
-	promptText       string
-	waitTarget       string
-	readTarget       string
-	sendKeysTarget   string
-	sendKeys         []string
-	sendKeyCalls     [][]string
-	sendKeysTargets  []string
-	methodCalls      []string
-	sendInputCalls   int
-	sendInputPaneID  string
-	sendInputText    string
-	sendInputKeys    []string
-	serverStopped    bool
-	serverStopError  string
-	serverStopHook   func()
-	runningMarker    string
-	pongProtocol     int
-	ignoreExit       bool
-	agentExitHook    func()
+	// spawnAppearsAfterPolls delays the simulated in-pane spawn a
+	// pane.send_input bootstrap command triggers: the harness appears after
+	// this many session.snapshot polls (0 = immediately, negative = never).
+	spawnAppearsAfterPolls int
+	pendingSpawnPaneID     string
+	pendingSpawnPolls      int
+	// shellProbesAtSendInput records how many pane.process_info probes had
+	// answered when the bootstrap command was injected, proving the spawn
+	// waited for the pane's shell first.
+	shellProbesAtSendInput int
+	promptTarget           string
+	promptText             string
+	waitTarget             string
+	readTarget             string
+	sendKeysTarget         string
+	sendKeys               []string
+	sendKeyCalls           [][]string
+	sendKeysTargets        []string
+	methodCalls            []string
+	sendInputCalls         int
+	sendInputPaneID        string
+	sendInputText          string
+	sendInputKeys          []string
+	serverStopped          bool
+	serverStopError        string
+	serverStopHook         func()
+	runningMarker          string
+	pongProtocol           int
+	ignoreExit             bool
+	agentExitHook          func()
 }
 
 func newFakeLifecycle(t *testing.T) (*Service, *fakeLifecycle) {
@@ -166,6 +171,54 @@ func (f *fakeLifecycle) record(call herdrtest.Call) {
 		f.sendInputPaneID = call.Text("pane_id")
 		f.sendInputText = call.Text("text")
 		f.sendInputKeys = appendStrings(f.sendInputKeys[:0], call.Params["keys"])
+		f.shellProbesAtSendInput = f.processInfoCalls
+		if strings.Contains(f.sendInputText, " agent spawn") && f.spawnAppearsAfterPolls >= 0 {
+			f.pendingSpawnPaneID = f.sendInputPaneID
+			f.pendingSpawnPolls = f.spawnAppearsAfterPolls
+			if f.pendingSpawnPolls == 0 {
+				f.simulateInPaneSpawn()
+			}
+		}
+	case "session.snapshot":
+		if f.pendingSpawnPaneID != "" && f.pendingSpawnPolls > 0 {
+			f.pendingSpawnPolls--
+			if f.pendingSpawnPolls == 0 {
+				f.simulateInPaneSpawn()
+			}
+		}
+	}
+}
+
+// simulateInPaneSpawn stands in for the injected `fledge agent spawn` child:
+// the pane's harness starts and Herdr's detection reports it as a live,
+// interactive-ready agent named after the pane's label.
+func (f *fakeLifecycle) simulateInPaneSpawn() {
+	paneID := f.pendingSpawnPaneID
+	f.pendingSpawnPaneID = ""
+	kind := "codex"
+	for i := range f.snapshot.Panes {
+		if f.snapshot.Panes[i].PaneID != paneID {
+			continue
+		}
+		f.snapshot.Panes[i].Agent = &kind
+		f.snapshot.Panes[i].AgentStatus = "idle"
+		name := ""
+		if f.snapshot.Panes[i].Label != nil {
+			name = *f.snapshot.Panes[i].Label
+		}
+		agents := f.snapshot.Agents[:0]
+		for _, agent := range f.snapshot.Agents {
+			if agent.PaneID != paneID {
+				agents = append(agents, agent)
+			}
+		}
+		// Like real Herdr process detection, the entry carries no launch
+		// handshake fields; readiness comes from the settled status alone.
+		f.snapshot.Agents = append(agents, herdr.AgentInfo{
+			Agent: &kind, AgentStatus: "idle", Name: &name,
+			PaneID: paneID, TabID: f.snapshot.Panes[i].TabID, WorkspaceID: f.snapshot.Panes[i].WorkspaceID,
+		})
+		return
 	}
 }
 
@@ -194,32 +247,6 @@ func (f *fakeLifecycle) handle(conn net.Conn, call herdrtest.Call) bool {
 		herdrtest.WriteResult(conn, call, map[string]any{
 			"type": "pane_process_info", "process_info": info,
 		})
-	case "agent.start":
-		if f.startBusyWhileBooting && f.processInfoCalls <= f.bootingProcessInfoCalls {
-			f.startBusyRejections++
-			herdrtest.WriteError(conn, call, "agent_pane_busy", "pane p1 has no shell yet")
-			return true
-		}
-		f.startCalls++
-		rawArgs := call.Params["args"]
-		f.startArgs = appendStrings(f.startArgs, rawArgs)
-		kind := "codex"
-		name := call.Text("name")
-		paneID, tabID := call.Text("pane_id"), ""
-		for i := range f.snapshot.Panes {
-			if f.snapshot.Panes[i].PaneID == paneID {
-				f.snapshot.Panes[i].Agent = &kind
-				f.snapshot.Panes[i].AgentStatus = "idle"
-				tabID = f.snapshot.Panes[i].TabID
-			}
-		}
-		f.snapshot.Agents = []herdr.AgentInfo{{
-			Agent: &kind, AgentStatus: "idle", Name: &name, PaneID: paneID, TabID: tabID, WorkspaceID: "w1",
-			InteractiveReady: true,
-		}}
-		herdrtest.WriteResult(conn, call, map[string]any{
-			"type": "agent_started", "agent": f.snapshot.Agents[0], "argv": rawArgs,
-		})
 	case "agent.prompt":
 		if f.failPromptContaining != "" && strings.Contains(call.Text("text"), f.failPromptContaining) {
 			herdrtest.WriteInjectedFailure(conn, call)
@@ -244,7 +271,11 @@ func (f *fakeLifecycle) handle(conn net.Conn, call herdrtest.Call) bool {
 		f.sendKeysTargets = append(f.sendKeysTargets, f.sendKeysTarget)
 		f.sendKeys = appendStrings(f.sendKeys[:0], call.Params["keys"])
 		f.sendKeyCalls = append(f.sendKeyCalls, append([]string(nil), f.sendKeys...))
-		if !f.ignoreExit {
+		// Only shutdown keys stop the fake harness; a plain enter is the
+		// prompt-submitting keypress and leaves the agent running.
+		if !f.ignoreExit && slices.ContainsFunc(f.sendKeys, func(key string) bool {
+			return key == "ctrl+d" || key == "ctrl+c"
+		}) {
 			f.exitAgent(f.sendKeysTarget)
 			if f.agentExitHook != nil {
 				f.agentExitHook()

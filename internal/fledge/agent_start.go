@@ -17,17 +17,23 @@ import (
 )
 
 type AgentStartOptions struct {
-	Name              string
-	Kind              string
-	Model             string
-	Profile           string `json:"profile,omitempty"`
-	CWD               string
-	Timeout           time.Duration
-	Args              []string
-	NewTab            bool
-	CurrentPaneID     string
-	Executable        string
-	RememberSelection bool
+	Name    string
+	Kind    string
+	Model   string
+	Profile string `json:"profile,omitempty"`
+	// ProfileLocksHarness and ProfileLocksModel report that the spawned
+	// profile pins the selection itself. The dedicated-tab bootstrap command
+	// omits a locked flag because `fledge agent spawn <profile>` rejects
+	// overrides of profile-owned fields.
+	ProfileLocksHarness bool
+	ProfileLocksModel   bool
+	CWD                 string
+	Timeout             time.Duration
+	Args                []string
+	NewTab              bool
+	CurrentPaneID       string
+	Executable          string
+	RememberSelection   bool
 }
 
 type AgentStartResult struct {
@@ -51,16 +57,13 @@ func (s *Service) SpawnAgent(ctx context.Context, opts AgentStartOptions) (Agent
 	if opts.CurrentPaneID != "" && !opts.NewTab {
 		return s.spawnAgentInCurrentPane(ctx, client, opts, cwd, forwardedArgs)
 	}
-	managed, started, err := s.startAgentLocked(ctx, client, opts, cwd, forwardedArgs)
+	managed, started, err := s.startAgentLocked(ctx, client, opts, cwd)
 	if err != nil {
 		return AgentStartResult{}, err
 	}
-	if err := s.activateSpawnMessaging(opts, managed.PaneID); err != nil {
-		return AgentStartResult{}, Wrap("agent_deliverer_failed",
-			fmt.Sprintf("agent %q started, but its message deliverer did not launch: %v; "+
-				"queued messages will not inject automatically — recover them with `fledge agent message retry`",
-				opts.Name, err), err)
-	}
+	// Messaging activation and the delivery helper are owned by the in-pane
+	// child the injected command starts: it re-enters SpawnAgent through
+	// spawnAgentInCurrentPane once it runs inside the prepared pane.
 	return AgentStartResult{
 		Agent: viewFromInfo(opts.Name, managed, started),
 		Argv:  forwardedArgs,
@@ -103,16 +106,27 @@ func (s *Service) resolveAgentCWD(requested string) (string, error) {
 	return canonical, nil
 }
 
+// startAgentLocked prepares a dedicated tab and drives its shell through
+// Fledge's own in-pane spawn: it injects a `fledge agent spawn` command into
+// the pane instead of calling Herdr's agent.start RPC, because agents started
+// through that RPC stay launch-pending forever (herdr 0.7.5) and can never
+// receive injected messages. The child command sees the pane's HERDR_PANE_ID,
+// claims the pane, activates messaging, and execs the harness where Herdr's
+// process detection recognizes it.
 func (s *Service) startAgentLocked(
 	ctx context.Context,
 	client *herdr.Client,
 	opts AgentStartOptions,
 	cwd string,
-	forwardedArgs []string,
 ) (state.Agent, herdr.AgentInfo, error) {
+	executable, err := s.fledgeExecutable()
+	if err != nil {
+		return state.Agent{}, herdr.AgentInfo{}, err
+	}
 	var managed state.Agent
 	var startedInfo herdr.AgentInfo
-	err := s.Store.WithLocked(s.Project.Session, s.Project.Root, func(st *state.Session) error {
+	err = s.Store.WithLocked(s.Project.Session, s.Project.Root, func(st *state.Session) error {
+		begin := time.Now()
 		snapshot, err := client.Snapshot(ctx)
 		if err != nil {
 			return err
@@ -122,18 +136,31 @@ func (s *Service) startAgentLocked(
 		if err != nil {
 			return rollbackCreatedAgentTab(ctx, client, opts.Name, managed, createdTab, err)
 		}
-		// A third of the spawn timeout waits for the pane's shell; the rest is
-		// left for agent.start itself. The poll runs while this closure holds
-		// the session flock — a conscious tradeoff, bounded by shellBudget,
-		// that keeps concurrent spawns from racing the half-configured pane.
+		// A third of the spawn timeout waits for the pane's shell; the rest
+		// confirms the injected spawn command took the pane over. The polls
+		// run while this closure holds the session flock — a conscious
+		// tradeoff that keeps concurrent spawns from racing the
+		// half-configured pane. The child's own `fledge agent spawn` blocks
+		// on the same flock until this closure persists, but the confirmation
+		// criteria (a visible foreground process or a detected harness) never
+		// depend on the child acquiring the lock.
 		shellBudget := opts.Timeout / 3
 		if err := ensureAgentPaneAvailable(ctx, client, snapshot, managed, opts.Name, shellBudget); err != nil {
 			return rollbackCreatedAgentTab(ctx, client, opts.Name, managed, createdTab, err)
 		}
-		startedInfo, err = startAgentInPane(ctx, client, opts, managed.PaneID, forwardedArgs)
+		if err := client.Call(ctx, "pane.send_input", map[string]any{
+			"pane_id": managed.PaneID,
+			"text":    spawnCommand(executable, opts, cwd),
+			"keys":    []string{"enter"},
+		}, nil); err != nil {
+			return rollbackCreatedAgentTab(ctx, client, opts.Name, managed, createdTab, err)
+		}
+		startedInfo, err = awaitAgentLaunch(ctx, client, managed.PaneID, opts.Timeout-time.Since(begin))
 		if err != nil {
 			return rollbackCreatedAgentTab(ctx, client, opts.Name, managed, createdTab, err)
 		}
+		// This record is provisional: the in-pane child re-records the agent
+		// when it claims the pane, inheriting the "tab" placement from it.
 		managed.Kind, managed.Model, managed.Profile, managed.Placement, managed.CWD =
 			opts.Kind, opts.Model, opts.Profile, "tab", cwd
 		st.Agents[opts.Name] = managed
@@ -141,6 +168,97 @@ func (s *Service) startAgentLocked(
 		return nil
 	})
 	return managed, startedInfo, err
+}
+
+// fledgeExecutable names the running fledge binary the dedicated-tab
+// bootstrap re-invokes inside the prepared pane.
+func (s *Service) fledgeExecutable() (string, error) {
+	if s.FledgeExecutable != "" {
+		return s.FledgeExecutable, nil
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("locate fledge executable: %w", err)
+	}
+	return executable, nil
+}
+
+// spawnCommand renders the shell command a dedicated-tab spawn injects: the
+// current fledge binary re-invoked as an in-pane `agent spawn`, carrying every
+// selection so the child never blocks on a picker. Profile-owned fields stay
+// with the profile: the child re-derives cwd and native args from it, and
+// locked harness or model flags are omitted because the child would reject
+// them as overrides.
+func spawnCommand(executable string, opts AgentStartOptions, cwd string) string {
+	args := []string{"agent", "spawn"}
+	if opts.Profile != "" {
+		args = append(args, opts.Profile)
+	}
+	args = append(args, "--name", opts.Name)
+	if opts.Profile == "" || !opts.ProfileLocksHarness {
+		args = append(args, "--harness", opts.Kind)
+	}
+	if opts.Model != "" && (opts.Profile == "" || !opts.ProfileLocksModel) {
+		args = append(args, "--model", opts.Model)
+	}
+	if opts.Profile == "" {
+		args = append(args, "--cwd", cwd)
+	}
+	args = append(args, "--timeout", opts.Timeout.String())
+	if opts.Profile == "" && len(opts.Args) > 0 {
+		args = append(args, "--")
+		args = append(args, opts.Args...)
+	}
+	quoted := make([]string, 0, len(args)+1)
+	quoted = append(quoted, shellQuote(executable))
+	for _, arg := range args {
+		quoted = append(quoted, shellQuote(arg))
+	}
+	return strings.Join(quoted, " ")
+}
+
+// awaitAgentLaunch polls until the injected spawn command visibly owns the
+// pane: Herdr reports a harness in it, or a non-shell foreground process (the
+// spawning fledge child or its harness) has appeared. The returned info
+// carries the pane's agent status when Herdr already reports a harness and is
+// zero — state unknown, still booting — when only the process was seen.
+func awaitAgentLaunch(
+	ctx context.Context,
+	client *herdr.Client,
+	paneID string,
+	budget time.Duration,
+) (herdr.AgentInfo, error) {
+	deadline := time.Now().Add(budget)
+	for {
+		if ctx.Err() != nil {
+			return herdr.AgentInfo{}, NewError("agent_launch_unconfirmed",
+				fmt.Sprintf("wait for the spawn command in managed pane %s was cancelled: %v", paneID, ctx.Err()))
+		}
+		snapshot, err := client.Snapshot(ctx)
+		if err != nil {
+			return herdr.AgentInfo{}, err
+		}
+		if pane, ok := panesByID(snapshot)[paneID]; ok && pane.Agent != nil {
+			return herdr.AgentInfo{Agent: pane.Agent, AgentStatus: pane.AgentStatus, PaneID: paneID}, nil
+		}
+		var result herdr.Result
+		if err := client.Call(ctx, "pane.process_info", map[string]any{"pane_id": paneID}, &result); err != nil {
+			return herdr.AgentInfo{}, err
+		}
+		if paneHasUnrelatedForegroundProcess(result.ProcessInfo) {
+			return herdr.AgentInfo{}, nil
+		}
+		if time.Now().After(deadline) {
+			return herdr.AgentInfo{}, NewError("agent_launch_unconfirmed",
+				fmt.Sprintf("managed pane %s shows no agent or spawn process after %s", paneID, budget))
+		}
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+		case <-timer.C:
+		}
+		timer.Stop()
+	}
 }
 
 // paneClaim records the pane an in-pane spawn took over, together with the
@@ -217,8 +335,16 @@ func (s *Service) claimCurrentPane(
 			map[string]any{"pane_id": opts.CurrentPaneID, "label": opts.Name}, nil); err != nil {
 			return err
 		}
+		placement := "pane"
+		// A dedicated-tab spawn pre-labels the pane and records the tab
+		// placement before its in-pane child claims it; the claim keeps the
+		// dedicated-tab semantics so `fledge agent stop` still closes the tab.
+		if existing, ok := st.Agents[opts.Name]; ok &&
+			existing.PaneID == pane.PaneID && existing.Placement == "tab" {
+			placement = existing.Placement
+		}
 		claim.managed = state.Agent{
-			Name: opts.Name, Kind: opts.Kind, Model: opts.Model, Profile: opts.Profile, Placement: "pane",
+			Name: opts.Name, Kind: opts.Kind, Model: opts.Model, Profile: opts.Profile, Placement: placement,
 			CWD: cwd, TabID: pane.TabID, PaneID: pane.PaneID,
 		}
 		st.Agents[opts.Name] = claim.managed
@@ -420,8 +546,8 @@ func ensureAgentPaneAvailable(
 }
 
 // awaitPaneShell polls until the pane's shell exists. A freshly created pane
-// reports no shell for its first moments, and Herdr rejects agent.start into
-// a shell-less pane as busy.
+// reports no shell for its first moments, and a spawn command injected before
+// the shell runs would be lost.
 func awaitPaneShell(
 	ctx context.Context,
 	client *herdr.Client,
@@ -477,27 +603,6 @@ func rollbackCreatedAgentTab(
 		return newAgentTabCloseError(name, managed, message, cause)
 	}
 	return cause
-}
-
-func startAgentInPane(
-	ctx context.Context,
-	client *herdr.Client,
-	opts AgentStartOptions,
-	paneID string,
-	forwardedArgs []string,
-) (herdr.AgentInfo, error) {
-	params := map[string]any{
-		"name": opts.Name, "kind": opts.Kind, "pane_id": paneID,
-		"args": forwardedArgs,
-	}
-	if timeout := herdr.Milliseconds(opts.Timeout); timeout != nil {
-		params["timeout_ms"] = *timeout
-	}
-	var started herdr.Result
-	if err := client.Call(ctx, "agent.start", params, &started); err != nil {
-		return herdr.AgentInfo{}, err
-	}
-	return started.Agent, nil
 }
 
 func paneHasUnrelatedForegroundProcess(info herdr.ProcessInfo) bool {

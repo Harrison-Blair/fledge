@@ -3,6 +3,8 @@ package fledge
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -79,7 +81,7 @@ func seedMessagingAgent(
 	})
 	fake.snapshot.Agents = append(fake.snapshot.Agents, herdr.AgentInfo{
 		Agent: &kind, AgentStatus: StateIdle, Name: &agentName,
-		PaneID: paneID, TabID: tabID, WorkspaceID: "w1", InteractiveReady: interactiveReady,
+		PaneID: paneID, TabID: tabID, WorkspaceID: "w1", InteractiveReady: &interactiveReady,
 	})
 	fake.mu.Unlock()
 	if _, err := service.messageStore().Append(runID, messaging.Event{
@@ -221,6 +223,31 @@ func TestMessageDeliveryClassifiesDefiniteAndAmbiguousFailures(t *testing.T) {
 	}
 }
 
+// Herdr's agent.prompt pastes the envelope into a detected harness's composer
+// without submitting it; delivery must follow up with a distinct enter.
+func TestDeliverySubmitsThePastedPromptWithEnter(t *testing.T) {
+	service, fake := newFakeLifecycle(t)
+	startTestMessageRun(t, service)
+	mustStartAgent(t, service, "worker")
+
+	sent, err := service.SendMessage(t.Context(), "worker", "submit me")
+	if err != nil || sent.Message.Status != messaging.StatusAwaitingAck {
+		t.Fatalf("send = %#v, %v", sent, err)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.sendKeysTarget != fake.promptTarget || !reflect.DeepEqual(fake.sendKeyCalls, [][]string{{"enter"}}) {
+		t.Fatalf("submit keys = %v on %q, prompt target %q",
+			fake.sendKeyCalls, fake.sendKeysTarget, fake.promptTarget)
+	}
+	promptIndex := slices.Index(fake.methodCalls, "agent.prompt")
+	enterIndex := slices.Index(fake.methodCalls, "agent.send_keys")
+	if promptIndex < 0 || enterIndex < promptIndex {
+		t.Fatalf("submit did not follow the paste: methods = %v", fake.methodCalls)
+	}
+}
+
 func TestSendToBootingAgentStaysQueuedWithoutDeliveryAttempt(t *testing.T) {
 	service, fake := newFakeLifecycle(t)
 	runID := startTestMessageRun(t, service)
@@ -244,15 +271,24 @@ func TestSendToBootingAgentStaysQueuedWithoutDeliveryAttempt(t *testing.T) {
 
 func TestAgentInteractiveReadinessPredicate(t *testing.T) {
 	kind := "codex"
+	ready, pending := true, true
+	notReady, notPending := false, false
 	for _, testCase := range []struct {
 		name  string
 		agent herdr.AgentInfo
 		want  bool
 	}{
-		{"ready harness", herdr.AgentInfo{Agent: &kind, InteractiveReady: true}, true},
-		{"no harness", herdr.AgentInfo{InteractiveReady: true}, false},
-		{"not interactive yet", herdr.AgentInfo{Agent: &kind}, false},
-		{"launch still pending", herdr.AgentInfo{Agent: &kind, InteractiveReady: true, LaunchPending: true}, false},
+		{"ready harness", herdr.AgentInfo{Agent: &kind, InteractiveReady: &ready}, true},
+		{"no harness", herdr.AgentInfo{InteractiveReady: &ready}, false},
+		{"not interactive yet", herdr.AgentInfo{Agent: &kind, InteractiveReady: &notReady}, false},
+		{"launch still pending", herdr.AgentInfo{Agent: &kind, InteractiveReady: &ready, LaunchPending: &pending}, false},
+		// Herdr's process detection reports no handshake fields at all for
+		// agents it recognized inside a pane; a settled lifecycle status is
+		// their readiness signal.
+		{"detected idle harness", herdr.AgentInfo{Agent: &kind, AgentStatus: StateIdle}, true},
+		{"detected working harness", herdr.AgentInfo{Agent: &kind, AgentStatus: StateWorking}, true},
+		{"detected harness without a settled status", herdr.AgentInfo{Agent: &kind, AgentStatus: StateUnknown}, false},
+		{"detected harness past its handshake", herdr.AgentInfo{Agent: &kind, AgentStatus: StateIdle, LaunchPending: &notPending}, true},
 	} {
 		if got := agentInteractiveReady(testCase.agent); got != testCase.want {
 			t.Errorf("%s: ready = %t, want %t", testCase.name, got, testCase.want)
@@ -361,9 +397,10 @@ func TestDeliverActivationWaitsForInteractiveReadiness(t *testing.T) {
 		} else {
 			statusBeforeReady <- showErr.Error()
 		}
+		ready := true
 		fake.mu.Lock()
 		for i := range fake.snapshot.Agents {
-			fake.snapshot.Agents[i].InteractiveReady = true
+			fake.snapshot.Agents[i].InteractiveReady = &ready
 		}
 		fake.mu.Unlock()
 	}()
@@ -491,14 +528,14 @@ func TestSystemFailureQueuesForInactiveSenderAndReplaysOnActivation(t *testing.T
 		t.Fatalf("inactive-sender notification = %#v", notification)
 	}
 
-	kind, name := "codex", "coordinator"
+	kind, name, ready := "codex", "coordinator", true
 	fake.mu.Lock()
 	fake.snapshot.Panes[0].Agent = &kind
 	fake.snapshot.Panes[0].AgentStatus = StateIdle
 	fake.snapshot.Agents = append(fake.snapshot.Agents, herdr.AgentInfo{
 		Agent: &kind, AgentStatus: StateIdle, Name: &name,
 		PaneID: coordinator.Agent.PaneID, TabID: coordinator.Agent.TabID,
-		WorkspaceID: "w1", InteractiveReady: true,
+		WorkspaceID: "w1", InteractiveReady: &ready,
 	})
 	fake.mu.Unlock()
 	client := &herdr.Client{Socket: serviceSessionSocket(t, service.Binary)}

@@ -14,6 +14,9 @@ import (
 
 var testSpawnSelection = state.SpawnSelection{Harness: "codex", Model: "gpt-5.6"}
 
+// The paste-settle before delivery's submitting enter only slows tests down.
+func init() { promptSubmitSettle = time.Millisecond }
+
 // seedDisposableState fills every field a coordinated stop is expected to
 // clear, so assertDisposableStateCleared has something to prove. The active
 // run is a real one: a fabricated ID would make the run close a no-op and
@@ -58,13 +61,25 @@ func assertDisposableStateCleared(
 }
 
 // mustStartAgent spawns name into its own tab, the arrangement almost every
-// agent-facing test needs before exercising anything else.
+// agent-facing test needs before exercising anything else. After the parent
+// spawn returns it stands in for the in-pane child the injected bootstrap
+// command starts: a current-pane SpawnAgent that claims the pane, activates
+// messaging, and hands the pane to the (stubbed) harness exec.
 func mustStartAgent(t *testing.T, service *Service, name string) AgentStartResult {
 	t.Helper()
 	result, err := service.SpawnAgent(t.Context(), AgentStartOptions{
 		Name: name, Kind: "codex", NewTab: true, Timeout: 30 * time.Second,
 	})
 	if err != nil {
+		t.Fatal(err)
+	}
+	previousExec := service.ExecAgent
+	service.ExecAgent = func(string, []string, []string) error { return nil }
+	defer func() { service.ExecAgent = previousExec }()
+	if _, err := service.SpawnAgent(t.Context(), AgentStartOptions{
+		Name: name, Kind: "codex", CurrentPaneID: result.Agent.PaneID,
+		Executable: "/usr/bin/codex", Timeout: 30 * time.Second,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	return result
