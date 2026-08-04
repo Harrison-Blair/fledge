@@ -832,33 +832,6 @@ func TestRejectsSymlinkedLogDirectories(t *testing.T) {
 	}
 }
 
-func TestUnixNoFollowOpenCannotTruncateSymlinkTarget(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("O_NOFOLLOW is a Unix safety mechanism")
-	}
-	directory := t.TempDir()
-	target := filepath.Join(directory, "target")
-	link := filepath.Join(directory, "link")
-	if err := os.WriteFile(target, []byte("unchanged"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(target, link); err != nil {
-		t.Fatal(err)
-	}
-	file, err := openFileNoFollow(link, os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err == nil {
-		_ = file.Close()
-		t.Fatal("openFileNoFollow unexpectedly opened a symlink")
-	}
-	contents, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(contents) != "unchanged" {
-		t.Fatalf("symlink target was truncated: %q", contents)
-	}
-}
-
 func TestRepairsOnlyUnterminatedTail(t *testing.T) {
 	store := initializedStore(t)
 	message := mustCreate(t, store, CreateParams{Sender: "user", Recipient: "alice", Body: "complete", RecipientPane: "%1"})

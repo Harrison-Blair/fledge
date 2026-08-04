@@ -5,16 +5,9 @@ package messaging
 import (
 	"errors"
 	"fmt"
-	"os"
 
 	"golang.org/x/sys/windows"
 )
-
-// Windows does not expose an os.OpenFile O_NOFOLLOW flag. openRegular validates
-// the opened handle against Lstat before callers perform destructive changes.
-func openFileNoFollow(path string, flags int, permission os.FileMode) (*os.File, error) {
-	return os.OpenFile(path, flags, permission)
-}
 
 // Windows refuses to delete a file that is still open, so the lock has to be
 // released before remove can unlink it. Unix closes the window this leaves

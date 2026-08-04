@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Harrison-Blair/fledge/internal/fsutil"
 	"github.com/Harrison-Blair/fledge/internal/statedir"
 )
 
@@ -174,10 +175,7 @@ func (l *Ledger) load() ([]entry, error) {
 // line that a crash left unterminated.
 func (l *Ledger) readAndRepairLog() ([]byte, error) {
 	path := l.logPath()
-	if err := rejectSymlink(path); err != nil {
-		return nil, err
-	}
-	file, err := openRegular(path, os.O_RDWR, 0o600)
+	file, err := fsutil.OpenRegular(path, os.O_RDWR, 0o600)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -212,12 +210,9 @@ func (l *Ledger) appendEntries(entries []entry) error {
 		}
 	}
 	path := l.logPath()
-	if err := rejectSymlink(path); err != nil {
-		return err
-	}
 	_, statErr := os.Lstat(path)
 	creating := errors.Is(statErr, os.ErrNotExist)
-	file, err := openRegular(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	file, err := fsutil.OpenRegular(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("open wake ledger %q: %w", path, err)
 	}
@@ -242,7 +237,7 @@ func (l *Ledger) appendEntries(entries []entry) error {
 	if creating {
 		// The first append also creates the ledger, whose directory entry only
 		// becomes durable once the directory itself is synced.
-		return syncDirectory(l.watchPath())
+		return fsutil.SyncDirectory(l.watchPath())
 	}
 	return nil
 }
@@ -263,7 +258,7 @@ func encodeEntries(entries []entry) ([]byte, error) {
 // in the same directory, so an interrupted write leaves the previous contents
 // in place rather than a half-written file.
 func writeFileAtomically(path string, contents []byte) error {
-	if err := rejectSymlink(path); err != nil {
+	if err := fsutil.RejectSymlink(path); err != nil {
 		return err
 	}
 	directory := filepath.Dir(path)
@@ -285,7 +280,7 @@ func writeFileAtomically(path string, contents []byte) error {
 		_ = os.Remove(temporary)
 		return fmt.Errorf("replace wake file %q: %w", path, err)
 	}
-	return syncDirectory(directory)
+	return fsutil.SyncDirectory(directory)
 }
 
 func writeAndSync(file *os.File, contents []byte) error {
@@ -351,57 +346,6 @@ func (l *Ledger) ensureStateDirectory() error {
 		if err := os.Chmod(directory.path, 0o700); err != nil {
 			return fmt.Errorf("secure wake state directory %q: %w", directory.path, err)
 		}
-	}
-	return nil
-}
-
-func openRegular(path string, flags int, permission os.FileMode) (*os.File, error) {
-	file, err := openFileNoFollow(path, flags, permission)
-	if err != nil {
-		return nil, err
-	}
-	info, err := file.Stat()
-	if err != nil {
-		_ = file.Close()
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		_ = file.Close()
-		return nil, fmt.Errorf("path %q is not a regular file", path)
-	}
-	current, err := os.Lstat(path)
-	if err != nil || current.Mode()&os.ModeSymlink != 0 || !os.SameFile(info, current) {
-		_ = file.Close()
-		if err != nil {
-			return nil, err
-		}
-		return nil, fmt.Errorf("path %q changed while opening or is a symlink", path)
-	}
-	return file, nil
-}
-
-func rejectSymlink(path string) error {
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("inspect wake path %q: %w", path, err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("wake path %q must not be a symlink", path)
-	}
-	return nil
-}
-
-func syncDirectory(path string) error {
-	directory, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("open wake state directory %q: %w", path, err)
-	}
-	defer directory.Close()
-	if err := directory.Sync(); err != nil {
-		return fmt.Errorf("sync wake state directory %q: %w", path, err)
 	}
 	return nil
 }

@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/Harrison-Blair/fledge/internal/fsutil"
 )
 
 // FileName is the debug log file name inside a session log directory.
@@ -122,26 +124,9 @@ func ownedLevels(dir string) ([]string, error) {
 
 func openLogFile(dir string) (*os.File, error) {
 	path := filepath.Join(dir, FileName)
-	info, err := os.Lstat(path)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-	case err != nil:
-		return nil, fmt.Errorf("inspect log file %q: %w", path, err)
-	case info.Mode()&os.ModeSymlink != 0:
-		return nil, fmt.Errorf("log file %q must not be a symlink", path)
-	}
-	file, err := openFileNoFollow(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	file, err := fsutil.OpenRegular(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open log file %q: %w", path, err)
-	}
-	opened, err := file.Stat()
-	if err != nil {
-		_ = file.Close()
-		return nil, fmt.Errorf("inspect log file %q: %w", path, err)
-	}
-	if !opened.Mode().IsRegular() {
-		_ = file.Close()
-		return nil, fmt.Errorf("log file %q is not a regular file", path)
 	}
 	if err := file.Chmod(0o600); err != nil {
 		_ = file.Close()

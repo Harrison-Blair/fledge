@@ -14,14 +14,6 @@ import (
 // locked turns out to have been unlinked or replaced while it waited.
 const lockAttempts = 5
 
-func openFileNoFollow(path string, flags int, permission os.FileMode) (*os.File, error) {
-	descriptor, err := unix.Open(path, flags|unix.O_NOFOLLOW|unix.O_CLOEXEC, uint32(permission.Perm()))
-	if err != nil {
-		return nil, err
-	}
-	return os.NewFile(uintptr(descriptor), path), nil
-}
-
 // removeUnderLock keeps the lock held while remove deletes the session's files,
 // so no other process can acquire it and write into files that are about to
 // disappear. Unlinking a file this process is still flocked to is safe because

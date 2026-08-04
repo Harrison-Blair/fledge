@@ -8,19 +8,12 @@ import (
 	"os"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/Harrison-Blair/fledge/internal/fsutil"
 )
 
-// Windows does not expose an os.OpenFile O_NOFOLLOW flag. openRegular validates
-// the opened handle against Lstat before callers perform destructive changes.
-func openFileNoFollow(path string, flags int, permission os.FileMode) (*os.File, error) {
-	return os.OpenFile(path, flags, permission)
-}
-
 func (l *Ledger) acquireLock(path string) (func() error, error) {
-	if err := rejectSymlink(path); err != nil {
-		return nil, err
-	}
-	file, err := openRegular(path, os.O_CREATE|os.O_RDWR, 0o600)
+	file, err := fsutil.OpenRegular(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open wake lock %q: %w", path, err)
 	}

@@ -17,17 +17,6 @@ type singletonLock struct {
 	overlapped windows.Overlapped
 }
 
-func openOwned(path string, flags int, permission os.FileMode) (*os.File, error) {
-	if err := rejectSymlink(path); err != nil {
-		return nil, err
-	}
-	file, err := os.OpenFile(path, flags, permission)
-	if err != nil {
-		return nil, err
-	}
-	return validateOwned(file, path)
-}
-
 func acquire(path string) (*singletonLock, error) {
 	file, err := openOwned(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {

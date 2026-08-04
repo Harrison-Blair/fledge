@@ -14,18 +14,6 @@ var errAlreadyRunning = errors.New("watcher is already running")
 
 type singletonLock struct{ file *os.File }
 
-func openOwned(path string, flags int, permission os.FileMode) (*os.File, error) {
-	if err := rejectSymlink(path); err != nil {
-		return nil, err
-	}
-	descriptor, err := unix.Open(path, flags|unix.O_NOFOLLOW|unix.O_CLOEXEC, uint32(permission.Perm()))
-	if err != nil {
-		return nil, err
-	}
-	file := os.NewFile(uintptr(descriptor), path)
-	return validateOwned(file, path)
-}
-
 func acquire(path string) (*singletonLock, error) {
 	file, err := openOwned(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {

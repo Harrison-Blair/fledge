@@ -8,21 +8,12 @@ import (
 	"os"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/Harrison-Blair/fledge/internal/fsutil"
 )
 
-func openFileNoFollow(path string, flags int, permission os.FileMode) (*os.File, error) {
-	descriptor, err := unix.Open(path, flags|unix.O_NOFOLLOW|unix.O_CLOEXEC, uint32(permission.Perm()))
-	if err != nil {
-		return nil, err
-	}
-	return os.NewFile(uintptr(descriptor), path), nil
-}
-
 func (l *Ledger) acquireLock(path string) (func() error, error) {
-	if err := rejectSymlink(path); err != nil {
-		return nil, err
-	}
-	file, err := openRegular(path, os.O_CREATE|os.O_RDWR, 0o600)
+	file, err := fsutil.OpenRegular(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open wake lock %q: %w", path, err)
 	}

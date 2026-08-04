@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Harrison-Blair/fledge/internal/fsutil"
 	"github.com/Harrison-Blair/fledge/internal/statedir"
 )
 
@@ -180,7 +181,7 @@ func (s *Store) RemoveLock() error {
 	return s.withRemovalLock(func() error {
 		var removeErr error
 		for _, lockPath := range []string{s.lockPath(), s.legacyLockPath()} {
-			if err := rejectSymlink(lockPath); err != nil {
+			if err := fsutil.RejectSymlink(lockPath); err != nil {
 				removeErr = errors.Join(removeErr, err)
 				continue
 			}
@@ -188,7 +189,7 @@ func (s *Store) RemoveLock() error {
 				removeErr = errors.Join(removeErr, fmt.Errorf("remove messaging lock %q: %w", lockPath, err))
 			}
 		}
-		return errors.Join(removeErr, syncDirectory(s.statePath()), syncDirectory(s.tempPath()))
+		return errors.Join(removeErr, fsutil.SyncDirectory(s.statePath()), fsutil.SyncDirectory(s.tempPath()))
 	})
 }
 
@@ -198,7 +199,7 @@ func (s *Store) RemoveAll() error {
 	return s.withRemovalLock(func() error {
 		var removeErr error
 		for _, path := range []string{s.statePath(), s.tempPath()} {
-			if err := rejectSymlink(path); err != nil {
+			if err := fsutil.RejectSymlink(path); err != nil {
 				removeErr = errors.Join(removeErr, err)
 				continue
 			}
@@ -206,7 +207,7 @@ func (s *Store) RemoveAll() error {
 				removeErr = errors.Join(removeErr, fmt.Errorf("remove messaging session directory %q: %w", path, err))
 			}
 		}
-		return errors.Join(removeErr, syncDirectory(statedir.Logs(s.root)), syncDirectory(statedir.Temp(s.root)))
+		return errors.Join(removeErr, fsutil.SyncDirectory(statedir.Logs(s.root)), fsutil.SyncDirectory(statedir.Temp(s.root)))
 	})
 }
 
@@ -220,7 +221,7 @@ func (s *Store) removeLegacyFiles() error {
 		filepath.Join(directory, lockFilename),
 		s.legacyLockPath(),
 	} {
-		if err := rejectSymlink(path); err != nil {
+		if err := fsutil.RejectSymlink(path); err != nil {
 			removeErr = errors.Join(removeErr, err)
 			continue
 		}
@@ -228,7 +229,7 @@ func (s *Store) removeLegacyFiles() error {
 			removeErr = errors.Join(removeErr, fmt.Errorf("remove legacy messaging file %q: %w", path, err))
 		}
 	}
-	return errors.Join(removeErr, syncDirectory(directory), syncDirectory(s.statePath()))
+	return errors.Join(removeErr, fsutil.SyncDirectory(directory), fsutil.SyncDirectory(s.statePath()))
 }
 
 // Create appends a new pending message.
@@ -505,10 +506,7 @@ func (s *Store) loadState() (*logState, error) {
 
 func (s *Store) readAndRepairLog() ([]byte, error) {
 	path := s.logPath()
-	if err := rejectSymlink(path); err != nil {
-		return nil, err
-	}
-	file, err := openRegular(path, os.O_RDWR, 0o600)
+	file, err := fsutil.OpenRegular(path, os.O_RDWR, 0o600)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, ErrNotInitialized
 	}
@@ -542,10 +540,7 @@ func (s *Store) replaceLog(events []event) error {
 		return err
 	}
 	path := s.logPath()
-	if err := rejectSymlink(path); err != nil {
-		return err
-	}
-	file, err := openRegular(path, os.O_CREATE|os.O_RDWR, 0o600)
+	file, err := fsutil.OpenRegular(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return fmt.Errorf("create messaging log %q: %w", path, err)
 	}
@@ -553,7 +548,7 @@ func (s *Store) replaceLog(events []event) error {
 		_ = file.Close()
 		return fmt.Errorf("secure messaging log %q: %w", path, err)
 	}
-	// Truncate only after openRegular has verified that the opened handle is the
+	// Truncate only after OpenRegular has verified that the opened handle is the
 	// same regular, non-symlink file currently named by path.
 	if err := file.Truncate(0); err != nil {
 		_ = file.Close()
@@ -571,7 +566,7 @@ func (s *Store) replaceLog(events []event) error {
 	if closeErr != nil {
 		return fmt.Errorf("close messaging log %q: %w", path, closeErr)
 	}
-	return syncDirectory(s.statePath())
+	return fsutil.SyncDirectory(s.statePath())
 }
 
 func (s *Store) appendEvents(events []event) error {
@@ -579,10 +574,7 @@ func (s *Store) appendEvents(events []event) error {
 		return err
 	}
 	path := s.logPath()
-	if err := rejectSymlink(path); err != nil {
-		return err
-	}
-	file, err := openRegular(path, os.O_WRONLY|os.O_APPEND, 0o600)
+	file, err := fsutil.OpenRegular(path, os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("open messaging log %q: %w", path, err)
 	}
@@ -628,38 +620,10 @@ func validateEvents(events []event) error {
 	return nil
 }
 
-func openRegular(path string, flags int, permission os.FileMode) (*os.File, error) {
-	file, err := openFileNoFollow(path, flags, permission)
-	if err != nil {
-		return nil, err
-	}
-	info, err := file.Stat()
-	if err != nil {
-		_ = file.Close()
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		_ = file.Close()
-		return nil, fmt.Errorf("path %q is not a regular file", path)
-	}
-	current, err := os.Lstat(path)
-	if err != nil || current.Mode()&os.ModeSymlink != 0 || !os.SameFile(info, current) {
-		_ = file.Close()
-		if err != nil {
-			return nil, err
-		}
-		return nil, fmt.Errorf("path %q changed while opening or is a symlink", path)
-	}
-	return file, nil
-}
-
 // openLockFile opens the session lock file, creating it if needed, without
 // following symlinks. The returned file is not yet locked.
 func openLockFile(path string) (*os.File, error) {
-	if err := rejectSymlink(path); err != nil {
-		return nil, err
-	}
-	file, err := openRegular(path, os.O_CREATE|os.O_RDWR, 0o600)
+	file, err := fsutil.OpenRegular(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open messaging lock %q: %w", path, err)
 	}
@@ -668,32 +632,6 @@ func openLockFile(path string) (*os.File, error) {
 		return nil, fmt.Errorf("secure messaging lock %q: %w", path, err)
 	}
 	return file, nil
-}
-
-func rejectSymlink(path string) error {
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("inspect messaging path %q: %w", path, err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("messaging path %q must not be a symlink", path)
-	}
-	return nil
-}
-
-func syncDirectory(path string) error {
-	directory, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("open messaging state directory %q: %w", path, err)
-	}
-	defer directory.Close()
-	if err := directory.Sync(); err != nil {
-		return fmt.Errorf("sync messaging state directory %q: %w", path, err)
-	}
-	return nil
 }
 
 func validateCreate(params CreateParams) error {

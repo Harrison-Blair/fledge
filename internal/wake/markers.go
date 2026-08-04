@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/Harrison-Blair/fledge/internal/fsutil"
 )
 
 const (
@@ -65,10 +67,7 @@ func (l *Ledger) SaveMarkers(markers Markers) error {
 
 func (l *Ledger) readMarkers() (Markers, error) {
 	path := l.markersPath()
-	if err := rejectSymlink(path); err != nil {
-		return Markers{}, err
-	}
-	file, err := openRegular(path, os.O_RDONLY, 0o600)
+	file, err := fsutil.OpenRegular(path, os.O_RDONLY, 0o600)
 	if errors.Is(err, os.ErrNotExist) {
 		return emptyMarkers(), nil
 	}
