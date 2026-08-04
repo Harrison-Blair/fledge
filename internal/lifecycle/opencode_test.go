@@ -65,7 +65,7 @@ func TestMergeOpenCodeConfigRejectsInvalidJSON(t *testing.T) {
 func TestPrepareOpenCodeRuntimeWritesProtectedSnapshots(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	const instructionsPath = ".fledge/profiles/generated/orchestrator.md"
+	instructionsPath := filepath.Join(root, ".fledge", "profiles", "generated", "orchestrator.md")
 	const original = ` {"instructions":["AGENTS.md"],"theme":"dark"} `
 	runtime, err := prepareOpenCodeRuntime(root, testSessionName, instructionsPath, original)
 	if err != nil {
@@ -92,7 +92,7 @@ func TestPrepareOpenCodeRuntimeWritesProtectedSnapshots(t *testing.T) {
 func TestRemoveOpenCodeRuntimePreservesAuditLogs(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	if _, err := prepareOpenCodeRuntime(root, testSessionName, ".fledge/profiles/generated/orchestrator.md", "{}"); err != nil {
+	if _, err := prepareOpenCodeRuntime(root, testSessionName, generatedPromptFile(root), "{}"); err != nil {
 		t.Fatal(err)
 	}
 	auditPath := filepath.Join(statedir.Session(root, testSessionName), "messages.jsonl")

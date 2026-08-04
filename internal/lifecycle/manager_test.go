@@ -164,7 +164,7 @@ func TestStartLeavesClaudeProfileUnchangedAndAppendsDurableInstructions(t *testi
 		t.Fatal(err)
 	}
 	wantInstructions := "custom Claude instructions\n\n" + mandatoryCoordinatorCommunicationPolicy
-	promptReference := filepath.Join(".fledge", "profiles", "generated", "orchestrator.md")
+	promptReference := generatedPrompt(t, root, wantInstructions)
 	wantArgs := []string{"--permission-mode", "bypassPermissions", "--append-system-prompt-file", promptReference}
 	if strings.Join(client.startAgent.args, "\x00") != strings.Join(wantArgs, "\x00") {
 		t.Errorf("Claude args = %#v, want %#v", client.startAgent.args, wantArgs)
@@ -172,7 +172,7 @@ func TestStartLeavesClaudeProfileUnchangedAndAppendsDurableInstructions(t *testi
 	if len(client.promptCalls) != 0 {
 		t.Errorf("orchestrator PromptAgent calls = %#v, want none", client.promptCalls)
 	}
-	generated, err := os.ReadFile(filepath.Join(root, promptReference))
+	generated, err := os.ReadFile(generatedPromptFile(root))
 	if err != nil || string(generated) != wantInstructions {
 		t.Fatalf("generated prompt = %q, %v; want exact rendered instructions", generated, err)
 	}
@@ -203,8 +203,8 @@ func TestStartPiUsesControlCharacterFreeGeneratedPromptArgument(t *testing.T) {
 	if err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout, Harness: "pi", HarnessSet: true}); err != nil {
 		t.Fatal(err)
 	}
-	wantPath := filepath.Join(".fledge", "profiles", "generated", "orchestrator.md")
-	wantArgs := []string{"--append-system-prompt", wantPath}
+	want := project.DefaultOrchestratorInstructions + "\n\n" + mandatoryCoordinatorCommunicationPolicy
+	wantArgs := []string{"--append-system-prompt", generatedPrompt(t, root, want)}
 	if strings.Join(client.startAgent.args, "\x00") != strings.Join(wantArgs, "\x00") {
 		t.Fatalf("Pi args = %#v, want %#v", client.startAgent.args, wantArgs)
 	}
@@ -213,8 +213,7 @@ func TestStartPiUsesControlCharacterFreeGeneratedPromptArgument(t *testing.T) {
 			t.Fatalf("Pi argument contains a control character: %q", arg)
 		}
 	}
-	want := project.DefaultOrchestratorInstructions + "\n\n" + mandatoryCoordinatorCommunicationPolicy
-	contents, err := os.ReadFile(filepath.Join(root, wantPath))
+	contents, err := os.ReadFile(generatedPromptFile(root))
 	if err != nil || string(contents) != want {
 		t.Fatalf("generated prompt = %q, %v; want exact multiline policy", contents, err)
 	}
@@ -420,10 +419,7 @@ func TestStartReattachPreservesGeneratedPromptSnapshot(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	writeTestRecord(t, root)
-	reference, err := project.EnsureGeneratedOrchestratorPrompt(root, "active session prompt")
-	if err != nil {
-		t.Fatal(err)
-	}
+	generatedPrompt(t, root, "active session prompt")
 	profilePath := filepath.Join(root, stateDirectory, "profiles", "orchestrator.toml")
 	if err := os.WriteFile(profilePath, []byte("schema_version = 1\ninstructions = 'edited profile'\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -434,7 +430,7 @@ func TestStartReattachPreservesGeneratedPromptSnapshot(t *testing.T) {
 	if err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout}); err != nil {
 		t.Fatal(err)
 	}
-	contents, err := os.ReadFile(filepath.Join(root, reference))
+	contents, err := os.ReadFile(generatedPromptFile(root))
 	if err != nil || string(contents) != "active session prompt" {
 		t.Fatalf("generated prompt after reattach = %q, %v; want active snapshot", contents, err)
 	}
@@ -886,13 +882,12 @@ func TestStartOpenCodeUsesDurableSnapshotAndIsolatesControlPane(t *testing.T) {
 		t.Fatal(err)
 	}
 	session := "fledge-" + sessionSlug(root) + "-00000000"
-	instructionsReference := filepath.Join(stateDirectory, "profiles", "generated", "orchestrator.md")
-	instructionsPath := filepath.Join(root, instructionsReference)
-	instructions, err := os.ReadFile(instructionsPath)
+	instructions, err := os.ReadFile(generatedPromptFile(root))
 	if err != nil {
 		t.Fatal(err)
 	}
 	wantInstructions := project.DefaultOrchestratorInstructions + "\n\n" + mandatoryCoordinatorCommunicationPolicy
+	instructionsReference := generatedPrompt(t, root, wantInstructions)
 	if string(instructions) != wantInstructions {
 		t.Fatalf("instruction snapshot = %q, want %q", instructions, wantInstructions)
 	}
@@ -968,8 +963,7 @@ func TestStartOpenCodeRollbackRemovesRuntimeArtifacts(t *testing.T) {
 	if _, err := os.Stat(statedir.TempSession(root, session)); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("rollback temp directory error = %v, want removed", err)
 	}
-	generated := filepath.Join(root, stateDirectory, "profiles", "generated", "orchestrator.md")
-	if _, err := os.Stat(generated); err != nil {
+	if _, err := os.Stat(generatedPromptFile(root)); err != nil {
 		t.Errorf("generated prompt after rollback = %v, want preserved", err)
 	}
 }
@@ -978,8 +972,7 @@ func TestStartReattachDoesNotRebuildOpenCodeSnapshot(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	writeTestRecord(t, root)
-	const promptPath = ".fledge/profiles/generated/orchestrator.md"
-	if _, err := prepareOpenCodeRuntime(root, testSessionName, promptPath, `{"old":true}`); err != nil {
+	if _, err := prepareOpenCodeRuntime(root, testSessionName, generatedPromptFile(root), `{"old":true}`); err != nil {
 		t.Fatal(err)
 	}
 	client := &fakeHerdr{sessions: []herdr.Session{{Name: testSessionName, Running: true}}}
@@ -1003,7 +996,7 @@ func TestSpawnRestoresOriginalOpenCodeConfig(t *testing.T) {
 	root := t.TempDir()
 	writeTestRecord(t, root)
 	const original = ` {"theme":"dark"} `
-	if _, err := prepareOpenCodeRuntime(root, testSessionName, ".fledge/profiles/generated/orchestrator.md", original); err != nil {
+	if _, err := prepareOpenCodeRuntime(root, testSessionName, generatedPromptFile(root), original); err != nil {
 		t.Fatal(err)
 	}
 	client := &fakeHerdr{
@@ -1036,11 +1029,8 @@ func TestOpenCodeRuntimeCleanupFollowsSessionDeletion(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
 			writeTestRecord(t, root)
-			generatedReference, err := project.EnsureGeneratedOrchestratorPrompt(root, "durable prompt")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := prepareOpenCodeRuntime(root, testSessionName, ".fledge/profiles/generated/orchestrator.md", "{}"); err != nil {
+			generatedPrompt(t, root, "durable prompt")
+			if _, err := prepareOpenCodeRuntime(root, testSessionName, generatedPromptFile(root), "{}"); err != nil {
 				t.Fatal(err)
 			}
 			auditPath := filepath.Join(root, stateDirectory, "logs", testSessionName, "messages.jsonl")
@@ -1060,7 +1050,7 @@ func TestOpenCodeRuntimeCleanupFollowsSessionDeletion(t *testing.T) {
 			if contents, err := os.ReadFile(auditPath); err != nil || string(contents) != "audit\n" {
 				t.Fatalf("audit after cleanup = %q, %v; want preserved", contents, err)
 			}
-			if contents, err := os.ReadFile(filepath.Join(root, generatedReference)); err != nil || string(contents) != "durable prompt" {
+			if contents, err := os.ReadFile(generatedPromptFile(root)); err != nil || string(contents) != "durable prompt" {
 				t.Fatalf("generated prompt after cleanup = %q, %v; want preserved", contents, err)
 			}
 		})
@@ -1071,7 +1061,7 @@ func TestOpenCodeRuntimeRetainedWhenSessionDeletionFails(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	writeTestRecord(t, root)
-	if _, err := prepareOpenCodeRuntime(root, testSessionName, ".fledge/profiles/generated/orchestrator.md", "{}"); err != nil {
+	if _, err := prepareOpenCodeRuntime(root, testSessionName, generatedPromptFile(root), "{}"); err != nil {
 		t.Fatal(err)
 	}
 	manager, _ := newTestManager(&fakeHerdr{
@@ -2178,6 +2168,24 @@ func writeTestRecord(t *testing.T, root string) {
 	if !created {
 		t.Fatal("record already existed")
 	}
+}
+
+// generatedPromptFile is the absolute path of a project's generated
+// orchestrator prompt, which is also the reference Fledge hands to harnesses.
+func generatedPromptFile(root string) string {
+	return filepath.Join(root, stateDirectory, "profiles", "generated", "orchestrator.md")
+}
+
+// generatedPrompt renders the prompt Start would generate and returns the
+// reference the harness receives for it. project.EnsureGeneratedOrchestratorPrompt
+// owns that reference's form, so tests follow it instead of hardcoding one.
+func generatedPrompt(t *testing.T, root, instructions string) string {
+	t.Helper()
+	reference, err := project.EnsureGeneratedOrchestratorPrompt(root, instructions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reference
 }
 
 func initTestProject(t *testing.T, root string) {
