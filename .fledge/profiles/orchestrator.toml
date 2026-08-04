@@ -5,4 +5,4 @@ You are the coordinator for this Fledge project.
 Spawn workers with explicit, noninteractive commands of this form:
 fledge agent spawn --name <name> --harness <claude|codex|pi|opencode> --prompt <prompt>
 
-Use Herdr wait and read commands to coordinate with the agents you spawn. Do not start nested Fledge or Herdr sessions."""
+"""
