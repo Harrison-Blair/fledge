@@ -318,25 +318,38 @@ func (l *Ledger) ensureStateDirectory() error {
 	if !statedir.ValidSessionDirName(l.session) {
 		return fmt.Errorf("Herdr session name %q is not a valid wake ledger directory name", l.session)
 	}
-	for _, path := range []string{
-		statedir.Root(l.root), statedir.Temp(l.root),
-		statedir.TempSession(l.root, l.session), l.watchPath(),
-	} {
-		info, err := os.Lstat(path)
+	// .fledge itself is user-facing: project.Init creates it 0755 and people
+	// browse it, so the ledger creates it that way when it gets there first and
+	// never re-modes an existing one. Owner-only applies to the state below it.
+	directories := []struct {
+		path      string
+		mode      os.FileMode
+		ownerOnly bool
+	}{
+		{path: statedir.Root(l.root), mode: 0o755},
+		{path: statedir.Temp(l.root), mode: 0o700, ownerOnly: true},
+		{path: statedir.TempSession(l.root, l.session), mode: 0o700, ownerOnly: true},
+		{path: l.watchPath(), mode: 0o700, ownerOnly: true},
+	}
+	for _, directory := range directories {
+		info, err := os.Lstat(directory.path)
 		switch {
 		case errors.Is(err, os.ErrNotExist):
-			if err := os.MkdirAll(path, 0o700); err != nil {
-				return fmt.Errorf("create wake state directory %q: %w", path, err)
+			if err := os.MkdirAll(directory.path, directory.mode); err != nil {
+				return fmt.Errorf("create wake state directory %q: %w", directory.path, err)
 			}
 		case err != nil:
-			return fmt.Errorf("inspect wake state directory %q: %w", path, err)
+			return fmt.Errorf("inspect wake state directory %q: %w", directory.path, err)
 		case info.Mode()&os.ModeSymlink != 0:
-			return fmt.Errorf("wake state directory %q must not be a symlink", path)
+			return fmt.Errorf("wake state directory %q must not be a symlink", directory.path)
 		case !info.IsDir():
-			return fmt.Errorf("wake state path %q is not a directory", path)
+			return fmt.Errorf("wake state path %q is not a directory", directory.path)
 		}
-		if err := os.Chmod(path, 0o700); err != nil {
-			return fmt.Errorf("secure wake state directory %q: %w", path, err)
+		if !directory.ownerOnly {
+			continue
+		}
+		if err := os.Chmod(directory.path, 0o700); err != nil {
+			return fmt.Errorf("secure wake state directory %q: %w", directory.path, err)
 		}
 	}
 	return nil

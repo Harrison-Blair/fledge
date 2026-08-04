@@ -138,6 +138,30 @@ func TestEnsureCreatesWatchDirectory(t *testing.T) {
 	}
 }
 
+func TestEnsureLeavesTheStateRootBrowsable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permissions are not available on Windows")
+	}
+
+	// .fledge is user-facing: project.Init creates it 0755 and people browse
+	// it. Only the state below it belongs to the ledger.
+	root := t.TempDir()
+	stateRoot := filepath.Join(root, ".fledge")
+	if err := os.MkdirAll(stateRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := testLedger(t, root).Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("%s permission = %04o, want the project's 0755 left alone", stateRoot, got)
+	}
+}
+
 func TestInvalidSessionNameFailsBeforeCreatingDirectories(t *testing.T) {
 	root := t.TempDir()
 	ledger := New(root, "../escape")
