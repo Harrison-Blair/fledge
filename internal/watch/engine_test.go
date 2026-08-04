@@ -1173,7 +1173,7 @@ func (l *fakeLedger) Append(kind WakeKind, key, reason string) (WakeRecord, erro
 	l.nextID++
 	id := fmt.Sprintf("w-%d", l.nextID)
 	for i, record := range l.records {
-		if record.Kind == kind && record.Key == key {
+		if record.WakeKind == kind && record.Key == key {
 			record.ID = id
 			record.IDs = append(record.IDs, id)
 			record.Reason = reason
@@ -1182,7 +1182,7 @@ func (l *fakeLedger) Append(kind WakeKind, key, reason string) (WakeRecord, erro
 		}
 	}
 
-	record := WakeRecord{ID: id, IDs: []string{id}, Kind: kind, Key: key, Reason: reason}
+	record := WakeRecord{ID: id, IDs: []string{id}, WakeKind: kind, Key: key, Reason: reason}
 	l.records = append(l.records, record)
 	return record, nil
 }

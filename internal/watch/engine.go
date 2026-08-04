@@ -13,6 +13,7 @@ import (
 
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/statedir"
+	"github.com/Harrison-Blair/fledge/internal/wake"
 )
 
 const (
@@ -34,44 +35,28 @@ const (
 // this one so the engine can degrade instead of crash-looping.
 var ErrCorruptLog = errors.New("corrupt wake ledger")
 
-// WakeKind classifies why the watcher wants to wake the orchestrator.
-type WakeKind string
-
-const (
-	KindStatus    WakeKind = "status"
-	KindEvent     WakeKind = "event"
-	KindDead      WakeKind = "dead"
-	KindHeartbeat WakeKind = "heartbeat"
+// The engine speaks the wake package's vocabulary directly: the durable ledger
+// is the only producer and consumer of these values, and a second declaration
+// bridged by converters means every new field is one missed edit away from
+// being silently dropped.
+type (
+	// WakeKind classifies why the watcher wants to wake the orchestrator.
+	WakeKind = wake.Kind
+	// WakeRecord is one wake still owed to the orchestrator.
+	WakeRecord = wake.Record
+	// StatusSeen records how far the watcher has consumed one worker's status file.
+	StatusSeen = wake.StatusSeen
+	// Markers is the watcher's suppression state: what it has already seen and
+	// already woken for.
+	Markers = wake.Markers
 )
 
-// WakeRecord is one wake still owed to the orchestrator. Wakes for the same
-// kind and key collapse into a single record carrying the latest reason, so
-// IDs holds every ledger entry the record speaks for.
-type WakeRecord struct {
-	ID     string
-	IDs    []string
-	Kind   WakeKind
-	Key    string
-	Reason string
-}
-
-// StatusSeen records how far the watcher has consumed one worker's status file.
-type StatusSeen struct {
-	Size      int64
-	MtimeUnix int64
-	Offset    int64
-}
-
-// Markers is the watcher's suppression state: what it has already seen and
-// already woken for.
-type Markers struct {
-	StatusSeen      map[string]StatusSeen
-	EventEscalated  map[string]bool
-	DoneGrace       map[string]int64
-	KnownAgents     []string
-	LastWakeUnix    int64
-	HeartbeatStreak int
-}
+const (
+	KindStatus    = wake.KindStatus
+	KindEvent     = wake.KindEvent
+	KindDead      = wake.KindDead
+	KindHeartbeat = wake.KindHeartbeat
+)
 
 // Ledger is the durable wake queue the engine appends to before it advances
 // any suppression marker.
@@ -626,12 +611,12 @@ func (e *Engine) rememberAndLog(wake pendingWake) {
 // keep-latest dedupe the ledger applies.
 func (e *Engine) remember(wake pendingWake) {
 	for i, record := range e.queue {
-		if record.Kind == wake.kind && record.Key == wake.key {
+		if record.WakeKind == wake.kind && record.Key == wake.key {
 			e.queue[i].Reason = wake.reason
 			return
 		}
 	}
-	e.queue = append(e.queue, WakeRecord{Kind: wake.kind, Key: wake.key, Reason: wake.reason})
+	e.queue = append(e.queue, WakeRecord{WakeKind: wake.kind, Key: wake.key, Reason: wake.reason})
 }
 
 // drain sends everything owed in one message, provided the rate window is open.
@@ -877,7 +862,7 @@ func statusReason(name, verb, detail string) string {
 
 func onlyHeartbeats(records []WakeRecord) bool {
 	for _, record := range records {
-		if record.Kind != KindHeartbeat {
+		if record.WakeKind != KindHeartbeat {
 			return false
 		}
 	}
