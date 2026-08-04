@@ -387,6 +387,35 @@ func TestReplyPreservesOriginalAndUserReplyIsDelivered(t *testing.T) {
 	}
 }
 
+func TestReplyAcknowledgesAnUncertainOriginal(t *testing.T) {
+	store := initializedStore(t)
+	original := mustCreate(t, store, CreateParams{Sender: "user", Recipient: "alice", Body: "question", RecipientPane: "%1"})
+	if _, err := store.RecordAttempt(original.ID); err != nil {
+		t.Fatal(err)
+	}
+	before := lineCount(t, store.logPath())
+
+	reply, err := store.Reply(original.ID, "alice", "%1", "answer", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A reply from the recipient proves the original reached it, so the
+	// acknowledgement must be durable rather than only in-memory.
+	got, err := New(store.root, store.session).Get(original.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusDelivered || !got.DeliveredAt.Equal(reply.CreatedAt) {
+		t.Fatalf("original after reply = %#v, want delivered at %v", got, reply.CreatedAt)
+	}
+	if got := lineCount(t, store.logPath()); got != before+2 {
+		t.Fatalf("reply transaction appended %d events, want 2", got-before)
+	}
+	if _, err := store.RecordDelivery(original.ID, true, ""); err == nil {
+		t.Fatal("acknowledged message still accepted a delivery outcome")
+	}
+}
+
 func TestCrashedReplyRecordIsDiscardedWithoutChangingOriginal(t *testing.T) {
 	store := initializedStore(t)
 	original := deliveredMessage(t, store, CreateParams{Sender: "user", Recipient: "alice", Body: "question", RecipientPane: "%1"})

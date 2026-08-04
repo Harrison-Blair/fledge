@@ -326,12 +326,20 @@ func (s *Store) Reply(originalID, replier, replierPane, body, replyRecipientPane
 			return err
 		}
 		at := s.now()
-		e := event{Version: eventVersion, Type: eventReplyCreated, At: at, SessionID: state.sessionID, MessageID: id, Sender: replier, Recipient: original.Sender, ReplyTo: originalID, Body: body, RecipientPane: replyRecipientPane}
-		if err := s.appendEvents([]event{e}); err != nil {
+		var batch []event
+		if original.Status == StatusUncertain {
+			// A reply from the recipient proves the original was delivered, so the
+			// same transaction resolves the interrupted attempt.
+			batch = append(batch, event{Version: eventVersion, Type: eventAcknowledged, At: at, SessionID: state.sessionID, MessageID: originalID})
+		}
+		batch = append(batch, event{Version: eventVersion, Type: eventReplyCreated, At: at, SessionID: state.sessionID, MessageID: id, Sender: replier, Recipient: original.Sender, ReplyTo: originalID, Body: body, RecipientPane: replyRecipientPane})
+		if err := s.appendEvents(batch); err != nil {
 			return err
 		}
-		if err := applyEvent(state, e); err != nil {
-			return err
+		for _, e := range batch {
+			if err := applyEvent(state, e); err != nil {
+				return err
+			}
 		}
 		reply = state.messages[id]
 		return nil
