@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -288,6 +290,72 @@ func TestAgentMessageWrapsCurrentDirectoryFailures(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "get current directory") {
 			t.Errorf("Execute(%v) error = %v", args, err)
 		}
+	}
+}
+
+func TestAgentMessageBodiesComeFromFileOrStdin(t *testing.T) {
+	t.Parallel()
+
+	large := strings.Repeat("x", messaging.MaxBodyBytes)
+	path := filepath.Join(t.TempDir(), "body.txt")
+	if err := os.WriteFile(path, []byte(large), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	fileManager := &fakeManager{}
+	command := newRootCommand(fileManager, func() (string, error) { return "/project", nil })
+	command.SetArgs([]string{"agent", "message", "send", "worker", "-F", path})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if len(fileManager.messageSends) != 1 || fileManager.messageSends[0].body != large {
+		t.Errorf("SendMessage calls = %d, body length = %d, want the whole file", len(fileManager.messageSends), len(fileManager.messageSends[0].body))
+	}
+
+	stdinManager := &fakeManager{}
+	command = newRootCommand(stdinManager, func() (string, error) { return "/project", nil })
+	command.SetIn(strings.NewReader("piped\nbody"))
+	command.SetArgs([]string{"agent", "message", "reply", "msg-1", "--file", "-"})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if len(stdinManager.messageReplies) != 1 || stdinManager.messageReplies[0].body != "piped\nbody" {
+		t.Errorf("ReplyMessage calls = %#v, want the piped body", stdinManager.messageReplies)
+	}
+}
+
+func TestAgentMessageBodySourcesAreExclusive(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "body.txt")
+	if err := os.WriteFile(path, []byte("from file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "send both", args: []string{"agent", "message", "send", "worker", "inline", "-F", path}, want: "not both"},
+		{name: "send neither", args: []string{"agent", "message", "send", "worker"}, want: "--file"},
+		{name: "reply both", args: []string{"agent", "message", "reply", "msg-1", "inline", "-F", path}, want: "not both"},
+		{name: "reply neither", args: []string{"agent", "message", "reply", "msg-1"}, want: "--file"},
+		{name: "missing file", args: []string{"agent", "message", "send", "worker", "-F", filepath.Join(t.TempDir(), "absent")}, want: "read message body"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			manager := &fakeManager{}
+			command := newRootCommand(manager, func() (string, error) { return "/project", nil })
+			command.SetArgs(test.args)
+			err := command.Execute()
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Execute(%v) error = %v, want %q", test.args, err, test.want)
+			}
+			if len(manager.messageSends)+len(manager.messageReplies) != 0 {
+				t.Fatalf("manager called for an invalid body source: %#v", manager)
+			}
+		})
 	}
 }
 
