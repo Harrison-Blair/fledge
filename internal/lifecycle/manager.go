@@ -696,23 +696,37 @@ func launchWatcher(root string) error {
 	if err != nil {
 		return fmt.Errorf("resolve fledge executable: %w", err)
 	}
-	command := exec.Command(executable, "watch", "--daemon")
-	command.Dir = root
-	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	command, devNull, err := watcherCommand(executable, root)
 	if err != nil {
-		return fmt.Errorf("open null device: %w", err)
+		return err
 	}
 	defer devNull.Close()
+	return startAndReap(command)
+}
+
+// watcherCommand builds the detached watcher daemon command. The returned file
+// backs its null stdio and must be closed once the command has started.
+func watcherCommand(executable, root string) (*exec.Cmd, *os.File, error) {
+	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open null device: %w", err)
+	}
+	command := exec.Command(executable, "watch", "--daemon")
+	command.Dir = root
 	command.Stdin = devNull
 	command.Stdout = devNull
 	command.Stderr = devNull
+	command.SysProcAttr = watcherProcessAttributes()
+	return command, devNull, nil
+}
+
+// startAndReap starts the detached watcher and waits on it in the background,
+// so an exiting watcher is collected instead of lingering as a zombie.
+func startAndReap(command *exec.Cmd) error {
 	if err := command.Start(); err != nil {
 		return fmt.Errorf("start watcher: %w", err)
 	}
-	if err := command.Process.Release(); err != nil {
-		killErr := command.Process.Kill()
-		return errors.Join(fmt.Errorf("release watcher: %w", err), killErr)
-	}
+	go func() { _ = command.Wait() }()
 	return nil
 }
 
