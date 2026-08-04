@@ -10,6 +10,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/Harrison-Blair/fledge/internal/fsutil"
 )
 
 const (
@@ -51,13 +53,20 @@ func profilePath(root string) string {
 // resolve the returned path from their own pane working directory, so a
 // project-relative reference would silently miss the file.
 func EnsureGeneratedOrchestratorPrompt(root, instructions string) (string, error) {
+	return ensureGeneratedOrchestratorPrompt(root, instructions, nil)
+}
+
+// ensureGeneratedOrchestratorPrompt takes afterValidate so a test can occupy the
+// window between validating the path and opening it, which is where a planted
+// symlink would race the check. Production passes nil.
+func ensureGeneratedOrchestratorPrompt(root, instructions string, afterValidate func()) (string, error) {
 	path := filepath.Join(root, stateDirectory, profilesDir, generatedProfilesDir, generatedOrchestratorFilename)
 	if err := rejectGeneratedPromptSymlink(path); err != nil {
 		return "", err
 	}
 	existing, err := os.ReadFile(path)
 	if err == nil && bytes.Equal(existing, []byte(instructions)) {
-		if err := os.Chmod(path, 0o600); err != nil {
+		if err := secureGeneratedPrompt(path); err != nil {
 			return "", fmt.Errorf("protect generated orchestrator prompt %q: %w", path, err)
 		}
 		return path, nil
@@ -68,16 +77,24 @@ func EnsureGeneratedOrchestratorPrompt(root, instructions string) (string, error
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", fmt.Errorf("create generated profile directory: %w", err)
 	}
-	if err := rejectGeneratedPromptSymlink(path); err != nil {
-		return "", err
+	if afterValidate != nil {
+		afterValidate()
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	// The open is the guard: a symlink planted since the check above is refused
+	// here rather than followed. Truncation happens through the validated handle
+	// instead of with O_TRUNC, because a Windows open would follow such a symlink
+	// and truncate its target before fsutil could reject it.
+	file, err := fsutil.OpenRegular(path, os.O_WRONLY|os.O_CREATE, 0o600)
 	if err != nil {
 		return "", fmt.Errorf("create generated orchestrator prompt %q: %w", path, err)
 	}
 	if err := file.Chmod(0o600); err != nil {
 		_ = file.Close()
 		return "", fmt.Errorf("protect generated orchestrator prompt %q: %w", path, err)
+	}
+	if err := file.Truncate(0); err != nil {
+		_ = file.Close()
+		return "", fmt.Errorf("truncate generated orchestrator prompt %q: %w", path, err)
 	}
 	_, writeErr := file.Write([]byte(instructions))
 	closeErr := file.Close()
@@ -88,6 +105,17 @@ func EnsureGeneratedOrchestratorPrompt(root, instructions string) (string, error
 		return "", fmt.Errorf("close generated orchestrator prompt %q: %w", path, closeErr)
 	}
 	return path, nil
+}
+
+// secureGeneratedPrompt narrows the mode of an unchanged prompt through a
+// validated handle, so a symlink planted since it was inspected is not
+// chmodded through.
+func secureGeneratedPrompt(path string) error {
+	file, err := fsutil.OpenRegular(path, os.O_RDONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	return errors.Join(file.Chmod(0o600), file.Close())
 }
 
 func rejectGeneratedPromptSymlink(path string) error {

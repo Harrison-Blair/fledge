@@ -78,6 +78,38 @@ func TestEnsureGeneratedOrchestratorPromptRejectsSymlink(t *testing.T) {
 	}
 }
 
+// TestEnsureGeneratedOrchestratorPromptRejectsSymlinkPlantedAfterValidation
+// plants the symlink in the window between the validation and the open, which
+// is the only window an attacker racing fledge can use. The open itself has to
+// refuse to follow it; the validation before it cannot help here.
+func TestEnsureGeneratedOrchestratorPromptRejectsSymlinkPlantedAfterValidation(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation commonly requires elevated Windows privileges")
+	}
+	root := t.TempDir()
+	path := filepath.Join(root, ".fledge", "profiles", "generated", "orchestrator.md")
+	target := filepath.Join(t.TempDir(), "target")
+	if err := os.WriteFile(target, []byte("unchanged"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plantSymlink := func() {
+		if err := os.Symlink(target, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := ensureGeneratedOrchestratorPrompt(root, "replacement", plantSymlink); err == nil {
+		t.Fatal("EnsureGeneratedOrchestratorPrompt accepted a symlink planted after validation")
+	} else if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("EnsureGeneratedOrchestratorPrompt() error = %v, want a symlink rejection", err)
+	}
+	contents, err := os.ReadFile(target)
+	if err != nil || string(contents) != "unchanged" {
+		t.Fatalf("symlink target = %q, %v; want unchanged", contents, err)
+	}
+}
+
 func TestLoadOrchestratorProfileAcceptsSupportedTOMLStrings(t *testing.T) {
 	t.Parallel()
 
