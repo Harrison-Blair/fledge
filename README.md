@@ -3,6 +3,15 @@
 Fledge manages a project-local [Herdr](https://herdr.dev/) session from the
 command line.
 
+## Prerequisites
+
+- Go 1.26 or newer, matching the version required by `go.mod`.
+- [Herdr](https://herdr.dev/) installed and on `PATH`. Fledge drives every
+  session through the `herdr` command.
+- Herdr protocol 16 or newer for the watcher's event-stream mode, matching
+  `min_protocol` in `.fledge/watch.json`. On an older Herdr, the watcher
+  degrades to snapshot polling.
+
 ## Build and install
 
 Build and test Fledge from the repository root:
@@ -11,7 +20,8 @@ Build and test Fledge from the repository root:
 scripts/build.sh
 ```
 
-Install the built binary to `~/go/bin/fledge`:
+Install the built binary to Go's install directory (`go env GOBIN`, otherwise
+`$(go env GOPATH)/bin`, otherwise `~/go/bin`):
 
 ```sh
 scripts/install.sh
