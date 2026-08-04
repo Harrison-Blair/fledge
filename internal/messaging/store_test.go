@@ -625,6 +625,88 @@ func TestConcurrentAppendsAreSerialized(t *testing.T) {
 	}
 }
 
+func TestRemoveAllCannotDestroyAnAppendCommittedUnderTheLock(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows cannot delete an open lock file, so RemoveAll must release it first")
+	}
+	for iteration := 0; iteration < 16; iteration++ {
+		root := t.TempDir()
+		store := New(root, testSession)
+		if _, err := store.Initialize(); err != nil {
+			t.Fatal(err)
+		}
+		state, err := store.loadState()
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Both racers queue behind a lock this test holds, so RemoveAll can win it
+		// first and hand the waiting appender any window it leaves open.
+		lockPath, err := store.activeLockPath()
+		if err != nil {
+			t.Fatal(err)
+		}
+		gate, err := store.acquireLock(lockPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		removed := make(chan struct{})
+		var removeErr error
+		go func() {
+			removeErr = New(root, testSession).RemoveAll()
+			close(removed)
+		}()
+
+		appended := make(chan struct{})
+		var failure string
+		go func() {
+			defer close(appended)
+			appender := New(root, testSession)
+			path, err := appender.activeLockPath()
+			if err != nil {
+				return
+			}
+			unlock, err := appender.acquireLock(path)
+			if err != nil {
+				return // RemoveAll already deleted the folder holding the lock.
+			}
+			defer func() { _ = unlock() }()
+			if _, err := os.Stat(appender.logPath()); err != nil {
+				return // RemoveAll already deleted the log.
+			}
+			e := event{
+				Version: eventVersion, Type: eventMessageCreated, At: time.Now().UTC(), SessionID: state.sessionID,
+				MessageID: "committed-under-the-lock", Sender: "user", Recipient: "alice", Body: "committed", RecipientPane: "%1",
+			}
+			if err := appender.appendEvents([]event{e}); err != nil {
+				failure = fmt.Sprintf("log vanished mid-append while the lock was held: %v", err)
+				return
+			}
+			// The append is committed and this appender still holds the lock, so
+			// nothing may delete the log before it releases.
+			select {
+			case <-removed:
+				if _, err := os.Stat(appender.logPath()); err != nil {
+					failure = fmt.Sprintf("RemoveAll destroyed an append committed under the lock: %v", err)
+				}
+			case <-time.After(100 * time.Millisecond):
+			}
+		}()
+
+		if err := gate(); err != nil {
+			t.Fatal(err)
+		}
+		<-appended
+		<-removed
+		if failure != "" {
+			t.Fatalf("iteration %d: %s", iteration, failure)
+		}
+		if removeErr != nil {
+			t.Fatalf("iteration %d: %v", iteration, removeErr)
+		}
+	}
+}
+
 func TestPermissionsAreOwnerOnly(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX permissions are not available on Windows")

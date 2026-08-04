@@ -16,17 +16,24 @@ func openFileNoFollow(path string, flags int, permission os.FileMode) (*os.File,
 	return os.OpenFile(path, flags, permission)
 }
 
-func (s *Store) acquireLock(path string) (func() error, error) {
-	if err := rejectSymlink(path); err != nil {
-		return nil, err
-	}
-	file, err := openRegular(path, os.O_CREATE|os.O_RDWR, 0o600)
+// Windows refuses to delete a file that is still open, so the lock has to be
+// released before remove can unlink it. Unix closes the window this leaves
+// between unlocking and deleting by holding the lock throughout instead.
+func (s *Store) removeUnderLock(path string, remove func() error) error {
+	unlock, err := s.acquireLock(path)
 	if err != nil {
-		return nil, fmt.Errorf("open messaging lock %q: %w", path, err)
+		return err
 	}
-	if err := file.Chmod(0o600); err != nil {
-		_ = file.Close()
-		return nil, fmt.Errorf("secure messaging lock %q: %w", path, err)
+	if err := unlock(); err != nil {
+		return err
+	}
+	return remove()
+}
+
+func (s *Store) acquireLock(path string) (func() error, error) {
+	file, err := openLockFile(path)
+	if err != nil {
+		return nil, err
 	}
 	var overlapped windows.Overlapped
 	handle := windows.Handle(file.Fd())
