@@ -1,0 +1,419 @@
+package cmd
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Harrison-Blair/fledge/internal/lifecycle"
+	"github.com/Harrison-Blair/fledge/internal/messaging"
+)
+
+func TestRootCommandShowsHelp(t *testing.T) {
+	t.Parallel()
+
+	manager := &fakeManager{}
+	command := newRootCommand(manager, func() (string, error) { return "/project", nil })
+	var output bytes.Buffer
+	command.SetOut(&output)
+	command.SetErr(&output)
+	command.SetArgs(nil)
+
+	if err := command.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	for _, expected := range []string{"fledge [command]", "agent", "init", "start", "stop"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("help output = %q, want %q", output.String(), expected)
+		}
+	}
+}
+
+func TestStartOptionsAndNativeArguments(t *testing.T) {
+	t.Parallel()
+
+	manager := &fakeManager{}
+	command := newRootCommand(manager, func() (string, error) { return "/project/nested", nil })
+	command.SetArgs([]string{"start", "-k", "codex", "-m", "gpt-custom", "-t", "45s", "--", "--sandbox", "read-only"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if len(manager.startOptions) != 1 {
+		t.Fatalf("Start() options = %#v", manager.startOptions)
+	}
+	got := manager.startOptions[0]
+	if got.Harness != "codex" || got.Model != "gpt-custom" || got.Timeout != 45*time.Second || !got.HarnessSet || !got.ModelSet || !got.TimeoutSet {
+		t.Errorf("StartOptions = %#v", got)
+	}
+	if strings.Join(got.NativeArgs, " ") != "--sandbox read-only" {
+		t.Errorf("native args = %#v", got.NativeArgs)
+	}
+}
+
+func TestAgentSpawnOptionsAndNativeArguments(t *testing.T) {
+	t.Parallel()
+
+	manager := &fakeManager{}
+	command := newRootCommand(manager, func() (string, error) { return "/project/nested", nil })
+	command.SetArgs([]string{"agent", "spawn", "-n", "reviewer", "-k", "claude", "-m", "opus", "-C", "pkg", "--prompt", "Review", "-t", "1m", "--", "--dangerously-skip-permissions"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if len(manager.spawnOptions) != 1 || len(manager.spawnDirs) != 1 {
+		t.Fatalf("Spawn() = dirs %#v options %#v", manager.spawnDirs, manager.spawnOptions)
+	}
+	got := manager.spawnOptions[0]
+	if got.Name != "reviewer" || got.Harness != "claude" || got.Model != "opus" || got.Cwd != "pkg" || got.Prompt != "Review" || got.Timeout != time.Minute || !got.ModelSet {
+		t.Errorf("SpawnOptions = %#v", got)
+	}
+	if strings.Join(got.NativeArgs, " ") != "--dangerously-skip-permissions" {
+		t.Errorf("native args = %#v", got.NativeArgs)
+	}
+}
+
+func TestAgentStopUsesNameAndCurrentDirectory(t *testing.T) {
+	t.Parallel()
+
+	manager := &fakeManager{}
+	command := newRootCommand(manager, func() (string, error) { return "/project/nested", nil })
+	command.SetArgs([]string{"agent", "stop", "reviewer"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if len(manager.stopAgentDirs) != 1 || manager.stopAgentDirs[0] != "/project/nested" {
+		t.Fatalf("StopAgent() dirs = %#v", manager.stopAgentDirs)
+	}
+	if len(manager.stopAgentNames) != 1 || manager.stopAgentNames[0] != "reviewer" {
+		t.Fatalf("StopAgent() names = %#v", manager.stopAgentNames)
+	}
+}
+
+func TestAgentStopRequiresExactlyOneName(t *testing.T) {
+	t.Parallel()
+
+	for _, args := range [][]string{{"agent", "stop"}, {"agent", "stop", "one", "two"}} {
+		manager := &fakeManager{}
+		command := newRootCommand(manager, func() (string, error) { return "/project", nil })
+		command.SetArgs(args)
+		if err := command.Execute(); err == nil {
+			t.Errorf("Execute(%v) error = nil", args)
+		}
+		if len(manager.stopAgentNames) != 0 {
+			t.Errorf("Execute(%v) called StopAgent: %#v", args, manager.stopAgentNames)
+		}
+	}
+}
+
+func TestAgentStopWrapsCurrentDirectoryError(t *testing.T) {
+	t.Parallel()
+
+	manager := &fakeManager{}
+	command := newRootCommand(manager, func() (string, error) { return "", errors.New("cwd failed") })
+	command.SetArgs([]string{"agent", "stop", "reviewer"})
+	err := command.Execute()
+	if err == nil || !strings.Contains(err.Error(), "get current directory") {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if len(manager.stopAgentNames) != 0 {
+		t.Fatalf("StopAgent() names = %#v", manager.stopAgentNames)
+	}
+}
+
+func TestAgentMessageCommandsRouteAndPrintResults(t *testing.T) {
+	t.Parallel()
+
+	manager := &fakeManager{
+		sendResult:  messaging.Message{ID: "msg-send", Recipient: "reviewer"},
+		replyResult: messaging.Message{ID: "msg-reply"},
+		inboxResult: []messaging.Message{
+			{ID: "msg-failed", Sender: "user", Recipient: "reviewer", Body: "outgoing", Status: messaging.StatusFailed, Failure: "submission\nrejected"},
+			{ID: "msg-inbox", Sender: "reviewer", Recipient: "user", ReplyTo: "msg-send", Body: "line one\nline two", Status: messaging.StatusDelivered},
+		},
+	}
+	var output bytes.Buffer
+
+	for _, args := range [][]string{
+		{"agent", "message", "send", "reviewer", "please review"},
+		{"agent", "message", "reply", "msg-send", "looks good"},
+		{"agent", "message", "inbox", "user"},
+	} {
+		command := newRootCommand(manager, func() (string, error) { return "/project/nested", nil })
+		command.SetOut(&output)
+		command.SetArgs(args)
+		if err := command.Execute(); err != nil {
+			t.Fatalf("Execute(%v) error = %v", args, err)
+		}
+	}
+
+	if len(manager.messageSends) != 1 || manager.messageSends[0] != (messageSendCall{"/project/nested", "reviewer", "please review"}) {
+		t.Errorf("SendMessage calls = %#v", manager.messageSends)
+	}
+	if len(manager.messageReplies) != 1 || manager.messageReplies[0] != (messageReplyCall{"/project/nested", "msg-send", "looks good"}) {
+		t.Errorf("ReplyMessage calls = %#v", manager.messageReplies)
+	}
+	if len(manager.inboxCalls) != 1 || manager.inboxCalls[0] != (inboxCall{"/project/nested", "user"}) {
+		t.Errorf("MessageInbox calls = %#v", manager.inboxCalls)
+	}
+	for _, want := range []string{
+		"Sent message msg-send to reviewer.",
+		"Replied to message msg-send with msg-reply.",
+		"msg-failed  failed  sent to reviewer",
+		"failure: submission\n  rejected",
+		"msg-inbox  delivered  received from reviewer",
+		"reply-to: msg-send",
+		"line one\n  line two",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("output = %q, want %q", output.String(), want)
+		}
+	}
+}
+
+func TestAgentMessageArgumentAndBodyValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "send missing body", args: []string{"agent", "message", "send", "worker"}},
+		{name: "send extra body", args: []string{"agent", "message", "send", "worker", "body", "extra"}},
+		{name: "reply missing body", args: []string{"agent", "message", "reply", "id"}},
+		{name: "ack unavailable", args: []string{"agent", "message", "ack", "id"}},
+		{name: "inbox extra identity", args: []string{"agent", "message", "inbox", "user", "worker"}},
+		{name: "blank body", args: []string{"agent", "message", "send", "worker", " \n\t"}},
+		{name: "invalid UTF-8", args: []string{"agent", "message", "reply", "id", string([]byte{0xff})}},
+		{name: "oversize body", args: []string{"agent", "message", "send", "worker", strings.Repeat("x", messaging.MaxBodyBytes+1)}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			manager := &fakeManager{}
+			command := newRootCommand(manager, func() (string, error) { return "/project", nil })
+			command.SetArgs(test.args)
+			if err := command.Execute(); err == nil {
+				t.Fatalf("Execute(%v) error = nil", test.args)
+			}
+			if len(manager.messageSends)+len(manager.messageReplies)+len(manager.inboxCalls) != 0 {
+				t.Fatalf("manager called for invalid args: %#v", manager)
+			}
+		})
+	}
+}
+
+func TestAgentMessageWrapsCurrentDirectoryFailures(t *testing.T) {
+	t.Parallel()
+
+	for _, args := range [][]string{
+		{"agent", "message", "send", "worker", "body"},
+		{"agent", "message", "reply", "id", "body"},
+		{"agent", "message", "inbox"},
+	} {
+		manager := &fakeManager{}
+		command := newRootCommand(manager, func() (string, error) { return "", errors.New("cwd failed") })
+		command.SetArgs(args)
+		err := command.Execute()
+		if err == nil || !strings.Contains(err.Error(), "get current directory") {
+			t.Errorf("Execute(%v) error = %v", args, err)
+		}
+	}
+}
+
+func TestAgentMessageEmptyInboxOutput(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	command := newRootCommand(&fakeManager{}, func() (string, error) { return "/project", nil })
+	command.SetOut(&output)
+	command.SetArgs([]string{"agent", "message", "inbox"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "Inbox is empty.\n" {
+		t.Errorf("output = %q", output.String())
+	}
+}
+
+func TestInitUsesExplicitOrCurrentPath(t *testing.T) {
+	t.Parallel()
+
+	manager := &fakeManager{}
+	command := newRootCommand(manager, func() (string, error) { return "/current", nil })
+	command.SetArgs([]string{"init", "/explicit"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	command = newRootCommand(manager, func() (string, error) { return "/current", nil })
+	command.SetArgs([]string{"init"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(manager.initPaths, ","); got != "/explicit,/current" {
+		t.Errorf("Init() paths = %q", got)
+	}
+}
+
+func TestCommandsRejectInvalidTimeouts(t *testing.T) {
+	t.Parallel()
+
+	for _, args := range [][]string{{"start", "-t", "3s"}, {"start", "-t", "3.000000001s"}, {"agent", "spawn", "-t", "301s"}} {
+		manager := &fakeManager{}
+		command := newRootCommand(manager, func() (string, error) { return "/project", nil })
+		command.SetArgs(args)
+		if err := command.Execute(); err == nil || !strings.Contains(err.Error(), "timeout must") {
+			t.Errorf("Execute(%v) error = %v", args, err)
+		}
+	}
+}
+
+func TestSessionCommandsUseCurrentDirectory(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		args      []string
+		wantStart int
+		wantStop  int
+	}{
+		{name: "start", args: []string{"start"}, wantStart: 1},
+		{name: "stop", args: []string{"stop"}, wantStop: 1},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			manager := &fakeManager{}
+			command := newRootCommand(manager, func() (string, error) { return "/project", nil })
+			command.SetArgs(test.args)
+
+			if err := command.Execute(); err != nil {
+				t.Fatalf("Execute() error = %v", err)
+			}
+			if len(manager.startDirs) != test.wantStart {
+				t.Errorf("Start() calls = %d, want %d", len(manager.startDirs), test.wantStart)
+			}
+			if len(manager.stopDirs) != test.wantStop {
+				t.Errorf("Stop() calls = %d, want %d", len(manager.stopDirs), test.wantStop)
+			}
+			for _, dir := range append(manager.startDirs, manager.stopDirs...) {
+				if dir != "/project" {
+					t.Errorf("manager directory = %q, want /project", dir)
+				}
+			}
+		})
+	}
+}
+
+func TestSessionCommandsRejectArguments(t *testing.T) {
+	t.Parallel()
+
+	for _, subcommand := range []string{"start", "stop"} {
+		t.Run(subcommand, func(t *testing.T) {
+			t.Parallel()
+
+			manager := &fakeManager{}
+			command := newRootCommand(manager, func() (string, error) { return "/project", nil })
+			command.SetArgs([]string{subcommand, "extra"})
+
+			if err := command.Execute(); err == nil {
+				t.Fatal("Execute() error = nil, want argument error")
+			}
+			if len(manager.startDirs) != 0 || len(manager.stopDirs) != 0 {
+				t.Fatalf("manager called with extra arguments: %#v", manager)
+			}
+		})
+	}
+}
+
+func TestCurrentDirectoryErrorIsWrapped(t *testing.T) {
+	t.Parallel()
+
+	for _, subcommand := range []string{"start", "stop"} {
+		t.Run(subcommand, func(t *testing.T) {
+			t.Parallel()
+
+			manager := &fakeManager{}
+			command := newRootCommand(manager, func() (string, error) {
+				return "", errors.New("cwd failed")
+			})
+			command.SetArgs([]string{subcommand})
+
+			err := command.Execute()
+			if err == nil || !strings.Contains(err.Error(), "get current directory") {
+				t.Fatalf("Execute() error = %v, want wrapped cwd error", err)
+			}
+			if len(manager.startDirs) != 0 || len(manager.stopDirs) != 0 {
+				t.Fatalf("manager called after cwd error: %#v", manager)
+			}
+		})
+	}
+}
+
+type fakeManager struct {
+	initPaths      []string
+	startDirs      []string
+	startOptions   []lifecycle.StartOptions
+	spawnDirs      []string
+	spawnOptions   []lifecycle.SpawnOptions
+	stopAgentDirs  []string
+	stopAgentNames []string
+	stopDirs       []string
+	messageSends   []messageSendCall
+	messageReplies []messageReplyCall
+	inboxCalls     []inboxCall
+	sendResult     messaging.Message
+	replyResult    messaging.Message
+	inboxResult    []messaging.Message
+}
+
+type messageSendCall struct{ dir, recipient, body string }
+type messageReplyCall struct{ dir, id, body string }
+type inboxCall struct{ dir, identity string }
+
+func (f *fakeManager) Init(path string) (string, error) {
+	f.initPaths = append(f.initPaths, path)
+	return path, nil
+}
+
+func (f *fakeManager) Start(_ context.Context, dir string, options ...lifecycle.StartOptions) error {
+	f.startDirs = append(f.startDirs, dir)
+	if len(options) > 0 {
+		f.startOptions = append(f.startOptions, options[0])
+	}
+	return nil
+}
+
+func (f *fakeManager) Stop(_ context.Context, dir string) error {
+	f.stopDirs = append(f.stopDirs, dir)
+	return nil
+}
+
+func (f *fakeManager) Spawn(_ context.Context, dir string, options lifecycle.SpawnOptions) error {
+	f.spawnDirs = append(f.spawnDirs, dir)
+	f.spawnOptions = append(f.spawnOptions, options)
+	return nil
+}
+
+func (f *fakeManager) StopAgent(_ context.Context, dir, name string) error {
+	f.stopAgentDirs = append(f.stopAgentDirs, dir)
+	f.stopAgentNames = append(f.stopAgentNames, name)
+	return nil
+}
+
+func (f *fakeManager) SendMessage(_ context.Context, dir, recipient, body string) (messaging.Message, error) {
+	f.messageSends = append(f.messageSends, messageSendCall{dir, recipient, body})
+	return f.sendResult, nil
+}
+
+func (f *fakeManager) ReplyMessage(_ context.Context, dir, id, body string) (messaging.Message, error) {
+	f.messageReplies = append(f.messageReplies, messageReplyCall{dir, id, body})
+	return f.replyResult, nil
+}
+
+func (f *fakeManager) MessageInbox(_ context.Context, dir, identity string) ([]messaging.Message, error) {
+	f.inboxCalls = append(f.inboxCalls, inboxCall{dir, identity})
+	return f.inboxResult, nil
+}

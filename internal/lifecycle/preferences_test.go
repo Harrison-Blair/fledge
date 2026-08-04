@@ -1,0 +1,96 @@
+package lifecycle
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func newPreferencesRoot(t *testing.T) string {
+	t.Helper()
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, stateDirectory), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func TestPreferencesRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	root := newPreferencesRoot(t)
+	first := preferences{Version: preferencesVersion, Harness: "claude", Model: "opus"}
+	if err := writePreferences(root, first); err != nil {
+		t.Fatal(err)
+	}
+
+	value, found, err := readPreferences(root)
+	if err != nil || !found || value != first {
+		t.Fatalf("readPreferences() = %#v, %v, %v; want %#v, true, nil", value, found, err, first)
+	}
+
+	info, err := os.Stat(preferencesPath(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Fatalf("preferences file mode = %v; want %v", mode, os.FileMode(0o600))
+	}
+
+	second := preferences{Version: preferencesVersion, Harness: "codex"}
+	if err := writePreferences(root, second); err != nil {
+		t.Fatal(err)
+	}
+
+	value, found, err = readPreferences(root)
+	if err != nil || !found || value != second {
+		t.Fatalf("readPreferences() = %#v, %v, %v; want %#v, true, nil", value, found, err, second)
+	}
+}
+
+func TestReadPreferencesMissing(t *testing.T) {
+	t.Parallel()
+
+	value, found, err := readPreferences(t.TempDir())
+	if err != nil || found || value != (preferences{}) {
+		t.Fatalf("readPreferences() = %#v, %v, %v; want zero value, false, nil", value, found, err)
+	}
+}
+
+func TestReadPreferencesInvalid(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		contents string
+	}{
+		{name: "corrupt json", contents: "{not json"},
+		{name: "wrong version", contents: `{"version":2,"harness":"claude"}`},
+		{name: "empty harness", contents: `{"version":1,"harness":""}`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := newPreferencesRoot(t)
+			path := preferencesPath(root)
+			if err := os.WriteFile(path, []byte(test.contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			value, found, err := readPreferences(root)
+			if err == nil {
+				t.Fatalf("readPreferences() = %#v, %v, nil; want error", value, found)
+			}
+			if found || value != (preferences{}) {
+				t.Fatalf("readPreferences() = %#v, %v; want zero value, false", value, found)
+			}
+			if !strings.Contains(err.Error(), path) {
+				t.Fatalf("readPreferences() error = %q; want it to contain %q", err, path)
+			}
+		})
+	}
+}

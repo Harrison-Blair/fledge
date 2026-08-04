@@ -1,0 +1,5 @@
+session.json
+messages.jsonl
+messages.lock
+preferences.json
+logs/
