@@ -84,14 +84,16 @@ control shell beside it. Reattaching preserves that layout and all running
 processes. Fledge appends a mandatory communication policy to every
 orchestrator profile at launch, for every harness. This runtime policy requires
 Fledge messages even when an existing custom profile says otherwise; profile
-files themselves are not rewritten. At `fledge start`, Fledge snapshots the
-orchestrator profile and Fledge policy, plus Codex escalation instructions when
-applicable, into durable harness-level instructions. Conversation clearing,
-compaction, harness restarts, and mode changes retain that snapshot. Profile
-edits take effect only after a full orchestrator restart with `fledge stop` and
-`fledge start`. Fledge does not submit an initial user prompt, so a newly
-launched orchestrator starts idle with those durable instructions already
-loaded.
+files themselves are not rewritten. On a fresh `fledge start`, Fledge renders
+the editable profile and mandatory policy to the ignored, owner-only
+`.fledge/profiles/generated/orchestrator.md`. Claude, Pi, and OpenCode reuse that
+file; Codex retains an escaped inline developer-instructions override that also
+includes its Codex-specific escalation guidance. Conversation clearing,
+compaction, harness restarts, and mode changes retain the rendered instructions.
+Profile edits take effect only after a full orchestrator restart with
+`fledge stop` and `fledge start`. Fledge does not submit an initial user prompt,
+so a newly launched orchestrator starts idle with those durable instructions
+already loaded.
 
 Workers continue to receive their instructions in each per-spawn prompt. For
 OpenCode, Fledge preserves the original inline configuration and applies the
@@ -178,7 +180,20 @@ or one of its parents:
 fledge stop
 ```
 
-Stopping requires confirmation from an interactive terminal. Fledge stores the
-runtime session pointer and active-session message audit in ignored files under
-`.fledge/`. Removing a session also removes its message audit, while leaving the
-tracked config, profiles, and any other `.fledge/` content untouched.
+Stopping requires confirmation from an interactive terminal. Fledge's project
+storage is divided by purpose:
+
+- `.fledge/config.json` and `.fledge/profiles/orchestrator.toml` are tracked;
+  edit only the TOML profile to customize coordinator instructions.
+- `.fledge/profiles/generated/orchestrator.md` is an ignored, reusable rendered
+  prompt owned by Fledge. It is refreshed on fresh startup when the profile or
+  mandatory policy changes and is preserved across stop and cleanup.
+- `.fledge/tmp/<session>/` is ignored ephemeral state, including the messaging
+  lock and OpenCode's original configuration snapshot. It is removed after a
+  successful stop, stale-session cleanup, or completed failed-start rollback,
+  but retained when Herdr session deletion fails so cleanup can be retried.
+- `.fledge/logs/<session>/` contains only `fledge.log` and `messages.jsonl`.
+  Successful stop and stale-session cleanup preserve these audit/debug logs;
+  a completed failed-start rollback removes logs for the unusable session.
+
+The ignored `.fledge/session.json` remains the active runtime session pointer.

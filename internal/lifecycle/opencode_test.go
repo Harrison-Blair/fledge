@@ -65,17 +65,18 @@ func TestMergeOpenCodeConfigRejectsInvalidJSON(t *testing.T) {
 func TestPrepareOpenCodeRuntimeWritesProtectedSnapshots(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	const instructions = "line one\nquoted \"text\" and 雪"
+	const instructionsPath = ".fledge/profiles/generated/orchestrator.md"
 	const original = ` {"instructions":["AGENTS.md"],"theme":"dark"} `
-	runtime, err := prepareOpenCodeRuntime(root, testSessionName, instructions, original)
+	runtime, err := prepareOpenCodeRuntime(root, testSessionName, instructionsPath, original)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	sessionDir := statedir.Session(root, testSessionName)
-	instructionsPath := filepath.Join(sessionDir, openCodeInstructionsFile)
-	assertProtectedFile(t, instructionsPath, instructions)
-	assertProtectedFile(t, filepath.Join(sessionDir, openCodeEnvironmentFile), original)
+	tempSessionDir := statedir.TempSession(root, testSessionName)
+	assertProtectedFile(t, filepath.Join(tempSessionDir, openCodeEnvironmentFile), original)
+	if _, err := os.Stat(filepath.Join(statedir.Session(root, testSessionName), openCodeInstructionsFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("per-session prompt artifact error = %v, want absent", err)
+	}
 	if got := runtime.paneEnvironment[openCodeConfigEnvironment]; got != original {
 		t.Fatalf("pane environment = %q, want exact original %q", got, original)
 	}
@@ -91,23 +92,54 @@ func TestPrepareOpenCodeRuntimeWritesProtectedSnapshots(t *testing.T) {
 func TestRemoveOpenCodeRuntimePreservesAuditLogs(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	if _, err := prepareOpenCodeRuntime(root, testSessionName, "policy", "{}"); err != nil {
+	if _, err := prepareOpenCodeRuntime(root, testSessionName, ".fledge/profiles/generated/orchestrator.md", "{}"); err != nil {
 		t.Fatal(err)
 	}
 	auditPath := filepath.Join(statedir.Session(root, testSessionName), "messages.jsonl")
+	if err := os.MkdirAll(filepath.Dir(auditPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(auditPath, []byte("audit\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := removeOpenCodeRuntime(root, testSessionName); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{openCodeInstructionsFile, openCodeEnvironmentFile} {
-		if _, err := os.Stat(filepath.Join(statedir.Session(root, testSessionName), name)); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("runtime artifact %s error = %v, want removed", name, err)
-		}
+	if _, err := os.Stat(filepath.Join(statedir.TempSession(root, testSessionName), openCodeEnvironmentFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("runtime environment error = %v, want removed", err)
 	}
 	if contents, err := os.ReadFile(auditPath); err != nil || string(contents) != "audit\n" {
 		t.Fatalf("audit contents = %q, %v; want preserved", contents, err)
+	}
+}
+
+func TestOpenCodeLegacyRuntimeFallbackAndCleanup(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	legacyDir := statedir.Session(root, testSessionName)
+	if err := os.MkdirAll(legacyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const original = `{"legacy":true}`
+	for name, contents := range map[string]string{
+		openCodeEnvironmentFile:  original,
+		openCodeInstructionsFile: "legacy prompt",
+	} {
+		if err := os.WriteFile(filepath.Join(legacyDir, name), []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	environment, err := openCodePaneEnvironment(root, testSessionName)
+	if err != nil || environment[openCodeConfigEnvironment] != original {
+		t.Fatalf("legacy environment = %#v, %v", environment, err)
+	}
+	if err := removeOpenCodeRuntime(root, testSessionName); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{openCodeEnvironmentFile, openCodeInstructionsFile} {
+		if _, err := os.Stat(filepath.Join(legacyDir, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("legacy artifact %s error = %v, want removed", name, err)
+		}
 	}
 }
 

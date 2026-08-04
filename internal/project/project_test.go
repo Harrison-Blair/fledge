@@ -166,7 +166,7 @@ func TestInitIsIdempotentAndPreservesExistingFiles(t *testing.T) {
 
 	assertFileContents(t, filepath.Join(root, stateDirectory, configFilename), configContents)
 	assertFileContents(t, filepath.Join(root, stateDirectory, profilesDir, profileFilename), profileContents)
-	assertFileContents(t, filepath.Join(root, stateDirectory, ".gitignore"), customIgnoreContents+"preferences.json\nlogs/\n")
+	assertFileContents(t, filepath.Join(root, stateDirectory, ".gitignore"), customIgnoreContents+"preferences.json\nlogs/\ntmp/\nprofiles/generated/\n")
 }
 
 func TestInitPreservesExistingProfileWhenCreatingOtherMetadata(t *testing.T) {

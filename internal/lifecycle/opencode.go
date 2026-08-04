@@ -23,16 +23,12 @@ type openCodeRuntime struct {
 	paneEnvironment   map[string]string
 }
 
-func prepareOpenCodeRuntime(root, session, instructions, originalConfig string) (openCodeRuntime, error) {
-	instructionsPath := filepath.Join(statedir.Session(root, session), openCodeInstructionsFile)
+func prepareOpenCodeRuntime(root, session, instructionsPath, originalConfig string) (openCodeRuntime, error) {
 	mergedConfig, err := mergeOpenCodeConfig(originalConfig, instructionsPath)
 	if err != nil {
 		return openCodeRuntime{}, err
 	}
-	if err := writeProtectedFile(instructionsPath, []byte(instructions)); err != nil {
-		return openCodeRuntime{}, err
-	}
-	environmentPath := filepath.Join(statedir.Session(root, session), openCodeEnvironmentFile)
+	environmentPath := filepath.Join(statedir.TempSession(root, session), openCodeEnvironmentFile)
 	if err := writeProtectedFile(environmentPath, []byte(originalConfig)); err != nil {
 		return openCodeRuntime{}, errors.Join(err, removeOpenCodeRuntime(root, session))
 	}
@@ -87,26 +83,45 @@ func mergeOpenCodeConfig(original, instructionsPath string) (string, error) {
 }
 
 func openCodePaneEnvironment(root, session string) (map[string]string, error) {
-	path := filepath.Join(statedir.Session(root, session), openCodeEnvironmentFile)
-	contents, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+	paths := []string{
+		filepath.Join(statedir.TempSession(root, session), openCodeEnvironmentFile),
+		filepath.Join(statedir.Session(root, session), openCodeEnvironmentFile),
 	}
-	if err != nil {
-		return nil, fmt.Errorf("read OpenCode environment snapshot: %w", err)
+	var contents []byte
+	var err error
+	for _, path := range paths {
+		contents, err = os.ReadFile(path)
+		if err == nil {
+			return map[string]string{openCodeConfigEnvironment: string(contents)}, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("read OpenCode environment snapshot: %w", err)
+		}
 	}
-	return map[string]string{openCodeConfigEnvironment: string(contents)}, nil
+	return nil, nil
 }
 
 func removeOpenCodeRuntime(root, session string) error {
 	var result error
-	for _, name := range []string{openCodeInstructionsFile, openCodeEnvironmentFile} {
-		path := filepath.Join(statedir.Session(root, session), name)
+	paths := []string{
+		filepath.Join(statedir.TempSession(root, session), openCodeEnvironmentFile),
+		filepath.Join(statedir.Session(root, session), openCodeInstructionsFile),
+		filepath.Join(statedir.Session(root, session), openCodeEnvironmentFile),
+	}
+	for _, path := range paths {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			result = errors.Join(result, fmt.Errorf("remove %s: %w", path, err))
 		}
 	}
 	return result
+}
+
+func removeSessionTemporaryState(root, session string) error {
+	path := statedir.TempSession(root, session)
+	if err := os.RemoveAll(path); err != nil {
+		return fmt.Errorf("remove session temporary directory %q: %w", path, err)
+	}
+	return nil
 }
 
 func writeProtectedFile(path string, contents []byte) error {

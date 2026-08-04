@@ -30,7 +30,7 @@ const (
 	stateDirectory = ".fledge"
 	recordFilename = "session.json"
 	recordVersion  = 1
-	ignoreContents = "session.json\npreferences.json\nlogs/\n"
+	ignoreContents = "session.json\npreferences.json\nlogs/\ntmp/\nprofiles/generated/\n"
 
 	sessionNamePrefix    = "fledge-"
 	sessionIDBytes       = 4
@@ -267,20 +267,25 @@ func (m *Manager) Start(ctx context.Context, dir string, supplied ...StartOption
 			return m.herdr.Attach(ctx, value.SessionName, root)
 		}
 	}
+	generatedInstructions := orchestratorInstructions(profile.Instructions, "")
+	generatedPrompt, err := project.EnsureGeneratedOrchestratorPrompt(root, generatedInstructions)
+	if err != nil {
+		return errors.Join(err, unlock())
+	}
 	instructions := orchestratorInstructions(profile.Instructions, selectedHarness.ID)
-	nativeArgs, err = harness.AppendOrchestratorInstructions(selectedHarness, nativeArgs, instructions)
+	nativeArgs, err = harness.AppendOrchestratorInstructions(selectedHarness, nativeArgs, instructions, generatedPrompt)
 	if err != nil {
 		return errors.Join(err, unlock())
 	}
 	runtime := openCodeRuntime{}
 	if selectedHarness.ID == "opencode" {
-		runtime, err = prepareOpenCodeRuntime(root, value.SessionName, instructions, m.getenv(openCodeConfigEnvironment))
+		runtime, err = prepareOpenCodeRuntime(root, value.SessionName, generatedPrompt, m.getenv(openCodeConfigEnvironment))
 		if err != nil {
 			var recordErr error
 			if recordCreated {
 				recordErr = removeRecordIfMatches(root, value.SessionName)
 			}
-			return errors.Join(err, recordErr, unlock())
+			return errors.Join(err, removeSessionTemporaryState(root, value.SessionName), recordErr, unlock())
 		}
 	}
 	logger, closeLog := m.sessionLogger(root, value.SessionName)
@@ -526,13 +531,21 @@ func orchestratorInstructions(profileInstructions, harnessID string) string {
 func (m *Manager) rollbackOwnedSession(ctx context.Context, root, session string, serverOwned bool) error {
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
-	var cleanupErr error
 	if serverOwned {
 		stopErr := m.herdr.Stop(cleanupCtx, session)
 		deleteErr := m.herdr.Delete(cleanupCtx, session)
-		cleanupErr = errors.Join(stopErr, deleteErr, messaging.New(root, session).RemoveAll())
+		if deleteErr != nil {
+			return errors.Join(stopErr, deleteErr)
+		}
+		return errors.Join(
+			stopErr,
+			messaging.New(root, session).RemoveAll(),
+			removeOpenCodeRuntime(root, session),
+			removeSessionTemporaryState(root, session),
+			removeRecordIfMatches(root, session),
+		)
 	}
-	return errors.Join(cleanupErr, removeOpenCodeRuntime(root, session), removeRecordIfMatches(root, session))
+	return errors.Join(removeOpenCodeRuntime(root, session), removeSessionTemporaryState(root, session), removeRecordIfMatches(root, session))
 }
 
 // Spawn starts an ad-hoc agent in a new tab of the running project session.
@@ -845,6 +858,7 @@ func (m *Manager) removeStaleSessionRecord(logger *slog.Logger, root, session st
 	if err := errors.Join(
 		messaging.New(root, session).RemoveLock(),
 		removeOpenCodeRuntime(root, session),
+		removeSessionTemporaryState(root, session),
 	); err != nil {
 		return err
 	}
@@ -876,6 +890,7 @@ func (m *Manager) stopAndDeleteSession(ctx context.Context, logger *slog.Logger,
 	if err := errors.Join(
 		messaging.New(root, value.SessionName).RemoveLock(),
 		removeOpenCodeRuntime(root, value.SessionName),
+		removeSessionTemporaryState(root, value.SessionName),
 	); err != nil {
 		return err
 	}

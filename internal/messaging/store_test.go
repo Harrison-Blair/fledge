@@ -83,6 +83,9 @@ func TestLifecycleInitializeEnsureAndReset(t *testing.T) {
 
 func TestRemoveLockKeepsLogAndRemoveAllDeletesSessionDirectory(t *testing.T) {
 	store := initializedStore(t)
+	if _, err := os.Stat(store.legacyLockPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("new session legacy lock error = %v, want absent", err)
+	}
 
 	if err := store.RemoveLock(); err != nil {
 		t.Fatal(err)
@@ -100,8 +103,33 @@ func TestRemoveLockKeepsLogAndRemoveAllDeletesSessionDirectory(t *testing.T) {
 	if _, err := os.Stat(store.statePath()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("session directory after RemoveAll error = %v, want not exist", err)
 	}
+	if _, err := os.Stat(store.tempPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("temporary session directory after RemoveAll error = %v, want not exist", err)
+	}
 	if _, err := os.Stat(statedir.Logs(store.root)); err != nil {
 		t.Fatalf("logs directory after RemoveAll: %v; want preserved", err)
+	}
+}
+
+func TestLegacySessionLockFallbackAndCleanup(t *testing.T) {
+	store := initializedStore(t)
+	if err := os.Rename(store.lockPath(), store.legacyLockPath()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Ensure(); err != nil {
+		t.Fatalf("Ensure() with legacy lock: %v", err)
+	}
+	if _, err := os.Stat(store.lockPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("fallback created new lock: %v", err)
+	}
+	if _, err := os.Stat(store.legacyLockPath()); err != nil {
+		t.Fatalf("legacy lock after fallback: %v", err)
+	}
+	if err := store.RemoveLock(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(store.legacyLockPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy lock after cleanup: %v", err)
 	}
 }
 
@@ -500,7 +528,8 @@ func TestPermissionsAreOwnerOnly(t *testing.T) {
 	store := initializedStore(t)
 	for _, path := range []string{
 		statedir.Root(store.root), statedir.Logs(store.root),
-		store.statePath(), store.logPath(), store.lockPath(),
+		store.statePath(), statedir.Temp(store.root), store.tempPath(),
+		store.logPath(), store.lockPath(),
 	} {
 		info, err := os.Stat(path)
 		if err != nil {

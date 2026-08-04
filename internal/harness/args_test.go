@@ -163,19 +163,20 @@ func TestBuildArgsValidatesNativeArgumentsBeforeHarness(t *testing.T) {
 
 func TestAppendOrchestratorInstructions(t *testing.T) {
 	const instructions = "First line\nquoted: \"value\"; Unicode: 雪"
+	const promptPath = ".fledge/profiles/generated/orchestrator.md"
 	tests := []struct {
 		harnessID string
 		want      []string
 	}{
-		{harnessID: "claude", want: []string{"--user", "value", "--append-system-prompt", instructions}},
+		{harnessID: "claude", want: []string{"--user", "value", "--append-system-prompt-file", promptPath}},
 		{harnessID: "codex", want: []string{"--user", "value", "-c", `developer_instructions="First line\nquoted: \"value\"; Unicode: 雪"`}},
-		{harnessID: "pi", want: []string{"--user", "value", "--append-system-prompt", instructions}},
+		{harnessID: "pi", want: []string{"--user", "value", "--append-system-prompt", promptPath}},
 		{harnessID: "opencode", want: []string{"--user", "value"}},
 	}
 	for _, test := range tests {
 		t.Run(test.harnessID, func(t *testing.T) {
 			input := []string{"--user", "value"}
-			got, err := AppendOrchestratorInstructions(Harness{ID: test.harnessID}, input, instructions)
+			got, err := AppendOrchestratorInstructions(Harness{ID: test.harnessID}, input, instructions, promptPath)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -195,7 +196,7 @@ func TestAppendOrchestratorInstructionsFledgeOverrideIsLast(t *testing.T) {
 		harnessID string
 		ownedFlag string
 	}{
-		{harnessID: "claude", ownedFlag: "--append-system-prompt"},
+		{harnessID: "claude", ownedFlag: "--append-system-prompt-file"},
 		{harnessID: "codex", ownedFlag: "-c"},
 		{harnessID: "pi", ownedFlag: "--append-system-prompt"},
 	} {
@@ -204,6 +205,7 @@ func TestAppendOrchestratorInstructionsFledgeOverrideIsLast(t *testing.T) {
 				Harness{ID: test.harnessID},
 				[]string{test.ownedFlag, "user value"},
 				"Fledge value",
+				".fledge/profiles/generated/orchestrator.md",
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -217,7 +219,7 @@ func TestAppendOrchestratorInstructionsFledgeOverrideIsLast(t *testing.T) {
 
 func TestCodexOrchestratorInstructionsAreTOMLSafe(t *testing.T) {
 	const instructions = "quote \" slash \\ newline\n tab\t delete\x7f snow 雪"
-	got, err := AppendOrchestratorInstructions(Harness{ID: "codex"}, nil, instructions)
+	got, err := AppendOrchestratorInstructions(Harness{ID: "codex"}, nil, instructions, ".fledge/profiles/generated/orchestrator.md")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,6 +1,5 @@
 // Package statedir resolves the paths of Fledge's project-local state
-// directories, including the per-session log folders shared by the messaging
-// audit log and the debug log.
+// directories, including per-session log and temporary-state folders.
 package statedir
 
 import (
@@ -11,6 +10,7 @@ import (
 const (
 	stateDirectory = ".fledge"
 	logsDirectory  = "logs"
+	tmpDirectory   = "tmp"
 )
 
 var (
@@ -26,6 +26,12 @@ func Logs(root string) string { return filepath.Join(Root(root), logsDirectory) 
 
 // Session returns the log folder belonging to one Herdr session.
 func Session(root, session string) string { return filepath.Join(Logs(root), session) }
+
+// Temp returns the directory holding ephemeral state for active sessions.
+func Temp(root string) string { return filepath.Join(Root(root), tmpDirectory) }
+
+// TempSession returns the ephemeral state folder belonging to one Herdr session.
+func TempSession(root, session string) string { return filepath.Join(Temp(root), session) }
 
 // ValidSessionDirName reports whether name is a Fledge session name that is
 // safe to use as a single log folder name. Both the current

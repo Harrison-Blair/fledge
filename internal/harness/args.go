@@ -57,12 +57,15 @@ func BuildArgs(selected Harness, model string, nativeArgs []string) ([]string, e
 
 // AppendOrchestratorInstructions adds Fledge's durable coordinator policy to
 // the end of the harness arguments so Fledge's value takes precedence over
-// conflicting native passthrough arguments.
-func AppendOrchestratorInstructions(selected Harness, args []string, instructions string) ([]string, error) {
+// conflicting native passthrough arguments. Claude and Pi consume the stable
+// generated prompt path; Codex keeps its safely escaped inline override.
+func AppendOrchestratorInstructions(selected Harness, args []string, instructions, promptPath string) ([]string, error) {
 	result := append([]string(nil), args...)
 	switch selected.ID {
-	case "claude", "pi":
-		return append(result, "--append-system-prompt", instructions), nil
+	case "claude":
+		return append(result, "--append-system-prompt-file", promptPath), nil
+	case "pi":
+		return append(result, "--append-system-prompt", promptPath), nil
 	case "codex":
 		return append(result, "-c", "developer_instructions="+tomlBasicString(instructions)), nil
 	case "opencode":

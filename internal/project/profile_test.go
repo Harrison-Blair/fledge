@@ -4,9 +4,78 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestEnsureGeneratedOrchestratorPromptReusesRefreshesAndProtectsFile(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	wantReference := filepath.Join(".fledge", "profiles", "generated", "orchestrator.md")
+	reference, err := EnsureGeneratedOrchestratorPrompt(root, "first\npolicy")
+	if err != nil || reference != wantReference {
+		t.Fatalf("EnsureGeneratedOrchestratorPrompt() = %q, %v; want %q", reference, err, wantReference)
+	}
+	path := filepath.Join(root, reference)
+	oldTime := time.Unix(123, 0)
+	if err := os.Chtimes(path, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureGeneratedOrchestratorPrompt(root, "first\npolicy"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 || !info.ModTime().Equal(oldTime) {
+		t.Fatalf("reused prompt mode/time = %o, %v; want 600 and %v", info.Mode().Perm(), info.ModTime(), oldTime)
+	}
+	if _, err := EnsureGeneratedOrchestratorPrompt(root, "refreshed\npolicy"); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil || string(contents) != "refreshed\npolicy" {
+		t.Fatalf("refreshed prompt = %q, %v", contents, err)
+	}
+}
+
+func TestEnsureGeneratedOrchestratorPromptRejectsSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation commonly requires elevated Windows privileges")
+	}
+	root := t.TempDir()
+	path := filepath.Join(root, ".fledge", "profiles", "generated", "orchestrator.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "target")
+	if err := os.WriteFile(target, []byte("unchanged"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureGeneratedOrchestratorPrompt(root, "replacement"); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("EnsureGeneratedOrchestratorPrompt() error = %v, want symlink rejection", err)
+	}
+	contents, err := os.ReadFile(target)
+	if err != nil || string(contents) != "unchanged" {
+		t.Fatalf("symlink target = %q, %v; want unchanged", contents, err)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("symlink target mode = %v; want 644", info.Mode().Perm())
+	}
+}
 
 func TestLoadOrchestratorProfileAcceptsSupportedTOMLStrings(t *testing.T) {
 	t.Parallel()

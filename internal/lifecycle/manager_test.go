@@ -13,6 +13,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/messaging"
 	"github.com/Harrison-Blair/fledge/internal/project"
+	"github.com/Harrison-Blair/fledge/internal/statedir"
 	"github.com/Harrison-Blair/fledge/internal/tui"
 )
 
@@ -92,6 +93,21 @@ func TestStartCreatesAndReusesSession(t *testing.T) {
 			t.Errorf("non-OpenCode runtime artifact %s error = %v, want absent", name, err)
 		}
 	}
+	logEntries, err := os.ReadDir(statedir.Session(root, wantSessionName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logNames []string
+	for _, entry := range logEntries {
+		logNames = append(logNames, entry.Name())
+	}
+	if strings.Join(logNames, ",") != "fledge.log,messages.jsonl" {
+		t.Fatalf("session log entries = %v, want only actual logs", logNames)
+	}
+	tmpEntries, err := os.ReadDir(statedir.TempSession(root, wantSessionName))
+	if err != nil || len(tmpEntries) != 1 || tmpEntries[0].Name() != "messages.lock" {
+		t.Fatalf("session temp entries = %v, %v; want messages.lock", tmpEntries, err)
+	}
 
 	ignore, err := os.ReadFile(filepath.Join(root, stateDirectory, ".gitignore"))
 	if err != nil {
@@ -147,16 +163,59 @@ func TestStartLeavesClaudeProfileUnchangedAndAppendsDurableInstructions(t *testi
 		t.Fatal(err)
 	}
 	wantInstructions := "custom Claude instructions\n\n" + mandatoryCoordinatorCommunicationPolicy
-	wantArgs := []string{"--permission-mode", "bypassPermissions", "--append-system-prompt", wantInstructions}
+	promptReference := filepath.Join(".fledge", "profiles", "generated", "orchestrator.md")
+	wantArgs := []string{"--permission-mode", "bypassPermissions", "--append-system-prompt-file", promptReference}
 	if strings.Join(client.startAgent.args, "\x00") != strings.Join(wantArgs, "\x00") {
 		t.Errorf("Claude args = %#v, want %#v", client.startAgent.args, wantArgs)
 	}
 	if len(client.promptCalls) != 0 {
 		t.Errorf("orchestrator PromptAgent calls = %#v, want none", client.promptCalls)
 	}
+	generated, err := os.ReadFile(filepath.Join(root, promptReference))
+	if err != nil || string(generated) != wantInstructions {
+		t.Fatalf("generated prompt = %q, %v; want exact rendered instructions", generated, err)
+	}
+	for _, arg := range client.startAgent.args {
+		if strings.ContainsAny(arg, "\n\r\t") {
+			t.Fatalf("Claude argument contains a control character: %q", arg)
+		}
+	}
 	contentsAfter, err := os.ReadFile(profilePath)
 	if err != nil || string(contentsAfter) != profileContents {
 		t.Fatalf("profile after Start() = %q, %v; want unchanged", contentsAfter, err)
+	}
+}
+
+func TestStartPiUsesControlCharacterFreeGeneratedPromptArgument(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	initTestProject(t, root)
+	client := &fakeHerdr{snapshot: testSnapshot()}
+	manager, _ := newTestManager(client, &fakeConfirmer{})
+	manager.lookPath = func(name string) (string, error) {
+		if name == "pi" {
+			return "/test/pi", nil
+		}
+		return "", os.ErrNotExist
+	}
+
+	if err := manager.Start(context.Background(), root, StartOptions{Harness: "pi", HarnessSet: true}); err != nil {
+		t.Fatal(err)
+	}
+	wantPath := filepath.Join(".fledge", "profiles", "generated", "orchestrator.md")
+	wantArgs := []string{"--append-system-prompt", wantPath}
+	if strings.Join(client.startAgent.args, "\x00") != strings.Join(wantArgs, "\x00") {
+		t.Fatalf("Pi args = %#v, want %#v", client.startAgent.args, wantArgs)
+	}
+	for _, arg := range client.startAgent.args {
+		if strings.ContainsAny(arg, "\n\r\t") {
+			t.Fatalf("Pi argument contains a control character: %q", arg)
+		}
+	}
+	want := project.DefaultOrchestratorInstructions + "\n\n" + mandatoryCoordinatorCommunicationPolicy
+	contents, err := os.ReadFile(filepath.Join(root, wantPath))
+	if err != nil || string(contents) != want {
+		t.Fatalf("generated prompt = %q, %v; want exact multiline policy", contents, err)
 	}
 }
 
@@ -304,6 +363,30 @@ func TestStartReusesLegacySessionName(t *testing.T) {
 	}
 }
 
+func TestStartReattachPreservesGeneratedPromptSnapshot(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeTestRecord(t, root)
+	reference, err := project.EnsureGeneratedOrchestratorPrompt(root, "active session prompt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	profilePath := filepath.Join(root, stateDirectory, "profiles", "orchestrator.toml")
+	if err := os.WriteFile(profilePath, []byte("schema_version = 1\ninstructions = 'edited profile'\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeHerdr{sessions: []herdr.Session{{Name: testSessionName, Running: true}}}
+	manager, _ := newTestManager(client, &fakeConfirmer{})
+
+	if err := manager.Start(context.Background(), root); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(filepath.Join(root, reference))
+	if err != nil || string(contents) != "active session prompt" {
+		t.Fatalf("generated prompt after reattach = %q, %v; want active snapshot", contents, err)
+	}
+}
+
 func TestStartRestartsStoppedSession(t *testing.T) {
 	t.Parallel()
 
@@ -435,7 +518,7 @@ func TestStartResetsMessagingOnlyForFreshServer(t *testing.T) {
 			t.Fatalf("preserved message = %#v, %v", preserved, err)
 		}
 		ignore, err := os.ReadFile(ignorePath)
-		if err != nil || string(ignore) != "session.json\nkeep-local/\npreferences.json\nlogs/\n" {
+		if err != nil || string(ignore) != "session.json\nkeep-local/\npreferences.json\nlogs/\ntmp/\nprofiles/generated/\n" {
 			t.Fatalf("reattach .gitignore = %q, %v", ignore, err)
 		}
 	})
@@ -520,7 +603,7 @@ func TestStartFailureOwnership(t *testing.T) {
 		}
 	})
 
-	t.Run("delete failure during rollback still removes record", func(t *testing.T) {
+	t.Run("delete failure during rollback preserves retry state", func(t *testing.T) {
 		root := t.TempDir()
 		initTestProject(t, root)
 		client := &fakeHerdr{
@@ -534,12 +617,16 @@ func TestStartFailureOwnership(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "delete failed") {
 			t.Fatalf("Start() error = %v, want delete failure surfaced", err)
 		}
-		if _, found, readErr := readRecord(root); readErr != nil || found {
-			t.Fatalf("record found = %v, error = %v; want removed", found, readErr)
+		if value, found, readErr := readRecord(root); readErr != nil || !found || value.SessionName == "" {
+			t.Fatalf("record = %#v, found %v, error = %v; want preserved", value, found, readErr)
 		}
 		sessionLogs := filepath.Join(root, stateDirectory, "logs", "fledge-"+sessionSlug(root)+"-00000000")
-		if _, statErr := os.Stat(sessionLogs); !errors.Is(statErr, os.ErrNotExist) {
-			t.Fatalf("session log directory stat error = %v, want removed", statErr)
+		if _, statErr := os.Stat(sessionLogs); statErr != nil {
+			t.Fatalf("session log directory stat error = %v, want preserved", statErr)
+		}
+		sessionTmp := statedir.TempSession(root, "fledge-"+sessionSlug(root)+"-00000000")
+		if _, statErr := os.Stat(sessionTmp); statErr != nil {
+			t.Fatalf("session temp directory stat error = %v, want preserved", statErr)
 		}
 		if len(client.stopCalls) != 1 || len(client.deleteCalls) != 1 {
 			t.Fatalf("cleanup calls = stop %v delete %v", client.stopCalls, client.deleteCalls)
@@ -723,7 +810,8 @@ func TestStartOpenCodeUsesDurableSnapshotAndIsolatesControlPane(t *testing.T) {
 		t.Fatal(err)
 	}
 	session := "fledge-" + sessionSlug(root) + "-00000000"
-	instructionsPath := filepath.Join(root, stateDirectory, "logs", session, openCodeInstructionsFile)
+	instructionsReference := filepath.Join(stateDirectory, "profiles", "generated", "orchestrator.md")
+	instructionsPath := filepath.Join(root, instructionsReference)
 	instructions, err := os.ReadFile(instructionsPath)
 	if err != nil {
 		t.Fatal(err)
@@ -736,9 +824,10 @@ func TestStartOpenCodeUsesDurableSnapshotAndIsolatesControlPane(t *testing.T) {
 		t.Fatalf("control pane environment = %#v, want original config", client.splitEnvironment)
 	}
 	merged := client.serverEnvironment[openCodeConfigEnvironment]
-	if !strings.Contains(merged, instructionsPath) || !strings.Contains(merged, `"theme":"dark"`) {
+	if !strings.Contains(merged, instructionsReference) || !strings.Contains(merged, `"theme":"dark"`) {
 		t.Fatalf("server config = %q, want instruction path and original fields", merged)
 	}
+	assertProtectedFile(t, filepath.Join(statedir.TempSession(root, session), openCodeEnvironmentFile), original)
 	if len(client.startAgent.args) != 0 || len(client.promptCalls) != 0 {
 		t.Fatalf("OpenCode launch args = %#v, prompt calls = %#v; want no prompt submission", client.startAgent.args, client.promptCalls)
 	}
@@ -762,6 +851,10 @@ func TestStartOpenCodeRejectsMalformedInlineConfigBeforeLaunch(t *testing.T) {
 		}
 		return ""
 	}
+	session := "fledge-" + sessionSlug(root) + "-00000000"
+	if err := os.MkdirAll(statedir.TempSession(root, session), 0o700); err != nil {
+		t.Fatal(err)
+	}
 
 	err := manager.Start(context.Background(), root, StartOptions{Harness: "opencode", HarnessSet: true})
 	if err == nil || !strings.Contains(err.Error(), "decode "+openCodeConfigEnvironment) {
@@ -772,6 +865,9 @@ func TestStartOpenCodeRejectsMalformedInlineConfigBeforeLaunch(t *testing.T) {
 	}
 	if _, found, readErr := readRecord(root); readErr != nil || found {
 		t.Fatalf("record after failed Start() = found %v, error %v; want removed", found, readErr)
+	}
+	if _, statErr := os.Stat(statedir.TempSession(root, session)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("temporary session directory after failed preparation = %v, want removed", statErr)
 	}
 }
 
@@ -793,10 +889,12 @@ func TestStartOpenCodeRollbackRemovesRuntimeArtifacts(t *testing.T) {
 		t.Fatal("Start() error = nil")
 	}
 	session := "fledge-" + sessionSlug(root) + "-00000000"
-	for _, name := range []string{openCodeInstructionsFile, openCodeEnvironmentFile} {
-		if _, err := os.Stat(filepath.Join(root, stateDirectory, "logs", session, name)); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("rollback artifact %s error = %v, want removed", name, err)
-		}
+	if _, err := os.Stat(statedir.TempSession(root, session)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("rollback temp directory error = %v, want removed", err)
+	}
+	generated := filepath.Join(root, stateDirectory, "profiles", "generated", "orchestrator.md")
+	if _, err := os.Stat(generated); err != nil {
+		t.Errorf("generated prompt after rollback = %v, want preserved", err)
 	}
 }
 
@@ -804,7 +902,8 @@ func TestStartReattachDoesNotRebuildOpenCodeSnapshot(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	writeTestRecord(t, root)
-	if _, err := prepareOpenCodeRuntime(root, testSessionName, "old durable instructions", `{"old":true}`); err != nil {
+	const promptPath = ".fledge/profiles/generated/orchestrator.md"
+	if _, err := prepareOpenCodeRuntime(root, testSessionName, promptPath, `{"old":true}`); err != nil {
 		t.Fatal(err)
 	}
 	client := &fakeHerdr{sessions: []herdr.Session{{Name: testSessionName, Running: true}}}
@@ -814,9 +913,9 @@ func TestStartReattachDoesNotRebuildOpenCodeSnapshot(t *testing.T) {
 	if err := manager.Start(context.Background(), root); err != nil {
 		t.Fatal(err)
 	}
-	contents, err := os.ReadFile(filepath.Join(root, stateDirectory, "logs", testSessionName, openCodeInstructionsFile))
-	if err != nil || string(contents) != "old durable instructions" {
-		t.Fatalf("instruction snapshot after reattach = %q, %v", contents, err)
+	contents, err := os.ReadFile(filepath.Join(statedir.TempSession(root, testSessionName), openCodeEnvironmentFile))
+	if err != nil || string(contents) != `{"old":true}` {
+		t.Fatalf("environment snapshot after reattach = %q, %v", contents, err)
 	}
 	if slicesContain(client.calls, "start-server") {
 		t.Fatalf("calls = %v, want attach without rebuilding", client.calls)
@@ -828,7 +927,7 @@ func TestSpawnRestoresOriginalOpenCodeConfig(t *testing.T) {
 	root := t.TempDir()
 	writeTestRecord(t, root)
 	const original = ` {"theme":"dark"} `
-	if _, err := prepareOpenCodeRuntime(root, testSessionName, "coordinator only", original); err != nil {
+	if _, err := prepareOpenCodeRuntime(root, testSessionName, ".fledge/profiles/generated/orchestrator.md", original); err != nil {
 		t.Fatal(err)
 	}
 	client := &fakeHerdr{
@@ -861,10 +960,17 @@ func TestOpenCodeRuntimeCleanupFollowsSessionDeletion(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
 			writeTestRecord(t, root)
-			if _, err := prepareOpenCodeRuntime(root, testSessionName, "policy", "{}"); err != nil {
+			generatedReference, err := project.EnsureGeneratedOrchestratorPrompt(root, "durable prompt")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := prepareOpenCodeRuntime(root, testSessionName, ".fledge/profiles/generated/orchestrator.md", "{}"); err != nil {
 				t.Fatal(err)
 			}
 			auditPath := filepath.Join(root, stateDirectory, "logs", testSessionName, "messages.jsonl")
+			if err := os.MkdirAll(filepath.Dir(auditPath), 0o700); err != nil {
+				t.Fatal(err)
+			}
 			if err := os.WriteFile(auditPath, []byte("audit\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -872,13 +978,14 @@ func TestOpenCodeRuntimeCleanupFollowsSessionDeletion(t *testing.T) {
 			if err := manager.Stop(context.Background(), root); err != nil {
 				t.Fatal(err)
 			}
-			for _, name := range []string{openCodeInstructionsFile, openCodeEnvironmentFile} {
-				if _, err := os.Stat(filepath.Join(root, stateDirectory, "logs", testSessionName, name)); !errors.Is(err, os.ErrNotExist) {
-					t.Errorf("artifact %s error = %v, want removed", name, err)
-				}
+			if _, err := os.Stat(statedir.TempSession(root, testSessionName)); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("temporary session directory error = %v, want removed", err)
 			}
 			if contents, err := os.ReadFile(auditPath); err != nil || string(contents) != "audit\n" {
 				t.Fatalf("audit after cleanup = %q, %v; want preserved", contents, err)
+			}
+			if contents, err := os.ReadFile(filepath.Join(root, generatedReference)); err != nil || string(contents) != "durable prompt" {
+				t.Fatalf("generated prompt after cleanup = %q, %v; want preserved", contents, err)
 			}
 		})
 	}
@@ -888,7 +995,7 @@ func TestOpenCodeRuntimeRetainedWhenSessionDeletionFails(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	writeTestRecord(t, root)
-	if _, err := prepareOpenCodeRuntime(root, testSessionName, "policy", "{}"); err != nil {
+	if _, err := prepareOpenCodeRuntime(root, testSessionName, ".fledge/profiles/generated/orchestrator.md", "{}"); err != nil {
 		t.Fatal(err)
 	}
 	manager, _ := newTestManager(&fakeHerdr{
@@ -898,10 +1005,8 @@ func TestOpenCodeRuntimeRetainedWhenSessionDeletionFails(t *testing.T) {
 	if err := manager.Stop(context.Background(), root); err == nil {
 		t.Fatal("Stop() error = nil")
 	}
-	for _, name := range []string{openCodeInstructionsFile, openCodeEnvironmentFile} {
-		if _, err := os.Stat(filepath.Join(root, stateDirectory, "logs", testSessionName, name)); err != nil {
-			t.Errorf("recoverable artifact %s removed: %v", name, err)
-		}
+	if _, err := os.Stat(filepath.Join(statedir.TempSession(root, testSessionName), openCodeEnvironmentFile)); err != nil {
+		t.Errorf("recoverable environment snapshot removed: %v", err)
 	}
 }
 
@@ -1512,8 +1617,8 @@ func TestStopSessionStates(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(sessionDirectory, "messages.jsonl")); err != nil {
 				t.Errorf("messaging log after Stop: %v; want preserved", err)
 			}
-			if _, err := os.Stat(filepath.Join(sessionDirectory, "messages.lock")); !errors.Is(err, os.ErrNotExist) {
-				t.Errorf("messaging lock error = %v, want not exist", err)
+			if _, err := os.Stat(statedir.TempSession(root, testSessionName)); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("temporary session directory error = %v, want not exist", err)
 			}
 			if contents, err := os.ReadFile(logPath); err != nil || string(contents) != "keep me" {
 				t.Errorf("log contents = %q, %v; want preserved", contents, err)

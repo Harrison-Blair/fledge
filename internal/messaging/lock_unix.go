@@ -18,8 +18,7 @@ func openFileNoFollow(path string, flags int, permission os.FileMode) (*os.File,
 	return os.NewFile(uintptr(descriptor), path), nil
 }
 
-func (s *Store) acquireLock() (func() error, error) {
-	path := s.lockPath()
+func (s *Store) acquireLock(path string) (func() error, error) {
 	if err := rejectSymlink(path); err != nil {
 		return nil, err
 	}

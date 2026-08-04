@@ -87,7 +87,8 @@ func WithIDGenerator(generator func() (string, error)) Option {
 	return func(s *Store) { s.generateID = generator }
 }
 
-// Store owns one Herdr session's message log beneath root/.fledge/logs.
+// Store owns one Herdr session's message log beneath root/.fledge/logs and its
+// ephemeral lock beneath root/.fledge/tmp.
 type Store struct {
 	root       string
 	session    string
@@ -126,7 +127,7 @@ func ValidateBody(body string) error {
 // when reattaching to an existing one.
 func (s *Store) Initialize() (string, error) {
 	var sessionID string
-	err := s.withLock(func() error {
+	err := s.withLockAt(s.lockPath(), func() error {
 		id, err := s.newID()
 		if err != nil {
 			return err
@@ -179,53 +180,70 @@ func (s *Store) RemoveLock() error {
 	if err := s.ensureStateDirectory(); err != nil {
 		return err
 	}
-	unlock, err := s.acquireLock()
+	path, err := s.activeLockPath()
+	if err != nil {
+		return err
+	}
+	unlock, err := s.acquireLock(path)
 	if err != nil {
 		return err
 	}
 	if err := unlock(); err != nil {
 		return err
 	}
-	lockPath := s.lockPath()
-	if err := rejectSymlink(lockPath); err != nil {
-		return err
+	var removeErr error
+	for _, lockPath := range []string{s.lockPath(), s.legacyLockPath()} {
+		if err := rejectSymlink(lockPath); err != nil {
+			removeErr = errors.Join(removeErr, err)
+			continue
+		}
+		if err := os.Remove(lockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			removeErr = errors.Join(removeErr, fmt.Errorf("remove messaging lock %q: %w", lockPath, err))
+		}
 	}
-	if err := os.Remove(lockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove messaging lock %q: %w", lockPath, err)
-	}
-	return syncDirectory(s.statePath())
+	return errors.Join(removeErr, syncDirectory(s.statePath()), syncDirectory(s.tempPath()))
 }
 
-// RemoveAll deletes the session's whole log folder. It is intended for rolling
-// back a session that never became usable.
+// RemoveAll deletes the session's log and temporary-state folders. It is
+// intended for rolling back a session that never became usable.
 func (s *Store) RemoveAll() error {
 	if err := s.ensureStateDirectory(); err != nil {
 		return err
 	}
-	unlock, err := s.acquireLock()
+	lockPath, err := s.activeLockPath()
+	if err != nil {
+		return err
+	}
+	unlock, err := s.acquireLock(lockPath)
 	if err != nil {
 		return err
 	}
 	if err := unlock(); err != nil {
 		return err
 	}
-	path := s.statePath()
-	if err := rejectSymlink(path); err != nil {
-		return err
+	var removeErr error
+	for _, path := range []string{s.statePath(), s.tempPath()} {
+		if err := rejectSymlink(path); err != nil {
+			removeErr = errors.Join(removeErr, err)
+			continue
+		}
+		if err := os.RemoveAll(path); err != nil {
+			removeErr = errors.Join(removeErr, fmt.Errorf("remove messaging session directory %q: %w", path, err))
+		}
 	}
-	if err := os.RemoveAll(path); err != nil {
-		return fmt.Errorf("remove messaging session directory %q: %w", path, err)
-	}
-	return syncDirectory(statedir.Logs(s.root))
+	return errors.Join(removeErr, syncDirectory(statedir.Logs(s.root)), syncDirectory(statedir.Temp(s.root)))
 }
 
-// removeLegacyFiles deletes the pre-session-folder message log and lock that
-// older Fledge versions kept directly in .fledge.
+// removeLegacyFiles deletes locks and the pre-session-folder message log from
+// layouts used by older Fledge versions.
 func (s *Store) removeLegacyFiles() error {
 	directory := statedir.Root(s.root)
 	var removeErr error
-	for _, name := range []string{logFilename, lockFilename} {
-		path := filepath.Join(directory, name)
+	for _, path := range []string{
+		filepath.Join(directory, logFilename),
+		filepath.Join(directory, lockFilename),
+		s.legacyLockPath(),
+	} {
 		if err := rejectSymlink(path); err != nil {
 			removeErr = errors.Join(removeErr, err)
 			continue
@@ -234,7 +252,7 @@ func (s *Store) removeLegacyFiles() error {
 			removeErr = errors.Join(removeErr, fmt.Errorf("remove legacy messaging file %q: %w", path, err))
 		}
 	}
-	return errors.Join(removeErr, syncDirectory(directory))
+	return errors.Join(removeErr, syncDirectory(directory), syncDirectory(s.statePath()))
 }
 
 // Create appends a new pending message.
@@ -406,7 +424,22 @@ func (s *Store) withLock(operation func() error) error {
 	if err := s.ensureStateDirectory(); err != nil {
 		return err
 	}
-	unlock, err := s.acquireLock()
+	path, err := s.activeLockPath()
+	if err != nil {
+		return err
+	}
+	return s.withAcquiredLock(path, operation)
+}
+
+func (s *Store) withLockAt(path string, operation func() error) error {
+	if err := s.ensureStateDirectory(); err != nil {
+		return err
+	}
+	return s.withAcquiredLock(path, operation)
+}
+
+func (s *Store) withAcquiredLock(path string, operation func() error) error {
+	unlock, err := s.acquireLock(path)
 	if err != nil {
 		return err
 	}
@@ -418,7 +451,10 @@ func (s *Store) ensureStateDirectory() error {
 	if !statedir.ValidSessionDirName(s.session) {
 		return fmt.Errorf("Herdr session name %q is not a valid messaging log directory name", s.session)
 	}
-	for _, path := range []string{statedir.Root(s.root), statedir.Logs(s.root), s.statePath()} {
+	for _, path := range []string{
+		statedir.Root(s.root), statedir.Logs(s.root), s.statePath(),
+		statedir.Temp(s.root), s.tempPath(),
+	} {
 		info, err := os.Lstat(path)
 		switch {
 		case errors.Is(err, os.ErrNotExist):
@@ -690,8 +726,26 @@ func (s *Store) newID() (string, error) {
 func (s *Store) now() time.Time { return s.clock().UTC() }
 
 func (s *Store) statePath() string { return statedir.Session(s.root, s.session) }
+func (s *Store) tempPath() string  { return statedir.TempSession(s.root, s.session) }
 func (s *Store) logPath() string   { return filepath.Join(s.statePath(), logFilename) }
-func (s *Store) lockPath() string  { return filepath.Join(s.statePath(), lockFilename) }
+func (s *Store) lockPath() string  { return filepath.Join(s.tempPath(), lockFilename) }
+func (s *Store) legacyLockPath() string {
+	return filepath.Join(s.statePath(), lockFilename)
+}
+
+func (s *Store) activeLockPath() (string, error) {
+	if _, err := os.Lstat(s.lockPath()); err == nil {
+		return s.lockPath(), nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("inspect messaging lock %q: %w", s.lockPath(), err)
+	}
+	if _, err := os.Lstat(s.legacyLockPath()); err == nil {
+		return s.legacyLockPath(), nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("inspect legacy messaging lock %q: %w", s.legacyLockPath(), err)
+	}
+	return s.lockPath(), nil
+}
 
 func randomID() (string, error) {
 	var value [16]byte

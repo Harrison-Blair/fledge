@@ -1,6 +1,8 @@
 package project
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +10,11 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+)
+
+const (
+	generatedProfilesDir          = "generated"
+	generatedOrchestratorFilename = "orchestrator.md"
 )
 
 // DefaultOrchestratorInstructions are written for newly initialized projects.
@@ -37,6 +44,66 @@ func LoadOrchestratorProfile(root string) (OrchestratorProfile, error) {
 
 func profilePath(root string) string {
 	return filepath.Join(root, stateDirectory, profilesDir, profileFilename)
+}
+
+// EnsureGeneratedOrchestratorPrompt writes the reusable rendered coordinator
+// prompt when its contents changed and returns its stable project-relative path.
+func EnsureGeneratedOrchestratorPrompt(root, instructions string) (string, error) {
+	reference := filepath.Join(stateDirectory, profilesDir, generatedProfilesDir, generatedOrchestratorFilename)
+	path := filepath.Join(root, reference)
+	if err := rejectGeneratedPromptSymlink(path); err != nil {
+		return "", err
+	}
+	existing, err := os.ReadFile(path)
+	if err == nil && bytes.Equal(existing, []byte(instructions)) {
+		if err := os.Chmod(path, 0o600); err != nil {
+			return "", fmt.Errorf("protect generated orchestrator prompt %q: %w", path, err)
+		}
+		return reference, nil
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("read generated orchestrator prompt %q: %w", path, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return "", fmt.Errorf("create generated profile directory: %w", err)
+	}
+	if err := rejectGeneratedPromptSymlink(path); err != nil {
+		return "", err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return "", fmt.Errorf("create generated orchestrator prompt %q: %w", path, err)
+	}
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return "", fmt.Errorf("protect generated orchestrator prompt %q: %w", path, err)
+	}
+	_, writeErr := file.Write([]byte(instructions))
+	closeErr := file.Close()
+	if writeErr != nil {
+		return "", fmt.Errorf("write generated orchestrator prompt %q: %w", path, writeErr)
+	}
+	if closeErr != nil {
+		return "", fmt.Errorf("close generated orchestrator prompt %q: %w", path, closeErr)
+	}
+	return reference, nil
+}
+
+func rejectGeneratedPromptSymlink(path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect generated orchestrator prompt %q: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("generated orchestrator prompt %q must not be a symlink", path)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("generated orchestrator prompt %q must be a regular file", path)
+	}
+	return nil
 }
 
 func loadProfileFile(path string) (OrchestratorProfile, error) {

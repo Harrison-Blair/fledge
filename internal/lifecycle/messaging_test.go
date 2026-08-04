@@ -291,7 +291,7 @@ func TestMessagingUpdatesLegacyIgnoreWithoutOverwritingEntries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(contents) != "session.json\nkeep-local/\npreferences.json\nlogs/\n" {
+	if string(contents) != "session.json\nkeep-local/\npreferences.json\nlogs/\ntmp/\nprofiles/generated/\n" {
 		t.Fatalf(".gitignore = %q", contents)
 	}
 }
