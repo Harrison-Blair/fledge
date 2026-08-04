@@ -56,6 +56,28 @@ func TestInitCreatesProjectFiles(t *testing.T) {
 	}
 }
 
+func TestInitKeepsUserFacingDirectoriesReadable(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	if _, err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	for _, dir := range []string{
+		filepath.Join(root, stateDirectory),
+		filepath.Join(root, stateDirectory, profilesDir),
+	} {
+		info, err := os.Stat(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != 0o755 {
+			t.Errorf("%s permissions = %o, want 755", dir, got)
+		}
+	}
+}
+
 func TestInitPreservesExistingWatcherConfig(t *testing.T) {
 	t.Parallel()
 

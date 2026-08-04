@@ -76,6 +76,9 @@ func Init(path string) (string, error) {
 		return "", err
 	}
 
+	// .fledge and .fledge/profiles hold user-facing configuration, so they stay
+	// 0755 and are never chmodded by state code; 0700 belongs only to logs/,
+	// tmp/, session directories, and profiles/generated/.
 	if err := os.MkdirAll(filepath.Dir(profilePath), 0o755); err != nil {
 		return "", fmt.Errorf("create Fledge project directories: %w", err)
 	}
