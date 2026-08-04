@@ -133,6 +133,81 @@ func TestLegacySessionLockFallbackAndCleanup(t *testing.T) {
 	}
 }
 
+func TestInitializeWaitsForALegacyLockHeldByAnotherStore(t *testing.T) {
+	store := initializedStore(t)
+	// A session created by an older Fledge keeps its lock inside the log folder.
+	if err := os.Rename(store.lockPath(), store.legacyLockPath()); err != nil {
+		t.Fatal(err)
+	}
+
+	holder := New(store.root, store.session)
+	state, err := holder.loadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockPath, err := holder.activeLockPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := holder.acquireLock(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit := func() {
+		t.Helper()
+		e := event{
+			Version: eventVersion, Type: eventMessageCreated, At: time.Now().UTC(), SessionID: state.sessionID,
+			MessageID: "committed-under-the-lock", Sender: "user", Recipient: "alice", Body: "committed", RecipientPane: "%1",
+		}
+		if err := holder.appendEvents([]event{e}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The clock runs inside Initialize's critical section, so it reports whether
+	// Initialize got past a lock this store is still holding and parks it there
+	// until the interleaving has been forced.
+	entered := make(chan struct{}, 1)
+	proceed := make(chan struct{})
+	resetting := New(store.root, store.session, WithClock(func() time.Time {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-proceed
+		return time.Now().UTC()
+	}))
+	var initializeErr error
+	done := make(chan struct{})
+	go func() {
+		_, initializeErr = resetting.Initialize()
+		close(done)
+	}()
+
+	select {
+	case <-entered:
+		// Mutual exclusion is already broken. Let Initialize replace the log and
+		// then finish the append this holder was in the middle of.
+		close(proceed)
+		<-done
+		commit()
+	case <-time.After(500 * time.Millisecond):
+		// Initialize is waiting for the legacy lock, as every other entry point does.
+		commit()
+		close(proceed)
+	}
+	if err := unlock(); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if initializeErr != nil {
+		t.Fatal(initializeErr)
+	}
+	if _, err := New(store.root, store.session).List(); err != nil {
+		t.Fatalf("log after Initialize raced a locked appender: %v", err)
+	}
+}
+
 func TestSessionsKeepIndependentLogs(t *testing.T) {
 	root := t.TempDir()
 	first := New(root, testSession)
@@ -387,6 +462,35 @@ func TestReplyPreservesOriginalAndUserReplyIsDelivered(t *testing.T) {
 	}
 }
 
+func TestReplyAcknowledgesAnUncertainOriginal(t *testing.T) {
+	store := initializedStore(t)
+	original := mustCreate(t, store, CreateParams{Sender: "user", Recipient: "alice", Body: "question", RecipientPane: "%1"})
+	if _, err := store.RecordAttempt(original.ID); err != nil {
+		t.Fatal(err)
+	}
+	before := lineCount(t, store.logPath())
+
+	reply, err := store.Reply(original.ID, "alice", "%1", "answer", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A reply from the recipient proves the original reached it, so the
+	// acknowledgement must be durable rather than only in-memory.
+	got, err := New(store.root, store.session).Get(original.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusDelivered || !got.DeliveredAt.Equal(reply.CreatedAt) {
+		t.Fatalf("original after reply = %#v, want delivered at %v", got, reply.CreatedAt)
+	}
+	if got := lineCount(t, store.logPath()); got != before+2 {
+		t.Fatalf("reply transaction appended %d events, want 2", got-before)
+	}
+	if _, err := store.RecordDelivery(original.ID, true, ""); err == nil {
+		t.Fatal("acknowledged message still accepted a delivery outcome")
+	}
+}
+
 func TestCrashedReplyRecordIsDiscardedWithoutChangingOriginal(t *testing.T) {
 	store := initializedStore(t)
 	original := deliveredMessage(t, store, CreateParams{Sender: "user", Recipient: "alice", Body: "question", RecipientPane: "%1"})
@@ -521,13 +625,97 @@ func TestConcurrentAppendsAreSerialized(t *testing.T) {
 	}
 }
 
+func TestRemoveAllCannotDestroyAnAppendCommittedUnderTheLock(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows cannot delete an open lock file, so RemoveAll must release it first")
+	}
+	for iteration := 0; iteration < 16; iteration++ {
+		root := t.TempDir()
+		store := New(root, testSession)
+		if _, err := store.Initialize(); err != nil {
+			t.Fatal(err)
+		}
+		state, err := store.loadState()
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Both racers queue behind a lock this test holds, so RemoveAll can win it
+		// first and hand the waiting appender any window it leaves open.
+		lockPath, err := store.activeLockPath()
+		if err != nil {
+			t.Fatal(err)
+		}
+		gate, err := store.acquireLock(lockPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		removed := make(chan struct{})
+		var removeErr error
+		go func() {
+			removeErr = New(root, testSession).RemoveAll()
+			close(removed)
+		}()
+
+		appended := make(chan struct{})
+		var failure string
+		go func() {
+			defer close(appended)
+			appender := New(root, testSession)
+			path, err := appender.activeLockPath()
+			if err != nil {
+				return
+			}
+			unlock, err := appender.acquireLock(path)
+			if err != nil {
+				return // RemoveAll already deleted the folder holding the lock.
+			}
+			defer func() { _ = unlock() }()
+			if _, err := os.Stat(appender.logPath()); err != nil {
+				return // RemoveAll already deleted the log.
+			}
+			e := event{
+				Version: eventVersion, Type: eventMessageCreated, At: time.Now().UTC(), SessionID: state.sessionID,
+				MessageID: "committed-under-the-lock", Sender: "user", Recipient: "alice", Body: "committed", RecipientPane: "%1",
+			}
+			if err := appender.appendEvents([]event{e}); err != nil {
+				failure = fmt.Sprintf("log vanished mid-append while the lock was held: %v", err)
+				return
+			}
+			// The append is committed and this appender still holds the lock, so
+			// nothing may delete the log before it releases.
+			select {
+			case <-removed:
+				if _, err := os.Stat(appender.logPath()); err != nil {
+					failure = fmt.Sprintf("RemoveAll destroyed an append committed under the lock: %v", err)
+				}
+			case <-time.After(100 * time.Millisecond):
+			}
+		}()
+
+		if err := gate(); err != nil {
+			t.Fatal(err)
+		}
+		<-appended
+		<-removed
+		if failure != "" {
+			t.Fatalf("iteration %d: %s", iteration, failure)
+		}
+		if removeErr != nil {
+			t.Fatalf("iteration %d: %v", iteration, removeErr)
+		}
+	}
+}
+
 func TestPermissionsAreOwnerOnly(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX permissions are not available on Windows")
 	}
 	store := initializedStore(t)
+	// statedir.Root is deliberately absent: it is the user-facing .fledge folder,
+	// owned by project.Init. See TestMessagingPreservesTheUserFacingStateFolder.
 	for _, path := range []string{
-		statedir.Root(store.root), statedir.Logs(store.root),
+		statedir.Logs(store.root),
 		store.statePath(), statedir.Temp(store.root), store.tempPath(),
 		store.logPath(), store.lockPath(),
 	} {
@@ -542,6 +730,35 @@ func TestPermissionsAreOwnerOnly(t *testing.T) {
 		if got := info.Mode().Perm(); got != want {
 			t.Errorf("%s permission = %04o, want %04o", path, got, want)
 		}
+	}
+}
+
+func TestMessagingPreservesTheUserFacingStateFolder(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permissions are not available on Windows")
+	}
+	root := t.TempDir()
+	// project.Init creates .fledge for the user at 0755; messaging shares the
+	// folder and must not narrow it to its own private 0700.
+	if err := os.MkdirAll(statedir.Root(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(statedir.Root(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	store := New(root, testSession)
+	if _, err := store.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	mustCreate(t, store, CreateParams{Sender: "user", Recipient: "alice", Body: "hello", RecipientPane: "%1"})
+
+	info, err := os.Stat(statedir.Root(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Errorf("%s permission = %04o, want 0755", statedir.Root(root), got)
 	}
 }
 

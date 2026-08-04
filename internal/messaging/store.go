@@ -127,7 +127,7 @@ func ValidateBody(body string) error {
 // when reattaching to an existing one.
 func (s *Store) Initialize() (string, error) {
 	var sessionID string
-	err := s.withLockAt(s.lockPath(), func() error {
+	err := s.withLock(func() error {
 		id, err := s.newID()
 		if err != nil {
 			return err
@@ -177,61 +177,37 @@ func (s *Store) Ensure() (string, error) {
 // for use after successful session deletion or confirmed stale-session
 // cleanup.
 func (s *Store) RemoveLock() error {
-	if err := s.ensureStateDirectory(); err != nil {
-		return err
-	}
-	path, err := s.activeLockPath()
-	if err != nil {
-		return err
-	}
-	unlock, err := s.acquireLock(path)
-	if err != nil {
-		return err
-	}
-	if err := unlock(); err != nil {
-		return err
-	}
-	var removeErr error
-	for _, lockPath := range []string{s.lockPath(), s.legacyLockPath()} {
-		if err := rejectSymlink(lockPath); err != nil {
-			removeErr = errors.Join(removeErr, err)
-			continue
+	return s.withRemovalLock(func() error {
+		var removeErr error
+		for _, lockPath := range []string{s.lockPath(), s.legacyLockPath()} {
+			if err := rejectSymlink(lockPath); err != nil {
+				removeErr = errors.Join(removeErr, err)
+				continue
+			}
+			if err := os.Remove(lockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+				removeErr = errors.Join(removeErr, fmt.Errorf("remove messaging lock %q: %w", lockPath, err))
+			}
 		}
-		if err := os.Remove(lockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			removeErr = errors.Join(removeErr, fmt.Errorf("remove messaging lock %q: %w", lockPath, err))
-		}
-	}
-	return errors.Join(removeErr, syncDirectory(s.statePath()), syncDirectory(s.tempPath()))
+		return errors.Join(removeErr, syncDirectory(s.statePath()), syncDirectory(s.tempPath()))
+	})
 }
 
 // RemoveAll deletes the session's log and temporary-state folders. It is
 // intended for rolling back a session that never became usable.
 func (s *Store) RemoveAll() error {
-	if err := s.ensureStateDirectory(); err != nil {
-		return err
-	}
-	lockPath, err := s.activeLockPath()
-	if err != nil {
-		return err
-	}
-	unlock, err := s.acquireLock(lockPath)
-	if err != nil {
-		return err
-	}
-	if err := unlock(); err != nil {
-		return err
-	}
-	var removeErr error
-	for _, path := range []string{s.statePath(), s.tempPath()} {
-		if err := rejectSymlink(path); err != nil {
-			removeErr = errors.Join(removeErr, err)
-			continue
+	return s.withRemovalLock(func() error {
+		var removeErr error
+		for _, path := range []string{s.statePath(), s.tempPath()} {
+			if err := rejectSymlink(path); err != nil {
+				removeErr = errors.Join(removeErr, err)
+				continue
+			}
+			if err := os.RemoveAll(path); err != nil {
+				removeErr = errors.Join(removeErr, fmt.Errorf("remove messaging session directory %q: %w", path, err))
+			}
 		}
-		if err := os.RemoveAll(path); err != nil {
-			removeErr = errors.Join(removeErr, fmt.Errorf("remove messaging session directory %q: %w", path, err))
-		}
-	}
-	return errors.Join(removeErr, syncDirectory(statedir.Logs(s.root)), syncDirectory(statedir.Temp(s.root)))
+		return errors.Join(removeErr, syncDirectory(statedir.Logs(s.root)), syncDirectory(statedir.Temp(s.root)))
+	})
 }
 
 // removeLegacyFiles deletes locks and the pre-session-folder message log from
@@ -326,12 +302,20 @@ func (s *Store) Reply(originalID, replier, replierPane, body, replyRecipientPane
 			return err
 		}
 		at := s.now()
-		e := event{Version: eventVersion, Type: eventReplyCreated, At: at, SessionID: state.sessionID, MessageID: id, Sender: replier, Recipient: original.Sender, ReplyTo: originalID, Body: body, RecipientPane: replyRecipientPane}
-		if err := s.appendEvents([]event{e}); err != nil {
+		var batch []event
+		if original.Status == StatusUncertain {
+			// A reply from the recipient proves the original was delivered, so the
+			// same transaction resolves the interrupted attempt.
+			batch = append(batch, event{Version: eventVersion, Type: eventAcknowledged, At: at, SessionID: state.sessionID, MessageID: originalID})
+		}
+		batch = append(batch, event{Version: eventVersion, Type: eventReplyCreated, At: at, SessionID: state.sessionID, MessageID: id, Sender: replier, Recipient: original.Sender, ReplyTo: originalID, Body: body, RecipientPane: replyRecipientPane})
+		if err := s.appendEvents(batch); err != nil {
 			return err
 		}
-		if err := applyEvent(state, e); err != nil {
-			return err
+		for _, e := range batch {
+			if err := applyEvent(state, e); err != nil {
+				return err
+			}
 		}
 		reply = state.messages[id]
 		return nil
@@ -431,11 +415,18 @@ func (s *Store) withLock(operation func() error) error {
 	return s.withAcquiredLock(path, operation)
 }
 
-func (s *Store) withLockAt(path string, operation func() error) error {
+// withRemovalLock runs remove under the session lock. Whether the lock may stay
+// held while its own file disappears is platform specific, so the ordering
+// lives in removeUnderLock.
+func (s *Store) withRemovalLock(remove func() error) error {
 	if err := s.ensureStateDirectory(); err != nil {
 		return err
 	}
-	return s.withAcquiredLock(path, operation)
+	path, err := s.activeLockPath()
+	if err != nil {
+		return err
+	}
+	return s.removeUnderLock(path, remove)
 }
 
 func (s *Store) withAcquiredLock(path string, operation func() error) error {
@@ -451,25 +442,40 @@ func (s *Store) ensureStateDirectory() error {
 	if !statedir.ValidSessionDirName(s.session) {
 		return fmt.Errorf("Herdr session name %q is not a valid messaging log directory name", s.session)
 	}
-	for _, path := range []string{
-		statedir.Root(s.root), statedir.Logs(s.root), s.statePath(),
-		statedir.Temp(s.root), s.tempPath(),
+	// .fledge is the user-facing project folder that project.Init creates at
+	// 0755 and shares with tracked files; only messaging's own state below it is
+	// narrowed to owner-only, and .fledge itself is never chmodded.
+	for _, directory := range []struct {
+		path    string
+		private bool
+	}{
+		{path: statedir.Root(s.root)},
+		{path: statedir.Logs(s.root), private: true},
+		{path: s.statePath(), private: true},
+		{path: statedir.Temp(s.root), private: true},
+		{path: s.tempPath(), private: true},
 	} {
-		info, err := os.Lstat(path)
+		mode := os.FileMode(0o755)
+		if directory.private {
+			mode = 0o700
+		}
+		info, err := os.Lstat(directory.path)
 		switch {
 		case errors.Is(err, os.ErrNotExist):
-			if err := os.MkdirAll(path, 0o700); err != nil {
-				return fmt.Errorf("create messaging state directory %q: %w", path, err)
+			if err := os.MkdirAll(directory.path, mode); err != nil {
+				return fmt.Errorf("create messaging state directory %q: %w", directory.path, err)
 			}
 		case err != nil:
-			return fmt.Errorf("inspect messaging state directory %q: %w", path, err)
+			return fmt.Errorf("inspect messaging state directory %q: %w", directory.path, err)
 		case info.Mode()&os.ModeSymlink != 0:
-			return fmt.Errorf("messaging state directory %q must not be a symlink", path)
+			return fmt.Errorf("messaging state directory %q must not be a symlink", directory.path)
 		case !info.IsDir():
-			return fmt.Errorf("messaging state path %q is not a directory", path)
+			return fmt.Errorf("messaging state path %q is not a directory", directory.path)
 		}
-		if err := os.Chmod(path, 0o700); err != nil {
-			return fmt.Errorf("secure messaging state directory %q: %w", path, err)
+		if directory.private {
+			if err := os.Chmod(directory.path, mode); err != nil {
+				return fmt.Errorf("secure messaging state directory %q: %w", directory.path, err)
+			}
 		}
 	}
 	return nil
@@ -643,6 +649,23 @@ func openRegular(path string, flags int, permission os.FileMode) (*os.File, erro
 			return nil, err
 		}
 		return nil, fmt.Errorf("path %q changed while opening or is a symlink", path)
+	}
+	return file, nil
+}
+
+// openLockFile opens the session lock file, creating it if needed, without
+// following symlinks. The returned file is not yet locked.
+func openLockFile(path string) (*os.File, error) {
+	if err := rejectSymlink(path); err != nil {
+		return nil, err
+	}
+	file, err := openRegular(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open messaging lock %q: %w", path, err)
+	}
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("secure messaging lock %q: %w", path, err)
 	}
 	return file, nil
 }
