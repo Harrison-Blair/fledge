@@ -13,12 +13,13 @@ import (
 func TestEnsureGeneratedOrchestratorPromptReusesRefreshesAndProtectsFile(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	wantReference := filepath.Join(".fledge", "profiles", "generated", "orchestrator.md")
-	reference, err := EnsureGeneratedOrchestratorPrompt(root, "first\npolicy")
-	if err != nil || reference != wantReference {
-		t.Fatalf("EnsureGeneratedOrchestratorPrompt() = %q, %v; want %q", reference, err, wantReference)
+	// Harnesses resolve the returned reference from their own working
+	// directory, so it must be absolute.
+	wantPath := filepath.Join(root, ".fledge", "profiles", "generated", "orchestrator.md")
+	path, err := EnsureGeneratedOrchestratorPrompt(root, "first\npolicy")
+	if err != nil || path != wantPath {
+		t.Fatalf("EnsureGeneratedOrchestratorPrompt() = %q, %v; want %q", path, err, wantPath)
 	}
-	path := filepath.Join(root, reference)
 	oldTime := time.Unix(123, 0)
 	if err := os.Chtimes(path, oldTime, oldTime); err != nil {
 		t.Fatal(err)
