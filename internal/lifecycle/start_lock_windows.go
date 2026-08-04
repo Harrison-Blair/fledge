@@ -3,6 +3,7 @@
 package lifecycle
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -10,7 +11,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func lockSessionRecord(root string) (func() error, error) {
+func lockSessionRecord(_ context.Context, root string) (func() error, error) {
 	path := recordPath(root)
 	file, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {

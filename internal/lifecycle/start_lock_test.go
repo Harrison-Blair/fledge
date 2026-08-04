@@ -1,6 +1,8 @@
 package lifecycle
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -9,14 +11,14 @@ func TestSessionRecordLockSerializesStarters(t *testing.T) {
 	root := t.TempDir()
 	writeTestRecord(t, root)
 
-	unlockFirst, err := lockSessionRecord(root)
+	unlockFirst, err := lockSessionRecord(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	acquired := make(chan func() error, 1)
 	errs := make(chan error, 1)
 	go func() {
-		unlock, err := lockSessionRecord(root)
+		unlock, err := lockSessionRecord(context.Background(), root)
 		if err != nil {
 			errs <- err
 			return
@@ -45,5 +47,36 @@ func TestSessionRecordLockSerializesStarters(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("second starter did not acquire the released session lock")
+	}
+}
+
+func TestSessionRecordLockGivesUpWhenTheContextEnds(t *testing.T) {
+	root := t.TempDir()
+	writeTestRecord(t, root)
+
+	unlockFirst, err := lockSessionRecord(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = unlockFirst() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	blocked := make(chan error, 1)
+	go func() {
+		unlock, err := lockSessionRecord(ctx, root)
+		if err == nil {
+			_ = unlock()
+		}
+		blocked <- err
+	}()
+
+	select {
+	case err := <-blocked:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("blocked lock error = %v, want the context deadline", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("lockSessionRecord wedged behind another holder instead of honoring the context")
 	}
 }

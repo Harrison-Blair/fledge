@@ -223,7 +223,7 @@ func (m *Manager) activeMessageSession(ctx context.Context, dir string, forcedCa
 	if !found {
 		return activeMessageSession{}, errors.New("project has no Fledge session; run fledge start first")
 	}
-	unlock, err := lockSessionRecord(root)
+	unlock, err := lockSessionRecord(ctx, root)
 	if err != nil {
 		return activeMessageSession{}, err
 	}

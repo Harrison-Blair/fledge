@@ -257,7 +257,7 @@ func (m *Manager) Start(ctx context.Context, dir string, options StartOptions) e
 			return errors.New("another fledge start initialized this project concurrently; retry the command")
 		}
 	}
-	unlock, err := lockSessionRecord(root)
+	unlock, err := lockSessionRecord(ctx, root)
 	if err != nil {
 		if recordCreated {
 			return errors.Join(err, removeRecordIfMatches(root, value.SessionName))
@@ -847,7 +847,7 @@ func (m *Manager) Stop(ctx context.Context, dir string) error {
 		_, err = fmt.Fprintf(m.output, "No active Fledge session found for %s.\n", root)
 		return err
 	}
-	unlock, err := lockSessionRecord(root)
+	unlock, err := lockSessionRecord(ctx, root)
 	if err != nil {
 		return err
 	}

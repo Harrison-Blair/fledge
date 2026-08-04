@@ -339,7 +339,7 @@ func TestMessageDeliveryHoldsSessionLockAgainstTeardown(t *testing.T) {
 	lockErrors := make(chan error, 1)
 	client.promptHook = func() {
 		go func() {
-			unlock, err := lockSessionRecord(root)
+			unlock, err := lockSessionRecord(context.Background(), root)
 			if err != nil {
 				lockErrors <- err
 				return
