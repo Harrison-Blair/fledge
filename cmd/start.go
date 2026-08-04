@@ -25,12 +25,6 @@ func newStartCommand(manager sessionManager, getwd func() (string, error)) *cobr
 			options.HarnessSet = cmd.Flags().Changed("harness")
 			options.ModelSet = cmd.Flags().Changed("model")
 			options.TimeoutSet = cmd.Flags().Changed("timeout")
-			if options.Timeout == 0 {
-				options.Timeout = lifecycle.DefaultAgentTimeout
-			}
-			if err := lifecycle.ValidateAgentTimeout(options.Timeout); err != nil {
-				return err
-			}
 			return manager.Start(cmd.Context(), dir, options)
 		},
 	}

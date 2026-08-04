@@ -291,6 +291,37 @@ func TestAgentMessageWrapsCurrentDirectoryFailures(t *testing.T) {
 	}
 }
 
+func TestCommandsPropagateManagerErrorsWithoutPrinting(t *testing.T) {
+	t.Parallel()
+
+	failure := errors.New("manager failed")
+	for _, test := range []struct {
+		name    string
+		args    []string
+		manager *fakeManager
+	}{
+		{name: "init", args: []string{"init", "/explicit"}, manager: &fakeManager{initErr: failure}},
+		{name: "send", args: []string{"agent", "message", "send", "worker", "body"}, manager: &fakeManager{sendErr: failure}},
+		{name: "reply", args: []string{"agent", "message", "reply", "msg-1", "body"}, manager: &fakeManager{replyErr: failure}},
+		{name: "inbox", args: []string{"agent", "message", "inbox"}, manager: &fakeManager{inboxErr: failure}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			var output bytes.Buffer
+			command := newRootCommand(test.manager, func() (string, error) { return "/project", nil })
+			command.SetOut(&output)
+			command.SetArgs(test.args)
+			if err := command.Execute(); !errors.Is(err, failure) {
+				t.Fatalf("Execute(%v) error = %v, want %v", test.args, err, failure)
+			}
+			if output.Len() != 0 {
+				t.Errorf("output = %q, want nothing printed for a failed command", output.String())
+			}
+		})
+	}
+}
+
 func TestAgentMessageEmptyInboxOutput(t *testing.T) {
 	t.Parallel()
 
@@ -325,16 +356,39 @@ func TestInitUsesExplicitOrCurrentPath(t *testing.T) {
 	}
 }
 
-func TestCommandsRejectInvalidTimeouts(t *testing.T) {
+func TestCommandsForwardTimeoutsToTheManagerUnchanged(t *testing.T) {
 	t.Parallel()
 
-	for _, args := range [][]string{{"start", "-t", "3s"}, {"start", "-t", "3.000000001s"}, {"agent", "spawn", "-t", "301s"}} {
-		manager := &fakeManager{}
-		command := newRootCommand(manager, func() (string, error) { return "/project", nil })
-		command.SetArgs(args)
-		if err := command.Execute(); err == nil || !strings.Contains(err.Error(), "timeout must") {
-			t.Errorf("Execute(%v) error = %v", args, err)
-		}
+	// The Manager is the single validator, so the commands must not coerce or
+	// reject timeouts themselves; a bare command still sends the flag default.
+	startManager := &fakeManager{}
+	command := newRootCommand(startManager, func() (string, error) { return "/project", nil })
+	command.SetArgs([]string{"start", "-t", "0"})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if len(startManager.startOptions) != 1 || startManager.startOptions[0].Timeout != 0 || !startManager.startOptions[0].TimeoutSet {
+		t.Errorf("StartOptions = %#v, want a forwarded zero timeout", startManager.startOptions)
+	}
+
+	spawnManager := &fakeManager{}
+	command = newRootCommand(spawnManager, func() (string, error) { return "/project", nil })
+	command.SetArgs([]string{"agent", "spawn", "-n", "worker", "-t", "0"})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if len(spawnManager.spawnOptions) != 1 || spawnManager.spawnOptions[0].Timeout != 0 {
+		t.Errorf("SpawnOptions = %#v, want a forwarded zero timeout", spawnManager.spawnOptions)
+	}
+
+	defaultManager := &fakeManager{}
+	command = newRootCommand(defaultManager, func() (string, error) { return "/project", nil })
+	command.SetArgs([]string{"start"})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if len(defaultManager.startOptions) != 1 || defaultManager.startOptions[0].Timeout != lifecycle.DefaultAgentTimeout {
+		t.Errorf("StartOptions = %#v, want the flag default", defaultManager.startOptions)
 	}
 }
 
@@ -439,6 +493,11 @@ type fakeManager struct {
 	sendResult     messaging.Message
 	replyResult    messaging.Message
 	inboxResult    []messaging.Message
+	initErr        error
+	startErr       error
+	sendErr        error
+	replyErr       error
+	inboxErr       error
 }
 
 type messageSendCall struct{ dir, recipient, body string }
@@ -447,15 +506,13 @@ type inboxCall struct{ dir, identity string }
 
 func (f *fakeManager) Init(path string) (string, error) {
 	f.initPaths = append(f.initPaths, path)
-	return path, nil
+	return path, f.initErr
 }
 
-func (f *fakeManager) Start(_ context.Context, dir string, options ...lifecycle.StartOptions) error {
+func (f *fakeManager) Start(_ context.Context, dir string, options lifecycle.StartOptions) error {
 	f.startDirs = append(f.startDirs, dir)
-	if len(options) > 0 {
-		f.startOptions = append(f.startOptions, options[0])
-	}
-	return nil
+	f.startOptions = append(f.startOptions, options)
+	return f.startErr
 }
 
 func (f *fakeManager) Stop(_ context.Context, dir string) error {
@@ -463,11 +520,9 @@ func (f *fakeManager) Stop(_ context.Context, dir string) error {
 	return nil
 }
 
-func (f *fakeManager) Watch(_ context.Context, dir string, options ...lifecycle.WatchOptions) error {
+func (f *fakeManager) Watch(_ context.Context, dir string, options lifecycle.WatchOptions) error {
 	f.watchDirs = append(f.watchDirs, dir)
-	if len(options) > 0 {
-		f.watchOptions = append(f.watchOptions, options[0])
-	}
+	f.watchOptions = append(f.watchOptions, options)
 	return nil
 }
 
@@ -485,15 +540,15 @@ func (f *fakeManager) StopAgent(_ context.Context, dir, name string) error {
 
 func (f *fakeManager) SendMessage(_ context.Context, dir, recipient, body string) (messaging.Message, error) {
 	f.messageSends = append(f.messageSends, messageSendCall{dir, recipient, body})
-	return f.sendResult, nil
+	return f.sendResult, f.sendErr
 }
 
 func (f *fakeManager) ReplyMessage(_ context.Context, dir, id, body string) (messaging.Message, error) {
 	f.messageReplies = append(f.messageReplies, messageReplyCall{dir, id, body})
-	return f.replyResult, nil
+	return f.replyResult, f.replyErr
 }
 
 func (f *fakeManager) MessageInbox(_ context.Context, dir, identity string) ([]messaging.Message, error) {
 	f.inboxCalls = append(f.inboxCalls, inboxCall{dir, identity})
-	return f.inboxResult, nil
+	return f.inboxResult, f.inboxErr
 }

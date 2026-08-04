@@ -44,7 +44,7 @@ func TestWatchRunsTheConcreteRuntime(t *testing.T) {
 	var output bytes.Buffer
 	manager := NewManager(client, &fakeConfirmer{}, nil, &output)
 
-	if err := manager.Watch(context.Background(), root); err != nil {
+	if err := manager.Watch(context.Background(), root, WatchOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	logPath := filepath.Join(statedir.Session(root, testSessionName), watchproc.LogFilename)
@@ -67,7 +67,7 @@ func TestWatchDeliveryUsesWatcherMessaging(t *testing.T) {
 		deliveredID, err = options.Deliver(ctx, "automated wake")
 		return err
 	}
-	if err := manager.Watch(context.Background(), root); err != nil {
+	if err := manager.Watch(context.Background(), root, WatchOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	message, err := messaging.New(root, testSessionName).Get(deliveredID)
@@ -92,7 +92,7 @@ func TestWatchDisabledExitsWithoutAnActiveSession(t *testing.T) {
 		t.Fatal("disabled watcher invoked the runtime")
 		return nil
 	}
-	if err := manager.Watch(context.Background(), root); err != nil {
+	if err := manager.Watch(context.Background(), root, WatchOptions{}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -103,7 +103,7 @@ func TestWatchRequiresAnActiveSessionWhenEnabled(t *testing.T) {
 	root := t.TempDir()
 	initTestProject(t, root)
 	manager, _ := newTestManager(&fakeHerdr{}, &fakeConfirmer{})
-	if err := manager.Watch(context.Background(), root); err == nil || !strings.Contains(err.Error(), "run fledge start") {
+	if err := manager.Watch(context.Background(), root, WatchOptions{}); err == nil || !strings.Contains(err.Error(), "run fledge start") {
 		t.Fatalf("Watch() error = %v", err)
 	}
 }

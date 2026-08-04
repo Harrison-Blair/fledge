@@ -188,7 +188,7 @@ func (m *Manager) Init(path string) (string, error) {
 }
 
 // Start launches or attaches to the session belonging to dir.
-func (m *Manager) Start(ctx context.Context, dir string, supplied ...StartOptions) error {
+func (m *Manager) Start(ctx context.Context, dir string, options StartOptions) error {
 	root, err := project.Find(dir)
 	if err != nil {
 		return err
@@ -199,14 +199,6 @@ func (m *Manager) Start(ctx context.Context, dir string, supplied ...StartOption
 	if err := m.herdr.Check(); err != nil {
 		return err
 	}
-	options := StartOptions{Timeout: DefaultAgentTimeout}
-	if len(supplied) > 0 {
-		options = supplied[0]
-		if options.Timeout == 0 {
-			options.Timeout = DefaultAgentTimeout
-		}
-	}
-
 	existingRecord, recordFound, err := readRecord(root)
 	if err != nil {
 		return err
@@ -588,9 +580,6 @@ func (m *Manager) Spawn(ctx context.Context, dir string, options SpawnOptions) (
 	}
 	if err := m.herdr.Check(); err != nil {
 		return err
-	}
-	if options.Timeout == 0 {
-		options.Timeout = DefaultAgentTimeout
 	}
 	if err := ValidateAgentTimeout(options.Timeout); err != nil {
 		return err

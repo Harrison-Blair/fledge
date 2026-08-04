@@ -172,9 +172,6 @@ func newAgentSpawnCommand(manager sessionManager, getwd func() (string, error)) 
 			}
 			options.NativeArgs = append([]string(nil), args...)
 			options.ModelSet = cmd.Flags().Changed("model")
-			if err := lifecycle.ValidateAgentTimeout(options.Timeout); err != nil {
-				return err
-			}
 			return manager.Spawn(cmd.Context(), dir, options)
 		},
 	}
