@@ -555,8 +555,10 @@ func TestPermissionsAreOwnerOnly(t *testing.T) {
 		t.Skip("POSIX permissions are not available on Windows")
 	}
 	store := initializedStore(t)
+	// statedir.Root is deliberately absent: it is the user-facing .fledge folder,
+	// owned by project.Init. See TestMessagingPreservesTheUserFacingStateFolder.
 	for _, path := range []string{
-		statedir.Root(store.root), statedir.Logs(store.root),
+		statedir.Logs(store.root),
 		store.statePath(), statedir.Temp(store.root), store.tempPath(),
 		store.logPath(), store.lockPath(),
 	} {
@@ -571,6 +573,35 @@ func TestPermissionsAreOwnerOnly(t *testing.T) {
 		if got := info.Mode().Perm(); got != want {
 			t.Errorf("%s permission = %04o, want %04o", path, got, want)
 		}
+	}
+}
+
+func TestMessagingPreservesTheUserFacingStateFolder(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permissions are not available on Windows")
+	}
+	root := t.TempDir()
+	// project.Init creates .fledge for the user at 0755; messaging shares the
+	// folder and must not narrow it to its own private 0700.
+	if err := os.MkdirAll(statedir.Root(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(statedir.Root(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	store := New(root, testSession)
+	if _, err := store.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	mustCreate(t, store, CreateParams{Sender: "user", Recipient: "alice", Body: "hello", RecipientPane: "%1"})
+
+	info, err := os.Stat(statedir.Root(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Errorf("%s permission = %04o, want 0755", statedir.Root(root), got)
 	}
 }
 

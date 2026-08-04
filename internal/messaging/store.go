@@ -459,25 +459,40 @@ func (s *Store) ensureStateDirectory() error {
 	if !statedir.ValidSessionDirName(s.session) {
 		return fmt.Errorf("Herdr session name %q is not a valid messaging log directory name", s.session)
 	}
-	for _, path := range []string{
-		statedir.Root(s.root), statedir.Logs(s.root), s.statePath(),
-		statedir.Temp(s.root), s.tempPath(),
+	// .fledge is the user-facing project folder that project.Init creates at
+	// 0755 and shares with tracked files; only messaging's own state below it is
+	// narrowed to owner-only, and .fledge itself is never chmodded.
+	for _, directory := range []struct {
+		path    string
+		private bool
+	}{
+		{path: statedir.Root(s.root)},
+		{path: statedir.Logs(s.root), private: true},
+		{path: s.statePath(), private: true},
+		{path: statedir.Temp(s.root), private: true},
+		{path: s.tempPath(), private: true},
 	} {
-		info, err := os.Lstat(path)
+		mode := os.FileMode(0o755)
+		if directory.private {
+			mode = 0o700
+		}
+		info, err := os.Lstat(directory.path)
 		switch {
 		case errors.Is(err, os.ErrNotExist):
-			if err := os.MkdirAll(path, 0o700); err != nil {
-				return fmt.Errorf("create messaging state directory %q: %w", path, err)
+			if err := os.MkdirAll(directory.path, mode); err != nil {
+				return fmt.Errorf("create messaging state directory %q: %w", directory.path, err)
 			}
 		case err != nil:
-			return fmt.Errorf("inspect messaging state directory %q: %w", path, err)
+			return fmt.Errorf("inspect messaging state directory %q: %w", directory.path, err)
 		case info.Mode()&os.ModeSymlink != 0:
-			return fmt.Errorf("messaging state directory %q must not be a symlink", path)
+			return fmt.Errorf("messaging state directory %q must not be a symlink", directory.path)
 		case !info.IsDir():
-			return fmt.Errorf("messaging state path %q is not a directory", path)
+			return fmt.Errorf("messaging state path %q is not a directory", directory.path)
 		}
-		if err := os.Chmod(path, 0o700); err != nil {
-			return fmt.Errorf("secure messaging state directory %q: %w", path, err)
+		if directory.private {
+			if err := os.Chmod(directory.path, mode); err != nil {
+				return fmt.Errorf("secure messaging state directory %q: %w", directory.path, err)
+			}
 		}
 	}
 	return nil
