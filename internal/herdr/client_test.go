@@ -20,6 +20,9 @@ const (
 	helperStdoutEnv  = "FLEDGE_HERDR_TEST_STDOUT"
 	helperStderrEnv  = "FLEDGE_HERDR_TEST_STDERR"
 	helperExitEnv    = "FLEDGE_HERDR_TEST_EXIT"
+	// helperSequenceEnv names a directory holding one response file per planned
+	// invocation, letting a test script a sequence of differing Herdr replies.
+	helperSequenceEnv = "FLEDGE_HERDR_TEST_SEQUENCE"
 )
 
 type helperInvocation struct {
@@ -63,6 +66,10 @@ func runHerdrHelper() {
 		}
 	}
 
+	if sequence := os.Getenv(helperSequenceEnv); sequence != "" {
+		respondFromSequence(sequence)
+	}
+
 	_, _ = io.WriteString(os.Stdout, os.Getenv(helperStdoutEnv))
 	_, _ = io.WriteString(os.Stderr, os.Getenv(helperStderrEnv))
 
@@ -75,6 +82,37 @@ func runHerdrHelper() {
 		os.Exit(code)
 	}
 
+	os.Exit(0)
+}
+
+// respondFromSequence consumes the next queued response and exits. An empty
+// response file makes the invocation fail, standing in for a server that is not
+// answering yet. Herdr is polled serially, so consuming files needs no locking.
+func respondFromSequence(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	if len(entries) == 0 {
+		fmt.Fprintln(os.Stderr, "scripted response sequence is exhausted")
+		os.Exit(1)
+	}
+	path := filepath.Join(dir, entries[0].Name())
+	response, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	if err := os.Remove(path); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	if len(response) == 0 {
+		fmt.Fprintln(os.Stderr, "herdr is unavailable")
+		os.Exit(1)
+	}
+	_, _ = os.Stdout.Write(response)
 	os.Exit(0)
 }
 
@@ -328,6 +366,41 @@ func TestClientWaitReadyReturnsInitialLayout(t *testing.T) {
 	}
 }
 
+func TestClientWaitReadySettleWindowNeedsConsecutiveEmptySnapshots(t *testing.T) {
+	const emptySnapshot = `{"id":"1","result":{"type":"session_snapshot","snapshot":{}}}`
+	const initialLayout = `{"id":"1","result":{"type":"session_snapshot","snapshot":{"tabs":[{"tab_id":"t1","workspace_id":"w1"}],"panes":[{"pane_id":"w1:p1","tab_id":"t1","workspace_id":"w1"}]}}}`
+
+	tests := []struct {
+		name      string
+		responses []string
+	}{
+		// A failed poll between two empty snapshots must restart the settle
+		// window instead of letting the failure age it out.
+		{name: "error between empty snapshots", responses: []string{emptySnapshot, "", emptySnapshot, initialLayout}},
+		{name: "empty then populated", responses: []string{emptySnapshot, initialLayout}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configureHelper(t, "")
+			t.Setenv(helperSequenceEnv, writeSequence(t, test.responses))
+
+			client := NewClient(helperBinary(t), nil, nil, nil)
+			// Every poll advances well past the settle window, so only a reset
+			// of the window can keep the client waiting.
+			client.now = steppingClock(10 * initialLayoutSettleTime)
+
+			snapshot, err := client.WaitReady(context.Background(), "session-name", 30*time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(snapshot.Tabs) != 1 || len(snapshot.Panes) != 1 {
+				t.Fatalf("WaitReady() = %#v, want the initial layout", snapshot)
+			}
+		})
+	}
+}
+
 func TestClientLayoutAndAgentCommands(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -572,6 +645,30 @@ func configureHelper(t *testing.T, capture string) {
 	t.Setenv(helperStdoutEnv, "")
 	t.Setenv(helperStderrEnv, "")
 	t.Setenv(helperExitEnv, "")
+	t.Setenv(helperSequenceEnv, "")
+}
+
+// writeSequence queues responses for the helper to return in order.
+func writeSequence(t *testing.T, responses []string) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	for i, response := range responses {
+		path := filepath.Join(dir, fmt.Sprintf("%02d", i))
+		if err := os.WriteFile(path, []byte(response), 0o600); err != nil {
+			t.Fatalf("write scripted response: %v", err)
+		}
+	}
+	return dir
+}
+
+// steppingClock advances by step on every reading.
+func steppingClock(step time.Duration) func() time.Time {
+	current := time.Unix(0, 0)
+	return func() time.Time {
+		current = current.Add(step)
+		return current
+	}
 }
 
 func readInvocation(t *testing.T, path string) helperInvocation {
