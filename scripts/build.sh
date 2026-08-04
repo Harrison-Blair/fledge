@@ -5,6 +5,7 @@ set -euo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
 cd "$repo_root"
-go test ./...
+go vet ./...
+go test -trimpath -buildvcs=true -race ./...
 mkdir -p bin
-go build -o bin/fledge .
+go build -trimpath -buildvcs=true -o bin/fledge .
