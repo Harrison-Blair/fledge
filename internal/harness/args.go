@@ -11,7 +11,7 @@ import (
 func ValidateNativeArgs(args []string) error {
 	for index, arg := range args {
 		if arg == "--model" || strings.HasPrefix(arg, "--model=") ||
-			(arg != "--" && strings.HasPrefix(arg, "-m") && !strings.HasPrefix(arg, "--")) {
+			(strings.HasPrefix(arg, "-m") && !strings.HasPrefix(arg, "--")) {
 			return fmt.Errorf(
 				"native argument %d %q selects a model; use Fledge's --model option instead",
 				index+1,
@@ -56,23 +56,41 @@ func BuildArgs(selected Harness, model string, nativeArgs []string) ([]string, e
 }
 
 // AppendOrchestratorInstructions adds Fledge's durable coordinator policy to
-// the end of the harness arguments so Fledge's value takes precedence over
-// conflicting native passthrough arguments. Claude and Pi consume the stable
-// generated prompt path; Codex keeps its safely escaped inline override.
+// the harness arguments, immediately before any literal "--" the user supplied
+// so the harness parses Fledge's flag instead of passing it through as
+// positional text. Without a "--" the policy is appended last, where it still
+// takes precedence over conflicting native passthrough arguments. Claude and Pi
+// consume the stable generated prompt path; Codex keeps its safely escaped
+// inline override.
 func AppendOrchestratorInstructions(selected Harness, args []string, instructions, promptPath string) ([]string, error) {
-	result := append([]string(nil), args...)
 	switch selected.ID {
 	case "claude":
-		return append(result, "--append-system-prompt-file", promptPath), nil
+		return spliceOwnedArgs(args, "--append-system-prompt-file", promptPath), nil
 	case "pi":
-		return append(result, "--append-system-prompt", promptPath), nil
+		return spliceOwnedArgs(args, "--append-system-prompt", promptPath), nil
 	case "codex":
-		return append(result, "-c", "developer_instructions="+tomlBasicString(instructions)), nil
+		return spliceOwnedArgs(args, "-c", "developer_instructions="+tomlBasicString(instructions)), nil
 	case "opencode":
-		return result, nil
+		return append([]string(nil), args...), nil
 	default:
 		return nil, fmt.Errorf("unsupported harness %q", selected.ID)
 	}
+}
+
+// spliceOwnedArgs inserts Fledge-owned arguments before the first literal "--"
+// in args, or at the end when args has none. The result never aliases args.
+func spliceOwnedArgs(args []string, owned ...string) []string {
+	insert := len(args)
+	for index, arg := range args {
+		if arg == "--" {
+			insert = index
+			break
+		}
+	}
+	result := make([]string, 0, len(args)+len(owned))
+	result = append(result, args[:insert]...)
+	result = append(result, owned...)
+	return append(result, args[insert:]...)
 }
 
 func tomlBasicString(value string) string {

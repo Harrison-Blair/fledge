@@ -14,7 +14,7 @@ func newStartCommand(manager sessionManager, getwd func() (string, error)) *cobr
 		Short: "Start or attach to this directory's Fledge session",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) > 0 && cmd.ArgsLenAtDash() < 0 {
+			if len(args) > 0 && cmd.ArgsLenAtDash() != 0 {
 				return fmt.Errorf("native agent arguments must follow --")
 			}
 			dir, err := getwd()

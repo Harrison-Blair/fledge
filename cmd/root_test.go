@@ -110,6 +110,40 @@ func TestAgentSpawnOptionsAndNativeArguments(t *testing.T) {
 	}
 }
 
+func TestNativeArgumentsMustNotPrecedeDash(t *testing.T) {
+	t.Parallel()
+
+	for _, args := range [][]string{
+		{"start", "bogus", "--", "--resume"},
+		{"agent", "spawn", "reviewer", "--", "--resume"},
+	} {
+		manager := &fakeManager{}
+		command := newRootCommand(manager, func() (string, error) { return "/project", nil })
+		command.SetArgs(args)
+		err := command.Execute()
+		if err == nil || !strings.Contains(err.Error(), "must follow --") {
+			t.Errorf("Execute(%v) error = %v, want positional rejection", args, err)
+		}
+		if len(manager.startDirs)+len(manager.spawnDirs) != 0 {
+			t.Errorf("Execute(%v) reached the manager: %#v", args, manager)
+		}
+	}
+}
+
+func TestStartAcceptsNativeArgumentsAfterDash(t *testing.T) {
+	t.Parallel()
+
+	manager := &fakeManager{}
+	command := newRootCommand(manager, func() (string, error) { return "/project", nil })
+	command.SetArgs([]string{"start", "--", "--flag"})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if len(manager.startOptions) != 1 || strings.Join(manager.startOptions[0].NativeArgs, " ") != "--flag" {
+		t.Fatalf("StartOptions = %#v", manager.startOptions)
+	}
+}
+
 func TestAgentStopUsesNameAndCurrentDirectory(t *testing.T) {
 	t.Parallel()
 
