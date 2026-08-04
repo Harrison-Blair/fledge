@@ -217,6 +217,34 @@ func TestAppendOrchestratorInstructionsFledgeOverrideIsLast(t *testing.T) {
 	}
 }
 
+func TestAppendOrchestratorInstructionsPrecedeNativePassthroughDash(t *testing.T) {
+	const promptPath = ".fledge/profiles/generated/orchestrator.md"
+	for _, test := range []struct {
+		harnessID string
+		want      []string
+	}{
+		{harnessID: "claude", want: []string{"--resume", "--append-system-prompt-file", promptPath, "--", "--not-a-flag", "--"}},
+		{harnessID: "pi", want: []string{"--resume", "--append-system-prompt", promptPath, "--", "--not-a-flag", "--"}},
+		{harnessID: "codex", want: []string{"--resume", "-c", `developer_instructions="policy"`, "--", "--not-a-flag", "--"}},
+		{harnessID: "opencode", want: []string{"--resume", "--", "--not-a-flag", "--"}},
+	} {
+		t.Run(test.harnessID, func(t *testing.T) {
+			got, err := AppendOrchestratorInstructions(
+				Harness{ID: test.harnessID},
+				[]string{"--resume", "--", "--not-a-flag", "--"},
+				"policy",
+				promptPath,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("AppendOrchestratorInstructions() = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestCodexOrchestratorInstructionsAreTOMLSafe(t *testing.T) {
 	const instructions = "quote \" slash \\ newline\n tab\t delete\x7f snow 雪"
 	got, err := AppendOrchestratorInstructions(Harness{ID: "codex"}, nil, instructions, ".fledge/profiles/generated/orchestrator.md")

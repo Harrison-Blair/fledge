@@ -58,7 +58,7 @@ func TestStartCreatesAndReusesSession(t *testing.T) {
 		t.Errorf("orchestrator PromptAgent calls = %#v, want none", client.promptCalls)
 	}
 	client.sessions = []herdr.Session{{Name: wantSessionName, Running: true}}
-	if err := manager.Start(context.Background(), root); err != nil {
+	if err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout}); err != nil {
 		t.Fatalf("second Start() error = %v", err)
 	}
 
@@ -160,11 +160,11 @@ func TestStartLeavesClaudeProfileUnchangedAndAppendsDurableInstructions(t *testi
 		return "", os.ErrNotExist
 	}
 
-	if err := manager.Start(context.Background(), root, StartOptions{Harness: "claude", HarnessSet: true}); err != nil {
+	if err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout, Harness: "claude", HarnessSet: true}); err != nil {
 		t.Fatal(err)
 	}
 	wantInstructions := "custom Claude instructions\n\n" + mandatoryCoordinatorCommunicationPolicy
-	promptReference := filepath.Join(".fledge", "profiles", "generated", "orchestrator.md")
+	promptReference := generatedPrompt(t, root, wantInstructions)
 	wantArgs := []string{"--permission-mode", "bypassPermissions", "--append-system-prompt-file", promptReference}
 	if strings.Join(client.startAgent.args, "\x00") != strings.Join(wantArgs, "\x00") {
 		t.Errorf("Claude args = %#v, want %#v", client.startAgent.args, wantArgs)
@@ -172,7 +172,7 @@ func TestStartLeavesClaudeProfileUnchangedAndAppendsDurableInstructions(t *testi
 	if len(client.promptCalls) != 0 {
 		t.Errorf("orchestrator PromptAgent calls = %#v, want none", client.promptCalls)
 	}
-	generated, err := os.ReadFile(filepath.Join(root, promptReference))
+	generated, err := os.ReadFile(generatedPromptFile(root))
 	if err != nil || string(generated) != wantInstructions {
 		t.Fatalf("generated prompt = %q, %v; want exact rendered instructions", generated, err)
 	}
@@ -200,11 +200,11 @@ func TestStartPiUsesControlCharacterFreeGeneratedPromptArgument(t *testing.T) {
 		return "", os.ErrNotExist
 	}
 
-	if err := manager.Start(context.Background(), root, StartOptions{Harness: "pi", HarnessSet: true}); err != nil {
+	if err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout, Harness: "pi", HarnessSet: true}); err != nil {
 		t.Fatal(err)
 	}
-	wantPath := filepath.Join(".fledge", "profiles", "generated", "orchestrator.md")
-	wantArgs := []string{"--append-system-prompt", wantPath}
+	want := project.DefaultOrchestratorInstructions + "\n\n" + mandatoryCoordinatorCommunicationPolicy
+	wantArgs := []string{"--append-system-prompt", generatedPrompt(t, root, want)}
 	if strings.Join(client.startAgent.args, "\x00") != strings.Join(wantArgs, "\x00") {
 		t.Fatalf("Pi args = %#v, want %#v", client.startAgent.args, wantArgs)
 	}
@@ -213,8 +213,7 @@ func TestStartPiUsesControlCharacterFreeGeneratedPromptArgument(t *testing.T) {
 			t.Fatalf("Pi argument contains a control character: %q", arg)
 		}
 	}
-	want := project.DefaultOrchestratorInstructions + "\n\n" + mandatoryCoordinatorCommunicationPolicy
-	contents, err := os.ReadFile(filepath.Join(root, wantPath))
+	contents, err := os.ReadFile(generatedPromptFile(root))
 	if err != nil || string(contents) != want {
 		t.Fatalf("generated prompt = %q, %v; want exact multiline policy", contents, err)
 	}
@@ -238,7 +237,7 @@ func TestStartBackfillsCodexRulesBeforeLaunch(t *testing.T) {
 	manager, _ := newTestManager(client, &fakeConfirmer{})
 	manager.lookPath = installedTestHarness
 
-	if err := manager.Start(context.Background(), root, StartOptions{Harness: "codex", HarnessSet: true}); err != nil {
+	if err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout, Harness: "codex", HarnessSet: true}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -257,7 +256,7 @@ func TestStartRejectsConflictingCodexRulesBeforeSessionCreation(t *testing.T) {
 	manager, _ := newTestManager(client, &fakeConfirmer{})
 	manager.lookPath = installedTestHarness
 
-	err := manager.Start(context.Background(), root, StartOptions{Harness: "codex", HarnessSet: true})
+	err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout, Harness: "codex", HarnessSet: true})
 	if err == nil || !strings.Contains(err.Error(), "conflicts") {
 		t.Fatalf("Start() error = %v, want Codex rule conflict", err)
 	}
@@ -281,7 +280,7 @@ func TestStartRejectsLegacyCodexRulesWithInitGuidance(t *testing.T) {
 	manager, _ := newTestManager(client, &fakeConfirmer{})
 	manager.lookPath = installedTestHarness
 
-	err := manager.Start(context.Background(), root, StartOptions{Harness: "codex", HarnessSet: true})
+	err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout, Harness: "codex", HarnessSet: true})
 	if err == nil || !strings.Contains(err.Error(), "run fledge init") {
 		t.Fatalf("Start() error = %v, want run-fledge-init guidance", err)
 	}
@@ -307,7 +306,7 @@ func TestStartCreatesWorkspaceForEmptyHeadlessServer(t *testing.T) {
 	manager, _ := newTestManager(client, &fakeConfirmer{})
 	manager.lookPath = installedTestHarness
 
-	if err := manager.Start(context.Background(), root, StartOptions{Harness: "codex", HarnessSet: true}); err != nil {
+	if err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout, Harness: "codex", HarnessSet: true}); err != nil {
 		t.Fatal(err)
 	}
 	wantCalls := []string{"check", "list", "start-server", "wait-ready", "create-workspace", "rename-tab", "rename-pane", "split-pane", "start-agent", "focus-agent", "attach"}
@@ -327,7 +326,7 @@ func TestStartRejectsSelectionFlagsWhenReattaching(t *testing.T) {
 	client := &fakeHerdr{sessions: []herdr.Session{{Name: testSessionName, Running: true}}}
 	manager, _ := newTestManager(client, &fakeConfirmer{})
 
-	err := manager.Start(context.Background(), root, StartOptions{Model: "gpt-custom", ModelSet: true})
+	err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout, Model: "gpt-custom", ModelSet: true})
 	if err == nil || !strings.Contains(err.Error(), "cannot be used when reattaching") {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -347,7 +346,7 @@ func TestStartReusesLegacySessionName(t *testing.T) {
 	client := &fakeHerdr{sessions: []herdr.Session{{Name: testSessionName, Running: true}}}
 	manager, _ := newTestManager(client, &fakeConfirmer{})
 
-	if err := manager.Start(context.Background(), root); err != nil {
+	if err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout}); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
 
@@ -381,7 +380,7 @@ func TestStartLaunchesWatcherBeforeEveryAttachAndWarnsOnly(t *testing.T) {
 			}
 			return errors.New("launcher failed")
 		}
-		if err := manager.Start(context.Background(), root); err != nil {
+		if err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout}); err != nil {
 			t.Fatal(err)
 		}
 		if launched != 1 || len(client.attachCalls) != 1 {
@@ -407,7 +406,7 @@ func TestStartLaunchesWatcherBeforeEveryAttachAndWarnsOnly(t *testing.T) {
 			}
 			return nil
 		}
-		if err := manager.Start(context.Background(), root, StartOptions{Harness: "codex", HarnessSet: true}); err != nil {
+		if err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout, Harness: "codex", HarnessSet: true}); err != nil {
 			t.Fatal(err)
 		}
 		if launched != 1 || len(client.attachCalls) != 1 {
@@ -420,10 +419,7 @@ func TestStartReattachPreservesGeneratedPromptSnapshot(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	writeTestRecord(t, root)
-	reference, err := project.EnsureGeneratedOrchestratorPrompt(root, "active session prompt")
-	if err != nil {
-		t.Fatal(err)
-	}
+	generatedPrompt(t, root, "active session prompt")
 	profilePath := filepath.Join(root, stateDirectory, "profiles", "orchestrator.toml")
 	if err := os.WriteFile(profilePath, []byte("schema_version = 1\ninstructions = 'edited profile'\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -431,10 +427,10 @@ func TestStartReattachPreservesGeneratedPromptSnapshot(t *testing.T) {
 	client := &fakeHerdr{sessions: []herdr.Session{{Name: testSessionName, Running: true}}}
 	manager, _ := newTestManager(client, &fakeConfirmer{})
 
-	if err := manager.Start(context.Background(), root); err != nil {
+	if err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout}); err != nil {
 		t.Fatal(err)
 	}
-	contents, err := os.ReadFile(filepath.Join(root, reference))
+	contents, err := os.ReadFile(generatedPromptFile(root))
 	if err != nil || string(contents) != "active session prompt" {
 		t.Fatalf("generated prompt after reattach = %q, %v; want active snapshot", contents, err)
 	}
@@ -452,7 +448,7 @@ func TestStartRestartsStoppedSession(t *testing.T) {
 	manager, _ := newTestManager(client, &fakeConfirmer{})
 	manager.lookPath = installedTestHarness
 
-	if err := manager.Start(context.Background(), root, StartOptions{Harness: "codex", HarnessSet: true}); err != nil {
+	if err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout, Harness: "codex", HarnessSet: true}); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
 	wantCalls := []string{"check", "list", "list", "start-server", "wait-ready", "rename-tab", "rename-pane", "split-pane", "start-agent", "focus-agent", "attach"}
@@ -533,7 +529,7 @@ func TestStartResetsMessagingOnlyForFreshServer(t *testing.T) {
 		manager, _ := newTestManager(client, &fakeConfirmer{})
 		manager.lookPath = installedTestHarness
 
-		if err := manager.Start(context.Background(), root, StartOptions{Harness: "codex", HarnessSet: true}); err != nil {
+		if err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout, Harness: "codex", HarnessSet: true}); err != nil {
 			t.Fatal(err)
 		}
 		messages, err := messaging.New(root, session).List()
@@ -563,7 +559,7 @@ func TestStartResetsMessagingOnlyForFreshServer(t *testing.T) {
 		client := &fakeHerdr{sessions: []herdr.Session{{Name: testSessionName, Running: true}}}
 		manager, _ := newTestManager(client, &fakeConfirmer{})
 
-		if err := manager.Start(context.Background(), root); err != nil {
+		if err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout}); err != nil {
 			t.Fatal(err)
 		}
 		preserved, err := messaging.New(root, testSessionName).Get(created.ID)
@@ -585,7 +581,7 @@ func TestStartChecksHerdrBeforeWritingState(t *testing.T) {
 	client := &fakeHerdr{checkErr: errors.New("not installed")}
 	manager, _ := newTestManager(client, &fakeConfirmer{})
 
-	if err := manager.Start(context.Background(), root); err == nil {
+	if err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout}); err == nil {
 		t.Fatal("Start() error = nil, want error")
 	}
 	if _, found, err := readRecord(root); err != nil || found {
@@ -604,7 +600,7 @@ func TestStartRandomFailureDoesNotCreateRecord(t *testing.T) {
 	manager.lookPath = installedTestHarness
 	manager.random = errorReader{err: randomErr}
 
-	err := manager.Start(context.Background(), root, StartOptions{Harness: "codex", HarnessSet: true})
+	err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout, Harness: "codex", HarnessSet: true})
 	if !errors.Is(err, randomErr) {
 		t.Fatalf("Start() error = %v, want %v", err, randomErr)
 	}
@@ -629,7 +625,7 @@ func TestStartFailureOwnership(t *testing.T) {
 		}
 		manager, _ := newTestManager(client, &fakeConfirmer{})
 
-		if err := manager.Start(context.Background(), root); err == nil {
+		if err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout}); err == nil {
 			t.Fatal("Start() error = nil, want error")
 		}
 		if _, found, err := readRecord(root); err != nil || !found {
@@ -644,7 +640,7 @@ func TestStartFailureOwnership(t *testing.T) {
 		manager, _ := newTestManager(client, &fakeConfirmer{})
 		manager.lookPath = installedTestHarness
 
-		err := manager.Start(context.Background(), root, StartOptions{Harness: "codex", HarnessSet: true})
+		err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout, Harness: "codex", HarnessSet: true})
 		if err == nil {
 			t.Fatal("Start() error = nil, want layout error")
 		}
@@ -666,7 +662,7 @@ func TestStartFailureOwnership(t *testing.T) {
 		manager, _ := newTestManager(client, &fakeConfirmer{})
 		manager.lookPath = installedTestHarness
 
-		err := manager.Start(context.Background(), root, StartOptions{Harness: "codex", HarnessSet: true})
+		err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout, Harness: "codex", HarnessSet: true})
 		if err == nil || !strings.Contains(err.Error(), "delete failed") {
 			t.Fatalf("Start() error = %v, want delete failure surfaced", err)
 		}
@@ -693,7 +689,7 @@ func TestStartFailureOwnership(t *testing.T) {
 		manager, _ := newTestManager(client, &fakeConfirmer{})
 		manager.lookPath = installedTestHarness
 
-		err := manager.Start(context.Background(), root, StartOptions{Harness: "codex", HarnessSet: true})
+		err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout, Harness: "codex", HarnessSet: true})
 		if err == nil || !strings.Contains(err.Error(), "server failed") {
 			t.Fatalf("Start() error = %v", err)
 		}
@@ -714,7 +710,7 @@ func TestStartFailureOwnership(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		if err := manager.Start(ctx, root, StartOptions{Harness: "codex", HarnessSet: true}); err == nil {
+		if err := manager.Start(ctx, root, StartOptions{Timeout: DefaultAgentTimeout, Harness: "codex", HarnessSet: true}); err == nil {
 			t.Fatal("Start() error = nil")
 		}
 		if client.stopCtxErr != nil {
@@ -849,7 +845,7 @@ func TestSpawnPromptCompositionAcrossHarnesses(t *testing.T) {
 				manager.getenv = func(string) string { return "" }
 
 				if err := manager.Spawn(context.Background(), root, SpawnOptions{
-					Name: "worker", Harness: harnessID, Prompt: promptCase.prompt,
+					Timeout: DefaultAgentTimeout, Name: "worker", Harness: harnessID, Prompt: promptCase.prompt,
 				}); err != nil {
 					t.Fatalf("Spawn() error = %v", err)
 				}
@@ -882,17 +878,16 @@ func TestStartOpenCodeUsesDurableSnapshotAndIsolatesControlPane(t *testing.T) {
 		return ""
 	}
 
-	if err := manager.Start(context.Background(), root, StartOptions{Harness: "opencode", HarnessSet: true}); err != nil {
+	if err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout, Harness: "opencode", HarnessSet: true}); err != nil {
 		t.Fatal(err)
 	}
 	session := "fledge-" + sessionSlug(root) + "-00000000"
-	instructionsReference := filepath.Join(stateDirectory, "profiles", "generated", "orchestrator.md")
-	instructionsPath := filepath.Join(root, instructionsReference)
-	instructions, err := os.ReadFile(instructionsPath)
+	instructions, err := os.ReadFile(generatedPromptFile(root))
 	if err != nil {
 		t.Fatal(err)
 	}
 	wantInstructions := project.DefaultOrchestratorInstructions + "\n\n" + mandatoryCoordinatorCommunicationPolicy
+	instructionsReference := generatedPrompt(t, root, wantInstructions)
 	if string(instructions) != wantInstructions {
 		t.Fatalf("instruction snapshot = %q, want %q", instructions, wantInstructions)
 	}
@@ -932,7 +927,7 @@ func TestStartOpenCodeRejectsMalformedInlineConfigBeforeLaunch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := manager.Start(context.Background(), root, StartOptions{Harness: "opencode", HarnessSet: true})
+	err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout, Harness: "opencode", HarnessSet: true})
 	if err == nil || !strings.Contains(err.Error(), "decode "+openCodeConfigEnvironment) {
 		t.Fatalf("Start() error = %v, want malformed inline config error", err)
 	}
@@ -961,15 +956,14 @@ func TestStartOpenCodeRollbackRemovesRuntimeArtifacts(t *testing.T) {
 	}
 	manager.getenv = func(string) string { return "{}" }
 
-	if err := manager.Start(context.Background(), root, StartOptions{Harness: "opencode", HarnessSet: true}); err == nil {
+	if err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout, Harness: "opencode", HarnessSet: true}); err == nil {
 		t.Fatal("Start() error = nil")
 	}
 	session := "fledge-" + sessionSlug(root) + "-00000000"
 	if _, err := os.Stat(statedir.TempSession(root, session)); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("rollback temp directory error = %v, want removed", err)
 	}
-	generated := filepath.Join(root, stateDirectory, "profiles", "generated", "orchestrator.md")
-	if _, err := os.Stat(generated); err != nil {
+	if _, err := os.Stat(generatedPromptFile(root)); err != nil {
 		t.Errorf("generated prompt after rollback = %v, want preserved", err)
 	}
 }
@@ -978,15 +972,14 @@ func TestStartReattachDoesNotRebuildOpenCodeSnapshot(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	writeTestRecord(t, root)
-	const promptPath = ".fledge/profiles/generated/orchestrator.md"
-	if _, err := prepareOpenCodeRuntime(root, testSessionName, promptPath, `{"old":true}`); err != nil {
+	if _, err := prepareOpenCodeRuntime(root, testSessionName, generatedPromptFile(root), `{"old":true}`); err != nil {
 		t.Fatal(err)
 	}
 	client := &fakeHerdr{sessions: []herdr.Session{{Name: testSessionName, Running: true}}}
 	manager, _ := newTestManager(client, &fakeConfirmer{})
 	manager.getenv = func(string) string { return `{"new":true}` }
 
-	if err := manager.Start(context.Background(), root); err != nil {
+	if err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout}); err != nil {
 		t.Fatal(err)
 	}
 	contents, err := os.ReadFile(filepath.Join(statedir.TempSession(root, testSessionName), openCodeEnvironmentFile))
@@ -1003,7 +996,7 @@ func TestSpawnRestoresOriginalOpenCodeConfig(t *testing.T) {
 	root := t.TempDir()
 	writeTestRecord(t, root)
 	const original = ` {"theme":"dark"} `
-	if _, err := prepareOpenCodeRuntime(root, testSessionName, ".fledge/profiles/generated/orchestrator.md", original); err != nil {
+	if _, err := prepareOpenCodeRuntime(root, testSessionName, generatedPromptFile(root), original); err != nil {
 		t.Fatal(err)
 	}
 	client := &fakeHerdr{
@@ -1016,7 +1009,7 @@ func TestSpawnRestoresOriginalOpenCodeConfig(t *testing.T) {
 	manager.lookPath = installedTestHarness
 	manager.getenv = func(string) string { return "" }
 
-	if err := manager.Spawn(context.Background(), root, SpawnOptions{Name: "worker", Harness: "codex"}); err != nil {
+	if err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: "worker", Harness: "codex"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := client.createCall.environment[openCodeConfigEnvironment]; got != original {
@@ -1036,11 +1029,8 @@ func TestOpenCodeRuntimeCleanupFollowsSessionDeletion(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
 			writeTestRecord(t, root)
-			generatedReference, err := project.EnsureGeneratedOrchestratorPrompt(root, "durable prompt")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := prepareOpenCodeRuntime(root, testSessionName, ".fledge/profiles/generated/orchestrator.md", "{}"); err != nil {
+			generatedPrompt(t, root, "durable prompt")
+			if _, err := prepareOpenCodeRuntime(root, testSessionName, generatedPromptFile(root), "{}"); err != nil {
 				t.Fatal(err)
 			}
 			auditPath := filepath.Join(root, stateDirectory, "logs", testSessionName, "messages.jsonl")
@@ -1060,7 +1050,7 @@ func TestOpenCodeRuntimeCleanupFollowsSessionDeletion(t *testing.T) {
 			if contents, err := os.ReadFile(auditPath); err != nil || string(contents) != "audit\n" {
 				t.Fatalf("audit after cleanup = %q, %v; want preserved", contents, err)
 			}
-			if contents, err := os.ReadFile(filepath.Join(root, generatedReference)); err != nil || string(contents) != "durable prompt" {
+			if contents, err := os.ReadFile(generatedPromptFile(root)); err != nil || string(contents) != "durable prompt" {
 				t.Fatalf("generated prompt after cleanup = %q, %v; want preserved", contents, err)
 			}
 		})
@@ -1071,7 +1061,7 @@ func TestOpenCodeRuntimeRetainedWhenSessionDeletionFails(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	writeTestRecord(t, root)
-	if _, err := prepareOpenCodeRuntime(root, testSessionName, ".fledge/profiles/generated/orchestrator.md", "{}"); err != nil {
+	if _, err := prepareOpenCodeRuntime(root, testSessionName, generatedPromptFile(root), "{}"); err != nil {
 		t.Fatal(err)
 	}
 	manager, _ := newTestManager(&fakeHerdr{
@@ -1171,7 +1161,7 @@ func TestSpawnCwdMustBelongToOwningProject(t *testing.T) {
 			manager.lookPath = installedTestHarness
 
 			err := manager.Spawn(context.Background(), root, SpawnOptions{
-				Name: "worker", Harness: "codex", Cwd: requested,
+				Timeout: DefaultAgentTimeout, Name: "worker", Harness: "codex", Cwd: requested,
 			})
 			if test.wantError != "" {
 				if err == nil || !strings.Contains(err.Error(), test.wantError) {
@@ -1221,7 +1211,7 @@ func TestSpawnBackfillsCodexRulesAndPreservesConflictsBeforeCreatingTab(t *testi
 				t.Errorf("rule at StartAgent() = %v, want installed", err)
 			}
 		}
-		if err := manager.Spawn(context.Background(), root, SpawnOptions{Name: "worker", Harness: "codex"}); err != nil {
+		if err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: "worker", Harness: "codex"}); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -1232,7 +1222,7 @@ func TestSpawnBackfillsCodexRulesAndPreservesConflictsBeforeCreatingTab(t *testi
 		if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		err := manager.Spawn(context.Background(), root, SpawnOptions{Name: "worker", Harness: "codex"})
+		err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: "worker", Harness: "codex"})
 		if err == nil || !strings.Contains(err.Error(), "conflicts") {
 			t.Fatalf("Spawn() error = %v, want Codex rule conflict", err)
 		}
@@ -1248,7 +1238,7 @@ func TestSpawnBackfillsCodexRulesAndPreservesConflictsBeforeCreatingTab(t *testi
 	t.Run("legacy policy directs user to init before creating tab", func(t *testing.T) {
 		manager, client, root, path := newManager(t)
 		legacyContents := writeLegacyCodexRules(t, path)
-		err := manager.Spawn(context.Background(), root, SpawnOptions{Name: "worker", Harness: "codex"})
+		err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: "worker", Harness: "codex"})
 		if err == nil || !strings.Contains(err.Error(), "run fledge init") {
 			t.Fatalf("Spawn() error = %v, want run-fledge-init guidance", err)
 		}
@@ -1286,7 +1276,7 @@ func TestSpawnCallerAwareFocusAndFailures(t *testing.T) {
 	t.Run("agent caller does not steal focus and still receives messaging context", func(t *testing.T) {
 		manager, client, root := newSpawnManager(t)
 		manager.getenv = func(string) string { return "w1:p1" }
-		if err := manager.Spawn(context.Background(), root, SpawnOptions{Name: "worker", Harness: "codex"}); err != nil {
+		if err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: "worker", Harness: "codex"}); err != nil {
 			t.Fatal(err)
 		}
 		if slicesContain(client.calls, "focus-agent") {
@@ -1300,7 +1290,7 @@ func TestSpawnCallerAwareFocusAndFailures(t *testing.T) {
 	t.Run("startup failure closes tab", func(t *testing.T) {
 		manager, client, root := newSpawnManager(t)
 		client.startErr = errors.New("launch failed")
-		if err := manager.Spawn(context.Background(), root, SpawnOptions{Name: "worker", Harness: "codex"}); err == nil {
+		if err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: "worker", Harness: "codex"}); err == nil {
 			t.Fatal("Spawn() error = nil")
 		}
 		if len(client.closeCalls) != 1 || client.closeCalls[0] != "t2" {
@@ -1312,7 +1302,7 @@ func TestSpawnCallerAwareFocusAndFailures(t *testing.T) {
 		manager, client, root := newSpawnManager(t)
 		client.startErr = errors.New("launch failed")
 		client.closeErr = errors.New("close failed")
-		err := manager.Spawn(context.Background(), root, SpawnOptions{Name: "worker", Harness: "codex"})
+		err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: "worker", Harness: "codex"})
 		if err == nil || !strings.Contains(err.Error(), "launch failed") || !strings.Contains(err.Error(), "close failed") {
 			t.Fatalf("Spawn() error = %v", err)
 		}
@@ -1323,7 +1313,7 @@ func TestSpawnCallerAwareFocusAndFailures(t *testing.T) {
 		client.startErr = context.Canceled
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		if err := manager.Spawn(ctx, root, SpawnOptions{Name: "worker", Harness: "codex"}); err == nil {
+		if err := manager.Spawn(ctx, root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: "worker", Harness: "codex"}); err == nil {
 			t.Fatal("Spawn() error = nil")
 		}
 		if client.closeCtxErr != nil {
@@ -1334,7 +1324,7 @@ func TestSpawnCallerAwareFocusAndFailures(t *testing.T) {
 	t.Run("prompt failure closes tab", func(t *testing.T) {
 		manager, client, root := newSpawnManager(t)
 		client.promptErr = errors.New("prompt failed")
-		err := manager.Spawn(context.Background(), root, SpawnOptions{Name: "worker", Harness: "codex", Prompt: "work"})
+		err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: "worker", Harness: "codex", Prompt: "work"})
 		if err == nil || !strings.Contains(err.Error(), "initial prompt failed") {
 			t.Fatalf("Spawn() error = %v", err)
 		}
@@ -1354,7 +1344,7 @@ func TestSpawnCallerAwareFocusAndFailures(t *testing.T) {
 		if err := os.WriteFile(statedir.StatusDir(root, testSessionName), []byte("not a directory"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		err := manager.Spawn(context.Background(), root, SpawnOptions{Name: "worker", Harness: "codex"})
+		err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: "worker", Harness: "codex"})
 		if err == nil || !strings.Contains(err.Error(), "status directory") {
 			t.Fatalf("Spawn() error = %v, want status directory failure", err)
 		}
@@ -1367,7 +1357,7 @@ func TestSpawnCallerAwareFocusAndFailures(t *testing.T) {
 		manager, client, root := newSpawnManager(t)
 		manager.getenv = func(string) string { return "" }
 		client.focusErr = errors.New("focus failed")
-		err := manager.Spawn(context.Background(), root, SpawnOptions{Name: "worker", Harness: "codex", Prompt: "work"})
+		err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: "worker", Harness: "codex", Prompt: "work"})
 		if err == nil || !strings.Contains(err.Error(), "focusing it failed") {
 			t.Fatalf("Spawn() error = %v", err)
 		}
@@ -1385,7 +1375,7 @@ func TestSpawnCallerAwareFocusAndFailures(t *testing.T) {
 		client.focusErr = errors.New("focus failed")
 		client.promptErr = errors.New("prompt failed")
 		client.closeErr = errors.New("close failed")
-		err := manager.Spawn(context.Background(), root, SpawnOptions{Name: "worker", Harness: "codex", Prompt: "work"})
+		err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: "worker", Harness: "codex", Prompt: "work"})
 		if err == nil || !strings.Contains(err.Error(), "focusing it failed") ||
 			!strings.Contains(err.Error(), "initial prompt failed") || !strings.Contains(err.Error(), "close failed") {
 			t.Fatalf("Spawn() error = %v", err)
@@ -1397,7 +1387,7 @@ func TestSpawnCallerAwareFocusAndFailures(t *testing.T) {
 
 	t.Run("duplicate name does not create tab", func(t *testing.T) {
 		manager, client, root := newSpawnManager(t)
-		err := manager.Spawn(context.Background(), root, SpawnOptions{Name: "orchestrator", Harness: "codex"})
+		err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: "orchestrator", Harness: "codex"})
 		if err == nil || !strings.Contains(err.Error(), "already exists") {
 			t.Fatalf("Spawn() error = %v", err)
 		}
@@ -1408,7 +1398,7 @@ func TestSpawnCallerAwareFocusAndFailures(t *testing.T) {
 
 	t.Run("reserved user name does not create tab", func(t *testing.T) {
 		manager, client, root := newSpawnManager(t)
-		err := manager.Spawn(context.Background(), root, SpawnOptions{Name: userIdentity, Harness: "codex"})
+		err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: userIdentity, Harness: "codex"})
 		if err == nil || !strings.Contains(err.Error(), "reserved") {
 			t.Fatalf("Spawn() error = %v", err)
 		}
@@ -1419,7 +1409,7 @@ func TestSpawnCallerAwareFocusAndFailures(t *testing.T) {
 
 	t.Run("reserved watcher name does not create tab", func(t *testing.T) {
 		manager, client, root := newSpawnManager(t)
-		err := manager.Spawn(context.Background(), root, SpawnOptions{Name: "watcher", Harness: "codex"})
+		err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: "watcher", Harness: "codex"})
 		if err == nil || !strings.Contains(err.Error(), "reserved") {
 			t.Fatalf("Spawn() error = %v", err)
 		}
@@ -1942,7 +1932,7 @@ func TestSpawnOffersLastUsedOnlyWhenInstalled(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if err := manager.Spawn(context.Background(), root, SpawnOptions{}); err != nil {
+		if err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout}); err != nil {
 			t.Fatalf("Spawn() error = %v", err)
 		}
 		want := tui.LastUsed{Harness: "codex", Model: "gpt-custom"}
@@ -1962,7 +1952,7 @@ func TestSpawnOffersLastUsedOnlyWhenInstalled(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if err := manager.Spawn(context.Background(), root, SpawnOptions{}); err != nil {
+		if err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout}); err != nil {
 			t.Fatalf("Spawn() error = %v", err)
 		}
 		if resolver.request.LastUsed != nil {
@@ -1978,7 +1968,7 @@ func TestSpawnOffersLastUsedOnlyWhenInstalled(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if err := manager.Spawn(context.Background(), root, SpawnOptions{Name: "worker", Harness: "codex"}); err != nil {
+		if err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: "worker", Harness: "codex"}); err != nil {
 			t.Fatalf("Spawn() error = %v", err)
 		}
 		if resolver.request.LastUsed != nil {
@@ -2031,7 +2021,7 @@ func TestSpawnSavesPromptedSelection(t *testing.T) {
 			manager, client, _, root := newPreferencesSpawnManager(t, resolver)
 			client.startErr = test.startErr
 
-			err := manager.Spawn(context.Background(), root, SpawnOptions{})
+			err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout})
 			if (err != nil) != test.wantErr {
 				t.Fatalf("Spawn() error = %v, wantErr %v", err, test.wantErr)
 			}
@@ -2058,7 +2048,7 @@ func TestSpawnIgnoresCorruptPreferences(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := manager.Spawn(context.Background(), root, SpawnOptions{}); err != nil {
+	if err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout}); err != nil {
 		t.Fatalf("Spawn() error = %v", err)
 	}
 	if !strings.Contains(output.String(), "Warning: ignoring saved picker preferences") {
@@ -2090,7 +2080,7 @@ func TestSpawnPropagatesCorruptPreferencesWarningWriteFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := manager.Spawn(context.Background(), root, SpawnOptions{}); !errors.Is(err, writeErr) {
+	if err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout}); !errors.Is(err, writeErr) {
 		t.Fatalf("Spawn() error = %v, want %v", err, writeErr)
 	}
 }
@@ -2112,7 +2102,7 @@ func TestStartOffersAndSavesLastUsedSelection(t *testing.T) {
 	resolver := &fakeSelectionResolver{selection: tui.Selection{Name: "orchestrator", Harness: "codex", Model: "new-model", Prompted: true}}
 	manager.selector = resolver
 
-	if err := manager.Start(context.Background(), root); err != nil {
+	if err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout}); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
 	want := tui.LastUsed{Harness: "codex", Model: "old-model"}
@@ -2178,6 +2168,24 @@ func writeTestRecord(t *testing.T, root string) {
 	if !created {
 		t.Fatal("record already existed")
 	}
+}
+
+// generatedPromptFile is the absolute path of a project's generated
+// orchestrator prompt, which is also the reference Fledge hands to harnesses.
+func generatedPromptFile(root string) string {
+	return filepath.Join(root, stateDirectory, "profiles", "generated", "orchestrator.md")
+}
+
+// generatedPrompt renders the prompt Start would generate and returns the
+// reference the harness receives for it. project.EnsureGeneratedOrchestratorPrompt
+// owns that reference's form, so tests follow it instead of hardcoding one.
+func generatedPrompt(t *testing.T, root, instructions string) string {
+	t.Helper()
+	reference, err := project.EnsureGeneratedOrchestratorPrompt(root, instructions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reference
 }
 
 func initTestProject(t *testing.T, root string) {
@@ -2450,6 +2458,33 @@ func testSnapshot() herdr.Snapshot {
 
 func (r errorReader) Read([]byte) (int, error) {
 	return 0, r.err
+}
+
+func TestStartAndSpawnRejectZeroTimeoutIdentically(t *testing.T) {
+	t.Parallel()
+
+	const want = "agent startup timeout must be greater than 3s and no more than 5m"
+
+	startRoot := t.TempDir()
+	initTestProject(t, startRoot)
+	startManager, _ := newTestManager(&fakeHerdr{snapshot: testSnapshot()}, &fakeConfirmer{})
+	startManager.lookPath = installedTestHarness
+	err := startManager.Start(context.Background(), startRoot, StartOptions{Harness: "codex", HarnessSet: true})
+	if err == nil || err.Error() != want {
+		t.Errorf("Start() error = %v, want %q", err, want)
+	}
+
+	spawnRoot := t.TempDir()
+	writeTestRecord(t, spawnRoot)
+	spawnManager, _ := newTestManager(&fakeHerdr{
+		sessions: []herdr.Session{{Name: testSessionName, Running: true}},
+		snapshot: testSnapshot(),
+	}, &fakeConfirmer{})
+	spawnManager.lookPath = installedTestHarness
+	err = spawnManager.Spawn(context.Background(), spawnRoot, SpawnOptions{Name: "worker", Harness: "codex"})
+	if err == nil || err.Error() != want {
+		t.Errorf("Spawn() error = %v, want %q", err, want)
+	}
 }
 
 func TestValidateAgentTimeout(t *testing.T) {

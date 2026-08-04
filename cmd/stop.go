@@ -7,6 +7,12 @@ func newStopCommand(manager sessionManager, getwd func() (string, error)) *cobra
 		Use:   "stop",
 		Short: "Stop and delete this directory's Fledge session",
 		Args:  cobra.NoArgs,
-		RunE:  directoryCommandHandler(getwd, manager.Stop),
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			dir, err := currentDirectory(getwd)
+			if err != nil {
+				return err
+			}
+			return manager.Stop(cmd.Context(), dir)
+		},
 	}
 }

@@ -144,15 +144,18 @@ func (m *Manager) ReplyMessage(ctx context.Context, dir, originalID, body string
 	return m.deliverMessage(ctx, logger, active.session, store, reply)
 }
 
-// MessageInbox returns a complete transcript to direct-user/control-shell callers.
-func (m *Manager) MessageInbox(ctx context.Context, dir, identity string) (_ []messaging.Message, resultErr error) {
+// MessageInbox returns a complete transcript to direct-user/control-shell
+// callers, along with the identity it resolved the transcript for. Callers
+// render message direction against that identity, so the default lives here
+// only.
+func (m *Manager) MessageInbox(ctx context.Context, dir, identity string) (_ []messaging.Message, _ string, resultErr error) {
 	active, err := m.activeMessageSession(ctx, dir, nil)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer func() { resultErr = errors.Join(resultErr, active.unlock()) }()
 	if !active.caller.isUser {
-		return nil, errors.New("managed agents cannot query message transcripts")
+		return nil, "", errors.New("managed agents cannot query message transcripts")
 	}
 	if identity == "" {
 		identity = userIdentity
@@ -164,9 +167,10 @@ func (m *Manager) MessageInbox(ctx context.Context, dir, identity string) (_ []m
 	logger.Info("inbox queried", "identity", identity)
 	store := messaging.New(active.root, active.session)
 	if _, err := store.Ensure(); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return store.Inbox(identity)
+	messages, err := store.Inbox(identity)
+	return messages, identity, err
 }
 
 func (m *Manager) deliverMessage(ctx context.Context, logger *slog.Logger, session string, store *messaging.Store, message messaging.Message) (messaging.Message, error) {
@@ -219,7 +223,7 @@ func (m *Manager) activeMessageSession(ctx context.Context, dir string, forcedCa
 	if !found {
 		return activeMessageSession{}, errors.New("project has no Fledge session; run fledge start first")
 	}
-	unlock, err := lockSessionRecord(root)
+	unlock, err := lockSessionRecord(ctx, root)
 	if err != nil {
 		return activeMessageSession{}, err
 	}

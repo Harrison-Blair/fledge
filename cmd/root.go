@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/Harrison-Blair/fledge/internal/herdr"
@@ -14,28 +15,33 @@ import (
 
 type sessionManager interface {
 	Init(string) (string, error)
-	Start(context.Context, string, ...lifecycle.StartOptions) error
+	Start(context.Context, string, lifecycle.StartOptions) error
 	Spawn(context.Context, string, lifecycle.SpawnOptions) error
 	StopAgent(context.Context, string, string) error
 	SendMessage(context.Context, string, string, string) (messaging.Message, error)
 	ReplyMessage(context.Context, string, string, string) (messaging.Message, error)
-	MessageInbox(context.Context, string, string) ([]messaging.Message, error)
-	Watch(context.Context, string, ...lifecycle.WatchOptions) error
+	MessageInbox(context.Context, string, string) ([]messaging.Message, string, error)
+	Watch(context.Context, string, lifecycle.WatchOptions) error
 	Stop(context.Context, string) error
+	SetOutput(io.Writer)
 }
 
-func directoryCommandHandler(
-	getwd func() (string, error),
-	operation func(context.Context, string) error,
-) func(*cobra.Command, []string) error {
-	return func(cmd *cobra.Command, _ []string) error {
-		dir, err := getwd()
-		if err != nil {
-			return fmt.Errorf("get current directory: %w", err)
-		}
+// commandOutput routes the manager's plain output through the root command's
+// writer, so SetOut captures everything Fledge prints rather than only what
+// the commands themselves write.
+type commandOutput struct{ command *cobra.Command }
 
-		return operation(cmd.Context(), dir)
+func (o commandOutput) Write(contents []byte) (int, error) {
+	return o.command.OutOrStdout().Write(contents)
+}
+
+// currentDirectory resolves the invocation directory every command needs.
+func currentDirectory(getwd func() (string, error)) (string, error) {
+	dir, err := getwd()
+	if err != nil {
+		return "", fmt.Errorf("get current directory: %w", err)
 	}
+	return dir, nil
 }
 
 // Execute runs the root command.
@@ -58,6 +64,7 @@ func newRootCommand(manager sessionManager, getwd func() (string, error)) *cobra
 			return cmd.Help()
 		},
 	}
+	manager.SetOutput(commandOutput{command: root})
 
 	root.AddCommand(newStartCommand(manager, getwd))
 	root.AddCommand(newStopCommand(manager, getwd))

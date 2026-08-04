@@ -149,6 +149,14 @@ func NewManager(client Herdr, confirmer Confirmer, input io.Reader, output io.Wr
 	return manager
 }
 
+// SetOutput redirects the manager's plain output. The writer passed to
+// NewManager still decides whether the interactive picker is available, so
+// callers that need terminal detection must construct with the real file and
+// redirect afterwards.
+func (m *Manager) SetOutput(output io.Writer) {
+	m.output = output
+}
+
 // sessionLogger opens the session's debug log. Logging must never break a
 // lifecycle operation, so on failure it warns on output and discards records.
 func (m *Manager) sessionLogger(root, session string) (*slog.Logger, func()) {
@@ -188,7 +196,7 @@ func (m *Manager) Init(path string) (string, error) {
 }
 
 // Start launches or attaches to the session belonging to dir.
-func (m *Manager) Start(ctx context.Context, dir string, supplied ...StartOptions) error {
+func (m *Manager) Start(ctx context.Context, dir string, options StartOptions) error {
 	root, err := project.Find(dir)
 	if err != nil {
 		return err
@@ -199,14 +207,6 @@ func (m *Manager) Start(ctx context.Context, dir string, supplied ...StartOption
 	if err := m.herdr.Check(); err != nil {
 		return err
 	}
-	options := StartOptions{Timeout: DefaultAgentTimeout}
-	if len(supplied) > 0 {
-		options = supplied[0]
-		if options.Timeout == 0 {
-			options.Timeout = DefaultAgentTimeout
-		}
-	}
-
 	existingRecord, recordFound, err := readRecord(root)
 	if err != nil {
 		return err
@@ -257,7 +257,7 @@ func (m *Manager) Start(ctx context.Context, dir string, supplied ...StartOption
 			return errors.New("another fledge start initialized this project concurrently; retry the command")
 		}
 	}
-	unlock, err := lockSessionRecord(root)
+	unlock, err := lockSessionRecord(ctx, root)
 	if err != nil {
 		if recordCreated {
 			return errors.Join(err, removeRecordIfMatches(root, value.SessionName))
@@ -589,9 +589,6 @@ func (m *Manager) Spawn(ctx context.Context, dir string, options SpawnOptions) (
 	if err := m.herdr.Check(); err != nil {
 		return err
 	}
-	if options.Timeout == 0 {
-		options.Timeout = DefaultAgentTimeout
-	}
 	if err := ValidateAgentTimeout(options.Timeout); err != nil {
 		return err
 	}
@@ -699,23 +696,37 @@ func launchWatcher(root string) error {
 	if err != nil {
 		return fmt.Errorf("resolve fledge executable: %w", err)
 	}
-	command := exec.Command(executable, "watch", "--daemon")
-	command.Dir = root
-	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	command, devNull, err := watcherCommand(executable, root)
 	if err != nil {
-		return fmt.Errorf("open null device: %w", err)
+		return err
 	}
 	defer devNull.Close()
+	return startAndReap(command)
+}
+
+// watcherCommand builds the detached watcher daemon command. The returned file
+// backs its null stdio and must be closed once the command has started.
+func watcherCommand(executable, root string) (*exec.Cmd, *os.File, error) {
+	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open null device: %w", err)
+	}
+	command := exec.Command(executable, "watch", "--daemon")
+	command.Dir = root
 	command.Stdin = devNull
 	command.Stdout = devNull
 	command.Stderr = devNull
+	command.SysProcAttr = watcherProcessAttributes()
+	return command, devNull, nil
+}
+
+// startAndReap starts the detached watcher and waits on it in the background,
+// so an exiting watcher is collected instead of lingering as a zombie.
+func startAndReap(command *exec.Cmd) error {
 	if err := command.Start(); err != nil {
 		return fmt.Errorf("start watcher: %w", err)
 	}
-	if err := command.Process.Release(); err != nil {
-		killErr := command.Process.Kill()
-		return errors.Join(fmt.Errorf("release watcher: %w", err), killErr)
-	}
+	go func() { _ = command.Wait() }()
 	return nil
 }
 
@@ -850,7 +861,7 @@ func (m *Manager) Stop(ctx context.Context, dir string) error {
 		_, err = fmt.Fprintf(m.output, "No active Fledge session found for %s.\n", root)
 		return err
 	}
-	unlock, err := lockSessionRecord(root)
+	unlock, err := lockSessionRecord(ctx, root)
 	if err != nil {
 		return err
 	}

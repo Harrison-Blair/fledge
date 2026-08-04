@@ -1,7 +1,10 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 
 	"github.com/Harrison-Blair/fledge/internal/lifecycle"
@@ -40,19 +43,21 @@ func newAgentMessageCommand(manager sessionManager, getwd func() (string, error)
 }
 
 func newMessageSendCommand(manager sessionManager, getwd func() (string, error)) *cobra.Command {
-	return &cobra.Command{
-		Use:   "send <recipient> <text>",
+	var bodyFile string
+	command := &cobra.Command{
+		Use:   "send <recipient> [text]",
 		Short: "Send a message to a live agent",
-		Args:  cobra.ExactArgs(2),
+		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := messaging.ValidateBody(args[1]); err != nil {
+			body, err := messageBody(cmd, args[1:], bodyFile)
+			if err != nil {
 				return err
 			}
 			dir, err := currentDirectory(getwd)
 			if err != nil {
 				return err
 			}
-			message, err := manager.SendMessage(cmd.Context(), dir, args[0], args[1])
+			message, err := manager.SendMessage(cmd.Context(), dir, args[0], body)
 			if err != nil {
 				return err
 			}
@@ -60,22 +65,26 @@ func newMessageSendCommand(manager sessionManager, getwd func() (string, error))
 			return err
 		},
 	}
+	addBodyFileFlag(command, &bodyFile)
+	return command
 }
 
 func newMessageReplyCommand(manager sessionManager, getwd func() (string, error)) *cobra.Command {
-	return &cobra.Command{
-		Use:   "reply <message-id> <text>",
+	var bodyFile string
+	command := &cobra.Command{
+		Use:   "reply <message-id> [text]",
 		Short: "Send a correlated reply",
-		Args:  cobra.ExactArgs(2),
+		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := messaging.ValidateBody(args[1]); err != nil {
+			body, err := messageBody(cmd, args[1:], bodyFile)
+			if err != nil {
 				return err
 			}
 			dir, err := currentDirectory(getwd)
 			if err != nil {
 				return err
 			}
-			reply, err := manager.ReplyMessage(cmd.Context(), dir, args[0], args[1])
+			reply, err := manager.ReplyMessage(cmd.Context(), dir, args[0], body)
 			if err != nil {
 				return err
 			}
@@ -83,6 +92,52 @@ func newMessageReplyCommand(manager sessionManager, getwd func() (string, error)
 			return err
 		},
 	}
+	addBodyFileFlag(command, &bodyFile)
+	return command
+}
+
+func addBodyFileFlag(command *cobra.Command, bodyFile *string) {
+	command.Flags().StringVarP(bodyFile, "file", "F", "", "read the message body from a file (- for stdin)")
+}
+
+// messageBody resolves a message body from exactly one of the optional text
+// argument or --file, so bodies that shell quoting cannot carry still reach
+// the manager intact.
+func messageBody(cmd *cobra.Command, textArgs []string, bodyFile string) (string, error) {
+	var body string
+	switch {
+	case len(textArgs) == 1 && bodyFile != "":
+		return "", errors.New("supply the message body as an argument or with --file, not both")
+	case len(textArgs) == 1:
+		body = textArgs[0]
+	case bodyFile != "":
+		contents, err := readMessageBodyFile(cmd, bodyFile)
+		if err != nil {
+			return "", err
+		}
+		body = contents
+	default:
+		return "", errors.New("supply the message body as an argument or with --file")
+	}
+	if err := messaging.ValidateBody(body); err != nil {
+		return "", err
+	}
+	return body, nil
+}
+
+func readMessageBodyFile(cmd *cobra.Command, bodyFile string) (string, error) {
+	if bodyFile == "-" {
+		contents, err := io.ReadAll(cmd.InOrStdin())
+		if err != nil {
+			return "", fmt.Errorf("read message body from stdin: %w", err)
+		}
+		return string(contents), nil
+	}
+	contents, err := os.ReadFile(bodyFile)
+	if err != nil {
+		return "", fmt.Errorf("read message body: %w", err)
+	}
+	return string(contents), nil
 }
 
 func newMessageInboxCommand(manager sessionManager, getwd func() (string, error)) *cobra.Command {
@@ -99,24 +154,13 @@ func newMessageInboxCommand(manager sessionManager, getwd func() (string, error)
 			if len(args) == 1 {
 				identity = args[0]
 			}
-			messages, err := manager.MessageInbox(cmd.Context(), dir, identity)
+			messages, identity, err := manager.MessageInbox(cmd.Context(), dir, identity)
 			if err != nil {
 				return err
-			}
-			if identity == "" {
-				identity = "user"
 			}
 			return writeInbox(cmd, messages, identity)
 		},
 	}
-}
-
-func currentDirectory(getwd func() (string, error)) (string, error) {
-	dir, err := getwd()
-	if err != nil {
-		return "", fmt.Errorf("get current directory: %w", err)
-	}
-	return dir, nil
 }
 
 func writeInbox(cmd *cobra.Command, messages []messaging.Message, identity string) error {
@@ -155,9 +199,9 @@ func newAgentStopCommand(manager sessionManager, getwd func() (string, error)) *
 		Short: "Stop an agent and close its pane",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			dir, err := getwd()
+			dir, err := currentDirectory(getwd)
 			if err != nil {
-				return fmt.Errorf("get current directory: %w", err)
+				return err
 			}
 			return manager.StopAgent(cmd.Context(), dir, args[0])
 		},
@@ -171,18 +215,15 @@ func newAgentSpawnCommand(manager sessionManager, getwd func() (string, error)) 
 		Short: "Spawn an agent in a dedicated tab",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) > 0 && cmd.ArgsLenAtDash() < 0 {
+			if len(args) > 0 && cmd.ArgsLenAtDash() != 0 {
 				return fmt.Errorf("native agent arguments must follow --")
 			}
-			dir, err := getwd()
+			dir, err := currentDirectory(getwd)
 			if err != nil {
-				return fmt.Errorf("get current directory: %w", err)
+				return err
 			}
 			options.NativeArgs = append([]string(nil), args...)
 			options.ModelSet = cmd.Flags().Changed("model")
-			if err := lifecycle.ValidateAgentTimeout(options.Timeout); err != nil {
-				return err
-			}
 			return manager.Spawn(cmd.Context(), dir, options)
 		},
 	}

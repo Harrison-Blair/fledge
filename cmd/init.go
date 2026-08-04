@@ -1,10 +1,6 @@
 package cmd
 
-import (
-	"fmt"
-
-	"github.com/spf13/cobra"
-)
+import "github.com/spf13/cobra"
 
 func newInitCommand(manager sessionManager, getwd func() (string, error)) *cobra.Command {
 	return &cobra.Command{
@@ -17,9 +13,9 @@ func newInitCommand(manager sessionManager, getwd func() (string, error)) *cobra
 				path = args[0]
 			} else {
 				var err error
-				path, err = getwd()
+				path, err = currentDirectory(getwd)
 				if err != nil {
-					return fmt.Errorf("get current directory: %w", err)
+					return err
 				}
 			}
 			_, err := manager.Init(path)

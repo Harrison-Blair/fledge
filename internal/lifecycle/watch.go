@@ -10,7 +10,7 @@ import (
 )
 
 // Watch runs or attaches to the active session's watcher.
-func (m *Manager) Watch(ctx context.Context, dir string, supplied ...WatchOptions) error {
+func (m *Manager) Watch(ctx context.Context, dir string, options WatchOptions) error {
 	root, err := project.Find(dir)
 	if err != nil {
 		return err
@@ -31,10 +31,6 @@ func (m *Manager) Watch(ctx context.Context, dir string, supplied ...WatchOption
 	}
 	if !found {
 		return errors.New("project has no Fledge session; run fledge start first")
-	}
-	options := WatchOptions{}
-	if len(supplied) > 0 {
-		options = supplied[0]
 	}
 	return m.watchRunner(ctx, watchproc.Options{
 		Root: root, Session: value.SessionName, Config: config, Herdr: m.herdr,
