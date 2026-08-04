@@ -275,7 +275,7 @@ storage is divided by purpose:
   prompt owned by Fledge. It is refreshed on fresh startup when the profile or
   mandatory policy changes and is preserved across stop and cleanup.
 - `.fledge/tmp/<session>/` is ignored ephemeral state, including messaging and
-  watcher locks, watcher PID/beacon files, worker status files, the durable wake
+  watcher locks, watcher PID files, worker status files, the durable wake
   ledger and OpenCode's original configuration snapshot. It is removed after a
   successful stop, stale-session cleanup, or completed failed-start rollback,
   but retained when Herdr session deletion fails so cleanup can be retried.
