@@ -18,8 +18,9 @@ import (
 
 // Session is a named Herdr session returned by the Herdr CLI.
 type Session struct {
-	Name    string `json:"name"`
-	Running bool   `json:"running"`
+	Name       string `json:"name"`
+	Running    bool   `json:"running"`
+	SocketPath string `json:"socket_path"`
 }
 
 // Snapshot is the live layout and agent state for one Herdr session.
@@ -50,6 +51,7 @@ type Pane struct {
 	WorkspaceID string  `json:"workspace_id"`
 	Label       *string `json:"label"`
 	Agent       *string `json:"agent"`
+	AgentStatus string  `json:"agent_status"`
 }
 
 type Agent struct {
@@ -58,6 +60,7 @@ type Agent struct {
 	PaneID      string  `json:"pane_id"`
 	TabID       string  `json:"tab_id"`
 	WorkspaceID string  `json:"workspace_id"`
+	AgentStatus string  `json:"agent_status"`
 }
 
 // Client invokes a Herdr executable.

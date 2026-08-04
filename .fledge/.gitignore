@@ -3,3 +3,5 @@ messages.jsonl
 messages.lock
 preferences.json
 logs/
+tmp/
+profiles/generated/

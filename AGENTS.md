@@ -4,6 +4,10 @@ Prefer delegating implimentation and review to sub-agents. Before delegating, as
     - The tasks can be done by both agents without communicating with one another
     - The tasks do not rely one one another in any way
 
+If delegating, you are to act as purely an orchestrator. Do not complete tasks yourself, instead spawn seperate agents to complete tasks and review work.
+
+Create new agents for different tasks, and for different review sessions.
+
 # Agent Coordination
 - Communicate with spawned agents through Fledge messages. Treat an agent's message reply as its completion signal.
 - Do not use `herdr agent wait` or `herdr agent read` to poll for completion or collect results.

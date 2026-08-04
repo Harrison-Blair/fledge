@@ -17,11 +17,26 @@ const (
 
 	stateDirectory  = ".fledge"
 	configFilename  = "config.json"
+	watchFilename   = "watch.json"
 	profilesDir     = "profiles"
 	profileFilename = "orchestrator.toml"
 
 	ignoreContents       = "session.json\npreferences.json\nlogs/\ntmp/\nprofiles/generated/\n"
 	legacyIgnoreContents = "*\n!.gitignore\n"
+	defaultWatchContents = `{
+  "version": 1,
+  "enabled": true,
+  "poll_interval_seconds": 15,
+  "idle_poll_interval_seconds": 60,
+  "signal_grace_seconds": 2,
+  "heartbeat_seconds": 600,
+  "heartbeat_max_seconds": 7200,
+  "wake_min_interval_seconds": 30,
+  "done_message_grace_seconds": 90,
+  "event_stream": true,
+  "min_protocol": 16
+}
+`
 )
 
 // ErrNotInitialized indicates that no initialized Fledge project was found.
@@ -41,6 +56,7 @@ func Init(path string) (string, error) {
 	}
 
 	configPath := filepath.Join(root, stateDirectory, configFilename)
+	watchPath := filepath.Join(root, stateDirectory, watchFilename)
 	profilePath := filepath.Join(root, stateDirectory, profilesDir, profileFilename)
 	ignorePath := filepath.Join(root, stateDirectory, ".gitignore")
 
@@ -67,6 +83,13 @@ func Init(path string) (string, error) {
 		if err := createFile(configPath, configContents(), 0o644, validateConfigFile); err != nil {
 			return "", err
 		}
+	}
+	if _, err := os.Stat(watchPath); errors.Is(err, os.ErrNotExist) {
+		if err := createFile(watchPath, []byte(defaultWatchContents), 0o644, nil); err != nil {
+			return "", err
+		}
+	} else if err != nil {
+		return "", fmt.Errorf("inspect watcher config %q: %w", watchPath, err)
 	}
 	if !profileExists {
 		if err := createFile(profilePath, []byte(defaultProfileContents), 0o644, validateProfileFile); err != nil {

@@ -24,6 +24,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/project"
 	"github.com/Harrison-Blair/fledge/internal/statedir"
 	"github.com/Harrison-Blair/fledge/internal/tui"
+	"github.com/Harrison-Blair/fledge/internal/watchproc"
 )
 
 const (
@@ -49,6 +50,7 @@ const (
   fledge agent message reply <message-id> <text>
 - Treat an injected Fledge completion message as the worker's completion signal, then stop the completed worker with:
   fledge agent stop <name>
+- Messages from sender watcher are actionable automated notifications. Act on them; never reply to watcher messages.
 - Never poll with fledge agent message inbox. Wait for injected Fledge messages instead.
 - Never use direct Herdr commands to communicate with, inspect, prompt, or collect output from agents. This includes herdr agent wait, read, get, list, prompt, send-keys, attach, and explain, plus Herdr API snapshots.`
 
@@ -61,6 +63,12 @@ Communicate with the orchestrator only through Fledge messaging:
   fledge agent message reply <message-id> <text>
 - Never poll with fledge agent message inbox. Wait for injected Fledge messages instead.
 - Never use direct Herdr commands to communicate with, inspect, prompt, or collect output from agents. This includes herdr agent wait, read, get, list, prompt, send-keys, attach, and explain, plus Herdr API snapshots.`
+
+	agentStatusContext = `Watcher status reporting:
+- Append status updates to this worker-specific file: %s
+- Format each line as <verb>: <detail>, where <verb> is exactly one of: working|done|needs-decision|blocked|failed|paused
+- The status file is append-only; never overwrite or truncate it.
+- Status-file reporting supplements, and does not replace, Fledge progress and completion messaging to the orchestrator.`
 )
 
 var (
@@ -86,6 +94,7 @@ type Herdr interface {
 	StartAgent(context.Context, string, string, string, string, time.Duration, []string) error
 	PromptAgent(context.Context, string, string, string) error
 	List(context.Context) ([]herdr.Session, error)
+	Protocol(context.Context) (int, error)
 	Stop(context.Context, string) error
 	Delete(context.Context, string) error
 }
@@ -97,14 +106,17 @@ type Confirmer interface {
 
 // Manager coordinates project state, Herdr, and user confirmation.
 type Manager struct {
-	herdr      Herdr
-	confirmer  Confirmer
-	output     io.Writer
-	random     io.Reader
-	selector   selectionResolver
-	lookPath   harness.LookPath
-	getenv     func(string) string
-	logFactory func(root, session string) (*slog.Logger, io.Closer, error)
+	herdr         Herdr
+	confirmer     Confirmer
+	output        io.Writer
+	random        io.Reader
+	selector      selectionResolver
+	lookPath      harness.LookPath
+	getenv        func(string) string
+	logFactory    func(root, session string) (*slog.Logger, io.Closer, error)
+	watchLauncher func(root string) error
+	watchRunner   func(context.Context, watchproc.Options) error
+	watchStopper  func(root, session string) error
 }
 
 type selectionResolver interface {
@@ -114,12 +126,15 @@ type selectionResolver interface {
 // NewManager creates a session lifecycle manager.
 func NewManager(client Herdr, confirmer Confirmer, input io.Reader, output io.Writer) *Manager {
 	manager := &Manager{
-		herdr:     client,
-		confirmer: confirmer,
-		output:    output,
-		random:    rand.Reader,
-		lookPath:  exec.LookPath,
-		getenv:    os.Getenv,
+		herdr:         client,
+		confirmer:     confirmer,
+		output:        output,
+		random:        rand.Reader,
+		lookPath:      exec.LookPath,
+		getenv:        os.Getenv,
+		watchLauncher: launchWatcher,
+		watchRunner:   watchproc.Run,
+		watchStopper:  watchproc.Stop,
 	}
 	stdin, stdinOK := input.(*os.File)
 	stdout, stdoutOK := output.(*os.File)
@@ -206,6 +221,7 @@ func (m *Manager) Start(ctx context.Context, dir string, supplied ...StartOption
 				return errors.New("startup selection flags cannot be used when reattaching to an existing orchestrator")
 			}
 			m.logSessionEvent(root, existingRecord.SessionName, "reattached to running session", "session", existingRecord.SessionName)
+			m.launchWatcherWarn(root)
 			return m.herdr.Attach(ctx, existingRecord.SessionName, root)
 		}
 	}
@@ -264,6 +280,7 @@ func (m *Manager) Start(ctx context.Context, dir string, supplied ...StartOption
 				return errors.New("startup selection flags cannot be used when reattaching to an existing orchestrator")
 			}
 			m.logSessionEvent(root, value.SessionName, "reattached to running session", "session", value.SessionName)
+			m.launchWatcherWarn(root)
 			return m.herdr.Attach(ctx, value.SessionName, root)
 		}
 	}
@@ -285,7 +302,12 @@ func (m *Manager) Start(ctx context.Context, dir string, supplied ...StartOption
 			if recordCreated {
 				recordErr = removeRecordIfMatches(root, value.SessionName)
 			}
-			return errors.Join(err, removeSessionTemporaryState(root, value.SessionName), recordErr, unlock())
+			watchErr := m.watchStopper(root, value.SessionName)
+			var temporaryErr error
+			if watchErr == nil {
+				temporaryErr = removeSessionTemporaryState(root, value.SessionName)
+			}
+			return errors.Join(err, watchErr, temporaryErr, recordErr, unlock())
 		}
 	}
 	logger, closeLog := m.sessionLogger(root, value.SessionName)
@@ -306,6 +328,7 @@ func (m *Manager) Start(ctx context.Context, dir string, supplied ...StartOption
 		return fmt.Errorf("orchestrator started, but release of its startup lock failed: %w", err)
 	}
 
+	m.launchWatcherWarn(root)
 	return m.herdr.Attach(ctx, value.SessionName, root)
 }
 
@@ -537,6 +560,9 @@ func (m *Manager) rollbackOwnedSession(ctx context.Context, root, session string
 		if deleteErr != nil {
 			return errors.Join(stopErr, deleteErr)
 		}
+		if watcherErr := m.watchStopper(root, session); watcherErr != nil {
+			return errors.Join(stopErr, watcherErr)
+		}
 		return errors.Join(
 			stopErr,
 			messaging.New(root, session).RemoveAll(),
@@ -544,6 +570,9 @@ func (m *Manager) rollbackOwnedSession(ctx context.Context, root, session string
 			removeSessionTemporaryState(root, session),
 			removeRecordIfMatches(root, session),
 		)
+	}
+	if watcherErr := m.watchStopper(root, session); watcherErr != nil {
+		return watcherErr
 	}
 	return errors.Join(removeOpenCodeRuntime(root, session), removeSessionTemporaryState(root, session), removeRecordIfMatches(root, session))
 }
@@ -592,8 +621,8 @@ func (m *Manager) Spawn(ctx context.Context, dir string, options SpawnOptions) (
 	if err != nil {
 		return err
 	}
-	if selection.Name == userIdentity {
-		return errors.New("agent name \"user\" is reserved for messaging")
+	if selection.Name == userIdentity || selection.Name == watcherIdentity {
+		return fmt.Errorf("agent name %q is reserved for messaging", selection.Name)
 	}
 	if err := rejectDuplicate(selection.Name, snapshot); err != nil {
 		return err
@@ -614,6 +643,9 @@ func (m *Manager) Spawn(ctx context.Context, dir string, options SpawnOptions) (
 	paneEnvironment, err := openCodePaneEnvironment(root, value.SessionName)
 	if err != nil {
 		return err
+	}
+	if err := os.MkdirAll(statedir.StatusDir(root, value.SessionName), 0o700); err != nil {
+		return fmt.Errorf("create watcher status directory: %w", err)
 	}
 	logger, closeLog := m.sessionLogger(root, value.SessionName)
 	defer closeLog()
@@ -644,7 +676,7 @@ func (m *Manager) Spawn(ctx context.Context, dir string, options SpawnOptions) (
 			focusErr = fmt.Errorf("agent %q started, but focusing it failed: %w", selection.Name, err)
 		}
 	}
-	prompt := agentMessagingContext
+	prompt := agentMessagingContext + "\n\n" + fmt.Sprintf(agentStatusContext, statedir.StatusFile(root, value.SessionName, selection.Name))
 	if options.Prompt != "" {
 		prompt += "\n\nYour task:\n" + options.Prompt
 	}
@@ -652,7 +684,39 @@ func (m *Manager) Spawn(ctx context.Context, dir string, options SpawnOptions) (
 		promptErr := fmt.Errorf("agent %q initial prompt failed: %w", selection.Name, err)
 		return errors.Join(focusErr, promptErr, rollback())
 	}
+	m.launchWatcherWarn(root)
 	return focusErr
+}
+
+func (m *Manager) launchWatcherWarn(root string) {
+	if err := m.watchLauncher(root); err != nil {
+		_, _ = fmt.Fprintf(m.output, "Warning: watcher could not be started: %v\n", err)
+	}
+}
+
+func launchWatcher(root string) error {
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve fledge executable: %w", err)
+	}
+	command := exec.Command(executable, "watch", "--daemon")
+	command.Dir = root
+	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		return fmt.Errorf("open null device: %w", err)
+	}
+	defer devNull.Close()
+	command.Stdin = devNull
+	command.Stdout = devNull
+	command.Stderr = devNull
+	if err := command.Start(); err != nil {
+		return fmt.Errorf("start watcher: %w", err)
+	}
+	if err := command.Process.Release(); err != nil {
+		killErr := command.Process.Kill()
+		return errors.Join(fmt.Errorf("release watcher: %w", err), killErr)
+	}
+	return nil
 }
 
 // ValidateAgentTimeout rejects agent startup timeouts outside (3s, 5m].
@@ -816,6 +880,9 @@ func (m *Manager) stopLocked(ctx context.Context, logger *slog.Logger, root stri
 	if !confirmed {
 		logger.Info("stop canceled", "session", value.SessionName)
 		return err
+	}
+	if err := m.watchStopper(root, value.SessionName); err != nil {
+		return fmt.Errorf("stop session watcher: %w", err)
 	}
 
 	if !exists {

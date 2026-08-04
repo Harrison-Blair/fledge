@@ -12,7 +12,10 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/project"
 )
 
-const userIdentity = "user"
+const (
+	userIdentity    = "user"
+	watcherIdentity = "watcher"
+)
 
 type messageCaller struct {
 	identity string
@@ -33,7 +36,7 @@ func (m *Manager) SendMessage(ctx context.Context, dir, recipient, body string) 
 	if err := messaging.ValidateBody(body); err != nil {
 		return messaging.Message{}, err
 	}
-	active, err := m.activeMessageSession(ctx, dir)
+	active, err := m.activeMessageSession(ctx, dir, nil)
 	if err != nil {
 		return messaging.Message{}, err
 	}
@@ -66,12 +69,44 @@ func (m *Manager) SendMessage(ctx context.Context, dir, recipient, body string) 
 	return m.deliverMessage(ctx, logger, active.session, store, message)
 }
 
+// SendWatcherWake sends one audited automated notification to the orchestrator.
+func (m *Manager) SendWatcherWake(ctx context.Context, dir, body string) (_ messaging.Message, resultErr error) {
+	if err := messaging.ValidateBody(body); err != nil {
+		return messaging.Message{}, err
+	}
+	active, err := m.activeMessageSession(ctx, dir, &messageCaller{identity: watcherIdentity})
+	if err != nil {
+		return messaging.Message{}, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, active.unlock()) }()
+	recipientPane, err := liveAgentPane(active.snapshot, "orchestrator")
+	if err != nil {
+		return messaging.Message{}, err
+	}
+
+	logger, closeLog := m.sessionLogger(active.root, active.session)
+	defer closeLog()
+	defer func() { logOutcome(logger, "watcher wake", resultErr) }()
+	store := messaging.New(active.root, active.session)
+	if _, err := store.Ensure(); err != nil {
+		return messaging.Message{}, err
+	}
+	message, err := store.Create(messaging.CreateParams{
+		Sender: watcherIdentity, Recipient: "orchestrator", Body: body, RecipientPane: recipientPane,
+	})
+	if err != nil {
+		return messaging.Message{}, err
+	}
+	logger.Info("message created", "message_id", message.ID, "sender", watcherIdentity, "recipient", "orchestrator", "body_bytes", len(body))
+	return m.deliverMessage(ctx, logger, active.session, store, message)
+}
+
 // ReplyMessage creates and immediately submits a correlated reply.
 func (m *Manager) ReplyMessage(ctx context.Context, dir, originalID, body string) (_ messaging.Message, resultErr error) {
 	if err := messaging.ValidateBody(body); err != nil {
 		return messaging.Message{}, err
 	}
-	active, err := m.activeMessageSession(ctx, dir)
+	active, err := m.activeMessageSession(ctx, dir, nil)
 	if err != nil {
 		return messaging.Message{}, err
 	}
@@ -111,7 +146,7 @@ func (m *Manager) ReplyMessage(ctx context.Context, dir, originalID, body string
 
 // MessageInbox returns a complete transcript to direct-user/control-shell callers.
 func (m *Manager) MessageInbox(ctx context.Context, dir, identity string) (_ []messaging.Message, resultErr error) {
-	active, err := m.activeMessageSession(ctx, dir)
+	active, err := m.activeMessageSession(ctx, dir, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +204,7 @@ func messageEnvelope(message messaging.Message) string {
 	return envelope.String()
 }
 
-func (m *Manager) activeMessageSession(ctx context.Context, dir string) (activeMessageSession, error) {
+func (m *Manager) activeMessageSession(ctx context.Context, dir string, forcedCaller *messageCaller) (activeMessageSession, error) {
 	root, err := project.Find(dir)
 	if err != nil {
 		return activeMessageSession{}, err
@@ -210,9 +245,14 @@ func (m *Manager) activeMessageSession(ctx context.Context, dir string) (activeM
 	if err != nil {
 		return fail(err)
 	}
-	caller, err := inferMessageCaller(m.getenv("HERDR_PANE_ID"), snapshot)
-	if err != nil {
-		return fail(err)
+	caller := messageCaller{}
+	if forcedCaller != nil {
+		caller = *forcedCaller
+	} else {
+		caller, err = inferMessageCaller(m.getenv("HERDR_PANE_ID"), snapshot)
+		if err != nil {
+			return fail(err)
+		}
 	}
 	if err := project.EnsureRuntimeIgnore(root); err != nil {
 		return fail(err)

@@ -25,10 +25,46 @@ func TestRootCommandShowsHelp(t *testing.T) {
 	if err := command.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	for _, expected := range []string{"fledge [command]", "agent", "init", "start", "stop"} {
+	for _, expected := range []string{"fledge [command]", "agent", "init", "start", "stop", "watch"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("help output = %q, want %q", output.String(), expected)
 		}
+	}
+}
+
+func TestWatchRoutesAttachedAndDaemonModes(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name   string
+		args   []string
+		daemon bool
+	}{
+		{name: "attached", args: []string{"watch"}},
+		{name: "daemon", args: []string{"watch", "--daemon"}, daemon: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			manager := &fakeManager{}
+			command := newRootCommand(manager, func() (string, error) { return "/project/nested", nil })
+			command.SetArgs(test.args)
+			if err := command.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			if len(manager.watchDirs) != 1 || manager.watchDirs[0] != "/project/nested" || len(manager.watchOptions) != 1 || manager.watchOptions[0].Daemon != test.daemon {
+				t.Fatalf("Watch() dirs/options = %#v/%#v", manager.watchDirs, manager.watchOptions)
+			}
+		})
+	}
+}
+
+func TestWatchDaemonFlagIsHidden(t *testing.T) {
+	t.Parallel()
+
+	command := newWatchCommand(&fakeManager{}, func() (string, error) { return "/project", nil })
+	flag := command.Flags().Lookup("daemon")
+	if flag == nil || !flag.Hidden {
+		t.Fatalf("daemon flag = %#v, want hidden", flag)
 	}
 }
 
@@ -361,6 +397,8 @@ type fakeManager struct {
 	stopAgentDirs  []string
 	stopAgentNames []string
 	stopDirs       []string
+	watchDirs      []string
+	watchOptions   []lifecycle.WatchOptions
 	messageSends   []messageSendCall
 	messageReplies []messageReplyCall
 	inboxCalls     []inboxCall
@@ -388,6 +426,14 @@ func (f *fakeManager) Start(_ context.Context, dir string, options ...lifecycle.
 
 func (f *fakeManager) Stop(_ context.Context, dir string) error {
 	f.stopDirs = append(f.stopDirs, dir)
+	return nil
+}
+
+func (f *fakeManager) Watch(_ context.Context, dir string, options ...lifecycle.WatchOptions) error {
+	f.watchDirs = append(f.watchDirs, dir)
+	if len(options) > 0 {
+		f.watchOptions = append(f.watchOptions, options[0])
+	}
 	return nil
 }
 

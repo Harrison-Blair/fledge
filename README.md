@@ -41,9 +41,10 @@ Initialize a project once. The optional path defaults to the current directory:
 fledge init [path]
 ```
 
-This creates tracked `.fledge/config.json` and
+This creates tracked `.fledge/config.json`, `.fledge/watch.json`, and
 `.fledge/profiles/orchestrator.toml` files. Edit the profile to change the
-instructions sent to the project's coordinator.
+instructions sent to the project's coordinator and `watch.json` to tune
+supervision.
 
 Initialization also creates the managed
 [Codex command policy](https://learn.chatgpt.com/docs/agent-configuration/rules)
@@ -125,6 +126,25 @@ also prohibit polling the Fledge inbox and direct Herdr agent communication or
 inspection. When provided, the caller's `--prompt` task follows those
 instructions in the same single prompt submission.
 
+Workers also receive the absolute path of their append-only watcher status
+file. A status line starts with one of these exact lower-case verbs followed by
+a colon:
+
+```text
+working: concise progress
+done: concise result
+needs-decision: decision the orchestrator must make
+blocked: concrete blocker
+failed: concrete failure
+paused: reason work is paused
+```
+
+`working` and `paused` are recorded without waking the orchestrator. `blocked`,
+`needs-decision`, and `failed` are actionable. `done` is held briefly so the
+worker's ordinary Fledge completion message can arrive; a missing completion is
+then escalated. Status reporting supplements Fledge messaging and never replaces
+the required progress and completion messages.
+
 After assigning the initial task through `fledge agent spawn --prompt`,
 orchestrators coordinate with `fledge agent message send` and `reply`. An
 injected Fledge completion message is the completion signal; the orchestrator
@@ -173,6 +193,61 @@ restart.
 Detach from Herdr with `Ctrl+B`, then `Q`. The session and its processes keep
 running in the background.
 
+## Watcher
+
+Fledge automatically launches one detached watcher for each active project
+session when starting, reattaching, or successfully spawning a worker. The
+watcher combines worker status files with Herdr agent-status events. If Herdr's
+event protocol or socket is unavailable, it continues with snapshot polling.
+Set `"enabled": false` in `.fledge/watch.json` to disable both attached and
+detached watcher modes cleanly.
+
+Attach a live decision-log monitor with:
+
+```sh
+fledge watch
+```
+
+If the background watcher is running, this prints roughly the last 50 complete
+lines and follows new lines until canceled or the watcher exits. If no watcher
+owns the session lock, the command runs the watcher in the foreground and
+writes decisions to both the terminal and the log. The hidden
+`fledge watch --daemon` form is reserved for Fledge's lifecycle launcher; it
+writes only to the log and exits successfully when another watcher already owns
+the session lock.
+
+Watcher decisions are appended to the owner-only
+`.fledge/logs/<session>/watch.log`. Queued lines include durable `w-...` wake
+IDs. Delivery lines include the injected message ID and every retired wake ID,
+allowing a queued decision to be traced through delivery even after ledger
+compaction.
+
+The tracked `.fledge/watch.json` accepts these settings:
+
+```json
+{
+  "version": 1,
+  "enabled": true,
+  "poll_interval_seconds": 15,
+  "idle_poll_interval_seconds": 60,
+  "signal_grace_seconds": 2,
+  "heartbeat_seconds": 600,
+  "heartbeat_max_seconds": 7200,
+  "wake_min_interval_seconds": 30,
+  "done_message_grace_seconds": 90,
+  "event_stream": true,
+  "min_protocol": 16
+}
+```
+
+Unknown fields and status/event values are ignored for forward compatibility.
+Actionable observations are appended to a durable wake ledger before their
+suppression markers advance, then batched into watcher messages sent from
+`watcher` to `orchestrator`. A normal ledger write failure leaves markers in
+place so the observation retries. If the ledger is corrupt, the watcher sends
+one explicit warning and continues with in-memory deduplication; supervision
+continues, but crash-safe replay is unavailable until restart.
+
 Stop and permanently delete the nearest Fledge session in the current directory
 or one of its parents:
 
@@ -183,16 +258,19 @@ fledge stop
 Stopping requires confirmation from an interactive terminal. Fledge's project
 storage is divided by purpose:
 
-- `.fledge/config.json` and `.fledge/profiles/orchestrator.toml` are tracked;
-  edit only the TOML profile to customize coordinator instructions.
+- `.fledge/config.json`, `.fledge/watch.json`, and
+  `.fledge/profiles/orchestrator.toml` are tracked. Edit the TOML profile to
+  customize coordinator instructions and `watch.json` to tune supervision.
 - `.fledge/profiles/generated/orchestrator.md` is an ignored, reusable rendered
   prompt owned by Fledge. It is refreshed on fresh startup when the profile or
   mandatory policy changes and is preserved across stop and cleanup.
-- `.fledge/tmp/<session>/` is ignored ephemeral state, including the messaging
-  lock and OpenCode's original configuration snapshot. It is removed after a
+- `.fledge/tmp/<session>/` is ignored ephemeral state, including messaging and
+  watcher locks, watcher PID/beacon files, worker status files, the durable wake
+  ledger and OpenCode's original configuration snapshot. It is removed after a
   successful stop, stale-session cleanup, or completed failed-start rollback,
   but retained when Herdr session deletion fails so cleanup can be retried.
-- `.fledge/logs/<session>/` contains only `fledge.log` and `messages.jsonl`.
+- `.fledge/logs/<session>/` contains `fledge.log`, `messages.jsonl`, and
+  `watch.log`.
   Successful stop and stale-session cleanup preserve these audit/debug logs;
   a completed failed-start rollback removes logs for the unusable session.
 

@@ -15,6 +15,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/project"
 	"github.com/Harrison-Blair/fledge/internal/statedir"
 	"github.com/Harrison-Blair/fledge/internal/tui"
+	"github.com/Harrison-Blair/fledge/internal/watchproc"
 )
 
 const testSessionName = "fledge-00000000000000000000000000000000"
@@ -363,6 +364,58 @@ func TestStartReusesLegacySessionName(t *testing.T) {
 	}
 }
 
+func TestStartLaunchesWatcherBeforeEveryAttachAndWarnsOnly(t *testing.T) {
+	t.Parallel()
+
+	t.Run("reattach", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeTestRecord(t, root)
+		client := &fakeHerdr{sessions: []herdr.Session{{Name: testSessionName, Running: true}}}
+		manager, output := newTestManager(client, &fakeConfirmer{})
+		launched := 0
+		manager.watchLauncher = func(gotRoot string) error {
+			launched++
+			if gotRoot != root || len(client.attachCalls) != 0 {
+				t.Errorf("watch launcher root/attach state = %q/%v, want project root before Attach", gotRoot, client.attachCalls)
+			}
+			return errors.New("launcher failed")
+		}
+		if err := manager.Start(context.Background(), root); err != nil {
+			t.Fatal(err)
+		}
+		if launched != 1 || len(client.attachCalls) != 1 {
+			t.Fatalf("launcher/Attach calls = %d/%d, want 1/1", launched, len(client.attachCalls))
+		}
+		if !strings.Contains(output.String(), "Warning: watcher could not be started") {
+			t.Errorf("output = %q, want warn-only launcher failure", output.String())
+		}
+	})
+
+	t.Run("fresh start", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		initTestProject(t, root)
+		client := &fakeHerdr{snapshot: testSnapshot()}
+		manager, _ := newTestManager(client, &fakeConfirmer{})
+		manager.lookPath = installedTestHarness
+		launched := 0
+		manager.watchLauncher = func(gotRoot string) error {
+			launched++
+			if gotRoot != root || len(client.attachCalls) != 0 {
+				t.Errorf("watch launcher root/attach state = %q/%v, want project root before Attach", gotRoot, client.attachCalls)
+			}
+			return nil
+		}
+		if err := manager.Start(context.Background(), root, StartOptions{Harness: "codex", HarnessSet: true}); err != nil {
+			t.Fatal(err)
+		}
+		if launched != 1 || len(client.attachCalls) != 1 {
+			t.Fatalf("launcher/Attach calls = %d/%d, want 1/1", launched, len(client.attachCalls))
+		}
+	})
+}
+
 func TestStartReattachPreservesGeneratedPromptSnapshot(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -688,6 +741,14 @@ func TestSpawnCreatesDedicatedTabAndPrompts(t *testing.T) {
 	manager, _ := newTestManager(client, &fakeConfirmer{})
 	manager.lookPath = installedTestHarness
 	manager.getenv = func(string) string { return "" }
+	launched := 0
+	manager.watchLauncher = func(gotRoot string) error {
+		launched++
+		if gotRoot != root || len(client.promptCalls) != 1 {
+			t.Errorf("watch launcher root/prompt state = %q/%v, want project root after successful prompt", gotRoot, client.promptCalls)
+		}
+		return nil
+	}
 
 	err := manager.Spawn(context.Background(), child, SpawnOptions{
 		Name: "worker", Harness: "codex", Model: "gpt-custom", ModelSet: true,
@@ -710,9 +771,20 @@ func TestSpawnCreatesDedicatedTabAndPrompts(t *testing.T) {
 	if strings.Join(client.startAgent.args, "\x00") != strings.Join(wantArgs, "\x00") {
 		t.Errorf("native args = %#v, want %#v", client.startAgent.args, wantArgs)
 	}
-	wantPrompt := agentMessagingContext + "\n\nYour task:\nReview the diff"
+	wantPrompt := expectedWorkerPrompt(root, "worker", "Review the diff")
 	if len(client.promptCalls) != 1 || client.prompt != wantPrompt {
 		t.Errorf("PromptAgent calls = %#v, want one call with %q", client.promptCalls, wantPrompt)
+	}
+	statusDir := statedir.StatusDir(root, testSessionName)
+	info, statErr := os.Stat(statusDir)
+	if statErr != nil || !info.IsDir() {
+		t.Fatalf("status directory = %#v, %v; want directory", info, statErr)
+	}
+	if !filepath.IsAbs(statedir.StatusFile(root, testSessionName, "worker")) {
+		t.Fatalf("status file path = %q, want absolute", statedir.StatusFile(root, testSessionName, "worker"))
+	}
+	if launched != 1 {
+		t.Errorf("watch launcher calls = %d, want 1", launched)
 	}
 }
 
@@ -739,6 +811,11 @@ func TestRuntimeCommunicationPoliciesRequireFledgeCompletionAndForbidPolling(t *
 	if !strings.Contains(mandatoryCoordinatorCommunicationPolicy, "fledge agent stop <name>") {
 		t.Errorf("orchestrator policy = %q, want worker stop instruction", mandatoryCoordinatorCommunicationPolicy)
 	}
+	for _, required := range []string{"watcher", "actionable", "never reply"} {
+		if !strings.Contains(mandatoryCoordinatorCommunicationPolicy, required) {
+			t.Errorf("orchestrator policy = %q, want watcher instruction containing %q", mandatoryCoordinatorCommunicationPolicy, required)
+		}
+	}
 }
 
 func TestSpawnPromptCompositionAcrossHarnesses(t *testing.T) {
@@ -747,10 +824,9 @@ func TestSpawnPromptCompositionAcrossHarnesses(t *testing.T) {
 	promptCases := []struct {
 		name   string
 		prompt string
-		want   string
 	}{
-		{name: "absent", want: agentMessagingContext},
-		{name: "present", prompt: "Review the diff", want: agentMessagingContext + "\n\nYour task:\nReview the diff"},
+		{name: "absent"},
+		{name: "present", prompt: "Review the diff"},
 	}
 	for _, harnessID := range []string{"claude", "codex", "pi", "opencode"} {
 		for _, promptCase := range promptCases {
@@ -777,7 +853,7 @@ func TestSpawnPromptCompositionAcrossHarnesses(t *testing.T) {
 				}); err != nil {
 					t.Fatalf("Spawn() error = %v", err)
 				}
-				want := promptCall{session: testSessionName, recipient: "worker", prompt: promptCase.want}
+				want := promptCall{session: testSessionName, recipient: "worker", prompt: expectedWorkerPrompt(root, "worker", promptCase.prompt)}
 				if len(client.promptCalls) != 1 || client.promptCalls[0] != want {
 					t.Fatalf("PromptAgent calls = %#v, want exactly %#v", client.promptCalls, want)
 				}
@@ -1216,7 +1292,7 @@ func TestSpawnCallerAwareFocusAndFailures(t *testing.T) {
 		if slicesContain(client.calls, "focus-agent") {
 			t.Fatalf("calls = %v, want no focus", client.calls)
 		}
-		if len(client.promptCalls) != 1 || client.prompt != agentMessagingContext {
+		if len(client.promptCalls) != 1 || client.prompt != expectedWorkerPrompt(root, "worker", "") {
 			t.Fatalf("PromptAgent calls = %#v, want one messaging-context call", client.promptCalls)
 		}
 	})
@@ -1265,6 +1341,26 @@ func TestSpawnCallerAwareFocusAndFailures(t *testing.T) {
 		if len(client.closeCalls) != 1 || client.closeCalls[0] != "t2" {
 			t.Fatalf("CloseTab() calls = %v, want t2", client.closeCalls)
 		}
+		if info, statErr := os.Stat(statedir.StatusDir(root, testSessionName)); statErr != nil || !info.IsDir() {
+			t.Fatalf("shared status directory = %#v, %v; want retained directory", info, statErr)
+		}
+	})
+
+	t.Run("status directory failure does not create tab", func(t *testing.T) {
+		manager, client, root := newSpawnManager(t)
+		if err := os.MkdirAll(statedir.TempSession(root, testSessionName), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(statedir.StatusDir(root, testSessionName), []byte("not a directory"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		err := manager.Spawn(context.Background(), root, SpawnOptions{Name: "worker", Harness: "codex"})
+		if err == nil || !strings.Contains(err.Error(), "status directory") {
+			t.Fatalf("Spawn() error = %v, want status directory failure", err)
+		}
+		if slicesContain(client.calls, "create-tab") {
+			t.Fatalf("calls = %v, want no tab creation", client.calls)
+		}
 	})
 
 	t.Run("focus failure still delivers prompt", func(t *testing.T) {
@@ -1275,7 +1371,7 @@ func TestSpawnCallerAwareFocusAndFailures(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "focusing it failed") {
 			t.Fatalf("Spawn() error = %v", err)
 		}
-		if client.prompt != agentMessagingContext+"\n\nYour task:\nwork" || len(client.promptCalls) != 1 {
+		if client.prompt != expectedWorkerPrompt(root, "worker", "work") || len(client.promptCalls) != 1 {
 			t.Fatalf("prompt = %q, calls = %v, want prompt delivered", client.prompt, client.calls)
 		}
 		if len(client.closeCalls) != 0 {
@@ -1320,6 +1416,31 @@ func TestSpawnCallerAwareFocusAndFailures(t *testing.T) {
 			t.Fatalf("calls = %v, want no tab creation", client.calls)
 		}
 	})
+
+	t.Run("reserved watcher name does not create tab", func(t *testing.T) {
+		manager, client, root := newSpawnManager(t)
+		err := manager.Spawn(context.Background(), root, SpawnOptions{Name: "watcher", Harness: "codex"})
+		if err == nil || !strings.Contains(err.Error(), "reserved") {
+			t.Fatalf("Spawn() error = %v", err)
+		}
+		if slicesContain(client.calls, "create-tab") {
+			t.Fatalf("calls = %v, want no tab creation", client.calls)
+		}
+	})
+}
+
+func expectedWorkerPrompt(root, agent, task string) string {
+	prompt := agentMessagingContext + `
+
+Watcher status reporting:
+- Append status updates to this worker-specific file: ` + statedir.StatusFile(root, testSessionName, agent) + `
+- Format each line as <verb>: <detail>, where <verb> is exactly one of: working|done|needs-decision|blocked|failed|paused
+- The status file is append-only; never overwrite or truncate it.
+- Status-file reporting supplements, and does not replace, Fledge progress and completion messaging to the orchestrator.`
+	if task != "" {
+		prompt += "\n\nYour task:\n" + task
+	}
+	return prompt
 }
 
 func TestStopAgentClosesNamedAgentPane(t *testing.T) {
@@ -2038,6 +2159,9 @@ func newTestManager(client *fakeHerdr, confirmer *fakeConfirmer) (*Manager, *byt
 	var output bytes.Buffer
 	manager := NewManager(client, confirmer, nil, &output)
 	manager.random = bytes.NewReader(make([]byte, 16))
+	manager.watchLauncher = func(string) error { return nil }
+	manager.watchRunner = func(context.Context, watchproc.Options) error { return nil }
+	manager.watchStopper = func(string, string) error { return nil }
 	return manager, &output
 }
 
@@ -2229,6 +2353,8 @@ func (f *fakeHerdr) List(context.Context) ([]herdr.Session, error) {
 	f.listCalls++
 	return f.sessions, f.listErr
 }
+
+func (f *fakeHerdr) Protocol(context.Context) (int, error) { return 19, nil }
 
 func (f *fakeHerdr) Stop(ctx context.Context, name string) error {
 	f.calls = append(f.calls, "stop")

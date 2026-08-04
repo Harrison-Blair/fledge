@@ -20,6 +20,7 @@ type sessionManager interface {
 	SendMessage(context.Context, string, string, string) (messaging.Message, error)
 	ReplyMessage(context.Context, string, string, string) (messaging.Message, error)
 	MessageInbox(context.Context, string, string) ([]messaging.Message, error)
+	Watch(context.Context, string, ...lifecycle.WatchOptions) error
 	Stop(context.Context, string) error
 }
 
@@ -62,6 +63,7 @@ func newRootCommand(manager sessionManager, getwd func() (string, error)) *cobra
 	root.AddCommand(newStopCommand(manager, getwd))
 	root.AddCommand(newInitCommand(manager, getwd))
 	root.AddCommand(newAgentCommand(manager, getwd))
+	root.AddCommand(newWatchCommand(manager, getwd))
 
 	return root
 }

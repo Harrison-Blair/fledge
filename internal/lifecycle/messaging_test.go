@@ -91,6 +91,39 @@ func TestSendMessageDeliversAuditedEnvelope(t *testing.T) {
 	}
 }
 
+func TestSendWatcherWakeForcesIdentityAndOrchestratorRecipient(t *testing.T) {
+	t.Parallel()
+	manager, client, root := newMessagingManager(t)
+	manager.getenv = func(string) string { return "foreign-pane" }
+
+	message, err := manager.SendWatcherWake(context.Background(), root, "worker is blocked")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantBody := "worker is blocked"
+	if message.Sender != "watcher" || message.Recipient != "orchestrator" || message.RecipientPane != "p-orchestrator" || message.Body != wantBody || message.Status != messaging.StatusDelivered {
+		t.Fatalf("message = %#v", message)
+	}
+	if len(client.promptCalls) != 1 || client.promptCalls[0].recipient != "orchestrator" {
+		t.Fatalf("PromptAgent calls = %#v", client.promptCalls)
+	}
+	for _, want := range []string{
+		"ID: " + message.ID,
+		"From: watcher",
+		"To: orchestrator",
+		"Body:\n" + wantBody,
+		"Reply: fledge agent message reply " + message.ID + " <text>",
+	} {
+		if !strings.Contains(client.promptCalls[0].prompt, want) {
+			t.Errorf("prompt = %q, want %q", client.promptCalls[0].prompt, want)
+		}
+	}
+	stored, err := messaging.New(root, testSessionName).Get(message.ID)
+	if err != nil || stored != message {
+		t.Fatalf("stored message = %#v, %v", stored, err)
+	}
+}
+
 func TestSendMessageAuthorizationAndRecipientRules(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

@@ -37,9 +37,11 @@ func TestInitCreatesProjectFiles(t *testing.T) {
 	}
 
 	assertFileContents(t, filepath.Join(root, stateDirectory, ".gitignore"), ignoreContents)
+	assertFileContents(t, filepath.Join(root, stateDirectory, watchFilename), defaultWatchContents)
 	assertFileContents(t, filepath.Join(root, ".codex", "rules", "fledge.rules"), codexRulesContents)
 	for _, path := range []string{
 		filepath.Join(root, stateDirectory, configFilename),
+		filepath.Join(root, stateDirectory, watchFilename),
 		filepath.Join(root, stateDirectory, profilesDir, profileFilename),
 		filepath.Join(root, stateDirectory, ".gitignore"),
 		filepath.Join(root, ".codex", "rules", "fledge.rules"),
@@ -52,6 +54,19 @@ func TestInitCreatesProjectFiles(t *testing.T) {
 			t.Errorf("%s permissions = %o, want 644", path, got)
 		}
 	}
+}
+
+func TestInitPreservesExistingWatcherConfig(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	const contents = "{\n  \"enabled\": false,\n  \"future_field\": 7\n}\n"
+	writeStateFile(t, root, watchFilename, contents)
+
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	assertFileContents(t, filepath.Join(root, stateDirectory, watchFilename), contents)
 }
 
 func TestInitPreservesConflictingCodexRulesAndReturnsError(t *testing.T) {

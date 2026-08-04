@@ -28,6 +28,11 @@ type SpawnOptions struct {
 	ModelSet   bool
 }
 
+// WatchOptions controls how the session watcher presents its decision log.
+type WatchOptions struct {
+	Daemon bool
+}
+
 func (o StartOptions) HasSelection() bool {
 	return o.HarnessSet || o.ModelSet || o.TimeoutSet || len(o.NativeArgs) > 0
 }
