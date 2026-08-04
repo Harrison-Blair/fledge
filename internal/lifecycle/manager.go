@@ -149,6 +149,14 @@ func NewManager(client Herdr, confirmer Confirmer, input io.Reader, output io.Wr
 	return manager
 }
 
+// SetOutput redirects the manager's plain output. The writer passed to
+// NewManager still decides whether the interactive picker is available, so
+// callers that need terminal detection must construct with the real file and
+// redirect afterwards.
+func (m *Manager) SetOutput(output io.Writer) {
+	m.output = output
+}
+
 // sessionLogger opens the session's debug log. Logging must never break a
 // lifecycle operation, so on failure it warns on output and discards records.
 func (m *Manager) sessionLogger(root, session string) (*slog.Logger, func()) {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,24 @@ func TestRootCommandShowsHelp(t *testing.T) {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("help output = %q, want %q", output.String(), expected)
 		}
+	}
+}
+
+func TestRootCommandCapturesManagerOutput(t *testing.T) {
+	t.Parallel()
+
+	project := t.TempDir()
+	manager := lifecycle.NewManager(nil, nil, nil, io.Discard)
+	command := newRootCommand(manager, func() (string, error) { return project, nil })
+	var output bytes.Buffer
+	command.SetOut(&output)
+	command.SetArgs([]string{"init", project})
+
+	if err := command.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !strings.Contains(output.String(), "Initialized Fledge project in") {
+		t.Errorf("output = %q, want the Manager's own output captured by SetOut", output.String())
 	}
 }
 
@@ -588,6 +607,7 @@ type fakeManager struct {
 	replyErr       error
 	inboxErr       error
 	inboxIdentity  string
+	output         io.Writer
 }
 
 type messageSendCall struct{ dir, recipient, body string }
@@ -603,6 +623,10 @@ func (f *fakeManager) Start(_ context.Context, dir string, options lifecycle.Sta
 	f.startDirs = append(f.startDirs, dir)
 	f.startOptions = append(f.startOptions, options)
 	return f.startErr
+}
+
+func (f *fakeManager) SetOutput(output io.Writer) {
+	f.output = output
 }
 
 func (f *fakeManager) Stop(_ context.Context, dir string) error {
