@@ -1,8 +1,6 @@
 package cmd
 
 import (
-	"fmt"
-
 	"github.com/Harrison-Blair/fledge/internal/lifecycle"
 	"github.com/spf13/cobra"
 )
@@ -14,9 +12,9 @@ func newWatchCommand(manager sessionManager, getwd func() (string, error)) *cobr
 		Short: "Monitor this directory's Fledge session",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			dir, err := getwd()
+			dir, err := currentDirectory(getwd)
 			if err != nil {
-				return fmt.Errorf("get current directory: %w", err)
+				return err
 			}
 			return manager.Watch(cmd.Context(), dir, options)
 		},

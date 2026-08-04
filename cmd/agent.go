@@ -111,14 +111,6 @@ func newMessageInboxCommand(manager sessionManager, getwd func() (string, error)
 	}
 }
 
-func currentDirectory(getwd func() (string, error)) (string, error) {
-	dir, err := getwd()
-	if err != nil {
-		return "", fmt.Errorf("get current directory: %w", err)
-	}
-	return dir, nil
-}
-
 func writeInbox(cmd *cobra.Command, messages []messaging.Message, identity string) error {
 	if len(messages) == 0 {
 		_, err := fmt.Fprintln(cmd.OutOrStdout(), "Inbox is empty.")
@@ -155,9 +147,9 @@ func newAgentStopCommand(manager sessionManager, getwd func() (string, error)) *
 		Short: "Stop an agent and close its pane",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			dir, err := getwd()
+			dir, err := currentDirectory(getwd)
 			if err != nil {
-				return fmt.Errorf("get current directory: %w", err)
+				return err
 			}
 			return manager.StopAgent(cmd.Context(), dir, args[0])
 		},
@@ -174,9 +166,9 @@ func newAgentSpawnCommand(manager sessionManager, getwd func() (string, error)) 
 			if len(args) > 0 && cmd.ArgsLenAtDash() != 0 {
 				return fmt.Errorf("native agent arguments must follow --")
 			}
-			dir, err := getwd()
+			dir, err := currentDirectory(getwd)
 			if err != nil {
-				return fmt.Errorf("get current directory: %w", err)
+				return err
 			}
 			options.NativeArgs = append([]string(nil), args...)
 			options.ModelSet = cmd.Flags().Changed("model")

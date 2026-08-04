@@ -17,9 +17,9 @@ func newStartCommand(manager sessionManager, getwd func() (string, error)) *cobr
 			if len(args) > 0 && cmd.ArgsLenAtDash() != 0 {
 				return fmt.Errorf("native agent arguments must follow --")
 			}
-			dir, err := getwd()
+			dir, err := currentDirectory(getwd)
 			if err != nil {
-				return fmt.Errorf("get current directory: %w", err)
+				return err
 			}
 			options.NativeArgs = append([]string(nil), args...)
 			options.HarnessSet = cmd.Flags().Changed("harness")

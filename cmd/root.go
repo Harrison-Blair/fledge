@@ -24,18 +24,13 @@ type sessionManager interface {
 	Stop(context.Context, string) error
 }
 
-func directoryCommandHandler(
-	getwd func() (string, error),
-	operation func(context.Context, string) error,
-) func(*cobra.Command, []string) error {
-	return func(cmd *cobra.Command, _ []string) error {
-		dir, err := getwd()
-		if err != nil {
-			return fmt.Errorf("get current directory: %w", err)
-		}
-
-		return operation(cmd.Context(), dir)
+// currentDirectory resolves the invocation directory every command needs.
+func currentDirectory(getwd func() (string, error)) (string, error) {
+	dir, err := getwd()
+	if err != nil {
+		return "", fmt.Errorf("get current directory: %w", err)
 	}
+	return dir, nil
 }
 
 // Execute runs the root command.
