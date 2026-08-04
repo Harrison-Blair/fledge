@@ -69,6 +69,7 @@ type Client struct {
 	stdin  io.Reader
 	stdout io.Writer
 	stderr io.Writer
+	now    func() time.Time
 }
 
 const initialLayoutSettleTime = 100 * time.Millisecond
@@ -80,6 +81,7 @@ func NewClient(binary string, stdin io.Reader, stdout, stderr io.Writer) *Client
 		stdin:  stdin,
 		stdout: stdout,
 		stderr: stderr,
+		now:    time.Now,
 	}
 }
 
@@ -150,13 +152,18 @@ func (c *Client) WaitReady(ctx context.Context, name string, timeout time.Durati
 				return snapshot, nil
 			}
 			if emptySince.IsZero() {
-				emptySince = time.Now()
-			} else if time.Since(emptySince) >= initialLayoutSettleTime {
+				emptySince = c.now()
+			} else if c.now().Sub(emptySince) >= initialLayoutSettleTime {
 				return snapshot, nil
 			}
 			lastErr = errors.New("snapshot has no initial tab and pane")
-		} else if ctx.Err() == nil {
-			lastErr = err
+		} else {
+			// A failed poll says nothing about the layout, so the settle window
+			// must restart from the next empty snapshot.
+			emptySince = time.Time{}
+			if ctx.Err() == nil {
+				lastErr = err
+			}
 		}
 
 		select {

@@ -47,10 +47,11 @@ func profilePath(root string) string {
 }
 
 // EnsureGeneratedOrchestratorPrompt writes the reusable rendered coordinator
-// prompt when its contents changed and returns its stable project-relative path.
+// prompt when its contents changed and returns its absolute path. Harnesses
+// resolve the returned path from their own pane working directory, so a
+// project-relative reference would silently miss the file.
 func EnsureGeneratedOrchestratorPrompt(root, instructions string) (string, error) {
-	reference := filepath.Join(stateDirectory, profilesDir, generatedProfilesDir, generatedOrchestratorFilename)
-	path := filepath.Join(root, reference)
+	path := filepath.Join(root, stateDirectory, profilesDir, generatedProfilesDir, generatedOrchestratorFilename)
 	if err := rejectGeneratedPromptSymlink(path); err != nil {
 		return "", err
 	}
@@ -59,7 +60,7 @@ func EnsureGeneratedOrchestratorPrompt(root, instructions string) (string, error
 		if err := os.Chmod(path, 0o600); err != nil {
 			return "", fmt.Errorf("protect generated orchestrator prompt %q: %w", path, err)
 		}
-		return reference, nil
+		return path, nil
 	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("read generated orchestrator prompt %q: %w", path, err)
@@ -86,7 +87,7 @@ func EnsureGeneratedOrchestratorPrompt(root, instructions string) (string, error
 	if closeErr != nil {
 		return "", fmt.Errorf("close generated orchestrator prompt %q: %w", path, closeErr)
 	}
-	return reference, nil
+	return path, nil
 }
 
 func rejectGeneratedPromptSymlink(path string) error {
