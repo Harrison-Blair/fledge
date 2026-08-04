@@ -27,10 +27,9 @@ const (
 	// LogFilename is the attached watcher's human-readable decision log.
 	LogFilename = "watch.log"
 
-	lockFilename   = "watch.lock"
-	pidFilename    = "watch.pid"
-	beaconFilename = "beacon"
-	tailInterval   = 100 * time.Millisecond
+	lockFilename = "watch.lock"
+	pidFilename  = "watch.pid"
+	tailInterval = 100 * time.Millisecond
 )
 
 // Herdr is the watcher-facing subset of the Herdr client.
@@ -95,7 +94,6 @@ func Run(ctx context.Context, options Options) (result error) {
 	defer func() { result = errors.Join(result, owner.release()) }()
 
 	pidPath := filepath.Join(statedir.WatchSession(options.Root, options.Session), pidFilename)
-	beaconPath := filepath.Join(statedir.WatchSession(options.Root, options.Session), beaconFilename)
 	if err := writePID(pidPath); err != nil {
 		return err
 	}
@@ -104,9 +102,6 @@ func Run(ctx context.Context, options Options) (result error) {
 			result = errors.Join(result, fmt.Errorf("remove watcher PID file %q: %w", pidPath, err))
 		}
 	}()
-	if err := createBeacon(beaconPath); err != nil {
-		return err
-	}
 	if err := ensureLogDirectory(options.Root, options.Session); err != nil {
 		return err
 	}
@@ -127,17 +122,12 @@ func Run(ctx context.Context, options Options) (result error) {
 		return err
 	}
 
-	engineHerdr := beaconHerdr{
-		Herdr: options.Herdr,
-		touch: func() error { return touchBeacon(beaconPath, time.Now()) },
-		log:   logger.Log,
-	}
 	ledger := wake.New(options.Root, options.Session)
 	engine := watch.Engine{
 		Root:        options.Root,
 		Session:     options.Session,
 		Config:      config,
-		Herdr:       engineHerdr,
+		Herdr:       options.Herdr,
 		Ledger:      wakeLedger{ledger: ledger},
 		Waker:       deliveryWaker(options.Deliver),
 		Completions: completionAudit{store: messaging.New(options.Root, options.Session)},
@@ -198,23 +188,6 @@ func configureEventStream(ctx context.Context, config watch.Config, client Herdr
 	return config, func(streamCtx context.Context, paneIDs []string, onReady func(), onEvent func(watch.Event)) error {
 		return watch.Subscribe(streamCtx, dial, paneIDs, onReady, onEvent)
 	}
-}
-
-type beaconHerdr struct {
-	Herdr watch.Herdr
-	touch func() error
-	log   func(string)
-}
-
-func (h beaconHerdr) List(ctx context.Context) ([]herdr.Session, error) {
-	if err := h.touch(); err != nil && h.log != nil {
-		h.log(fmt.Sprintf("touch watcher beacon: %v", err))
-	}
-	return h.Herdr.List(ctx)
-}
-
-func (h beaconHerdr) Snapshot(ctx context.Context, session string) (herdr.Snapshot, error) {
-	return h.Herdr.Snapshot(ctx, session)
 }
 
 type lineLogger struct {

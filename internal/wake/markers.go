@@ -25,13 +25,18 @@ type StatusSeen struct {
 // already woken for. It is advisory — a lost or unreadable markers file costs
 // at most a duplicate wake, so decoding never fails.
 type Markers struct {
-	Version         int                   `json:"version"`
-	StatusSeen      map[string]StatusSeen `json:"status_seen"`
-	EventEscalated  map[string]bool       `json:"event_escalated"`
-	DoneGrace       map[string]int64      `json:"done_grace"`
-	KnownAgents     []string              `json:"known_agents"`
-	LastWakeUnix    int64                 `json:"last_wake_unix"`
-	HeartbeatStreak int                   `json:"heartbeat_streak"`
+	Version    int                   `json:"version"`
+	StatusSeen map[string]StatusSeen `json:"status_seen"`
+	// Terminal names the workers that already reported done or failed. It is
+	// suppression state like the rest: held here rather than in the watcher
+	// process so a restart does not report a finished worker as vanished, and
+	// so the rollback that retries an unqueued observation retracts it too.
+	Terminal        map[string]bool  `json:"terminal,omitempty"`
+	EventEscalated  map[string]bool  `json:"event_escalated"`
+	DoneGrace       map[string]int64 `json:"done_grace"`
+	KnownAgents     []string         `json:"known_agents"`
+	LastWakeUnix    int64            `json:"last_wake_unix"`
+	HeartbeatStreak int              `json:"heartbeat_streak"`
 }
 
 // LoadMarkers returns the stored suppression markers. A missing, unreadable, or

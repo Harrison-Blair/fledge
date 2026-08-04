@@ -11,23 +11,19 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/watch"
 )
 
+// wakeLedger adapts the durable ledger to the engine's Ledger interface. The
+// two speak the same types, so the only translation left is the corruption
+// sentinel the engine degrades on.
 type wakeLedger struct{ ledger *wake.Ledger }
 
 func (l wakeLedger) Append(kind watch.WakeKind, key, reason string) (watch.WakeRecord, error) {
-	record, err := l.ledger.Append(wake.Kind(kind), key, reason)
-	return toWatchRecord(record), mapLedgerError(err)
+	record, err := l.ledger.Append(kind, key, reason)
+	return record, mapLedgerError(err)
 }
 
 func (l wakeLedger) Pending() ([]watch.WakeRecord, error) {
 	records, err := l.ledger.Pending()
-	if err != nil {
-		return nil, mapLedgerError(err)
-	}
-	result := make([]watch.WakeRecord, 0, len(records))
-	for _, record := range records {
-		result = append(result, toWatchRecord(record))
-	}
-	return result, nil
+	return records, mapLedgerError(err)
 }
 
 func (l wakeLedger) MarkDelivered(ids []string, messageID string) error {
@@ -38,54 +34,11 @@ func (l wakeLedger) Compact() error { return mapLedgerError(l.ledger.Compact()) 
 
 func (l wakeLedger) LoadMarkers() (watch.Markers, error) {
 	markers, err := l.ledger.LoadMarkers()
-	return watch.Markers{
-		StatusSeen:      toWatchStatusSeen(markers.StatusSeen),
-		EventEscalated:  markers.EventEscalated,
-		DoneGrace:       markers.DoneGrace,
-		KnownAgents:     markers.KnownAgents,
-		LastWakeUnix:    markers.LastWakeUnix,
-		HeartbeatStreak: markers.HeartbeatStreak,
-	}, mapLedgerError(err)
+	return markers, mapLedgerError(err)
 }
 
 func (l wakeLedger) SaveMarkers(markers watch.Markers) error {
-	return mapLedgerError(l.ledger.SaveMarkers(wake.Markers{
-		StatusSeen:      toWakeStatusSeen(markers.StatusSeen),
-		EventEscalated:  markers.EventEscalated,
-		DoneGrace:       markers.DoneGrace,
-		KnownAgents:     markers.KnownAgents,
-		LastWakeUnix:    markers.LastWakeUnix,
-		HeartbeatStreak: markers.HeartbeatStreak,
-	}))
-}
-
-func toWatchRecord(record wake.Record) watch.WakeRecord {
-	return watch.WakeRecord{
-		ID: record.ID, IDs: append([]string(nil), record.IDs...), Kind: watch.WakeKind(record.WakeKind),
-		Key: record.Key, Reason: record.Reason,
-	}
-}
-
-func toWatchStatusSeen(values map[string]wake.StatusSeen) map[string]watch.StatusSeen {
-	if values == nil {
-		return nil
-	}
-	result := make(map[string]watch.StatusSeen, len(values))
-	for name, seen := range values {
-		result[name] = watch.StatusSeen{Size: seen.Size, MtimeUnix: seen.MtimeUnix, Offset: seen.Offset}
-	}
-	return result
-}
-
-func toWakeStatusSeen(values map[string]watch.StatusSeen) map[string]wake.StatusSeen {
-	if values == nil {
-		return nil
-	}
-	result := make(map[string]wake.StatusSeen, len(values))
-	for name, seen := range values {
-		result[name] = wake.StatusSeen{Size: seen.Size, MtimeUnix: seen.MtimeUnix, Offset: seen.Offset}
-	}
-	return result
+	return mapLedgerError(l.ledger.SaveMarkers(markers))
 }
 
 func mapLedgerError(err error) error {

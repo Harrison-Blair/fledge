@@ -101,10 +101,39 @@ func TestRunForegroundLogsToOutputAndOwnerOnlyFile(t *testing.T) {
 	}
 	assertPermission(t, logPath, 0o600)
 	assertPermission(t, filepath.Join(statedir.WatchSession(root, testSession), lockFilename), 0o600)
-	assertPermission(t, filepath.Join(statedir.WatchSession(root, testSession), beaconFilename), 0o600)
 	if _, err := os.Stat(filepath.Join(statedir.WatchSession(root, testSession), pidFilename)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("watch.pid after exit: %v, want absent", err)
 	}
+}
+
+func TestEnsureStateDirectoriesLeavesTheStateRootBrowsable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permissions are not available on Windows")
+	}
+
+	// .fledge is user-facing: project.Init creates it 0755 and people browse
+	// it. Tightening it to 0700 fights that, and it is the state below it —
+	// not the directory itself — that the watcher keeps to itself.
+	t.Run("existing root is left alone", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.MkdirAll(statedir.Root(root), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := ensureStateDirectories(root, testSession); err != nil {
+			t.Fatal(err)
+		}
+		assertPermission(t, statedir.Root(root), 0o755)
+		assertPermission(t, statedir.WatchSession(root, testSession), 0o700)
+	})
+
+	t.Run("missing root is created browsable", func(t *testing.T) {
+		root := t.TempDir()
+		if err := ensureLogDirectory(root, testSession); err != nil {
+			t.Fatal(err)
+		}
+		assertPermission(t, statedir.Root(root), 0o755)
+		assertPermission(t, statedir.Session(root, testSession), 0o700)
+	})
 }
 
 func TestRunDaemonExitsNilWhenSingletonIsHeld(t *testing.T) {
@@ -218,11 +247,6 @@ func TestRunWritesPIDAndTouchesBeaconDuringCycle(t *testing.T) {
 		t.Fatalf("watch.pid = %q", contents)
 	}
 	assertPermission(t, pidPath, 0o600)
-	beaconPath := filepath.Join(statedir.WatchSession(root, testSession), beaconFilename)
-	info, err := os.Stat(beaconPath)
-	if err != nil || info.ModTime().IsZero() {
-		t.Fatalf("beacon stat = %v, %v", info, err)
-	}
 
 	cancel()
 	if err := <-done; !errors.Is(err, context.Canceled) {
@@ -297,19 +321,6 @@ func TestUnavailableSocketDisablesEventsButStillPolls(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "event stream disabled") || !strings.Contains(output.String(), "socket") {
 		t.Fatalf("output = %q", output.String())
-	}
-}
-
-func TestBeaconHerdrTouchesExactlyOncePerList(t *testing.T) {
-	count := 0
-	wrapped := beaconHerdr{
-		Herdr: &staticHerdr{},
-		touch: func() error { count++; return nil },
-	}
-	_, _ = wrapped.List(context.Background())
-	_, _ = wrapped.List(context.Background())
-	if count != 2 {
-		t.Fatalf("beacon touches = %d, want one per List", count)
 	}
 }
 

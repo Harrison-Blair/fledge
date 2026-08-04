@@ -25,7 +25,6 @@ const (
 // Event is one Herdr pane.agent_status_changed notification.
 type Event struct {
 	PaneID      string
-	WorkspaceID string
 	AgentStatus string
 	Agent       string
 }
@@ -168,7 +167,6 @@ func decodeEventLine(line []byte) (Event, bool) {
 		Event string `json:"event"`
 		Data  struct {
 			PaneID      string `json:"pane_id"`
-			WorkspaceID string `json:"workspace_id"`
 			AgentStatus string `json:"agent_status"`
 			Agent       string `json:"agent"`
 		} `json:"data"`
@@ -185,7 +183,6 @@ func decodeEventLine(line []byte) (Event, bool) {
 
 	return Event{
 		PaneID:      message.Data.PaneID,
-		WorkspaceID: message.Data.WorkspaceID,
 		AgentStatus: message.Data.AgentStatus,
 		Agent:       message.Data.Agent,
 	}, true

@@ -52,7 +52,7 @@ func TestDecodeEventLine(t *testing.T) {
 		{
 			name:   "complete event",
 			line:   eventLine,
-			want:   Event{PaneID: "p1", WorkspaceID: "w1", AgentStatus: "blocked", Agent: "reviewer"},
+			want:   Event{PaneID: "p1", AgentStatus: "blocked", Agent: "reviewer"},
 			wantOK: true,
 		},
 		{
@@ -108,8 +108,8 @@ func TestSubscribeStreamsEventsUntilTheServerCloses(t *testing.T) {
 	}
 
 	want := []Event{
-		{PaneID: "p1", WorkspaceID: "w1", AgentStatus: "blocked", Agent: "reviewer"},
-		{PaneID: "p2", WorkspaceID: "w1", AgentStatus: "working", Agent: "migrator"},
+		{PaneID: "p1", AgentStatus: "blocked", Agent: "reviewer"},
+		{PaneID: "p2", AgentStatus: "working", Agent: "migrator"},
 	}
 	if len(events) != len(want) {
 		t.Fatalf("Subscribe() delivered %d events (%+v), want %d", len(events), events, len(want))

@@ -71,6 +71,15 @@ func TestLoadConfig(t *testing.T) {
 		{name: "json array", write: true, contents: `[1,2]`, want: defaults},
 		{name: "event stream false honored", write: true, contents: `{"event_stream":false}`, want: streamless},
 		{
+			// A negative duration is not a shorter one: it inverts the windows
+			// the engine derives from it, so it falls back like a wrong type.
+			name:     "negative durations keep their defaults",
+			write:    true,
+			contents: `{"poll_interval_seconds":-1,"idle_poll_interval_seconds":-2,"signal_grace_seconds":-3,"heartbeat_seconds":-4,"heartbeat_max_seconds":-5,"wake_min_interval_seconds":-6,"done_message_grace_seconds":-7}`,
+			want:     defaults,
+		},
+		{name: "a negative duration keeps its neighbours", write: true, contents: `{"enabled":false,"done_message_grace_seconds":-7}`, want: disabled},
+		{
 			name:     "every field set",
 			write:    true,
 			contents: `{"version":2,"enabled":false,"poll_interval_seconds":1,"idle_poll_interval_seconds":2,"signal_grace_seconds":3,"heartbeat_seconds":4,"heartbeat_max_seconds":5,"wake_min_interval_seconds":6,"done_message_grace_seconds":7,"event_stream":false,"min_protocol":8}`,

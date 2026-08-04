@@ -10,6 +10,7 @@ func fullMarkers() Markers {
 	return Markers{
 		Version:         markersVersion,
 		StatusSeen:      map[string]StatusSeen{"alice": {Size: 128, MtimeUnix: 1754300000, Offset: 96}},
+		Terminal:        map[string]bool{"alice": true},
 		EventEscalated:  map[string]bool{"%3": true},
 		DoneGrace:       map[string]int64{"bob": 1754300090},
 		KnownAgents:     []string{"alice", "bob"},
@@ -32,9 +33,16 @@ func TestDecodeMarkersToleratesUnusableContents(t *testing.T) {
 		{name: "missing version", contents: `{"heartbeat_streak":3}`, want: emptyMarkers()},
 		{name: "future version", contents: `{"version":99,"heartbeat_streak":3}`, want: emptyMarkers()},
 		{
-			name:     "valid",
+			// Markers written before terminal state was persisted are still the
+			// current version and must keep the rest of their suppression state.
+			name:     "valid without terminal state",
 			contents: `{"version":1,"known_agents":["alice"],"heartbeat_streak":3}`,
 			want:     Markers{Version: markersVersion, KnownAgents: []string{"alice"}, HeartbeatStreak: 3},
+		},
+		{
+			name:     "valid with terminal state",
+			contents: `{"version":1,"terminal":{"alice":true},"heartbeat_streak":3}`,
+			want:     Markers{Version: markersVersion, Terminal: map[string]bool{"alice": true}, HeartbeatStreak: 3},
 		},
 	}
 	for _, test := range tests {

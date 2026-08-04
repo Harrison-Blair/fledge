@@ -15,14 +15,31 @@ import (
 )
 
 func ensureStateDirectories(root, session string) error {
+	if err := ensureStateRoot(root); err != nil {
+		return err
+	}
 	return ensureDirectories(
-		statedir.Root(root), statedir.Temp(root),
-		statedir.TempSession(root, session), statedir.WatchSession(root, session),
+		statedir.Temp(root), statedir.TempSession(root, session), statedir.WatchSession(root, session),
 	)
 }
 
 func ensureLogDirectory(root, session string) error {
-	return ensureDirectories(statedir.Root(root), statedir.Logs(root), statedir.Session(root, session))
+	if err := ensureStateRoot(root); err != nil {
+		return err
+	}
+	return ensureDirectories(statedir.Logs(root), statedir.Session(root, session))
+}
+
+// ensureStateRoot creates .fledge if the watcher got there before the project
+// did. The directory is user-facing — project.Init creates it 0755 and people
+// browse it — so the watcher creates it that way and never re-modes an
+// existing one. Only the state below it is the watcher's to keep owner-only.
+func ensureStateRoot(root string) error {
+	path := statedir.Root(root)
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return fmt.Errorf("create watch directory %q: %w", path, err)
+	}
+	return inspectDirectory(path)
 }
 
 func ensureDirectories(paths ...string) error {
@@ -30,18 +47,25 @@ func ensureDirectories(paths ...string) error {
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			return fmt.Errorf("create watch directory %q: %w", path, err)
 		}
-		info, err := os.Lstat(path)
-		switch {
-		case err != nil:
-			return fmt.Errorf("inspect watch directory %q: %w", path, err)
-		case info.Mode()&os.ModeSymlink != 0:
-			return fmt.Errorf("watch directory %q must not be a symlink", path)
-		case !info.IsDir():
-			return fmt.Errorf("watch path %q is not a directory", path)
+		if err := inspectDirectory(path); err != nil {
+			return err
 		}
 		if err := os.Chmod(path, 0o700); err != nil {
 			return fmt.Errorf("secure watch directory %q: %w", path, err)
 		}
+	}
+	return nil
+}
+
+func inspectDirectory(path string) error {
+	info, err := os.Lstat(path)
+	switch {
+	case err != nil:
+		return fmt.Errorf("inspect watch directory %q: %w", path, err)
+	case info.Mode()&os.ModeSymlink != 0:
+		return fmt.Errorf("watch directory %q must not be a symlink", path)
+	case !info.IsDir():
+		return fmt.Errorf("watch path %q is not a directory", path)
 	}
 	return nil
 }
@@ -54,28 +78,6 @@ func writePID(path string) error {
 	_, writeErr := io.WriteString(file, strconv.Itoa(os.Getpid())+"\n")
 	closeErr := file.Close()
 	return errors.Join(writeErr, closeErr)
-}
-
-func createBeacon(path string) error {
-	file, err := openOwned(path, os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		return fmt.Errorf("create watcher beacon %q: %w", path, err)
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	return touchBeacon(path, time.Now())
-}
-
-func touchBeacon(path string, at time.Time) error {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return err
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return fmt.Errorf("watcher beacon %q is not a regular file", path)
-	}
-	return os.Chtimes(path, at, at)
 }
 
 func followLog(ctx context.Context, root, session string, output io.Writer, interval time.Duration) error {

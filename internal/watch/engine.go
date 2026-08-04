@@ -13,6 +13,7 @@ import (
 
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/statedir"
+	"github.com/Harrison-Blair/fledge/internal/wake"
 )
 
 const (
@@ -27,6 +28,17 @@ const (
 	// the loop into a hot spin. The config layer honours an explicit zero; the
 	// engine is what refuses to act on it.
 	minIntervalSeconds = 1
+
+	// eventsDisabledFor is how many poll budgets the engine stands the event
+	// stream down for once it runs out of strikes.
+	eventsDisabledFor = 10
+
+	// herdrCallTimeout and deliverTimeout bound the cycle's calls out of the
+	// process. Neither the Herdr CLI nor the message store answers on a
+	// deadline of its own, and a single wedged call would otherwise stall
+	// supervision for as long as the subprocess sulks.
+	herdrCallTimeout = 30 * time.Second
+	deliverTimeout   = 60 * time.Second
 )
 
 // ErrCorruptLog reports that the durable wake ledger can no longer be trusted.
@@ -34,44 +46,28 @@ const (
 // this one so the engine can degrade instead of crash-looping.
 var ErrCorruptLog = errors.New("corrupt wake ledger")
 
-// WakeKind classifies why the watcher wants to wake the orchestrator.
-type WakeKind string
-
-const (
-	KindStatus    WakeKind = "status"
-	KindEvent     WakeKind = "event"
-	KindDead      WakeKind = "dead"
-	KindHeartbeat WakeKind = "heartbeat"
+// The engine speaks the wake package's vocabulary directly: the durable ledger
+// is the only producer and consumer of these values, and a second declaration
+// bridged by converters means every new field is one missed edit away from
+// being silently dropped.
+type (
+	// WakeKind classifies why the watcher wants to wake the orchestrator.
+	WakeKind = wake.Kind
+	// WakeRecord is one wake still owed to the orchestrator.
+	WakeRecord = wake.Record
+	// StatusSeen records how far the watcher has consumed one worker's status file.
+	StatusSeen = wake.StatusSeen
+	// Markers is the watcher's suppression state: what it has already seen and
+	// already woken for.
+	Markers = wake.Markers
 )
 
-// WakeRecord is one wake still owed to the orchestrator. Wakes for the same
-// kind and key collapse into a single record carrying the latest reason, so
-// IDs holds every ledger entry the record speaks for.
-type WakeRecord struct {
-	ID     string
-	IDs    []string
-	Kind   WakeKind
-	Key    string
-	Reason string
-}
-
-// StatusSeen records how far the watcher has consumed one worker's status file.
-type StatusSeen struct {
-	Size      int64
-	MtimeUnix int64
-	Offset    int64
-}
-
-// Markers is the watcher's suppression state: what it has already seen and
-// already woken for.
-type Markers struct {
-	StatusSeen      map[string]StatusSeen
-	EventEscalated  map[string]bool
-	DoneGrace       map[string]int64
-	KnownAgents     []string
-	LastWakeUnix    int64
-	HeartbeatStreak int
-}
+const (
+	KindStatus    = wake.KindStatus
+	KindEvent     = wake.KindEvent
+	KindDead      = wake.KindDead
+	KindHeartbeat = wake.KindHeartbeat
+)
 
 // Ledger is the durable wake queue the engine appends to before it advances
 // any suppression marker.
@@ -124,12 +120,12 @@ type Engine struct {
 	Timeout     func(context.Context, time.Duration) (context.Context, context.CancelFunc)
 	Log         func(message string)
 
-	started        time.Time
-	terminal       map[string]bool
-	queue          []WakeRecord
-	degraded       bool
-	failures       int
-	eventsDisabled bool
+	started             time.Time
+	queue               []WakeRecord
+	degraded            bool
+	memoryMarkers       Markers
+	failures            int
+	eventsDisabledUntil time.Time
 }
 
 // supervised is one worker the engine is watching this cycle.
@@ -168,7 +164,7 @@ func (e *Engine) cycle(ctx context.Context) (bool, error) {
 		return false, err
 	}
 
-	sessions, err := e.Herdr.List(ctx)
+	sessions, err := e.listSessions(ctx)
 	if err != nil {
 		e.logf("list Herdr sessions: %v", err)
 		e.wait(ctx, e.pollInterval())
@@ -179,7 +175,7 @@ func (e *Engine) cycle(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 
-	snapshot, err := e.Herdr.Snapshot(ctx, e.Session)
+	snapshot, err := e.snapshot(ctx)
 	if err != nil {
 		e.logf("snapshot session %s: %v", e.Session, err)
 		e.wait(ctx, e.pollInterval())
@@ -228,9 +224,6 @@ func (e *Engine) cycle(ctx context.Context) (bool, error) {
 }
 
 func (e *Engine) init() {
-	if e.terminal == nil {
-		e.terminal = make(map[string]bool)
-	}
 	if e.started.IsZero() {
 		e.started = e.Now()
 	}
@@ -298,13 +291,13 @@ func (e *Engine) readStatus(name string, markers *Markers) []pendingWake {
 		switch ClassifyStatus(verb) {
 		case ActionWake:
 			delete(markers.DoneGrace, name)
-			e.terminal[name] = verb == verbFailed
+			markers.Terminal[name] = verb == verbFailed
 			wakes = append(wakes, pendingWake{kind: KindStatus, key: name, reason: statusReason(name, verb, detail)})
 		case ActionAbsorb:
 			delete(markers.DoneGrace, name)
 			e.logf("absorbed: %s", statusReason(name, verb, detail))
 		case ActionWakeAfterGrace:
-			e.terminal[name] = true
+			markers.Terminal[name] = true
 			if _, waiting := markers.DoneGrace[name]; !waiting {
 				markers.DoneGrace[name] = e.Now().Unix()
 				e.logf("%s reported done; holding for the completion message", name)
@@ -401,16 +394,20 @@ func (e *Engine) detectDeparted(workers []supervised, markers *Markers) []pendin
 			continue
 		}
 
+		terminal := markers.Terminal[name]
 		delete(markers.StatusSeen, name)
-		if e.terminal[name] {
+		delete(markers.Terminal, name)
+		if terminal {
 			continue
 		}
 		if _, waiting := markers.DoneGrace[name]; waiting {
 			continue
 		}
 
-		lookback := time.Duration(e.Config.DoneMessageGraceSeconds) * time.Second
-		completed, err := e.Completions.CompletionSince(name, e.started.Add(-lookback))
+		// The whole session is searched rather than a window anchored on this
+		// process's start: the question is whether the worker ever messaged the
+		// orchestrator, and a restart must not re-report the ones that did.
+		completed, err := e.Completions.CompletionSince(name, time.Time{})
 		if err != nil {
 			e.logf("read completion log for %s: %v", name, err)
 			continue
@@ -511,6 +508,7 @@ func (e *Engine) watchEvents(ctx context.Context, workers []supervised, markers 
 		func(event Event) { e.handleEvent(ctx, event, markers, names) },
 	)
 
+	lived := e.Now().Sub(started)
 	switch {
 	case ctx.Err() != nil:
 		return
@@ -518,17 +516,24 @@ func (e *Engine) watchEvents(ctx context.Context, workers []supervised, markers 
 		// The budget elapsed with the stream healthy: a clean end of cycle.
 		e.failures = 0
 		return
-	}
-
-	e.failures++
-	e.logf("event stream failed (%d/%d): %v", e.failures, maxEventFailures, err)
-	if e.failures >= maxEventFailures {
-		e.eventsDisabled = true
-		e.logf("event stream disabled for this process; falling back to polling")
+	case ready && lived >= budget/2:
+		// A subscription that carried events for most of its budget before
+		// ending is Herdr recycling a connection, not a stream the watcher
+		// should give up on. Counting it would let ordinary early EOFs
+		// accumulate into a permanent fallback to slow polling.
+		e.failures = 0
+		e.logf("event stream ended after %s of its %s budget: %v", lived, budget, err)
+	default:
+		e.failures++
+		e.logf("event stream failed (%d/%d): %v", e.failures, maxEventFailures, err)
+		if e.failures >= maxEventFailures {
+			e.eventsDisabledUntil = e.Now().Add(eventsDisabledFor * budget)
+			e.logf("event stream disabled until %s; falling back to polling", e.eventsDisabledUntil.Format(time.RFC3339))
+		}
 	}
 
 	// Serve out the rest of the budget so a refused socket cannot spin.
-	if remaining := budget - e.Now().Sub(started); remaining > 0 {
+	if remaining := budget - lived; remaining > 0 {
 		e.wait(ctx, remaining)
 	}
 }
@@ -537,7 +542,7 @@ func (e *Engine) watchEvents(ctx context.Context, workers []supervised, markers 
 // subscription is acknowledged, which is what catches a worker that was
 // already blocked before the watcher started listening.
 func (e *Engine) reconcile(ctx context.Context, markers *Markers) {
-	snapshot, err := e.Herdr.Snapshot(ctx, e.Session)
+	snapshot, err := e.snapshot(ctx)
 	if err != nil {
 		e.logf("reconcile snapshot: %v", err)
 		return
@@ -626,12 +631,12 @@ func (e *Engine) rememberAndLog(wake pendingWake) {
 // keep-latest dedupe the ledger applies.
 func (e *Engine) remember(wake pendingWake) {
 	for i, record := range e.queue {
-		if record.Kind == wake.kind && record.Key == wake.key {
+		if record.WakeKind == wake.kind && record.Key == wake.key {
 			e.queue[i].Reason = wake.reason
 			return
 		}
 	}
-	e.queue = append(e.queue, WakeRecord{Kind: wake.kind, Key: wake.key, Reason: wake.reason})
+	e.queue = append(e.queue, WakeRecord{WakeKind: wake.kind, Key: wake.key, Reason: wake.reason})
 }
 
 // drain sends everything owed in one message, provided the rate window is open.
@@ -650,12 +655,7 @@ func (e *Engine) drain(ctx context.Context, markers *Markers) {
 		reasons = append(reasons, record.Reason)
 	}
 
-	body := ComposeWakeBody(reasons)
-	if body == "" {
-		return
-	}
-
-	messageID, err := e.Waker.Deliver(ctx, body)
+	messageID, err := e.deliver(ctx, ComposeWakeBody(reasons))
 	if err != nil {
 		e.logf("deliver wake: %v; %d wake(s) stay queued", err, len(records))
 		return
@@ -744,9 +744,29 @@ func (e *Engine) noteLedgerError(ctx context.Context, err error) {
 		"Watcher: the wake ledger at %s is corrupt; durable replay is disabled until Fledge is restarted. Supervision continues in memory.\nAutomated watcher notification — do not reply to this message ID.",
 		statedir.WatchSession(e.Root, e.Session),
 	)
-	if _, err := e.Waker.Deliver(ctx, notice); err != nil {
+	if _, err := e.deliver(ctx, notice); err != nil {
 		e.logf("deliver ledger corruption notice: %v", err)
 	}
+}
+
+// --- bounded calls out of the process -----------------------------------
+
+func (e *Engine) listSessions(ctx context.Context) ([]herdr.Session, error) {
+	callCtx, cancel := e.Timeout(ctx, herdrCallTimeout)
+	defer cancel()
+	return e.Herdr.List(callCtx)
+}
+
+func (e *Engine) snapshot(ctx context.Context) (herdr.Snapshot, error) {
+	callCtx, cancel := e.Timeout(ctx, herdrCallTimeout)
+	defer cancel()
+	return e.Herdr.Snapshot(callCtx, e.Session)
+}
+
+func (e *Engine) deliver(ctx context.Context, body string) (string, error) {
+	callCtx, cancel := e.Timeout(ctx, deliverTimeout)
+	defer cancel()
+	return e.Waker.Deliver(callCtx, body)
 }
 
 func (e *Engine) windowOpen(markers Markers) bool {
@@ -759,14 +779,25 @@ func (e *Engine) windowOpen(markers Markers) bool {
 
 // --- markers and helpers ------------------------------------------------
 
+// loadMarkers returns the suppression state this cycle starts from. Once the
+// engine is degraded that state lives in memory only: the wakes it is
+// suppressing live in memory too, so persisting it would let a degraded
+// process that dies take both the wake and the observation behind it.
 func (e *Engine) loadMarkers() Markers {
-	markers, err := e.Ledger.LoadMarkers()
-	if err != nil {
-		e.logf("load watch markers: %v", err)
+	markers := e.memoryMarkers
+	if !e.degraded {
+		stored, err := e.Ledger.LoadMarkers()
+		if err != nil {
+			e.logf("load watch markers: %v", err)
+		}
+		markers = stored
 	}
 
 	if markers.StatusSeen == nil {
 		markers.StatusSeen = make(map[string]StatusSeen)
+	}
+	if markers.Terminal == nil {
+		markers.Terminal = make(map[string]bool)
 	}
 	if markers.EventEscalated == nil {
 		markers.EventEscalated = make(map[string]bool)
@@ -779,6 +810,10 @@ func (e *Engine) loadMarkers() Markers {
 }
 
 func (e *Engine) saveMarkers(markers Markers) {
+	if e.degraded {
+		e.memoryMarkers = markers
+		return
+	}
 	if err := e.Ledger.SaveMarkers(markers); err != nil {
 		e.logf("save watch markers: %v", err)
 	}
@@ -789,6 +824,10 @@ func cloneMarkers(markers Markers) Markers {
 	clone.StatusSeen = make(map[string]StatusSeen, len(markers.StatusSeen))
 	for name, seen := range markers.StatusSeen {
 		clone.StatusSeen[name] = seen
+	}
+	clone.Terminal = make(map[string]bool, len(markers.Terminal))
+	for name, terminal := range markers.Terminal {
+		clone.Terminal[name] = terminal
 	}
 	clone.EventEscalated = make(map[string]bool, len(markers.EventEscalated))
 	for paneID, escalated := range markers.EventEscalated {
@@ -806,8 +845,26 @@ func (e *Engine) statusPath(name string) string {
 	return statedir.StatusFile(e.Root, e.Session, name)
 }
 
+// eventsActive reports whether this cycle should spend its budget on the push
+// stream. A stream that ran out of strikes is stood down for a while rather
+// than for the life of the process: the usual cause is a Herdr that is
+// restarting, and a watcher that polls slowly forever afterwards is a
+// supervision gap nobody sees.
 func (e *Engine) eventsActive() bool {
-	return e.Config.EventStream && !e.eventsDisabled
+	if !e.Config.EventStream {
+		return false
+	}
+	if e.eventsDisabledUntil.IsZero() {
+		return true
+	}
+	if e.Now().Before(e.eventsDisabledUntil) {
+		return false
+	}
+
+	e.eventsDisabledUntil = time.Time{}
+	e.failures = 0
+	e.logf("event stream re-armed; trying the push stream again")
+	return true
 }
 
 func (e *Engine) pollInterval() time.Duration {
@@ -877,7 +934,7 @@ func statusReason(name, verb, detail string) string {
 
 func onlyHeartbeats(records []WakeRecord) bool {
 	for _, record := range records {
-		if record.Kind != KindHeartbeat {
+		if record.WakeKind != KindHeartbeat {
 			return false
 		}
 	}

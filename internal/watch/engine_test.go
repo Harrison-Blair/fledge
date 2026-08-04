@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -408,13 +409,17 @@ func TestCycleLooksBackForACompletionSentBeforeTheDoneLine(t *testing.T) {
 	}
 }
 
-func TestCycleLooksBackBeforeWatcherStartForAVanishedWorkersCompletion(t *testing.T) {
+func TestCycleAcceptsAVanishedWorkersCompletionFromAnyPointInTheSession(t *testing.T) {
 	t.Parallel()
 
+	// The departure question is whether the worker ever messaged the
+	// orchestrator this session, not whether it did so inside a window the
+	// watcher's own start time defines: a window would re-report every worker
+	// that finished before the watcher restarted.
 	h := newHarness(t)
 	h.ledger.markers.KnownAgents = []string{"migrator"}
 	h.snapshot(worker("reviewer", "p2", "working"))
-	h.completions.completed["migrator"] = true
+	h.completions.at["migrator"] = h.start.Add(-24 * time.Hour)
 
 	h.runCycle()
 	h.wantNoDelivery()
@@ -422,9 +427,59 @@ func TestCycleLooksBackBeforeWatcherStartForAVanishedWorkersCompletion(t *testin
 	if len(h.completions.calls) != 1 {
 		t.Fatalf("CompletionSince calls = %+v, want one dead-worker lookup", h.completions.calls)
 	}
-	want := h.start.Add(-time.Duration(h.engine.Config.DoneMessageGraceSeconds) * time.Second)
-	if got := h.completions.calls[0].since; !got.Equal(want) {
-		t.Errorf("CompletionSince(since=%s), want watcher restart lookback %s", got, want)
+	if got := h.completions.calls[0].since; !got.IsZero() {
+		t.Errorf("CompletionSince(since=%s), want the whole session searched", got)
+	}
+}
+
+func TestCycleRemembersATerminalVerbAcrossAWatcherRestart(t *testing.T) {
+	t.Parallel()
+
+	// Terminal state that lives only in the process is lost when the watcher
+	// restarts, and the worker's later departure then reads as a vanishing —
+	// a spurious wake for a failure the orchestrator was already told about.
+	h := newHarness(t)
+	h.snapshot(worker("migrator", "p1", "working"))
+	h.appendStatus("migrator", "failed: build broke")
+	h.runCycle()
+	if body := h.onlyDelivery(); !strings.Contains(body, "migrator failed: build broke") {
+		t.Fatalf("delivered body = %q, want the failure wake", body)
+	}
+
+	h.waker.bodies = nil
+	h.restart()
+	h.snapshot(worker("reviewer", "p2", "working"))
+	h.clock.advance(time.Duration(h.engine.Config.WakeMinIntervalSeconds+1) * time.Second)
+	h.runCycle()
+
+	h.wantNoDelivery()
+}
+
+func TestCycleWakesForAWorkerThatDepartedAfterAnUnqueuedFailure(t *testing.T) {
+	t.Parallel()
+
+	// The rollback that keeps an unqueued observation replayable has to undo
+	// the terminal mark that observation made too. The worker leaves before the
+	// retry, so nothing ever re-reads its status file, and a mark left standing
+	// suppresses the departure wake as well: the failure reaches nobody, ever.
+	h := newHarness(t)
+	h.snapshot(worker("migrator", "p1", "working"), worker("reviewer", "p2", "working"))
+	h.runCycle()
+	h.wantNoDelivery()
+
+	h.appendStatus("migrator", "failed: build broke")
+	h.ledger.appendErr = errors.New("disk full")
+	h.clock.advance(time.Duration(h.engine.Config.WakeMinIntervalSeconds+1) * time.Second)
+	h.runCycle()
+	h.wantNoDelivery()
+
+	h.ledger.appendErr = nil
+	h.snapshot(worker("reviewer", "p2", "working"))
+	h.clock.advance(time.Duration(h.engine.Config.WakeMinIntervalSeconds+1) * time.Second)
+	h.runCycle()
+
+	if body := h.onlyDelivery(); !strings.Contains(body, "migrator") {
+		t.Errorf("delivered body = %q, want the departed worker escalated", body)
 	}
 }
 
@@ -735,6 +790,80 @@ func TestCycleTreatsAnExpiredEventBudgetAsACleanCycle(t *testing.T) {
 	}
 }
 
+func TestCycleForgivesAStreamThatLivedMostOfItsBudget(t *testing.T) {
+	t.Parallel()
+
+	// A stream that carried events for most of its budget and then ended is
+	// Herdr recycling a connection. Counting those as strikes lets three
+	// ordinary early EOFs, hours apart, retire the push stream for good.
+	h := newHarness(t)
+	h.engine.Config.EventStream = true
+	h.snapshot(worker("reviewer", "p1", "working"))
+	h.subscriber.liveFor = h.engine.pollInterval()
+	h.subscriber.err = errors.New("herdr closed the stream")
+
+	for range 4 {
+		h.runCycle()
+	}
+
+	if h.subscriber.calls != 4 {
+		t.Errorf("engine subscribed %d times, want a healthy stretch to clear the failure streak", h.subscriber.calls)
+	}
+}
+
+func TestCycleRetriesTheEventStreamAfterStandingItDown(t *testing.T) {
+	t.Parallel()
+
+	// Giving up on the push stream for the life of the process turns a Herdr
+	// restart into permanently slow supervision, so the stand-down expires.
+	h := newHarness(t)
+	h.engine.Config.EventStream = true
+	h.snapshot(worker("reviewer", "p1", "working"))
+	h.subscriber.err = errors.New("socket refused")
+
+	for range 4 {
+		h.runCycle()
+	}
+	if h.subscriber.calls != 3 {
+		t.Fatalf("engine subscribed %d times, want the stream stood down after 3 failures", h.subscriber.calls)
+	}
+
+	h.clock.advance(eventsDisabledFor * h.engine.pollInterval())
+	h.subscriber.err = nil
+	h.runCycle()
+
+	if h.subscriber.calls != 4 {
+		t.Errorf("engine subscribed %d times, want the stand-down to expire", h.subscriber.calls)
+	}
+}
+
+func TestCycleBoundsEveryCallOutOfTheProcess(t *testing.T) {
+	t.Parallel()
+
+	// A wedged Herdr subprocess or a stalled delivery answers neither with
+	// data nor an error, so only a deadline the engine imposes ends the wait.
+	h := newHarness(t)
+	h.engine.Timeout = context.WithTimeout
+	h.snapshot(worker("reviewer", "p1", "working"))
+	h.appendStatus("reviewer", "blocked: needs a decision")
+
+	h.runCycle()
+
+	budgets := map[string]struct {
+		got  time.Duration
+		want time.Duration
+	}{
+		"List":     {got: h.herdr.listBudget, want: herdrCallTimeout},
+		"Snapshot": {got: h.herdr.snapshotBudget, want: herdrCallTimeout},
+		"Deliver":  {got: h.waker.deliverBudget, want: deliverTimeout},
+	}
+	for name, budget := range budgets {
+		if budget.got <= 0 || budget.got > budget.want {
+			t.Errorf("%s ran with a %s deadline, want one of at most %s", name, budget.got, budget.want)
+		}
+	}
+}
+
 func TestCycleDoesNotHotSpinOnEventFailures(t *testing.T) {
 	t.Parallel()
 
@@ -854,6 +983,56 @@ func TestCycleDegradesWhenTheLedgerIsCorrupt(t *testing.T) {
 	}
 }
 
+func TestDegradedModeReplaysItsObservationsAfterTheWatcherDies(t *testing.T) {
+	t.Parallel()
+
+	// A degraded watcher holds its wakes in memory, so a process that dies
+	// takes them with it. Advancing the stored markers anyway suppresses the
+	// observations behind those wakes forever; leaving the stored markers
+	// where they were is what keeps the guarantee at least-once.
+	h := newHarness(t)
+	h.snapshot(worker("reviewer", "p1", "working"))
+	h.appendStatus("reviewer", "blocked: needs a decision")
+	h.ledger.appendErr = fmt.Errorf("read wake ledger: %w", ErrCorruptLog)
+	h.waker.err = errors.New("orchestrator is gone")
+
+	h.runCycle()
+	h.wantNoDelivery()
+
+	// A fresh watcher over the same stored markers and status file: the wake
+	// the dead process held has to be observed a second time.
+	h.ledger.appendErr = nil
+	h.waker.err = nil
+	h.restart()
+	h.clock.advance(time.Duration(h.engine.Config.WakeMinIntervalSeconds+1) * time.Second)
+	h.runCycle()
+
+	if body := h.onlyDelivery(); !strings.Contains(body, "blocked: needs a decision") {
+		t.Errorf("delivered body = %q, want the lost wake replayed", body)
+	}
+}
+
+func TestCycleFallsBackToTheDefaultDoneGraceWhenTheConfiguredOneIsNegative(t *testing.T) {
+	t.Parallel()
+
+	// A negative grace makes the completion look-back reach into the future,
+	// so every clean finish is reported as a swallowed one.
+	h := newHarness(t)
+	h.writeConfig(`{"done_message_grace_seconds": -5, "event_stream": false}`)
+	h.engine.Config = LoadConfig(h.root)
+	h.snapshot(worker("reviewer", "p1", "working"))
+	h.appendStatus("reviewer", "done: shipped")
+	h.completions.at["reviewer"] = h.clock.Now()
+
+	h.runCycle()
+	h.wantNoDelivery()
+
+	h.clock.advance(time.Duration(h.engine.Config.DoneMessageGraceSeconds+1) * time.Second)
+	h.runCycle()
+
+	h.wantNoDelivery()
+}
+
 func TestCycleClampsIntervalsToAvoidAHotSpin(t *testing.T) {
 	t.Parallel()
 
@@ -952,7 +1131,7 @@ func newHarness(t *testing.T) *harness {
 		herdr:       &fakeHerdrAPI{sessions: []herdr.Session{{Name: testSession, Running: true}}},
 		ledger:      newFakeLedger(),
 		waker:       &fakeWaker{messageID: "m-1"},
-		completions: &fakeCompletions{completed: map[string]bool{}},
+		completions: &fakeCompletions{completed: map[string]bool{}, at: map[string]time.Time{}},
 		clock:       clock,
 		subscriber:  &fakeSubscriber{},
 		root:        root,
@@ -962,26 +1141,54 @@ func newHarness(t *testing.T) *harness {
 	fakes.subscriber.herdr = fakes.herdr
 	fakes.subscriber.t = t
 	fakes.subscriber.now = clock.Now
+	fakes.subscriber.advance = clock.advance
 
 	config := defaultConfig()
 	config.EventStream = false
-	fakes.engine = &Engine{
-		Root:        root,
-		Session:     testSession,
-		Config:      config,
-		Herdr:       fakes.herdr,
-		Ledger:      fakes.ledger,
-		Waker:       fakes.waker,
-		Completions: fakes.completions,
-		Subscriber:  fakes.subscriber.subscribe,
-		Now:         clock.Now,
-		Sleep:       clock.SleepFor,
-		Log:         func(message string) { fakes.logs = append(fakes.logs, message) },
-		Timeout:     immediateTimeout(clock.Now),
-	}
+	fakes.engine = fakes.newEngine(config)
 	fakes.subscriber.pollInterval = fakes.engine.pollInterval()
 
 	return fakes
+}
+
+func (h *harness) newEngine(config Config) *Engine {
+	return &Engine{
+		Root:        h.root,
+		Session:     testSession,
+		Config:      config,
+		Herdr:       h.herdr,
+		Ledger:      h.ledger,
+		Waker:       h.waker,
+		Completions: h.completions,
+		Subscriber:  h.subscriber.subscribe,
+		Now:         h.clock.Now,
+		Sleep:       h.clock.SleepFor,
+		Log:         func(message string) { h.logs = append(h.logs, message) },
+		Timeout:     immediateTimeout(h.clock.Now),
+	}
+}
+
+// restart replaces the engine with a fresh one over the same status files,
+// ledger and stored markers: what survives a watcher restart is whatever the
+// markers hold.
+func (h *harness) restart() {
+	h.t.Helper()
+
+	h.engine = h.newEngine(h.engine.Config)
+}
+
+// writeConfig installs a project-local watch.json so a test can exercise the
+// real loader rather than a hand-built Config.
+func (h *harness) writeConfig(contents string) {
+	h.t.Helper()
+
+	if err := os.MkdirAll(statedir.Root(h.root), 0o755); err != nil {
+		h.t.Fatalf("create state directory: %v", err)
+	}
+	path := filepath.Join(statedir.Root(h.root), configFilename)
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		h.t.Fatalf("write watch config: %v", err)
+	}
 }
 
 func (h *harness) runCycle() {
@@ -1127,20 +1334,34 @@ func (c *stepClock) lastSleep() time.Duration {
 }
 
 type fakeHerdrAPI struct {
-	sessions    []herdr.Session
-	snapshot    herdr.Snapshot
-	snapshots   int
-	listErr     error
-	snapshotErr error
+	sessions       []herdr.Session
+	snapshot       herdr.Snapshot
+	snapshots      int
+	listBudget     time.Duration
+	snapshotBudget time.Duration
+	listErr        error
+	snapshotErr    error
 }
 
-func (f *fakeHerdrAPI) List(context.Context) ([]herdr.Session, error) {
+func (f *fakeHerdrAPI) List(ctx context.Context) ([]herdr.Session, error) {
+	f.listBudget = budgetOf(ctx)
 	return f.sessions, f.listErr
 }
 
-func (f *fakeHerdrAPI) Snapshot(context.Context, string) (herdr.Snapshot, error) {
+func (f *fakeHerdrAPI) Snapshot(ctx context.Context, _ string) (herdr.Snapshot, error) {
 	f.snapshots++
+	f.snapshotBudget = budgetOf(ctx)
 	return f.snapshot, f.snapshotErr
+}
+
+// budgetOf reports how long a call has left to run, which is what shows the
+// engine bounded it. It reads the real clock because context deadlines do.
+func budgetOf(ctx context.Context) time.Duration {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return 0
+	}
+	return time.Until(deadline)
 }
 
 type fakeLedger struct {
@@ -1173,7 +1394,7 @@ func (l *fakeLedger) Append(kind WakeKind, key, reason string) (WakeRecord, erro
 	l.nextID++
 	id := fmt.Sprintf("w-%d", l.nextID)
 	for i, record := range l.records {
-		if record.Kind == kind && record.Key == key {
+		if record.WakeKind == kind && record.Key == key {
 			record.ID = id
 			record.IDs = append(record.IDs, id)
 			record.Reason = reason
@@ -1182,7 +1403,7 @@ func (l *fakeLedger) Append(kind WakeKind, key, reason string) (WakeRecord, erro
 		}
 	}
 
-	record := WakeRecord{ID: id, IDs: []string{id}, Kind: kind, Key: key, Reason: reason}
+	record := WakeRecord{ID: id, IDs: []string{id}, WakeKind: kind, Key: key, Reason: reason}
 	l.records = append(l.records, record)
 	return record, nil
 }
@@ -1235,12 +1456,14 @@ func (l *fakeLedger) SaveMarkers(markers Markers) error {
 }
 
 type fakeWaker struct {
-	bodies    []string
-	messageID string
-	err       error
+	bodies        []string
+	messageID     string
+	deliverBudget time.Duration
+	err           error
 }
 
-func (w *fakeWaker) Deliver(_ context.Context, body string) (string, error) {
+func (w *fakeWaker) Deliver(ctx context.Context, body string) (string, error) {
+	w.deliverBudget = budgetOf(ctx)
 	if w.err != nil {
 		return "", w.err
 	}
@@ -1253,22 +1476,31 @@ type completionCall struct {
 	since  time.Time
 }
 
+// fakeCompletions answers from at when a worker's completion message has a
+// timestamp, which is what makes the since boundary observable, and from
+// completed when the test only cares that one exists.
 type fakeCompletions struct {
 	completed map[string]bool
+	at        map[string]time.Time
 	calls     []completionCall
 	err       error
 }
 
 func (c *fakeCompletions) CompletionSince(worker string, since time.Time) (bool, error) {
 	c.calls = append(c.calls, completionCall{worker: worker, since: since})
+	if sent, ok := c.at[worker]; ok {
+		return !sent.Before(since), c.err
+	}
 	return c.completed[worker], c.err
 }
 
 type fakeSubscriber struct {
 	t                    *testing.T
 	silent               bool
+	liveFor              time.Duration
 	pollInterval         time.Duration
 	now                  func() time.Time
+	advance              func(time.Duration)
 	calls                int
 	paneIDs              [][]string
 	batches              [][]Event
@@ -1293,6 +1525,12 @@ func (s *fakeSubscriber) subscribe(ctx context.Context, paneIDs []string, onRead
 		s.t.Errorf("subscription budget = %s, want the poll interval %s", got, s.pollInterval)
 	}
 
+	// A stream that acknowledges, carries its subscription for a while and then
+	// ends: the ordinary early EOF, not a stream that never worked.
+	if s.liveFor > 0 {
+		onReady()
+		s.advance(s.liveFor)
+	}
 	if s.err != nil {
 		return s.err
 	}

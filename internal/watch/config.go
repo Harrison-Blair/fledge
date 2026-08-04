@@ -75,13 +75,13 @@ func LoadConfig(root string) Config {
 
 	config.Version = intField(fields, "version", config.Version)
 	config.Enabled = boolField(fields, "enabled", config.Enabled)
-	config.PollIntervalSeconds = intField(fields, "poll_interval_seconds", config.PollIntervalSeconds)
-	config.IdlePollIntervalSeconds = intField(fields, "idle_poll_interval_seconds", config.IdlePollIntervalSeconds)
-	config.SignalGraceSeconds = intField(fields, "signal_grace_seconds", config.SignalGraceSeconds)
-	config.HeartbeatSeconds = intField(fields, "heartbeat_seconds", config.HeartbeatSeconds)
-	config.HeartbeatMaxSeconds = intField(fields, "heartbeat_max_seconds", config.HeartbeatMaxSeconds)
-	config.WakeMinIntervalSeconds = intField(fields, "wake_min_interval_seconds", config.WakeMinIntervalSeconds)
-	config.DoneMessageGraceSeconds = intField(fields, "done_message_grace_seconds", config.DoneMessageGraceSeconds)
+	config.PollIntervalSeconds = secondsField(fields, "poll_interval_seconds", config.PollIntervalSeconds)
+	config.IdlePollIntervalSeconds = secondsField(fields, "idle_poll_interval_seconds", config.IdlePollIntervalSeconds)
+	config.SignalGraceSeconds = secondsField(fields, "signal_grace_seconds", config.SignalGraceSeconds)
+	config.HeartbeatSeconds = secondsField(fields, "heartbeat_seconds", config.HeartbeatSeconds)
+	config.HeartbeatMaxSeconds = secondsField(fields, "heartbeat_max_seconds", config.HeartbeatMaxSeconds)
+	config.WakeMinIntervalSeconds = secondsField(fields, "wake_min_interval_seconds", config.WakeMinIntervalSeconds)
+	config.DoneMessageGraceSeconds = secondsField(fields, "done_message_grace_seconds", config.DoneMessageGraceSeconds)
 	config.EventStream = boolField(fields, "event_stream", config.EventStream)
 	config.MinProtocol = intField(fields, "min_protocol", config.MinProtocol)
 
@@ -94,6 +94,18 @@ func intField(fields map[string]json.RawMessage, key string, fallback int) int {
 		return fallback
 	}
 	return value
+}
+
+// secondsField reads a duration field. A negative value falls back to the
+// field's default the same way a wrong type does: the engine reads these as
+// durations, and a negative one does not shorten a window, it inverts it —
+// a negative done grace turns the completion look-back into a look-forward
+// and reports every clean finish as a swallowed one.
+func secondsField(fields map[string]json.RawMessage, key string, fallback int) int {
+	if value := intField(fields, key, fallback); value >= 0 {
+		return value
+	}
+	return fallback
 }
 
 func boolField(fields map[string]json.RawMessage, key string, fallback bool) bool {
