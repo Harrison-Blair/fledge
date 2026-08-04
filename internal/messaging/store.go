@@ -127,7 +127,7 @@ func ValidateBody(body string) error {
 // when reattaching to an existing one.
 func (s *Store) Initialize() (string, error) {
 	var sessionID string
-	err := s.withLockAt(s.lockPath(), func() error {
+	err := s.withLock(func() error {
 		id, err := s.newID()
 		if err != nil {
 			return err
@@ -434,13 +434,6 @@ func (s *Store) withLock(operation func() error) error {
 	}
 	path, err := s.activeLockPath()
 	if err != nil {
-		return err
-	}
-	return s.withAcquiredLock(path, operation)
-}
-
-func (s *Store) withLockAt(path string, operation func() error) error {
-	if err := s.ensureStateDirectory(); err != nil {
 		return err
 	}
 	return s.withAcquiredLock(path, operation)

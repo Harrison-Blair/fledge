@@ -133,6 +133,81 @@ func TestLegacySessionLockFallbackAndCleanup(t *testing.T) {
 	}
 }
 
+func TestInitializeWaitsForALegacyLockHeldByAnotherStore(t *testing.T) {
+	store := initializedStore(t)
+	// A session created by an older Fledge keeps its lock inside the log folder.
+	if err := os.Rename(store.lockPath(), store.legacyLockPath()); err != nil {
+		t.Fatal(err)
+	}
+
+	holder := New(store.root, store.session)
+	state, err := holder.loadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockPath, err := holder.activeLockPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := holder.acquireLock(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit := func() {
+		t.Helper()
+		e := event{
+			Version: eventVersion, Type: eventMessageCreated, At: time.Now().UTC(), SessionID: state.sessionID,
+			MessageID: "committed-under-the-lock", Sender: "user", Recipient: "alice", Body: "committed", RecipientPane: "%1",
+		}
+		if err := holder.appendEvents([]event{e}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The clock runs inside Initialize's critical section, so it reports whether
+	// Initialize got past a lock this store is still holding and parks it there
+	// until the interleaving has been forced.
+	entered := make(chan struct{}, 1)
+	proceed := make(chan struct{})
+	resetting := New(store.root, store.session, WithClock(func() time.Time {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-proceed
+		return time.Now().UTC()
+	}))
+	var initializeErr error
+	done := make(chan struct{})
+	go func() {
+		_, initializeErr = resetting.Initialize()
+		close(done)
+	}()
+
+	select {
+	case <-entered:
+		// Mutual exclusion is already broken. Let Initialize replace the log and
+		// then finish the append this holder was in the middle of.
+		close(proceed)
+		<-done
+		commit()
+	case <-time.After(500 * time.Millisecond):
+		// Initialize is waiting for the legacy lock, as every other entry point does.
+		commit()
+		close(proceed)
+	}
+	if err := unlock(); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if initializeErr != nil {
+		t.Fatal(initializeErr)
+	}
+	if _, err := New(store.root, store.session).List(); err != nil {
+		t.Fatalf("log after Initialize raced a locked appender: %v", err)
+	}
+}
+
 func TestSessionsKeepIndependentLogs(t *testing.T) {
 	root := t.TempDir()
 	first := New(root, testSession)
