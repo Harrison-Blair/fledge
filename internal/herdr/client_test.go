@@ -26,6 +26,7 @@ type helperInvocation struct {
 	Args  []string `json:"args"`
 	Dir   string   `json:"dir"`
 	Stdin string   `json:"stdin"`
+	Env   string   `json:"env,omitempty"`
 }
 
 func TestMain(m *testing.M) {
@@ -50,7 +51,7 @@ func runHerdrHelper() {
 	}
 
 	if capture := os.Getenv(helperCaptureEnv); capture != "" {
-		invocation := helperInvocation{Args: os.Args[1:], Dir: dir, Stdin: string(stdin)}
+		invocation := helperInvocation{Args: os.Args[1:], Dir: dir, Stdin: string(stdin), Env: os.Getenv("FLEDGE_REPLACED_ENV")}
 		contents, err := json.Marshal(invocation)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -415,11 +416,11 @@ func TestClientCreationResponses(t *testing.T) {
 		capture := filepath.Join(t.TempDir(), "invocation.json")
 		configureHelper(t, capture)
 		t.Setenv(helperStdoutEnv, `{"id":"1","result":{"type":"pane_created","pane":{"pane_id":"w1:p2","tab_id":"t1","workspace_id":"w1"}}}`)
-		pane, err := NewClient(helperBinary(t), nil, nil, nil).SplitPane(context.Background(), "s", "w1:p1", "/project")
+		pane, err := NewClient(helperBinary(t), nil, nil, nil).SplitPane(context.Background(), "s", "w1:p1", "/project", map[string]string{"Z_VAR": "last", "A_VAR": "first"})
 		if err != nil || pane.PaneID != "w1:p2" {
 			t.Fatalf("SplitPane() = %#v, %v", pane, err)
 		}
-		want := []string{"--session", "s", "pane", "split", "w1:p1", "--direction", "right", "--ratio", "0.5", "--cwd", "/project", "--no-focus"}
+		want := []string{"--session", "s", "pane", "split", "w1:p1", "--direction", "right", "--ratio", "0.5", "--cwd", "/project", "--env", "A_VAR=first", "--env", "Z_VAR=last", "--no-focus"}
 		assertStrings(t, "args", readInvocation(t, capture).Args, want)
 	})
 
@@ -427,11 +428,11 @@ func TestClientCreationResponses(t *testing.T) {
 		capture := filepath.Join(t.TempDir(), "invocation.json")
 		configureHelper(t, capture)
 		t.Setenv(helperStdoutEnv, `{"id":"1","result":{"type":"tab_created","tab":{"tab_id":"t2","workspace_id":"w1","label":"worker"},"root_pane":{"pane_id":"w1:p2","tab_id":"t2","workspace_id":"w1"}}}`)
-		tab, pane, err := NewClient(helperBinary(t), nil, nil, nil).CreateTab(context.Background(), "s", "w1", "/project", "worker")
+		tab, pane, err := NewClient(helperBinary(t), nil, nil, nil).CreateTab(context.Background(), "s", "w1", "/project", "worker", map[string]string{"OPENCODE_CONFIG_CONTENT": "original"})
 		if err != nil || tab.TabID != "t2" || pane.PaneID != "w1:p2" {
 			t.Fatalf("CreateTab() = %#v, %#v, %v", tab, pane, err)
 		}
-		want := []string{"--session", "s", "tab", "create", "--workspace", "w1", "--cwd", "/project", "--label", "worker", "--no-focus"}
+		want := []string{"--session", "s", "tab", "create", "--workspace", "w1", "--cwd", "/project", "--label", "worker", "--env", "OPENCODE_CONFIG_CONTENT=original", "--no-focus"}
 		assertStrings(t, "args", readInvocation(t, capture).Args, want)
 	})
 }
@@ -463,13 +464,13 @@ func TestClientRequiresResponsePayloadsAndIDs(t *testing.T) {
 		},
 		{
 			name: "split missing pane", stdout: `{}`, operation: func(client *Client) error {
-				_, err := client.SplitPane(context.Background(), "s", "p1", "/project")
+				_, err := client.SplitPane(context.Background(), "s", "p1", "/project", nil)
 				return err
 			}, want: "missing pane_id",
 		},
 		{
 			name: "tab missing IDs", stdout: `{}`, operation: func(client *Client) error {
-				_, _, err := client.CreateTab(context.Background(), "s", "w1", "/project", "worker")
+				_, _, err := client.CreateTab(context.Background(), "s", "w1", "/project", "worker", nil)
 				return err
 			}, want: "missing tab_id",
 		},
@@ -491,7 +492,8 @@ func TestClientStartServerDetached(t *testing.T) {
 	capture := filepath.Join(t.TempDir(), "invocation.json")
 	configureHelper(t, capture)
 	client := NewClient(helperBinary(t), nil, nil, nil)
-	if err := client.StartServer("session-name", dir); err != nil {
+	t.Setenv("FLEDGE_REPLACED_ENV", "old")
+	if err := client.StartServer("session-name", dir, map[string]string{"FLEDGE_REPLACED_ENV": "new"}); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(time.Second)
@@ -509,6 +511,22 @@ func TestClientStartServerDetached(t *testing.T) {
 	if invocation.Dir != dir {
 		t.Errorf("dir = %q, want %q", invocation.Dir, dir)
 	}
+	if invocation.Env != "new" {
+		t.Errorf("replaced environment = %q, want new", invocation.Env)
+	}
+}
+
+func TestEnvironmentConstructionIsDeterministic(t *testing.T) {
+	gotArgs := appendEnvironmentArgs([]string{"command"}, map[string]string{"Z": "last", "A": "first"})
+	wantArgs := []string{"command", "--env", "A=first", "--env", "Z=last"}
+	assertStrings(t, "args", gotArgs, wantArgs)
+
+	gotEnvironment := replaceEnvironment(
+		[]string{"KEEP=value", "Z=old", "A=old", "A=duplicate"},
+		map[string]string{"Z": "last", "A": "first"},
+	)
+	wantEnvironment := []string{"KEEP=value", "A=first", "Z=last"}
+	assertStrings(t, "environment", gotEnvironment, wantEnvironment)
 }
 
 func TestClientListCommandErrors(t *testing.T) {

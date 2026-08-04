@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -106,9 +107,10 @@ func (c *Client) Attach(ctx context.Context, name, dir string) error {
 
 // StartServer starts a named Herdr server without attaching a UI. The server
 // owns its own lifetime after the command has successfully started.
-func (c *Client) StartServer(name, dir string) error {
+func (c *Client) StartServer(name, dir string, environment map[string]string) error {
 	command := exec.Command(c.binary, "--session", name, "server")
 	command.Dir = dir
+	command.Env = replaceEnvironment(os.Environ(), environment)
 
 	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
@@ -213,14 +215,17 @@ func (c *Client) RenamePane(ctx context.Context, session, paneID, label string) 
 	return nil
 }
 
-func (c *Client) SplitPane(ctx context.Context, session, paneID, dir string) (Pane, error) {
+func (c *Client) SplitPane(ctx context.Context, session, paneID, dir string, environment map[string]string) (Pane, error) {
 	var response struct {
 		Result struct {
 			Type string `json:"type"`
 			Pane Pane   `json:"pane"`
 		} `json:"result"`
 	}
-	if err := c.runSessionJSON(ctx, session, &response, "pane", "split", paneID, "--direction", "right", "--ratio", "0.5", "--cwd", dir, "--no-focus"); err != nil {
+	args := []string{"pane", "split", paneID, "--direction", "right", "--ratio", "0.5", "--cwd", dir}
+	args = appendEnvironmentArgs(args, environment)
+	args = append(args, "--no-focus")
+	if err := c.runSessionJSON(ctx, session, &response, args...); err != nil {
 		return Pane{}, fmt.Errorf("split Herdr pane %q: %w", paneID, err)
 	}
 	if response.Result.Pane.PaneID == "" {
@@ -229,7 +234,7 @@ func (c *Client) SplitPane(ctx context.Context, session, paneID, dir string) (Pa
 	return response.Result.Pane, nil
 }
 
-func (c *Client) CreateTab(ctx context.Context, session, workspaceID, dir, label string) (Tab, Pane, error) {
+func (c *Client) CreateTab(ctx context.Context, session, workspaceID, dir, label string, environment map[string]string) (Tab, Pane, error) {
 	var response struct {
 		Result struct {
 			Type     string `json:"type"`
@@ -237,7 +242,9 @@ func (c *Client) CreateTab(ctx context.Context, session, workspaceID, dir, label
 			RootPane Pane   `json:"root_pane"`
 		} `json:"result"`
 	}
-	args := []string{"tab", "create", "--workspace", workspaceID, "--cwd", dir, "--label", label, "--no-focus"}
+	args := []string{"tab", "create", "--workspace", workspaceID, "--cwd", dir, "--label", label}
+	args = appendEnvironmentArgs(args, environment)
+	args = append(args, "--no-focus")
 	if err := c.runSessionJSON(ctx, session, &response, args...); err != nil {
 		return Tab{}, Pane{}, fmt.Errorf("create Herdr tab %q: %w", label, err)
 	}
@@ -358,4 +365,35 @@ func (c *Client) runSessionJSON(ctx context.Context, session string, destination
 	sessionArgs = append(sessionArgs, "--session", session)
 	sessionArgs = append(sessionArgs, args...)
 	return c.runJSON(ctx, destination, sessionArgs...)
+}
+
+func appendEnvironmentArgs(args []string, environment map[string]string) []string {
+	keys := make([]string, 0, len(environment))
+	for key := range environment {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		args = append(args, "--env", key+"="+environment[key])
+	}
+	return args
+}
+
+func replaceEnvironment(base []string, overrides map[string]string) []string {
+	result := make([]string, 0, len(base)+len(overrides))
+	for _, entry := range base {
+		key, _, _ := strings.Cut(entry, "=")
+		if _, replaced := overrides[key]; !replaced {
+			result = append(result, entry)
+		}
+	}
+	keys := make([]string, 0, len(overrides))
+	for key := range overrides {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		result = append(result, key+"="+overrides[key])
+	}
+	return result
 }

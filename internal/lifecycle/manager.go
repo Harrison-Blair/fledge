@@ -72,14 +72,14 @@ var (
 type Herdr interface {
 	Check() error
 	Attach(context.Context, string, string) error
-	StartServer(string, string) error
+	StartServer(string, string, map[string]string) error
 	WaitReady(context.Context, string, time.Duration) (herdr.Snapshot, error)
 	Snapshot(context.Context, string) (herdr.Snapshot, error)
 	CreateWorkspace(context.Context, string, string, string) (herdr.Workspace, herdr.Tab, herdr.Pane, error)
 	RenameTab(context.Context, string, string, string) error
 	RenamePane(context.Context, string, string, string) error
-	SplitPane(context.Context, string, string, string) (herdr.Pane, error)
-	CreateTab(context.Context, string, string, string, string) (herdr.Tab, herdr.Pane, error)
+	SplitPane(context.Context, string, string, string, map[string]string) (herdr.Pane, error)
+	CreateTab(context.Context, string, string, string, string, map[string]string) (herdr.Tab, herdr.Pane, error)
 	CloseTab(context.Context, string, string) error
 	ClosePane(context.Context, string, string) error
 	FocusAgent(context.Context, string, string) error
@@ -267,10 +267,25 @@ func (m *Manager) Start(ctx context.Context, dir string, supplied ...StartOption
 			return m.herdr.Attach(ctx, value.SessionName, root)
 		}
 	}
-	prompt := orchestratorPrompt(profile.Instructions, selectedHarness.ID)
+	instructions := orchestratorInstructions(profile.Instructions, selectedHarness.ID)
+	nativeArgs, err = harness.AppendOrchestratorInstructions(selectedHarness, nativeArgs, instructions)
+	if err != nil {
+		return errors.Join(err, unlock())
+	}
+	runtime := openCodeRuntime{}
+	if selectedHarness.ID == "opencode" {
+		runtime, err = prepareOpenCodeRuntime(root, value.SessionName, instructions, m.getenv(openCodeConfigEnvironment))
+		if err != nil {
+			var recordErr error
+			if recordCreated {
+				recordErr = removeRecordIfMatches(root, value.SessionName)
+			}
+			return errors.Join(err, recordErr, unlock())
+		}
+	}
 	logger, closeLog := m.sessionLogger(root, value.SessionName)
 	logger.Info("start invoked", "session", value.SessionName, "harness", selectedHarness.ID, "timeout", options.Timeout.String(), "native_args", len(nativeArgs))
-	serverOwned, initErr := m.initializeOrchestrator(ctx, logger, root, value.SessionName, selectedHarness, options.Timeout, nativeArgs, prompt)
+	serverOwned, initErr := m.initializeOrchestrator(ctx, logger, root, value.SessionName, selectedHarness, options.Timeout, nativeArgs, runtime)
 	if initErr != nil {
 		logger.Error("orchestrator start failed", "session", value.SessionName, "server_owned", serverOwned, "err", initErr.Error())
 		logger.Warn("rolling back failed start", "session", value.SessionName)
@@ -430,9 +445,9 @@ func (m *Manager) initializeOrchestrator(
 	selectedHarness harness.Harness,
 	timeout time.Duration,
 	nativeArgs []string,
-	prompt string,
+	runtime openCodeRuntime,
 ) (bool, error) {
-	if err := m.herdr.StartServer(session, root); err != nil {
+	if err := m.herdr.StartServer(session, root, runtime.serverEnvironment); err != nil {
 		return false, err
 	}
 	logger.Debug("herdr server started", "session", session)
@@ -463,16 +478,13 @@ func (m *Manager) initializeOrchestrator(
 	if err := m.herdr.RenamePane(ctx, session, pane.PaneID, "orchestrator"); err != nil {
 		return true, err
 	}
-	if _, err := m.herdr.SplitPane(ctx, session, pane.PaneID, root); err != nil {
+	if _, err := m.herdr.SplitPane(ctx, session, pane.PaneID, root, runtime.paneEnvironment); err != nil {
 		return true, err
 	}
 	if err := m.herdr.StartAgent(ctx, session, "orchestrator", selectedHarness.ID, pane.PaneID, timeout, nativeArgs); err != nil {
 		return true, err
 	}
 	logger.Debug("orchestrator agent started", "harness", selectedHarness.ID, "pane", pane.PaneID)
-	if err := m.herdr.PromptAgent(ctx, session, "orchestrator", prompt); err != nil {
-		return true, fmt.Errorf("submit required orchestrator profile prompt: %w", err)
-	}
 	if err := m.herdr.FocusAgent(ctx, session, "orchestrator"); err != nil {
 		return true, err
 	}
@@ -503,12 +515,12 @@ func initialLayout(snapshot herdr.Snapshot) (herdr.Tab, herdr.Pane, error) {
 	return herdr.Tab{}, herdr.Pane{}, fmt.Errorf("initial Herdr tab %q has no root pane", tab.TabID)
 }
 
-func orchestratorPrompt(profileInstructions, harnessID string) string {
-	prompt := profileInstructions
+func orchestratorInstructions(profileInstructions, harnessID string) string {
+	instructions := profileInstructions
 	if harnessID == "codex" {
-		prompt += "\n\n" + codexCoordinatorGuidance
+		instructions += "\n\n" + codexCoordinatorGuidance
 	}
-	return prompt + "\n\n" + mandatoryCoordinatorCommunicationPolicy
+	return instructions + "\n\n" + mandatoryCoordinatorCommunicationPolicy
 }
 
 func (m *Manager) rollbackOwnedSession(ctx context.Context, root, session string, serverOwned bool) error {
@@ -520,7 +532,7 @@ func (m *Manager) rollbackOwnedSession(ctx context.Context, root, session string
 		deleteErr := m.herdr.Delete(cleanupCtx, session)
 		cleanupErr = errors.Join(stopErr, deleteErr, messaging.New(root, session).RemoveAll())
 	}
-	return errors.Join(cleanupErr, removeRecordIfMatches(root, session))
+	return errors.Join(cleanupErr, removeOpenCodeRuntime(root, session), removeRecordIfMatches(root, session))
 }
 
 // Spawn starts an ad-hoc agent in a new tab of the running project session.
@@ -586,11 +598,15 @@ func (m *Manager) Spawn(ctx context.Context, dir string, options SpawnOptions) (
 			return err
 		}
 	}
+	paneEnvironment, err := openCodePaneEnvironment(root, value.SessionName)
+	if err != nil {
+		return err
+	}
 	logger, closeLog := m.sessionLogger(root, value.SessionName)
 	defer closeLog()
 	defer func() { logOutcome(logger, "agent spawn", resultErr) }()
 	logger.Info("agent spawn", "name", selection.Name, "harness", selectedHarness.ID, "cwd", cwd)
-	tab, pane, err := m.herdr.CreateTab(ctx, value.SessionName, workspaceID, cwd, selection.Name)
+	tab, pane, err := m.herdr.CreateTab(ctx, value.SessionName, workspaceID, cwd, selection.Name, paneEnvironment)
 	if err != nil {
 		return err
 	}
@@ -826,7 +842,10 @@ func (m *Manager) removeStaleSessionRecord(logger *slog.Logger, root, session st
 	if err := removeRecord(root); err != nil {
 		return err
 	}
-	if err := messaging.New(root, session).RemoveLock(); err != nil {
+	if err := errors.Join(
+		messaging.New(root, session).RemoveLock(),
+		removeOpenCodeRuntime(root, session),
+	); err != nil {
 		return err
 	}
 	logger.Info("stale session record removed", "session", session)
@@ -854,7 +873,10 @@ func (m *Manager) stopAndDeleteSession(ctx context.Context, logger *slog.Logger,
 			return err
 		}
 	}
-	if err := messaging.New(root, value.SessionName).RemoveLock(); err != nil {
+	if err := errors.Join(
+		messaging.New(root, value.SessionName).RemoveLock(),
+		removeOpenCodeRuntime(root, value.SessionName),
+	); err != nil {
 		return err
 	}
 	logger.Info("session stopped and deleted", "session", value.SessionName)

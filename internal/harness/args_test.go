@@ -160,3 +160,69 @@ func TestBuildArgsValidatesNativeArgumentsBeforeHarness(t *testing.T) {
 		t.Fatalf("BuildArgs() error = %v", err)
 	}
 }
+
+func TestAppendOrchestratorInstructions(t *testing.T) {
+	const instructions = "First line\nquoted: \"value\"; Unicode: 雪"
+	tests := []struct {
+		harnessID string
+		want      []string
+	}{
+		{harnessID: "claude", want: []string{"--user", "value", "--append-system-prompt", instructions}},
+		{harnessID: "codex", want: []string{"--user", "value", "-c", `developer_instructions="First line\nquoted: \"value\"; Unicode: 雪"`}},
+		{harnessID: "pi", want: []string{"--user", "value", "--append-system-prompt", instructions}},
+		{harnessID: "opencode", want: []string{"--user", "value"}},
+	}
+	for _, test := range tests {
+		t.Run(test.harnessID, func(t *testing.T) {
+			input := []string{"--user", "value"}
+			got, err := AppendOrchestratorInstructions(Harness{ID: test.harnessID}, input, instructions)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("AppendOrchestratorInstructions() = %#v, want %#v", got, test.want)
+			}
+			got[0] = "changed"
+			if input[0] != "--user" {
+				t.Fatal("AppendOrchestratorInstructions() result aliases input")
+			}
+		})
+	}
+}
+
+func TestAppendOrchestratorInstructionsFledgeOverrideIsLast(t *testing.T) {
+	for _, test := range []struct {
+		harnessID string
+		ownedFlag string
+	}{
+		{harnessID: "claude", ownedFlag: "--append-system-prompt"},
+		{harnessID: "codex", ownedFlag: "-c"},
+		{harnessID: "pi", ownedFlag: "--append-system-prompt"},
+	} {
+		t.Run(test.harnessID, func(t *testing.T) {
+			got, err := AppendOrchestratorInstructions(
+				Harness{ID: test.harnessID},
+				[]string{test.ownedFlag, "user value"},
+				"Fledge value",
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got[len(got)-2] != test.ownedFlag {
+				t.Fatalf("args = %#v, want final owned flag %q", got, test.ownedFlag)
+			}
+		})
+	}
+}
+
+func TestCodexOrchestratorInstructionsAreTOMLSafe(t *testing.T) {
+	const instructions = "quote \" slash \\ newline\n tab\t delete\x7f snow 雪"
+	got, err := AppendOrchestratorInstructions(Harness{ID: "codex"}, nil, instructions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `developer_instructions="quote \" slash \\ newline\n tab\t delete\u007F snow 雪"`
+	if len(got) != 2 || got[0] != "-c" || got[1] != want {
+		t.Fatalf("Codex args = %#v, want [-c %q]", got, want)
+	}
+}

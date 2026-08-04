@@ -37,18 +37,23 @@ func TestStartCreatesAndReusesSession(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("first Start() error = %v", err)
 	}
-	wantFreshCalls := []string{"check", "list", "start-server", "wait-ready", "rename-tab", "rename-pane", "split-pane", "start-agent", "prompt-agent", "focus-agent", "attach"}
+	wantFreshCalls := []string{"check", "list", "start-server", "wait-ready", "rename-tab", "rename-pane", "split-pane", "start-agent", "focus-agent", "attach"}
 	if strings.Join(client.calls, ",") != strings.Join(wantFreshCalls, ",") {
 		t.Fatalf("fresh call order = %v, want %v", client.calls, wantFreshCalls)
 	}
-	if got, want := client.startAgent.args, []string{"--model", "custom/model", "--approval-policy", "never"}; strings.Join(got, "\x00") != strings.Join(want, "\x00") {
-		t.Errorf("native args = %#v, want %#v", got, want)
+	wantNativePrefix := []string{"--model", "custom/model", "--approval-policy", "never"}
+	if len(client.startAgent.args) < len(wantNativePrefix) || strings.Join(client.startAgent.args[:len(wantNativePrefix)], "\x00") != strings.Join(wantNativePrefix, "\x00") {
+		t.Errorf("native args = %#v, want prefix %#v", client.startAgent.args, wantNativePrefix)
 	}
 	if client.startAgent.name != "orchestrator" || client.startAgent.kind != "codex" || client.startAgent.pane != "w1:p1" || client.startAgent.timeout != 45*time.Second {
 		t.Errorf("StartAgent() = %#v", client.startAgent)
 	}
-	if client.prompt != project.DefaultOrchestratorInstructions+"\n\n"+codexCoordinatorGuidance+"\n\n"+mandatoryCoordinatorCommunicationPolicy {
-		t.Errorf("orchestrator prompt = %q", client.prompt)
+	wantInstructions := project.DefaultOrchestratorInstructions + "\n\n" + codexCoordinatorGuidance + "\n\n" + mandatoryCoordinatorCommunicationPolicy
+	if len(client.startAgent.args) != 6 || client.startAgent.args[4] != "-c" || !strings.Contains(client.startAgent.args[5], wantInstructions[:40]) {
+		t.Errorf("orchestrator native args = %#v, want final developer_instructions override", client.startAgent.args)
+	}
+	if len(client.promptCalls) != 0 {
+		t.Errorf("orchestrator PromptAgent calls = %#v, want none", client.promptCalls)
 	}
 	client.sessions = []herdr.Session{{Name: wantSessionName, Running: true}}
 	if err := manager.Start(context.Background(), root); err != nil {
@@ -82,6 +87,11 @@ func TestStartCreatesAndReusesSession(t *testing.T) {
 	if permissions := recordInfo.Mode().Perm(); permissions != 0o600 {
 		t.Errorf("record permissions = %o, want 600", permissions)
 	}
+	for _, name := range []string{openCodeInstructionsFile, openCodeEnvironmentFile} {
+		if _, err := os.Stat(filepath.Join(root, stateDirectory, "logs", wantSessionName, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("non-OpenCode runtime artifact %s error = %v, want absent", name, err)
+		}
+	}
 
 	ignore, err := os.ReadFile(filepath.Join(root, stateDirectory, ".gitignore"))
 	if err != nil {
@@ -92,12 +102,12 @@ func TestStartCreatesAndReusesSession(t *testing.T) {
 	}
 }
 
-func TestOrchestratorPromptAppendsMandatoryPolicyAcrossHarnesses(t *testing.T) {
+func TestOrchestratorInstructionsAppendMandatoryPolicyAcrossHarnesses(t *testing.T) {
 	t.Parallel()
 
 	const custom = "Keep these custom coordinator instructions."
 	for _, harnessID := range []string{"claude", "codex", "pi", "opencode"} {
-		got := orchestratorPrompt(custom, harnessID)
+		got := orchestratorInstructions(custom, harnessID)
 		wantPrefix := custom + "\n\n"
 		if harnessID == "codex" {
 			wantPrefix += codexCoordinatorGuidance + "\n\n"
@@ -111,7 +121,7 @@ func TestOrchestratorPromptAppendsMandatoryPolicyAcrossHarnesses(t *testing.T) {
 	}
 }
 
-func TestStartLeavesClaudeProfileAndPromptUnchanged(t *testing.T) {
+func TestStartLeavesClaudeProfileUnchangedAndAppendsDurableInstructions(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -136,8 +146,13 @@ func TestStartLeavesClaudeProfileAndPromptUnchanged(t *testing.T) {
 	if err := manager.Start(context.Background(), root, StartOptions{Harness: "claude", HarnessSet: true}); err != nil {
 		t.Fatal(err)
 	}
-	if client.prompt != "custom Claude instructions\n\n"+mandatoryCoordinatorCommunicationPolicy {
-		t.Errorf("Claude prompt = %q, want custom instructions followed by mandatory policy", client.prompt)
+	wantInstructions := "custom Claude instructions\n\n" + mandatoryCoordinatorCommunicationPolicy
+	wantArgs := []string{"--permission-mode", "bypassPermissions", "--append-system-prompt", wantInstructions}
+	if strings.Join(client.startAgent.args, "\x00") != strings.Join(wantArgs, "\x00") {
+		t.Errorf("Claude args = %#v, want %#v", client.startAgent.args, wantArgs)
+	}
+	if len(client.promptCalls) != 0 {
+		t.Errorf("orchestrator PromptAgent calls = %#v, want none", client.promptCalls)
 	}
 	contentsAfter, err := os.ReadFile(profilePath)
 	if err != nil || string(contentsAfter) != profileContents {
@@ -235,7 +250,7 @@ func TestStartCreatesWorkspaceForEmptyHeadlessServer(t *testing.T) {
 	if err := manager.Start(context.Background(), root, StartOptions{Harness: "codex", HarnessSet: true}); err != nil {
 		t.Fatal(err)
 	}
-	wantCalls := []string{"check", "list", "start-server", "wait-ready", "create-workspace", "rename-tab", "rename-pane", "split-pane", "start-agent", "prompt-agent", "focus-agent", "attach"}
+	wantCalls := []string{"check", "list", "start-server", "wait-ready", "create-workspace", "rename-tab", "rename-pane", "split-pane", "start-agent", "focus-agent", "attach"}
 	if strings.Join(client.calls, ",") != strings.Join(wantCalls, ",") {
 		t.Fatalf("call order = %v, want %v", client.calls, wantCalls)
 	}
@@ -304,7 +319,7 @@ func TestStartRestartsStoppedSession(t *testing.T) {
 	if err := manager.Start(context.Background(), root, StartOptions{Harness: "codex", HarnessSet: true}); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	wantCalls := []string{"check", "list", "list", "start-server", "wait-ready", "rename-tab", "rename-pane", "split-pane", "start-agent", "prompt-agent", "focus-agent", "attach"}
+	wantCalls := []string{"check", "list", "list", "start-server", "wait-ready", "rename-tab", "rename-pane", "split-pane", "start-agent", "focus-agent", "attach"}
 	if strings.Join(client.calls, ",") != strings.Join(wantCalls, ",") {
 		t.Fatalf("call order = %v, want %v", client.calls, wantCalls)
 	}
@@ -680,6 +695,212 @@ func TestSpawnPromptCompositionAcrossHarnesses(t *testing.T) {
 					t.Fatalf("PromptAgent calls = %#v, want exactly %#v", client.promptCalls, want)
 				}
 			})
+		}
+	}
+}
+
+func TestStartOpenCodeUsesDurableSnapshotAndIsolatesControlPane(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	initTestProject(t, root)
+	client := &fakeHerdr{snapshot: testSnapshot()}
+	manager, _ := newTestManager(client, &fakeConfirmer{})
+	manager.lookPath = func(name string) (string, error) {
+		if name == "opencode" {
+			return "/test/opencode", nil
+		}
+		return "", os.ErrNotExist
+	}
+	const original = `{"instructions":["AGENTS.md"],"theme":"dark"}`
+	manager.getenv = func(name string) string {
+		if name == openCodeConfigEnvironment {
+			return original
+		}
+		return ""
+	}
+
+	if err := manager.Start(context.Background(), root, StartOptions{Harness: "opencode", HarnessSet: true}); err != nil {
+		t.Fatal(err)
+	}
+	session := "fledge-" + sessionSlug(root) + "-00000000"
+	instructionsPath := filepath.Join(root, stateDirectory, "logs", session, openCodeInstructionsFile)
+	instructions, err := os.ReadFile(instructionsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantInstructions := project.DefaultOrchestratorInstructions + "\n\n" + mandatoryCoordinatorCommunicationPolicy
+	if string(instructions) != wantInstructions {
+		t.Fatalf("instruction snapshot = %q, want %q", instructions, wantInstructions)
+	}
+	if client.splitEnvironment[openCodeConfigEnvironment] != original {
+		t.Fatalf("control pane environment = %#v, want original config", client.splitEnvironment)
+	}
+	merged := client.serverEnvironment[openCodeConfigEnvironment]
+	if !strings.Contains(merged, instructionsPath) || !strings.Contains(merged, `"theme":"dark"`) {
+		t.Fatalf("server config = %q, want instruction path and original fields", merged)
+	}
+	if len(client.startAgent.args) != 0 || len(client.promptCalls) != 0 {
+		t.Fatalf("OpenCode launch args = %#v, prompt calls = %#v; want no prompt submission", client.startAgent.args, client.promptCalls)
+	}
+}
+
+func TestStartOpenCodeRejectsMalformedInlineConfigBeforeLaunch(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	initTestProject(t, root)
+	client := &fakeHerdr{snapshot: testSnapshot()}
+	manager, _ := newTestManager(client, &fakeConfirmer{})
+	manager.lookPath = func(name string) (string, error) {
+		if name == "opencode" {
+			return "/test/opencode", nil
+		}
+		return "", os.ErrNotExist
+	}
+	manager.getenv = func(name string) string {
+		if name == openCodeConfigEnvironment {
+			return "{invalid"
+		}
+		return ""
+	}
+
+	err := manager.Start(context.Background(), root, StartOptions{Harness: "opencode", HarnessSet: true})
+	if err == nil || !strings.Contains(err.Error(), "decode "+openCodeConfigEnvironment) {
+		t.Fatalf("Start() error = %v, want malformed inline config error", err)
+	}
+	if slicesContain(client.calls, "start-server") {
+		t.Fatalf("calls = %v, want no server launch", client.calls)
+	}
+	if _, found, readErr := readRecord(root); readErr != nil || found {
+		t.Fatalf("record after failed Start() = found %v, error %v; want removed", found, readErr)
+	}
+}
+
+func TestStartOpenCodeRollbackRemovesRuntimeArtifacts(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	initTestProject(t, root)
+	client := &fakeHerdr{snapshot: testSnapshot(), waitErr: errors.New("not ready")}
+	manager, _ := newTestManager(client, &fakeConfirmer{})
+	manager.lookPath = func(name string) (string, error) {
+		if name == "opencode" {
+			return "/test/opencode", nil
+		}
+		return "", os.ErrNotExist
+	}
+	manager.getenv = func(string) string { return "{}" }
+
+	if err := manager.Start(context.Background(), root, StartOptions{Harness: "opencode", HarnessSet: true}); err == nil {
+		t.Fatal("Start() error = nil")
+	}
+	session := "fledge-" + sessionSlug(root) + "-00000000"
+	for _, name := range []string{openCodeInstructionsFile, openCodeEnvironmentFile} {
+		if _, err := os.Stat(filepath.Join(root, stateDirectory, "logs", session, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("rollback artifact %s error = %v, want removed", name, err)
+		}
+	}
+}
+
+func TestStartReattachDoesNotRebuildOpenCodeSnapshot(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeTestRecord(t, root)
+	if _, err := prepareOpenCodeRuntime(root, testSessionName, "old durable instructions", `{"old":true}`); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeHerdr{sessions: []herdr.Session{{Name: testSessionName, Running: true}}}
+	manager, _ := newTestManager(client, &fakeConfirmer{})
+	manager.getenv = func(string) string { return `{"new":true}` }
+
+	if err := manager.Start(context.Background(), root); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(filepath.Join(root, stateDirectory, "logs", testSessionName, openCodeInstructionsFile))
+	if err != nil || string(contents) != "old durable instructions" {
+		t.Fatalf("instruction snapshot after reattach = %q, %v", contents, err)
+	}
+	if slicesContain(client.calls, "start-server") {
+		t.Fatalf("calls = %v, want attach without rebuilding", client.calls)
+	}
+}
+
+func TestSpawnRestoresOriginalOpenCodeConfig(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeTestRecord(t, root)
+	const original = ` {"theme":"dark"} `
+	if _, err := prepareOpenCodeRuntime(root, testSessionName, "coordinator only", original); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeHerdr{
+		sessions:    []herdr.Session{{Name: testSessionName, Running: true}},
+		snapshot:    testSnapshot(),
+		createdTab:  herdr.Tab{TabID: "t2", WorkspaceID: "w1"},
+		createdPane: herdr.Pane{PaneID: "w1:p2", TabID: "t2", WorkspaceID: "w1"},
+	}
+	manager, _ := newTestManager(client, &fakeConfirmer{})
+	manager.lookPath = installedTestHarness
+	manager.getenv = func(string) string { return "" }
+
+	if err := manager.Spawn(context.Background(), root, SpawnOptions{Name: "worker", Harness: "codex"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := client.createCall.environment[openCodeConfigEnvironment]; got != original {
+		t.Fatalf("worker environment = %#v, want exact original config %q", client.createCall.environment, original)
+	}
+}
+
+func TestOpenCodeRuntimeCleanupFollowsSessionDeletion(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name     string
+		sessions []herdr.Session
+	}{
+		{name: "successful deletion", sessions: []herdr.Session{{Name: testSessionName, Running: false}}},
+		{name: "stale cleanup"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeTestRecord(t, root)
+			if _, err := prepareOpenCodeRuntime(root, testSessionName, "policy", "{}"); err != nil {
+				t.Fatal(err)
+			}
+			auditPath := filepath.Join(root, stateDirectory, "logs", testSessionName, "messages.jsonl")
+			if err := os.WriteFile(auditPath, []byte("audit\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			manager, _ := newTestManager(&fakeHerdr{sessions: test.sessions}, &fakeConfirmer{answer: true})
+			if err := manager.Stop(context.Background(), root); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{openCodeInstructionsFile, openCodeEnvironmentFile} {
+				if _, err := os.Stat(filepath.Join(root, stateDirectory, "logs", testSessionName, name)); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("artifact %s error = %v, want removed", name, err)
+				}
+			}
+			if contents, err := os.ReadFile(auditPath); err != nil || string(contents) != "audit\n" {
+				t.Fatalf("audit after cleanup = %q, %v; want preserved", contents, err)
+			}
+		})
+	}
+}
+
+func TestOpenCodeRuntimeRetainedWhenSessionDeletionFails(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeTestRecord(t, root)
+	if _, err := prepareOpenCodeRuntime(root, testSessionName, "policy", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	manager, _ := newTestManager(&fakeHerdr{
+		sessions:  []herdr.Session{{Name: testSessionName, Running: false}},
+		deleteErr: errors.New("delete failed"),
+	}, &fakeConfirmer{answer: true})
+	if err := manager.Stop(context.Background(), root); err == nil {
+		t.Fatal("Stop() error = nil")
+	}
+	for _, name := range []string{openCodeInstructionsFile, openCodeEnvironmentFile} {
+		if _, err := os.Stat(filepath.Join(root, stateDirectory, "logs", testSessionName, name)); err != nil {
+			t.Errorf("recoverable artifact %s removed: %v", name, err)
 		}
 	}
 }
@@ -1743,43 +1964,45 @@ type attachCall struct {
 }
 
 type fakeHerdr struct {
-	checkErr         error
-	attachErr        error
-	listErr          error
-	stopErr          error
-	deleteErr        error
-	sessions         []herdr.Session
-	snapshot         herdr.Snapshot
-	snapshotErr      error
-	checkCalls       int
-	listCalls        int
-	attachCalls      []attachCall
-	stopCalls        []string
-	deleteCalls      []string
-	stopHook         func()
-	calls            []string
-	startAgent       startAgentCall
-	prompt           string
-	promptCalls      []promptCall
-	createdTab       herdr.Tab
-	createdPane      herdr.Pane
-	createdWorkspace herdr.Workspace
-	createWorkspace  createWorkspaceCall
-	createCall       createTabCall
-	startErr         error
-	startHook        func()
-	promptErr        error
-	promptHook       func()
-	renameErr        error
-	focusErr         error
-	closeCalls       []string
-	closeErr         error
-	closePaneCalls   []string
-	closePaneErr     error
-	serverErr        error
-	waitErr          error
-	closeCtxErr      error
-	stopCtxErr       error
+	checkErr          error
+	attachErr         error
+	listErr           error
+	stopErr           error
+	deleteErr         error
+	sessions          []herdr.Session
+	snapshot          herdr.Snapshot
+	snapshotErr       error
+	checkCalls        int
+	listCalls         int
+	attachCalls       []attachCall
+	stopCalls         []string
+	deleteCalls       []string
+	stopHook          func()
+	calls             []string
+	startAgent        startAgentCall
+	prompt            string
+	promptCalls       []promptCall
+	createdTab        herdr.Tab
+	createdPane       herdr.Pane
+	createdWorkspace  herdr.Workspace
+	createWorkspace   createWorkspaceCall
+	createCall        createTabCall
+	startErr          error
+	startHook         func()
+	promptErr         error
+	promptHook        func()
+	renameErr         error
+	focusErr          error
+	closeCalls        []string
+	closeErr          error
+	closePaneCalls    []string
+	closePaneErr      error
+	serverErr         error
+	waitErr           error
+	closeCtxErr       error
+	stopCtxErr        error
+	serverEnvironment map[string]string
+	splitEnvironment  map[string]string
 }
 
 type startAgentCall struct {
@@ -1793,6 +2016,7 @@ type startAgentCall struct {
 
 type createTabCall struct {
 	session, workspace, cwd, label string
+	environment                    map[string]string
 }
 
 type createWorkspaceCall struct {
@@ -1815,8 +2039,9 @@ func (f *fakeHerdr) Attach(_ context.Context, name, dir string) error {
 	return f.attachErr
 }
 
-func (f *fakeHerdr) StartServer(string, string) error {
+func (f *fakeHerdr) StartServer(_ string, _ string, environment map[string]string) error {
 	f.calls = append(f.calls, "start-server")
+	f.serverEnvironment = cloneEnvironment(environment)
 	return f.serverErr
 }
 func (f *fakeHerdr) WaitReady(context.Context, string, time.Duration) (herdr.Snapshot, error) {
@@ -1840,14 +2065,26 @@ func (f *fakeHerdr) RenamePane(context.Context, string, string, string) error {
 	f.calls = append(f.calls, "rename-pane")
 	return f.renameErr
 }
-func (f *fakeHerdr) SplitPane(context.Context, string, string, string) (herdr.Pane, error) {
+func (f *fakeHerdr) SplitPane(_ context.Context, _, _, _ string, environment map[string]string) (herdr.Pane, error) {
 	f.calls = append(f.calls, "split-pane")
+	f.splitEnvironment = cloneEnvironment(environment)
 	return herdr.Pane{}, nil
 }
-func (f *fakeHerdr) CreateTab(_ context.Context, session, workspace, cwd, label string) (herdr.Tab, herdr.Pane, error) {
+func (f *fakeHerdr) CreateTab(_ context.Context, session, workspace, cwd, label string, environment map[string]string) (herdr.Tab, herdr.Pane, error) {
 	f.calls = append(f.calls, "create-tab")
-	f.createCall = createTabCall{session: session, workspace: workspace, cwd: cwd, label: label}
+	f.createCall = createTabCall{session: session, workspace: workspace, cwd: cwd, label: label, environment: cloneEnvironment(environment)}
 	return f.createdTab, f.createdPane, nil
+}
+
+func cloneEnvironment(environment map[string]string) map[string]string {
+	if environment == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(environment))
+	for key, value := range environment {
+		cloned[key] = value
+	}
+	return cloned
 }
 func (f *fakeHerdr) CloseTab(ctx context.Context, _ string, tabID string) error {
 	f.calls = append(f.calls, "close-tab")

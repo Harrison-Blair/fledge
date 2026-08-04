@@ -55,6 +55,54 @@ func BuildArgs(selected Harness, model string, nativeArgs []string) ([]string, e
 	return append(args, nativeArgs...), nil
 }
 
+// AppendOrchestratorInstructions adds Fledge's durable coordinator policy to
+// the end of the harness arguments so Fledge's value takes precedence over
+// conflicting native passthrough arguments.
+func AppendOrchestratorInstructions(selected Harness, args []string, instructions string) ([]string, error) {
+	result := append([]string(nil), args...)
+	switch selected.ID {
+	case "claude", "pi":
+		return append(result, "--append-system-prompt", instructions), nil
+	case "codex":
+		return append(result, "-c", "developer_instructions="+tomlBasicString(instructions)), nil
+	case "opencode":
+		return result, nil
+	default:
+		return nil, fmt.Errorf("unsupported harness %q", selected.ID)
+	}
+}
+
+func tomlBasicString(value string) string {
+	var encoded strings.Builder
+	encoded.WriteByte('"')
+	for _, char := range value {
+		switch char {
+		case '\b':
+			encoded.WriteString(`\b`)
+		case '\t':
+			encoded.WriteString(`\t`)
+		case '\n':
+			encoded.WriteString(`\n`)
+		case '\f':
+			encoded.WriteString(`\f`)
+		case '\r':
+			encoded.WriteString(`\r`)
+		case '"':
+			encoded.WriteString(`\"`)
+		case '\\':
+			encoded.WriteString(`\\`)
+		default:
+			if char < 0x20 || char == 0x7f {
+				fmt.Fprintf(&encoded, `\u%04X`, char)
+			} else {
+				encoded.WriteRune(char)
+			}
+		}
+	}
+	encoded.WriteByte('"')
+	return encoded.String()
+}
+
 func hasPermissionFlag(args []string) bool {
 	for _, arg := range args {
 		if arg == "--permission-mode" || strings.HasPrefix(arg, "--permission-mode=") ||

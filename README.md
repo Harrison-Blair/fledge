@@ -84,7 +84,18 @@ control shell beside it. Reattaching preserves that layout and all running
 processes. Fledge appends a mandatory communication policy to every
 orchestrator profile at launch, for every harness. This runtime policy requires
 Fledge messages even when an existing custom profile says otherwise; profile
-files themselves are not rewritten.
+files themselves are not rewritten. At `fledge start`, Fledge snapshots the
+orchestrator profile and Fledge policy, plus Codex escalation instructions when
+applicable, into durable harness-level instructions. Conversation clearing,
+compaction, harness restarts, and mode changes retain that snapshot. Profile
+edits take effect only after a full orchestrator restart with `fledge stop` and
+`fledge start`. Fledge does not submit an initial user prompt, so a newly
+launched orchestrator starts idle with those durable instructions already
+loaded.
+
+Workers continue to receive their instructions in each per-spawn prompt. For
+OpenCode, Fledge preserves the original inline configuration and applies the
+coordinator policy only to the coordinator, not to control or worker panes.
 
 Spawn another agent in a dedicated, matching-name tab:
 
