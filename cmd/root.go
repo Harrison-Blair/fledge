@@ -19,7 +19,7 @@ type sessionManager interface {
 	StopAgent(context.Context, string, string) error
 	SendMessage(context.Context, string, string, string) (messaging.Message, error)
 	ReplyMessage(context.Context, string, string, string) (messaging.Message, error)
-	MessageInbox(context.Context, string, string) ([]messaging.Message, error)
+	MessageInbox(context.Context, string, string) ([]messaging.Message, string, error)
 	Watch(context.Context, string, lifecycle.WatchOptions) error
 	Stop(context.Context, string) error
 }

@@ -230,9 +230,12 @@ func TestReplyToUserPreservesOriginalAndEntersUserTranscript(t *testing.T) {
 	}
 
 	manager.getenv = func(string) string { return "" }
-	inbox, err := manager.MessageInbox(context.Background(), root, "")
+	inbox, identity, err := manager.MessageInbox(context.Background(), root, "")
 	if err != nil || len(inbox) != 2 || inbox[0].ID != original.ID || inbox[1].ID != reply.ID {
 		t.Fatalf("user inbox = %#v, %v", inbox, err)
+	}
+	if identity != userIdentity {
+		t.Fatalf("resolved inbox identity = %q, want %q", identity, userIdentity)
 	}
 }
 
@@ -270,7 +273,7 @@ func TestMessageAuthorizationAndRespawnBinding(t *testing.T) {
 	if _, err := manager.ReplyMessage(context.Background(), root, message.ID, "intrude"); !errors.Is(err, messaging.ErrUnauthorized) {
 		t.Fatalf("foreign agent reply error = %v", err)
 	}
-	if _, err := manager.MessageInbox(context.Background(), root, "worker"); err == nil || !strings.Contains(err.Error(), "cannot query") {
+	if _, _, err := manager.MessageInbox(context.Background(), root, "worker"); err == nil || !strings.Contains(err.Error(), "cannot query") {
 		t.Fatalf("managed agent inbox error = %v", err)
 	}
 
@@ -281,14 +284,14 @@ func TestMessageAuthorizationAndRespawnBinding(t *testing.T) {
 	}
 	client.snapshot.Panes = append(client.snapshot.Panes, herdr.Pane{PaneID: "p-respawned"})
 	manager.getenv = func(string) string { return "" }
-	inbox, err := manager.MessageInbox(context.Background(), root, "worker")
+	inbox, identity, err := manager.MessageInbox(context.Background(), root, "worker")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(inbox) != 1 || inbox[0].ID != message.ID {
-		t.Fatalf("worker history after respawn = %#v", inbox)
+	if len(inbox) != 1 || inbox[0].ID != message.ID || identity != "worker" {
+		t.Fatalf("worker history after respawn = %#v, identity %q", inbox, identity)
 	}
-	unknown, err := manager.MessageInbox(context.Background(), root, "unknown")
+	unknown, _, err := manager.MessageInbox(context.Background(), root, "unknown")
 	if err != nil || len(unknown) != 0 {
 		t.Fatalf("unknown transcript = %#v, %v", unknown, err)
 	}

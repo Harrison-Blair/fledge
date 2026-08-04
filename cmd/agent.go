@@ -99,12 +99,9 @@ func newMessageInboxCommand(manager sessionManager, getwd func() (string, error)
 			if len(args) == 1 {
 				identity = args[0]
 			}
-			messages, err := manager.MessageInbox(cmd.Context(), dir, identity)
+			messages, identity, err := manager.MessageInbox(cmd.Context(), dir, identity)
 			if err != nil {
 				return err
-			}
-			if identity == "" {
-				identity = "user"
 			}
 			return writeInbox(cmd, messages, identity)
 		},

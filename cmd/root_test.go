@@ -291,6 +291,27 @@ func TestAgentMessageWrapsCurrentDirectoryFailures(t *testing.T) {
 	}
 }
 
+func TestAgentMessageInboxRendersDirectionForTheResolvedIdentity(t *testing.T) {
+	t.Parallel()
+
+	manager := &fakeManager{
+		inboxIdentity: "orchestrator",
+		inboxResult: []messaging.Message{
+			{ID: "msg-1", Sender: "orchestrator", Recipient: "worker", Body: "start", Status: messaging.StatusDelivered},
+		},
+	}
+	var output bytes.Buffer
+	command := newRootCommand(manager, func() (string, error) { return "/project", nil })
+	command.SetOut(&output)
+	command.SetArgs([]string{"agent", "message", "inbox"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "sent to worker") {
+		t.Errorf("output = %q, want direction rendered against the manager's resolved identity", output.String())
+	}
+}
+
 func TestCommandsPropagateManagerErrorsWithoutPrinting(t *testing.T) {
 	t.Parallel()
 
@@ -498,6 +519,7 @@ type fakeManager struct {
 	sendErr        error
 	replyErr       error
 	inboxErr       error
+	inboxIdentity  string
 }
 
 type messageSendCall struct{ dir, recipient, body string }
@@ -548,7 +570,10 @@ func (f *fakeManager) ReplyMessage(_ context.Context, dir, id, body string) (mes
 	return f.replyResult, f.replyErr
 }
 
-func (f *fakeManager) MessageInbox(_ context.Context, dir, identity string) ([]messaging.Message, error) {
+func (f *fakeManager) MessageInbox(_ context.Context, dir, identity string) ([]messaging.Message, string, error) {
 	f.inboxCalls = append(f.inboxCalls, inboxCall{dir, identity})
-	return f.inboxResult, f.inboxErr
+	if f.inboxIdentity != "" {
+		identity = f.inboxIdentity
+	}
+	return f.inboxResult, identity, f.inboxErr
 }
