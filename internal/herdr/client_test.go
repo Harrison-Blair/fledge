@@ -328,7 +328,7 @@ func TestClientDestructiveCommandErrors(t *testing.T) {
 func TestClientSnapshot(t *testing.T) {
 	capture := filepath.Join(t.TempDir(), "invocation.json")
 	configureHelper(t, capture)
-	t.Setenv(helperStdoutEnv, `{"id":"1","result":{"type":"session_snapshot","snapshot":{"focused_workspace_id":"w1","focused_tab_id":"t1","focused_pane_id":"w1:p1","workspaces":[{"workspace_id":"w1","label":"project"}],"tabs":[{"tab_id":"t1","workspace_id":"w1","label":"orchestrator"}],"panes":[{"pane_id":"w1:p1","tab_id":"t1","workspace_id":"w1","label":"orchestrator"}],"agents":[{"name":"orchestrator","agent":"codex","pane_id":"w1:p1","tab_id":"t1","workspace_id":"w1"}]}}}`)
+	t.Setenv(helperStdoutEnv, `{"id":"1","result":{"type":"session_snapshot","snapshot":{"focused_workspace_id":"w1","focused_tab_id":"t1","focused_pane_id":"w1:p1","workspaces":[{"workspace_id":"w1","label":"project"}],"tabs":[{"tab_id":"t1","workspace_id":"w1","label":"orchestrator"}],"panes":[{"pane_id":"w1:p1","tab_id":"t1","workspace_id":"w1","label":"orchestrator"}],"agents":[{"name":"orchestrator","agent":"codex","pane_id":"w1:p1","tab_id":"t1","workspace_id":"w1","revision":664,"agent_session":{"agent":"codex","kind":"id","source":"herdr:codex","value":"019fcf2f-6113"}}]}}}`)
 
 	snapshot, err := NewClient(helperBinary(t), nil, nil, nil).Snapshot(context.Background(), "session-name")
 	if err != nil {
@@ -336,6 +336,13 @@ func TestClientSnapshot(t *testing.T) {
 	}
 	if snapshot.FocusedPaneID != "w1:p1" || len(snapshot.Agents) != 1 || snapshot.Agents[0].Name == nil || *snapshot.Agents[0].Name != "orchestrator" {
 		t.Fatalf("Snapshot() = %#v", snapshot)
+	}
+	agent := snapshot.Agents[0]
+	if agent.Revision != 664 {
+		t.Errorf("agent revision = %d, want 664", agent.Revision)
+	}
+	if agent.AgentSession == nil || agent.AgentSession.Kind != "id" || agent.AgentSession.Value != "019fcf2f-6113" {
+		t.Errorf("agent_session = %#v, want id correlation preserved", agent.AgentSession)
 	}
 	assertStrings(t, "args", readInvocation(t, capture).Args, []string{"--session", "session-name", "api", "snapshot"})
 }

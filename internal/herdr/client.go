@@ -55,12 +55,24 @@ type Pane struct {
 }
 
 type Agent struct {
-	Name        *string `json:"name"`
-	Agent       *string `json:"agent"`
-	PaneID      string  `json:"pane_id"`
-	TabID       string  `json:"tab_id"`
-	WorkspaceID string  `json:"workspace_id"`
-	AgentStatus string  `json:"agent_status"`
+	Name         *string       `json:"name"`
+	Agent        *string       `json:"agent"`
+	PaneID       string        `json:"pane_id"`
+	TabID        string        `json:"tab_id"`
+	WorkspaceID  string        `json:"workspace_id"`
+	AgentStatus  string        `json:"agent_status"`
+	AgentSession *AgentSession `json:"agent_session"`
+	Revision     int           `json:"revision"`
+}
+
+// AgentSession is Herdr's exact correlation between a pane's agent and the
+// harness's own native session. Kind is "id" or "path"; Value is the harness
+// session identifier Fledge uses to locate the agent's transcript.
+type AgentSession struct {
+	Agent  string `json:"agent"`
+	Kind   string `json:"kind"`
+	Source string `json:"source"`
+	Value  string `json:"value"`
 }
 
 // Client invokes a Herdr executable.

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/Harrison-Blair/fledge/internal/agentcontext"
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lifecycle"
 	"github.com/Harrison-Blair/fledge/internal/messaging"
@@ -18,6 +19,7 @@ type sessionManager interface {
 	Start(context.Context, string, lifecycle.StartOptions) error
 	Spawn(context.Context, string, lifecycle.SpawnOptions) error
 	StopAgent(context.Context, string, string) error
+	Context(context.Context, string, string) (agentcontext.Report, error)
 	SendMessage(context.Context, string, string, string) (messaging.Message, error)
 	ReplyMessage(context.Context, string, string, string) (messaging.Message, error)
 	MessageInbox(context.Context, string, string) ([]messaging.Message, string, error)

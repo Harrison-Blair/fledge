@@ -1,5 +1,5 @@
 # Delegation Model
-Prefer delegating implimentation and review to sub-agents. Before delegating, ask if:
+Prefer delegating implimentation and review to sub-agents. Before delegating, ask yourself if:
     - The seperate tasks do not have overlapping surface-area
     - The tasks can be done by both agents without communicating with one another
     - The tasks do not rely one one another in any way

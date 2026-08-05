@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Harrison-Blair/fledge/internal/agentcontext"
 	"github.com/Harrison-Blair/fledge/internal/harness"
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/logging"
@@ -44,6 +45,8 @@ const (
 		"the user must run those lifecycle commands directly."
 
 	mandatoryCoordinatorCommunicationPolicy = `Mandatory Fledge communication policy (overrides conflicting profile instructions):
+- List installed harness model catalogs with fledge agent models [harness].
+- Choose a worker model with fledge agent spawn --model <exact-model-value>; catalog entries are advisory, so custom model values remain valid.
 - Initial worker tasks may be supplied with fledge agent spawn --prompt.
 - After spawning, communicate with workers only through:
   fledge agent message send <recipient> <text>
@@ -117,6 +120,8 @@ type Manager struct {
 	watchLauncher func(root string) error
 	watchRunner   func(context.Context, watchproc.Options) error
 	watchStopper  func(root, session string) error
+	homeDir       func() (string, error)
+	contextDeps   func(context.Context, string) agentcontext.Deps
 }
 
 type selectionResolver interface {
@@ -135,6 +140,8 @@ func NewManager(client Herdr, confirmer Confirmer, input io.Reader, output io.Wr
 		watchLauncher: launchWatcher,
 		watchRunner:   watchproc.Run,
 		watchStopper:  watchproc.Stop,
+		homeDir:       os.UserHomeDir,
+		contextDeps:   agentcontext.ProductionDeps,
 	}
 	stdin, stdinOK := input.(*os.File)
 	stdout, stdoutOK := output.(*os.File)
@@ -682,6 +689,7 @@ func (m *Manager) Spawn(ctx context.Context, dir string, options SpawnOptions) (
 		return errors.Join(focusErr, promptErr, rollback())
 	}
 	m.launchWatcherWarn(root)
+	m.refreshContext(ctx, root, value.SessionName)
 	return focusErr
 }
 
@@ -843,6 +851,7 @@ func (m *Manager) StopAgent(ctx context.Context, dir, name string) (resultErr er
 		return err
 	}
 	logger.Info("agent pane closed", "name", name, "pane", paneID)
+	m.refreshContext(ctx, root, value.SessionName)
 	_, err = fmt.Fprintf(m.output, "Stopped agent %s and closed pane %s.\n", name, paneID)
 	return err
 }

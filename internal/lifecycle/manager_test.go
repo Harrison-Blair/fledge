@@ -138,6 +138,27 @@ func TestOrchestratorInstructionsAppendMandatoryPolicyAcrossHarnesses(t *testing
 	}
 }
 
+func TestOrchestratorInstructionsIncludeModelCatalogGuidanceAfterCustomProfile(t *testing.T) {
+	t.Parallel()
+
+	const custom = "Existing custom coordinator profile."
+	for _, harnessID := range []string{"claude", "codex", "pi", "opencode"} {
+		instructions := orchestratorInstructions(custom, harnessID)
+		for _, required := range []string{
+			"fledge agent models [harness]",
+			"fledge agent spawn --model <exact-model-value>",
+			"catalog entries are advisory",
+		} {
+			if !strings.Contains(instructions, required) {
+				t.Errorf("%s instructions = %q, want %q", harnessID, instructions, required)
+			}
+		}
+		if strings.Index(instructions, "fledge agent models [harness]") <= strings.Index(instructions, custom) {
+			t.Errorf("%s model guidance does not follow the existing custom profile: %q", harnessID, instructions)
+		}
+	}
+}
+
 func TestStartLeavesClaudeProfileUnchangedAndAppendsDurableInstructions(t *testing.T) {
 	t.Parallel()
 
@@ -753,7 +774,8 @@ func TestSpawnCreatesDedicatedTabAndPrompts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn() error = %v", err)
 	}
-	wantCalls := []string{"check", "list", "snapshot", "create-tab", "rename-pane", "start-agent", "focus-agent", "prompt-agent"}
+	// The trailing snapshot is the best-effort context-usage refresh.
+	wantCalls := []string{"check", "list", "snapshot", "create-tab", "rename-pane", "start-agent", "focus-agent", "prompt-agent", "snapshot"}
 	if strings.Join(client.calls, ",") != strings.Join(wantCalls, ",") {
 		t.Fatalf("call order = %v, want %v", client.calls, wantCalls)
 	}
@@ -1450,7 +1472,8 @@ func TestStopAgentClosesNamedAgentPane(t *testing.T) {
 	if err := manager.StopAgent(context.Background(), root, name); err != nil {
 		t.Fatal(err)
 	}
-	wantCalls := []string{"check", "list", "snapshot", "close-pane"}
+	// The trailing snapshot is the best-effort context-usage refresh.
+	wantCalls := []string{"check", "list", "snapshot", "close-pane", "snapshot"}
 	if strings.Join(client.calls, ",") != strings.Join(wantCalls, ",") {
 		t.Fatalf("call order = %v, want %v", client.calls, wantCalls)
 	}

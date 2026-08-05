@@ -119,6 +119,10 @@ type Engine struct {
 	Sleep       func(ctx context.Context, d time.Duration)
 	Timeout     func(context.Context, time.Duration) (context.Context, context.CancelFunc)
 	Log         func(message string)
+	// Refresh, when set, is handed each fresh snapshot the cycle reads so the
+	// supervisor can rebuild derived state (the agent context-usage report) on
+	// lifecycle transitions. It is best-effort and must not block.
+	Refresh func(ctx context.Context, snapshot herdr.Snapshot)
 
 	started             time.Time
 	queue               []WakeRecord
@@ -181,6 +185,7 @@ func (e *Engine) cycle(ctx context.Context) (bool, error) {
 		e.wait(ctx, e.pollInterval())
 		return true, ctx.Err()
 	}
+	e.refresh(ctx, snapshot)
 
 	markers := e.loadMarkers()
 	beforeObservations := cloneMarkers(markers)
@@ -548,8 +553,16 @@ func (e *Engine) reconcile(ctx context.Context, markers *Markers) {
 		return
 	}
 
+	e.refresh(ctx, snapshot)
 	for _, worker := range namedWorkers(snapshot) {
 		e.applyTransition(ctx, worker.PaneID, worker.Name, worker.AgentStatus, markers)
+	}
+}
+
+// refresh hands a fresh snapshot to the injected Refresh hook when one is set.
+func (e *Engine) refresh(ctx context.Context, snapshot herdr.Snapshot) {
+	if e.Refresh != nil {
+		e.Refresh(ctx, snapshot)
 	}
 }
 

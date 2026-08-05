@@ -135,6 +135,7 @@ func Run(ctx context.Context, options Options) (result error) {
 		Now:         time.Now,
 		Sleep:       sleepContext,
 		Log:         logger.Log,
+		Refresh:     contextRefresher(options.Root, options.Session, logger.Log),
 	}
 	result = engine.Run(ctx)
 	return errors.Join(result, logger.Err())

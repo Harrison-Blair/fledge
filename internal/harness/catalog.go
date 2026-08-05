@@ -187,9 +187,21 @@ func commandRunner(ctx context.Context, path string, args ...string) ([]byte, er
 
 func claudeModels() []Model {
 	return []Model{
-		{ID: "haiku", Name: "haiku", Maker: "Claude", Description: "Stable Claude Haiku alias"},
-		{ID: "opus", Name: "opus", Maker: "Claude", Description: "Stable Claude Opus alias"},
-		{ID: "sonnet", Name: "sonnet", Maker: "Claude", Description: "Stable Claude Sonnet alias"},
+		{ID: "fable", Name: "Fable (moving alias)", Provider: "anthropic", Maker: "Claude", Description: "Moving alias for the latest Claude Fable model"},
+		{ID: "haiku", Name: "Haiku (moving alias)", Provider: "anthropic", Maker: "Claude", Description: "Moving alias for the latest Claude Haiku model"},
+		{ID: "opus", Name: "Opus (moving alias)", Provider: "anthropic", Maker: "Claude", Description: "Moving alias for the latest Claude Opus model"},
+		{ID: "sonnet", Name: "Sonnet (moving alias)", Provider: "anthropic", Maker: "Claude", Description: "Moving alias for the latest Claude Sonnet model"},
+		{ID: "claude-fable-5", Name: "Claude Fable 5", Provider: "anthropic", Maker: "Claude", Description: "Current canonical Claude Fable 5 model"},
+		{ID: "claude-mythos-5", Name: "Claude Mythos 5", Provider: "anthropic", Maker: "Claude", Description: "Glasswing-restricted current canonical Claude Mythos 5 model"},
+		{ID: "claude-opus-5", Name: "Claude Opus 5", Provider: "anthropic", Maker: "Claude", Description: "Current canonical Claude Opus 5 model"},
+		{ID: "claude-opus-4-8", Name: "Claude Opus 4.8", Provider: "anthropic", Maker: "Claude", Description: "Current canonical Claude Opus 4.8 model"},
+		{ID: "claude-opus-4-7", Name: "Claude Opus 4.7", Provider: "anthropic", Maker: "Claude", Description: "Current canonical Claude Opus 4.7 model"},
+		{ID: "claude-opus-4-6", Name: "Claude Opus 4.6", Provider: "anthropic", Maker: "Claude", Description: "Current canonical Claude Opus 4.6 model"},
+		{ID: "claude-sonnet-5", Name: "Claude Sonnet 5", Provider: "anthropic", Maker: "Claude", Description: "Current canonical Claude Sonnet 5 model"},
+		{ID: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6", Provider: "anthropic", Maker: "Claude", Description: "Current canonical Claude Sonnet 4.6 model"},
+		{ID: "claude-haiku-4-5", Name: "Claude Haiku 4.5", Provider: "anthropic", Maker: "Claude", Description: "Current canonical Claude Haiku 4.5 model"},
+		{ID: "claude-opus-4-5", Name: "Claude Opus 4.5 (legacy)", Provider: "anthropic", Maker: "Claude", Description: "Active legacy Claude Opus 4.5 model"},
+		{ID: "claude-sonnet-4-5", Name: "Claude Sonnet 4.5 (legacy)", Provider: "anthropic", Maker: "Claude", Description: "Active legacy Claude Sonnet 4.5 model"},
 	}
 }
 

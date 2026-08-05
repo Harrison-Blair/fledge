@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Harrison-Blair/fledge/internal/agentcontext"
 	"github.com/Harrison-Blair/fledge/internal/lifecycle"
 	"github.com/Harrison-Blair/fledge/internal/messaging"
 )
@@ -607,8 +608,13 @@ type fakeManager struct {
 	replyErr       error
 	inboxErr       error
 	inboxIdentity  string
+	contextCalls   []contextCall
+	contextResult  agentcontext.Report
+	contextErr     error
 	output         io.Writer
 }
+
+type contextCall struct{ dir, name string }
 
 type messageSendCall struct{ dir, recipient, body string }
 type messageReplyCall struct{ dir, id, body string }
@@ -650,6 +656,11 @@ func (f *fakeManager) StopAgent(_ context.Context, dir, name string) error {
 	f.stopAgentDirs = append(f.stopAgentDirs, dir)
 	f.stopAgentNames = append(f.stopAgentNames, name)
 	return nil
+}
+
+func (f *fakeManager) Context(_ context.Context, dir, name string) (agentcontext.Report, error) {
+	f.contextCalls = append(f.contextCalls, contextCall{dir, name})
+	return f.contextResult, f.contextErr
 }
 
 func (f *fakeManager) SendMessage(_ context.Context, dir, recipient, body string) (messaging.Message, error) {

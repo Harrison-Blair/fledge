@@ -51,7 +51,7 @@ func TestResolveInstalledHarness(t *testing.T) {
 	}
 }
 
-func TestDiscoverClaudeAliases(t *testing.T) {
+func TestDiscoverClaudeCatalogIsExact(t *testing.T) {
 	runnerCalled := false
 	catalog := Discover(context.Background(), Harness{ID: "claude", Name: "Claude Code"}, DiscoveryOptions{
 		Runner: func(context.Context, string, ...string) ([]byte, error) {
@@ -63,9 +63,46 @@ func TestDiscoverClaudeAliases(t *testing.T) {
 	if runnerCalled {
 		t.Fatal("Claude discovery invoked Runner")
 	}
-	assertModelIDs(t, catalog.Models, []string{"", "haiku", "opus", "sonnet"})
 	if !catalog.Models[0].Default || catalog.Models[0].Name != "Harness default" {
 		t.Errorf("default model = %#v", catalog.Models[0])
+	}
+	want := map[string]struct {
+		name        string
+		description string
+	}{
+		"fable":             {"Fable (moving alias)", "Moving alias for the latest Claude Fable model"},
+		"haiku":             {"Haiku (moving alias)", "Moving alias for the latest Claude Haiku model"},
+		"opus":              {"Opus (moving alias)", "Moving alias for the latest Claude Opus model"},
+		"sonnet":            {"Sonnet (moving alias)", "Moving alias for the latest Claude Sonnet model"},
+		"claude-fable-5":    {"Claude Fable 5", "Current canonical Claude Fable 5 model"},
+		"claude-mythos-5":   {"Claude Mythos 5", "Glasswing-restricted current canonical Claude Mythos 5 model"},
+		"claude-opus-5":     {"Claude Opus 5", "Current canonical Claude Opus 5 model"},
+		"claude-opus-4-8":   {"Claude Opus 4.8", "Current canonical Claude Opus 4.8 model"},
+		"claude-opus-4-7":   {"Claude Opus 4.7", "Current canonical Claude Opus 4.7 model"},
+		"claude-opus-4-6":   {"Claude Opus 4.6", "Current canonical Claude Opus 4.6 model"},
+		"claude-sonnet-5":   {"Claude Sonnet 5", "Current canonical Claude Sonnet 5 model"},
+		"claude-sonnet-4-6": {"Claude Sonnet 4.6", "Current canonical Claude Sonnet 4.6 model"},
+		"claude-haiku-4-5":  {"Claude Haiku 4.5", "Current canonical Claude Haiku 4.5 model"},
+		"claude-opus-4-5":   {"Claude Opus 4.5 (legacy)", "Active legacy Claude Opus 4.5 model"},
+		"claude-sonnet-4-5": {"Claude Sonnet 4.5 (legacy)", "Active legacy Claude Sonnet 4.5 model"},
+	}
+	if got, wantCount := len(catalog.Models), len(want)+1; got != wantCount {
+		t.Fatalf("Claude model count = %d, want %d: %#v", got, wantCount, catalog.Models)
+	}
+	for _, model := range catalog.Models[1:] {
+		metadata, ok := want[model.ID]
+		if !ok {
+			t.Errorf("unexpected Claude model ID %q", model.ID)
+			continue
+		}
+		if model.Name != metadata.name || model.Description != metadata.description ||
+			model.Provider != "anthropic" || model.Maker != "Claude" {
+			t.Errorf("Claude model %q = %#v, want name %q, description %q, Anthropic/Claude metadata", model.ID, model, metadata.name, metadata.description)
+		}
+		delete(want, model.ID)
+	}
+	if len(want) != 0 {
+		t.Errorf("missing Claude model IDs: %v", want)
 	}
 	if catalog.Warning != "" {
 		t.Errorf("warning = %q, want empty", catalog.Warning)

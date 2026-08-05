@@ -106,9 +106,38 @@ Profile edits take effect only after a full orchestrator restart with
 so a newly launched orchestrator starts idle with those durable instructions
 already loaded.
 
+The mandatory policy also tells coordinators to inspect model catalogs with
+`fledge agent models [harness]` and pass the selected exact value to
+`fledge agent spawn --model`. Because the policy is appended at launch,
+existing custom coordinator profiles receive this guidance after the same full
+restart without being rewritten.
+
 Workers continue to receive their instructions in each per-spawn prompt. For
 OpenCode, Fledge preserves the original inline configuration and applies the
 coordinator policy only to the coordinator, not to control or worker panes.
+
+List the advisory model catalogs for every installed supported harness, in
+Fledge's supported harness order:
+
+```sh
+fledge agent models
+```
+
+Pass a harness ID, display name, or executable name to list only that installed
+harness:
+
+```sh
+fledge agent models "Claude Code"
+```
+
+The stable table shows the harness, provider or integration group, exact model
+value, friendly name, and description. `(default)` means omit `--model` and use
+the harness's configured default. Discovery warnings do not hide the default or
+any models that were available. Claude's built-in catalog includes its current
+moving aliases, canonical IDs, and active legacy IDs; it intentionally omits
+dated snapshots, cloud-platform spellings, and deprecated or retired models.
+Catalogs guide selection but do not validate launches, so an explicit custom
+model value remains valid even when it is not listed.
 
 Spawn another agent in a dedicated, matching-name tab:
 
