@@ -4,14 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 
 	"github.com/Harrison-Blair/fledge/internal/messaging"
 	"github.com/Harrison-Blair/fledge/internal/project"
 )
 
-func (m *Manager) coordinationStore(dir string) (string, string, *messaging.Store, error) {
-	root, err := project.Find(dir)
+func (m *Manager) coordinationStore(dir string) (caller, root string, store *messaging.Store, err error) {
+	root, err = project.Find(dir)
 	if err != nil {
 		return "", "", nil, err
 	}
@@ -22,15 +21,15 @@ func (m *Manager) coordinationStore(dir string) (string, string, *messaging.Stor
 	if !found {
 		return "", "", nil, errors.New("project has no Fledge session; run fledge start first")
 	}
-	store := messaging.New(root, record.SessionName)
+	store = messaging.New(root, record.SessionName)
 	if err := validateStoreBinding(store, record); err != nil {
 		return "", "", nil, err
 	}
-	caller, err := m.paneCaller(store)
+	callerValue, err := m.paneCaller(store)
 	if err != nil {
 		return "", "", nil, err
 	}
-	return caller.identity, record.SessionName, store, nil
+	return callerValue.identity, root, store, nil
 }
 
 func validateStoreBinding(store *messaging.Store, record record) error {
@@ -57,12 +56,12 @@ func (m *Manager) AgentList(_ context.Context, dir string) ([]messaging.Agent, e
 }
 
 func (m *Manager) TaskAssign(_ context.Context, dir, assignee, parent, description string) (messaging.Task, error) {
-	caller, _, store, err := m.coordinationStore(dir)
+	caller, root, store, err := m.coordinationStore(dir)
 	if err != nil {
 		return messaging.Task{}, err
 	}
 	task, err := store.AssignTask(caller, assignee, parent, description)
-	return task, m.deliverThrough(dir, err)
+	return task, m.deliverThrough(root, err)
 }
 
 func (m *Manager) TaskProgress(_ context.Context, dir, id, detail string) (messaging.Task, error) {
@@ -74,12 +73,12 @@ func (m *Manager) TaskProgress(_ context.Context, dir, id, detail string) (messa
 }
 
 func (m *Manager) TaskTransition(_ context.Context, dir, id string, status messaging.TaskStatus, detail string) (messaging.Task, error) {
-	caller, _, store, err := m.coordinationStore(dir)
+	caller, root, store, err := m.coordinationStore(dir)
 	if err != nil {
 		return messaging.Task{}, err
 	}
 	task, err := store.TransitionTask(caller, id, status, detail)
-	return task, m.deliverThrough(dir, err)
+	return task, m.deliverThrough(root, err)
 }
 
 // deliverThrough makes sure a dispatcher exists to deliver the wakes a
@@ -87,13 +86,9 @@ func (m *Manager) TaskTransition(_ context.Context, dir, id string, status messa
 // exits as soon as it finds the singleton held — and a dispatcher that cannot
 // be started only warns: the events are already durable, and the next command
 // or spawn tries again.
-func (m *Manager) deliverThrough(dir string, err error) error {
+func (m *Manager) deliverThrough(root string, err error) error {
 	if err != nil {
 		return err
-	}
-	root, findErr := project.Find(dir)
-	if findErr != nil {
-		return findErr
 	}
 	m.launchWatcherWarn(root)
 	return nil
@@ -121,9 +116,6 @@ func (m *Manager) TaskList(_ context.Context, dir string) ([]messaging.Task, err
 			if visible[task.ID] && task.ParentID != "" && !visible[task.ParentID] {
 				visible[task.ParentID], changed = true, true
 			}
-			if task.ParentID != "" && visible[task.ParentID] && !visible[task.ID] {
-				visible[task.ID], changed = true, true
-			}
 		}
 	}
 	filtered := tasks[:0]
@@ -140,7 +132,6 @@ func (m *Manager) TaskShow(ctx context.Context, dir, id string) (messaging.Task,
 	if err != nil {
 		return messaging.Task{}, err
 	}
-	sort.SliceStable(tasks, func(i, j int) bool { return tasks[i].CreatedAt.Before(tasks[j].CreatedAt) })
 	for _, task := range tasks {
 		if task.ID == id {
 			return task, nil

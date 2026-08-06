@@ -40,6 +40,11 @@ func Init(path string) (string, error) {
 		return "", err
 	}
 
+	home, _ := canonicalHome()
+	if home != "" && root == home {
+		return "", fmt.Errorf("the home directory cannot be a Fledge project root")
+	}
+
 	configPath := filepath.Join(root, stateDirectory, configFilename)
 	profilePath := filepath.Join(root, stateDirectory, profilesDir, profileFilename)
 	ignorePath := filepath.Join(root, stateDirectory, ".gitignore")
@@ -91,7 +96,14 @@ func Find(start string) (string, error) {
 		return "", err
 	}
 
+	home, _ := canonicalHome()
+	withinHome := home != "" && (current == home || isBelow(current, home))
+
 	for {
+		if withinHome && current == home {
+			return "", fmt.Errorf("%w (searched from %q)", ErrNotInitialized, start)
+		}
+
 		marker := filepath.Join(current, stateDirectory, configFilename)
 		_, err := os.Stat(marker)
 		switch {
@@ -117,6 +129,20 @@ func Find(start string) (string, error) {
 // LoadConfig reads and strictly validates the project marker at root.
 func LoadConfig(root string) (Config, error) {
 	return loadConfigFile(filepath.Join(root, stateDirectory, configFilename))
+}
+
+func canonicalHome() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return canonicalDirectory(home)
+}
+
+func isBelow(path, parent string) bool {
+	relative, err := filepath.Rel(parent, path)
+	return err == nil && relative != "." && relative != ".." &&
+		!strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 func canonicalDirectory(path string) (string, error) {

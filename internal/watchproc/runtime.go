@@ -25,6 +25,7 @@ const (
 type Herdr interface {
 	Protocol(context.Context) (int, error)
 	List(context.Context) ([]herdr.Session, error)
+	Snapshot(context.Context, string) (herdr.Snapshot, error)
 	PromptAgent(context.Context, string, string, string) error
 }
 

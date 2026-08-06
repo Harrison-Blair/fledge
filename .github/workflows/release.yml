@@ -12,6 +12,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -25,6 +28,24 @@ jobs:
           tag="${GITHUB_REF_NAME#v}"
           [ "$file" = "$tag" ] || { echo "VERSION=$file disagrees with tag $GITHUB_REF_NAME"; exit 1; }
           echo "version=$file" >> "$GITHUB_OUTPUT"
+      - name: Check that the release version is monotonic
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          if [[ ! "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            printf 'invalid release version %q: expected vMAJOR.MINOR.PATCH\n' "$tag" >&2
+            exit 1
+          fi
+          while IFS= read -r existing_tag; do
+            [[ "$existing_tag" == "$tag" ]] && continue
+            [[ "$existing_tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || continue
+            highest="$(printf '%s\n%s\n' "$existing_tag" "$tag" | sort -V | tail -n 1)"
+            if [[ "$highest" != "$tag" ]]; then
+              printf 'release %s is not newer than existing release %s\n' "$tag" "$existing_tag" >&2
+              exit 1
+            fi
+          done < <(git tag --list)
       - name: Vet
         run: go vet ./...
       - name: Test

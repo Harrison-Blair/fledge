@@ -39,6 +39,12 @@ func TestPreferencesRoundTrip(t *testing.T) {
 		t.Fatalf("preferences file mode = %v; want %v", mode, os.FileMode(0o600))
 	}
 
+	// Loosen the existing file's mode: the atomic replacement must land a fresh
+	// 0600 temp file, not inherit whatever mode the old destination carried.
+	if err := os.Chmod(preferencesPath(root), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	second := preferences{Version: preferencesVersion, Harness: "codex"}
 	if err := writePreferences(root, second); err != nil {
 		t.Fatal(err)
@@ -47,6 +53,43 @@ func TestPreferencesRoundTrip(t *testing.T) {
 	value, found, err = readPreferences(root)
 	if err != nil || !found || value != second {
 		t.Fatalf("readPreferences() = %#v, %v, %v; want %#v, true, nil", value, found, err, second)
+	}
+
+	info, err = os.Stat(preferencesPath(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Fatalf("replaced preferences file mode = %v; want %v", mode, os.FileMode(0o600))
+	}
+
+	leftovers, err := filepath.Glob(filepath.Join(root, stateDirectory, ".preferences-*.tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leftovers) != 0 {
+		t.Fatalf("temporary preferences files left behind: %v", leftovers)
+	}
+}
+
+func TestWritePreferencesRejectsSymlinkWithoutTouchingTarget(t *testing.T) {
+	t.Parallel()
+
+	root := newPreferencesRoot(t)
+	target := filepath.Join(root, "sentinel.json")
+	const sentinel = "do not touch\n"
+	if err := os.WriteFile(target, []byte(sentinel), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, preferencesPath(root)); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	if err := writePreferences(root, preferences{Version: preferencesVersion, Harness: "claude"}); err == nil {
+		t.Fatal("writePreferences() accepted a symlinked destination")
+	}
+	if contents, err := os.ReadFile(target); err != nil || string(contents) != sentinel {
+		t.Fatalf("sentinel target = %q, %v; want unchanged %q", contents, err, sentinel)
 	}
 }
 

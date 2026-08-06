@@ -14,7 +14,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -79,11 +78,6 @@ Coordinate only through Fledge messaging and task commands:
 - Never use direct Herdr commands to communicate with, inspect, prompt, or
   collect output from agents (herdr agent wait/read/get/list/prompt/send-keys/
   attach/explain, and Herdr API snapshots).`
-)
-
-var (
-	legacySessionNamePattern = regexp.MustCompile(`^fledge-[0-9a-f]{32}$`)
-	sessionNamePattern       = regexp.MustCompile(`^fledge-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9a-f]{8}$`)
 )
 
 // Herdr is the part of the Herdr CLI used by the lifecycle manager.
@@ -239,17 +233,14 @@ func (m *Manager) Start(ctx context.Context, dir string, options StartOptions) e
 		return err
 	}
 	if recordFound {
-		if session, exists := sessionByName(sessions, existingRecord.SessionName); exists && session.Running {
-			if options.HasSelection() {
-				return errors.New("startup selection flags cannot be used when reattaching to an existing orchestrator")
-			}
-			existingRecord, err = m.bindExistingRecord(ctx, root, existingRecord)
-			if err != nil {
-				return err
-			}
-			m.logSessionEvent(root, existingRecord.SessionName, "reattached to running session", "session", existingRecord.SessionName)
-			m.launchWatcherWarn(root)
-			return m.herdr.Attach(ctx, existingRecord.SessionName, root)
+		// Pre-lock reattach validates the selection flags before binding, so a
+		// rejected reattach never creates or upgrades durable messaging state.
+		handled, reattachErr := m.reattachRunningSession(ctx, root, sessions, options, existingRecord, true,
+			func(value record) (record, error) {
+				return m.bindExistingRecord(ctx, root, value)
+			})
+		if handled {
+			return reattachErr
 		}
 	}
 	if err := ValidateAgentTimeout(options.Timeout); err != nil {
@@ -299,20 +290,20 @@ func (m *Manager) Start(ctx context.Context, dir string, options StartOptions) e
 		if listErr != nil {
 			return errors.Join(listErr, unlock())
 		}
-		if session, exists := sessionByName(lockedSessions, value.SessionName); exists && session.Running {
-			value, err = bindRecordToStore(root, value)
-			if err != nil {
-				return errors.Join(err, unlock())
-			}
-			if unlockErr := unlock(); unlockErr != nil {
-				return unlockErr
-			}
-			if options.HasSelection() {
-				return errors.New("startup selection flags cannot be used when reattaching to an existing orchestrator")
-			}
-			m.logSessionEvent(root, value.SessionName, "reattached to running session", "session", value.SessionName)
-			m.launchWatcherWarn(root)
-			return m.herdr.Attach(ctx, value.SessionName, root)
+		// Post-lock reattach binds durable state and releases the startup lock
+		// this branch owns before validating selection flags, so a session that
+		// began running between the two List calls is bound and unlocked even
+		// when the flags then make Start return an error.
+		handled, reattachErr := m.reattachRunningSession(ctx, root, lockedSessions, options, value, false,
+			func(value record) (record, error) {
+				bound, bindErr := bindRecordToStore(root, value)
+				if bindErr != nil {
+					return record{}, errors.Join(bindErr, unlock())
+				}
+				return bound, unlock()
+			})
+		if handled {
+			return reattachErr
 		}
 	}
 	generatedInstructions := orchestratorInstructions(profile.Instructions, "")
@@ -378,6 +369,47 @@ func revalidateLockedRecord(root, sessionName string, recordCreated bool) error 
 		return errors.New("Fledge session record changed while waiting for startup; retry the command")
 	}
 	return nil
+}
+
+// reattachBinder binds a record to its durable messaging state and returns the
+// (possibly upgraded) record. The pre-lock and post-lock reattach paths supply
+// different binders because they own the startup lock differently.
+type reattachBinder func(record) (record, error)
+
+// reattachRunningSession attaches to an already-running orchestrator, sharing
+// the running-session check, log, watcher launch, and attach across Start's two
+// reattach paths. The paths differ only in whether selection flags are rejected
+// before or after binding (selectionBeforeBind) and in which binder runs; the
+// binder is invoked only once the session is confirmed running, so a caller
+// that owns the startup lock keeps it when this returns not-handled. handled
+// reports whether the running-session path was taken; when true, Start returns
+// the accompanying error verbatim.
+func (m *Manager) reattachRunningSession(
+	ctx context.Context,
+	root string,
+	sessions []herdr.Session,
+	options StartOptions,
+	value record,
+	selectionBeforeBind bool,
+	bind reattachBinder,
+) (bool, error) {
+	session, exists := sessionByName(sessions, value.SessionName)
+	if !exists || !session.Running {
+		return false, nil
+	}
+	if selectionBeforeBind && options.HasSelection() {
+		return true, errors.New("startup selection flags cannot be used when reattaching to an existing orchestrator")
+	}
+	bound, err := bind(value)
+	if err != nil {
+		return true, err
+	}
+	if !selectionBeforeBind && options.HasSelection() {
+		return true, errors.New("startup selection flags cannot be used when reattaching to an existing orchestrator")
+	}
+	m.logSessionEvent(root, bound.SessionName, "reattached to running session", "session", bound.SessionName)
+	m.launchWatcherWarn(root)
+	return true, m.herdr.Attach(ctx, bound.SessionName, root)
 }
 
 type selectionInput struct {
@@ -1353,14 +1385,15 @@ func readRecord(root string) (record, bool, error) {
 	return value, true, nil
 }
 
+// validSessionName delegates session-name grammar to statedir's shared
+// validator, then keeps lifecycle's own slug-length bound: statedir names any
+// filesystem-safe component, but the generator here caps the current-format
+// slug at maxSessionSlugLength. Legacy names carry a fixed 32-hex body whose
+// computed slug length is 23, so they remain accepted.
 func validSessionName(name string) bool {
-	if legacySessionNamePattern.MatchString(name) {
-		return true
-	}
-	if !sessionNamePattern.MatchString(name) {
+	if !statedir.ValidSessionDirName(name) {
 		return false
 	}
-
 	slugLength := len(name) - len(sessionNamePrefix) - 1 - sessionIDHexLength
 	return slugLength <= maxSessionSlugLength
 }

@@ -71,9 +71,13 @@ func inspectDirectory(path string) error {
 }
 
 func writePID(path string) error {
-	file, err := openOwned(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	file, err := openOwned(path, os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("open watcher PID file %q: %w", path, err)
+	}
+	if err := file.Truncate(0); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("truncate watcher PID file %q: %w", path, err)
 	}
 	_, writeErr := io.WriteString(file, strconv.Itoa(os.Getpid())+"\n")
 	closeErr := file.Close()

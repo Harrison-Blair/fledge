@@ -414,3 +414,30 @@ func writeProfile(t *testing.T, root, contents string) {
 		t.Fatal(err)
 	}
 }
+
+func TestFindDoesNotUseHomeAsProjectRoot(t *testing.T) {
+	home := t.TempDir()
+	// os.UserHomeDir reads HOME on Unix and USERPROFILE on Windows, so set both
+	// to keep the test correct cross-platform.
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	writeStateFile(t, home, configFilename, "{\n  \"schema_version\": 1\n}\n")
+
+	nested := filepath.Join(home, "project", "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Find(nested); !errors.Is(err, ErrNotInitialized) {
+		t.Fatalf("Find(nested) home marker was unexpectedly discovered: %v", err)
+	}
+	if _, err := Find(home); !errors.Is(err, ErrNotInitialized) {
+		t.Fatalf("Find(home) home itself was unexpectedly discovered: %v", err)
+	}
+	if _, err := Init(home); err == nil {
+		t.Fatal("Init(home) accepted the home directory as a project root")
+	} else if !strings.Contains(err.Error(), "the home directory cannot be a Fledge project root") {
+		t.Fatalf("Init(home) error = %v, want home-root rejection", err)
+	}
+}

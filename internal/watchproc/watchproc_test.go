@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -318,6 +319,9 @@ func (stubHerdr) Protocol(context.Context) (int, error) { return 0, errors.New("
 func (stubHerdr) List(context.Context) ([]herdr.Session, error) {
 	return nil, errors.New("unused")
 }
+func (stubHerdr) Snapshot(context.Context, string) (herdr.Snapshot, error) {
+	return herdr.Snapshot{}, errors.New("unused")
+}
 func (stubHerdr) PromptAgent(context.Context, string, string, string) error {
 	return errors.New("unused")
 }
@@ -339,4 +343,25 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return string(b.contents)
+}
+
+func TestWritePIDTruncatesExistingContents(t *testing.T) {
+	path := filepath.Join(t.TempDir(), pidFilename)
+	stale := strings.Repeat("9", len(strconv.Itoa(os.Getpid()))+64) + "\n"
+	if err := os.WriteFile(path, []byte(stale), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writePID(path); err != nil {
+		t.Fatalf("writePID() error = %v", err)
+	}
+
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strconv.Itoa(os.Getpid()) + "\n"
+	if string(contents) != want {
+		t.Fatalf("PID file = %q, want %q", contents, want)
+	}
 }

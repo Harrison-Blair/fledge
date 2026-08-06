@@ -27,6 +27,7 @@ const dispatcherIdentity = "dispatcher"
 type Herdr interface {
 	Protocol(context.Context) (int, error)
 	List(context.Context) ([]herdr.Session, error)
+	Snapshot(context.Context, string) (herdr.Snapshot, error)
 	PromptAgent(context.Context, string, string, string) error
 }
 
@@ -108,13 +109,27 @@ func Run(ctx context.Context, options Options) error {
 		return err
 	}
 
-	events := make(chan watch.Event, 16)
+	type generationEvent struct {
+		generation int
+		event      watch.Event
+	}
+	events := make(chan generationEvent, 16)
 	type streamResult struct {
 		generation int
 		err        error
 	}
 	streamErrors := make(chan streamResult, 4)
-	acked := make(chan int, 4)
+	// streamReady carries a snapshot taken from the acknowledged subscription
+	// callback. The callback blocks on release until the run loop has reconciled
+	// that snapshot, so post-ack status events cannot be applied before it.
+	type streamReady struct {
+		generation int
+		panes      []string
+		snapshot   herdr.Snapshot
+		err        error
+		release    chan struct{}
+	}
+	readyResults := make(chan streamReady, 4)
 	panes, err := activePanes(store)
 	if err != nil {
 		return err
@@ -139,21 +154,64 @@ func Run(ctx context.Context, options Options) error {
 	// available to deliver that spawn's wakes instead of exiting for good.
 	restart := func() {
 		stopStream()
+		// Bump the generation on every teardown, not only when resubscribing. The
+		// stream just canceled will still deliver a terminal streamResult tagged
+		// with its own generation; advancing here before the idle branch makes that
+		// result — and any event or readiness the torn-down stream buffered —
+		// compare stale, so an idle transition rests instead of mistaking the
+		// canceled stream's end for a fatal stream failure.
+		generation++
 		if len(panes) == 0 {
 			stopStream = func() {}
 			emit(trace.Record{Kind: "dispatcher.idle", Origin: dispatcherIdentity, Note: "no live pane to subscribe to"})
 			announce()
 			return
 		}
-		generation++
 		streamCtx, cancel := context.WithCancel(ctx)
 		stopStream = cancel
 		current := generation
 		ids := append([]string(nil), panes...)
 		emit(trace.Record{Kind: "dispatcher.subscribe", Origin: dispatcherIdentity, Pane: strings.Join(ids, ",")})
+		// onReady runs synchronously inside Subscribe once Herdr acknowledges the
+		// subscription and before any stream event is read. Snapshotting from here
+		// and blocking on release until the run loop has reconciled it closes the
+		// resubscribe window: a pane.closed that arrived while the previous stream
+		// was torn down and this one not yet live reaches neither stream, but the
+		// snapshot still reflects it. All sends/waits select on streamCtx.Done() so
+		// stopStream cannot leak this goroutine.
+		onReady := func() {
+			snapshot, snapErr := options.Herdr.Snapshot(streamCtx, options.Session)
+			if streamCtx.Err() != nil {
+				return
+			}
+			ready := streamReady{generation: current, panes: ids, snapshot: snapshot,
+				err: snapErr, release: make(chan struct{})}
+			select {
+			case readyResults <- ready:
+			case <-streamCtx.Done():
+				return
+			}
+			select {
+			case <-ready.release:
+			case <-streamCtx.Done():
+			}
+		}
+		onEvent := func(event watch.Event) {
+			select {
+			case events <- generationEvent{generation: current, event: event}:
+			case <-streamCtx.Done():
+			}
+		}
 		go func() {
-			streamErrors <- streamResult{generation: current, err: options.Subscribe(streamCtx, ids,
-				func() { acked <- current }, func(event watch.Event) { events <- event })}
+			result := streamResult{generation: current, err: options.Subscribe(streamCtx, ids, onReady, onEvent)}
+			// Mirror the onReady/onEvent sends: streamCtx is canceled either by a
+			// restart tearing this stream down or by Run's defer stopStream, so a
+			// rapid burst of canceled subscriptions cannot pin sender goroutines on a
+			// full streamErrors channel after the run loop has stopped receiving.
+			select {
+			case streamErrors <- result:
+			case <-streamCtx.Done():
+			}
 		}()
 	}
 	restart()
@@ -162,12 +220,41 @@ func Run(ctx context.Context, options Options) error {
 		case <-ctx.Done():
 			emit(trace.Record{Kind: "dispatcher.exit", Origin: dispatcherIdentity, Note: ctx.Err().Error()})
 			return ctx.Err()
-		case current := <-acked:
-			if current == generation {
-				emit(trace.Record{Kind: "dispatcher.subscribed", Origin: dispatcherIdentity, Pane: strings.Join(panes, ",")})
-				announce()
+		case ready := <-readyResults:
+			// A stale generation's callback is unblocked and ignored: its stream is
+			// already being torn down and its snapshot describes a pane set we no
+			// longer subscribe to.
+			if ready.generation != generation {
+				close(ready.release)
+				continue
 			}
-		case event := <-events:
+			// Reconcile before releasing the callback. Only then can Herdr deliver
+			// post-ack events, so a status change queued after the snapshot cannot
+			// be applied and then overwritten by older snapshot state. A snapshot
+			// error is fatal: announcing readiness over a registry we could not
+			// reconcile would strand exactly the missed transition D2 must catch.
+			// The outer dispatcher process owns restart.
+			if ready.err != nil {
+				close(ready.release)
+				err := fmt.Errorf("reconcile Herdr snapshot for subscription: %w", ready.err)
+				emit(trace.Record{Kind: "dispatcher.exit", Origin: dispatcherIdentity, Note: err.Error()})
+				return err
+			}
+			if err := reconcileSnapshot(store, ready.panes, ready.snapshot); err != nil {
+				close(ready.release)
+				emit(trace.Record{Kind: "dispatcher.exit", Origin: dispatcherIdentity, Note: err.Error()})
+				return err
+			}
+			close(ready.release)
+			emit(trace.Record{Kind: "dispatcher.subscribed", Origin: dispatcherIdentity, Pane: strings.Join(panes, ",")})
+			announce()
+		case wrapped := <-events:
+			// An event buffered by a torn-down stream must not run against the new
+			// generation's just-reconciled registry and undo it.
+			if wrapped.generation != generation {
+				continue
+			}
+			event := wrapped.event
 			emit(trace.Record{Kind: "herdr.pane", Origin: event.Agent, Pane: event.PaneID,
 				Status: event.AgentStatus, Note: event.Type})
 			var err error
@@ -242,6 +329,39 @@ func activePanes(store *messaging.Store) ([]string, error) {
 	return panes, nil
 }
 
+// reconcileSnapshot catches any pane close or status change that fell into the
+// resubscribe window — between the previous stream's teardown and this stream
+// going live — by treating the acknowledged subscription's snapshot as the
+// authority. It is scoped to the pane IDs this generation subscribed to, never
+// the whole registry, so a concurrent later registration this stream never
+// covered is not mistaken for a departed pane. It is idempotent: reconciling an
+// already-correct registry is a no-op because StopAgentByPane ignores
+// inactive/unknown panes and RecordAgentStatus ignores an unchanged status.
+func reconcileSnapshot(store *messaging.Store, subscribed []string, snapshot herdr.Snapshot) error {
+	live := make(map[string]herdr.Pane, len(snapshot.Panes))
+	for _, pane := range snapshot.Panes {
+		live[pane.PaneID] = pane
+	}
+	for _, paneID := range subscribed {
+		pane, ok := live[paneID]
+		if !ok {
+			if err := store.StopAgentByPane(paneID); err != nil {
+				return err
+			}
+			continue
+		}
+		// A present pane with a blank status keeps its current registry status;
+		// the store rejects a blank transition and the snapshot simply carries no
+		// status to project.
+		if pane.AgentStatus != "" {
+			if err := store.RecordAgentStatus(paneID, pane.AgentStatus); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // drain submits every pending wake. One undeliverable recipient must not stall
 // the rest: recording its terminal failure outcome stops it being replayed, and
 // the remaining wakes still go out. Only a storage failure, which would make
@@ -278,11 +398,24 @@ func drain(ctx context.Context, client Herdr, session string, store *messaging.S
 			if ctx.Err() != nil {
 				return errors.Join(ctx.Err(), err)
 			}
+			// Re-read after the prompt fails: a reply or another dispatcher can
+			// resolve an uncertain message while the prompt is in flight, and only
+			// a still-uncertain message may take a delivery outcome. A cached
+			// status would reintroduce that race and, worse, let RecordDelivery
+			// reject an already-terminal message and strand this replayable wake.
 			if wake.Kind == "message" {
-				if _, recordErr := store.RecordDelivery(wake.ReferenceID, false, err.Error()); recordErr != nil {
-					return recordErr
+				message, getErr := store.Get(wake.ReferenceID)
+				if getErr != nil {
+					return getErr
+				}
+				if message.Status == messaging.StatusUncertain {
+					if _, recordErr := store.RecordDelivery(message.ID, false, err.Error()); recordErr != nil {
+						return recordErr
+					}
 				}
 			}
+			// The wake is independent replayable state and must always terminalize,
+			// even when its message was already delivered or failed.
 			if _, recordErr := store.RecordWakeOutcome(wake.ID, false, err.Error()); recordErr != nil {
 				return recordErr
 			}

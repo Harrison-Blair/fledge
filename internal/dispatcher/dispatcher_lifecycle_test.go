@@ -3,6 +3,7 @@ package dispatcher
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -141,6 +142,7 @@ func TestDispatcherStaysUpWithNoRegisteredPanes(t *testing.T) {
 		Caller: messaging.UserIdentity, Task: "start working"}); err != nil {
 		t.Fatal(err)
 	}
+	h.client.setSnapshotPanes("p1")
 	h.notifyLedger()
 
 	prompts := h.awaitDelivery(t, 1)
@@ -180,6 +182,9 @@ func TestDispatcherRecordsFailureAndDeliversRemainingWakes(t *testing.T) {
 	h.client.mu.Lock()
 	h.client.refuse = map[string]error{"wedged": errors.New("pane is not accepting input")}
 	h.client.mu.Unlock()
+	// Both panes are live for the subscription snapshot; a wedged pane still
+	// exists, it simply refuses input.
+	h.client.setSnapshotPanes("p1", "p2")
 
 	stuck, err := h.store.Create(messaging.CreateParams{
 		Sender: messaging.UserIdentity, Recipient: "wedged", RecipientPane: "p1", Body: "first"})
@@ -222,6 +227,9 @@ func TestDispatcherRetiresClosedPanes(t *testing.T) {
 		Name: "worker", PaneID: "p1", Harness: "codex", Caller: messaging.UserIdentity}); err != nil {
 		t.Fatal(err)
 	}
+	// p1 is live at subscribe time, so reconciliation leaves it alone; the
+	// pane.closed event below is what must retire it.
+	h.client.setSnapshotPanes("p1")
 	h.notifyLedger()
 	select {
 	case h.events <- watch.Event{Type: "pane.closed", PaneID: "p1"}:
@@ -240,5 +248,383 @@ func TestDispatcherRetiresClosedPanes(t *testing.T) {
 			t.Fatal("closed pane is still registered as active")
 		case <-time.After(10 * time.Millisecond):
 		}
+	}
+}
+
+// countKind reports how many emitted records carry the given kind, letting a
+// test distinguish the startup idle transition from a later one.
+func (r *recorder) countKind(kind string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, record := range r.records {
+		if record.Kind == kind {
+			n++
+		}
+	}
+	return n
+}
+
+// When the session's last live pane closes, restart tears down the active
+// subscription and the dispatcher must rest idle — the resting state the next
+// spawn relaunches into — not exit. The canceled stream still delivers a terminal
+// streamResult tagged with its own generation; the per-teardown generation bump
+// makes that result compare stale so the run loop discards it. Without the bump
+// the result matches the current generation, is treated as a live stream failure,
+// and the dispatcher returns "Herdr dispatcher event stream ended" and dies.
+func TestDispatcherStaysIdleWhenLastPaneCloses(t *testing.T) {
+	h := newHarness(t)
+	h.awaitReady(t)
+	// The startup idle (no registered panes) is the baseline; the teardown below
+	// must produce a second one.
+	if got := h.records.countKind("dispatcher.idle"); got != 1 {
+		t.Fatalf("startup dispatcher.idle count = %d, want 1", got)
+	}
+
+	// Bring a live pane up so the dispatcher holds an active subscription.
+	if _, _, err := h.store.RegisterAgent(messaging.RegisterParams{
+		Name: "worker", PaneID: "p1", Harness: "codex", Caller: messaging.UserIdentity}); err != nil {
+		t.Fatal(err)
+	}
+	h.client.setSnapshotPanes("p1")
+	h.notifyLedger()
+	deadline := time.After(5 * time.Second)
+	for {
+		subs := h.subscriptions()
+		if len(subs) == 1 && strings.Join(subs[0], ",") == "p1" {
+			break
+		}
+		select {
+		case err := <-h.done:
+			t.Fatalf("dispatcher exited before subscribing: %v", err)
+		case <-deadline:
+			t.Fatalf("no subscription for p1: %#v", h.subscriptions())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	// The last pane closes: its agent deactivates so the next ledger recompute
+	// sees zero live panes.
+	select {
+	case h.events <- watch.Event{Type: "pane.closed", PaneID: "p1"}:
+	case <-time.After(5 * time.Second):
+		t.Fatal("dispatcher never accepted the pane.closed event")
+	}
+	deadline = time.After(5 * time.Second)
+	for {
+		if _, err := h.store.AgentByPane("p1"); errors.Is(err, messaging.ErrAgentNotFound) {
+			break
+		}
+		select {
+		case err := <-h.done:
+			t.Fatalf("dispatcher exited: %v", err)
+		case <-deadline:
+			t.Fatal("closed pane is still registered as active")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	// Recompute active panes -> empty -> restart tears down the p1 stream. Its
+	// terminal result must be discarded as stale, not exit the dispatcher.
+	h.notifyLedger()
+
+	deadline = time.After(5 * time.Second)
+	for {
+		if h.records.countKind("dispatcher.idle") >= 2 {
+			break
+		}
+		select {
+		case err := <-h.done:
+			t.Fatalf("dispatcher exited when its last pane closed: %v", err)
+		case <-deadline:
+			t.Fatalf("dispatcher never rested idle after last pane closed; idle count = %d",
+				h.records.countKind("dispatcher.idle"))
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	// And it stays up: no late stream-ended exit may race in behind the idle.
+	select {
+	case err := <-h.done:
+		t.Fatalf("dispatcher exited after resting idle: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// TestDispatcherStaysIdleWhenLastPaneCloses_Repeated is the deterministic
+// regression guard for the same P1 fix. The reverted bug only surfaces when the
+// torn-down stream's terminal streamResult wins the goroutine's random select
+// against its already-canceled streamCtx.Done(): so a single zero-pane teardown
+// catches the reverted bug only ~50% of the time, making one 'go test' run an
+// unreliable regression signal. Driving many independent teardowns in one run
+// lifts single-run detection to ~1-0.5^N. Each iteration brings a fresh pane
+// live, closes it, asserts the dispatcher rests idle, and — before the next
+// subscription can bump the generation and mask a stale-generation exit — grants
+// a short grace window in which any raced stream-ended exit for THIS teardown
+// must surface. On correct code no exit ever surfaces, so the test is a
+// deterministic PASS.
+func TestDispatcherStaysIdleWhenLastPaneCloses_Repeated(t *testing.T) {
+	h := newHarness(t)
+	h.awaitReady(t)
+	// The startup idle (no registered panes) is the baseline; each iteration below
+	// must add exactly one more.
+	if got := h.records.countKind("dispatcher.idle"); got != 1 {
+		t.Fatalf("startup dispatcher.idle count = %d, want 1", got)
+	}
+
+	const iterations = 30
+	for i := range iterations {
+		pane := fmt.Sprintf("p%d", i)
+		name := fmt.Sprintf("worker%d", i)
+
+		// Bring a live pane up so the dispatcher holds an active subscription.
+		if _, _, err := h.store.RegisterAgent(messaging.RegisterParams{
+			Name: name, PaneID: pane, Harness: "codex", Caller: messaging.UserIdentity}); err != nil {
+			t.Fatalf("iteration %d: register %s: %v", i, name, err)
+		}
+		h.client.setSnapshotPanes(pane)
+		h.notifyLedger()
+		h.awaitSubscription(t, i, pane)
+
+		// The last pane closes: its agent deactivates so the next ledger recompute
+		// sees zero live panes and tears the p-i stream down.
+		select {
+		case h.events <- watch.Event{Type: "pane.closed", PaneID: pane}:
+		case err := <-h.done:
+			t.Fatalf("iteration %d: dispatcher exited before pane.closed: %v", i, err)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("iteration %d: dispatcher never accepted pane.closed for %s", i, pane)
+		}
+		h.awaitPaneRetired(t, i, pane)
+		// Recompute active panes -> empty -> restart tears down the p-i stream. Its
+		// terminal result must be discarded as stale, not exit the dispatcher.
+		h.notifyLedger()
+
+		// Startup idle plus one per completed iteration.
+		h.awaitIdleCount(t, i, i+2)
+
+		// The torn-down stream's terminal result may still be racing toward the run
+		// loop. Give it a window to surface a stale-generation exit for THIS
+		// teardown before the next iteration's subscribe bumps the generation and
+		// would mask it. On correct code the bumped generation already made that
+		// result stale, so nothing exits.
+		select {
+		case err := <-h.done:
+			t.Fatalf("iteration %d: dispatcher exited after resting idle: %v", i, err)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// awaitSubscription waits until the dispatcher has opened a subscription for the
+// single given pane, so a later pane.closed exercises a genuinely live stream's
+// teardown rather than a no-op.
+func (h *dispatcherHarness) awaitSubscription(t *testing.T, iter int, pane string) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		for _, sub := range h.subscriptions() {
+			if len(sub) == 1 && sub[0] == pane {
+				return
+			}
+		}
+		select {
+		case err := <-h.done:
+			t.Fatalf("iteration %d: dispatcher exited before subscribing to %s: %v", iter, pane, err)
+		case <-deadline:
+			t.Fatalf("iteration %d: no subscription for %s: %#v", iter, pane, h.subscriptions())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// awaitPaneRetired waits until the closed pane's agent has been deactivated, the
+// precondition for the next recompute seeing zero live panes.
+func (h *dispatcherHarness) awaitPaneRetired(t *testing.T, iter int, pane string) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		if _, err := h.store.AgentByPane(pane); errors.Is(err, messaging.ErrAgentNotFound) {
+			return
+		}
+		select {
+		case err := <-h.done:
+			t.Fatalf("iteration %d: dispatcher exited while retiring %s: %v", iter, pane, err)
+		case <-deadline:
+			t.Fatalf("iteration %d: closed pane %s still registered as active", iter, pane)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// awaitIdleCount waits until the dispatcher has rested idle at least `want`
+// times, failing fast if it exits instead.
+func (h *dispatcherHarness) awaitIdleCount(t *testing.T, iter, want int) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		if h.records.countKind("dispatcher.idle") >= want {
+			return
+		}
+		select {
+		case err := <-h.done:
+			t.Fatalf("iteration %d: dispatcher exited when its last pane closed: %v", iter, err)
+		case <-deadline:
+			t.Fatalf("iteration %d: dispatcher never rested idle after last pane closed; idle count = %d, want %d",
+				iter, h.records.countKind("dispatcher.idle"), want)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// gatedSub models one Herdr subscription whose acknowledgement the test releases
+// on demand, so the vulnerable resubscribe window can be entered deterministically
+// without timing sleeps.
+type gatedSub struct {
+	panes []string
+	ack   chan struct{}
+}
+
+// A pane that closes after the old subscription is torn down but before the new
+// one is acknowledged emits a pane.closed neither stream can carry. Only a
+// snapshot taken from the new subscription's onReady still reflects the closure,
+// so reconciliation — not an event — must retire the departed agent.
+func TestDispatcherReconcilesPaneClosedDuringResubscribe(t *testing.T) {
+	root := t.TempDir()
+	store := messaging.New(root, testSession)
+	if _, err := store.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	// Worker A owns a task on p1, so its silent departure must orphan that task.
+	if _, _, err := store.RegisterAgent(messaging.RegisterParams{
+		Name: "workerA", PaneID: "p1", Harness: "codex",
+		Caller: messaging.UserIdentity, Task: "do work"}); err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := store.Tasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var taskID string
+	for _, task := range tasks {
+		if task.Assignee == "workerA" {
+			taskID = task.ID
+		}
+	}
+	if taskID == "" {
+		t.Fatal("workerA has no task to orphan")
+	}
+
+	client := &fakeHerdr{protocol: RequiredHerdrProtocol}
+	client.setSnapshotPanes("p1")
+	files := &fakeFiles{events: make(chan struct{}, 4), errs: make(chan error, 1)}
+
+	subs := make(chan *gatedSub, 8)
+	subscribe := func(streamCtx context.Context, panes []string, onReady func(), _ func(watch.Event)) error {
+		sub := &gatedSub{panes: append([]string(nil), panes...), ack: make(chan struct{})}
+		select {
+		case subs <- sub:
+		case <-streamCtx.Done():
+			return streamCtx.Err()
+		}
+		// Wait for the test to acknowledge before running onReady, exactly as
+		// watch.Subscribe waits for Herdr's ack before calling it.
+		select {
+		case <-sub.ack:
+		case <-streamCtx.Done():
+			return streamCtx.Err()
+		}
+		onReady()
+		<-streamCtx.Done()
+		return streamCtx.Err()
+	}
+
+	ready := make(chan struct{}, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, Options{Root: root, Session: testSession, Herdr: client,
+			WatchFile: func(string) (FileWatcher, error) { return files, nil },
+			Subscribe: subscribe,
+			Ready:     func() { ready <- struct{}{} }})
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("dispatcher did not stop")
+		}
+	})
+
+	awaitSub := func(want []string) *gatedSub {
+		t.Helper()
+		select {
+		case sub := <-subs:
+			if strings.Join(sub.panes, ",") != strings.Join(want, ",") {
+				t.Fatalf("subscription = %#v, want %#v", sub.panes, want)
+			}
+			return sub
+		case err := <-done:
+			t.Fatalf("dispatcher exited before subscribing: %v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("no subscription for %#v", want)
+		}
+		return nil
+	}
+
+	// First subscription covers p1; acknowledging it drives the initial snapshot
+	// reconciliation, after which the dispatcher announces readiness.
+	first := awaitSub([]string{"p1"})
+	close(first.ack)
+	select {
+	case <-ready:
+	case err := <-done:
+		t.Fatalf("dispatcher exited before ready: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("dispatcher never became ready")
+	}
+
+	// Registering B changes the pane set, tearing down the p1 stream and opening
+	// a replacement for [p1, p2] that is not yet acknowledged: the window.
+	if _, _, err := store.RegisterAgent(messaging.RegisterParams{
+		Name: "workerB", PaneID: "p2", Harness: "codex", Caller: messaging.UserIdentity}); err != nil {
+		t.Fatal(err)
+	}
+	files.events <- struct{}{}
+	second := awaitSub([]string{"p1", "p2"})
+
+	// A closes inside the window: the snapshot loses p1 and NO pane.closed event
+	// is delivered on either stream. Acknowledging the replacement now is the only
+	// thing that can retire A, and only via snapshot reconciliation.
+	client.setSnapshotPanes("p2")
+	close(second.ack)
+
+	deadline := time.After(5 * time.Second)
+	for {
+		if _, err := store.AgentByPane("p1"); errors.Is(err, messaging.ErrAgentNotFound) {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("dispatcher exited: %v", err)
+		case <-deadline:
+			t.Fatal("A was not reconciled to stopped during the resubscribe window")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	if _, err := store.AgentByPane("p2"); err != nil {
+		t.Fatalf("workerB should still be active on p2: %v", err)
+	}
+	task, err := store.Task(taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Status != messaging.TaskOrphaned {
+		t.Fatalf("A's task status = %s, want orphaned", task.Status)
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("dispatcher exited after reconciliation: %v", err)
+	default:
 	}
 }

@@ -360,7 +360,16 @@ func TestStartRejectsSelectionFlagsWhenReattaching(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	writeTestRecord(t, root)
+	initTestProject(t, root)
+	if err := initializeStateDirectory(root); err != nil {
+		t.Fatal(err)
+	}
+	// An unbound legacy record: the pre-lock reattach must reject the selection
+	// flags before binding, so MessagingSessionID stays empty. If binding ran
+	// first, a durable session ID would be written even though Start errors.
+	if created, err := createRecord(root, record{Version: recordVersion, SessionName: testSessionName}); err != nil || !created {
+		t.Fatalf("createRecord() = %v, %v", created, err)
+	}
 	client := &fakeHerdr{sessions: []herdr.Session{{Name: testSessionName, Running: true}}}
 	manager, _ := newTestManager(client, &fakeConfirmer{})
 
@@ -371,8 +380,118 @@ func TestStartRejectsSelectionFlagsWhenReattaching(t *testing.T) {
 	if len(client.attachCalls) != 0 {
 		t.Fatalf("Attach() calls = %v, want none", client.attachCalls)
 	}
+	value, found, err := readRecord(root)
+	if err != nil || !found {
+		t.Fatalf("readRecord() = %v, %v", found, err)
+	}
+	if value.MessagingSessionID != "" {
+		t.Fatalf("MessagingSessionID = %q, want empty (pre-lock reject must not bind)", value.MessagingSessionID)
+	}
 	if _, found, err := readPreferences(root); err != nil || found {
 		t.Fatalf("preferences after rejected reattach = %v, %v; want none", found, err)
+	}
+}
+
+// TestStartPostLockReattachBindsBeforeRejectingSelection covers the second
+// reattach path: the session is stopped at the first List and running at the
+// second (it started up between the two checks under the startup lock). That
+// path intentionally binds durable state and releases the lock before it
+// validates the selection flags, so Start still errors on the flags but leaves
+// the record bound.
+func TestStartPostLockReattachBindsBeforeRejectingSelection(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	initTestProject(t, root)
+	if err := initializeStateDirectory(root); err != nil {
+		t.Fatal(err)
+	}
+	sessionID, err := messaging.New(root, testSessionName).Initialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created, err := createRecord(root, record{Version: recordVersion, SessionName: testSessionName}); err != nil || !created {
+		t.Fatalf("createRecord() = %v, %v", created, err)
+	}
+	client := &fakeHerdr{listSequence: [][]herdr.Session{
+		{{Name: testSessionName, Running: false}},
+		{{Name: testSessionName, Running: true}},
+	}}
+	manager, _ := newTestManager(client, &fakeConfirmer{})
+	manager.lookPath = installedTestHarness
+	launches := 0
+	manager.watchLauncher = func(string) error { launches++; return nil }
+
+	err = manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout, Harness: "codex", HarnessSet: true})
+	if err == nil || !strings.Contains(err.Error(), "cannot be used when reattaching") {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if len(client.attachCalls) != 0 {
+		t.Fatalf("Attach() calls = %v, want none", client.attachCalls)
+	}
+	if launches != 0 {
+		t.Fatalf("watcher launches = %d, want 0 (selection rejected before the common tail)", launches)
+	}
+	value, found, err := readRecord(root)
+	if err != nil || !found {
+		t.Fatalf("readRecord() = %v, %v", found, err)
+	}
+	if value.MessagingSessionID != sessionID {
+		t.Fatalf("MessagingSessionID = %q, want %q (post-lock path must bind before the selection check)", value.MessagingSessionID, sessionID)
+	}
+}
+
+// TestStartPostLockReattachReleasesStartupLock covers the same post-lock
+// reattach path as the test above, but asserts the branch releases the startup
+// lock it owns before returning. The record is pre-bound so the binder is a
+// no-op that does not rewrite session.json: the lock file's inode stays stable,
+// so re-acquiring the same startup lock after Start returns observes whether
+// unlock() actually ran. (When binding rewrites the record, the rename orphans
+// the locked inode, and a path-based re-acquire always succeeds regardless of a
+// leak, so this scenario deliberately avoids the rewrite.) A regression that
+// binds but omits unlock() keeps the flock held, so the bounded re-acquire
+// below blocks to its deadline and fails instead of succeeding at once.
+func TestStartPostLockReattachReleasesStartupLock(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	initTestProject(t, root)
+	if err := initializeStateDirectory(root); err != nil {
+		t.Fatal(err)
+	}
+	sessionID, err := messaging.New(root, testSessionName).Initialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created, err := createRecord(root, record{Version: recordVersion, SessionName: testSessionName, MessagingSessionID: sessionID}); err != nil || !created {
+		t.Fatalf("createRecord() = %v, %v", created, err)
+	}
+	client := &fakeHerdr{listSequence: [][]herdr.Session{
+		{{Name: testSessionName, Running: false}},
+		{{Name: testSessionName, Running: true}},
+	}}
+	manager, _ := newTestManager(client, &fakeConfirmer{})
+	manager.lookPath = installedTestHarness
+	manager.watchLauncher = func(string) error { return nil }
+
+	err = manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout, Harness: "codex", HarnessSet: true})
+	if err == nil || !strings.Contains(err.Error(), "cannot be used when reattaching") {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	// The post-lock reattach path must release the startup lock it owns before
+	// returning. Because the pre-bound record is not rewritten, the lock file's
+	// inode is unchanged, so re-acquiring the same lock proves release: a leaked
+	// unlock() would keep the flock held and this bounded acquire would block to
+	// its deadline and fail.
+	lockCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	unlock, err := lockSessionRecord(lockCtx, root)
+	if err != nil {
+		t.Fatalf("re-acquire startup lock after reattach = %v; post-lock reattach path leaked the lock", err)
+	}
+	if err := unlock(); err != nil {
+		t.Fatalf("unlock() = %v", err)
 	}
 }
 
@@ -1675,6 +1794,10 @@ func TestReadRecordSessionNameFormats(t *testing.T) {
 		{name: "uppercase slug", sessionName: "fledge-My-project-0123abcd", wantValid: false},
 		{name: "consecutive separators", sessionName: "fledge-my--project-0123abcd", wantValid: false},
 		{name: "slug too long", sessionName: "fledge-" + strings.Repeat("a", 65) + "-0123abcd", wantValid: false},
+		// A grammatically valid hyphenated slug of 65 bytes must still be rejected
+		// by the retained length cap, so delegating grammar to statedir (which has
+		// no length bound) cannot silently broaden accepted records.
+		{name: "hyphenated slug too long", sessionName: "fledge-a" + strings.Repeat("-a", 32) + "-0123abcd", wantValid: false},
 		{name: "short identifier", sessionName: "fledge-my-project-0123abc", wantValid: false},
 		{name: "uppercase identifier", sessionName: "fledge-my-project-0123abcD", wantValid: false},
 	}
@@ -2268,6 +2391,7 @@ type fakeHerdr struct {
 	stopErr           error
 	deleteErr         error
 	sessions          []herdr.Session
+	listSequence      [][]herdr.Session
 	snapshot          herdr.Snapshot
 	snapshotErr       error
 	checkCalls        int
@@ -2420,6 +2544,13 @@ func (f *fakeHerdr) PromptAgent(_ context.Context, session string, recipient str
 func (f *fakeHerdr) List(context.Context) ([]herdr.Session, error) {
 	f.calls = append(f.calls, "list")
 	f.listCalls++
+	if len(f.listSequence) > 0 {
+		index := f.listCalls - 1
+		if index >= len(f.listSequence) {
+			index = len(f.listSequence) - 1
+		}
+		return f.listSequence[index], f.listErr
+	}
 	return f.sessions, f.listErr
 }
 

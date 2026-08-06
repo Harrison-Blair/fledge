@@ -143,6 +143,41 @@ func TestOpenCodeLegacyRuntimeFallbackAndCleanup(t *testing.T) {
 	}
 }
 
+func TestWriteProtectedFileTruncatesPreviousContents(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "runtime", openCodeEnvironmentFile)
+	if err := writeProtectedFile(path, []byte("a long initial configuration value")); err != nil {
+		t.Fatal(err)
+	}
+	// Overwriting with shorter contents must leave no suffix from the previous
+	// value: the handle-level Truncate(0) replaces os.O_TRUNC removed for the
+	// symlink-safe open.
+	if err := writeProtectedFile(path, []byte("short")); err != nil {
+		t.Fatal(err)
+	}
+	assertProtectedFile(t, path, "short")
+}
+
+func TestWriteProtectedFileRejectsSymlinkWithoutTouchingTarget(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "sentinel")
+	const sentinel = "do not touch"
+	if err := os.WriteFile(target, []byte(sentinel), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "snapshot")
+	if err := os.Symlink(target, path); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	if err := writeProtectedFile(path, []byte("attacker payload")); err == nil {
+		t.Fatal("writeProtectedFile() accepted a symlinked destination")
+	}
+	if contents, err := os.ReadFile(target); err != nil || string(contents) != sentinel {
+		t.Fatalf("sentinel target = %q, %v; want unchanged %q", contents, err, sentinel)
+	}
+}
+
 func assertProtectedFile(t *testing.T, path, want string) {
 	t.Helper()
 	contents, err := os.ReadFile(path)

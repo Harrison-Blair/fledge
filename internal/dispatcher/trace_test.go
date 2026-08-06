@@ -58,6 +58,7 @@ func TestRunEmitsTheRecordSequenceForAMessageWake(t *testing.T) {
 	}
 	files := &fakeFiles{events: make(chan struct{}, 4), errs: make(chan error, 1)}
 	client := &fakeHerdr{protocol: RequiredHerdrProtocol}
+	client.setSnapshotPanes("%12")
 	collected := &recorder{}
 	ready := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -137,6 +138,7 @@ func TestRunEmitsAFailedWakeWithItsTransportError(t *testing.T) {
 	}
 	files := &fakeFiles{events: make(chan struct{}, 1), errs: make(chan error, 1)}
 	client := &fakeHerdr{protocol: RequiredHerdrProtocol, refuse: map[string]error{"worker": errPaneGone}}
+	client.setSnapshotPanes("%12")
 	collected := &recorder{}
 	ready := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -180,6 +182,7 @@ func TestRunDoesNotReplayLedgerHistoryOnStart(t *testing.T) {
 	}
 	files := &fakeFiles{events: make(chan struct{}, 1), errs: make(chan error, 1)}
 	client := &fakeHerdr{protocol: RequiredHerdrProtocol}
+	client.setSnapshotPanes("%12")
 	collected := &recorder{}
 	ready := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -235,6 +238,7 @@ func TestRunSurvivesTraceReadFailure(t *testing.T) {
 	}
 	files := &fakeFiles{events: make(chan struct{}, 1), errs: make(chan error, 1)}
 	client := &fakeHerdr{protocol: RequiredHerdrProtocol}
+	client.setSnapshotPanes("%12")
 	collected := &recorder{}
 	records := make(chan trace.Record, 16)
 	ready := make(chan struct{})

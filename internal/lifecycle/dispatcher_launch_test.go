@@ -2,12 +2,15 @@ package lifecycle
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/Harrison-Blair/fledge/internal/dispatcher"
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/messaging"
+	"github.com/Harrison-Blair/fledge/internal/project"
 )
 
 // Coordination has no polling fallback, so an old Herdr has to be refused up
@@ -85,15 +88,37 @@ func TestMutatingCommandsEnsureADispatcherIsRunning(t *testing.T) {
 
 	t.Run("assign and transition", func(t *testing.T) {
 		manager, launches, root, client := newLaunchManager(t)
-		task, err := manager.TaskAssign(ctx, root, "worker", "", "do the thing")
+		// Invoke from a nested directory: coordinationStore resolves the project
+		// root once, and the same canonical root must reach the launcher for both
+		// the assign and the transition — never the nested working directory.
+		nested := filepath.Join(root, "sub", "dir")
+		if err := os.MkdirAll(nested, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		wantRoot, err := project.Find(nested)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := manager.TaskTransition(ctx, root, task.ID, messaging.TaskCanceled, ""); err != nil {
+		var launchedRoots []string
+		manager.watchLauncher = func(gotRoot string) error {
+			*launches++
+			launchedRoots = append(launchedRoots, gotRoot)
+			return nil
+		}
+		task, err := manager.TaskAssign(ctx, nested, "worker", "", "do the thing")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := manager.TaskTransition(ctx, nested, task.ID, messaging.TaskCanceled, ""); err != nil {
 			t.Fatal(err)
 		}
 		if *launches != 2 {
 			t.Fatalf("dispatcher launches = %d, want 2", *launches)
+		}
+		for _, got := range launchedRoots {
+			if got != wantRoot {
+				t.Fatalf("launcher root = %q, want canonical project root %q", got, wantRoot)
+			}
 		}
 		// Task commands validate, append, and launch. A wedged pane must not be
 		// able to stall them, so they wait on no Herdr call at all.

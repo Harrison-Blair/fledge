@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/Harrison-Blair/fledge/internal/fsutil"
 	"github.com/Harrison-Blair/fledge/internal/statedir"
 )
 
@@ -128,13 +129,19 @@ func writeProtectedFile(path string, contents []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create OpenCode runtime directory: %w", err)
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	file, err := fsutil.OpenRegular(path, os.O_WRONLY|os.O_CREATE, 0o600)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", path, err)
 	}
 	if err := file.Chmod(0o600); err != nil {
 		_ = file.Close()
 		return fmt.Errorf("protect %s: %w", path, err)
+	}
+	// OpenRegular must not carry os.O_TRUNC (the Windows symlink-safety
+	// contract), so truncate through the validated handle instead.
+	if err := file.Truncate(0); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("truncate %s: %w", path, err)
 	}
 	if _, err := file.Write(contents); err != nil {
 		_ = file.Close()

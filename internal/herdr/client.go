@@ -18,6 +18,10 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/fswatch"
 )
 
+// MaxResponseBytes bounds how much stdout Fledge buffers from a single Herdr
+// CLI invocation, protecting against an unbounded or misbehaving response.
+const MaxResponseBytes = 4 << 20
+
 // Session is a named Herdr session returned by the Herdr CLI.
 type Session struct {
 	Name       string `json:"name"`
@@ -384,10 +388,28 @@ func (c *Client) runJSON(ctx context.Context, destination any, args ...string) e
 	var stderr bytes.Buffer
 
 	command := exec.CommandContext(ctx, c.binary, args...)
-	command.Stdout = &stdout
+	stdoutPipe, err := command.StdoutPipe()
+	if err != nil {
+		return err
+	}
 	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		return err
+	}
 
-	if err := command.Run(); err != nil {
+	_, readErr := io.CopyN(&stdout, stdoutPipe, MaxResponseBytes+1)
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		return fmt.Errorf("read JSON response: %w", readErr)
+	}
+	if stdout.Len() > MaxResponseBytes {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		return fmt.Errorf("response exceeds %d bytes", MaxResponseBytes)
+	}
+
+	if err := command.Wait(); err != nil {
 		message := strings.TrimSpace(stderr.String())
 		if message == "" {
 			return err

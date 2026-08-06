@@ -763,3 +763,18 @@ func assertStrings(t *testing.T, name string, got, want []string) {
 		}
 	}
 }
+
+func TestClientRejectsOversizeResponse(t *testing.T) {
+	configureHelper(t, "")
+	// Whitespace payload one byte past the cap: JSON validity cannot mask
+	// whether the size check runs before decoding. Delivered via a response
+	// file rather than an environment variable.
+	oversize := strings.Repeat(" ", MaxResponseBytes+1)
+	t.Setenv(helperSequenceEnv, writeSequence(t, []string{oversize}))
+
+	_, err := NewClient(helperBinary(t), nil, nil, nil).List(context.Background())
+	want := fmt.Sprintf("response exceeds %d bytes", MaxResponseBytes)
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("List() error = %v, want containing %q", err, want)
+	}
+}
