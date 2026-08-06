@@ -28,7 +28,7 @@ func TestAgentContextRendersTextByDefault(t *testing.T) {
 	t.Parallel()
 
 	manager := &fakeManager{contextResult: reportFixture()}
-	command := newRootCommand(manager, func() (string, error) { return "/project/nested", nil })
+	command := newRootCommand(manager, func() (string, error) { return "/project/nested", nil }, testVersion)
 	var output bytes.Buffer
 	command.SetOut(&output)
 	command.SetArgs([]string{"agent", "context"})
@@ -47,7 +47,7 @@ func TestAgentContextNamePassedThrough(t *testing.T) {
 	t.Parallel()
 
 	manager := &fakeManager{contextResult: reportFixture()}
-	command := newRootCommand(manager, func() (string, error) { return "/project", nil })
+	command := newRootCommand(manager, func() (string, error) { return "/project", nil }, testVersion)
 	command.SetArgs([]string{"agent", "context", "orchestrator"})
 	if err := command.Execute(); err != nil {
 		t.Fatal(err)
@@ -61,7 +61,7 @@ func TestAgentContextJSONIsVersionedAndValid(t *testing.T) {
 	t.Parallel()
 
 	manager := &fakeManager{contextResult: reportFixture()}
-	command := newRootCommand(manager, func() (string, error) { return "/project", nil })
+	command := newRootCommand(manager, func() (string, error) { return "/project", nil }, testVersion)
 	var output bytes.Buffer
 	command.SetOut(&output)
 	command.SetArgs([]string{"agent", "context", "--json"})
@@ -84,7 +84,7 @@ func TestAgentContextRejectsExtraArgs(t *testing.T) {
 	t.Parallel()
 
 	manager := &fakeManager{}
-	command := newRootCommand(manager, func() (string, error) { return "/project", nil })
+	command := newRootCommand(manager, func() (string, error) { return "/project", nil }, testVersion)
 	command.SetArgs([]string{"agent", "context", "one", "two"})
 	if err := command.Execute(); err == nil {
 		t.Error("Execute() error = nil, want too-many-args rejection")

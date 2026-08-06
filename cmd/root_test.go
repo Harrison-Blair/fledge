@@ -16,11 +16,34 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/messaging"
 )
 
+// testVersion is a sentinel: the commands carry whatever version they are
+// handed, so the tests never restate the real one.
+const testVersion = "9.9.9"
+
+func TestRootCommandReportsTheInjectedVersion(t *testing.T) {
+	t.Parallel()
+
+	for _, args := range [][]string{{"--version"}, {"version"}} {
+		command := newRootCommand(&fakeManager{}, func() (string, error) { return "/project", nil }, testVersion)
+		var output bytes.Buffer
+		command.SetOut(&output)
+		command.SetErr(&output)
+		command.SetArgs(args)
+
+		if err := command.Execute(); err != nil {
+			t.Fatalf("Execute(%v) error = %v", args, err)
+		}
+		if output.String() != testVersion+"\n" {
+			t.Errorf("Execute(%v) output = %q, want the injected version", args, output.String())
+		}
+	}
+}
+
 func TestRootCommandShowsHelp(t *testing.T) {
 	t.Parallel()
 
 	manager := &fakeManager{}
-	command := newRootCommand(manager, func() (string, error) { return "/project", nil })
+	command := newRootCommand(manager, func() (string, error) { return "/project", nil }, testVersion)
 	var output bytes.Buffer
 	command.SetOut(&output)
 	command.SetErr(&output)
@@ -41,7 +64,7 @@ func TestRootCommandCapturesManagerOutput(t *testing.T) {
 
 	project := t.TempDir()
 	manager := lifecycle.NewManager(nil, nil, nil, io.Discard)
-	command := newRootCommand(manager, func() (string, error) { return project, nil })
+	command := newRootCommand(manager, func() (string, error) { return project, nil }, testVersion)
 	var output bytes.Buffer
 	command.SetOut(&output)
 	command.SetArgs([]string{"init", project})
@@ -58,22 +81,25 @@ func TestWatchRoutesAttachedAndDaemonModes(t *testing.T) {
 	t.Parallel()
 
 	for _, test := range []struct {
-		name   string
-		args   []string
-		daemon bool
+		name       string
+		args       []string
+		daemon     bool
+		jsonOutput bool
 	}{
 		{name: "attached", args: []string{"watch"}},
 		{name: "daemon", args: []string{"watch", "--daemon"}, daemon: true},
+		{name: "json", args: []string{"watch", "--json"}, jsonOutput: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			manager := &fakeManager{}
-			command := newRootCommand(manager, func() (string, error) { return "/project/nested", nil })
+			command := newRootCommand(manager, func() (string, error) { return "/project/nested", nil }, testVersion)
 			command.SetArgs(test.args)
 			if err := command.Execute(); err != nil {
 				t.Fatal(err)
 			}
-			if len(manager.watchDirs) != 1 || manager.watchDirs[0] != "/project/nested" || len(manager.watchOptions) != 1 || manager.watchOptions[0].Daemon != test.daemon {
+			if len(manager.watchDirs) != 1 || manager.watchDirs[0] != "/project/nested" || len(manager.watchOptions) != 1 ||
+				manager.watchOptions[0].Daemon != test.daemon || manager.watchOptions[0].JSON != test.jsonOutput {
 				t.Fatalf("Watch() dirs/options = %#v/%#v", manager.watchDirs, manager.watchOptions)
 			}
 		})
@@ -94,7 +120,7 @@ func TestStartOptionsAndNativeArguments(t *testing.T) {
 	t.Parallel()
 
 	manager := &fakeManager{}
-	command := newRootCommand(manager, func() (string, error) { return "/project/nested", nil })
+	command := newRootCommand(manager, func() (string, error) { return "/project/nested", nil }, testVersion)
 	command.SetArgs([]string{"start", "-k", "codex", "-m", "gpt-custom", "-t", "45s", "--", "--sandbox", "read-only"})
 	if err := command.Execute(); err != nil {
 		t.Fatal(err)
@@ -115,7 +141,7 @@ func TestAgentSpawnOptionsAndNativeArguments(t *testing.T) {
 	t.Parallel()
 
 	manager := &fakeManager{}
-	command := newRootCommand(manager, func() (string, error) { return "/project/nested", nil })
+	command := newRootCommand(manager, func() (string, error) { return "/project/nested", nil }, testVersion)
 	command.SetArgs([]string{"agent", "spawn", "-n", "reviewer", "-k", "claude", "-m", "opus", "-C", "pkg", "--task", "Review", "-t", "1m", "--", "--dangerously-skip-permissions"})
 	if err := command.Execute(); err != nil {
 		t.Fatal(err)
@@ -140,7 +166,7 @@ func TestNativeArgumentsMustNotPrecedeDash(t *testing.T) {
 		{"agent", "spawn", "reviewer", "--", "--resume"},
 	} {
 		manager := &fakeManager{}
-		command := newRootCommand(manager, func() (string, error) { return "/project", nil })
+		command := newRootCommand(manager, func() (string, error) { return "/project", nil }, testVersion)
 		command.SetArgs(args)
 		err := command.Execute()
 		if err == nil || !strings.Contains(err.Error(), "must follow --") {
@@ -156,7 +182,7 @@ func TestStartAcceptsNativeArgumentsAfterDash(t *testing.T) {
 	t.Parallel()
 
 	manager := &fakeManager{}
-	command := newRootCommand(manager, func() (string, error) { return "/project", nil })
+	command := newRootCommand(manager, func() (string, error) { return "/project", nil }, testVersion)
 	command.SetArgs([]string{"start", "--", "--flag"})
 	if err := command.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -170,7 +196,7 @@ func TestAgentStopUsesNameAndCurrentDirectory(t *testing.T) {
 	t.Parallel()
 
 	manager := &fakeManager{}
-	command := newRootCommand(manager, func() (string, error) { return "/project/nested", nil })
+	command := newRootCommand(manager, func() (string, error) { return "/project/nested", nil }, testVersion)
 	command.SetArgs([]string{"agent", "stop", "reviewer"})
 	if err := command.Execute(); err != nil {
 		t.Fatal(err)
@@ -188,7 +214,7 @@ func TestAgentStopRequiresExactlyOneName(t *testing.T) {
 
 	for _, args := range [][]string{{"agent", "stop"}, {"agent", "stop", "one", "two"}} {
 		manager := &fakeManager{}
-		command := newRootCommand(manager, func() (string, error) { return "/project", nil })
+		command := newRootCommand(manager, func() (string, error) { return "/project", nil }, testVersion)
 		command.SetArgs(args)
 		if err := command.Execute(); err == nil {
 			t.Errorf("Execute(%v) error = nil", args)
@@ -203,7 +229,7 @@ func TestAgentStopWrapsCurrentDirectoryError(t *testing.T) {
 	t.Parallel()
 
 	manager := &fakeManager{}
-	command := newRootCommand(manager, func() (string, error) { return "", errors.New("cwd failed") })
+	command := newRootCommand(manager, func() (string, error) { return "", errors.New("cwd failed") }, testVersion)
 	command.SetArgs([]string{"agent", "stop", "reviewer"})
 	err := command.Execute()
 	if err == nil || !strings.Contains(err.Error(), "get current directory") {
@@ -232,7 +258,7 @@ func TestAgentMessageCommandsRouteAndPrintResults(t *testing.T) {
 		{"agent", "message", "reply", "msg-send", "looks good"},
 		{"agent", "message", "inbox", "user"},
 	} {
-		command := newRootCommand(manager, func() (string, error) { return "/project/nested", nil })
+		command := newRootCommand(manager, func() (string, error) { return "/project/nested", nil }, testVersion)
 		command.SetOut(&output)
 		command.SetArgs(args)
 		if err := command.Execute(); err != nil {
@@ -283,7 +309,7 @@ func TestAgentMessageArgumentAndBodyValidation(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			manager := &fakeManager{}
-			command := newRootCommand(manager, func() (string, error) { return "/project", nil })
+			command := newRootCommand(manager, func() (string, error) { return "/project", nil }, testVersion)
 			command.SetArgs(test.args)
 			if err := command.Execute(); err == nil {
 				t.Fatalf("Execute(%v) error = nil", test.args)
@@ -304,7 +330,7 @@ func TestAgentMessageWrapsCurrentDirectoryFailures(t *testing.T) {
 		{"agent", "message", "inbox"},
 	} {
 		manager := &fakeManager{}
-		command := newRootCommand(manager, func() (string, error) { return "", errors.New("cwd failed") })
+		command := newRootCommand(manager, func() (string, error) { return "", errors.New("cwd failed") }, testVersion)
 		command.SetArgs(args)
 		err := command.Execute()
 		if err == nil || !strings.Contains(err.Error(), "get current directory") {
@@ -323,7 +349,7 @@ func TestAgentMessageBodiesComeFromFileOrStdin(t *testing.T) {
 	}
 
 	fileManager := &fakeManager{}
-	command := newRootCommand(fileManager, func() (string, error) { return "/project", nil })
+	command := newRootCommand(fileManager, func() (string, error) { return "/project", nil }, testVersion)
 	command.SetArgs([]string{"agent", "message", "send", "worker", "-F", path})
 	if err := command.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -333,7 +359,7 @@ func TestAgentMessageBodiesComeFromFileOrStdin(t *testing.T) {
 	}
 
 	stdinManager := &fakeManager{}
-	command = newRootCommand(stdinManager, func() (string, error) { return "/project", nil })
+	command = newRootCommand(stdinManager, func() (string, error) { return "/project", nil }, testVersion)
 	command.SetIn(strings.NewReader("piped\nbody"))
 	command.SetArgs([]string{"agent", "message", "reply", "msg-1", "--file", "-"})
 	if err := command.Execute(); err != nil {
@@ -366,7 +392,7 @@ func TestAgentMessageBodySourcesAreExclusive(t *testing.T) {
 			t.Parallel()
 
 			manager := &fakeManager{}
-			command := newRootCommand(manager, func() (string, error) { return "/project", nil })
+			command := newRootCommand(manager, func() (string, error) { return "/project", nil }, testVersion)
 			command.SetArgs(test.args)
 			err := command.Execute()
 			if err == nil || !strings.Contains(err.Error(), test.want) {
@@ -389,7 +415,7 @@ func TestAgentMessageInboxRendersDirectionForTheResolvedIdentity(t *testing.T) {
 		},
 	}
 	var output bytes.Buffer
-	command := newRootCommand(manager, func() (string, error) { return "/project", nil })
+	command := newRootCommand(manager, func() (string, error) { return "/project", nil }, testVersion)
 	command.SetOut(&output)
 	command.SetArgs([]string{"agent", "message", "inbox"})
 	if err := command.Execute(); err != nil {
@@ -418,7 +444,7 @@ func TestCommandsPropagateManagerErrorsWithoutPrinting(t *testing.T) {
 			t.Parallel()
 
 			var output bytes.Buffer
-			command := newRootCommand(test.manager, func() (string, error) { return "/project", nil })
+			command := newRootCommand(test.manager, func() (string, error) { return "/project", nil }, testVersion)
 			command.SetOut(&output)
 			command.SetArgs(test.args)
 			if err := command.Execute(); !errors.Is(err, failure) {
@@ -435,7 +461,7 @@ func TestAgentMessageEmptyInboxOutput(t *testing.T) {
 	t.Parallel()
 
 	var output bytes.Buffer
-	command := newRootCommand(&fakeManager{}, func() (string, error) { return "/project", nil })
+	command := newRootCommand(&fakeManager{}, func() (string, error) { return "/project", nil }, testVersion)
 	command.SetOut(&output)
 	command.SetArgs([]string{"agent", "message", "inbox"})
 	if err := command.Execute(); err != nil {
@@ -450,12 +476,12 @@ func TestInitUsesExplicitOrCurrentPath(t *testing.T) {
 	t.Parallel()
 
 	manager := &fakeManager{}
-	command := newRootCommand(manager, func() (string, error) { return "/current", nil })
+	command := newRootCommand(manager, func() (string, error) { return "/current", nil }, testVersion)
 	command.SetArgs([]string{"init", "/explicit"})
 	if err := command.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	command = newRootCommand(manager, func() (string, error) { return "/current", nil })
+	command = newRootCommand(manager, func() (string, error) { return "/current", nil }, testVersion)
 	command.SetArgs([]string{"init"})
 	if err := command.Execute(); err != nil {
 		t.Fatal(err)
@@ -471,7 +497,7 @@ func TestCommandsForwardTimeoutsToTheManagerUnchanged(t *testing.T) {
 	// The Manager is the single validator, so the commands must not coerce or
 	// reject timeouts themselves; a bare command still sends the flag default.
 	startManager := &fakeManager{}
-	command := newRootCommand(startManager, func() (string, error) { return "/project", nil })
+	command := newRootCommand(startManager, func() (string, error) { return "/project", nil }, testVersion)
 	command.SetArgs([]string{"start", "-t", "0"})
 	if err := command.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -481,7 +507,7 @@ func TestCommandsForwardTimeoutsToTheManagerUnchanged(t *testing.T) {
 	}
 
 	spawnManager := &fakeManager{}
-	command = newRootCommand(spawnManager, func() (string, error) { return "/project", nil })
+	command = newRootCommand(spawnManager, func() (string, error) { return "/project", nil }, testVersion)
 	command.SetArgs([]string{"agent", "spawn", "-n", "worker", "-t", "0"})
 	if err := command.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -491,7 +517,7 @@ func TestCommandsForwardTimeoutsToTheManagerUnchanged(t *testing.T) {
 	}
 
 	defaultManager := &fakeManager{}
-	command = newRootCommand(defaultManager, func() (string, error) { return "/project", nil })
+	command = newRootCommand(defaultManager, func() (string, error) { return "/project", nil }, testVersion)
 	command.SetArgs([]string{"start"})
 	if err := command.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -519,7 +545,7 @@ func TestSessionCommandsUseCurrentDirectory(t *testing.T) {
 			t.Parallel()
 
 			manager := &fakeManager{}
-			command := newRootCommand(manager, func() (string, error) { return "/project", nil })
+			command := newRootCommand(manager, func() (string, error) { return "/project", nil }, testVersion)
 			command.SetArgs(test.args)
 
 			if err := command.Execute(); err != nil {
@@ -548,7 +574,7 @@ func TestSessionCommandsRejectArguments(t *testing.T) {
 			t.Parallel()
 
 			manager := &fakeManager{}
-			command := newRootCommand(manager, func() (string, error) { return "/project", nil })
+			command := newRootCommand(manager, func() (string, error) { return "/project", nil }, testVersion)
 			command.SetArgs([]string{subcommand, "extra"})
 
 			if err := command.Execute(); err == nil {
@@ -571,7 +597,7 @@ func TestCurrentDirectoryErrorIsWrapped(t *testing.T) {
 			manager := &fakeManager{}
 			command := newRootCommand(manager, func() (string, error) {
 				return "", errors.New("cwd failed")
-			})
+			}, testVersion)
 			command.SetArgs([]string{subcommand})
 
 			err := command.Execute()

@@ -14,7 +14,7 @@ import (
 
 func runTaskCommand(t *testing.T, manager *fakeManager, args ...string) (string, error) {
 	t.Helper()
-	command := newRootCommand(manager, func() (string, error) { return "/project/nested", nil })
+	command := newRootCommand(manager, func() (string, error) { return "/project/nested", nil }, testVersion)
 	var output bytes.Buffer
 	command.SetOut(&output)
 	command.SetErr(&output)

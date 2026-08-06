@@ -47,26 +47,29 @@ func currentDirectory(getwd func() (string, error)) (string, error) {
 	return dir, nil
 }
 
-// Execute runs the root command.
-func Execute() error {
+// Execute runs the root command with the version main embedded from VERSION.
+func Execute(version string) error {
 	client := herdr.NewClient("herdr", os.Stdin, os.Stdout, os.Stderr)
 	confirmer := tui.NewConfirmer(os.Stdin, os.Stdout)
 	manager := lifecycle.NewManager(client, confirmer, os.Stdin, os.Stdout)
 
-	return newRootCommand(manager, os.Getwd).Execute()
+	return newRootCommand(manager, os.Getwd, version).Execute()
 }
 
-func newRootCommand(manager sessionManager, getwd func() (string, error)) *cobra.Command {
+func newRootCommand(manager sessionManager, getwd func() (string, error), version string) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "fledge",
 		Short:         "Manage project-local Herdr sessions",
 		Args:          cobra.NoArgs,
+		Version:       version,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
 	}
+	// Print the bare version so --version and the version subcommand agree.
+	root.SetVersionTemplate("{{.Version}}\n")
 	manager.SetOutput(commandOutput{command: root})
 
 	root.AddCommand(newStartCommand(manager, getwd))
@@ -74,6 +77,7 @@ func newRootCommand(manager sessionManager, getwd func() (string, error)) *cobra
 	root.AddCommand(newInitCommand(manager, getwd))
 	root.AddCommand(newAgentCommand(manager, getwd))
 	root.AddCommand(newWatchCommand(manager, getwd))
+	root.AddCommand(newVersionCommand(version))
 
 	return root
 }
