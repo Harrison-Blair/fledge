@@ -20,7 +20,7 @@ const (
 	profilesDir     = "profiles"
 	profileFilename = "orchestrator.toml"
 
-	ignoreContents       = "session.json\npreferences.json\nlogs/\ntmp/\nprofiles/generated/\n"
+	ignoreContents       = "session.json\nsession.lock\npreferences.json\nlogs/\ntmp/\nprofiles/generated/\n"
 	legacyIgnoreContents = "*\n!.gitignore\n"
 )
 

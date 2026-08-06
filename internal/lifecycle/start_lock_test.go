@@ -3,17 +3,31 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
 )
 
 func TestSessionRecordLockSerializesStarters(t *testing.T) {
 	root := t.TempDir()
-	writeTestRecord(t, root)
+	// Initialize a project without writing session.json so the first acquisition
+	// proves lockSessionRecord creates its own stable lock file rather than
+	// depending on the record already existing.
+	initTestProject(t, root)
 
 	unlockFirst, err := lockSessionRecord(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
+	}
+	info, err := os.Stat(sessionLockPath(root))
+	if err != nil {
+		t.Fatalf("stat session lock: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("session lock permissions = %o, want 600", perm)
+	}
+	if _, err := os.Stat(recordPath(root)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("session record error = %v, want the record absent after a first lock", err)
 	}
 	acquired := make(chan func() error, 1)
 	errs := make(chan error, 1)

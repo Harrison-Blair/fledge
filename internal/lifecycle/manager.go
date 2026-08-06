@@ -33,8 +33,9 @@ import (
 const (
 	stateDirectory           = ".fledge"
 	recordFilename           = "session.json"
+	sessionLockFilename      = "session.lock"
 	recordVersion            = 1
-	ignoreContents           = "session.json\npreferences.json\nlogs/\ntmp/\nprofiles/generated/\n"
+	ignoreContents           = "session.json\nsession.lock\npreferences.json\nlogs/\ntmp/\nprofiles/generated/\n"
 	paneAuthorityEnvironment = "FLEDGE_PANE_AUTHORITY"
 	paneAuthorityBytes       = 32
 
@@ -987,6 +988,9 @@ func (m *Manager) Stop(ctx context.Context, dir string) error {
 	if err != nil {
 		return err
 	}
+	if err := project.EnsureRuntimeIgnore(root); err != nil {
+		return err
+	}
 	value, found, err := readRecord(root)
 	if err != nil {
 		return err
@@ -1446,4 +1450,11 @@ func restoreRecord(root string, value record, operationErr error) error {
 
 func recordPath(root string) string {
 	return filepath.Join(root, stateDirectory, recordFilename)
+}
+
+// sessionLockPath is the dedicated project-lifetime startup lock. It is created
+// lazily on first acquisition and is never renamed or removed by Fledge, so its
+// identity stays stable across every atomic session.json rewrite.
+func sessionLockPath(root string) string {
+	return filepath.Join(root, stateDirectory, sessionLockFilename)
 }

@@ -5,3 +5,4 @@ preferences.json
 logs/
 tmp/
 profiles/generated/
+session.lock

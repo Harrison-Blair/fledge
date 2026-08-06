@@ -443,12 +443,12 @@ func TestStartPostLockReattachBindsBeforeRejectingSelection(t *testing.T) {
 
 // TestStartPostLockReattachReleasesStartupLock covers the same post-lock
 // reattach path as the test above, but asserts the branch releases the startup
-// lock it owns before returning. The record is pre-bound so the binder is a
-// no-op that does not rewrite session.json: the lock file's inode stays stable,
-// so re-acquiring the same startup lock after Start returns observes whether
-// unlock() actually ran. (When binding rewrites the record, the rename orphans
-// the locked inode, and a path-based re-acquire always succeeds regardless of a
-// leak, so this scenario deliberately avoids the rewrite.) A regression that
+// lock it owns before returning. The startup lock lives on the dedicated
+// .fledge/session.lock file, whose inode is stable across every session.json
+// rewrite, so re-acquiring the same lock after Start returns reliably observes
+// whether unlock() actually ran regardless of any record binding. The record is
+// pre-bound to keep the reattach binder a no-op, holding the test on the
+// lock-release contract rather than record-binding behavior. A regression that
 // binds but omits unlock() keeps the flock held, so the bounded re-acquire
 // below blocks to its deadline and fails instead of succeeding at once.
 func TestStartPostLockReattachReleasesStartupLock(t *testing.T) {
@@ -480,10 +480,9 @@ func TestStartPostLockReattachReleasesStartupLock(t *testing.T) {
 	}
 
 	// The post-lock reattach path must release the startup lock it owns before
-	// returning. Because the pre-bound record is not rewritten, the lock file's
-	// inode is unchanged, so re-acquiring the same lock proves release: a leaked
-	// unlock() would keep the flock held and this bounded acquire would block to
-	// its deadline and fail.
+	// returning. The dedicated session.lock inode is stable, so re-acquiring the
+	// same lock proves release: a leaked unlock() would keep the flock held and
+	// this bounded acquire would block to its deadline and fail.
 	lockCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	unlock, err := lockSessionRecord(lockCtx, root)
@@ -728,7 +727,7 @@ func TestStartResetsMessagingOnlyForFreshServer(t *testing.T) {
 			t.Fatalf("preserved message = %#v, %v", preserved, err)
 		}
 		ignore, err := os.ReadFile(ignorePath)
-		if err != nil || string(ignore) != "session.json\nkeep-local/\npreferences.json\nlogs/\ntmp/\nprofiles/generated/\n" {
+		if err != nil || string(ignore) != "session.json\nkeep-local/\nsession.lock\npreferences.json\nlogs/\ntmp/\nprofiles/generated/\n" {
 			t.Fatalf("reattach .gitignore = %q, %v", ignore, err)
 		}
 	})
@@ -1958,6 +1957,30 @@ func TestStopRemovesRecordBeforeStoppingRunningSession(t *testing.T) {
 
 	if err := manager.Stop(context.Background(), root); err != nil {
 		t.Fatalf("Stop() error = %v", err)
+	}
+}
+
+func TestStopAppendsRuntimeIgnoreForUpgradedProjects(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTestRecord(t, root)
+	// Simulate a project initialized by an older Fledge whose ignore file predates
+	// session.lock. The first command after upgrade may be Stop, so it must add the
+	// persistent lock entry rather than leave it visible as an untracked file.
+	ignorePath := filepath.Join(root, stateDirectory, ".gitignore")
+	if err := os.WriteFile(ignorePath, []byte("session.json\nkeep-local/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeHerdr{sessions: []herdr.Session{{Name: testSessionName, Running: true}}}
+	manager, _ := newTestManager(client, &fakeConfirmer{answer: true})
+
+	if err := manager.Stop(context.Background(), root); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	ignore, err := os.ReadFile(ignorePath)
+	if err != nil || string(ignore) != "session.json\nkeep-local/\nsession.lock\npreferences.json\nlogs/\ntmp/\nprofiles/generated/\n" {
+		t.Fatalf("Stop() .gitignore = %q, %v", ignore, err)
 	}
 }
 
