@@ -2126,6 +2126,7 @@ func TestSpawnPropagatesCorruptPreferencesWarningWriteFailure(t *testing.T) {
 	resolver := &fakeSelectionResolver{selection: tui.Selection{Name: "worker", Harness: "codex"}}
 	manager := NewManager(client, &fakeConfirmer{}, nil, errorWriter{err: writeErr})
 	manager.random = bytes.NewReader(make([]byte, 16))
+	manager.getenv = func(string) string { return "" }
 	manager.lookPath = installedTestHarness
 	manager.selector = resolver
 	if err := os.WriteFile(preferencesPath(root), []byte("{not json"), 0o600); err != nil {
@@ -2201,6 +2202,7 @@ func newTestManager(client *fakeHerdr, confirmer *fakeConfirmer) (*Manager, *byt
 	var output bytes.Buffer
 	manager := NewManager(client, confirmer, nil, &output)
 	manager.random = bytes.NewReader(make([]byte, 16))
+	manager.getenv = func(string) string { return "" }
 	manager.watchLauncher = func(string) error { return nil }
 	manager.watchRunner = func(context.Context, watchproc.Options) error { return nil }
 	manager.watchStopper = func(string, string) error { return nil }
