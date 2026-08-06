@@ -248,7 +248,7 @@ func TestFollowLogEndsWhenTheSingletonIsReleased(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- followLog(ctx, root, testSession, output) }()
+	go func() { done <- followLog(ctx, root, testSession, output, lineRenderer(false, false)) }()
 
 	// Exit the way the daemon does: drop the PID file, then release the lock.
 	if err := os.Remove(pidPath); err != nil {
@@ -296,7 +296,7 @@ func TestFollowLogExitsWhenTheSingletonIsAlreadyFree(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- followLog(ctx, root, testSession, output) }()
+	go func() { done <- followLog(ctx, root, testSession, output, lineRenderer(false, false)) }()
 	select {
 	case err := <-done:
 		if err != nil {

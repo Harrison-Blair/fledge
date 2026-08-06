@@ -62,6 +62,59 @@ type event struct {
 	TaskStatus    TaskStatus `json:"task_status,omitempty"`
 	WakeID        string     `json:"wake_id,omitempty"`
 	WakeKind      string     `json:"wake_kind,omitempty"`
+	Actor         string     `json:"actor,omitempty"`
+}
+
+// LedgerEntry is the exported projection of one durable ledger event. Readers
+// that only diagnose activity use it instead of reconstructing session state,
+// so they never have to interpret the log's ordering rules.
+type LedgerEntry struct {
+	Version       int
+	Type          string
+	At            time.Time
+	SessionID     string
+	Session       string
+	MessageID     string
+	Sender        string
+	Recipient     string
+	ReplyTo       string
+	Body          string
+	RecipientPane string
+	Accepted      *bool
+	Detail        string
+	AgentName     string
+	PaneID        string
+	Harness       string
+	AuthorityHash string
+	CanDelegate   bool
+	ParentTaskID  string
+	TaskID        string
+	Assignee      string
+	Assigner      string
+	Description   string
+	TaskStatus    TaskStatus
+	WakeID        string
+	WakeKind      string
+	Actor         string
+}
+
+// DecodeLedgerLine decodes one ledger line for a diagnostic reader. It is
+// deliberately lenient where decodeEvent is strict: a line written by a newer
+// Fledge, or one whose contents the reconstruction rules would reject, is
+// reported as undecodable rather than fatal. Ordering and referential rules are
+// the store's business, not a trace reader's.
+func DecodeLedgerLine(data []byte) (LedgerEntry, bool) {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return LedgerEntry{}, false
+	}
+	var e event
+	if err := json.Unmarshal(data, &e); err != nil {
+		return LedgerEntry{}, false
+	}
+	if strings.TrimSpace(e.Type) == "" || e.At.IsZero() {
+		return LedgerEntry{}, false
+	}
+	return LedgerEntry(e), true
 }
 
 type logState struct {
@@ -80,8 +133,9 @@ func decodeEvent(data []byte, result *event) error {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return errors.New("empty event")
 	}
+	// Unknown fields are tolerated so a dispatcher already running cannot be
+	// killed by a line a newer Fledge wrote into the same session's ledger.
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(result); err != nil {
 		return err
 	}
@@ -110,7 +164,7 @@ func validateEvent(e event) error {
 		if strings.TrimSpace(e.Session) == "" {
 			return errors.New("session_start is missing Herdr session name")
 		}
-		if e.MessageID != "" || e.Sender != "" || e.Recipient != "" || e.ReplyTo != "" || e.Body != "" || e.RecipientPane != "" || e.Accepted != nil || e.Detail != "" {
+		if e.MessageID != "" || e.Sender != "" || e.Recipient != "" || e.ReplyTo != "" || e.Body != "" || e.RecipientPane != "" || e.Accepted != nil || e.Detail != "" || e.Actor != "" {
 			return errors.New("session_start has unexpected fields")
 		}
 	case eventMessageCreated, eventMessageReplied, eventReplyCreated:
@@ -138,22 +192,22 @@ func validateEvent(e event) error {
 		if e.Recipient != "user" && e.RecipientPane == "" {
 			return errors.New("agent message is missing recipient pane")
 		}
-		if e.Accepted != nil || e.Detail != "" {
+		if e.Accepted != nil || e.Detail != "" || e.Actor != "" {
 			return errors.New("message event has outcome fields")
 		}
 	case eventDeliveryAttempt:
-		if e.MessageID == "" || e.Session != "" || e.Sender != "" || e.Recipient != "" || e.ReplyTo != "" || e.Body != "" || e.RecipientPane != "" || e.Accepted != nil || e.Detail != "" {
+		if e.MessageID == "" || e.Session != "" || e.Sender != "" || e.Recipient != "" || e.ReplyTo != "" || e.Body != "" || e.RecipientPane != "" || e.Accepted != nil || e.Detail != "" || e.Actor != "" {
 			return errors.New("invalid delivery_attempt fields")
 		}
 	case eventDeliveryOutcome:
-		if e.MessageID == "" || e.Session != "" || e.Accepted == nil || e.Sender != "" || e.Recipient != "" || e.ReplyTo != "" || e.Body != "" || e.RecipientPane != "" {
+		if e.MessageID == "" || e.Session != "" || e.Accepted == nil || e.Sender != "" || e.Recipient != "" || e.ReplyTo != "" || e.Body != "" || e.RecipientPane != "" || e.Actor != "" {
 			return errors.New("invalid delivery_outcome fields")
 		}
 		if *e.Accepted && e.Detail != "" {
 			return errors.New("accepted delivery outcome has failure detail")
 		}
 	case eventAcknowledged:
-		if e.MessageID == "" || e.Session != "" || e.Sender != "" || e.Recipient != "" || e.ReplyTo != "" || e.Body != "" || e.RecipientPane != "" || e.Accepted != nil || e.Detail != "" {
+		if e.MessageID == "" || e.Session != "" || e.Sender != "" || e.Recipient != "" || e.ReplyTo != "" || e.Body != "" || e.RecipientPane != "" || e.Accepted != nil || e.Detail != "" || e.Actor != "" {
 			return errors.New("invalid acknowledged fields")
 		}
 	case eventAgentRegistered, eventAgentStopped, eventAgentStatus,

@@ -84,11 +84,11 @@ func writePID(path string) error {
 // exits. Two watches are needed: the log itself, and the singleton directory,
 // because a dispatcher that exits without logging is only observable through
 // the PID and readiness files it removes on the way out.
-func followLog(ctx context.Context, root, session string, output io.Writer) error {
+func followLog(ctx context.Context, root, session string, output io.Writer, render func([]byte) []byte) error {
 	path := filepath.Join(statedir.Session(root, session), LogFilename)
 	singletonPath := statedir.TempSession(root, session)
 	lockPath := filepath.Join(singletonPath, lockFilename)
-	offset, err := writeBacklog(path, output, 50)
+	offset, err := writeBacklog(path, output, 50, render)
 	if err != nil {
 		return err
 	}
@@ -111,7 +111,7 @@ func followLog(ctx context.Context, root, session string, output io.Writer) erro
 		if len(contents) == 0 {
 			return nil
 		}
-		_, err = output.Write(contents)
+		_, err = output.Write(renderLines(contents, render))
 		return err
 	}
 	// The dispatcher can exit between reading the backlog and arming the watches
@@ -151,7 +151,7 @@ func followLog(ctx context.Context, root, session string, output io.Writer) erro
 	}
 }
 
-func writeBacklog(path string, output io.Writer, lines int) (int64, error) {
+func writeBacklog(path string, output io.Writer, lines int, render func([]byte) []byte) (int64, error) {
 	contents, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return 0, nil
@@ -169,10 +169,20 @@ func writeBacklog(path string, output io.Writer, lines int) (int64, error) {
 		starts = starts[len(starts)-lines:]
 	}
 	backlog := append(bytes.Join(starts, []byte{'\n'}), '\n')
-	if _, err := output.Write(backlog); err != nil {
+	if _, err := output.Write(renderLines(backlog, render)); err != nil {
 		return 0, err
 	}
 	return int64(end), nil
+}
+
+// renderLines applies render to each whole line of a newline-terminated block.
+func renderLines(contents []byte, render func([]byte) []byte) []byte {
+	var rendered []byte
+	for line := range bytes.SplitSeq(bytes.TrimSuffix(contents, []byte{'\n'}), []byte{'\n'}) {
+		rendered = append(rendered, render(line)...)
+		rendered = append(rendered, '\n')
+	}
+	return rendered
 }
 
 func readComplete(path string, offset int64) ([]byte, int64, error) {

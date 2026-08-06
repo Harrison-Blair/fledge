@@ -89,23 +89,23 @@ type RegisterParams struct {
 func validateCoordinationEvent(e event) error {
 	switch e.Type {
 	case eventAgentRegistered:
-		if blank(e.AgentName, e.PaneID, e.Harness) {
-			return errors.New("agent_registered is missing identity fields")
+		if blank(e.AgentName, e.PaneID, e.Harness) || e.Actor != "" {
+			return errors.New("invalid agent_registered fields")
 		}
 		if e.AuthorityHash != "" && !validAuthorityHash(e.AuthorityHash) {
 			return errors.New("agent_registered has an invalid authority hash")
 		}
 	case eventAgentStopped:
-		if blank(e.AgentName, e.PaneID) {
-			return errors.New("agent_stopped is missing identity fields")
+		if blank(e.AgentName, e.PaneID) || e.Actor != "" {
+			return errors.New("invalid agent_stopped fields")
 		}
 	case eventAgentStatus:
-		if blank(e.AgentName, e.PaneID, e.Detail) {
-			return errors.New("agent_status_changed is missing fields")
+		if blank(e.AgentName, e.PaneID, e.Detail) || e.Actor != "" {
+			return errors.New("invalid agent_status_changed fields")
 		}
 	case eventTaskAssigned:
-		if blank(e.TaskID, e.Assignee, e.Assigner, e.Description) || e.TaskStatus != TaskActive {
-			return errors.New("task_assigned is missing fields")
+		if blank(e.TaskID, e.Assignee, e.Assigner, e.Description) || e.TaskStatus != TaskActive || e.Actor != "" {
+			return errors.New("invalid task_assigned fields")
 		}
 	case eventTaskProgress, eventTaskBlocked, eventTaskDecision, eventTaskResumed,
 		eventTaskCompleted, eventTaskFailed, eventTaskCanceled, eventTaskOrphaned:
@@ -113,16 +113,16 @@ func validateCoordinationEvent(e event) error {
 			return errors.New("task transition is missing fields")
 		}
 	case eventWakeRequested:
-		if blank(e.WakeID, e.WakeKind, e.Recipient, e.RecipientPane, e.Body) {
-			return errors.New("wake_requested is missing fields")
+		if blank(e.WakeID, e.WakeKind, e.Recipient, e.RecipientPane, e.Body) || e.Actor != "" {
+			return errors.New("invalid wake_requested fields")
 		}
 	case eventWakeAttempt:
-		if blank(e.WakeID) {
-			return errors.New("wake_attempt is missing wake_id")
+		if blank(e.WakeID) || e.Actor != "" {
+			return errors.New("invalid wake_attempt fields")
 		}
 	case eventWakeOutcome:
-		if blank(e.WakeID) || e.Accepted == nil {
-			return errors.New("wake_outcome is missing fields")
+		if blank(e.WakeID) || e.Accepted == nil || e.Actor != "" {
+			return errors.New("invalid wake_outcome fields")
 		}
 		if *e.Accepted && e.Detail != "" {
 			return errors.New("accepted wake outcome has failure detail")
@@ -618,11 +618,11 @@ func (s *Store) TransitionTask(caller, id string, target TaskStatus, detail stri
 			}
 		}
 		at := s.now()
-		events := []event{s.taskTransitionEvent(state, at, id, target, strings.TrimSpace(detail))}
+		events := []event{s.taskTransitionEvent(state, at, caller, id, target, strings.TrimSpace(detail))}
 		if target == TaskCanceled || target == TaskFailed {
 			for _, descendant := range descendants(state, id) {
 				if !terminal(descendant.Status) {
-					events = append(events, s.taskTransitionEvent(state, at, descendant.ID, TaskCanceled, "ancestor task ended"))
+					events = append(events, s.taskTransitionEvent(state, at, caller, descendant.ID, TaskCanceled, "ancestor task ended"))
 				}
 			}
 		}
@@ -720,14 +720,16 @@ func descendants(state *logState, parent string) []Task {
 	return result
 }
 
-func (s *Store) taskTransitionEvent(state *logState, at time.Time, id string, status TaskStatus, detail string) event {
+// taskTransitionEvent records caller as the transition's actor. For a cascade,
+// caller was authorized against the ancestor, not each descendant.
+func (s *Store) taskTransitionEvent(state *logState, at time.Time, caller, id string, status TaskStatus, detail string) event {
 	kind := map[TaskStatus]string{TaskActive: eventTaskResumed, TaskBlocked: eventTaskBlocked,
 		TaskNeedsDecision: eventTaskDecision, TaskCompleted: eventTaskCompleted,
 		TaskFailed: eventTaskFailed, TaskCanceled: eventTaskCanceled, TaskOrphaned: eventTaskOrphaned}[status]
 	if status == TaskActive && state.tasks[id].Status == TaskActive {
 		kind = eventTaskProgress
 	}
-	return event{Version: eventVersion, Type: kind, At: at, SessionID: state.sessionID, TaskID: id, TaskStatus: status, Detail: detail}
+	return event{Version: eventVersion, Type: kind, At: at, SessionID: state.sessionID, TaskID: id, TaskStatus: status, Detail: detail, Actor: caller}
 }
 
 func (s *Store) RecordProgress(caller, id, detail string) (Task, error) {
@@ -746,7 +748,7 @@ func (s *Store) RecordProgress(caller, id, detail string) (Task, error) {
 		if strings.TrimSpace(detail) == "" {
 			return errors.New("progress detail must not be blank")
 		}
-		e := event{Version: eventVersion, Type: eventTaskProgress, At: s.now(), SessionID: state.sessionID, TaskID: id, TaskStatus: TaskActive, Detail: strings.TrimSpace(detail)}
+		e := event{Version: eventVersion, Type: eventTaskProgress, At: s.now(), SessionID: state.sessionID, TaskID: id, TaskStatus: TaskActive, Detail: strings.TrimSpace(detail), Actor: caller}
 		if err := s.appendEvents([]event{e}); err != nil {
 			return err
 		}

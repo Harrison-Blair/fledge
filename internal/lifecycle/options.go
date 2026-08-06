@@ -33,6 +33,7 @@ type SpawnOptions struct {
 // WatchOptions controls how the session watcher presents its decision log.
 type WatchOptions struct {
 	Daemon bool
+	JSON   bool
 }
 
 func (o StartOptions) HasSelection() bool {

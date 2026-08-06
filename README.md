@@ -318,8 +318,15 @@ terminal and the log. The hidden `fledge watch --daemon` form is reserved for
 Fledge's lifecycle launcher; it writes only to the log and exits successfully
 when another dispatcher already owns the session lock.
 
-Dispatcher activity is appended to the owner-only
-`.fledge/logs/<session>/dispatcher.log`.
+Either form shows a live trace of coordination activity: the message or task
+body exchanged, who it came from, who it went to, who acted, and what the
+dispatcher did about it. `fledge watch --json` emits the same records as JSON
+lines instead. Color is used only when the trace is going to a terminal and
+`NO_COLOR` is unset.
+
+Dispatcher activity is appended as JSON lines to the owner-only
+`.fledge/logs/<session>/dispatcher.log`, so a second `fledge watch` renders
+exactly what the first one shows.
 
 Stop and permanently delete the nearest Fledge session in the current directory
 or one of its parents:

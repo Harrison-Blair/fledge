@@ -19,6 +19,7 @@ func newWatchCommand(manager sessionManager, getwd func() (string, error)) *cobr
 			return manager.Watch(cmd.Context(), dir, options)
 		},
 	}
+	command.Flags().BoolVar(&options.JSON, "json", false, "emit the trace as JSON lines instead of a human log")
 	command.Flags().BoolVar(&options.Daemon, "daemon", false, "run the watcher in the background")
 	_ = command.Flags().MarkHidden("daemon")
 	return command

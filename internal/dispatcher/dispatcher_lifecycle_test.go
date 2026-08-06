@@ -17,12 +17,13 @@ const testSession = "fledge-test-1234abcd"
 // dispatcherHarness runs one dispatcher against injected ledger and Herdr event
 // sources so a test drives it entirely by events, never by elapsed time.
 type dispatcherHarness struct {
-	store  *messaging.Store
-	client *fakeHerdr
-	files  *fakeFiles
-	ready  chan struct{}
-	done   chan error
-	cancel context.CancelFunc
+	store   *messaging.Store
+	client  *fakeHerdr
+	files   *fakeFiles
+	ready   chan struct{}
+	done    chan error
+	cancel  context.CancelFunc
+	records *recorder
 
 	mu         sync.Mutex
 	subscribed [][]string
@@ -37,12 +38,13 @@ func newHarness(t *testing.T) *dispatcherHarness {
 		t.Fatal(err)
 	}
 	h := &dispatcherHarness{
-		store:  store,
-		client: &fakeHerdr{protocol: RequiredHerdrProtocol},
-		files:  &fakeFiles{events: make(chan struct{}, 4), errs: make(chan error, 1)},
-		ready:  make(chan struct{}, 4),
-		done:   make(chan error, 1),
-		events: make(chan watch.Event, 4),
+		store:   store,
+		client:  &fakeHerdr{protocol: RequiredHerdrProtocol},
+		files:   &fakeFiles{events: make(chan struct{}, 4), errs: make(chan error, 1)},
+		ready:   make(chan struct{}, 4),
+		done:    make(chan error, 1),
+		events:  make(chan watch.Event, 4),
+		records: &recorder{},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	h.cancel = cancel
@@ -73,6 +75,7 @@ func newHarness(t *testing.T) *dispatcherHarness {
 				}
 			},
 			Ready: func() { h.ready <- struct{}{} },
+			Emit:  h.records.emit,
 		})
 	}()
 	return h
@@ -125,6 +128,10 @@ func (h *dispatcherHarness) subscriptions() [][]string {
 func TestDispatcherStaysUpWithNoRegisteredPanes(t *testing.T) {
 	h := newHarness(t)
 	h.awaitReady(t)
+	idle, ok := h.records.find("dispatcher.idle")
+	if !ok || idle.Note != "no live pane to subscribe to" {
+		t.Fatalf("dispatcher.idle record = %#v, found = %t", idle, ok)
+	}
 	if subscriptions := h.subscriptions(); len(subscriptions) != 0 {
 		t.Fatalf("subscribed with no panes: %#v", subscriptions)
 	}

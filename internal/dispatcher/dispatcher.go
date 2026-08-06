@@ -10,13 +10,19 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/messaging"
+	"github.com/Harrison-Blair/fledge/internal/trace"
 	"github.com/Harrison-Blair/fledge/internal/watch"
 )
 
 const RequiredHerdrProtocol = 19
+
+// dispatcherIdentity names this process in the trace, distinguishing what the
+// dispatcher did from what the ledger merely recorded.
+const dispatcherIdentity = "dispatcher"
 
 type Herdr interface {
 	Protocol(context.Context) (int, error)
@@ -39,6 +45,14 @@ type Options struct {
 	WatchFile     WatchFile
 	Subscribe     Subscribe
 	Ready         func()
+	// ReadTrace tails the ledger for the diagnostic feed. It defaults to
+	// trace.Read; tests inject a failing reader to prove a broken tail does not
+	// end the dispatcher.
+	ReadTrace func(string, int64) ([]messaging.LedgerEntry, int64, error)
+	// Emit receives one record per observed or caused coordination event. It is
+	// the dispatcher's only account of its own decisions, so it is called from
+	// the run loop in the order the decisions were made.
+	Emit func(trace.Record)
 }
 
 func Run(ctx context.Context, options Options) error {
@@ -47,6 +61,9 @@ func Run(ctx context.Context, options Options) error {
 	}
 	if options.WatchFile == nil {
 		options.WatchFile = watchLedger
+	}
+	if options.ReadTrace == nil {
+		options.ReadTrace = trace.Read
 	}
 	protocol, err := options.Herdr.Protocol(ctx)
 	if err != nil {
@@ -57,6 +74,22 @@ func Run(ctx context.Context, options Options) error {
 	}
 	store := messaging.New(options.Root, options.Session)
 	if _, err := store.Ensure(); err != nil {
+		return err
+	}
+	emit := func(record trace.Record) {
+		if options.Emit == nil {
+			return
+		}
+		if record.At.IsZero() {
+			record.At = time.Now()
+		}
+		options.Emit(record)
+	}
+	// Seeding learns who the ledger's existing lines named without re-emitting
+	// them: a dispatcher that restarts mid-session shows what happens next, not
+	// the whole session again.
+	state, offset, err := trace.Seed(store.LogPath())
+	if err != nil {
 		return err
 	}
 	fileEvents, err := options.WatchFile(store.LogPath())
@@ -71,7 +104,7 @@ func Run(ctx context.Context, options Options) error {
 		}
 		options.Subscribe = subscribe
 	}
-	if err := drain(ctx, options.Herdr, options.Session, store); err != nil {
+	if err := drain(ctx, options.Herdr, options.Session, store, emit); err != nil {
 		return err
 	}
 
@@ -97,6 +130,7 @@ func Run(ctx context.Context, options Options) error {
 			if options.Ready != nil {
 				options.Ready()
 			}
+			emit(trace.Record{Kind: "dispatcher.ready", Origin: dispatcherIdentity})
 		}
 	}
 	// A session with no live pane is a resting state, not a failure: the last
@@ -107,6 +141,7 @@ func Run(ctx context.Context, options Options) error {
 		stopStream()
 		if len(panes) == 0 {
 			stopStream = func() {}
+			emit(trace.Record{Kind: "dispatcher.idle", Origin: dispatcherIdentity, Note: "no live pane to subscribe to"})
 			announce()
 			return
 		}
@@ -115,6 +150,7 @@ func Run(ctx context.Context, options Options) error {
 		stopStream = cancel
 		current := generation
 		ids := append([]string(nil), panes...)
+		emit(trace.Record{Kind: "dispatcher.subscribe", Origin: dispatcherIdentity, Pane: strings.Join(ids, ",")})
 		go func() {
 			streamErrors <- streamResult{generation: current, err: options.Subscribe(streamCtx, ids,
 				func() { acked <- current }, func(event watch.Event) { events <- event })}
@@ -124,12 +160,16 @@ func Run(ctx context.Context, options Options) error {
 	for {
 		select {
 		case <-ctx.Done():
+			emit(trace.Record{Kind: "dispatcher.exit", Origin: dispatcherIdentity, Note: ctx.Err().Error()})
 			return ctx.Err()
 		case current := <-acked:
 			if current == generation {
+				emit(trace.Record{Kind: "dispatcher.subscribed", Origin: dispatcherIdentity, Pane: strings.Join(panes, ",")})
 				announce()
 			}
 		case event := <-events:
+			emit(trace.Record{Kind: "herdr.pane", Origin: event.Agent, Pane: event.PaneID,
+				Status: event.AgentStatus, Note: event.Type})
 			var err error
 			if event.Type == "pane.closed" {
 				err = store.StopAgentByPane(event.PaneID)
@@ -144,16 +184,36 @@ func Run(ctx context.Context, options Options) error {
 				continue
 			}
 			if ctx.Err() != nil {
+				emit(trace.Record{Kind: "dispatcher.exit", Origin: dispatcherIdentity, Note: ctx.Err().Error()})
 				return ctx.Err()
 			}
-			return fmt.Errorf("Herdr dispatcher event stream ended: %w", result.err)
+			err := fmt.Errorf("Herdr dispatcher event stream ended: %w", result.err)
+			emit(trace.Record{Kind: "dispatcher.exit", Origin: dispatcherIdentity, Note: err.Error()})
+			return err
 		case err := <-fileEvents.Errors():
 			if err != nil {
-				return fmt.Errorf("watch session ledger: %w", err)
+				err = fmt.Errorf("watch session ledger: %w", err)
+				emit(trace.Record{Kind: "dispatcher.exit", Origin: dispatcherIdentity, Note: err.Error()})
+				return err
 			}
 		case <-fileEvents.Events():
-			if err := drain(ctx, options.Herdr, options.Session, store); err != nil {
+			if err := drain(ctx, options.Herdr, options.Session, store, emit); err != nil {
 				return err
+			}
+			// The dispatcher's own outcome writes retrigger this watch, so the tail
+			// also shows the deliveries it just recorded. A failed diagnostic tail
+			// read degrades the trace instead of ending delivery; the unchanged
+			// offset makes the next notification retry it.
+			entries, next, readErr := options.ReadTrace(store.LogPath(), offset)
+			if readErr != nil {
+				emit(trace.Record{Kind: "dispatcher.trace-degraded", Origin: dispatcherIdentity, Note: readErr.Error()})
+				continue
+			}
+			offset = next
+			for _, entry := range entries {
+				if record, ok := state.Apply(entry); ok {
+					emit(record)
+				}
 			}
 			current, err := activePanes(store)
 			if err != nil {
@@ -186,7 +246,7 @@ func activePanes(store *messaging.Store) ([]string, error) {
 // the rest: recording its terminal failure outcome stops it being replayed, and
 // the remaining wakes still go out. Only a storage failure, which would make
 // outcomes unrecordable, ends the dispatcher.
-func drain(ctx context.Context, client Herdr, session string, store *messaging.Store) error {
+func drain(ctx context.Context, client Herdr, session string, store *messaging.Store, emit func(trace.Record)) error {
 	wakes, err := store.PendingWakes()
 	if err != nil {
 		return err
@@ -207,8 +267,12 @@ func drain(ctx context.Context, client Herdr, session string, store *messaging.S
 			return err
 		}
 		envelope := fmt.Sprintf("[Fledge wake]\nDelivery-ID: %s\nKind: %s\n\n%s", wake.ID, wake.Kind, wake.Body)
+		emit(trace.Record{Kind: "wake.send", Origin: dispatcherIdentity, Target: wake.Recipient,
+			Pane: wake.RecipientPane, Ref: wake.ID, Rel: wake.ReferenceID, Note: "prompting pane " + wake.RecipientPane})
 		err := client.PromptAgent(ctx, session, wake.Recipient, envelope)
 		if err != nil {
+			emit(trace.Record{Kind: "wake.failed", Origin: dispatcherIdentity, Target: wake.Recipient,
+				Pane: wake.RecipientPane, Ref: wake.ID, Note: err.Error()})
 			// A canceled context says nothing about the wake, so it stays
 			// uncertain and the next dispatcher replays it.
 			if ctx.Err() != nil {
