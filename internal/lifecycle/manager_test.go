@@ -840,7 +840,6 @@ func TestRuntimeCommunicationPoliciesRequireFledgeCompletionAndForbidPolling(t *
 			"fledge agent message reply",
 			"task",
 			"Never poll with fledge agent message inbox",
-			"herdr agent wait, read, get, list, prompt, send-keys, attach, and explain",
 			"Herdr API snapshots",
 		} {
 			if !strings.Contains(policy, required) {
@@ -848,10 +847,26 @@ func TestRuntimeCommunicationPoliciesRequireFledgeCompletionAndForbidPolling(t *
 			}
 		}
 	}
-	for _, required := range []string{"--can-delegate", "--parent-task", "Ordinary messages always wake"} {
+	for _, required := range []string{
+		"--can-delegate", "--parent-task", "Ordinary messages always wake",
+		"herdr agent wait, read, get, list, prompt, send-keys, attach, and explain",
+	} {
 		if !strings.Contains(mandatoryCoordinatorCommunicationPolicy, required) {
 			t.Errorf("orchestrator policy = %q, want %q", mandatoryCoordinatorCommunicationPolicy, required)
 		}
+	}
+	for _, required := range []string{
+		"A terminal transition (complete/fail) delivers its detail to the assigner",
+		"do NOT also message the same summary",
+		"herdr agent wait/read/get/list/prompt/send-keys/",
+		"attach/explain",
+	} {
+		if !strings.Contains(agentMessagingContext, required) {
+			t.Errorf("worker policy = %q, want containing %q", agentMessagingContext, required)
+		}
+	}
+	if strings.Contains(agentMessagingContext, "completion summary") {
+		t.Errorf("worker policy = %q, must not instruct sending a completion summary message", agentMessagingContext)
 	}
 }
 

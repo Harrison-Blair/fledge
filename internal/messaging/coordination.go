@@ -258,7 +258,7 @@ func (s *Store) RegisterAgent(params RegisterParams) (Agent, *Task, error) {
 				TaskID: taskID, ParentTaskID: params.ParentTaskID, Assignee: params.Name,
 				Assigner: params.Caller, Description: strings.TrimSpace(params.Task), TaskStatus: TaskActive})
 			wake, err := s.wakeEventToPane(state, at, "task-assigned", taskID, params.Name, params.PaneID,
-				fmt.Sprintf("[Fledge task]\nID: %s\nAssigned by: %s\nTask:\n%s\n\nReport with: fledge agent task progress %s <text>", taskID, params.Caller, strings.TrimSpace(params.Task), taskID))
+				fmt.Sprintf("[Fledge task]\nID: %s\nAssigned by: %s\nTask:\n%s\n\nReport progress with: fledge agent task progress %s <text> — finish with fledge agent task complete %s --file <path> (its summary reaches me; no separate message needed).", taskID, params.Caller, strings.TrimSpace(params.Task), taskID, taskID))
 			if err != nil {
 				return err
 			}

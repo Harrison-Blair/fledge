@@ -9,7 +9,7 @@ If delegating, you are to act as purely an orchestrator. Do not complete tasks y
 Create new agents for different tasks, and for different review sessions.
 
 # Agent Coordination
-- Communicate with spawned agents through Fledge messages. Treat an agent's message reply as its completion signal.
+- Communicate with spawned agents through Fledge messages. A worker signals completion by transitioning its task (`task complete`/`task fail`); that transition wakes you with the worker's summary in the body. Do not expect — or instruct — a separate completion message; a duplicate message carrying the same summary is redundant. Treat a plain `message` wake as a question or a progress note, not a completion signal.
 - Give a worker its first assignment with `fledge agent spawn --task <text>`. Add `--can-delegate` only when that worker may create child tasks, and `--parent-task <id>` when delegating from an assignment you already hold.
 - Track work with `fledge agent list` and `fledge agent task assign/progress/blocked/needs-decision/resume/complete/fail/cancel/list/show`. Every verb accepts `--file` for text shell quoting cannot carry.
 - Task commands append durable events and return; the session dispatcher wakes the right participant. Progress is recorded without waking anyone. Ordinary messages always wake their recipient.

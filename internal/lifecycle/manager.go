@@ -65,13 +65,20 @@ const (
 	agentMessagingContext = `You are a worker in a Fledge-managed session.
 
 Coordinate only through Fledge messaging and task commands:
-- Send progress updates and a completion summary to the orchestrator with:
-  fledge agent message send orchestrator <text>
-- Reply to each incoming message with its message ID to preserve correlation:
-  fledge agent message reply <message-id> <text>
-- Report assigned task state with fledge agent task progress/blocked/needs-decision/complete/fail.
-- Never poll with fledge agent message inbox. Wait for injected Fledge messages instead.
-- Never use direct Herdr commands to communicate with, inspect, prompt, or collect output from agents. This includes herdr agent wait, read, get, list, prompt, send-keys, attach, and explain, plus Herdr API snapshots.`
+- Report your assigned task's state with:
+  fledge agent task progress|blocked|needs-decision|complete|fail <task-id> [--file <path>]
+  A terminal transition (complete/fail) delivers its detail to the assigner as
+  the completion signal — do NOT also message the same summary. Prefer --file
+  for multi-line summaries.
+- Use messages only for things that are not a task-terminal summary — a
+  clarifying question, a mid-flight update, or reporting work you were not
+  assigned as a task:
+  fledge agent message send <recipient> <text>
+  fledge agent message reply <message-id> <text>   (reply preserves correlation)
+- Never poll with fledge agent message inbox. Wait for injected Fledge messages.
+- Never use direct Herdr commands to communicate with, inspect, prompt, or
+  collect output from agents (herdr agent wait/read/get/list/prompt/send-keys/
+  attach/explain, and Herdr API snapshots).`
 )
 
 var (
