@@ -9,8 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"time"
 
+	"github.com/Harrison-Blair/fledge/internal/fswatch"
 	"github.com/Harrison-Blair/fledge/internal/statedir"
 )
 
@@ -19,7 +19,7 @@ func ensureStateDirectories(root, session string) error {
 		return err
 	}
 	return ensureDirectories(
-		statedir.Temp(root), statedir.TempSession(root, session), statedir.WatchSession(root, session),
+		statedir.Temp(root), statedir.TempSession(root, session),
 	)
 }
 
@@ -80,43 +80,72 @@ func writePID(path string) error {
 	return errors.Join(writeErr, closeErr)
 }
 
-func followLog(ctx context.Context, root, session string, output io.Writer, interval time.Duration) error {
+// followLog streams an already-running dispatcher's log until that dispatcher
+// exits. Two watches are needed: the log itself, and the singleton directory,
+// because a dispatcher that exits without logging is only observable through
+// the PID and readiness files it removes on the way out.
+func followLog(ctx context.Context, root, session string, output io.Writer) error {
 	path := filepath.Join(statedir.Session(root, session), LogFilename)
-	lockPath := filepath.Join(statedir.WatchSession(root, session), lockFilename)
+	singletonPath := statedir.TempSession(root, session)
+	lockPath := filepath.Join(singletonPath, lockFilename)
 	offset, err := writeBacklog(path, output, 50)
 	if err != nil {
 		return err
 	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	logChanges, err := fswatch.File(path)
+	if err != nil {
+		return err
+	}
+	defer logChanges.Close()
+	singletonChanges, err := fswatch.Directory(singletonPath)
+	if err != nil {
+		return err
+	}
+	defer singletonChanges.Close()
+	flush := func() error {
+		contents, next, err := readComplete(path, offset)
+		if err != nil {
+			return err
+		}
+		offset = next
+		if len(contents) == 0 {
+			return nil
+		}
+		_, err = output.Write(contents)
+		return err
+	}
+	// The dispatcher can exit between reading the backlog and arming the watches
+	// above, which would leave nothing left to notify this follower. Re-check
+	// once the watches are live so that race resolves as a clean exit.
+	held, err := singletonHeld(lockPath)
+	if err != nil {
+		return err
+	}
+	if !held {
+		return flush()
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
-			var contents []byte
-			contents, offset, err = readComplete(path, offset)
-			if err != nil {
+		case err := <-logChanges.Errors():
+			return fmt.Errorf("follow watch log: %w", err)
+		case err := <-singletonChanges.Errors():
+			return fmt.Errorf("follow watcher shutdown: %w", err)
+		case <-logChanges.Events():
+			if err := flush(); err != nil {
 				return err
 			}
-			if len(contents) > 0 {
-				if _, err := output.Write(contents); err != nil {
-					return err
-				}
+		case <-singletonChanges.Events():
+			if err := flush(); err != nil {
+				return err
 			}
 			held, err := singletonHeld(lockPath)
 			if err != nil {
 				return err
 			}
 			if !held {
-				contents, _, err := readComplete(path, offset)
-				if err != nil {
-					return err
-				}
-				if len(contents) > 0 {
-					_, err = output.Write(contents)
-				}
-				return err
+				return flush()
 			}
 		}
 	}

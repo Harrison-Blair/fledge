@@ -4,6 +4,7 @@ package lifecycle
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,8 @@ import (
 	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/agentcontext"
+	"github.com/Harrison-Blair/fledge/internal/dispatcher"
+	"github.com/Harrison-Blair/fledge/internal/fsutil"
 	"github.com/Harrison-Blair/fledge/internal/harness"
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/logging"
@@ -29,10 +32,12 @@ import (
 )
 
 const (
-	stateDirectory = ".fledge"
-	recordFilename = "session.json"
-	recordVersion  = 1
-	ignoreContents = "session.json\npreferences.json\nlogs/\ntmp/\nprofiles/generated/\n"
+	stateDirectory           = ".fledge"
+	recordFilename           = "session.json"
+	recordVersion            = 1
+	ignoreContents           = "session.json\npreferences.json\nlogs/\ntmp/\nprofiles/generated/\n"
+	paneAuthorityEnvironment = "FLEDGE_PANE_AUTHORITY"
+	paneAuthorityBytes       = 32
 
 	sessionNamePrefix    = "fledge-"
 	sessionIDBytes       = 4
@@ -44,34 +49,29 @@ const (
 		"Never run fledge start or fledge stop; " +
 		"the user must run those lifecycle commands directly."
 
-	mandatoryCoordinatorCommunicationPolicy = `Mandatory Fledge communication policy (overrides conflicting profile instructions):
+	mandatoryCoordinatorCommunicationPolicy = `Mandatory Fledge coordination policy (overrides conflicting profile instructions):
 - List installed harness model catalogs with fledge agent models [harness].
 - Choose a worker model with fledge agent spawn --model <exact-model-value>; catalog entries are advisory, so custom model values remain valid.
-- Initial worker tasks may be supplied with fledge agent spawn --prompt.
+- Create workers with fledge agent spawn --task <text>; add --can-delegate only when they may create child tasks and --parent-task when delegating from an existing task.
 - After spawning, communicate with workers only through:
   fledge agent message send <recipient> <text>
   fledge agent message reply <message-id> <text>
-- Treat an injected Fledge completion message as the worker's completion signal, then stop the completed worker with:
-  fledge agent stop <name>
-- Messages from sender watcher are actionable automated notifications. Act on them; never reply to watcher messages.
+- Track work through fledge agent task assign/progress/blocked/needs-decision/resume/complete/fail/cancel/list/show.
+- Task commands append durable events; the dispatcher delivers all required wakes. Ordinary messages always wake their recipient.
+- Stop a completed worker only after its task is terminal.
 - Never poll with fledge agent message inbox. Wait for injected Fledge messages instead.
 - Never use direct Herdr commands to communicate with, inspect, prompt, or collect output from agents. This includes herdr agent wait, read, get, list, prompt, send-keys, attach, and explain, plus Herdr API snapshots.`
 
 	agentMessagingContext = `You are a worker in a Fledge-managed session.
 
-Communicate with the orchestrator only through Fledge messaging:
+Coordinate only through Fledge messaging and task commands:
 - Send progress updates and a completion summary to the orchestrator with:
   fledge agent message send orchestrator <text>
 - Reply to each incoming message with its message ID to preserve correlation:
   fledge agent message reply <message-id> <text>
+- Report assigned task state with fledge agent task progress/blocked/needs-decision/complete/fail.
 - Never poll with fledge agent message inbox. Wait for injected Fledge messages instead.
 - Never use direct Herdr commands to communicate with, inspect, prompt, or collect output from agents. This includes herdr agent wait, read, get, list, prompt, send-keys, attach, and explain, plus Herdr API snapshots.`
-
-	agentStatusContext = `Watcher status reporting:
-- Append status updates to this worker-specific file: %s
-- Format each line as <verb>: <detail>, where <verb> is exactly one of: working|done|needs-decision|blocked|failed|paused
-- The status file is append-only; never overwrite or truncate it.
-- Status-file reporting supplements, and does not replace, Fledge progress and completion messaging to the orchestrator.`
 )
 
 var (
@@ -109,19 +109,20 @@ type Confirmer interface {
 
 // Manager coordinates project state, Herdr, and user confirmation.
 type Manager struct {
-	herdr         Herdr
-	confirmer     Confirmer
-	output        io.Writer
-	random        io.Reader
-	selector      selectionResolver
-	lookPath      harness.LookPath
-	getenv        func(string) string
-	logFactory    func(root, session string) (*slog.Logger, io.Closer, error)
-	watchLauncher func(root string) error
-	watchRunner   func(context.Context, watchproc.Options) error
-	watchStopper  func(root, session string) error
-	homeDir       func() (string, error)
-	contextDeps   func(context.Context, string) agentcontext.Deps
+	herdr           Herdr
+	confirmer       Confirmer
+	output          io.Writer
+	random          io.Reader
+	authorityRandom io.Reader
+	selector        selectionResolver
+	lookPath        harness.LookPath
+	getenv          func(string) string
+	logFactory      func(root, session string) (*slog.Logger, io.Closer, error)
+	watchLauncher   func(root string) error
+	watchRunner     func(context.Context, watchproc.Options) error
+	watchStopper    func(root, session string) error
+	homeDir         func() (string, error)
+	contextDeps     func(context.Context, string) agentcontext.Deps
 }
 
 type selectionResolver interface {
@@ -131,17 +132,18 @@ type selectionResolver interface {
 // NewManager creates a session lifecycle manager.
 func NewManager(client Herdr, confirmer Confirmer, input io.Reader, output io.Writer) *Manager {
 	manager := &Manager{
-		herdr:         client,
-		confirmer:     confirmer,
-		output:        output,
-		random:        rand.Reader,
-		lookPath:      exec.LookPath,
-		getenv:        os.Getenv,
-		watchLauncher: launchWatcher,
-		watchRunner:   watchproc.Run,
-		watchStopper:  watchproc.Stop,
-		homeDir:       os.UserHomeDir,
-		contextDeps:   agentcontext.ProductionDeps,
+		herdr:           client,
+		confirmer:       confirmer,
+		output:          output,
+		random:          rand.Reader,
+		authorityRandom: rand.Reader,
+		lookPath:        exec.LookPath,
+		getenv:          os.Getenv,
+		watchLauncher:   launchWatcher,
+		watchRunner:     watchproc.Run,
+		watchStopper:    watchproc.Stop,
+		homeDir:         os.UserHomeDir,
+		contextDeps:     agentcontext.ProductionDeps,
 	}
 	stdin, stdinOK := input.(*os.File)
 	stdout, stdoutOK := output.(*os.File)
@@ -214,6 +216,13 @@ func (m *Manager) Start(ctx context.Context, dir string, options StartOptions) e
 	if err := m.herdr.Check(); err != nil {
 		return err
 	}
+	protocol, err := m.herdr.Protocol(ctx)
+	if err != nil {
+		return fmt.Errorf("read Herdr protocol: %w", err)
+	}
+	if protocol < dispatcher.RequiredHerdrProtocol {
+		return fmt.Errorf("Herdr protocol %d is unsupported; protocol %d or newer is required. Upgrade Herdr, then restart with fledge stop and fledge start", protocol, dispatcher.RequiredHerdrProtocol)
+	}
 	existingRecord, recordFound, err := readRecord(root)
 	if err != nil {
 		return err
@@ -226,6 +235,10 @@ func (m *Manager) Start(ctx context.Context, dir string, options StartOptions) e
 		if session, exists := sessionByName(sessions, existingRecord.SessionName); exists && session.Running {
 			if options.HasSelection() {
 				return errors.New("startup selection flags cannot be used when reattaching to an existing orchestrator")
+			}
+			existingRecord, err = m.bindExistingRecord(ctx, root, existingRecord)
+			if err != nil {
+				return err
 			}
 			m.logSessionEvent(root, existingRecord.SessionName, "reattached to running session", "session", existingRecord.SessionName)
 			m.launchWatcherWarn(root)
@@ -280,6 +293,10 @@ func (m *Manager) Start(ctx context.Context, dir string, options StartOptions) e
 			return errors.Join(listErr, unlock())
 		}
 		if session, exists := sessionByName(lockedSessions, value.SessionName); exists && session.Running {
+			value, err = bindRecordToStore(root, value)
+			if err != nil {
+				return errors.Join(err, unlock())
+			}
 			if unlockErr := unlock(); unlockErr != nil {
 				return unlockErr
 			}
@@ -473,6 +490,28 @@ func modelChoices(models []harness.Model) []tui.Choice {
 	return choices
 }
 
+func (m *Manager) newPaneAuthority() (string, string, error) {
+	value := make([]byte, paneAuthorityBytes)
+	if _, err := io.ReadFull(m.authorityRandom, value); err != nil {
+		return "", "", fmt.Errorf("generate pane authority: %w", err)
+	}
+	token := hex.EncodeToString(value)
+	return token, paneAuthorityHash(token), nil
+}
+
+func paneAuthorityHash(token string) string {
+	digest := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(digest[:])
+}
+
+func cloneStringMap(source map[string]string) map[string]string {
+	result := make(map[string]string, len(source)+1)
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
+}
+
 func (m *Manager) initializeOrchestrator(
 	ctx context.Context,
 	logger *slog.Logger,
@@ -482,13 +521,22 @@ func (m *Manager) initializeOrchestrator(
 	nativeArgs []string,
 	runtime openCodeRuntime,
 ) (bool, error) {
-	if err := m.herdr.StartServer(session, root, runtime.serverEnvironment); err != nil {
+	authority, authorityHash, err := m.newPaneAuthority()
+	if err != nil {
+		return false, err
+	}
+	serverEnvironment := cloneStringMap(runtime.serverEnvironment)
+	serverEnvironment[paneAuthorityEnvironment] = authority
+	if err := m.herdr.StartServer(session, root, serverEnvironment); err != nil {
 		return false, err
 	}
 	logger.Debug("herdr server started", "session", session)
 	messagingSessionID, err := messaging.New(root, session).Initialize()
 	if err != nil {
 		return true, fmt.Errorf("initialize session messaging: %w", err)
+	}
+	if err := replaceRecordSessionBinding(root, session, messagingSessionID); err != nil {
+		return true, fmt.Errorf("bind Fledge session record to messaging log: %w", err)
 	}
 	logger.Debug("session messaging initialized", "messaging_session_id", messagingSessionID)
 	snapshot, err := m.herdr.WaitReady(ctx, session, 10*time.Second)
@@ -513,11 +561,19 @@ func (m *Manager) initializeOrchestrator(
 	if err := m.herdr.RenamePane(ctx, session, pane.PaneID, "orchestrator"); err != nil {
 		return true, err
 	}
-	if _, err := m.herdr.SplitPane(ctx, session, pane.PaneID, root, runtime.paneEnvironment); err != nil {
+	controlEnvironment := cloneStringMap(runtime.paneEnvironment)
+	controlEnvironment[paneAuthorityEnvironment] = ""
+	if _, err := m.herdr.SplitPane(ctx, session, pane.PaneID, root, controlEnvironment); err != nil {
 		return true, err
 	}
 	if err := m.herdr.StartAgent(ctx, session, "orchestrator", selectedHarness.ID, pane.PaneID, timeout, nativeArgs); err != nil {
 		return true, err
+	}
+	if _, _, err := messaging.New(root, session).RegisterAgent(messaging.RegisterParams{
+		Name: "orchestrator", PaneID: pane.PaneID, Harness: selectedHarness.ID, AuthorityHash: authorityHash,
+		Caller: userIdentity, CanDelegate: true,
+	}); err != nil {
+		return true, fmt.Errorf("register orchestrator: %w", err)
 	}
 	logger.Debug("orchestrator agent started", "harness", selectedHarness.ID, "pane", pane.PaneID)
 	if err := m.herdr.FocusAgent(ctx, session, "orchestrator"); err != nil {
@@ -614,6 +670,17 @@ func (m *Manager) Spawn(ctx context.Context, dir string, options SpawnOptions) (
 	if !exists || !session.Running {
 		return errors.New("project's Fledge session is not running; run fledge start first")
 	}
+	// Resolve who is asking before doing any work on their behalf, so a pane
+	// without authority is turned away before a tab, a prompt, or a harness
+	// process exists.
+	store := messaging.New(root, value.SessionName)
+	if err := validateStoreBinding(store, value); err != nil {
+		return err
+	}
+	spawnCaller, err := m.paneCaller(store)
+	if err != nil {
+		return err
+	}
 	snapshot, err := m.herdr.Snapshot(ctx, value.SessionName)
 	if err != nil {
 		return err
@@ -625,8 +692,12 @@ func (m *Manager) Spawn(ctx context.Context, dir string, options SpawnOptions) (
 	if err != nil {
 		return err
 	}
-	if selection.Name == userIdentity || selection.Name == watcherIdentity {
-		return fmt.Errorf("agent name %q is reserved for messaging", selection.Name)
+	// "orchestrator" is a privileged coordination identity that bypasses
+	// delegation and transition authorization, so only fledge start may create
+	// it. Without this, stopping the coordinator would free the name for any
+	// caller to respawn and inherit its authority.
+	if selection.Name == userIdentity || selection.Name == orchestratorIdentity {
+		return fmt.Errorf("agent name %q is reserved for coordination", selection.Name)
 	}
 	if err := rejectDuplicate(selection.Name, snapshot); err != nil {
 		return err
@@ -648,9 +719,12 @@ func (m *Manager) Spawn(ctx context.Context, dir string, options SpawnOptions) (
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(statedir.StatusDir(root, value.SessionName), 0o700); err != nil {
-		return fmt.Errorf("create watcher status directory: %w", err)
+	authority, authorityHash, err := m.newPaneAuthority()
+	if err != nil {
+		return err
 	}
+	paneEnvironment = cloneStringMap(paneEnvironment)
+	paneEnvironment[paneAuthorityEnvironment] = authority
 	logger, closeLog := m.sessionLogger(root, value.SessionName)
 	defer closeLog()
 	defer func() { logOutcome(logger, "agent spawn", resultErr) }()
@@ -672,6 +746,14 @@ func (m *Manager) Spawn(ctx context.Context, dir string, options SpawnOptions) (
 	if err := m.herdr.StartAgent(ctx, value.SessionName, selection.Name, selectedHarness.ID, pane.PaneID, options.Timeout, nativeArgs); err != nil {
 		return errors.Join(err, rollback())
 	}
+	_, _, err = store.RegisterAgent(messaging.RegisterParams{
+		Name: selection.Name, PaneID: pane.PaneID, Harness: selectedHarness.ID, AuthorityHash: authorityHash,
+		CanDelegate: options.CanDelegate, ParentTaskID: options.ParentTask,
+		Caller: spawnCaller.identity, Task: options.Task,
+	})
+	if err != nil {
+		return errors.Join(err, rollback())
+	}
 	logger.Info("agent started", "name", selection.Name, "harness", selectedHarness.ID, "pane", pane.PaneID)
 	var focusErr error
 	if caller == tui.CallerDirectUser {
@@ -680,13 +762,10 @@ func (m *Manager) Spawn(ctx context.Context, dir string, options SpawnOptions) (
 			focusErr = fmt.Errorf("agent %q started, but focusing it failed: %w", selection.Name, err)
 		}
 	}
-	prompt := agentMessagingContext + "\n\n" + fmt.Sprintf(agentStatusContext, statedir.StatusFile(root, value.SessionName, selection.Name))
-	if options.Prompt != "" {
-		prompt += "\n\nYour task:\n" + options.Prompt
-	}
+	prompt := agentMessagingContext
 	if err := m.herdr.PromptAgent(ctx, value.SessionName, selection.Name, prompt); err != nil {
 		promptErr := fmt.Errorf("agent %q initial prompt failed: %w", selection.Name, err)
-		return errors.Join(focusErr, promptErr, rollback())
+		return errors.Join(focusErr, promptErr, store.StopAgent(selection.Name, pane.PaneID), rollback())
 	}
 	m.launchWatcherWarn(root)
 	m.refreshContext(ctx, root, value.SessionName)
@@ -709,7 +788,19 @@ func launchWatcher(root string) error {
 		return err
 	}
 	defer devNull.Close()
-	return startAndReap(command)
+	if err := startAndReap(command); err != nil {
+		return err
+	}
+	record, found, err := readRecord(root)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return errors.New("session record disappeared while starting dispatcher")
+	}
+	readyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return watchproc.WaitReady(readyCtx, root, record.SessionName)
 }
 
 // watcherCommand builds the detached watcher daemon command. The returned file
@@ -829,26 +920,21 @@ func (m *Manager) StopAgent(ctx context.Context, dir, name string) (resultErr er
 	if !exists || !session.Running {
 		return errors.New("project's Fledge session is not running; run fledge start first")
 	}
-	snapshot, err := m.herdr.Snapshot(ctx, value.SessionName)
-	if err != nil {
-		return err
-	}
 	logger, closeLog := m.sessionLogger(root, value.SessionName)
 	defer closeLog()
 	defer func() { logOutcome(logger, "agent stop", resultErr) }()
 	logger.Info("agent stop", "name", name)
-	paneID := ""
-	for _, agent := range snapshot.Agents {
-		if agent.Name != nil && *agent.Name == name {
-			paneID = agent.PaneID
-			break
-		}
+	store := messaging.New(root, value.SessionName)
+	agent, err := store.Agent(name)
+	if err != nil {
+		return fmt.Errorf("live agent %q was not found in the project's Fledge session: %w", name, err)
 	}
-	if paneID == "" {
-		return fmt.Errorf("live agent %q was not found in the project's Fledge session", name)
-	}
+	paneID := agent.PaneID
 	if err := m.herdr.ClosePane(ctx, value.SessionName, paneID); err != nil {
 		return err
+	}
+	if err := store.StopAgent(name, paneID); err != nil {
+		return fmt.Errorf("pane %s closed, but registry update failed: %w", paneID, err)
 	}
 	logger.Info("agent pane closed", "name", name, "pane", paneID)
 	m.refreshContext(ctx, root, value.SessionName)
@@ -988,8 +1074,114 @@ func (m *Manager) stopAndDeleteSession(ctx context.Context, logger *slog.Logger,
 }
 
 type record struct {
-	Version     int    `json:"version"`
-	SessionName string `json:"session_name"`
+	Version            int    `json:"version"`
+	SessionName        string `json:"session_name"`
+	MessagingSessionID string `json:"messaging_session_id,omitempty"`
+}
+
+// bindExistingRecord upgrades a legacy running-session record while the
+// startup lock excludes stop/start races. Coordination commands can then
+// validate the record entirely from durable local state, without a Herdr call.
+func (m *Manager) bindExistingRecord(ctx context.Context, root string, value record) (record, error) {
+	unlock, err := lockSessionRecord(ctx, root)
+	if err != nil {
+		return record{}, err
+	}
+	locked, found, err := readRecord(root)
+	if err != nil {
+		return record{}, errors.Join(err, unlock())
+	}
+	if !found || locked.SessionName != value.SessionName ||
+		(value.MessagingSessionID != "" && locked.MessagingSessionID != value.MessagingSessionID) {
+		return record{}, errors.Join(errors.New("Fledge session record changed while binding its durable session; retry the command"), unlock())
+	}
+	bound, bindErr := bindRecordToStore(root, locked)
+	return bound, errors.Join(bindErr, unlock())
+}
+
+func bindRecordToStore(root string, value record) (record, error) {
+	store := messaging.New(root, value.SessionName)
+	sessionID, err := store.Ensure()
+	if err != nil {
+		return record{}, err
+	}
+	if value.MessagingSessionID != "" && value.MessagingSessionID != sessionID {
+		return record{}, fmt.Errorf("%w: record has %q, log has %q", messaging.ErrSessionMismatch, value.MessagingSessionID, sessionID)
+	}
+	if value.MessagingSessionID == sessionID {
+		return value, nil
+	}
+	if err := bindRecordSession(root, value.SessionName, sessionID); err != nil {
+		return record{}, err
+	}
+	value.MessagingSessionID = sessionID
+	return value, nil
+}
+
+func bindRecordSession(root, session, sessionID string) error {
+	return writeRecordSessionBinding(root, session, sessionID, false)
+}
+
+func replaceRecordSessionBinding(root, session, sessionID string) error {
+	return writeRecordSessionBinding(root, session, sessionID, true)
+}
+
+func writeRecordSessionBinding(root, session, sessionID string, replace bool) error {
+	if strings.TrimSpace(sessionID) == "" {
+		return errors.New("messaging session ID is empty")
+	}
+	value, found, err := readRecord(root)
+	if err != nil {
+		return err
+	}
+	if !found || value.SessionName != session {
+		return fmt.Errorf("Fledge session record no longer names %q", session)
+	}
+	if !replace && value.MessagingSessionID != "" && value.MessagingSessionID != sessionID {
+		return fmt.Errorf("%w: record has %q, log has %q", messaging.ErrSessionMismatch, value.MessagingSessionID, sessionID)
+	}
+	if value.MessagingSessionID == sessionID {
+		return nil
+	}
+	value.MessagingSessionID = sessionID
+	return rewriteRecord(root, value)
+}
+
+func rewriteRecord(root string, value record) error {
+	path := recordPath(root)
+	contents, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode Fledge session record: %w", err)
+	}
+	contents = append(contents, '\n')
+	if err := fsutil.RejectSymlink(path); err != nil {
+		return err
+	}
+	file, err := os.CreateTemp(filepath.Dir(path), ".session-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary Fledge session record: %w", err)
+	}
+	temporary := file.Name()
+	defer os.Remove(temporary)
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("secure temporary Fledge session record: %w", err)
+	}
+	if _, err := file.Write(contents); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write temporary Fledge session record: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("sync temporary Fledge session record: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close temporary Fledge session record: %w", err)
+	}
+	if err := os.Rename(temporary, path); err != nil {
+		return fmt.Errorf("replace %s: %w", path, err)
+	}
+	return fsutil.SyncDirectory(filepath.Dir(path))
 }
 
 func (m *Manager) loadOrCreateRecord(root string) (record, bool, error) {

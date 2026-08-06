@@ -26,7 +26,7 @@ func TestSubscribeRequest(t *testing.T) {
 		t.Fatalf("subscribeRequest() error = %v", err)
 	}
 
-	want := `{"id":"fledge-watch","method":"events.subscribe","params":{"subscriptions":[{"type":"pane.agent_status_changed","pane_id":"p1"},{"type":"pane.agent_status_changed","pane_id":"p2"}]}}` + "\n"
+	want := `{"id":"fledge-watch","method":"events.subscribe","params":{"subscriptions":[{"type":"pane.agent_status_changed","pane_id":"p1"},{"type":"pane.closed","pane_id":"p1"},{"type":"pane.agent_status_changed","pane_id":"p2"},{"type":"pane.closed","pane_id":"p2"}]}}` + "\n"
 	if string(request) != want {
 		t.Errorf("subscribeRequest() =\n%s\nwant\n%s", request, want)
 	}
@@ -52,13 +52,13 @@ func TestDecodeEventLine(t *testing.T) {
 		{
 			name:   "complete event",
 			line:   eventLine,
-			want:   Event{PaneID: "p1", AgentStatus: "blocked", Agent: "reviewer"},
+			want:   Event{Type: agentStatusEvt, PaneID: "p1", AgentStatus: "blocked", Agent: "reviewer"},
 			wantOK: true,
 		},
 		{
 			name:   "extra fields ignored",
 			line:   `{"event":"pane.agent_status_changed","data":{"pane_id":"p1","agent_status":"working","mystery":7}}`,
-			want:   Event{PaneID: "p1", AgentStatus: "working"},
+			want:   Event{Type: agentStatusEvt, PaneID: "p1", AgentStatus: "working"},
 			wantOK: true,
 		},
 		{name: "wrong event type", line: `{"event":"pane.output","data":{"pane_id":"p1","agent_status":"blocked"}}`},
@@ -108,8 +108,8 @@ func TestSubscribeStreamsEventsUntilTheServerCloses(t *testing.T) {
 	}
 
 	want := []Event{
-		{PaneID: "p1", AgentStatus: "blocked", Agent: "reviewer"},
-		{PaneID: "p2", AgentStatus: "working", Agent: "migrator"},
+		{Type: agentStatusEvt, PaneID: "p1", AgentStatus: "blocked", Agent: "reviewer"},
+		{Type: agentStatusEvt, PaneID: "p2", AgentStatus: "working", Agent: "migrator"},
 	}
 	if len(events) != len(want) {
 		t.Fatalf("Subscribe() delivered %d events (%+v), want %d", len(events), events, len(want))
@@ -122,7 +122,7 @@ func TestSubscribeStreamsEventsUntilTheServerCloses(t *testing.T) {
 
 	select {
 	case request := <-requests:
-		want := `{"id":"fledge-watch","method":"events.subscribe","params":{"subscriptions":[{"type":"pane.agent_status_changed","pane_id":"p1"},{"type":"pane.agent_status_changed","pane_id":"p2"}]}}`
+		want := `{"id":"fledge-watch","method":"events.subscribe","params":{"subscriptions":[{"type":"pane.agent_status_changed","pane_id":"p1"},{"type":"pane.closed","pane_id":"p1"},{"type":"pane.agent_status_changed","pane_id":"p2"},{"type":"pane.closed","pane_id":"p2"}]}}`
 		if request != want {
 			t.Errorf("Subscribe() sent %s, want %s", request, want)
 		}

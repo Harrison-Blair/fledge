@@ -116,7 +116,7 @@ func TestAgentSpawnOptionsAndNativeArguments(t *testing.T) {
 
 	manager := &fakeManager{}
 	command := newRootCommand(manager, func() (string, error) { return "/project/nested", nil })
-	command.SetArgs([]string{"agent", "spawn", "-n", "reviewer", "-k", "claude", "-m", "opus", "-C", "pkg", "--prompt", "Review", "-t", "1m", "--", "--dangerously-skip-permissions"})
+	command.SetArgs([]string{"agent", "spawn", "-n", "reviewer", "-k", "claude", "-m", "opus", "-C", "pkg", "--task", "Review", "-t", "1m", "--", "--dangerously-skip-permissions"})
 	if err := command.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestAgentSpawnOptionsAndNativeArguments(t *testing.T) {
 		t.Fatalf("Spawn() = dirs %#v options %#v", manager.spawnDirs, manager.spawnOptions)
 	}
 	got := manager.spawnOptions[0]
-	if got.Name != "reviewer" || got.Harness != "claude" || got.Model != "opus" || got.Cwd != "pkg" || got.Prompt != "Review" || got.Timeout != time.Minute || !got.ModelSet {
+	if got.Name != "reviewer" || got.Harness != "claude" || got.Model != "opus" || got.Cwd != "pkg" || got.Task != "Review" || got.Timeout != time.Minute || !got.ModelSet {
 		t.Errorf("SpawnOptions = %#v", got)
 	}
 	if strings.Join(got.NativeArgs, " ") != "--dangerously-skip-permissions" {
@@ -586,32 +586,74 @@ func TestCurrentDirectoryErrorIsWrapped(t *testing.T) {
 }
 
 type fakeManager struct {
-	initPaths      []string
-	startDirs      []string
-	startOptions   []lifecycle.StartOptions
-	spawnDirs      []string
-	spawnOptions   []lifecycle.SpawnOptions
-	stopAgentDirs  []string
-	stopAgentNames []string
-	stopDirs       []string
-	watchDirs      []string
-	watchOptions   []lifecycle.WatchOptions
-	messageSends   []messageSendCall
-	messageReplies []messageReplyCall
-	inboxCalls     []inboxCall
-	sendResult     messaging.Message
-	replyResult    messaging.Message
-	inboxResult    []messaging.Message
-	initErr        error
-	startErr       error
-	sendErr        error
-	replyErr       error
-	inboxErr       error
-	inboxIdentity  string
-	contextCalls   []contextCall
-	contextResult  agentcontext.Report
-	contextErr     error
-	output         io.Writer
+	initPaths       []string
+	startDirs       []string
+	startOptions    []lifecycle.StartOptions
+	spawnDirs       []string
+	spawnOptions    []lifecycle.SpawnOptions
+	stopAgentDirs   []string
+	stopAgentNames  []string
+	stopDirs        []string
+	watchDirs       []string
+	watchOptions    []lifecycle.WatchOptions
+	messageSends    []messageSendCall
+	messageReplies  []messageReplyCall
+	inboxCalls      []inboxCall
+	sendResult      messaging.Message
+	replyResult     messaging.Message
+	inboxResult     []messaging.Message
+	initErr         error
+	startErr        error
+	sendErr         error
+	replyErr        error
+	inboxErr        error
+	inboxIdentity   string
+	contextCalls    []contextCall
+	contextResult   agentcontext.Report
+	contextErr      error
+	taskCalls       []taskCall
+	taskResult      messaging.Task
+	taskListResult  []messaging.Task
+	agentListResult []messaging.Agent
+	taskErr         error
+	output          io.Writer
+}
+
+// taskCall records one coordination command as the CLI translated it, so tests
+// can assert the exact arguments the manager was handed.
+type taskCall struct {
+	verb, dir, target, parent, detail string
+	status                            messaging.TaskStatus
+}
+
+func (f *fakeManager) AgentList(_ context.Context, dir string) ([]messaging.Agent, error) {
+	f.taskCalls = append(f.taskCalls, taskCall{verb: "agent-list", dir: dir})
+	return f.agentListResult, f.taskErr
+}
+
+func (f *fakeManager) TaskAssign(_ context.Context, dir, assignee, parent, description string) (messaging.Task, error) {
+	f.taskCalls = append(f.taskCalls, taskCall{verb: "assign", dir: dir, target: assignee, parent: parent, detail: description})
+	return f.taskResult, f.taskErr
+}
+
+func (f *fakeManager) TaskProgress(_ context.Context, dir, id, detail string) (messaging.Task, error) {
+	f.taskCalls = append(f.taskCalls, taskCall{verb: "progress", dir: dir, target: id, detail: detail})
+	return f.taskResult, f.taskErr
+}
+
+func (f *fakeManager) TaskTransition(_ context.Context, dir, id string, status messaging.TaskStatus, detail string) (messaging.Task, error) {
+	f.taskCalls = append(f.taskCalls, taskCall{verb: "transition", dir: dir, target: id, status: status, detail: detail})
+	return f.taskResult, f.taskErr
+}
+
+func (f *fakeManager) TaskList(_ context.Context, dir string) ([]messaging.Task, error) {
+	f.taskCalls = append(f.taskCalls, taskCall{verb: "task-list", dir: dir})
+	return f.taskListResult, f.taskErr
+}
+
+func (f *fakeManager) TaskShow(_ context.Context, dir, id string) (messaging.Task, error) {
+	f.taskCalls = append(f.taskCalls, taskCall{verb: "show", dir: dir, target: id})
+	return f.taskResult, f.taskErr
 }
 
 type contextCall struct{ dir, name string }

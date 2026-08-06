@@ -129,8 +129,7 @@ func TestSendMessageLogsMetadataWithoutBody(t *testing.T) {
 	decoded := decodeLogRecords(t, records)
 	for _, want := range []struct{ level, message string }{
 		{"INFO", "message created"},
-		{"DEBUG", "delivery attempt"},
-		{"DEBUG", "delivered"},
+		{"INFO", "message queued"},
 	} {
 		if !hasLogRecord(decoded, want.level, want.message) {
 			t.Errorf("session log is missing %s %q; records = %v", want.level, want.message, decoded)

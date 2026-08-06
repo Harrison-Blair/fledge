@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Harrison-Blair/fledge/internal/fswatch"
 )
 
 const (
@@ -87,7 +90,8 @@ func runHerdrHelper() {
 
 // respondFromSequence consumes the next queued response and exits. An empty
 // response file makes the invocation fail, standing in for a server that is not
-// answering yet. Herdr is polled serially, so consuming files needs no locking.
+// answering yet. Client operations are serialized, so consuming files needs no
+// locking.
 func respondFromSequence(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -349,9 +353,14 @@ func TestClientSnapshot(t *testing.T) {
 
 func TestClientWaitReadyAcceptsSettledEmptyServer(t *testing.T) {
 	configureHelper(t, "")
-	t.Setenv(helperStdoutEnv, `{"id":"1","result":{"type":"session_snapshot","snapshot":{}}}`)
+	t.Setenv(helperSequenceEnv, writeSequence(t, []string{
+		`{"sessions":[{"name":"session-name","running":true,"socket_path":"/herdr/session.sock"}]}`,
+		`{"id":"1","result":{"type":"session_snapshot","snapshot":{}}}`,
+	}))
+	client := NewClient(helperBinary(t), nil, nil, nil)
+	client.watch = func(string) (fswatch.Watcher, error) { return newFakeWatcher(), nil }
 
-	snapshot, err := NewClient(helperBinary(t), nil, nil, nil).WaitReady(context.Background(), "session-name", 30*time.Second)
+	snapshot, err := client.WaitReady(context.Background(), "session-name", 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,9 +371,14 @@ func TestClientWaitReadyAcceptsSettledEmptyServer(t *testing.T) {
 
 func TestClientWaitReadyReturnsInitialLayout(t *testing.T) {
 	configureHelper(t, "")
-	t.Setenv(helperStdoutEnv, `{"id":"1","result":{"type":"session_snapshot","snapshot":{"focused_tab_id":"t1","focused_pane_id":"w1:p1","tabs":[{"tab_id":"t1","workspace_id":"w1"}],"panes":[{"pane_id":"w1:p1","tab_id":"t1","workspace_id":"w1"}]}}}`)
+	t.Setenv(helperSequenceEnv, writeSequence(t, []string{
+		`{"sessions":[{"name":"session-name","running":true,"socket_path":"/herdr/session.sock"}]}`,
+		`{"id":"1","result":{"type":"session_snapshot","snapshot":{"focused_tab_id":"t1","focused_pane_id":"w1:p1","tabs":[{"tab_id":"t1","workspace_id":"w1"}],"panes":[{"pane_id":"w1:p1","tab_id":"t1","workspace_id":"w1"}]}}}`,
+	}))
+	client := NewClient(helperBinary(t), nil, nil, nil)
+	client.watch = func(string) (fswatch.Watcher, error) { return newFakeWatcher(), nil }
 
-	snapshot, err := NewClient(helperBinary(t), nil, nil, nil).WaitReady(context.Background(), "session-name", 30*time.Second)
+	snapshot, err := client.WaitReady(context.Background(), "session-name", 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,40 +387,93 @@ func TestClientWaitReadyReturnsInitialLayout(t *testing.T) {
 	}
 }
 
-func TestClientWaitReadySettleWindowNeedsConsecutiveEmptySnapshots(t *testing.T) {
-	const emptySnapshot = `{"id":"1","result":{"type":"session_snapshot","snapshot":{}}}`
+func TestClientWaitReadyRetriesOnlyAfterSocketChange(t *testing.T) {
 	const initialLayout = `{"id":"1","result":{"type":"session_snapshot","snapshot":{"tabs":[{"tab_id":"t1","workspace_id":"w1"}],"panes":[{"pane_id":"w1:p1","tab_id":"t1","workspace_id":"w1"}]}}}`
-
-	tests := []struct {
-		name      string
-		responses []string
-	}{
-		// A failed poll between two empty snapshots must restart the settle
-		// window instead of letting the failure age it out.
-		{name: "error between empty snapshots", responses: []string{emptySnapshot, "", emptySnapshot, initialLayout}},
-		{name: "empty then populated", responses: []string{emptySnapshot, initialLayout}},
+	configureHelper(t, "")
+	t.Setenv(helperSequenceEnv, writeSequence(t, []string{
+		`{"sessions":[{"name":"session-name","running":true,"socket_path":"/herdr/session.sock"}]}`,
+		"",
+		initialLayout,
+	}))
+	watcher := newFakeWatcher()
+	client := NewClient(helperBinary(t), nil, nil, nil)
+	client.watch = func(path string) (fswatch.Watcher, error) {
+		if path != "/herdr/session.sock" {
+			t.Fatalf("watched path = %q", path)
+		}
+		watcher.events <- struct{}{}
+		return watcher, nil
 	}
 
+	snapshot, err := client.WaitReady(context.Background(), "session-name", 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Tabs) != 1 || len(snapshot.Panes) != 1 {
+		t.Fatalf("WaitReady() = %#v, want the initial layout", snapshot)
+	}
+}
+
+func TestClientWaitReadyReturnsSocketResolutionErrorsWithoutRetrying(t *testing.T) {
+	tests := []struct {
+		name     string
+		response string
+		want     string
+	}{
+		{name: "missing", response: `{"sessions":[]}`, want: "was not found"},
+		{name: "stopped", response: `{"sessions":[{"name":"session-name"}]}`, want: "is not running"},
+		{name: "missing path", response: `{"sessions":[{"name":"session-name","running":true}]}`, want: "has no socket path"},
+	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			configureHelper(t, "")
-			t.Setenv(helperSequenceEnv, writeSequence(t, test.responses))
-
-			client := NewClient(helperBinary(t), nil, nil, nil)
-			// Every poll advances well past the settle window, so only a reset
-			// of the window can keep the client waiting.
-			client.now = steppingClock(10 * initialLayoutSettleTime)
-
-			snapshot, err := client.WaitReady(context.Background(), "session-name", 30*time.Second)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(snapshot.Tabs) != 1 || len(snapshot.Panes) != 1 {
-				t.Fatalf("WaitReady() = %#v, want the initial layout", snapshot)
+			t.Setenv(helperStdoutEnv, test.response)
+			_, err := NewClient(helperBinary(t), nil, nil, nil).WaitReady(context.Background(), "session-name", 30*time.Second)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("WaitReady() error = %v, want containing %q", err, test.want)
 			}
 		})
 	}
 }
+
+func TestClientWaitReadyDoesNotRetryWithoutAChangeEvent(t *testing.T) {
+	configureHelper(t, "")
+	sequence := writeSequence(t, []string{
+		`{"sessions":[{"name":"session-name","running":true,"socket_path":"/herdr/session.sock"}]}`,
+		"",
+		`{"id":"1","result":{"type":"session_snapshot","snapshot":{}}}`,
+	})
+	t.Setenv(helperSequenceEnv, sequence)
+	watcher := newFakeWatcher()
+	want := errors.New("watch stopped")
+	watcher.errors <- want
+	client := NewClient(helperBinary(t), nil, nil, nil)
+	client.watch = func(string) (fswatch.Watcher, error) { return watcher, nil }
+
+	if _, err := client.WaitReady(context.Background(), "session-name", 30*time.Second); !errors.Is(err, want) {
+		t.Fatalf("WaitReady() error = %v, want %v", err, want)
+	}
+	remaining, err := os.ReadDir(sequence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining) != 1 {
+		t.Fatalf("remaining scripted responses = %d, want one unconsumed snapshot", len(remaining))
+	}
+}
+
+type fakeWatcher struct {
+	events chan struct{}
+	errors chan error
+}
+
+func newFakeWatcher() *fakeWatcher {
+	return &fakeWatcher{events: make(chan struct{}, 1), errors: make(chan error, 1)}
+}
+
+func (w *fakeWatcher) Events() <-chan struct{} { return w.events }
+func (w *fakeWatcher) Errors() <-chan error    { return w.errors }
+func (w *fakeWatcher) Close() error            { return nil }
 
 func TestClientLayoutAndAgentCommands(t *testing.T) {
 	tests := []struct {
@@ -667,15 +734,6 @@ func writeSequence(t *testing.T, responses []string) string {
 		}
 	}
 	return dir
-}
-
-// steppingClock advances by step on every reading.
-func steppingClock(step time.Duration) func() time.Time {
-	current := time.Unix(0, 0)
-	return func() time.Time {
-		current = current.Add(step)
-		return current
-	}
 }
 
 func readInvocation(t *testing.T, path string) helperInvocation {

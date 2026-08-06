@@ -24,6 +24,8 @@ func newAgentCommand(manager sessionManager, getwd func() (string, error)) *cobr
 		},
 	}
 	agent.AddCommand(newAgentSpawnCommand(manager, getwd))
+	agent.AddCommand(newAgentListCommand(manager, getwd))
+	agent.AddCommand(newAgentTaskCommand(manager, getwd))
 	agent.AddCommand(newAgentStopCommand(manager, getwd))
 	agent.AddCommand(newAgentMessageCommand(manager, getwd))
 	agent.AddCommand(newAgentContextCommand(manager, getwd))
@@ -272,6 +274,8 @@ func newAgentSpawnCommand(manager sessionManager, getwd func() (string, error)) 
 	command.Flags().StringVarP(&options.Model, "model", "m", "", "model ID (defaults to the harness default)")
 	command.Flags().StringVarP(&options.Cwd, "cwd", "C", "", "agent working directory within this Fledge project (defaults to its root)")
 	command.Flags().DurationVarP(&options.Timeout, "timeout", "t", lifecycle.DefaultAgentTimeout, "agent startup timeout")
-	command.Flags().StringVar(&options.Prompt, "prompt", "", "initial prompt to submit after startup")
+	command.Flags().StringVar(&options.Task, "task", "", "atomically assign an initial task")
+	command.Flags().BoolVar(&options.CanDelegate, "can-delegate", false, "allow this agent to delegate child tasks")
+	command.Flags().StringVar(&options.ParentTask, "parent-task", "", "parent task authorizing delegated work")
 	return command
 }

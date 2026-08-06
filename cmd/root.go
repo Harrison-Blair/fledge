@@ -15,6 +15,7 @@ import (
 )
 
 type sessionManager interface {
+	coordinationManager
 	Init(string) (string, error)
 	Start(context.Context, string, lifecycle.StartOptions) error
 	Spawn(context.Context, string, lifecycle.SpawnOptions) error

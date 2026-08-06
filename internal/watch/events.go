@@ -14,6 +14,7 @@ const (
 	subscribeID    = "fledge-watch"
 	subscribeCall  = "events.subscribe"
 	agentStatusEvt = "pane.agent_status_changed"
+	paneClosedEvt  = "pane.closed"
 	ackType        = "subscription_started"
 
 	// defaultAckBudget bounds the wait for the subscription ack. Tests inject
@@ -24,6 +25,7 @@ const (
 
 // Event is one Herdr pane.agent_status_changed notification.
 type Event struct {
+	Type        string
 	PaneID      string
 	AgentStatus string
 	Agent       string
@@ -58,10 +60,9 @@ type subscribeMessage struct {
 // snapshot nor the stream.
 //
 // Only the subscription ack is bounded by a deadline. Once subscribed the read
-// blocks for as long as the server holds the connection open without sending,
-// so callers MUST pass a bounded ctx: a Herdr that wedges with the socket open
-// sends neither data nor EOF, and only ctx expiry turns that into the error
-// that sends the caller back to polling.
+// blocks for as long as the server holds the connection open without sending:
+// a Herdr that wedges with the socket open sends neither data nor EOF, and only
+// canceling ctx unblocks the read and returns control to the caller.
 func Subscribe(ctx context.Context, dial func(context.Context) (net.Conn, error), paneIDs []string, onReady func(), onEvent func(Event)) error {
 	return subscribe(ctx, dial, paneIDs, onReady, onEvent, defaultAckBudget)
 }
@@ -135,6 +136,7 @@ func subscribeRequest(paneIDs []string) ([]byte, error) {
 	subscriptions := make([]subscription, 0, len(paneIDs))
 	for _, paneID := range paneIDs {
 		subscriptions = append(subscriptions, subscription{Type: agentStatusEvt, PaneID: paneID})
+		subscriptions = append(subscriptions, subscription{Type: paneClosedEvt, PaneID: paneID})
 	}
 
 	request, err := json.Marshal(subscribeMessage{
@@ -174,14 +176,15 @@ func decodeEventLine(line []byte) (Event, bool) {
 	if err := json.Unmarshal(line, &message); err != nil {
 		return Event{}, false
 	}
-	if message.Event != agentStatusEvt {
+	if message.Event != agentStatusEvt && message.Event != paneClosedEvt {
 		return Event{}, false
 	}
-	if message.Data.PaneID == "" || message.Data.AgentStatus == "" {
+	if message.Data.PaneID == "" || (message.Event == agentStatusEvt && message.Data.AgentStatus == "") {
 		return Event{}, false
 	}
 
 	return Event{
+		Type:        message.Event,
 		PaneID:      message.Data.PaneID,
 		AgentStatus: message.Data.AgentStatus,
 		Agent:       message.Data.Agent,

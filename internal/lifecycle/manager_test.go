@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Harrison-Blair/fledge/internal/dispatcher"
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/messaging"
 	"github.com/Harrison-Blair/fledge/internal/project"
@@ -102,12 +103,12 @@ func TestStartCreatesAndReusesSession(t *testing.T) {
 	for _, entry := range logEntries {
 		logNames = append(logNames, entry.Name())
 	}
-	if strings.Join(logNames, ",") != "fledge.log,messages.jsonl" {
+	if strings.Join(logNames, ",") != "events.jsonl,fledge.log" {
 		t.Fatalf("session log entries = %v, want only actual logs", logNames)
 	}
 	tmpEntries, err := os.ReadDir(statedir.TempSession(root, wantSessionName))
-	if err != nil || len(tmpEntries) != 1 || tmpEntries[0].Name() != "messages.lock" {
-		t.Fatalf("session temp entries = %v, %v; want messages.lock", tmpEntries, err)
+	if err != nil || len(tmpEntries) != 1 || tmpEntries[0].Name() != "events.lock" {
+		t.Fatalf("session temp entries = %v, %v; want events.lock", tmpEntries, err)
 	}
 
 	ignore, err := os.ReadFile(filepath.Join(root, stateDirectory, ".gitignore"))
@@ -326,6 +327,7 @@ func TestStartCreatesWorkspaceForEmptyHeadlessServer(t *testing.T) {
 	}
 	manager, _ := newTestManager(client, &fakeConfirmer{})
 	manager.lookPath = installedTestHarness
+	manager.authorityRandom = bytes.NewReader(bytes.Repeat([]byte{0xcd}, paneAuthorityBytes))
 
 	if err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout, Harness: "codex", HarnessSet: true}); err != nil {
 		t.Fatal(err)
@@ -336,6 +338,21 @@ func TestStartCreatesWorkspaceForEmptyHeadlessServer(t *testing.T) {
 	}
 	if client.createWorkspace.dir != root || client.createWorkspace.label != "orchestrator" {
 		t.Fatalf("CreateWorkspace() call = %#v", client.createWorkspace)
+	}
+	wantAuthority := strings.Repeat("cd", paneAuthorityBytes)
+	if client.serverEnvironment[paneAuthorityEnvironment] != wantAuthority {
+		t.Fatalf("server pane authority was not injected")
+	}
+	if client.splitEnvironment[paneAuthorityEnvironment] != "" {
+		t.Fatalf("control pane inherited orchestrator authority")
+	}
+	value, found, err := readRecord(root)
+	if err != nil || !found {
+		t.Fatalf("readRecord() = %#v, %v, %v", value, found, err)
+	}
+	agent, err := messaging.New(root, value.SessionName).Agent(orchestratorIdentity)
+	if err != nil || agent.AuthorityHash != paneAuthorityHash(wantAuthority) {
+		t.Fatalf("orchestrator authority = %q, %v", agent.AuthorityHash, err)
 	}
 }
 
@@ -570,7 +587,11 @@ func TestStartResetsMessagingOnlyForFreshServer(t *testing.T) {
 			t.Fatal(err)
 		}
 		store := messaging.New(root, testSessionName)
-		if _, err := store.Initialize(); err != nil {
+		sessionID, err := store.Initialize()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := replaceRecordSessionBinding(root, testSessionName, sessionID); err != nil {
 			t.Fatal(err)
 		}
 		created, err := store.Create(messaging.CreateParams{Sender: "user", Recipient: "worker", Body: "keep", RecipientPane: "pane"})
@@ -758,6 +779,7 @@ func TestSpawnCreatesDedicatedTabAndPrompts(t *testing.T) {
 	manager, _ := newTestManager(client, &fakeConfirmer{})
 	manager.lookPath = installedTestHarness
 	manager.getenv = func(string) string { return "" }
+	manager.authorityRandom = bytes.NewReader(bytes.Repeat([]byte{0xab}, paneAuthorityBytes))
 	launched := 0
 	manager.watchLauncher = func(gotRoot string) error {
 		launched++
@@ -769,7 +791,7 @@ func TestSpawnCreatesDedicatedTabAndPrompts(t *testing.T) {
 
 	err := manager.Spawn(context.Background(), child, SpawnOptions{
 		Name: "worker", Harness: "codex", Model: "gpt-custom", ModelSet: true,
-		Timeout: 60 * time.Second, Prompt: "Review the diff", NativeArgs: []string{"--sandbox", "read-only"},
+		Timeout: 60 * time.Second, Task: "Review the diff", NativeArgs: []string{"--sandbox", "read-only"},
 	})
 	if err != nil {
 		t.Fatalf("Spawn() error = %v", err)
@@ -782,6 +804,14 @@ func TestSpawnCreatesDedicatedTabAndPrompts(t *testing.T) {
 	if client.createCall.cwd != root || client.createCall.label != "worker" || client.createCall.workspace != "w1" {
 		t.Errorf("CreateTab() = %#v", client.createCall)
 	}
+	wantAuthority := strings.Repeat("ab", paneAuthorityBytes)
+	if got := client.createCall.environment[paneAuthorityEnvironment]; got != wantAuthority {
+		t.Errorf("pane authority = %q, want deterministic token", got)
+	}
+	registered, err := messaging.New(root, testSessionName).Agent("worker")
+	if err != nil || registered.AuthorityHash != paneAuthorityHash(wantAuthority) {
+		t.Errorf("registered authority = %q, %v", registered.AuthorityHash, err)
+	}
 	if client.startAgent.pane != "w1:p2" || client.startAgent.kind != "codex" || client.startAgent.timeout != 60*time.Second {
 		t.Errorf("StartAgent() = %#v", client.startAgent)
 	}
@@ -792,14 +822,6 @@ func TestSpawnCreatesDedicatedTabAndPrompts(t *testing.T) {
 	wantPrompt := expectedWorkerPrompt(root, "worker", "Review the diff")
 	if len(client.promptCalls) != 1 || client.prompt != wantPrompt {
 		t.Errorf("PromptAgent calls = %#v, want one call with %q", client.promptCalls, wantPrompt)
-	}
-	statusDir := statedir.StatusDir(root, testSessionName)
-	info, statErr := os.Stat(statusDir)
-	if statErr != nil || !info.IsDir() {
-		t.Fatalf("status directory = %#v, %v; want directory", info, statErr)
-	}
-	if !filepath.IsAbs(statedir.StatusFile(root, testSessionName, "worker")) {
-		t.Fatalf("status file path = %q, want absolute", statedir.StatusFile(root, testSessionName, "worker"))
 	}
 	if launched != 1 {
 		t.Errorf("watch launcher calls = %d, want 1", launched)
@@ -816,7 +838,7 @@ func TestRuntimeCommunicationPoliciesRequireFledgeCompletionAndForbidPolling(t *
 		for _, required := range []string{
 			"fledge agent message send",
 			"fledge agent message reply",
-			"completion",
+			"task",
 			"Never poll with fledge agent message inbox",
 			"herdr agent wait, read, get, list, prompt, send-keys, attach, and explain",
 			"Herdr API snapshots",
@@ -826,12 +848,9 @@ func TestRuntimeCommunicationPoliciesRequireFledgeCompletionAndForbidPolling(t *
 			}
 		}
 	}
-	if !strings.Contains(mandatoryCoordinatorCommunicationPolicy, "fledge agent stop <name>") {
-		t.Errorf("orchestrator policy = %q, want worker stop instruction", mandatoryCoordinatorCommunicationPolicy)
-	}
-	for _, required := range []string{"watcher", "actionable", "never reply"} {
+	for _, required := range []string{"--can-delegate", "--parent-task", "Ordinary messages always wake"} {
 		if !strings.Contains(mandatoryCoordinatorCommunicationPolicy, required) {
-			t.Errorf("orchestrator policy = %q, want watcher instruction containing %q", mandatoryCoordinatorCommunicationPolicy, required)
+			t.Errorf("orchestrator policy = %q, want %q", mandatoryCoordinatorCommunicationPolicy, required)
 		}
 	}
 }
@@ -867,7 +886,7 @@ func TestSpawnPromptCompositionAcrossHarnesses(t *testing.T) {
 				manager.getenv = func(string) string { return "" }
 
 				if err := manager.Spawn(context.Background(), root, SpawnOptions{
-					Timeout: DefaultAgentTimeout, Name: "worker", Harness: harnessID, Prompt: promptCase.prompt,
+					Timeout: DefaultAgentTimeout, Name: "worker", Harness: harnessID, Task: promptCase.prompt,
 				}); err != nil {
 					t.Fatalf("Spawn() error = %v", err)
 				}
@@ -1055,7 +1074,7 @@ func TestOpenCodeRuntimeCleanupFollowsSessionDeletion(t *testing.T) {
 			if _, err := prepareOpenCodeRuntime(root, testSessionName, generatedPromptFile(root), "{}"); err != nil {
 				t.Fatal(err)
 			}
-			auditPath := filepath.Join(root, stateDirectory, "logs", testSessionName, "messages.jsonl")
+			auditPath := filepath.Join(root, stateDirectory, "logs", testSessionName, "events.jsonl")
 			if err := os.MkdirAll(filepath.Dir(auditPath), 0o700); err != nil {
 				t.Fatal(err)
 			}
@@ -1283,7 +1302,11 @@ func TestSpawnCallerAwareFocusAndFailures(t *testing.T) {
 		writeTestRecord(t, root)
 		snapshot := testSnapshot()
 		kind, name := "codex", "orchestrator"
-		snapshot.Agents = []herdr.Agent{{PaneID: "w1:p1", Agent: &kind, Name: &name}}
+		liveName := "helper"
+		snapshot.Agents = []herdr.Agent{
+			{PaneID: "w1:p1", Agent: &kind, Name: &name},
+			{PaneID: "w1:p3", Agent: &kind, Name: &liveName},
+		}
 		client := &fakeHerdr{
 			sessions:    []herdr.Session{{Name: testSessionName, Running: true}},
 			snapshot:    snapshot,
@@ -1297,7 +1320,12 @@ func TestSpawnCallerAwareFocusAndFailures(t *testing.T) {
 
 	t.Run("agent caller does not steal focus and still receives messaging context", func(t *testing.T) {
 		manager, client, root := newSpawnManager(t)
-		manager.getenv = func(string) string { return "w1:p1" }
+		manager.getenv = func(name string) string {
+			if name == "HERDR_PANE_ID" {
+				return "w1:p1"
+			}
+			return ""
+		}
 		if err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: "worker", Harness: "codex"}); err != nil {
 			t.Fatal(err)
 		}
@@ -1346,32 +1374,12 @@ func TestSpawnCallerAwareFocusAndFailures(t *testing.T) {
 	t.Run("prompt failure closes tab", func(t *testing.T) {
 		manager, client, root := newSpawnManager(t)
 		client.promptErr = errors.New("prompt failed")
-		err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: "worker", Harness: "codex", Prompt: "work"})
+		err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: "worker", Harness: "codex", Task: "work"})
 		if err == nil || !strings.Contains(err.Error(), "initial prompt failed") {
 			t.Fatalf("Spawn() error = %v", err)
 		}
 		if len(client.closeCalls) != 1 || client.closeCalls[0] != "t2" {
 			t.Fatalf("CloseTab() calls = %v, want t2", client.closeCalls)
-		}
-		if info, statErr := os.Stat(statedir.StatusDir(root, testSessionName)); statErr != nil || !info.IsDir() {
-			t.Fatalf("shared status directory = %#v, %v; want retained directory", info, statErr)
-		}
-	})
-
-	t.Run("status directory failure does not create tab", func(t *testing.T) {
-		manager, client, root := newSpawnManager(t)
-		if err := os.MkdirAll(statedir.TempSession(root, testSessionName), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(statedir.StatusDir(root, testSessionName), []byte("not a directory"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: "worker", Harness: "codex"})
-		if err == nil || !strings.Contains(err.Error(), "status directory") {
-			t.Fatalf("Spawn() error = %v, want status directory failure", err)
-		}
-		if slicesContain(client.calls, "create-tab") {
-			t.Fatalf("calls = %v, want no tab creation", client.calls)
 		}
 	})
 
@@ -1379,7 +1387,7 @@ func TestSpawnCallerAwareFocusAndFailures(t *testing.T) {
 		manager, client, root := newSpawnManager(t)
 		manager.getenv = func(string) string { return "" }
 		client.focusErr = errors.New("focus failed")
-		err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: "worker", Harness: "codex", Prompt: "work"})
+		err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: "worker", Harness: "codex", Task: "work"})
 		if err == nil || !strings.Contains(err.Error(), "focusing it failed") {
 			t.Fatalf("Spawn() error = %v", err)
 		}
@@ -1397,7 +1405,7 @@ func TestSpawnCallerAwareFocusAndFailures(t *testing.T) {
 		client.focusErr = errors.New("focus failed")
 		client.promptErr = errors.New("prompt failed")
 		client.closeErr = errors.New("close failed")
-		err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: "worker", Harness: "codex", Prompt: "work"})
+		err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: "worker", Harness: "codex", Task: "work"})
 		if err == nil || !strings.Contains(err.Error(), "focusing it failed") ||
 			!strings.Contains(err.Error(), "initial prompt failed") || !strings.Contains(err.Error(), "close failed") {
 			t.Fatalf("Spawn() error = %v", err)
@@ -1409,8 +1417,22 @@ func TestSpawnCallerAwareFocusAndFailures(t *testing.T) {
 
 	t.Run("duplicate name does not create tab", func(t *testing.T) {
 		manager, client, root := newSpawnManager(t)
-		err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: "orchestrator", Harness: "codex"})
+		err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: "helper", Harness: "codex"})
 		if err == nil || !strings.Contains(err.Error(), "already exists") {
+			t.Fatalf("Spawn() error = %v", err)
+		}
+		if slicesContain(client.calls, "create-tab") {
+			t.Fatalf("calls = %v, want no tab creation", client.calls)
+		}
+	})
+
+	// "orchestrator" bypasses delegation and transition authorization, so it must
+	// stay unclaimable even once fledge agent stop has freed the live name.
+	t.Run("reserved orchestrator name does not create tab", func(t *testing.T) {
+		manager, client, root := newSpawnManager(t)
+		client.snapshot.Agents = nil
+		err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: orchestratorIdentity, Harness: "codex"})
+		if err == nil || !strings.Contains(err.Error(), "reserved") {
 			t.Fatalf("Spawn() error = %v", err)
 		}
 		if slicesContain(client.calls, "create-tab") {
@@ -1429,30 +1451,10 @@ func TestSpawnCallerAwareFocusAndFailures(t *testing.T) {
 		}
 	})
 
-	t.Run("reserved watcher name does not create tab", func(t *testing.T) {
-		manager, client, root := newSpawnManager(t)
-		err := manager.Spawn(context.Background(), root, SpawnOptions{Timeout: DefaultAgentTimeout, Name: "watcher", Harness: "codex"})
-		if err == nil || !strings.Contains(err.Error(), "reserved") {
-			t.Fatalf("Spawn() error = %v", err)
-		}
-		if slicesContain(client.calls, "create-tab") {
-			t.Fatalf("calls = %v, want no tab creation", client.calls)
-		}
-	})
 }
 
 func expectedWorkerPrompt(root, agent, task string) string {
-	prompt := agentMessagingContext + `
-
-Watcher status reporting:
-- Append status updates to this worker-specific file: ` + statedir.StatusFile(root, testSessionName, agent) + `
-- Format each line as <verb>: <detail>, where <verb> is exactly one of: working|done|needs-decision|blocked|failed|paused
-- The status file is append-only; never overwrite or truncate it.
-- Status-file reporting supplements, and does not replace, Fledge progress and completion messaging to the orchestrator.`
-	if task != "" {
-		prompt += "\n\nYour task:\n" + task
-	}
-	return prompt
+	return agentMessagingContext
 }
 
 func TestStopAgentClosesNamedAgentPane(t *testing.T) {
@@ -1468,12 +1470,13 @@ func TestStopAgentClosesNamedAgentPane(t *testing.T) {
 		snapshot: snapshot,
 	}
 	manager, output := newTestManager(client, &fakeConfirmer{})
+	registerTestAgent(t, root, name, "w1:p2")
 
 	if err := manager.StopAgent(context.Background(), root, name); err != nil {
 		t.Fatal(err)
 	}
 	// The trailing snapshot is the best-effort context-usage refresh.
-	wantCalls := []string{"check", "list", "snapshot", "close-pane", "snapshot"}
+	wantCalls := []string{"check", "list", "close-pane", "snapshot"}
 	if strings.Join(client.calls, ",") != strings.Join(wantCalls, ",") {
 		t.Fatalf("call order = %v, want %v", client.calls, wantCalls)
 	}
@@ -1543,15 +1546,13 @@ func TestStopAgentRequiresRunningSessionAndLiveAgent(t *testing.T) {
 	}
 }
 
-func TestStopAgentReturnsSnapshotAndCloseFailures(t *testing.T) {
+func TestStopAgentReturnsCloseFailures(t *testing.T) {
 	t.Parallel()
 
 	for _, test := range []struct {
-		name        string
-		snapshotErr error
-		closeErr    error
+		name     string
+		closeErr error
 	}{
-		{name: "snapshot", snapshotErr: errors.New("snapshot failed")},
 		{name: "close", closeErr: errors.New("close failed")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1562,15 +1563,13 @@ func TestStopAgentReturnsSnapshotAndCloseFailures(t *testing.T) {
 			snapshot.Agents = []herdr.Agent{{Name: &name, PaneID: "w1:p2"}}
 			client := &fakeHerdr{
 				sessions: []herdr.Session{{Name: testSessionName, Running: true}}, snapshot: snapshot,
-				snapshotErr: test.snapshotErr, closePaneErr: test.closeErr,
+				closePaneErr: test.closeErr,
 			}
 			manager, output := newTestManager(client, &fakeConfirmer{})
+			registerTestAgent(t, root, name, "w1:p2")
 
 			err := manager.StopAgent(context.Background(), root, name)
-			wantErr := test.snapshotErr
-			if wantErr == nil {
-				wantErr = test.closeErr
-			}
+			wantErr := test.closeErr
 			if !errors.Is(err, wantErr) {
 				t.Fatalf("StopAgent() error = %v, want %v", err, wantErr)
 			}
@@ -1578,6 +1577,21 @@ func TestStopAgentReturnsSnapshotAndCloseFailures(t *testing.T) {
 				t.Fatalf("output = %q", output.String())
 			}
 		})
+	}
+}
+
+func registerTestAgent(t *testing.T, root, name, pane string) {
+	t.Helper()
+	store := messaging.New(root, testSessionName)
+	sessionID, err := store.Initialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceRecordSessionBinding(root, testSessionName, sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.RegisterAgent(messaging.RegisterParams{Name: name, PaneID: pane, Harness: "codex", Caller: "user"}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -1748,7 +1762,7 @@ func TestStopSessionStates(t *testing.T) {
 			if _, err := os.Stat(recordPath(root)); !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("session record error = %v, want not exist", err)
 			}
-			if _, err := os.Stat(filepath.Join(sessionDirectory, "messages.jsonl")); err != nil {
+			if _, err := os.Stat(filepath.Join(sessionDirectory, "events.jsonl")); err != nil {
 				t.Errorf("messaging log after Stop: %v; want preserved", err)
 			}
 			if _, err := os.Stat(statedir.TempSession(root, testSessionName)); !errors.Is(err, os.ErrNotExist) {
@@ -1845,7 +1859,7 @@ func TestStopFailureRetainsRecord(t *testing.T) {
 			if _, err := os.Stat(recordPath(root)); err != nil {
 				t.Errorf("session record removed: %v", err)
 			}
-			if _, err := os.Stat(filepath.Join(root, stateDirectory, "logs", testSessionName, "messages.jsonl")); err != nil {
+			if _, err := os.Stat(filepath.Join(root, stateDirectory, "logs", testSessionName, "events.jsonl")); err != nil {
 				t.Errorf("messaging log removed after failed cleanup: %v", err)
 			}
 		})
@@ -2184,7 +2198,13 @@ func writeTestRecord(t *testing.T, root string) {
 	if err := initializeStateDirectory(root); err != nil {
 		t.Fatal(err)
 	}
-	created, err := createRecord(root, record{Version: recordVersion, SessionName: testSessionName})
+	sessionID, err := messaging.New(root, testSessionName).Initialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := createRecord(root, record{
+		Version: recordVersion, SessionName: testSessionName, MessagingSessionID: sessionID,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2224,6 +2244,7 @@ type attachCall struct {
 }
 
 type fakeHerdr struct {
+	protocol          int
 	checkErr          error
 	attachErr         error
 	listErr           error
@@ -2385,7 +2406,12 @@ func (f *fakeHerdr) List(context.Context) ([]herdr.Session, error) {
 	return f.sessions, f.listErr
 }
 
-func (f *fakeHerdr) Protocol(context.Context) (int, error) { return 19, nil }
+func (f *fakeHerdr) Protocol(context.Context) (int, error) {
+	if f.protocol != 0 {
+		return f.protocol, nil
+	}
+	return dispatcher.RequiredHerdrProtocol, nil
+}
 
 func (f *fakeHerdr) Stop(ctx context.Context, name string) error {
 	f.calls = append(f.calls, "stop")

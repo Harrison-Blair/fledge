@@ -95,7 +95,7 @@ func TestRemoveOpenCodeRuntimePreservesAuditLogs(t *testing.T) {
 	if _, err := prepareOpenCodeRuntime(root, testSessionName, generatedPromptFile(root), "{}"); err != nil {
 		t.Fatal(err)
 	}
-	auditPath := filepath.Join(statedir.Session(root, testSessionName), "messages.jsonl")
+	auditPath := filepath.Join(statedir.Session(root, testSessionName), "events.jsonl")
 	if err := os.MkdirAll(filepath.Dir(auditPath), 0o700); err != nil {
 		t.Fatal(err)
 	}

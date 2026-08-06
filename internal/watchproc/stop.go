@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Harrison-Blair/fledge/internal/fswatch"
 	"github.com/Harrison-Blair/fledge/internal/statedir"
 )
 
@@ -17,7 +18,6 @@ const maxPIDFileBytes = 32
 
 const (
 	stopReleaseTimeout = 10 * time.Second
-	stopPollInterval   = 25 * time.Millisecond
 )
 
 // Stop terminates the watcher that currently owns the session singleton. A
@@ -28,7 +28,7 @@ func Stop(root, session string) error {
 	if err != nil {
 		return err
 	}
-	watchPath := statedir.WatchSession(root, session)
+	watchPath := statedir.TempSession(root, session)
 	lockPath := filepath.Join(watchPath, lockFilename)
 	if !terminated {
 		if _, err := os.Lstat(lockPath); errors.Is(err, os.ErrNotExist) {
@@ -45,11 +45,22 @@ func Stop(root, session string) error {
 		}
 		return nil
 	}
-	return waitForRelease(lockPath, stopReleaseTimeout, stopPollInterval)
+	return waitForRelease(lockPath, stopReleaseTimeout)
 }
 
-func waitForRelease(lockPath string, timeout, interval time.Duration) error {
-	deadline := time.Now().Add(timeout)
+// waitForRelease blocks until the terminating watcher has dropped the
+// singleton lock. Releasing an advisory lock changes no file, so the whole
+// directory is watched: what is actually observable is the exiting watcher
+// removing its PID and readiness files beside the lock. The timeout bounds a
+// process that dies without unwinding; it is not a poll interval.
+func waitForRelease(lockPath string, timeout time.Duration) error {
+	changes, err := fswatch.Directory(filepath.Dir(lockPath))
+	if err != nil {
+		return err
+	}
+	defer changes.Close()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	for {
 		held, err := singletonHeld(lockPath)
 		if err != nil {
@@ -58,10 +69,14 @@ func waitForRelease(lockPath string, timeout, interval time.Duration) error {
 		if !held {
 			return nil
 		}
-		if !time.Now().Before(deadline) {
+		select {
+		case <-changes.Events():
+			continue
+		case err := <-changes.Errors():
+			return fmt.Errorf("await watcher shutdown: %w", err)
+		case <-timer.C:
 			return fmt.Errorf("watcher did not release singleton lock %q within %s", lockPath, timeout)
 		}
-		time.Sleep(interval)
 	}
 }
 
@@ -77,7 +92,7 @@ func stopAttempt(root, session string, terminate func(int) error) (bool, error) 
 	if !statedir.ValidSessionDirName(session) {
 		return false, fmt.Errorf("Herdr session name %q is not a valid watch directory name", session)
 	}
-	watchPath := statedir.WatchSession(root, session)
+	watchPath := statedir.TempSession(root, session)
 	if _, err := os.Lstat(watchPath); errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	} else if err != nil {

@@ -1,8 +1,8 @@
 package project
 
 import (
+	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
 
@@ -15,6 +15,9 @@ func TestCommittedProjectFilesMatchGeneratedContents(t *testing.T) {
 	root := repositoryRoot(t)
 	assertFileContents(t, filepath.Join(root, stateDirectory, profilesDir, profileFilename), defaultProfileContents)
 	assertFileContents(t, filepath.Join(root, ".codex", "rules", "fledge.rules"), codexRulesContents)
+	if _, err := os.Stat(filepath.Join(root, stateDirectory, "watch.json")); !os.IsNotExist(err) {
+		t.Fatalf("removed watch.json still exists or cannot be inspected: %v", err)
+	}
 
 	profile, err := LoadOrchestratorProfile(root)
 	if err != nil {
@@ -27,9 +30,9 @@ func TestCommittedProjectFilesMatchGeneratedContents(t *testing.T) {
 
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve test source path")
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("resolve test working directory: %v", err)
 	}
-	return filepath.Dir(filepath.Dir(filepath.Dir(file)))
+	return filepath.Clean(filepath.Join(workingDirectory, "..", ".."))
 }

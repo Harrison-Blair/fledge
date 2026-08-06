@@ -8,9 +8,9 @@ command line.
 - Go 1.26 or newer, matching the version required by `go.mod`.
 - [Herdr](https://herdr.dev/) installed and on `PATH`. Fledge drives every
   session through the `herdr` command.
-- Herdr protocol 16 or newer for the watcher's event-stream mode, matching
-  `min_protocol` in `.fledge/watch.json`. On an older Herdr, the watcher
-  degrades to snapshot polling.
+- Herdr protocol 19 or newer. Coordination is event-driven end to end and has
+  no polling fallback, so `fledge start` refuses an older Herdr and asks you to
+  upgrade it and then run `fledge stop` and `fledge start` yourself.
 
 ## Build and install
 
@@ -51,10 +51,9 @@ Initialize a project once. The optional path defaults to the current directory:
 fledge init [path]
 ```
 
-This creates tracked `.fledge/config.json`, `.fledge/watch.json`, and
+This creates tracked `.fledge/config.json` and
 `.fledge/profiles/orchestrator.toml` files. Edit the profile to change the
-instructions sent to the project's coordinator and `watch.json` to tune
-supervision.
+instructions sent to the project's coordinator.
 
 Initialization also creates the managed
 [Codex command policy](https://learn.chatgpt.com/docs/agent-configuration/rules)
@@ -112,7 +111,8 @@ The mandatory policy also tells coordinators to inspect model catalogs with
 existing custom coordinator profiles receive this guidance after the same full
 restart without being rewritten.
 
-Workers continue to receive their instructions in each per-spawn prompt. For
+Workers continue to receive their coordination instructions in each per-spawn
+prompt. For
 OpenCode, Fledge preserves the original inline configuration and applies the
 coordinator policy only to the coordinator, not to control or worker panes.
 
@@ -146,7 +146,7 @@ fledge agent spawn \
   --name reviewer \
   --harness claude \
   --model opus \
-  --prompt "Review the current diff"
+  --task "Review the current diff"
 ```
 
 Commands invoked by agents or scripts must provide `--name` and `--harness`;
@@ -158,37 +158,89 @@ Fledge resolves symlinks before checking this boundary and rejects external
 directories and directories owned by a nested or otherwise different Fledge
 project.
 
-Every spawned agent receives harness-neutral Fledge messaging instructions,
-even when `--prompt` is omitted. These require progress updates and a completion
+Every spawned agent receives harness-neutral Fledge coordination instructions,
+even when `--task` is omitted. These require progress updates and a completion
 summary to `orchestrator`, plus correlated replies to incoming messages. They
 also prohibit polling the Fledge inbox and direct Herdr agent communication or
-inspection. When provided, the caller's `--prompt` task follows those
-instructions in the same single prompt submission.
+inspection.
 
-Workers also receive the absolute path of their append-only watcher status
-file. A status line starts with one of these exact lower-case verbs followed by
-a colon:
+`--task` is atomic with registration: the agent's registry entry, its first
+assignment, and the wake that delivers that assignment are appended to the
+session ledger as one fsynced transaction, so a worker never exists with a task
+that was never delivered, or the reverse.
 
-```text
-working: concise progress
-done: concise result
-needs-decision: decision the orchestrator must make
-blocked: concrete blocker
-failed: concrete failure
-paused: reason work is paused
+`--can-delegate` lets a worker create child tasks of its own. A delegating
+worker must name the assignment it is delegating from with `--parent-task`,
+which is what keeps the task tree connected and lets a cancellation reach every
+descendant. Callers without an active parent task, and agents without
+`--can-delegate`, are refused. The names `user` and `orchestrator` are reserved
+coordination identities and cannot be spawned.
+
+## Tasks
+
+The durable registry and its task tree are managed with `fledge agent list` and
+the `fledge agent task` verbs:
+
+```sh
+fledge agent list
+fledge agent task assign <agent> [task] [--parent-task <id>] [--file <path>]
+fledge agent task progress <task-id> <text>
+fledge agent task blocked <task-id> <reason>
+fledge agent task needs-decision <task-id> <question>
+fledge agent task resume <task-id> [detail]
+fledge agent task complete <task-id> [detail]
+fledge agent task fail <task-id> <reason>
+fledge agent task cancel <task-id> [detail]
+fledge agent task list
+fledge agent task show <task-id>
 ```
 
-`working` and `paused` are recorded without waking the orchestrator. `blocked`,
-`needs-decision`, and `failed` are actionable. `done` is held briefly so the
-worker's ordinary Fledge completion message can arrive; a missing completion is
-then escalated. Status reporting supplements Fledge messaging and never replaces
-the required progress and completion messages.
+Every verb accepts `--file` (`-F`, or `-` for stdin) in place of an inline
+argument, for text that shell quoting cannot carry. `progress`, `blocked`,
+`needs-decision`, and `fail` require their detail; the rest accept one
+optionally.
 
-After assigning the initial task through `fledge agent spawn --prompt`,
-orchestrators coordinate with `fledge agent message send` and `reply`. An
-injected Fledge completion message is the completion signal; the orchestrator
-then stops that worker with `fledge agent stop`. Managed agents never poll the
-Fledge inbox or use direct Herdr commands to inspect or collect agent output.
+`fledge agent list` shows each registered pane's live state, the harness it
+runs, whether it may delegate, and its parent task. An agent with no assignment
+is unassigned, one holding an active task is assigned, and a stopped pane's
+unfinished work becomes orphaned.
+
+An agent holds at most one active task at a time. A parent task cannot be
+completed while any child of it is unfinished, and cancelling or failing a task
+cancels every descendant. Losing the agent an update was destined for never
+blocks the update itself: the durable transition is recorded and the wake is
+simply dropped, so a worker whose coordinator has gone can still record that it
+finished, failed, or is blocked.
+
+Each command only validates its inputs, appends the resulting events to the
+fsynced session ledger, and makes sure a dispatcher is running. It never waits
+on a Herdr delivery, list, or snapshot, so a wedged agent pane cannot stall an
+unrelated command.
+
+The project session record is bound to the ledger's random session ID. A
+missing ledger, an unbound legacy record, or a mismatched ID is rejected instead
+of being silently initialized as current state; reattaching with `fledge start`
+validates and upgrades a legacy record. This durable check does not prove that
+the Herdr process is still live—doing that would require a Herdr call—so
+lifecycle commands remain responsible for live-session checks.
+
+New managed panes also receive a random authority token, while only its hash is
+stored in the ledger. Coordination commands require the token and pane ID to
+agree, and can recover the registered identity when `HERDR_PANE_ID` alone was
+cleared. A process that deliberately clears both inherited variables is locally
+indistinguishable from the user's unmanaged control shell without a Herdr query
+or OS-specific process attestation; this is an explicit protocol limitation,
+not a hostile-process security boundary.
+
+Wakes are routed to exactly one participant. Assignment and resumption wake the
+assignee; blocked, needs-decision, completion, failure, and orphaning wake the
+agent that assigned the work; cancellation wakes the assignee that has to stop.
+Progress is recorded durably and wakes nobody. Ordinary messages always wake
+their recipient.
+
+Orchestrators stop a worker with `fledge agent stop` once its task is terminal.
+Managed agents never poll the Fledge inbox or use direct Herdr commands to
+inspect or collect agent output.
 
 Stop a named agent and close its pane:
 
@@ -205,10 +257,11 @@ Send a message to a live named agent in the current project session:
 fledge agent message send reviewer "Please check the authentication changes"
 ```
 
-Fledge persists each message before immediately injecting it through Herdr. A
-`delivered` status means Herdr accepted the injection; Fledge does not wait for
-the agent to finish processing the message. Recipients can send a correlated
-reply using the incoming message ID:
+Fledge appends each message and its wake to the session ledger and returns; the
+session's dispatcher performs the injection. A `delivered` status means Herdr
+accepted the injection; Fledge does not wait for the agent to finish processing
+the message. Recipients can send a correlated reply using the incoming message
+ID:
 
 ```sh
 fledge agent message reply <message-id> "The changes look correct"
@@ -232,60 +285,41 @@ restart.
 Detach from Herdr with `Ctrl+B`, then `Q`. The session and its processes keep
 running in the background.
 
-## Watcher
+## Dispatcher
 
-Fledge automatically launches one detached watcher for each active project
-session when starting, reattaching, or successfully spawning a worker. The
-watcher combines worker status files with Herdr agent-status events. If Herdr's
-event protocol or socket is unavailable, it continues with snapshot polling.
-Set `"enabled": false` in `.fledge/watch.json` to disable both attached and
-detached watcher modes cleanly.
+Every active project session has exactly one detached dispatcher, launched when
+Fledge starts, reattaches, or successfully spawns a worker, and held to a single
+instance by a session lock. It is mandatory: it is the only thing that turns a
+durable coordination event into an agent wake.
 
-Attach a live decision-log monitor with:
+The dispatcher waits on two event sources and no clock. Filesystem
+notifications tell it the session ledger has grown; a Herdr protocol 19 event
+subscription tells it that a registered pane changed agent status or closed. It
+never polls either one, and it has no configuration to tune.
+
+Each requested wake carries a stable delivery ID and is replayed until a
+terminal outcome is durably recorded, so a dispatcher killed mid-delivery
+resumes exactly where it stopped. An agent that cannot be reached has its
+failure recorded and the remaining wakes still go out. A pane Herdr reports
+closed is retired from the registry, and its unfinished work is orphaned. A
+session whose last agent has stopped is a resting state, not a failure: the
+dispatcher stays up with no subscription and delivers the next spawn's wakes.
+
+Attach a live monitor with:
 
 ```sh
 fledge watch
 ```
 
-If the background watcher is running, this prints roughly the last 50 complete
-lines and follows new lines until canceled or the watcher exits. If no watcher
-owns the session lock, the command runs the watcher in the foreground and
-writes decisions to both the terminal and the log. The hidden
-`fledge watch --daemon` form is reserved for Fledge's lifecycle launcher; it
-writes only to the log and exits successfully when another watcher already owns
-the session lock.
+If a dispatcher is already running, this prints roughly the last 50 complete
+lines and follows new lines until canceled or that dispatcher exits. Otherwise
+the command runs the dispatcher in the foreground and writes to both the
+terminal and the log. The hidden `fledge watch --daemon` form is reserved for
+Fledge's lifecycle launcher; it writes only to the log and exits successfully
+when another dispatcher already owns the session lock.
 
-Watcher decisions are appended to the owner-only
-`.fledge/logs/<session>/watch.log`. Queued lines include durable `w-...` wake
-IDs. Delivery lines include the injected message ID and every retired wake ID,
-allowing a queued decision to be traced through delivery even after ledger
-compaction.
-
-The tracked `.fledge/watch.json` accepts these settings:
-
-```json
-{
-  "version": 1,
-  "enabled": true,
-  "poll_interval_seconds": 15,
-  "idle_poll_interval_seconds": 60,
-  "signal_grace_seconds": 2,
-  "heartbeat_seconds": 600,
-  "heartbeat_max_seconds": 7200,
-  "wake_min_interval_seconds": 30,
-  "done_message_grace_seconds": 90,
-  "event_stream": true,
-  "min_protocol": 16
-}
-```
-
-Unknown fields and status/event values are ignored for forward compatibility.
-Actionable observations are appended to a durable wake ledger before their
-suppression markers advance, then batched into watcher messages sent from
-`watcher` to `orchestrator`. A normal ledger write failure leaves markers in
-place so the observation retries. If the ledger is corrupt, the watcher sends
-one explicit warning and continues with in-memory deduplication; supervision
-continues, but crash-safe replay is unavailable until restart.
+Dispatcher activity is appended to the owner-only
+`.fledge/logs/<session>/dispatcher.log`.
 
 Stop and permanently delete the nearest Fledge session in the current directory
 or one of its parents:
@@ -297,19 +331,19 @@ fledge stop
 Stopping requires confirmation from an interactive terminal. Fledge's project
 storage is divided by purpose:
 
-- `.fledge/config.json`, `.fledge/watch.json`, and
-  `.fledge/profiles/orchestrator.toml` are tracked. Edit the TOML profile to
-  customize coordinator instructions and `watch.json` to tune supervision.
+- `.fledge/config.json` and `.fledge/profiles/orchestrator.toml` are tracked.
+  Edit the TOML profile to customize coordinator instructions.
 - `.fledge/profiles/generated/orchestrator.md` is an ignored, reusable rendered
   prompt owned by Fledge. It is refreshed on fresh startup when the profile or
   mandatory policy changes and is preserved across stop and cleanup.
-- `.fledge/tmp/<session>/` is ignored ephemeral state, including messaging and
-  watcher locks, watcher PID files, worker status files, the durable wake
-  ledger and OpenCode's original configuration snapshot. It is removed after a
-  successful stop, stale-session cleanup, or completed failed-start rollback,
-  but retained when Herdr session deletion fails so cleanup can be retried.
-- `.fledge/logs/<session>/` contains `fledge.log`, `messages.jsonl`, and
-  `watch.log`.
+- `.fledge/tmp/<session>/` is ignored ephemeral state, including the messaging
+  and dispatcher locks, the dispatcher PID and readiness files, and OpenCode's
+  original configuration snapshot. It is removed after a successful stop,
+  stale-session cleanup, or completed failed-start rollback, but retained when
+  Herdr session deletion fails so cleanup can be retried.
+- `.fledge/logs/<session>/` contains `fledge.log`, `events.jsonl`, and
+  `dispatcher.log`. `events.jsonl` is the append-only session ledger holding
+  every message, registry, task, and wake event.
   Successful stop and stale-session cleanup preserve these audit/debug logs;
   a completed failed-start rollback removes logs for the unusable session.
 

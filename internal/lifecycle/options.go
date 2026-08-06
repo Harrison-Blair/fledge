@@ -18,14 +18,16 @@ type StartOptions struct {
 
 // SpawnOptions controls creation of one ad-hoc agent tab.
 type SpawnOptions struct {
-	Name       string
-	Harness    string
-	Model      string
-	Cwd        string
-	Timeout    time.Duration
-	Prompt     string
-	NativeArgs []string
-	ModelSet   bool
+	Name        string
+	Harness     string
+	Model       string
+	Cwd         string
+	Timeout     time.Duration
+	Task        string
+	ParentTask  string
+	CanDelegate bool
+	NativeArgs  []string
+	ModelSet    bool
 }
 
 // WatchOptions controls how the session watcher presents its decision log.

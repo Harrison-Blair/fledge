@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Harrison-Blair/fledge/internal/fswatch"
 )
 
 // Session is a named Herdr session returned by the Herdr CLI.
@@ -81,10 +83,8 @@ type Client struct {
 	stdin  io.Reader
 	stdout io.Writer
 	stderr io.Writer
-	now    func() time.Time
+	watch  func(string) (fswatch.Watcher, error)
 }
-
-const initialLayoutSettleTime = 100 * time.Millisecond
 
 // NewClient creates a Herdr CLI client.
 func NewClient(binary string, stdin io.Reader, stdout, stderr io.Writer) *Client {
@@ -93,7 +93,7 @@ func NewClient(binary string, stdin io.Reader, stdout, stderr io.Writer) *Client
 		stdin:  stdin,
 		stdout: stdout,
 		stderr: stderr,
-		now:    time.Now,
+		watch:  fswatch.File,
 	}
 }
 
@@ -148,42 +148,74 @@ func (c *Client) StartServer(name, dir string, environment map[string]string) er
 	return nil
 }
 
-// WaitReady polls the named server until its initial layout can be read or the
-// server remains layout-empty long enough to require explicit initialization.
+// WaitReady waits for the named server's socket to change and then reads its
+// initial layout. The watch is installed before the first snapshot, which
+// closes the check/subscription race without a timed retry loop. An empty
+// snapshot is ready: a server started with `herdr server` has no layout until
+// its caller explicitly creates one.
 func (c *Client) WaitReady(ctx context.Context, name string, timeout time.Duration) (Snapshot, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	ticker := time.NewTicker(25 * time.Millisecond)
-	defer ticker.Stop()
-	var lastErr error
-	var emptySince time.Time
+	socketPath, err := c.sessionSocket(ctx, name)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("wait for Herdr session %q readiness: %w", name, err)
+	}
+	changes, err := c.watch(socketPath)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("wait for Herdr session %q readiness: %w", name, err)
+	}
+	defer changes.Close()
+
+	// This is the single race-closing check. If the server became ready before
+	// the watch was armed, the snapshot observes it. Otherwise the watch event
+	// below is the only reason another snapshot is attempted.
+	snapshot, lastErr := c.Snapshot(ctx, name)
+	if lastErr == nil {
+		return snapshot, nil
+	}
 	for {
-		if snapshot, err := c.Snapshot(ctx, name); err == nil {
-			if len(snapshot.Tabs) > 0 && len(snapshot.Panes) > 0 {
+		select {
+		case <-ctx.Done():
+			return Snapshot{}, fmt.Errorf("wait for Herdr session %q readiness: %w", name, errors.Join(ctx.Err(), lastErr))
+		case err, ok := <-changes.Errors():
+			if !ok || err == nil {
+				return Snapshot{}, fmt.Errorf("wait for Herdr session %q readiness: filesystem watch ended", name)
+			}
+			return Snapshot{}, fmt.Errorf("wait for Herdr session %q readiness: %w", name, err)
+		case _, ok := <-changes.Events():
+			if !ok {
+				return Snapshot{}, fmt.Errorf("wait for Herdr session %q readiness: filesystem watch ended", name)
+			}
+			snapshot, err := c.Snapshot(ctx, name)
+			if err == nil {
 				return snapshot, nil
 			}
-			if emptySince.IsZero() {
-				emptySince = c.now()
-			} else if c.now().Sub(emptySince) >= initialLayoutSettleTime {
-				return snapshot, nil
-			}
-			lastErr = errors.New("snapshot has no initial tab and pane")
-		} else {
-			// A failed poll says nothing about the layout, so the settle window
-			// must restart from the next empty snapshot.
-			emptySince = time.Time{}
 			if ctx.Err() == nil {
 				lastErr = err
 			}
 		}
-
-		select {
-		case <-ctx.Done():
-			return Snapshot{}, fmt.Errorf("wait for Herdr session %q readiness: %w", name, errors.Join(ctx.Err(), lastErr))
-		case <-ticker.C:
-		}
 	}
+}
+
+func (c *Client) sessionSocket(ctx context.Context, name string) (string, error) {
+	sessions, err := c.List(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, session := range sessions {
+		if session.Name != name {
+			continue
+		}
+		if !session.Running {
+			return "", fmt.Errorf("Herdr session %q is not running", name)
+		}
+		if strings.TrimSpace(session.SocketPath) == "" {
+			return "", fmt.Errorf("running Herdr session %q has no socket path", name)
+		}
+		return session.SocketPath, nil
+	}
+	return "", fmt.Errorf("Herdr session %q was not found", name)
 }
 
 // CreateWorkspace creates a workspace and its initial tab and pane.

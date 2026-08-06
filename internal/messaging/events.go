@@ -18,22 +18,50 @@ const (
 	eventDeliveryAttempt = "delivery_attempt"
 	eventDeliveryOutcome = "delivery_outcome"
 	eventAcknowledged    = "acknowledged"
+	eventAgentRegistered = "agent_registered"
+	eventAgentStopped    = "agent_stopped"
+	eventAgentStatus     = "agent_status_changed"
+	eventTaskAssigned    = "task_assigned"
+	eventTaskProgress    = "task_progress"
+	eventTaskBlocked     = "task_blocked"
+	eventTaskDecision    = "task_needs_decision"
+	eventTaskResumed     = "task_resumed"
+	eventTaskCompleted   = "task_completed"
+	eventTaskFailed      = "task_failed"
+	eventTaskCanceled    = "task_canceled"
+	eventTaskOrphaned    = "task_orphaned"
+	eventWakeRequested   = "wake_requested"
+	eventWakeAttempt     = "wake_attempt"
+	eventWakeOutcome     = "wake_outcome"
 )
 
 type event struct {
-	Version       int       `json:"version"`
-	Type          string    `json:"type"`
-	At            time.Time `json:"at"`
-	SessionID     string    `json:"session_id"`
-	Session       string    `json:"session,omitempty"`
-	MessageID     string    `json:"message_id,omitempty"`
-	Sender        string    `json:"sender,omitempty"`
-	Recipient     string    `json:"recipient,omitempty"`
-	ReplyTo       string    `json:"reply_to,omitempty"`
-	Body          string    `json:"body,omitempty"`
-	RecipientPane string    `json:"recipient_pane,omitempty"`
-	Accepted      *bool     `json:"accepted,omitempty"`
-	Detail        string    `json:"detail,omitempty"`
+	Version       int        `json:"version"`
+	Type          string     `json:"type"`
+	At            time.Time  `json:"at"`
+	SessionID     string     `json:"session_id"`
+	Session       string     `json:"session,omitempty"`
+	MessageID     string     `json:"message_id,omitempty"`
+	Sender        string     `json:"sender,omitempty"`
+	Recipient     string     `json:"recipient,omitempty"`
+	ReplyTo       string     `json:"reply_to,omitempty"`
+	Body          string     `json:"body,omitempty"`
+	RecipientPane string     `json:"recipient_pane,omitempty"`
+	Accepted      *bool      `json:"accepted,omitempty"`
+	Detail        string     `json:"detail,omitempty"`
+	AgentName     string     `json:"agent_name,omitempty"`
+	PaneID        string     `json:"pane_id,omitempty"`
+	Harness       string     `json:"harness,omitempty"`
+	AuthorityHash string     `json:"authority_hash,omitempty"`
+	CanDelegate   bool       `json:"can_delegate,omitempty"`
+	ParentTaskID  string     `json:"parent_task_id,omitempty"`
+	TaskID        string     `json:"task_id,omitempty"`
+	Assignee      string     `json:"assignee,omitempty"`
+	Assigner      string     `json:"assigner,omitempty"`
+	Description   string     `json:"description,omitempty"`
+	TaskStatus    TaskStatus `json:"task_status,omitempty"`
+	WakeID        string     `json:"wake_id,omitempty"`
+	WakeKind      string     `json:"wake_kind,omitempty"`
 }
 
 type logState struct {
@@ -41,6 +69,11 @@ type logState struct {
 	session   string
 	messages  map[string]Message
 	order     []string
+	agents    map[string]Agent
+	tasks     map[string]Task
+	taskOrder []string
+	wakes     map[string]Wake
+	wakeOrder []string
 }
 
 func decodeEvent(data []byte, result *event) error {
@@ -123,6 +156,11 @@ func validateEvent(e event) error {
 		if e.MessageID == "" || e.Session != "" || e.Sender != "" || e.Recipient != "" || e.ReplyTo != "" || e.Body != "" || e.RecipientPane != "" || e.Accepted != nil || e.Detail != "" {
 			return errors.New("invalid acknowledged fields")
 		}
+	case eventAgentRegistered, eventAgentStopped, eventAgentStatus,
+		eventTaskAssigned, eventTaskProgress, eventTaskBlocked, eventTaskDecision,
+		eventTaskResumed, eventTaskCompleted, eventTaskFailed, eventTaskCanceled,
+		eventTaskOrphaned, eventWakeRequested, eventWakeAttempt, eventWakeOutcome:
+		return validateCoordinationEvent(e)
 	default:
 		return fmt.Errorf("unknown event type %q", e.Type)
 	}
@@ -225,6 +263,11 @@ func applyEvent(state *logState, e event) error {
 			message.UpdatedAt = e.At
 			state.messages[e.MessageID] = message
 		}
+	case eventAgentRegistered, eventAgentStopped, eventAgentStatus,
+		eventTaskAssigned, eventTaskProgress, eventTaskBlocked, eventTaskDecision,
+		eventTaskResumed, eventTaskCompleted, eventTaskFailed, eventTaskCanceled,
+		eventTaskOrphaned, eventWakeRequested, eventWakeAttempt, eventWakeOutcome:
+		return applyCoordinationEvent(state, e)
 	}
 	return nil
 }

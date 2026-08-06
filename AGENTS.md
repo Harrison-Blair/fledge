@@ -10,13 +10,18 @@ Create new agents for different tasks, and for different review sessions.
 
 # Agent Coordination
 - Communicate with spawned agents through Fledge messages. Treat an agent's message reply as its completion signal.
+- Give a worker its first assignment with `fledge agent spawn --task <text>`. Add `--can-delegate` only when that worker may create child tasks, and `--parent-task <id>` when delegating from an assignment you already hold.
+- Track work with `fledge agent list` and `fledge agent task assign/progress/blocked/needs-decision/resume/complete/fail/cancel/list/show`. Every verb accepts `--file` for text shell quoting cannot carry.
+- Task commands append durable events and return; the session dispatcher wakes the right participant. Progress is recorded without waking anyone. Ordinary messages always wake their recipient.
 - Do not use `herdr agent wait` or `herdr agent read` to poll for completion or collect results.
-- After receiving an agent's final reply, stop it with `fledge agent stop <name>` before reporting its result to the user.
+- After receiving an agent's final reply, and once its task is terminal, stop it with `fledge agent stop <name>` before reporting its result to the user.
 - If an agent fails or is no longer needed, stop it before finishing the task.
 - Never run `fledge start` or `fledge stop`; session lifecycle remains under direct user control.
 
 # Completion is Non-Breaking
 Ensure the full test suite and build are running without error before determining a task is done.
+
+Ensure `./scripts/build.sh` is running without error
 
 # Write testable code
 - Separate logic from side effects. Keep business logic in pure functions; inject IO, network, clock, and randomness at the edges.

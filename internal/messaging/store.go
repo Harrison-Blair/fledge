@@ -22,9 +22,11 @@ import (
 )
 
 const (
-	logFilename  = "messages.jsonl"
-	lockFilename = "messages.lock"
-	eventVersion = 1
+	logFilename        = "events.jsonl"
+	lockFilename       = "events.lock"
+	legacyLogFilename  = "messages.jsonl"
+	legacyLockFilename = "messages.lock"
+	eventVersion       = 1
 )
 
 // MaxBodyBytes is the largest permitted UTF-8 message body.
@@ -174,6 +176,22 @@ func (s *Store) Ensure() (string, error) {
 	return sessionID, err
 }
 
+// SessionID returns the durable identifier of an existing messaging session.
+// Unlike Ensure it never initializes an absent log, so callers can use it to
+// validate an independent session record without accidentally making stale
+// state look current.
+func (s *Store) SessionID() (string, error) {
+	var sessionID string
+	err := s.withState(func(state *logState) error {
+		if state.session != s.session {
+			return fmt.Errorf("%w: log has %q, active session is %q", ErrSessionMismatch, state.session, s.session)
+		}
+		sessionID = state.sessionID
+		return nil
+	})
+	return sessionID, err
+}
+
 // RemoveLock deletes the session's lock file and keeps its log. It is intended
 // for use after successful session deletion or confirmed stale-session
 // cleanup.
@@ -219,6 +237,10 @@ func (s *Store) removeLegacyFiles() error {
 	for _, path := range []string{
 		filepath.Join(directory, logFilename),
 		filepath.Join(directory, lockFilename),
+		filepath.Join(directory, legacyLogFilename),
+		filepath.Join(directory, legacyLockFilename),
+		filepath.Join(s.statePath(), legacyLogFilename),
+		filepath.Join(s.statePath(), legacyLockFilename),
 		s.legacyLockPath(),
 	} {
 		if err := fsutil.RejectSymlink(path); err != nil {
@@ -248,10 +270,17 @@ func (s *Store) Create(params CreateParams) (Message, error) {
 			MessageID: id, Sender: params.Sender, Recipient: params.Recipient,
 			Body: params.Body, RecipientPane: params.RecipientPane,
 		}
-		if err := s.appendEvents([]event{e}); err != nil {
+		wake, err := s.wakeEventToPane(state, e.At, "message", id, params.Recipient, params.RecipientPane, messageWakeBody(e))
+		if err != nil {
+			return err
+		}
+		if err := s.appendEvents([]event{e, wake}); err != nil {
 			return err
 		}
 		if err := applyEvent(state, e); err != nil {
+			return err
+		}
+		if err := applyEvent(state, wake); err != nil {
 			return err
 		}
 		created = state.messages[id]
@@ -309,7 +338,15 @@ func (s *Store) Reply(originalID, replier, replierPane, body, replyRecipientPane
 			// same transaction resolves the interrupted attempt.
 			batch = append(batch, event{Version: eventVersion, Type: eventAcknowledged, At: at, SessionID: state.sessionID, MessageID: originalID})
 		}
-		batch = append(batch, event{Version: eventVersion, Type: eventReplyCreated, At: at, SessionID: state.sessionID, MessageID: id, Sender: replier, Recipient: original.Sender, ReplyTo: originalID, Body: body, RecipientPane: replyRecipientPane})
+		replyEvent := event{Version: eventVersion, Type: eventReplyCreated, At: at, SessionID: state.sessionID, MessageID: id, Sender: replier, Recipient: original.Sender, ReplyTo: originalID, Body: body, RecipientPane: replyRecipientPane}
+		batch = append(batch, replyEvent)
+		if original.Sender != "user" {
+			wake, wakeErr := s.wakeEventToPane(state, at, "message", id, original.Sender, replyRecipientPane, messageWakeBody(replyEvent))
+			if wakeErr != nil {
+				return wakeErr
+			}
+			batch = append(batch, wake)
+		}
 		if err := s.appendEvents(batch); err != nil {
 			return err
 		}
@@ -487,7 +524,10 @@ func (s *Store) loadState() (*logState, error) {
 	if err != nil {
 		return nil, err
 	}
-	state := &logState{messages: make(map[string]Message)}
+	state := &logState{
+		messages: make(map[string]Message), agents: make(map[string]Agent),
+		tasks: make(map[string]Task), wakes: make(map[string]Wake),
+	}
 	lines := bytes.Split(data, []byte{'\n'})
 	for index, line := range lines[:len(lines)-1] {
 		var e event
@@ -717,3 +757,16 @@ func randomID() (string, error) {
 }
 
 func boolPointer(value bool) *bool { return &value }
+
+// LogPath returns the append-only session ledger path for event dispatchers.
+func (s *Store) LogPath() string { return s.logPath() }
+
+func messageWakeBody(e event) string {
+	var envelope strings.Builder
+	fmt.Fprintf(&envelope, "[Fledge message]\nID: %s\nFrom: %s\nTo: %s\n", e.MessageID, e.Sender, e.Recipient)
+	if e.ReplyTo != "" {
+		fmt.Fprintf(&envelope, "Reply-To: %s\n", e.ReplyTo)
+	}
+	fmt.Fprintf(&envelope, "Body:\n%s\n\nReply: fledge agent message reply %s <text>", e.Body, e.MessageID)
+	return envelope.String()
+}
