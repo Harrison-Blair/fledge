@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -11,17 +10,6 @@ import (
 
 	"github.com/Harrison-Blair/fledge/internal/messaging"
 )
-
-func runTaskCommand(t *testing.T, manager *fakeManager, args ...string) (string, error) {
-	t.Helper()
-	command := newRootCommand(manager, func() (string, error) { return "/project/nested", nil }, testVersion)
-	var output bytes.Buffer
-	command.SetOut(&output)
-	command.SetErr(&output)
-	command.SetArgs(args)
-	err := command.Execute()
-	return output.String(), err
-}
 
 // Each verb must reach the manager as the right transition, with the detail the
 // caller supplied. A verb wired to the wrong status silently corrupts the
@@ -52,7 +40,7 @@ func TestTaskVerbsMapToTransitions(t *testing.T) {
 	for _, current := range cases {
 		t.Run(current.args[0], func(t *testing.T) {
 			manager := &fakeManager{taskResult: messaging.Task{ID: "t-1", Status: current.want.status}}
-			output, err := runTaskCommand(t, manager, append([]string{"agent", "task"}, current.args...)...)
+			output, err := runRootCommand(t, manager, append([]string{"agent", "task"}, current.args...)...)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -74,7 +62,7 @@ func TestTaskDetailRequirements(t *testing.T) {
 	for _, verb := range []string{"progress", "blocked", "needs-decision", "fail"} {
 		t.Run("required/"+verb, func(t *testing.T) {
 			manager := &fakeManager{}
-			_, err := runTaskCommand(t, manager, "agent", "task", verb, "t-1")
+			_, err := runRootCommand(t, manager, "agent", "task", verb, "t-1")
 			if err == nil || !strings.Contains(err.Error(), "--file") {
 				t.Fatalf("error = %v, want a missing-detail error", err)
 			}
@@ -86,7 +74,7 @@ func TestTaskDetailRequirements(t *testing.T) {
 	for _, verb := range []string{"resume", "complete", "cancel"} {
 		t.Run("optional/"+verb, func(t *testing.T) {
 			manager := &fakeManager{taskResult: messaging.Task{ID: "t-1"}}
-			if _, err := runTaskCommand(t, manager, "agent", "task", verb, "t-1"); err != nil {
+			if _, err := runRootCommand(t, manager, "agent", "task", verb, "t-1"); err != nil {
 				t.Fatalf("%s without detail: %v", verb, err)
 			}
 		})
@@ -101,7 +89,7 @@ func TestTaskDetailAndAssignmentAcceptFileBodies(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := &fakeManager{taskResult: messaging.Task{ID: "t-9", Assignee: "worker"}}
-	if _, err := runTaskCommand(t, manager, "agent", "task", "assign", "worker", "--parent-task", "t-1", "--file", path); err != nil {
+	if _, err := runRootCommand(t, manager, "agent", "task", "assign", "worker", "--parent-task", "t-1", "--file", path); err != nil {
 		t.Fatal(err)
 	}
 	// File bodies reach the manager verbatim; the store is what trims them.
@@ -111,7 +99,7 @@ func TestTaskDetailAndAssignmentAcceptFileBodies(t *testing.T) {
 	}
 
 	manager = &fakeManager{taskResult: messaging.Task{ID: "t-9"}}
-	if _, err := runTaskCommand(t, manager, "agent", "task", "blocked", "t-9", "--file", path); err != nil {
+	if _, err := runRootCommand(t, manager, "agent", "task", "blocked", "t-9", "--file", path); err != nil {
 		t.Fatal(err)
 	}
 	if len(manager.taskCalls) != 1 || manager.taskCalls[0].detail != "read the whole diff\n" {
@@ -127,7 +115,7 @@ func TestTaskListAndShowRenderCoordinationState(t *testing.T) {
 		{ID: "t-1", Status: messaging.TaskActive, Assignee: "worker", Assigner: "orchestrator", Description: "review\nthe diff", CreatedAt: created},
 		{ID: "t-2", Status: messaging.TaskBlocked, Assignee: "child", Assigner: "worker", ParentID: "t-1", Description: "sub work", CreatedAt: created},
 	}}
-	output, err := runTaskCommand(t, manager, "agent", "task", "list")
+	output, err := runRootCommand(t, manager, "agent", "task", "list")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +127,7 @@ func TestTaskListAndShowRenderCoordinationState(t *testing.T) {
 
 	manager = &fakeManager{taskResult: messaging.Task{ID: "t-2", Status: messaging.TaskBlocked,
 		Assignee: "child", Assigner: "worker", ParentID: "t-1", Description: "sub work", Detail: "waiting on review"}}
-	output, err = runTaskCommand(t, manager, "agent", "task", "show", "t-2")
+	output, err = runRootCommand(t, manager, "agent", "task", "show", "t-2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +146,7 @@ func TestAgentListRendersRegistryStates(t *testing.T) {
 		{Name: "child", PaneID: "p3", Harness: "claude", Active: true, Status: "idle", ParentTaskID: "t-1"},
 		{Name: "departed", PaneID: "p4", Harness: "codex", Active: false, Status: "working"},
 	}}
-	output, err := runTaskCommand(t, manager, "agent", "list")
+	output, err := runRootCommand(t, manager, "agent", "list")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +167,7 @@ func TestTaskCommandsSurfaceManagerErrors(t *testing.T) {
 	t.Parallel()
 
 	manager := &fakeManager{taskErr: errors.New("agent has no task capacity")}
-	if _, err := runTaskCommand(t, manager, "agent", "task", "assign", "worker", "more work"); err == nil ||
+	if _, err := runRootCommand(t, manager, "agent", "task", "assign", "worker", "more work"); err == nil ||
 		!strings.Contains(err.Error(), "no task capacity") {
 		t.Fatalf("error = %v", err)
 	}

@@ -16,6 +16,36 @@ func registerAll(t *testing.T, store *Store, params ...RegisterParams) {
 	}
 }
 
+// assignedWorker registers the standard orchestrator(p1)+worker(p2) pair and
+// hands the worker a single active assignment, returning that task.
+func assignedWorker(t *testing.T, store *Store) Task {
+	t.Helper()
+	registerAll(t, store,
+		RegisterParams{Name: OrchestratorIdentity, PaneID: "p1", Harness: "codex", Caller: UserIdentity, CanDelegate: true},
+		RegisterParams{Name: "worker", PaneID: "p2", Harness: "codex", Caller: OrchestratorIdentity})
+	task, err := store.AssignTask(OrchestratorIdentity, "worker", "", "do the thing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return task
+}
+
+// orchestratorLeadChild registers the orchestrator(p1), a delegating lead(p2)
+// already holding "lead work", and a child(p3) worker, returning the lead's
+// parent task ID.
+func orchestratorLeadChild(t *testing.T, store *Store) string {
+	t.Helper()
+	registerAll(t, store,
+		RegisterParams{Name: OrchestratorIdentity, PaneID: "p1", Harness: "codex", Caller: UserIdentity, CanDelegate: true},
+		RegisterParams{Name: "lead", PaneID: "p2", Harness: "codex", Caller: OrchestratorIdentity, CanDelegate: true, Task: "lead work"},
+		RegisterParams{Name: "child", PaneID: "p3", Harness: "codex", Caller: OrchestratorIdentity})
+	tasks, err := store.Tasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tasks[0].ID
+}
+
 // A worker owns its own outcome. Losing the agent that assigned the work is a
 // reason to skip the wake, never a reason to refuse the durable transition:
 // otherwise a worker whose coordinator crashed can no longer record that it
@@ -24,13 +54,7 @@ func TestTransitionSurvivesTheLossOfTheWakeRecipient(t *testing.T) {
 	for _, target := range []TaskStatus{TaskCompleted, TaskFailed, TaskBlocked} {
 		t.Run(string(target), func(t *testing.T) {
 			store := coordinationTestStore(t)
-			registerAll(t, store,
-				RegisterParams{Name: OrchestratorIdentity, PaneID: "p1", Harness: "codex", Caller: UserIdentity, CanDelegate: true},
-				RegisterParams{Name: "worker", PaneID: "p2", Harness: "codex", Caller: OrchestratorIdentity})
-			task, err := store.AssignTask(OrchestratorIdentity, "worker", "", "do the thing")
-			if err != nil {
-				t.Fatal(err)
-			}
+			task := assignedWorker(t, store)
 			if err := store.StopAgent(OrchestratorIdentity, "p1"); err != nil {
 				t.Fatal(err)
 			}
@@ -62,13 +86,7 @@ func TestTransitionSurvivesTheLossOfTheWakeRecipient(t *testing.T) {
 // subscribed to it.
 func TestStopAgentOrphansWorkWhenTheAssignerIsGone(t *testing.T) {
 	store := coordinationTestStore(t)
-	registerAll(t, store,
-		RegisterParams{Name: OrchestratorIdentity, PaneID: "p1", Harness: "codex", Caller: UserIdentity, CanDelegate: true},
-		RegisterParams{Name: "worker", PaneID: "p2", Harness: "codex", Caller: OrchestratorIdentity})
-	task, err := store.AssignTask(OrchestratorIdentity, "worker", "", "do the thing")
-	if err != nil {
-		t.Fatal(err)
-	}
+	task := assignedWorker(t, store)
 	if err := store.StopAgent(OrchestratorIdentity, "p1"); err != nil {
 		t.Fatal(err)
 	}
@@ -88,15 +106,8 @@ func TestStopAgentOrphansWorkWhenTheAssignerIsGone(t *testing.T) {
 // nobody is doing any more.
 func TestOrphaningWakesTheAssigner(t *testing.T) {
 	store := coordinationTestStore(t)
-	registerAll(t, store,
-		RegisterParams{Name: OrchestratorIdentity, PaneID: "p1", Harness: "codex", Caller: UserIdentity, CanDelegate: true},
-		RegisterParams{Name: "lead", PaneID: "p2", Harness: "codex", Caller: OrchestratorIdentity, CanDelegate: true, Task: "lead work"},
-		RegisterParams{Name: "child", PaneID: "p3", Harness: "codex", Caller: OrchestratorIdentity})
-	tasks, err := store.Tasks()
-	if err != nil {
-		t.Fatal(err)
-	}
-	child, err := store.AssignTask("lead", "child", tasks[0].ID, "child work")
+	parentID := orchestratorLeadChild(t, store)
+	child, err := store.AssignTask("lead", "child", parentID, "child work")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,13 +236,7 @@ func TestWakeMatrixRoutesEachTransitionToOneParticipant(t *testing.T) {
 	for _, current := range steps {
 		t.Run(current.name, func(t *testing.T) {
 			store := coordinationTestStore(t)
-			registerAll(t, store,
-				RegisterParams{Name: OrchestratorIdentity, PaneID: "p1", Harness: "codex", Caller: UserIdentity, CanDelegate: true},
-				RegisterParams{Name: "worker", PaneID: "p2", Harness: "codex", Caller: OrchestratorIdentity})
-			task, err := store.AssignTask(OrchestratorIdentity, "worker", "", "do the thing")
-			if err != nil {
-				t.Fatal(err)
-			}
+			task := assignedWorker(t, store)
 			if current.run != nil {
 				// Settle the assignment wake so only the transition under test is left.
 				settleWakes(t, store)
@@ -266,21 +271,13 @@ func TestWakeMatrixRoutesEachTransitionToOneParticipant(t *testing.T) {
 // assignee, since they are the agents that have to stop working.
 func TestCascadeCancelWakesEveryDescendantAssignee(t *testing.T) {
 	store := coordinationTestStore(t)
-	registerAll(t, store,
-		RegisterParams{Name: OrchestratorIdentity, PaneID: "p1", Harness: "codex", Caller: UserIdentity, CanDelegate: true},
-		RegisterParams{Name: "lead", PaneID: "p2", Harness: "codex", Caller: OrchestratorIdentity, CanDelegate: true, Task: "lead work"},
-		RegisterParams{Name: "child", PaneID: "p3", Harness: "codex", Caller: OrchestratorIdentity})
-	tasks, err := store.Tasks()
-	if err != nil {
-		t.Fatal(err)
-	}
-	parent := tasks[0]
-	child, err := store.AssignTask("lead", "child", parent.ID, "child work")
+	parentID := orchestratorLeadChild(t, store)
+	child, err := store.AssignTask("lead", "child", parentID, "child work")
 	if err != nil {
 		t.Fatal(err)
 	}
 	settleWakes(t, store)
-	if _, err := store.TransitionTask(OrchestratorIdentity, parent.ID, TaskCanceled, ""); err != nil {
+	if _, err := store.TransitionTask(OrchestratorIdentity, parentID, TaskCanceled, ""); err != nil {
 		t.Fatal(err)
 	}
 	canceled := taskByID(t, store, child.ID)
@@ -295,7 +292,7 @@ func TestCascadeCancelWakesEveryDescendantAssignee(t *testing.T) {
 	for _, wake := range wakes {
 		woken[wake.Recipient] = wake.ReferenceID
 	}
-	if woken["lead"] != parent.ID || woken["child"] != child.ID || len(woken) != 2 {
+	if woken["lead"] != parentID || woken["child"] != child.ID || len(woken) != 2 {
 		t.Fatalf("cascade wakes = %#v", woken)
 	}
 }

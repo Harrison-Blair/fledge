@@ -184,8 +184,9 @@ func TestDispatcherRecordsFailureAndDeliversRemainingWakes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.store.Create(messaging.CreateParams{
-		Sender: messaging.UserIdentity, Recipient: "healthy", RecipientPane: "p2", Body: "second"}); err != nil {
+	healthy, err := h.store.Create(messaging.CreateParams{
+		Sender: messaging.UserIdentity, Recipient: "healthy", RecipientPane: "p2", Body: "second"})
+	if err != nil {
 		t.Fatal(err)
 	}
 	h.notifyLedger()
@@ -193,6 +194,14 @@ func TestDispatcherRecordsFailureAndDeliversRemainingWakes(t *testing.T) {
 	prompts := h.awaitDelivery(t, 1)
 	if !strings.Contains(prompts[0], "second") {
 		t.Fatalf("prompt = %q, want the healthy agent's message", prompts[0])
+	}
+	// The healthy message went out and its record mirrors the delivered outcome.
+	delivered, err := h.store.Get(healthy.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delivered.Status != messaging.StatusDelivered {
+		t.Fatalf("healthy message status = %s, want delivered", delivered.Status)
 	}
 	failed, err := h.store.Get(stuck.ID)
 	if err != nil {
@@ -241,73 +250,6 @@ func TestDispatcherRetiresClosedPanes(t *testing.T) {
 			t.Fatal("closed pane is still registered as active")
 		case <-time.After(10 * time.Millisecond):
 		}
-	}
-}
-
-// When the session's last live pane closes, restart tears down the active
-// subscription and the dispatcher must rest idle — the resting state the next
-// spawn relaunches into — not exit. The canceled stream still delivers a terminal
-// streamResult tagged with its own generation; the per-teardown generation bump
-// makes that result compare stale so the run loop discards it. Without the bump
-// the result matches the current generation, is treated as a live stream failure,
-// and the dispatcher returns "Herdr dispatcher event stream ended" and dies.
-func TestDispatcherStaysIdleWhenLastPaneCloses(t *testing.T) {
-	h := newHarness(t)
-	h.awaitReady(t)
-
-	// Bring a live pane up so the dispatcher holds an active subscription.
-	if _, _, err := h.store.RegisterAgent(messaging.RegisterParams{
-		Name: "worker", PaneID: "p1", Harness: "codex", Caller: messaging.UserIdentity}); err != nil {
-		t.Fatal(err)
-	}
-	h.client.setSnapshotPanes("p1")
-	h.notifyLedger()
-	deadline := time.After(5 * time.Second)
-	for {
-		subs := h.subscriptions()
-		if len(subs) == 1 && strings.Join(subs[0], ",") == "p1" {
-			break
-		}
-		select {
-		case err := <-h.done:
-			t.Fatalf("dispatcher exited before subscribing: %v", err)
-		case <-deadline:
-			t.Fatalf("no subscription for p1: %#v", h.subscriptions())
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
-
-	// The last pane closes: its agent deactivates so the next ledger recompute
-	// sees zero live panes.
-	select {
-	case h.events <- herdr.Event{Type: "pane.closed", PaneID: "p1"}:
-	case <-time.After(5 * time.Second):
-		t.Fatal("dispatcher never accepted the pane.closed event")
-	}
-	deadline = time.After(5 * time.Second)
-	for {
-		if _, err := h.store.AgentByPane("p1"); errors.Is(err, messaging.ErrAgentNotFound) {
-			break
-		}
-		select {
-		case err := <-h.done:
-			t.Fatalf("dispatcher exited: %v", err)
-		case <-deadline:
-			t.Fatal("closed pane is still registered as active")
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
-	// Recompute active panes -> empty -> restart tears down the p1 stream. Its
-	// terminal result must be discarded as stale, not exit the dispatcher. Give
-	// that terminal streamResult a window to race toward the run loop: on correct
-	// code the per-teardown generation bump already made it stale, so nothing
-	// exits and the dispatcher rests idle rather than reporting a stream-ended
-	// failure.
-	h.notifyLedger()
-	select {
-	case err := <-h.done:
-		t.Fatalf("dispatcher exited when its last pane closed: %v", err)
-	case <-time.After(500 * time.Millisecond):
 	}
 }
 

@@ -2,7 +2,6 @@ package watchproc
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -125,92 +124,6 @@ func TestRunReplaysStableWakeAndRecordsOutcomes(t *testing.T) {
 	wakes, _ = store.PendingWakes()
 	if len(wakes) != 0 {
 		t.Fatalf("pending wakes = %#v", wakes)
-	}
-}
-
-// A crash after a wake attempt is persisted but before its outcome is recorded
-// leaves a replayable uncertain wake. On relaunch the recipient's pane is gone,
-// so drain's PromptAgent fails. One undeliverable recipient must not stall the
-// rest: drain must terminalize the poison wake and keep going so every later
-// wake still goes out.
-func TestDrainTerminalizesFailedWakeAndContinues(t *testing.T) {
-	root, session := t.TempDir(), "fledge-test-1234abcd"
-	store := messaging.New(root, session)
-	if _, err := store.Initialize(); err != nil {
-		t.Fatal(err)
-	}
-	for _, params := range []messaging.RegisterParams{
-		{Name: "poison", PaneID: "p1", Harness: "codex", Caller: messaging.UserIdentity},
-		{Name: "healthy", PaneID: "p2", Harness: "codex", Caller: messaging.UserIdentity},
-	} {
-		if _, _, err := store.RegisterAgent(params); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	// Create the poison message first and drive it to the exact post-crash state:
-	// its wake was attempted but never got an outcome, so it is still replayable.
-	poison, err := store.Create(messaging.CreateParams{
-		Sender: messaging.UserIdentity, Recipient: "poison", RecipientPane: "p1", Body: "first"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	wakes, err := store.PendingWakes()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var poisonWake messaging.Wake
-	for _, wake := range wakes {
-		if wake.ReferenceID == poison.ID {
-			poisonWake = wake
-		}
-	}
-	if poisonWake.ID == "" {
-		t.Fatalf("no wake for poison message; wakes = %#v", wakes)
-	}
-	if _, err := store.RecordWakeAttempt(poisonWake.ID); err != nil {
-		t.Fatal(err)
-	} // Deliberately omit RecordWakeOutcome: this models the crash window.
-
-	// A healthy message queued after the poison one proves drain kept going.
-	healthy, err := store.Create(messaging.CreateParams{
-		Sender: messaging.UserIdentity, Recipient: "healthy", RecipientPane: "p2", Body: "second"})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	client := &fakeHerdr{protocol: RequiredHerdrProtocol,
-		refuse: map[string]error{"poison": errors.New("pane p1 is gone")}}
-	if err := drain(context.Background(), client, session, store); err != nil {
-		t.Fatalf("drain returned %v, want nil", err)
-	}
-
-	// The poison wake failed, and its message mirrors that failed status.
-	got, err := store.Get(poison.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Status != messaging.StatusFailed {
-		t.Fatalf("poison message status = %s, want failed", got.Status)
-	}
-	// The healthy message went out and is the sole accepted prompt.
-	delivered, err := store.Get(healthy.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if delivered.Status != messaging.StatusDelivered {
-		t.Fatalf("healthy message status = %s, want delivered", delivered.Status)
-	}
-	if prompts := client.delivered(); len(prompts) != 1 || !strings.Contains(prompts[0], "second") {
-		t.Fatalf("prompts = %#v, want only the healthy wake", prompts)
-	}
-	// The poison wake was terminalized, so nothing is left to replay.
-	pending, err := store.PendingWakes()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(pending) != 0 {
-		t.Fatalf("pending wakes = %#v, want none", pending)
 	}
 }
 

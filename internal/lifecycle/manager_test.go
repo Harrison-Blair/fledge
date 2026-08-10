@@ -119,7 +119,7 @@ func TestStartCreatesAndReusesSession(t *testing.T) {
 	}
 }
 
-func TestOrchestratorInstructionsAppendMandatoryPolicyAcrossHarnesses(t *testing.T) {
+func TestOrchestratorInstructionsComposeAcrossHarnesses(t *testing.T) {
 	t.Parallel()
 
 	const custom = "Keep these custom coordinator instructions."
@@ -132,30 +132,84 @@ func TestOrchestratorInstructionsAppendMandatoryPolicyAcrossHarnesses(t *testing
 		if got != wantPrefix+mandatoryCoordinatorCommunicationPolicy {
 			t.Errorf("%s prompt = %q", harnessID, got)
 		}
+		// The mandatory policy — and the model-catalog guidance it carries — must
+		// follow the custom profile for every harness.
 		if strings.Index(got, mandatoryCoordinatorCommunicationPolicy) <= strings.Index(got, custom) {
 			t.Errorf("%s mandatory policy does not follow custom profile: %q", harnessID, got)
+		}
+		if strings.Index(got, "fledge agent models [harness]") <= strings.Index(got, custom) {
+			t.Errorf("%s model guidance does not follow the custom profile: %q", harnessID, got)
 		}
 	}
 }
 
-func TestOrchestratorInstructionsIncludeModelCatalogGuidanceAfterCustomProfile(t *testing.T) {
+// TestCoordinationConstantsContainRequiredDirectives asserts the required (and
+// forbidden) directives inside the two compile-time coordination guidance
+// constants. The orchestrator constant is embedded verbatim by
+// orchestratorInstructions (see TestOrchestratorInstructionsComposeAcrossHarnesses),
+// so substrings verified here hold for every composed harness prompt.
+func TestCoordinationConstantsContainRequiredDirectives(t *testing.T) {
 	t.Parallel()
 
-	const custom = "Existing custom coordinator profile."
-	for _, harnessID := range []string{"claude", "codex", "pi", "opencode"} {
-		instructions := orchestratorInstructions(custom, harnessID)
-		for _, required := range []string{
-			"fledge agent models [harness]",
-			"fledge agent spawn --model <exact-model-value>",
-			"catalog entries are advisory",
-		} {
-			if !strings.Contains(instructions, required) {
-				t.Errorf("%s instructions = %q, want %q", harnessID, instructions, required)
+	for _, tc := range []struct {
+		name     string
+		constant string
+		required []string
+		absent   []string
+	}{
+		{
+			name:     "orchestrator",
+			constant: mandatoryCoordinatorCommunicationPolicy,
+			required: []string{
+				// Model-catalog guidance.
+				"fledge agent models [harness]",
+				"fledge agent spawn --model <exact-model-value>",
+				"catalog entries are advisory",
+				// Messaging and task directives shared with the worker policy.
+				"fledge agent message send",
+				"fledge agent message reply",
+				"task",
+				"Never poll with fledge agent message inbox",
+				"Herdr API snapshots",
+				// Directives unique to the orchestrator policy.
+				"--can-delegate",
+				"--parent-task",
+				"Ordinary messages always wake",
+				"herdr agent wait, read, get, list, prompt, send-keys, attach, and explain",
+			},
+		},
+		{
+			name:     "worker",
+			constant: agentMessagingContext,
+			required: []string{
+				// Messaging and task directives shared with the orchestrator policy.
+				"fledge agent message send",
+				"fledge agent message reply",
+				"task",
+				"Never poll with fledge agent message inbox",
+				"Herdr API snapshots",
+				// Directives unique to the worker policy.
+				"A terminal transition (complete/fail) delivers its detail to the assigner",
+				"do NOT also message the same summary",
+				"herdr agent wait/read/get/list/prompt/send-keys/",
+				"attach/explain",
+			},
+			absent: []string{"completion summary"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			for _, required := range tc.required {
+				if !strings.Contains(tc.constant, required) {
+					t.Errorf("%s policy = %q, want containing %q", tc.name, tc.constant, required)
+				}
 			}
-		}
-		if strings.Index(instructions, "fledge agent models [harness]") <= strings.Index(instructions, custom) {
-			t.Errorf("%s model guidance does not follow the existing custom profile: %q", harnessID, instructions)
-		}
+			for _, absent := range tc.absent {
+				if strings.Contains(tc.constant, absent) {
+					t.Errorf("%s policy = %q, must not contain %q", tc.name, tc.constant, absent)
+				}
+			}
+		})
 	}
 }
 
@@ -816,7 +870,7 @@ func TestSpawnCreatesDedicatedTabAndPrompts(t *testing.T) {
 	if strings.Join(client.startAgent.args, "\x00") != strings.Join(wantArgs, "\x00") {
 		t.Errorf("native args = %#v, want %#v", client.startAgent.args, wantArgs)
 	}
-	wantPrompt := expectedWorkerPrompt(root, "worker", "Review the diff")
+	wantPrompt := agentMessagingContext
 	if len(client.promptCalls) != 1 || client.prompt != wantPrompt {
 		t.Errorf("PromptAgent calls = %#v, want one call with %q", client.promptCalls, wantPrompt)
 	}
@@ -825,89 +879,42 @@ func TestSpawnCreatesDedicatedTabAndPrompts(t *testing.T) {
 	}
 }
 
-func TestRuntimeCommunicationPoliciesRequireFledgeCompletionAndForbidPolling(t *testing.T) {
-	t.Parallel()
-
-	for name, policy := range map[string]string{
-		"orchestrator": mandatoryCoordinatorCommunicationPolicy,
-		"worker":       agentMessagingContext,
-	} {
-		for _, required := range []string{
-			"fledge agent message send",
-			"fledge agent message reply",
-			"task",
-			"Never poll with fledge agent message inbox",
-			"Herdr API snapshots",
-		} {
-			if !strings.Contains(policy, required) {
-				t.Errorf("%s policy = %q, want containing %q", name, policy, required)
-			}
-		}
-	}
-	for _, required := range []string{
-		"--can-delegate", "--parent-task", "Ordinary messages always wake",
-		"herdr agent wait, read, get, list, prompt, send-keys, attach, and explain",
-	} {
-		if !strings.Contains(mandatoryCoordinatorCommunicationPolicy, required) {
-			t.Errorf("orchestrator policy = %q, want %q", mandatoryCoordinatorCommunicationPolicy, required)
-		}
-	}
-	for _, required := range []string{
-		"A terminal transition (complete/fail) delivers its detail to the assigner",
-		"do NOT also message the same summary",
-		"herdr agent wait/read/get/list/prompt/send-keys/",
-		"attach/explain",
-	} {
-		if !strings.Contains(agentMessagingContext, required) {
-			t.Errorf("worker policy = %q, want containing %q", agentMessagingContext, required)
-		}
-	}
-	if strings.Contains(agentMessagingContext, "completion summary") {
-		t.Errorf("worker policy = %q, must not instruct sending a completion summary message", agentMessagingContext)
-	}
-}
-
 func TestSpawnPromptCompositionAcrossHarnesses(t *testing.T) {
 	t.Parallel()
 
-	promptCases := []struct {
-		name   string
-		prompt string
-	}{
-		{name: "absent"},
-		{name: "present", prompt: "Review the diff"},
-	}
+	// Spawn hardcodes prompt = agentMessagingContext and never reads
+	// options.Task, so the composed worker prompt is identical whether a task is
+	// present or absent. One task value per harness is enough to assert the
+	// cross-harness invariant; a task is supplied here to prove it is ignored.
 	for _, harnessID := range []string{"claude", "codex", "pi", "opencode"} {
-		for _, promptCase := range promptCases {
-			t.Run(harnessID+"/"+promptCase.name, func(t *testing.T) {
-				root := t.TempDir()
-				writeTestRecord(t, root)
-				client := &fakeHerdr{
-					sessions:    []herdr.Session{{Name: testSessionName, Running: true}},
-					snapshot:    testSnapshot(),
-					createdTab:  herdr.Tab{TabID: "t2", WorkspaceID: "w1", Label: "worker"},
-					createdPane: herdr.Pane{PaneID: "w1:p2", TabID: "t2", WorkspaceID: "w1"},
+		t.Run(harnessID, func(t *testing.T) {
+			root := t.TempDir()
+			writeTestRecord(t, root)
+			client := &fakeHerdr{
+				sessions:    []herdr.Session{{Name: testSessionName, Running: true}},
+				snapshot:    testSnapshot(),
+				createdTab:  herdr.Tab{TabID: "t2", WorkspaceID: "w1", Label: "worker"},
+				createdPane: herdr.Pane{PaneID: "w1:p2", TabID: "t2", WorkspaceID: "w1"},
+			}
+			manager, _ := newTestManager(client, &fakeConfirmer{})
+			manager.lookPath = func(name string) (string, error) {
+				if name == harnessID {
+					return "/test/" + name, nil
 				}
-				manager, _ := newTestManager(client, &fakeConfirmer{})
-				manager.lookPath = func(name string) (string, error) {
-					if name == harnessID {
-						return "/test/" + name, nil
-					}
-					return "", os.ErrNotExist
-				}
-				manager.getenv = func(string) string { return "" }
+				return "", os.ErrNotExist
+			}
+			manager.getenv = func(string) string { return "" }
 
-				if err := manager.Spawn(context.Background(), root, SpawnOptions{
-					Timeout: DefaultAgentTimeout, Name: "worker", Harness: harnessID, Task: promptCase.prompt,
-				}); err != nil {
-					t.Fatalf("Spawn() error = %v", err)
-				}
-				want := promptCall{session: testSessionName, recipient: "worker", prompt: expectedWorkerPrompt(root, "worker", promptCase.prompt)}
-				if len(client.promptCalls) != 1 || client.promptCalls[0] != want {
-					t.Fatalf("PromptAgent calls = %#v, want exactly %#v", client.promptCalls, want)
-				}
-			})
-		}
+			if err := manager.Spawn(context.Background(), root, SpawnOptions{
+				Timeout: DefaultAgentTimeout, Name: "worker", Harness: harnessID, Task: "Review the diff",
+			}); err != nil {
+				t.Fatalf("Spawn() error = %v", err)
+			}
+			want := promptCall{session: testSessionName, recipient: "worker", prompt: agentMessagingContext}
+			if len(client.promptCalls) != 1 || client.promptCalls[0] != want {
+				t.Fatalf("PromptAgent calls = %#v, want exactly %#v", client.promptCalls, want)
+			}
+		})
 	}
 }
 
@@ -1344,7 +1351,7 @@ func TestSpawnCallerAwareFocusAndFailures(t *testing.T) {
 		if slicesContain(client.calls, "focus-agent") {
 			t.Fatalf("calls = %v, want no focus", client.calls)
 		}
-		if len(client.promptCalls) != 1 || client.prompt != expectedWorkerPrompt(root, "worker", "") {
+		if len(client.promptCalls) != 1 || client.prompt != agentMessagingContext {
 			t.Fatalf("PromptAgent calls = %#v, want one messaging-context call", client.promptCalls)
 		}
 	})
@@ -1403,7 +1410,7 @@ func TestSpawnCallerAwareFocusAndFailures(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "focusing it failed") {
 			t.Fatalf("Spawn() error = %v", err)
 		}
-		if client.prompt != expectedWorkerPrompt(root, "worker", "work") || len(client.promptCalls) != 1 {
+		if client.prompt != agentMessagingContext || len(client.promptCalls) != 1 {
 			t.Fatalf("prompt = %q, calls = %v, want prompt delivered", client.prompt, client.calls)
 		}
 		if len(client.closeCalls) != 0 {
@@ -1463,10 +1470,6 @@ func TestSpawnCallerAwareFocusAndFailures(t *testing.T) {
 		}
 	})
 
-}
-
-func expectedWorkerPrompt(root, agent, task string) string {
-	return agentMessagingContext
 }
 
 func TestStopAgentClosesNamedAgentPane(t *testing.T) {
@@ -1560,34 +1563,25 @@ func TestStopAgentRequiresRunningSessionAndLiveAgent(t *testing.T) {
 func TestStopAgentReturnsCloseFailures(t *testing.T) {
 	t.Parallel()
 
-	for _, test := range []struct {
-		name     string
-		closeErr error
-	}{
-		{name: "close", closeErr: errors.New("close failed")},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			root := t.TempDir()
-			writeTestRecord(t, root)
-			name := "worker"
-			snapshot := testSnapshot()
-			snapshot.Agents = []herdr.Agent{{Name: &name, PaneID: "w1:p2"}}
-			client := &fakeHerdr{
-				sessions: []herdr.Session{{Name: testSessionName, Running: true}}, snapshot: snapshot,
-				closePaneErr: test.closeErr,
-			}
-			manager, output := newTestManager(client, &fakeConfirmer{})
-			registerTestAgent(t, root, name, "w1:p2")
+	root := t.TempDir()
+	writeTestRecord(t, root)
+	name := "worker"
+	snapshot := testSnapshot()
+	snapshot.Agents = []herdr.Agent{{Name: &name, PaneID: "w1:p2"}}
+	closeErr := errors.New("close failed")
+	client := &fakeHerdr{
+		sessions: []herdr.Session{{Name: testSessionName, Running: true}}, snapshot: snapshot,
+		closePaneErr: closeErr,
+	}
+	manager, output := newTestManager(client, &fakeConfirmer{})
+	registerTestAgent(t, root, name, "w1:p2")
 
-			err := manager.StopAgent(context.Background(), root, name)
-			wantErr := test.closeErr
-			if !errors.Is(err, wantErr) {
-				t.Fatalf("StopAgent() error = %v, want %v", err, wantErr)
-			}
-			if output.Len() != 0 {
-				t.Fatalf("output = %q", output.String())
-			}
-		})
+	err := manager.StopAgent(context.Background(), root, name)
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("StopAgent() error = %v, want %v", err, closeErr)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("output = %q", output.String())
 	}
 }
 

@@ -72,31 +72,125 @@ func TestPromptsAllowed(t *testing.T) {
 	}
 }
 
-func TestSelectorPromptsInOrder(t *testing.T) {
+// TestSelectorPromptOrdering table-drives the interactive harness/model prompt
+// flow. Each case pins the selection, the exact prompt-call order, and — via its
+// own verify hook — the bespoke choice-list assertions (which index of
+// seenChoices matters differs per case). The models factory closes over the
+// subtest t so a case can assert the loader's harness argument or assert it is
+// never called.
+func TestSelectorPromptOrdering(t *testing.T) {
 	t.Parallel()
 
-	prompts := &fakePromptRunner{choices: []string{"pi", "openai-codex/gpt-5"}, text: "worker-1"}
-	selector := testSelector(t, true, prompts)
-	selection, err := selector.Select(context.Background(), SelectionRequest{
-		Harnesses: []Choice{{Value: "codex", Label: "Codex"}, {Value: "pi", Label: "Pi"}},
-		Models: func(_ context.Context, harness string) ([]Choice, error) {
-			if harness != "pi" {
-				t.Errorf("model harness = %q, want pi", harness)
-			}
-			return []Choice{{Value: "openai-codex/gpt-5", Label: "GPT-5"}}, nil
+	harnessCodexPi := []Choice{{Value: "codex", Label: "Codex"}, {Value: "pi", Label: "Pi"}}
+
+	tests := []struct {
+		name          string
+		harnesses     []Choice
+		lastUsed      *LastUsed
+		chosen        []string
+		models        func(t *testing.T) func(context.Context, string) ([]Choice, error)
+		wantSelection Selection
+		wantCalls     []string
+		verify        func(t *testing.T, prompts *fakePromptRunner)
+	}{
+		{
+			name:      "prompts harness then model in order",
+			harnesses: harnessCodexPi,
+			chosen:    []string{"pi", "openai-codex/gpt-5"},
+			models: func(t *testing.T) func(context.Context, string) ([]Choice, error) {
+				return func(_ context.Context, harness string) ([]Choice, error) {
+					if harness != "pi" {
+						t.Errorf("model harness = %q, want pi", harness)
+					}
+					return []Choice{{Value: "openai-codex/gpt-5", Label: "GPT-5"}}, nil
+				}
+			},
+			wantSelection: Selection{Name: "worker-1", Harness: "pi", Model: "openai-codex/gpt-5", Prompted: true},
+			wantCalls:     []string{"choose:Select harness:false", "choose:Select model:true", "text:Agent name"},
+			verify: func(t *testing.T, prompts *fakePromptRunner) {
+				if len(prompts.seenChoices[1]) != 2 || prompts.seenChoices[1][0].Label != "Harness default" {
+					t.Errorf("model choices = %#v, want prepended harness default", prompts.seenChoices[1])
+				}
+			},
 		},
-	})
-	if err != nil {
-		t.Fatal(err)
+		{
+			name:      "last used selects harness and model, skipping the model prompt",
+			harnesses: harnessCodexPi,
+			lastUsed:  &LastUsed{Harness: "pi", Model: "openai-codex/gpt-5"},
+			chosen:    []string{lastUsedValue},
+			models: func(t *testing.T) func(context.Context, string) ([]Choice, error) {
+				return func(context.Context, string) ([]Choice, error) {
+					t.Error("model loader called, want skipped")
+					return nil, nil
+				}
+			},
+			wantSelection: Selection{Name: "worker-1", Harness: "pi", Model: "openai-codex/gpt-5", Prompted: true},
+			wantCalls:     []string{"choose:Select harness:false", "text:Agent name"},
+			verify: func(t *testing.T, prompts *fakePromptRunner) {
+				want := append([]Choice{{Value: lastUsedValue, Label: "Last used (pi · openai-codex/gpt-5)"}}, harnessCodexPi...)
+				if !reflect.DeepEqual(prompts.seenChoices[0], want) {
+					t.Errorf("harness choices = %#v, want %#v", prompts.seenChoices[0], want)
+				}
+			},
+		},
+		{
+			name:      "last used with harness-default model skips the model prompt",
+			harnesses: []Choice{{Value: "claude", Label: "Claude"}},
+			lastUsed:  &LastUsed{Harness: "claude"},
+			chosen:    []string{lastUsedValue},
+			models: func(t *testing.T) func(context.Context, string) ([]Choice, error) {
+				return func(context.Context, string) ([]Choice, error) {
+					t.Error("model loader called, want skipped")
+					return nil, nil
+				}
+			},
+			wantSelection: Selection{Name: "worker-1", Harness: "claude", Prompted: true},
+			wantCalls:     []string{"choose:Select harness:false", "text:Agent name"},
+			verify: func(t *testing.T, prompts *fakePromptRunner) {
+				if got := prompts.seenChoices[0][0].Label; got != "Last used (claude · harness default)" {
+					t.Errorf("last used label = %q, want %q", got, "Last used (claude · harness default)")
+				}
+			},
+		},
+		{
+			name:      "declining last used still prompts for the model",
+			harnesses: []Choice{{Value: "codex", Label: "Codex"}},
+			lastUsed:  &LastUsed{Harness: "pi", Model: "openai-codex/gpt-5"},
+			chosen:    []string{"codex", "openai-codex/gpt-5"},
+			models: func(t *testing.T) func(context.Context, string) ([]Choice, error) {
+				return func(context.Context, string) ([]Choice, error) {
+					return []Choice{{Value: "openai-codex/gpt-5", Label: "GPT-5"}}, nil
+				}
+			},
+			wantSelection: Selection{Name: "worker-1", Harness: "codex", Model: "openai-codex/gpt-5", Prompted: true},
+			wantCalls:     []string{"choose:Select harness:false", "choose:Select model:true", "text:Agent name"},
+		},
 	}
-	if want := (Selection{Name: "worker-1", Harness: "pi", Model: "openai-codex/gpt-5", Prompted: true}); selection != want {
-		t.Errorf("Select() = %#v, want %#v", selection, want)
-	}
-	if want := []string{"choose:Select harness:false", "choose:Select model:true", "text:Agent name"}; !reflect.DeepEqual(prompts.calls, want) {
-		t.Errorf("prompt calls = %#v, want %#v", prompts.calls, want)
-	}
-	if len(prompts.seenChoices[1]) != 2 || prompts.seenChoices[1][0].Label != "Harness default" {
-		t.Errorf("model choices = %#v, want prepended harness default", prompts.seenChoices[1])
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			prompts := &fakePromptRunner{choices: test.chosen, text: "worker-1"}
+			selector := testSelector(t, true, prompts)
+			selection, err := selector.Select(context.Background(), SelectionRequest{
+				Harnesses: test.harnesses,
+				LastUsed:  test.lastUsed,
+				Models:    test.models(t),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if selection != test.wantSelection {
+				t.Errorf("Select() = %#v, want %#v", selection, test.wantSelection)
+			}
+			if !reflect.DeepEqual(prompts.calls, test.wantCalls) {
+				t.Errorf("prompt calls = %#v, want %#v", prompts.calls, test.wantCalls)
+			}
+			if test.verify != nil {
+				test.verify(t, prompts)
+			}
+		})
 	}
 }
 
@@ -119,85 +213,6 @@ func TestSelectorExplicitValuesSkipPrompts(t *testing.T) {
 	}
 	if got.Prompted {
 		t.Error("Prompted = true, want false")
-	}
-}
-
-func TestSelectorLastUsedSelectsHarnessAndModel(t *testing.T) {
-	t.Parallel()
-
-	harnesses := []Choice{{Value: "codex", Label: "Codex"}, {Value: "pi", Label: "Pi"}}
-	prompts := &fakePromptRunner{choices: []string{lastUsedValue}, text: "worker-1"}
-	selector := testSelector(t, true, prompts)
-	selection, err := selector.Select(context.Background(), SelectionRequest{
-		Harnesses: harnesses,
-		LastUsed:  &LastUsed{Harness: "pi", Model: "openai-codex/gpt-5"},
-		Models: func(context.Context, string) ([]Choice, error) {
-			t.Error("model loader called, want skipped")
-			return nil, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := (Selection{Name: "worker-1", Harness: "pi", Model: "openai-codex/gpt-5", Prompted: true}); selection != want {
-		t.Errorf("Select() = %#v, want %#v", selection, want)
-	}
-	if want := []string{"choose:Select harness:false", "text:Agent name"}; !reflect.DeepEqual(prompts.calls, want) {
-		t.Errorf("prompt calls = %#v, want %#v", prompts.calls, want)
-	}
-	want := append([]Choice{{Value: lastUsedValue, Label: "Last used (pi · openai-codex/gpt-5)"}}, harnesses...)
-	if !reflect.DeepEqual(prompts.seenChoices[0], want) {
-		t.Errorf("harness choices = %#v, want %#v", prompts.seenChoices[0], want)
-	}
-}
-
-func TestSelectorLastUsedHarnessDefaultModelSkipsModelPrompt(t *testing.T) {
-	t.Parallel()
-
-	prompts := &fakePromptRunner{choices: []string{lastUsedValue}, text: "worker-1"}
-	selector := testSelector(t, true, prompts)
-	selection, err := selector.Select(context.Background(), SelectionRequest{
-		Harnesses: []Choice{{Value: "claude", Label: "Claude"}},
-		LastUsed:  &LastUsed{Harness: "claude"},
-		Models: func(context.Context, string) ([]Choice, error) {
-			t.Error("model loader called, want skipped")
-			return nil, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := (Selection{Name: "worker-1", Harness: "claude", Prompted: true}); selection != want {
-		t.Errorf("Select() = %#v, want %#v", selection, want)
-	}
-	if want := []string{"choose:Select harness:false", "text:Agent name"}; !reflect.DeepEqual(prompts.calls, want) {
-		t.Errorf("prompt calls = %#v, want %#v", prompts.calls, want)
-	}
-	if got := prompts.seenChoices[0][0].Label; got != "Last used (claude · harness default)" {
-		t.Errorf("last used label = %q, want %q", got, "Last used (claude · harness default)")
-	}
-}
-
-func TestSelectorLastUsedDeclinedStillPromptsModel(t *testing.T) {
-	t.Parallel()
-
-	prompts := &fakePromptRunner{choices: []string{"codex", "openai-codex/gpt-5"}, text: "worker-1"}
-	selector := testSelector(t, true, prompts)
-	selection, err := selector.Select(context.Background(), SelectionRequest{
-		Harnesses: []Choice{{Value: "codex", Label: "Codex"}},
-		LastUsed:  &LastUsed{Harness: "pi", Model: "openai-codex/gpt-5"},
-		Models: func(context.Context, string) ([]Choice, error) {
-			return []Choice{{Value: "openai-codex/gpt-5", Label: "GPT-5"}}, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := (Selection{Name: "worker-1", Harness: "codex", Model: "openai-codex/gpt-5", Prompted: true}); selection != want {
-		t.Errorf("Select() = %#v, want %#v", selection, want)
-	}
-	if want := []string{"choose:Select harness:false", "choose:Select model:true", "text:Agent name"}; !reflect.DeepEqual(prompts.calls, want) {
-		t.Errorf("prompt calls = %#v, want %#v", prompts.calls, want)
 	}
 }
 

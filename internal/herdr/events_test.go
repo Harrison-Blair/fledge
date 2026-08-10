@@ -158,20 +158,28 @@ func TestSubscribeSignalsReadinessAfterTheAck(t *testing.T) {
 	}
 }
 
-func TestSubscribeSkipsReadinessWithoutAnAck(t *testing.T) {
+func TestSubscribeRejectsAMissingAck(t *testing.T) {
 	t.Parallel()
 
+	// Two events and then a hang-up: an implementation that wrongly accepts
+	// the first line as the ack goes on to deliver the second, so it fails
+	// this test on the delivery count instead of blocking on a read. Without an
+	// ack, readiness must never be signalled and no event may be delivered.
 	dial := fakeHerdr(t, func(conn net.Conn) {
 		readLine(conn)
 		writeAll(conn, eventLine, eventLine)
 	})
 
 	ready := 0
-	if err := Subscribe(t.Context(), dial, []string{"p1"}, func() { ready++ }, func(Event) {}); err == nil {
+	delivered := 0
+	if err := Subscribe(t.Context(), dial, []string{"p1"}, func() { ready++ }, func(Event) { delivered++ }); err == nil {
 		t.Fatal("Subscribe() error = nil, want an error when the ack is missing")
 	}
 	if ready != 0 {
 		t.Errorf("Subscribe() signalled readiness %d times, want 0 without an ack", ready)
+	}
+	if delivered != 0 {
+		t.Errorf("Subscribe() delivered %d events, want 0 before the ack", delivered)
 	}
 }
 
@@ -192,26 +200,6 @@ func TestSubscribeWaitsForASlowAck(t *testing.T) {
 	}
 	if len(events) != 1 {
 		t.Fatalf("Subscribe() delivered %d events (%+v), want 1", len(events), events)
-	}
-}
-
-func TestSubscribeRejectsAMissingAck(t *testing.T) {
-	t.Parallel()
-
-	// Two events and then a hang-up: an implementation that wrongly accepts
-	// the first line as the ack goes on to deliver the second, so it fails
-	// this test on the delivery count instead of blocking on a read.
-	dial := fakeHerdr(t, func(conn net.Conn) {
-		readLine(conn)
-		writeAll(conn, eventLine, eventLine)
-	})
-
-	delivered := 0
-	if err := Subscribe(t.Context(), dial, []string{"p1"}, func() {}, func(Event) { delivered++ }); err == nil {
-		t.Fatal("Subscribe() error = nil, want an error when the ack is missing")
-	}
-	if delivered != 0 {
-		t.Errorf("Subscribe() delivered %d events, want 0 before the ack", delivered)
 	}
 }
 

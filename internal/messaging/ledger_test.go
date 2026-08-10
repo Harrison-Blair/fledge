@@ -62,15 +62,7 @@ func TestTaskTransitionsAndProgressRecordTheCaller(t *testing.T) {
 		t.Fatal(err)
 	}
 	actors := map[string]string{}
-	contents, err := os.ReadFile(store.LogPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for line := range strings.SplitSeq(strings.TrimSuffix(string(contents), "\n"), "\n") {
-		entry, ok := DecodeLedgerLine([]byte(line))
-		if !ok {
-			t.Fatalf("undecodable ledger line %q", line)
-		}
+	for _, entry := range decodeLedger(t, store.LogPath()) {
 		actors[entry.Type] = entry.Actor
 	}
 	if actors[eventTaskProgress] != "worker" {
@@ -107,15 +99,7 @@ func TestCascadeCancelRecordsTheAncestorCallerOnDescendants(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	contents, err := os.ReadFile(store.LogPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for line := range strings.SplitSeq(strings.TrimSuffix(string(contents), "\n"), "\n") {
-		entry, ok := DecodeLedgerLine([]byte(line))
-		if !ok {
-			t.Fatalf("undecodable ledger line %q", line)
-		}
+	for _, entry := range decodeLedger(t, store.LogPath()) {
 		if entry.Type == eventTaskCanceled && entry.TaskID == child.ID {
 			if entry.Actor != UserIdentity {
 				t.Fatalf("descendant task_canceled actor = %q, want %q", entry.Actor, UserIdentity)
@@ -124,4 +108,23 @@ func TestCascadeCancelRecordsTheAncestorCallerOnDescendants(t *testing.T) {
 		}
 	}
 	t.Fatalf("no task_canceled event found for descendant %s", child.ID)
+}
+
+// decodeLedger reads the ledger at path and decodes every line, failing the
+// test on any line the reader rejects.
+func decodeLedger(t *testing.T, path string) []LedgerEntry {
+	t.Helper()
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entries []LedgerEntry
+	for line := range strings.SplitSeq(strings.TrimSuffix(string(contents), "\n"), "\n") {
+		entry, ok := DecodeLedgerLine([]byte(line))
+		if !ok {
+			t.Fatalf("undecodable ledger line %q", line)
+		}
+		entries = append(entries, entry)
+	}
+	return entries
 }

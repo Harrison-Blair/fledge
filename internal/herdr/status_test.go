@@ -54,32 +54,3 @@ func TestClientProtocolErrors(t *testing.T) {
 		})
 	}
 }
-
-func TestClientSnapshotDecodesAgentStatus(t *testing.T) {
-	captureFile(t)
-	t.Setenv(helperStdoutEnv, `{"id":"1","result":{"type":"session_snapshot","snapshot":{"panes":[{"pane_id":"w1:p1","tab_id":"t1","workspace_id":"w1","agent_status":"blocked"}],"agents":[{"name":"reviewer","agent":"claude","pane_id":"w1:p1","tab_id":"t1","workspace_id":"w1","agent_status":"working"}]}}}`)
-
-	snapshot, err := NewClient(helperBinary(t), nil, nil, nil).Snapshot(context.Background(), "session-name")
-	if err != nil {
-		t.Fatalf("Snapshot() error = %v", err)
-	}
-	if len(snapshot.Panes) != 1 || snapshot.Panes[0].AgentStatus != "blocked" {
-		t.Fatalf("Snapshot() panes = %#v, want agent_status blocked", snapshot.Panes)
-	}
-	if len(snapshot.Agents) != 1 || snapshot.Agents[0].AgentStatus != "working" {
-		t.Fatalf("Snapshot() agents = %#v, want agent_status working", snapshot.Agents)
-	}
-}
-
-func TestClientListDecodesSocketPath(t *testing.T) {
-	captureFile(t)
-	t.Setenv(helperStdoutEnv, `{"sessions":[{"name":"fledge-demo-0a1b2c3d","running":true,"socket_path":"/home/user/.config/herdr/sessions/fledge-demo-0a1b2c3d/herdr.sock"}]}`)
-
-	sessions, err := NewClient(helperBinary(t), nil, nil, nil).List(context.Background())
-	if err != nil {
-		t.Fatalf("List() error = %v", err)
-	}
-	if len(sessions) != 1 || sessions[0].SocketPath != "/home/user/.config/herdr/sessions/fledge-demo-0a1b2c3d/herdr.sock" {
-		t.Fatalf("List() = %#v, want socket_path decoded", sessions)
-	}
-}

@@ -25,13 +25,28 @@ func TestBuildArgsMapsModelsForEveryHarness(t *testing.T) {
 	}
 }
 
-func TestBuildArgsHarnessDefaultOmitsModel(t *testing.T) {
-	got, err := BuildArgs(Harness{ID: "codex"}, "", []string{"--search"})
-	if err != nil {
-		t.Fatal(err)
+func TestBuildArgsAssemblesModelAndPermissionFlags(t *testing.T) {
+	tests := []struct {
+		name    string
+		harness string
+		model   string
+		native  []string
+		want    []string
+	}{
+		{name: "harness default omits model", harness: "codex", model: "", native: []string{"--search"}, want: []string{"--search"}},
+		{name: "claude defaults to bypass permissions", harness: "claude", model: "", native: nil, want: []string{"--permission-mode", "bypassPermissions"}},
+		{name: "claude bypass follows model", harness: "claude", model: "sonnet", native: nil, want: []string{"--model", "sonnet", "--permission-mode", "bypassPermissions"}},
 	}
-	if want := []string{"--search"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("BuildArgs() = %v, want %v", got, want)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := BuildArgs(Harness{ID: test.harness}, test.model, test.native)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, test.want) {
+				t.Errorf("BuildArgs() = %v, want %v", got, test.want)
+			}
+		})
 	}
 }
 
@@ -65,27 +80,6 @@ func TestBuildArgsPreservesNativeArgumentsWithoutAliasing(t *testing.T) {
 	got[len(got)-1] = "changed"
 	if !reflect.DeepEqual(backing, wantBacking) {
 		t.Errorf("BuildArgs() result aliases input: got backing %v, want %v", backing, wantBacking)
-	}
-}
-
-func TestBuildArgsClaudeDefaultsToBypassPermissions(t *testing.T) {
-	got, err := BuildArgs(Harness{ID: "claude"}, "", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := []string{"--permission-mode", "bypassPermissions"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("BuildArgs() = %v, want %v", got, want)
-	}
-}
-
-func TestBuildArgsClaudeBypassFollowsModel(t *testing.T) {
-	got, err := BuildArgs(Harness{ID: "claude"}, "sonnet", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"--model", "sonnet", "--permission-mode", "bypassPermissions"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("BuildArgs() = %v, want %v", got, want)
 	}
 }
 
