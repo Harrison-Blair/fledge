@@ -30,7 +30,7 @@ Coordinate exclusively through Fledge's injected session messaging commands:
 fledge agent message send <recipient> <text>
 fledge agent message reply <message-id> <text>
 
-Track work through fledge agent task assign/progress/blocked/needs-decision/resume/complete/fail/cancel/list/show. Task commands are durable and nonblocking; the event dispatcher wakes the right participant. Ordinary messages always wake their recipient. Stop workers only after their task is terminal. Never poll the Fledge inbox or use direct Herdr commands to inspect, prompt, or collect agent output. Do not start nested Fledge or Herdr sessions.`
+Track work through fledge agent task assign/progress/blocked/needs-decision/resume/complete/fail/cancel/list/show. Task commands are durable and nonblocking; the event dispatcher wakes the right participant. Ordinary messages always wake their recipient. Stop workers only after their task is terminal. Never poll the Fledge inbox or use direct Herdr commands to inspect, prompt, or collect agent output. Never author or run sleep, shell wait, polling loops, or repeated status commands to await worker updates or task completion. After delegating, yield control; Fledge will wake you when an update requires attention. Do not start nested Fledge or Herdr sessions.`
 
 const defaultProfileContents = "schema_version = 1\ninstructions = \"\"\"\n" + DefaultOrchestratorInstructions + "\"\"\"\n"
 

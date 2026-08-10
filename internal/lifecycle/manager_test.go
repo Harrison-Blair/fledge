@@ -171,6 +171,9 @@ func TestCoordinationConstantsContainRequiredDirectives(t *testing.T) {
 				"task",
 				"Never poll with fledge agent message inbox",
 				"Herdr API snapshots",
+				"Never author or run sleep, shell wait, polling loops, or repeated status commands",
+				"After delegating, yield control",
+				"Fledge will wake you when an update requires attention",
 				// Directives unique to the orchestrator policy.
 				"--can-delegate",
 				"--parent-task",

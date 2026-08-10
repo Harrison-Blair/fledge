@@ -161,8 +161,11 @@ project.
 Every spawned agent receives harness-neutral Fledge coordination instructions,
 even when `--task` is omitted. These require progress updates and a completion
 summary to `orchestrator`, plus correlated replies to incoming messages. They
-also prohibit polling the Fledge inbox and direct Herdr agent communication or
-inspection.
+also prohibit polling the Fledge inbox, direct Herdr agent communication or
+inspection, and running `sleep`, shell `wait`, polling loops, or repeated
+status commands to await worker updates or task completion — after
+delegating, an agent yields control and Fledge wakes it when an update
+requires attention.
 
 `--task` is atomic with registration: the agent's registry entry, its first
 assignment, and the wake that delivers that assignment are appended to the

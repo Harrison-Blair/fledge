@@ -14,6 +14,7 @@ Create new agents for different tasks, and for different review sessions.
 - Track work with `fledge agent list` and `fledge agent task assign/progress/blocked/needs-decision/resume/complete/fail/cancel/list/show`. Every verb accepts `--file` for text shell quoting cannot carry.
 - Task commands append durable events and return; the session dispatcher wakes the right participant. Progress is recorded without waking anyone. Ordinary messages always wake their recipient.
 - Do not use `herdr agent wait` or `herdr agent read` to poll for completion or collect results.
+- Never author or run `sleep`, shell `wait`, polling loops, or repeated status commands to await worker updates or task completion. After delegating, yield control; Fledge will wake you when an update requires attention.
 - After receiving an agent's final reply, and once its task is terminal, stop it with `fledge agent stop <name>` before reporting its result to the user.
 - If an agent fails or is no longer needed, stop it before finishing the task.
 - Never run `fledge start` or `fledge stop`; session lifecycle remains under direct user control.

@@ -57,6 +57,7 @@ const (
 - Task commands append durable events; the dispatcher delivers all required wakes. Ordinary messages always wake their recipient.
 - Stop a completed worker only after its task is terminal.
 - Never poll with fledge agent message inbox. Wait for injected Fledge messages instead.
+- Never author or run sleep, shell wait, polling loops, or repeated status commands to await worker updates or task completion. After delegating, yield control; Fledge will wake you when an update requires attention.
 - Never use direct Herdr commands to communicate with, inspect, prompt, or collect output from agents. This includes herdr agent wait, read, get, list, prompt, send-keys, attach, and explain, plus Herdr API snapshots.`
 
 	agentMessagingContext = `You are a worker in a Fledge-managed session.

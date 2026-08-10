@@ -130,6 +130,9 @@ func TestDefaultOrchestratorInstructionsUseInjectedMessaging(t *testing.T) {
 		"Ordinary messages always wake",
 		"Never poll",
 		"direct Herdr commands",
+		"Never author or run sleep, shell wait, polling loops, or repeated status commands",
+		"After delegating, yield control",
+		"Fledge will wake you when an update requires attention",
 	} {
 		if !strings.Contains(DefaultOrchestratorInstructions, want) {
 			t.Errorf("DefaultOrchestratorInstructions = %q, want containing %q", DefaultOrchestratorInstructions, want)
