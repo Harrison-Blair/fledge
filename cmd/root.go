@@ -45,6 +45,18 @@ func currentDirectory(getwd func() (string, error)) (string, error) {
 	return dir, nil
 }
 
+// runInDir builds a RunE that resolves the invocation directory before
+// delegating to fn, collapsing the getwd preamble every command shares.
+func runInDir(getwd func() (string, error), fn func(cmd *cobra.Command, args []string, dir string) error) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, args []string) error {
+		dir, err := currentDirectory(getwd)
+		if err != nil {
+			return err
+		}
+		return fn(cmd, args, dir)
+	}
+}
+
 // Execute runs the root command with the version main embedded from VERSION.
 func Execute(version string) error {
 	client := herdr.NewClient("herdr", os.Stdin, os.Stdout, os.Stderr)

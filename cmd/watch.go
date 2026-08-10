@@ -11,13 +11,9 @@ func newWatchCommand(manager sessionManager, getwd func() (string, error)) *cobr
 		Use:   "watch",
 		Short: "Monitor this directory's Fledge session",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			dir, err := currentDirectory(getwd)
-			if err != nil {
-				return err
-			}
+		RunE: runInDir(getwd, func(cmd *cobra.Command, _ []string, dir string) error {
 			return manager.Watch(cmd.Context(), dir, options)
-		},
+		}),
 	}
 	command.Flags().BoolVar(&options.Daemon, "daemon", false, "run the watcher in the background")
 	_ = command.Flags().MarkHidden("daemon")

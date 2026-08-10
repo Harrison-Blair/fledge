@@ -22,11 +22,7 @@ type coordinationManager interface {
 func newAgentListCommand(manager coordinationManager, getwd func() (string, error)) *cobra.Command {
 	return &cobra.Command{
 		Use: "list", Short: "List the durable pane-bound agent registry", Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			dir, err := currentDirectory(getwd)
-			if err != nil {
-				return err
-			}
+		RunE: runInDir(getwd, func(cmd *cobra.Command, _ []string, dir string) error {
 			agents, err := manager.AgentList(cmd.Context(), dir)
 			if err != nil {
 				return err
@@ -45,7 +41,7 @@ func newAgentListCommand(manager coordinationManager, getwd func() (string, erro
 				}
 			}
 			return writer.Flush()
-		},
+		}),
 	}
 }
 
@@ -68,12 +64,8 @@ func newAgentTaskCommand(manager coordinationManager, getwd func() (string, erro
 func newTaskAssignCommand(manager coordinationManager, getwd func() (string, error)) *cobra.Command {
 	var parent, bodyFile string
 	command := &cobra.Command{Use: "assign <agent> [task]", Short: "Assign work to an agent", Args: cobra.RangeArgs(1, 2),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: runInDir(getwd, func(cmd *cobra.Command, args []string, dir string) error {
 			body, err := messageBody(cmd, args[1:], bodyFile)
-			if err != nil {
-				return err
-			}
-			dir, err := currentDirectory(getwd)
 			if err != nil {
 				return err
 			}
@@ -83,7 +75,7 @@ func newTaskAssignCommand(manager coordinationManager, getwd func() (string, err
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Assigned task %s to %s.\n", task.ID, task.Assignee)
 			return err
-		}}
+		})}
 	command.Flags().StringVar(&parent, "parent-task", "", "parent task for delegated work")
 	addBodyFileFlag(command, &bodyFile)
 	return command
@@ -92,12 +84,8 @@ func newTaskAssignCommand(manager coordinationManager, getwd func() (string, err
 func newTaskDetailCommand(manager coordinationManager, getwd func() (string, error), name string, status messaging.TaskStatus, required bool) *cobra.Command {
 	var bodyFile string
 	command := &cobra.Command{Use: name + " <task-id> [detail]", Short: taskTransitionShort(name), Args: cobra.RangeArgs(1, 2),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: runInDir(getwd, func(cmd *cobra.Command, args []string, dir string) error {
 			detail, err := optionalTaskDetail(cmd, args[1:], bodyFile, required)
-			if err != nil {
-				return err
-			}
-			dir, err := currentDirectory(getwd)
 			if err != nil {
 				return err
 			}
@@ -112,7 +100,7 @@ func newTaskDetailCommand(manager coordinationManager, getwd func() (string, err
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Task %s is %s.\n", task.ID, task.Status)
 			return err
-		}}
+		})}
 	addBodyFileFlag(command, &bodyFile)
 	return command
 }
@@ -133,11 +121,7 @@ func taskTransitionShort(name string) string {
 }
 
 func newTaskListCommand(manager coordinationManager, getwd func() (string, error)) *cobra.Command {
-	return &cobra.Command{Use: "list", Short: "List visible tasks", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		dir, err := currentDirectory(getwd)
-		if err != nil {
-			return err
-		}
+	return &cobra.Command{Use: "list", Short: "List visible tasks", Args: cobra.NoArgs, RunE: runInDir(getwd, func(cmd *cobra.Command, _ []string, dir string) error {
 		tasks, err := manager.TaskList(cmd.Context(), dir)
 		if err != nil {
 			return err
@@ -152,20 +136,16 @@ func newTaskListCommand(manager coordinationManager, getwd func() (string, error
 			}
 		}
 		return writer.Flush()
-	}}
+	})}
 }
 
 func newTaskShowCommand(manager coordinationManager, getwd func() (string, error)) *cobra.Command {
-	return &cobra.Command{Use: "show <task-id>", Short: "Show one visible task", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		dir, err := currentDirectory(getwd)
-		if err != nil {
-			return err
-		}
+	return &cobra.Command{Use: "show <task-id>", Short: "Show one visible task", Args: cobra.ExactArgs(1), RunE: runInDir(getwd, func(cmd *cobra.Command, args []string, dir string) error {
 		task, err := manager.TaskShow(cmd.Context(), dir, args[0])
 		if err != nil {
 			return err
 		}
 		_, err = fmt.Fprintf(cmd.OutOrStdout(), "ID: %s\nStatus: %s\nAssignee: %s\nAssigner: %s\nParent: %s\nTask:\n%s\nDetail:\n%s\n", task.ID, task.Status, task.Assignee, task.Assigner, task.ParentID, task.Description, task.Detail)
 		return err
-	}}
+	})}
 }

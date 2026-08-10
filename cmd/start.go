@@ -13,20 +13,16 @@ func newStartCommand(manager sessionManager, getwd func() (string, error)) *cobr
 		Use:   "start [-- native-args...]",
 		Short: "Start or attach to this directory's Fledge session",
 		Args:  cobra.ArbitraryArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: runInDir(getwd, func(cmd *cobra.Command, args []string, dir string) error {
 			if len(args) > 0 && cmd.ArgsLenAtDash() != 0 {
 				return fmt.Errorf("native agent arguments must follow --")
-			}
-			dir, err := currentDirectory(getwd)
-			if err != nil {
-				return err
 			}
 			options.NativeArgs = append([]string(nil), args...)
 			options.HarnessSet = cmd.Flags().Changed("harness")
 			options.ModelSet = cmd.Flags().Changed("model")
 			options.TimeoutSet = cmd.Flags().Changed("timeout")
 			return manager.Start(cmd.Context(), dir, options)
-		},
+		}),
 	}
 	command.Flags().StringVarP(&options.Harness, "harness", "k", "", "agent harness (claude, codex, pi, or opencode)")
 	command.Flags().StringVarP(&options.Model, "model", "m", "", "model ID (defaults to the harness default)")

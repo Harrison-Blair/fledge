@@ -51,12 +51,8 @@ func newMessageSendCommand(manager sessionManager, getwd func() (string, error))
 		Use:   "send <recipient> [text]",
 		Short: "Send a message to a live agent",
 		Args:  cobra.RangeArgs(1, 2),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: runInDir(getwd, func(cmd *cobra.Command, args []string, dir string) error {
 			body, err := messageBody(cmd, args[1:], bodyFile)
-			if err != nil {
-				return err
-			}
-			dir, err := currentDirectory(getwd)
 			if err != nil {
 				return err
 			}
@@ -66,7 +62,7 @@ func newMessageSendCommand(manager sessionManager, getwd func() (string, error))
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Sent message %s to %s.\n", message.ID, message.Recipient)
 			return err
-		},
+		}),
 	}
 	addBodyFileFlag(command, &bodyFile)
 	return command
@@ -78,12 +74,8 @@ func newMessageReplyCommand(manager sessionManager, getwd func() (string, error)
 		Use:   "reply <message-id> [text]",
 		Short: "Send a correlated reply",
 		Args:  cobra.RangeArgs(1, 2),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: runInDir(getwd, func(cmd *cobra.Command, args []string, dir string) error {
 			body, err := messageBody(cmd, args[1:], bodyFile)
-			if err != nil {
-				return err
-			}
-			dir, err := currentDirectory(getwd)
 			if err != nil {
 				return err
 			}
@@ -93,7 +85,7 @@ func newMessageReplyCommand(manager sessionManager, getwd func() (string, error)
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Replied to message %s with %s.\n", args[0], reply.ID)
 			return err
-		},
+		}),
 	}
 	addBodyFileFlag(command, &bodyFile)
 	return command
@@ -148,11 +140,7 @@ func newMessageInboxCommand(manager sessionManager, getwd func() (string, error)
 		Use:   "inbox [identity]",
 		Short: "Show an identity's active-session transcript",
 		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			dir, err := currentDirectory(getwd)
-			if err != nil {
-				return err
-			}
+		RunE: runInDir(getwd, func(cmd *cobra.Command, args []string, dir string) error {
 			identity := ""
 			if len(args) == 1 {
 				identity = args[0]
@@ -162,7 +150,7 @@ func newMessageInboxCommand(manager sessionManager, getwd func() (string, error)
 				return err
 			}
 			return writeInbox(cmd, messages, identity)
-		},
+		}),
 	}
 }
 
@@ -196,13 +184,9 @@ func newAgentStopCommand(manager sessionManager, getwd func() (string, error)) *
 		Use:   "stop <name>",
 		Short: "Stop an agent and close its pane",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			dir, err := currentDirectory(getwd)
-			if err != nil {
-				return err
-			}
+		RunE: runInDir(getwd, func(cmd *cobra.Command, args []string, dir string) error {
 			return manager.StopAgent(cmd.Context(), dir, args[0])
-		},
+		}),
 	}
 }
 
@@ -212,18 +196,14 @@ func newAgentSpawnCommand(manager sessionManager, getwd func() (string, error)) 
 		Use:   "spawn [-- native-args...]",
 		Short: "Spawn an agent in a dedicated tab",
 		Args:  cobra.ArbitraryArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: runInDir(getwd, func(cmd *cobra.Command, args []string, dir string) error {
 			if len(args) > 0 && cmd.ArgsLenAtDash() != 0 {
 				return fmt.Errorf("native agent arguments must follow --")
-			}
-			dir, err := currentDirectory(getwd)
-			if err != nil {
-				return err
 			}
 			options.NativeArgs = append([]string(nil), args...)
 			options.ModelSet = cmd.Flags().Changed("model")
 			return manager.Spawn(cmd.Context(), dir, options)
-		},
+		}),
 	}
 	command.Flags().StringVarP(&options.Name, "name", "n", "", "unique agent and tab name")
 	command.Flags().StringVarP(&options.Harness, "harness", "k", "", "agent harness (claude, codex, pi, or opencode)")
