@@ -34,10 +34,6 @@ type Options struct {
 	Herdr         Herdr
 	Output        io.Writer
 	Daemon        bool
-	// JSON emits the stored records verbatim instead of the human trace, and
-	// Color permits ANSI in that human trace. The log on disk is JSON either way.
-	JSON  bool
-	Color bool
 }
 
 func Run(ctx context.Context, options Options) (result error) {
@@ -68,7 +64,8 @@ func Run(ctx context.Context, options Options) (result error) {
 		if options.Daemon {
 			return nil
 		}
-		return followLog(ctx, options.Root, options.Session, options.Output, lineRenderer(options.JSON, options.Color))
+		_, _ = fmt.Fprintln(options.Output, "dispatcher already running")
+		return nil
 	}
 	if err != nil {
 		return err
@@ -94,13 +91,16 @@ func Run(ctx context.Context, options Options) (result error) {
 		return err
 	}
 	defer func() { result = errors.Join(result, logFile.Close()) }()
-	emit, flush := recordSink(logFile, options.Output, options.Daemon, options.JSON, options.Color)
-	defer flush()
-	// The marker file is what WaitReady watches for; readiness reaches a reader
-	// as the dispatcher's own record, like every other event in the trace.
+	destination := io.Writer(logFile)
+	if !options.Daemon {
+		destination = io.MultiWriter(logFile, options.Output)
+	}
+	// The marker file is what WaitReady watches for; a foreground watcher also
+	// prints readiness so an attached terminal shows the dispatcher came up.
 	ready := func() {
 		_ = os.WriteFile(readyPath, []byte("ready\n"), 0o600)
+		_, _ = fmt.Fprintln(destination, "dispatcher ready")
 	}
 	return dispatcher.Run(ctx, dispatcher.Options{Root: options.Root, Session: options.Session,
-		Herdr: options.Herdr, Ready: ready, Emit: emit})
+		Herdr: options.Herdr, Ready: ready})
 }

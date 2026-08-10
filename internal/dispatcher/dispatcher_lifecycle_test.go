@@ -18,13 +18,12 @@ const testSession = "fledge-test-1234abcd"
 // dispatcherHarness runs one dispatcher against injected ledger and Herdr event
 // sources so a test drives it entirely by events, never by elapsed time.
 type dispatcherHarness struct {
-	store   *messaging.Store
-	client  *fakeHerdr
-	files   *fakeFiles
-	ready   chan struct{}
-	done    chan error
-	cancel  context.CancelFunc
-	records *recorder
+	store  *messaging.Store
+	client *fakeHerdr
+	files  *fakeFiles
+	ready  chan struct{}
+	done   chan error
+	cancel context.CancelFunc
 
 	mu         sync.Mutex
 	subscribed [][]string
@@ -39,13 +38,12 @@ func newHarness(t *testing.T) *dispatcherHarness {
 		t.Fatal(err)
 	}
 	h := &dispatcherHarness{
-		store:   store,
-		client:  &fakeHerdr{protocol: RequiredHerdrProtocol},
-		files:   &fakeFiles{events: make(chan struct{}, 4), errs: make(chan error, 1)},
-		ready:   make(chan struct{}, 4),
-		done:    make(chan error, 1),
-		events:  make(chan watch.Event, 4),
-		records: &recorder{},
+		store:  store,
+		client: &fakeHerdr{protocol: RequiredHerdrProtocol},
+		files:  &fakeFiles{events: make(chan struct{}, 4), errs: make(chan error, 1)},
+		ready:  make(chan struct{}, 4),
+		done:   make(chan error, 1),
+		events: make(chan watch.Event, 4),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	h.cancel = cancel
@@ -76,7 +74,6 @@ func newHarness(t *testing.T) *dispatcherHarness {
 				}
 			},
 			Ready: func() { h.ready <- struct{}{} },
-			Emit:  h.records.emit,
 		})
 	}()
 	return h
@@ -129,10 +126,8 @@ func (h *dispatcherHarness) subscriptions() [][]string {
 func TestDispatcherStaysUpWithNoRegisteredPanes(t *testing.T) {
 	h := newHarness(t)
 	h.awaitReady(t)
-	idle, ok := h.records.find("dispatcher.idle")
-	if !ok || idle.Note != "no live pane to subscribe to" {
-		t.Fatalf("dispatcher.idle record = %#v, found = %t", idle, ok)
-	}
+	// Readiness with no live pane is the resting idle state: the dispatcher
+	// announced without opening any subscription.
 	if subscriptions := h.subscriptions(); len(subscriptions) != 0 {
 		t.Fatalf("subscribed with no panes: %#v", subscriptions)
 	}
@@ -251,20 +246,6 @@ func TestDispatcherRetiresClosedPanes(t *testing.T) {
 	}
 }
 
-// countKind reports how many emitted records carry the given kind, letting a
-// test distinguish the startup idle transition from a later one.
-func (r *recorder) countKind(kind string) int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	n := 0
-	for _, record := range r.records {
-		if record.Kind == kind {
-			n++
-		}
-	}
-	return n
-}
-
 // When the session's last live pane closes, restart tears down the active
 // subscription and the dispatcher must rest idle — the resting state the next
 // spawn relaunches into — not exit. The canceled stream still delivers a terminal
@@ -275,11 +256,6 @@ func (r *recorder) countKind(kind string) int {
 func TestDispatcherStaysIdleWhenLastPaneCloses(t *testing.T) {
 	h := newHarness(t)
 	h.awaitReady(t)
-	// The startup idle (no registered panes) is the baseline; the teardown below
-	// must produce a second one.
-	if got := h.records.countKind("dispatcher.idle"); got != 1 {
-		t.Fatalf("startup dispatcher.idle count = %d, want 1", got)
-	}
 
 	// Bring a live pane up so the dispatcher holds an active subscription.
 	if _, _, err := h.store.RegisterAgent(messaging.RegisterParams{
@@ -324,28 +300,16 @@ func TestDispatcherStaysIdleWhenLastPaneCloses(t *testing.T) {
 		}
 	}
 	// Recompute active panes -> empty -> restart tears down the p1 stream. Its
-	// terminal result must be discarded as stale, not exit the dispatcher.
+	// terminal result must be discarded as stale, not exit the dispatcher. Give
+	// that terminal streamResult a window to race toward the run loop: on correct
+	// code the per-teardown generation bump already made it stale, so nothing
+	// exits and the dispatcher rests idle rather than reporting a stream-ended
+	// failure.
 	h.notifyLedger()
-
-	deadline = time.After(5 * time.Second)
-	for {
-		if h.records.countKind("dispatcher.idle") >= 2 {
-			break
-		}
-		select {
-		case err := <-h.done:
-			t.Fatalf("dispatcher exited when its last pane closed: %v", err)
-		case <-deadline:
-			t.Fatalf("dispatcher never rested idle after last pane closed; idle count = %d",
-				h.records.countKind("dispatcher.idle"))
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
-	// And it stays up: no late stream-ended exit may race in behind the idle.
 	select {
 	case err := <-h.done:
-		t.Fatalf("dispatcher exited after resting idle: %v", err)
-	case <-time.After(100 * time.Millisecond):
+		t.Fatalf("dispatcher exited when its last pane closed: %v", err)
+	case <-time.After(500 * time.Millisecond):
 	}
 }
 
@@ -364,11 +328,6 @@ func TestDispatcherStaysIdleWhenLastPaneCloses(t *testing.T) {
 func TestDispatcherStaysIdleWhenLastPaneCloses_Repeated(t *testing.T) {
 	h := newHarness(t)
 	h.awaitReady(t)
-	// The startup idle (no registered panes) is the baseline; each iteration below
-	// must add exactly one more.
-	if got := h.records.countKind("dispatcher.idle"); got != 1 {
-		t.Fatalf("startup dispatcher.idle count = %d, want 1", got)
-	}
 
 	const iterations = 30
 	for i := range iterations {
@@ -398,14 +357,11 @@ func TestDispatcherStaysIdleWhenLastPaneCloses_Repeated(t *testing.T) {
 		// terminal result must be discarded as stale, not exit the dispatcher.
 		h.notifyLedger()
 
-		// Startup idle plus one per completed iteration.
-		h.awaitIdleCount(t, i, i+2)
-
 		// The torn-down stream's terminal result may still be racing toward the run
 		// loop. Give it a window to surface a stale-generation exit for THIS
 		// teardown before the next iteration's subscribe bumps the generation and
 		// would mask it. On correct code the bumped generation already made that
-		// result stale, so nothing exits.
+		// result stale, so nothing exits and the dispatcher rests idle.
 		select {
 		case err := <-h.done:
 			t.Fatalf("iteration %d: dispatcher exited after resting idle: %v", i, err)
@@ -450,26 +406,6 @@ func (h *dispatcherHarness) awaitPaneRetired(t *testing.T, iter int, pane string
 			t.Fatalf("iteration %d: dispatcher exited while retiring %s: %v", iter, pane, err)
 		case <-deadline:
 			t.Fatalf("iteration %d: closed pane %s still registered as active", iter, pane)
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
-}
-
-// awaitIdleCount waits until the dispatcher has rested idle at least `want`
-// times, failing fast if it exits instead.
-func (h *dispatcherHarness) awaitIdleCount(t *testing.T, iter, want int) {
-	t.Helper()
-	deadline := time.After(5 * time.Second)
-	for {
-		if h.records.countKind("dispatcher.idle") >= want {
-			return
-		}
-		select {
-		case err := <-h.done:
-			t.Fatalf("iteration %d: dispatcher exited when its last pane closed: %v", iter, err)
-		case <-deadline:
-			t.Fatalf("iteration %d: dispatcher never rested idle after last pane closed; idle count = %d, want %d",
-				iter, h.records.countKind("dispatcher.idle"), want)
 		case <-time.After(10 * time.Millisecond):
 		}
 	}

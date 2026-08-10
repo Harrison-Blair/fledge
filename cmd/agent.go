@@ -1,14 +1,12 @@
 package cmd
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
-	"github.com/Harrison-Blair/fledge/internal/agentcontext"
 	"github.com/Harrison-Blair/fledge/internal/lifecycle"
 	"github.com/Harrison-Blair/fledge/internal/messaging"
 	"github.com/spf13/cobra"
@@ -28,45 +26,8 @@ func newAgentCommand(manager sessionManager, getwd func() (string, error)) *cobr
 	agent.AddCommand(newAgentTaskCommand(manager, getwd))
 	agent.AddCommand(newAgentStopCommand(manager, getwd))
 	agent.AddCommand(newAgentMessageCommand(manager, getwd))
-	agent.AddCommand(newAgentContextCommand(manager, getwd))
 	agent.AddCommand(newAgentModelsCommand(nil, nil))
 	return agent
-}
-
-func newAgentContextCommand(manager sessionManager, getwd func() (string, error)) *cobra.Command {
-	var asJSON bool
-	command := &cobra.Command{
-		Use:   "context [name]",
-		Short: "Show each live agent's context-window usage",
-		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			dir, err := currentDirectory(getwd)
-			if err != nil {
-				return err
-			}
-			name := ""
-			if len(args) == 1 {
-				name = args[0]
-			}
-			report, err := manager.Context(cmd.Context(), dir, name)
-			if err != nil {
-				return err
-			}
-			if asJSON {
-				return writeContextJSON(cmd, report)
-			}
-			_, err = io.WriteString(cmd.OutOrStdout(), agentcontext.Render(report))
-			return err
-		},
-	}
-	command.Flags().BoolVar(&asJSON, "json", false, "print the versioned report as JSON")
-	return command
-}
-
-func writeContextJSON(cmd *cobra.Command, report agentcontext.Report) error {
-	encoder := json.NewEncoder(cmd.OutOrStdout())
-	encoder.SetIndent("", "  ")
-	return encoder.Encode(report)
 }
 
 func newAgentMessageCommand(manager sessionManager, getwd func() (string, error)) *cobra.Command {

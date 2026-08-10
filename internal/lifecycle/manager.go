@@ -17,7 +17,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Harrison-Blair/fledge/internal/agentcontext"
 	"github.com/Harrison-Blair/fledge/internal/dispatcher"
 	"github.com/Harrison-Blair/fledge/internal/fsutil"
 	"github.com/Harrison-Blair/fledge/internal/harness"
@@ -124,7 +123,6 @@ type Manager struct {
 	watchRunner     func(context.Context, watchproc.Options) error
 	watchStopper    func(root, session string) error
 	homeDir         func() (string, error)
-	contextDeps     func(context.Context, string) agentcontext.Deps
 }
 
 type selectionResolver interface {
@@ -145,7 +143,6 @@ func NewManager(client Herdr, confirmer Confirmer, input io.Reader, output io.Wr
 		watchRunner:     watchproc.Run,
 		watchStopper:    watchproc.Stop,
 		homeDir:         os.UserHomeDir,
-		contextDeps:     agentcontext.ProductionDeps,
 	}
 	stdin, stdinOK := input.(*os.File)
 	stdout, stdoutOK := output.(*os.File)
@@ -808,7 +805,6 @@ func (m *Manager) Spawn(ctx context.Context, dir string, options SpawnOptions) (
 		return errors.Join(focusErr, promptErr, store.StopAgent(selection.Name, pane.PaneID), rollback())
 	}
 	m.launchWatcherWarn(root)
-	m.refreshContext(ctx, root, value.SessionName)
 	return focusErr
 }
 
@@ -977,7 +973,6 @@ func (m *Manager) StopAgent(ctx context.Context, dir, name string) (resultErr er
 		return fmt.Errorf("pane %s closed, but registry update failed: %w", paneID, err)
 	}
 	logger.Info("agent pane closed", "name", name, "pane", paneID)
-	m.refreshContext(ctx, root, value.SessionName)
 	_, err = fmt.Fprintf(m.output, "Stopped agent %s and closed pane %s.\n", name, paneID)
 	return err
 }

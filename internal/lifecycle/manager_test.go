@@ -914,8 +914,7 @@ func TestSpawnCreatesDedicatedTabAndPrompts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn() error = %v", err)
 	}
-	// The trailing snapshot is the best-effort context-usage refresh.
-	wantCalls := []string{"check", "list", "snapshot", "create-tab", "rename-pane", "start-agent", "focus-agent", "prompt-agent", "snapshot"}
+	wantCalls := []string{"check", "list", "snapshot", "create-tab", "rename-pane", "start-agent", "focus-agent", "prompt-agent"}
 	if strings.Join(client.calls, ",") != strings.Join(wantCalls, ",") {
 		t.Fatalf("call order = %v, want %v", client.calls, wantCalls)
 	}
@@ -1608,8 +1607,7 @@ func TestStopAgentClosesNamedAgentPane(t *testing.T) {
 	if err := manager.StopAgent(context.Background(), root, name); err != nil {
 		t.Fatal(err)
 	}
-	// The trailing snapshot is the best-effort context-usage refresh.
-	wantCalls := []string{"check", "list", "close-pane", "snapshot"}
+	wantCalls := []string{"check", "list", "close-pane"}
 	if strings.Join(client.calls, ",") != strings.Join(wantCalls, ",") {
 		t.Fatalf("call order = %v, want %v", client.calls, wantCalls)
 	}

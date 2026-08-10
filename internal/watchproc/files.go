@@ -1,16 +1,12 @@
 package watchproc
 
 import (
-	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strconv"
 
-	"github.com/Harrison-Blair/fledge/internal/fswatch"
 	"github.com/Harrison-Blair/fledge/internal/statedir"
 )
 
@@ -82,141 +78,6 @@ func writePID(path string) error {
 	_, writeErr := io.WriteString(file, strconv.Itoa(os.Getpid())+"\n")
 	closeErr := file.Close()
 	return errors.Join(writeErr, closeErr)
-}
-
-// followLog streams an already-running dispatcher's log until that dispatcher
-// exits. Two watches are needed: the log itself, and the singleton directory,
-// because a dispatcher that exits without logging is only observable through
-// the PID and readiness files it removes on the way out.
-func followLog(ctx context.Context, root, session string, output io.Writer, render func([]byte) []byte) error {
-	path := filepath.Join(statedir.Session(root, session), LogFilename)
-	singletonPath := statedir.TempSession(root, session)
-	lockPath := filepath.Join(singletonPath, lockFilename)
-	offset, err := writeBacklog(path, output, 50, render)
-	if err != nil {
-		return err
-	}
-	logChanges, err := fswatch.File(path)
-	if err != nil {
-		return err
-	}
-	defer logChanges.Close()
-	singletonChanges, err := fswatch.Directory(singletonPath)
-	if err != nil {
-		return err
-	}
-	defer singletonChanges.Close()
-	flush := func() error {
-		contents, next, err := readComplete(path, offset)
-		if err != nil {
-			return err
-		}
-		offset = next
-		if len(contents) == 0 {
-			return nil
-		}
-		_, err = output.Write(renderLines(contents, render))
-		return err
-	}
-	// The dispatcher can exit between reading the backlog and arming the watches
-	// above, which would leave nothing left to notify this follower. Re-check
-	// once the watches are live so that race resolves as a clean exit.
-	held, err := singletonHeld(lockPath)
-	if err != nil {
-		return err
-	}
-	if !held {
-		return flush()
-	}
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case err := <-logChanges.Errors():
-			return fmt.Errorf("follow watch log: %w", err)
-		case err := <-singletonChanges.Errors():
-			return fmt.Errorf("follow watcher shutdown: %w", err)
-		case <-logChanges.Events():
-			if err := flush(); err != nil {
-				return err
-			}
-		case <-singletonChanges.Events():
-			if err := flush(); err != nil {
-				return err
-			}
-			held, err := singletonHeld(lockPath)
-			if err != nil {
-				return err
-			}
-			if !held {
-				return flush()
-			}
-		}
-	}
-}
-
-func writeBacklog(path string, output io.Writer, lines int, render func([]byte) []byte) (int64, error) {
-	contents, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return 0, nil
-	}
-	if err != nil {
-		return 0, fmt.Errorf("read watch log %q: %w", path, err)
-	}
-	end := bytes.LastIndexByte(contents, '\n') + 1
-	if end == 0 {
-		return 0, nil
-	}
-	complete := contents[:end]
-	starts := bytes.Split(bytes.TrimSuffix(complete, []byte{'\n'}), []byte{'\n'})
-	if len(starts) > lines {
-		starts = starts[len(starts)-lines:]
-	}
-	backlog := append(bytes.Join(starts, []byte{'\n'}), '\n')
-	if _, err := output.Write(renderLines(backlog, render)); err != nil {
-		return 0, err
-	}
-	return int64(end), nil
-}
-
-// renderLines applies render to each whole line of a newline-terminated block.
-func renderLines(contents []byte, render func([]byte) []byte) []byte {
-	var rendered []byte
-	for line := range bytes.SplitSeq(bytes.TrimSuffix(contents, []byte{'\n'}), []byte{'\n'}) {
-		rendered = append(rendered, render(line)...)
-		rendered = append(rendered, '\n')
-	}
-	return rendered
-}
-
-func readComplete(path string, offset int64) ([]byte, int64, error) {
-	file, err := os.Open(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, offset, nil
-	}
-	if err != nil {
-		return nil, offset, fmt.Errorf("open watch log %q: %w", path, err)
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return nil, offset, err
-	}
-	if info.Size() < offset {
-		offset = 0
-	}
-	if _, err := file.Seek(offset, io.SeekStart); err != nil {
-		return nil, offset, err
-	}
-	contents, err := io.ReadAll(file)
-	if err != nil {
-		return nil, offset, err
-	}
-	end := bytes.LastIndexByte(contents, '\n') + 1
-	if end == 0 {
-		return nil, offset, nil
-	}
-	return contents[:end], offset + int64(end), nil
 }
 
 func singletonHeld(path string) (bool, error) {

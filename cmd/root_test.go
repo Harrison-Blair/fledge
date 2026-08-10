@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Harrison-Blair/fledge/internal/agentcontext"
 	"github.com/Harrison-Blair/fledge/internal/lifecycle"
 	"github.com/Harrison-Blair/fledge/internal/messaging"
 )
@@ -81,14 +80,12 @@ func TestWatchRoutesAttachedAndDaemonModes(t *testing.T) {
 	t.Parallel()
 
 	for _, test := range []struct {
-		name       string
-		args       []string
-		daemon     bool
-		jsonOutput bool
+		name   string
+		args   []string
+		daemon bool
 	}{
 		{name: "attached", args: []string{"watch"}},
 		{name: "daemon", args: []string{"watch", "--daemon"}, daemon: true},
-		{name: "json", args: []string{"watch", "--json"}, jsonOutput: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -99,7 +96,7 @@ func TestWatchRoutesAttachedAndDaemonModes(t *testing.T) {
 				t.Fatal(err)
 			}
 			if len(manager.watchDirs) != 1 || manager.watchDirs[0] != "/project/nested" || len(manager.watchOptions) != 1 ||
-				manager.watchOptions[0].Daemon != test.daemon || manager.watchOptions[0].JSON != test.jsonOutput {
+				manager.watchOptions[0].Daemon != test.daemon {
 				t.Fatalf("Watch() dirs/options = %#v/%#v", manager.watchDirs, manager.watchOptions)
 			}
 		})
@@ -634,9 +631,6 @@ type fakeManager struct {
 	replyErr        error
 	inboxErr        error
 	inboxIdentity   string
-	contextCalls    []contextCall
-	contextResult   agentcontext.Report
-	contextErr      error
 	taskCalls       []taskCall
 	taskResult      messaging.Task
 	taskListResult  []messaging.Task
@@ -682,8 +676,6 @@ func (f *fakeManager) TaskShow(_ context.Context, dir, id string) (messaging.Tas
 	return f.taskResult, f.taskErr
 }
 
-type contextCall struct{ dir, name string }
-
 type messageSendCall struct{ dir, recipient, body string }
 type messageReplyCall struct{ dir, id, body string }
 type inboxCall struct{ dir, identity string }
@@ -724,11 +716,6 @@ func (f *fakeManager) StopAgent(_ context.Context, dir, name string) error {
 	f.stopAgentDirs = append(f.stopAgentDirs, dir)
 	f.stopAgentNames = append(f.stopAgentNames, name)
 	return nil
-}
-
-func (f *fakeManager) Context(_ context.Context, dir, name string) (agentcontext.Report, error) {
-	f.contextCalls = append(f.contextCalls, contextCall{dir, name})
-	return f.contextResult, f.contextErr
 }
 
 func (f *fakeManager) SendMessage(_ context.Context, dir, recipient, body string) (messaging.Message, error) {

@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -225,92 +224,6 @@ func TestRunValidatesItsInputs(t *testing.T) {
 	}
 }
 
-// followLog must end when the dispatcher that owned the log exits, which is
-// only observable through the singleton state it removes on the way out.
-func TestFollowLogEndsWhenTheSingletonIsReleased(t *testing.T) {
-	t.Parallel()
-
-	root := sessionRoot(t)
-	logPath := filepath.Join(statedir.Session(root, testSession), LogFilename)
-	if err := os.WriteFile(logPath, []byte("first line\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	statePath := statedir.TempSession(root, testSession)
-	lockPath := filepath.Join(statePath, lockFilename)
-	owner, err := acquire(lockPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pidPath := filepath.Join(statePath, pidFilename)
-	if err := writePID(pidPath); err != nil {
-		t.Fatal(err)
-	}
-	output := &syncBuffer{}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	done := make(chan error, 1)
-	go func() { done <- followLog(ctx, root, testSession, output, lineRenderer(false, false)) }()
-
-	// Exit the way the daemon does: drop the PID file, then release the lock.
-	if err := os.Remove(pidPath); err != nil {
-		t.Fatal(err)
-	}
-	if err := owner.release(); err != nil {
-		t.Fatal(err)
-	}
-	// Whether followLog armed its watches before or after the release decides
-	// which exit path it takes, so keep disturbing the directory until it
-	// returns. Only the test needs this; the follower itself is event-driven.
-	deadline := time.After(10 * time.Second)
-	for nudge := 0; ; nudge++ {
-		select {
-		case err := <-done:
-			if err != nil {
-				t.Fatalf("followLog() = %v", err)
-			}
-			if !strings.Contains(output.String(), "first line") {
-				t.Fatalf("output = %q", output.String())
-			}
-			return
-		case <-deadline:
-			t.Fatal("followLog() did not notice the released singleton")
-		case <-time.After(20 * time.Millisecond):
-			path := filepath.Join(statePath, "nudge")
-			if err := os.WriteFile(path, []byte{byte(nudge)}, 0o600); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-}
-
-// A dispatcher that exits before the follower arms its watches leaves no event
-// to observe, so the follower has to notice on its own.
-func TestFollowLogExitsWhenTheSingletonIsAlreadyFree(t *testing.T) {
-	t.Parallel()
-
-	root := sessionRoot(t)
-	logPath := filepath.Join(statedir.Session(root, testSession), LogFilename)
-	if err := os.WriteFile(logPath, []byte("only line\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	output := &syncBuffer{}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	done := make(chan error, 1)
-	go func() { done <- followLog(ctx, root, testSession, output, lineRenderer(false, false)) }()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("followLog() = %v", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("followLog() waited for a dispatcher that was never running")
-	}
-	if !strings.Contains(output.String(), "only line") {
-		t.Fatalf("output = %q", output.String())
-	}
-}
-
 // stubHerdr satisfies the client contract for the input-validation and
 // singleton paths, none of which reach Herdr.
 type stubHerdr struct{}
@@ -324,25 +237,6 @@ func (stubHerdr) Snapshot(context.Context, string) (herdr.Snapshot, error) {
 }
 func (stubHerdr) PromptAgent(context.Context, string, string, string) error {
 	return errors.New("unused")
-}
-
-// syncBuffer collects follower output from the goroutine that produces it.
-type syncBuffer struct {
-	mu       sync.Mutex
-	contents []byte
-}
-
-func (b *syncBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.contents = append(b.contents, p...)
-	return len(p), nil
-}
-
-func (b *syncBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return string(b.contents)
 }
 
 func TestWritePIDTruncatesExistingContents(t *testing.T) {

@@ -10,7 +10,6 @@ import (
 
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/messaging"
-	"github.com/Harrison-Blair/fledge/internal/trace"
 	"github.com/Harrison-Blair/fledge/internal/watch"
 )
 
@@ -195,7 +194,7 @@ func TestDrainTerminalizesFailedWakeForAlreadyDeliveredMessage(t *testing.T) {
 
 	client := &fakeHerdr{protocol: RequiredHerdrProtocol,
 		refuse: map[string]error{"poison": errors.New("pane p1 is gone")}}
-	if err := drain(context.Background(), client, session, store, func(trace.Record) {}); err != nil {
+	if err := drain(context.Background(), client, session, store); err != nil {
 		t.Fatalf("drain returned %v, want nil", err)
 	}
 
