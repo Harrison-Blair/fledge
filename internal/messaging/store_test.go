@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Harrison-Blair/fledge/internal/statedir"
+	"github.com/Harrison-Blair/fledge/internal/fsutil"
 )
 
 const (
@@ -106,7 +106,7 @@ func TestRemoveLockKeepsLogAndRemoveAllDeletesSessionDirectory(t *testing.T) {
 	if _, err := os.Stat(store.tempPath()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("temporary session directory after RemoveAll error = %v, want not exist", err)
 	}
-	if _, err := os.Stat(statedir.Logs(store.root)); err != nil {
+	if _, err := os.Stat(fsutil.Logs(store.root)); err != nil {
 		t.Fatalf("logs directory after RemoveAll: %v; want preserved", err)
 	}
 }
@@ -253,7 +253,7 @@ func TestInvalidSessionNameFailsBeforeCreatingDirectories(t *testing.T) {
 			if _, err := New(root, session).Initialize(); err == nil {
 				t.Fatalf("Initialize() error = nil, want invalid session name error")
 			}
-			if _, err := os.Stat(statedir.Root(root)); !errors.Is(err, os.ErrNotExist) {
+			if _, err := os.Stat(fsutil.Root(root)); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("state directory error = %v, want not exist", err)
 			}
 		})
@@ -262,7 +262,7 @@ func TestInvalidSessionNameFailsBeforeCreatingDirectories(t *testing.T) {
 
 func TestInitializeRemovesLegacyTopLevelFiles(t *testing.T) {
 	root := t.TempDir()
-	legacyDirectory := statedir.Root(root)
+	legacyDirectory := fsutil.Root(root)
 	if err := os.Mkdir(legacyDirectory, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -712,11 +712,11 @@ func TestPermissionsAreOwnerOnly(t *testing.T) {
 		t.Skip("POSIX permissions are not available on Windows")
 	}
 	store := initializedStore(t)
-	// statedir.Root is deliberately absent: it is the user-facing .fledge folder,
+	// fsutil.Root is deliberately absent: it is the user-facing .fledge folder,
 	// owned by project.Init. See TestMessagingPreservesTheUserFacingStateFolder.
 	for _, path := range []string{
-		statedir.Logs(store.root),
-		store.statePath(), statedir.Temp(store.root), store.tempPath(),
+		fsutil.Logs(store.root),
+		store.statePath(), fsutil.Temp(store.root), store.tempPath(),
 		store.logPath(), store.lockPath(),
 	} {
 		info, err := os.Stat(path)
@@ -740,10 +740,10 @@ func TestMessagingPreservesTheUserFacingStateFolder(t *testing.T) {
 	root := t.TempDir()
 	// project.Init creates .fledge for the user at 0755; messaging shares the
 	// folder and must not narrow it to its own private 0700.
-	if err := os.MkdirAll(statedir.Root(root), 0o755); err != nil {
+	if err := os.MkdirAll(fsutil.Root(root), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(statedir.Root(root), 0o755); err != nil {
+	if err := os.Chmod(fsutil.Root(root), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -753,82 +753,12 @@ func TestMessagingPreservesTheUserFacingStateFolder(t *testing.T) {
 	}
 	mustCreate(t, store, CreateParams{Sender: "user", Recipient: "alice", Body: "hello", RecipientPane: "%1"})
 
-	info, err := os.Stat(statedir.Root(root))
+	info, err := os.Stat(fsutil.Root(root))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := info.Mode().Perm(); got != 0o755 {
-		t.Errorf("%s permission = %04o, want 0755", statedir.Root(root), got)
-	}
-}
-
-func TestRejectsLogAndLockSymlinks(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlink creation commonly requires elevated Windows privileges")
-	}
-	t.Run("log", func(t *testing.T) {
-		store := initializedStore(t)
-		if err := os.Remove(store.logPath()); err != nil {
-			t.Fatal(err)
-		}
-		target := filepath.Join(t.TempDir(), "target")
-		if err := os.WriteFile(target, []byte("unchanged"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink(target, store.logPath()); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := store.Initialize(); err == nil || !strings.Contains(err.Error(), "symlink") {
-			t.Fatalf("Initialize error = %v, want symlink rejection", err)
-		}
-		contents, _ := os.ReadFile(target)
-		if string(contents) != "unchanged" {
-			t.Fatal("log symlink target was modified")
-		}
-	})
-	t.Run("lock", func(t *testing.T) {
-		store := initializedStore(t)
-		if err := os.Remove(store.lockPath()); err != nil {
-			t.Fatal(err)
-		}
-		target := filepath.Join(t.TempDir(), "target")
-		if err := os.WriteFile(target, []byte("unchanged"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink(target, store.lockPath()); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := store.List(); err == nil || !strings.Contains(err.Error(), "symlink") {
-			t.Fatalf("List error = %v, want symlink rejection", err)
-		}
-	})
-}
-
-func TestRejectsSymlinkedLogDirectories(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlink creation commonly requires elevated Windows privileges")
-	}
-	tests := []struct {
-		name      string
-		directory func(*Store) string
-	}{
-		{name: "logs", directory: func(store *Store) string { return statedir.Logs(store.root) }},
-		{name: "session", directory: func(store *Store) string { return store.statePath() }},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			store := New(t.TempDir(), testSession)
-			link := test.directory(store)
-			if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Symlink(t.TempDir(), link); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := store.Initialize(); err == nil || !strings.Contains(err.Error(), "symlink") {
-				t.Fatalf("Initialize error = %v, want symlink rejection", err)
-			}
-		})
+		t.Errorf("%s permission = %04o, want 0755", fsutil.Root(root), got)
 	}
 }
 

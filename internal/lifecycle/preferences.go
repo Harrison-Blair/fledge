@@ -30,35 +30,7 @@ func writePreferences(root string, value preferences) error {
 		return fmt.Errorf("encode Fledge preferences: %w", err)
 	}
 	contents = append(contents, '\n')
-
-	if err := fsutil.RejectSymlink(path); err != nil {
-		return err
-	}
-	file, err := os.CreateTemp(filepath.Dir(path), ".preferences-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create temporary Fledge preferences: %w", err)
-	}
-	temporary := file.Name()
-	defer os.Remove(temporary)
-	if err := file.Chmod(0o600); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("secure temporary Fledge preferences: %w", err)
-	}
-	if _, err := file.Write(contents); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("write temporary Fledge preferences: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("sync temporary Fledge preferences: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("close temporary Fledge preferences: %w", err)
-	}
-	if err := os.Rename(temporary, path); err != nil {
-		return fmt.Errorf("replace %s: %w", path, err)
-	}
-	return fsutil.SyncDirectory(filepath.Dir(path))
+	return fsutil.WriteFileAtomic(path, contents, 0o600)
 }
 
 func readPreferences(root string) (preferences, bool, error) {

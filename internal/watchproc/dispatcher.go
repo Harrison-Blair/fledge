@@ -1,6 +1,4 @@
-// Package dispatcher turns durable coordination events and Herdr push events
-// into agent wakes without polling either source.
-package dispatcher
+package watchproc
 
 import (
 	"context"
@@ -13,17 +11,9 @@ import (
 
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/messaging"
-	"github.com/Harrison-Blair/fledge/internal/watch"
 )
 
 const RequiredHerdrProtocol = 19
-
-type Herdr interface {
-	Protocol(context.Context) (int, error)
-	List(context.Context) ([]herdr.Session, error)
-	Snapshot(context.Context, string) (herdr.Snapshot, error)
-	PromptAgent(context.Context, string, string, string) error
-}
 
 type FileWatcher interface {
 	Events() <-chan struct{}
@@ -32,17 +22,11 @@ type FileWatcher interface {
 }
 
 type WatchFile func(string) (FileWatcher, error)
-type Subscribe func(context.Context, []string, func(), func(watch.Event)) error
+type Subscribe func(context.Context, []string, func(), func(herdr.Event)) error
 
-type Options struct {
-	Root, Session string
-	Herdr         Herdr
-	WatchFile     WatchFile
-	Subscribe     Subscribe
-	Ready         func()
-}
-
-func Run(ctx context.Context, options Options) error {
+// runDispatcher turns durable coordination events and Herdr push events into
+// agent wakes without polling either source.
+func runDispatcher(ctx context.Context, options Options) error {
 	if options.Herdr == nil {
 		return errors.New("dispatcher Herdr client is missing")
 	}
@@ -78,7 +62,7 @@ func Run(ctx context.Context, options Options) error {
 
 	type generationEvent struct {
 		generation int
-		event      watch.Event
+		event      herdr.Event
 	}
 	events := make(chan generationEvent, 16)
 	type streamResult struct {
@@ -160,7 +144,7 @@ func Run(ctx context.Context, options Options) error {
 			case <-streamCtx.Done():
 			}
 		}
-		onEvent := func(event watch.Event) {
+		onEvent := func(event herdr.Event) {
 			select {
 			case events <- generationEvent{generation: current, event: event}:
 			case <-streamCtx.Done():
@@ -398,7 +382,7 @@ func socketSubscriber(ctx context.Context, client Herdr, session string) (Subscr
 		var dialer net.Dialer
 		return dialer.DialContext(dialCtx, "unix", path)
 	}
-	return func(streamCtx context.Context, panes []string, ready func(), event func(watch.Event)) error {
-		return watch.Subscribe(streamCtx, dial, panes, ready, event)
+	return func(streamCtx context.Context, panes []string, ready func(), event func(herdr.Event)) error {
+		return herdr.Subscribe(streamCtx, dial, panes, ready, event)
 	}, nil
 }

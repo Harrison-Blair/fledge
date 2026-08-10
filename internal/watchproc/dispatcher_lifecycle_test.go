@@ -1,4 +1,4 @@
-package dispatcher
+package watchproc
 
 import (
 	"context"
@@ -9,11 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/messaging"
-	"github.com/Harrison-Blair/fledge/internal/watch"
 )
-
-const testSession = "fledge-test-1234abcd"
 
 // dispatcherHarness runs one dispatcher against injected ledger and Herdr event
 // sources so a test drives it entirely by events, never by elapsed time.
@@ -27,7 +25,7 @@ type dispatcherHarness struct {
 
 	mu         sync.Mutex
 	subscribed [][]string
-	events     chan watch.Event
+	events     chan herdr.Event
 }
 
 func newHarness(t *testing.T) *dispatcherHarness {
@@ -43,7 +41,7 @@ func newHarness(t *testing.T) *dispatcherHarness {
 		files:  &fakeFiles{events: make(chan struct{}, 4), errs: make(chan error, 1)},
 		ready:  make(chan struct{}, 4),
 		done:   make(chan error, 1),
-		events: make(chan watch.Event, 4),
+		events: make(chan herdr.Event, 4),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	h.cancel = cancel
@@ -56,10 +54,10 @@ func newHarness(t *testing.T) *dispatcherHarness {
 		}
 	})
 	go func() {
-		h.done <- Run(ctx, Options{
+		h.done <- runDispatcher(ctx, Options{
 			Root: root, Session: testSession, Herdr: h.client,
 			WatchFile: func(string) (FileWatcher, error) { return h.files, nil },
-			Subscribe: func(streamCtx context.Context, panes []string, onReady func(), onEvent func(watch.Event)) error {
+			Subscribe: func(streamCtx context.Context, panes []string, onReady func(), onEvent func(herdr.Event)) error {
 				h.mu.Lock()
 				h.subscribed = append(h.subscribed, append([]string(nil), panes...))
 				h.mu.Unlock()
@@ -227,7 +225,7 @@ func TestDispatcherRetiresClosedPanes(t *testing.T) {
 	h.client.setSnapshotPanes("p1")
 	h.notifyLedger()
 	select {
-	case h.events <- watch.Event{Type: "pane.closed", PaneID: "p1"}:
+	case h.events <- herdr.Event{Type: "pane.closed", PaneID: "p1"}:
 	case <-time.After(5 * time.Second):
 		t.Fatal("dispatcher never accepted the pane.closed event")
 	}
@@ -282,7 +280,7 @@ func TestDispatcherStaysIdleWhenLastPaneCloses(t *testing.T) {
 	// The last pane closes: its agent deactivates so the next ledger recompute
 	// sees zero live panes.
 	select {
-	case h.events <- watch.Event{Type: "pane.closed", PaneID: "p1"}:
+	case h.events <- herdr.Event{Type: "pane.closed", PaneID: "p1"}:
 	case <-time.After(5 * time.Second):
 		t.Fatal("dispatcher never accepted the pane.closed event")
 	}
@@ -346,7 +344,7 @@ func TestDispatcherStaysIdleWhenLastPaneCloses_Repeated(t *testing.T) {
 		// The last pane closes: its agent deactivates so the next ledger recompute
 		// sees zero live panes and tears the p-i stream down.
 		select {
-		case h.events <- watch.Event{Type: "pane.closed", PaneID: pane}:
+		case h.events <- herdr.Event{Type: "pane.closed", PaneID: pane}:
 		case err := <-h.done:
 			t.Fatalf("iteration %d: dispatcher exited before pane.closed: %v", i, err)
 		case <-time.After(5 * time.Second):
@@ -454,7 +452,7 @@ func TestDispatcherReconcilesPaneClosedDuringResubscribe(t *testing.T) {
 	files := &fakeFiles{events: make(chan struct{}, 4), errs: make(chan error, 1)}
 
 	subs := make(chan *gatedSub, 8)
-	subscribe := func(streamCtx context.Context, panes []string, onReady func(), _ func(watch.Event)) error {
+	subscribe := func(streamCtx context.Context, panes []string, onReady func(), _ func(herdr.Event)) error {
 		sub := &gatedSub{panes: append([]string(nil), panes...), ack: make(chan struct{})}
 		select {
 		case subs <- sub:
@@ -462,7 +460,7 @@ func TestDispatcherReconcilesPaneClosedDuringResubscribe(t *testing.T) {
 			return streamCtx.Err()
 		}
 		// Wait for the test to acknowledge before running onReady, exactly as
-		// watch.Subscribe waits for Herdr's ack before calling it.
+		// herdr.Subscribe waits for Herdr's ack before calling it.
 		select {
 		case <-sub.ack:
 		case <-streamCtx.Done():
@@ -477,7 +475,7 @@ func TestDispatcherReconcilesPaneClosedDuringResubscribe(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, Options{Root: root, Session: testSession, Herdr: client,
+		done <- runDispatcher(ctx, Options{Root: root, Session: testSession, Herdr: client,
 			WatchFile: func(string) (FileWatcher, error) { return files, nil },
 			Subscribe: subscribe,
 			Ready:     func() { ready <- struct{}{} }})

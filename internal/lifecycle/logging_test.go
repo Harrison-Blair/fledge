@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Harrison-Blair/fledge/internal/fsutil"
 	"github.com/Harrison-Blair/fledge/internal/logging"
-	"github.com/Harrison-Blair/fledge/internal/statedir"
 )
 
 func captureSessionLog(manager *Manager) *bytes.Buffer {
@@ -173,7 +173,7 @@ func TestStartCreatesSessionDebugLogFile(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("readRecord() = %#v, %v, %v", value, found, err)
 	}
-	logPath := filepath.Join(statedir.Session(root, value.SessionName), logging.FileName)
+	logPath := filepath.Join(fsutil.Session(root, value.SessionName), logging.FileName)
 	info, err := os.Stat(logPath)
 	if err != nil {
 		t.Fatalf("session debug log missing: %v", err)

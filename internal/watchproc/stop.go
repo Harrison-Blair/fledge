@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Harrison-Blair/fledge/internal/fsutil"
 	"github.com/Harrison-Blair/fledge/internal/fswatch"
-	"github.com/Harrison-Blair/fledge/internal/statedir"
 )
 
 const maxPIDFileBytes = 32
@@ -28,7 +28,7 @@ func Stop(root, session string) error {
 	if err != nil {
 		return err
 	}
-	watchPath := statedir.TempSession(root, session)
+	watchPath := fsutil.TempSession(root, session)
 	lockPath := filepath.Join(watchPath, lockFilename)
 	if !terminated {
 		if _, err := os.Lstat(lockPath); errors.Is(err, os.ErrNotExist) {
@@ -89,10 +89,10 @@ func stopAttempt(root, session string, terminate func(int) error) (bool, error) 
 	if strings.TrimSpace(root) == "" {
 		return false, errors.New("watch project root is missing")
 	}
-	if !statedir.ValidSessionDirName(session) {
+	if !fsutil.ValidSessionDirName(session) {
 		return false, fmt.Errorf("Herdr session name %q is not a valid watch directory name", session)
 	}
-	watchPath := statedir.TempSession(root, session)
+	watchPath := fsutil.TempSession(root, session)
 	if _, err := os.Lstat(watchPath); errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	} else if err != nil {

@@ -124,6 +124,14 @@ func ownedLevels(dir string) ([]string, error) {
 
 func openLogFile(dir string) (*os.File, error) {
 	path := filepath.Join(dir, FileName)
+	switch info, err := os.Lstat(path); {
+	case errors.Is(err, os.ErrNotExist):
+		// The log file does not exist yet; it will be created below.
+	case err != nil:
+		return nil, fmt.Errorf("inspect log file %q: %w", path, err)
+	case info.Mode()&os.ModeSymlink != 0:
+		return nil, fmt.Errorf("log file %q must not be a symlink", path)
+	}
 	file, err := fsutil.OpenRegular(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open log file %q: %w", path, err)

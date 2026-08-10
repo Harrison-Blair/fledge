@@ -1,4 +1,4 @@
-package dispatcher
+package watchproc
 
 import (
 	"context"
@@ -10,7 +10,6 @@ import (
 
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/messaging"
-	"github.com/Harrison-Blair/fledge/internal/watch"
 )
 
 type fakeFiles struct {
@@ -100,9 +99,9 @@ func TestRunReplaysStableWakeAndRecordsOutcomes(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, Options{Root: root, Session: session, Herdr: client,
+		done <- runDispatcher(ctx, Options{Root: root, Session: session, Herdr: client,
 			WatchFile: func(string) (FileWatcher, error) { return files, nil },
-			Subscribe: func(ctx context.Context, _ []string, onReady func(), _ func(watch.Event)) error {
+			Subscribe: func(ctx context.Context, _ []string, onReady func(), _ func(herdr.Event)) error {
 				onReady()
 				close(ready)
 				<-ctx.Done()
@@ -228,7 +227,7 @@ func TestDrainTerminalizesFailedWakeForAlreadyDeliveredMessage(t *testing.T) {
 }
 
 func TestRunRequiresProtocol19WithRestartGuidance(t *testing.T) {
-	err := Run(context.Background(), Options{Root: t.TempDir(), Session: "fledge-test-1234abcd", Herdr: &fakeHerdr{protocol: 18}})
+	err := runDispatcher(context.Background(), Options{Root: t.TempDir(), Session: "fledge-test-1234abcd", Herdr: &fakeHerdr{protocol: 18}})
 	if err == nil || !strings.Contains(err.Error(), "protocol 19") || !strings.Contains(err.Error(), "fledge stop and fledge start") {
 		t.Fatalf("error = %v", err)
 	}

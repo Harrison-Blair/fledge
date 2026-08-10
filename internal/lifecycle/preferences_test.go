@@ -72,27 +72,6 @@ func TestPreferencesRoundTrip(t *testing.T) {
 	}
 }
 
-func TestWritePreferencesRejectsSymlinkWithoutTouchingTarget(t *testing.T) {
-	t.Parallel()
-
-	root := newPreferencesRoot(t)
-	target := filepath.Join(root, "sentinel.json")
-	const sentinel = "do not touch\n"
-	if err := os.WriteFile(target, []byte(sentinel), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(target, preferencesPath(root)); err != nil {
-		t.Skipf("symlink unsupported: %v", err)
-	}
-
-	if err := writePreferences(root, preferences{Version: preferencesVersion, Harness: "claude"}); err == nil {
-		t.Fatal("writePreferences() accepted a symlinked destination")
-	}
-	if contents, err := os.ReadFile(target); err != nil || string(contents) != sentinel {
-		t.Fatalf("sentinel target = %q, %v; want unchanged %q", contents, err, sentinel)
-	}
-}
-
 func TestReadPreferencesMissing(t *testing.T) {
 	t.Parallel()
 

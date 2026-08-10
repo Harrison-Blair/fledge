@@ -10,9 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Harrison-Blair/fledge/internal/dispatcher"
+	"github.com/Harrison-Blair/fledge/internal/fsutil"
 	"github.com/Harrison-Blair/fledge/internal/herdr"
-	"github.com/Harrison-Blair/fledge/internal/statedir"
 )
 
 const (
@@ -34,13 +33,21 @@ type Options struct {
 	Herdr         Herdr
 	Output        io.Writer
 	Daemon        bool
+
+	// WatchFile, Subscribe, and Ready are dispatcher seams. Production leaves
+	// WatchFile and Subscribe nil so the dispatcher installs its native ledger
+	// watcher and Herdr event socket; tests inject fakes. Ready is set here so
+	// the readiness marker is written when the dispatcher announces.
+	WatchFile WatchFile
+	Subscribe Subscribe
+	Ready     func()
 }
 
 func Run(ctx context.Context, options Options) (result error) {
 	if strings.TrimSpace(options.Root) == "" {
 		return errors.New("watch project root is missing")
 	}
-	if !statedir.ValidSessionDirName(options.Session) {
+	if !fsutil.ValidSessionDirName(options.Session) {
 		return fmt.Errorf("Herdr session name %q is not a valid dispatcher directory name", options.Session)
 	}
 	if options.Herdr == nil {
@@ -57,7 +64,7 @@ func Run(ctx context.Context, options Options) (result error) {
 	if err := ensureStateDirectories(options.Root, options.Session); err != nil {
 		return err
 	}
-	statePath := statedir.TempSession(options.Root, options.Session)
+	statePath := fsutil.TempSession(options.Root, options.Session)
 	lockPath := filepath.Join(statePath, lockFilename)
 	owner, err := acquire(lockPath)
 	if errors.Is(err, errAlreadyRunning) {
@@ -85,7 +92,7 @@ func Run(ctx context.Context, options Options) (result error) {
 	if err := ensureLogDirectory(options.Root, options.Session); err != nil {
 		return err
 	}
-	logPath := filepath.Join(statedir.Session(options.Root, options.Session), LogFilename)
+	logPath := filepath.Join(fsutil.Session(options.Root, options.Session), LogFilename)
 	logFile, err := openOwned(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
@@ -97,10 +104,9 @@ func Run(ctx context.Context, options Options) (result error) {
 	}
 	// The marker file is what WaitReady watches for; a foreground watcher also
 	// prints readiness so an attached terminal shows the dispatcher came up.
-	ready := func() {
+	options.Ready = func() {
 		_ = os.WriteFile(readyPath, []byte("ready\n"), 0o600)
 		_, _ = fmt.Fprintln(destination, "dispatcher ready")
 	}
-	return dispatcher.Run(ctx, dispatcher.Options{Root: options.Root, Session: options.Session,
-		Herdr: options.Herdr, Ready: ready})
+	return runDispatcher(ctx, options)
 }

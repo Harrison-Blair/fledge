@@ -17,14 +17,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Harrison-Blair/fledge/internal/dispatcher"
 	"github.com/Harrison-Blair/fledge/internal/fsutil"
 	"github.com/Harrison-Blair/fledge/internal/harness"
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/logging"
 	"github.com/Harrison-Blair/fledge/internal/messaging"
 	"github.com/Harrison-Blair/fledge/internal/project"
-	"github.com/Harrison-Blair/fledge/internal/statedir"
 	"github.com/Harrison-Blair/fledge/internal/tui"
 	"github.com/Harrison-Blair/fledge/internal/watchproc"
 )
@@ -152,7 +150,7 @@ func NewManager(client Herdr, confirmer Confirmer, input io.Reader, output io.Wr
 		manager.selector = (*tui.Selector)(nil)
 	}
 	manager.logFactory = func(root, session string) (*slog.Logger, io.Closer, error) {
-		return logging.Open(statedir.Session(root, session), logging.ParseLevel(manager.getenv(logging.LevelEnvVar)))
+		return logging.Open(fsutil.Session(root, session), logging.ParseLevel(manager.getenv(logging.LevelEnvVar)))
 	}
 	return manager
 }
@@ -219,8 +217,8 @@ func (m *Manager) Start(ctx context.Context, dir string, options StartOptions) e
 	if err != nil {
 		return fmt.Errorf("read Herdr protocol: %w", err)
 	}
-	if protocol < dispatcher.RequiredHerdrProtocol {
-		return fmt.Errorf("Herdr protocol %d is unsupported; protocol %d or newer is required. Upgrade Herdr, then restart with fledge stop and fledge start", protocol, dispatcher.RequiredHerdrProtocol)
+	if protocol < watchproc.RequiredHerdrProtocol {
+		return fmt.Errorf("Herdr protocol %d is unsupported; protocol %d or newer is required. Upgrade Herdr, then restart with fledge stop and fledge start", protocol, watchproc.RequiredHerdrProtocol)
 	}
 	existingRecord, recordFound, err := readRecord(root)
 	if err != nil {
@@ -572,7 +570,7 @@ func (m *Manager) initializeOrchestrator(
 	if err != nil {
 		return true, fmt.Errorf("initialize session messaging: %w", err)
 	}
-	if err := replaceRecordSessionBinding(root, session, messagingSessionID); err != nil {
+	if err := writeRecordSessionBinding(root, session, messagingSessionID, true); err != nil {
 		return true, fmt.Errorf("bind Fledge session record to messaging log: %w", err)
 	}
 	logger.Debug("session messaging initialized", "messaging_session_id", messagingSessionID)
@@ -1149,19 +1147,11 @@ func bindRecordToStore(root string, value record) (record, error) {
 	if value.MessagingSessionID == sessionID {
 		return value, nil
 	}
-	if err := bindRecordSession(root, value.SessionName, sessionID); err != nil {
+	if err := writeRecordSessionBinding(root, value.SessionName, sessionID, false); err != nil {
 		return record{}, err
 	}
 	value.MessagingSessionID = sessionID
 	return value, nil
-}
-
-func bindRecordSession(root, session, sessionID string) error {
-	return writeRecordSessionBinding(root, session, sessionID, false)
-}
-
-func replaceRecordSessionBinding(root, session, sessionID string) error {
-	return writeRecordSessionBinding(root, session, sessionID, true)
 }
 
 func writeRecordSessionBinding(root, session, sessionID string, replace bool) error {
@@ -1192,34 +1182,7 @@ func rewriteRecord(root string, value record) error {
 		return fmt.Errorf("encode Fledge session record: %w", err)
 	}
 	contents = append(contents, '\n')
-	if err := fsutil.RejectSymlink(path); err != nil {
-		return err
-	}
-	file, err := os.CreateTemp(filepath.Dir(path), ".session-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create temporary Fledge session record: %w", err)
-	}
-	temporary := file.Name()
-	defer os.Remove(temporary)
-	if err := file.Chmod(0o600); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("secure temporary Fledge session record: %w", err)
-	}
-	if _, err := file.Write(contents); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("write temporary Fledge session record: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("sync temporary Fledge session record: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("close temporary Fledge session record: %w", err)
-	}
-	if err := os.Rename(temporary, path); err != nil {
-		return fmt.Errorf("replace %s: %w", path, err)
-	}
-	return fsutil.SyncDirectory(filepath.Dir(path))
+	return fsutil.WriteFileAtomic(path, contents, 0o600)
 }
 
 func (m *Manager) loadOrCreateRecord(root string) (record, bool, error) {
@@ -1390,7 +1353,7 @@ func readRecord(root string) (record, bool, error) {
 // slug at maxSessionSlugLength. Legacy names carry a fixed 32-hex body whose
 // computed slug length is 23, so they remain accepted.
 func validSessionName(name string) bool {
-	if !statedir.ValidSessionDirName(name) {
+	if !fsutil.ValidSessionDirName(name) {
 		return false
 	}
 	slugLength := len(name) - len(sessionNamePrefix) - 1 - sessionIDHexLength

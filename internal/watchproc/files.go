@@ -7,7 +7,7 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/Harrison-Blair/fledge/internal/statedir"
+	"github.com/Harrison-Blair/fledge/internal/fsutil"
 )
 
 func ensureStateDirectories(root, session string) error {
@@ -15,7 +15,7 @@ func ensureStateDirectories(root, session string) error {
 		return err
 	}
 	return ensureDirectories(
-		statedir.Temp(root), statedir.TempSession(root, session),
+		fsutil.Temp(root), fsutil.TempSession(root, session),
 	)
 }
 
@@ -23,7 +23,7 @@ func ensureLogDirectory(root, session string) error {
 	if err := ensureStateRoot(root); err != nil {
 		return err
 	}
-	return ensureDirectories(statedir.Logs(root), statedir.Session(root, session))
+	return ensureDirectories(fsutil.Logs(root), fsutil.Session(root, session))
 }
 
 // ensureStateRoot creates .fledge if the watcher got there before the project
@@ -31,7 +31,7 @@ func ensureLogDirectory(root, session string) error {
 // browse it — so the watcher creates it that way and never re-modes an
 // existing one. Only the state below it is the watcher's to keep owner-only.
 func ensureStateRoot(root string) error {
-	path := statedir.Root(root)
+	path := fsutil.Root(root)
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		return fmt.Errorf("create watch directory %q: %w", path, err)
 	}

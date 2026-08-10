@@ -1,4 +1,4 @@
-package dispatcher
+package watchproc
 
 import "github.com/Harrison-Blair/fledge/internal/fswatch"
 

@@ -1,4 +1,4 @@
-package statedir
+package fsutil
 
 import (
 	"path/filepath"

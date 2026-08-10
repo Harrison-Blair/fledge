@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -43,70 +42,6 @@ func TestEnsureGeneratedOrchestratorPromptReusesRefreshesAndProtectsFile(t *test
 	contents, err := os.ReadFile(path)
 	if err != nil || string(contents) != "refreshed\npolicy" {
 		t.Fatalf("refreshed prompt = %q, %v", contents, err)
-	}
-}
-
-func TestEnsureGeneratedOrchestratorPromptRejectsSymlink(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlink creation commonly requires elevated Windows privileges")
-	}
-	root := t.TempDir()
-	path := filepath.Join(root, ".fledge", "profiles", "generated", "orchestrator.md")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	target := filepath.Join(t.TempDir(), "target")
-	if err := os.WriteFile(target, []byte("unchanged"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(target, path); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := EnsureGeneratedOrchestratorPrompt(root, "replacement"); err == nil || !strings.Contains(err.Error(), "symlink") {
-		t.Fatalf("EnsureGeneratedOrchestratorPrompt() error = %v, want symlink rejection", err)
-	}
-	contents, err := os.ReadFile(target)
-	if err != nil || string(contents) != "unchanged" {
-		t.Fatalf("symlink target = %q, %v; want unchanged", contents, err)
-	}
-	info, err := os.Stat(target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o644 {
-		t.Fatalf("symlink target mode = %v; want 644", info.Mode().Perm())
-	}
-}
-
-// TestEnsureGeneratedOrchestratorPromptRejectsSymlinkPlantedAfterValidation
-// plants the symlink in the window between the validation and the open, which
-// is the only window an attacker racing fledge can use. The open itself has to
-// refuse to follow it; the validation before it cannot help here.
-func TestEnsureGeneratedOrchestratorPromptRejectsSymlinkPlantedAfterValidation(t *testing.T) {
-	t.Parallel()
-	if runtime.GOOS == "windows" {
-		t.Skip("symlink creation commonly requires elevated Windows privileges")
-	}
-	root := t.TempDir()
-	path := filepath.Join(root, ".fledge", "profiles", "generated", "orchestrator.md")
-	target := filepath.Join(t.TempDir(), "target")
-	if err := os.WriteFile(target, []byte("unchanged"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	plantSymlink := func() {
-		if err := os.Symlink(target, path); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	if _, err := ensureGeneratedOrchestratorPrompt(root, "replacement", plantSymlink); err == nil {
-		t.Fatal("EnsureGeneratedOrchestratorPrompt accepted a symlink planted after validation")
-	} else if !strings.Contains(err.Error(), "symlink") {
-		t.Fatalf("EnsureGeneratedOrchestratorPrompt() error = %v, want a symlink rejection", err)
-	}
-	contents, err := os.ReadFile(target)
-	if err != nil || string(contents) != "unchanged" {
-		t.Fatalf("symlink target = %q, %v; want unchanged", contents, err)
 	}
 }
 

@@ -18,7 +18,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/Harrison-Blair/fledge/internal/fsutil"
-	"github.com/Harrison-Blair/fledge/internal/statedir"
 )
 
 const (
@@ -199,15 +198,11 @@ func (s *Store) RemoveLock() error {
 	return s.withRemovalLock(func() error {
 		var removeErr error
 		for _, lockPath := range []string{s.lockPath(), s.legacyLockPath()} {
-			if err := fsutil.RejectSymlink(lockPath); err != nil {
-				removeErr = errors.Join(removeErr, err)
-				continue
-			}
 			if err := os.Remove(lockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 				removeErr = errors.Join(removeErr, fmt.Errorf("remove messaging lock %q: %w", lockPath, err))
 			}
 		}
-		return errors.Join(removeErr, fsutil.SyncDirectory(s.statePath()), fsutil.SyncDirectory(s.tempPath()))
+		return removeErr
 	})
 }
 
@@ -217,22 +212,18 @@ func (s *Store) RemoveAll() error {
 	return s.withRemovalLock(func() error {
 		var removeErr error
 		for _, path := range []string{s.statePath(), s.tempPath()} {
-			if err := fsutil.RejectSymlink(path); err != nil {
-				removeErr = errors.Join(removeErr, err)
-				continue
-			}
 			if err := os.RemoveAll(path); err != nil {
 				removeErr = errors.Join(removeErr, fmt.Errorf("remove messaging session directory %q: %w", path, err))
 			}
 		}
-		return errors.Join(removeErr, fsutil.SyncDirectory(statedir.Logs(s.root)), fsutil.SyncDirectory(statedir.Temp(s.root)))
+		return removeErr
 	})
 }
 
 // removeLegacyFiles deletes locks and the pre-session-folder message log from
 // layouts used by older Fledge versions.
 func (s *Store) removeLegacyFiles() error {
-	directory := statedir.Root(s.root)
+	directory := fsutil.Root(s.root)
 	var removeErr error
 	for _, path := range []string{
 		filepath.Join(directory, logFilename),
@@ -243,15 +234,11 @@ func (s *Store) removeLegacyFiles() error {
 		filepath.Join(s.statePath(), legacyLockFilename),
 		s.legacyLockPath(),
 	} {
-		if err := fsutil.RejectSymlink(path); err != nil {
-			removeErr = errors.Join(removeErr, err)
-			continue
-		}
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			removeErr = errors.Join(removeErr, fmt.Errorf("remove legacy messaging file %q: %w", path, err))
 		}
 	}
-	return errors.Join(removeErr, fsutil.SyncDirectory(directory), fsutil.SyncDirectory(s.statePath()))
+	return removeErr
 }
 
 // Create appends a new pending message.
@@ -477,7 +464,7 @@ func (s *Store) withAcquiredLock(path string, operation func() error) error {
 }
 
 func (s *Store) ensureStateDirectory() error {
-	if !statedir.ValidSessionDirName(s.session) {
+	if !fsutil.ValidSessionDirName(s.session) {
 		return fmt.Errorf("Herdr session name %q is not a valid messaging log directory name", s.session)
 	}
 	// .fledge is the user-facing project folder that project.Init creates at
@@ -487,10 +474,10 @@ func (s *Store) ensureStateDirectory() error {
 		path    string
 		private bool
 	}{
-		{path: statedir.Root(s.root)},
-		{path: statedir.Logs(s.root), private: true},
+		{path: fsutil.Root(s.root)},
+		{path: fsutil.Logs(s.root), private: true},
 		{path: s.statePath(), private: true},
-		{path: statedir.Temp(s.root), private: true},
+		{path: fsutil.Temp(s.root), private: true},
 		{path: s.tempPath(), private: true},
 	} {
 		mode := os.FileMode(0o755)
@@ -580,23 +567,13 @@ func (s *Store) replaceLog(events []event) error {
 		return err
 	}
 	path := s.logPath()
-	file, err := fsutil.OpenRegular(path, os.O_CREATE|os.O_RDWR, 0o600)
+	file, err := fsutil.OpenRegular(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return fmt.Errorf("create messaging log %q: %w", path, err)
 	}
 	if err := file.Chmod(0o600); err != nil {
 		_ = file.Close()
 		return fmt.Errorf("secure messaging log %q: %w", path, err)
-	}
-	// Truncate only after OpenRegular has verified that the opened handle is the
-	// same regular, non-symlink file currently named by path.
-	if err := file.Truncate(0); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("truncate messaging log %q: %w", path, err)
-	}
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("seek messaging log %q: %w", path, err)
 	}
 	err = writeEvents(file, events)
 	closeErr := file.Close()
@@ -606,7 +583,7 @@ func (s *Store) replaceLog(events []event) error {
 	if closeErr != nil {
 		return fmt.Errorf("close messaging log %q: %w", path, closeErr)
 	}
-	return fsutil.SyncDirectory(s.statePath())
+	return nil
 }
 
 func (s *Store) appendEvents(events []event) error {
@@ -644,9 +621,6 @@ func writeEvents(file *os.File, events []event) error {
 			return fmt.Errorf("append messaging events: %w", err)
 		}
 		data = data[written:]
-	}
-	if err := file.Sync(); err != nil {
-		return fmt.Errorf("sync messaging events: %w", err)
 	}
 	return nil
 }
@@ -726,8 +700,8 @@ func (s *Store) newID() (string, error) {
 
 func (s *Store) now() time.Time { return s.clock().UTC() }
 
-func (s *Store) statePath() string { return statedir.Session(s.root, s.session) }
-func (s *Store) tempPath() string  { return statedir.TempSession(s.root, s.session) }
+func (s *Store) statePath() string { return fsutil.Session(s.root, s.session) }
+func (s *Store) tempPath() string  { return fsutil.TempSession(s.root, s.session) }
 func (s *Store) logPath() string   { return filepath.Join(s.statePath(), logFilename) }
 func (s *Store) lockPath() string  { return filepath.Join(s.tempPath(), lockFilename) }
 func (s *Store) legacyLockPath() string {

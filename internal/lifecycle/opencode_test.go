@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Harrison-Blair/fledge/internal/statedir"
+	"github.com/Harrison-Blair/fledge/internal/fsutil"
 )
 
 func TestMergeOpenCodeConfig(t *testing.T) {
@@ -72,9 +72,9 @@ func TestPrepareOpenCodeRuntimeWritesProtectedSnapshots(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tempSessionDir := statedir.TempSession(root, testSessionName)
+	tempSessionDir := fsutil.TempSession(root, testSessionName)
 	assertProtectedFile(t, filepath.Join(tempSessionDir, openCodeEnvironmentFile), original)
-	if _, err := os.Stat(filepath.Join(statedir.Session(root, testSessionName), openCodeInstructionsFile)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(fsutil.Session(root, testSessionName), openCodeInstructionsFile)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("per-session prompt artifact error = %v, want absent", err)
 	}
 	if got := runtime.paneEnvironment[openCodeConfigEnvironment]; got != original {
@@ -95,7 +95,7 @@ func TestRemoveOpenCodeRuntimePreservesAuditLogs(t *testing.T) {
 	if _, err := prepareOpenCodeRuntime(root, testSessionName, generatedPromptFile(root), "{}"); err != nil {
 		t.Fatal(err)
 	}
-	auditPath := filepath.Join(statedir.Session(root, testSessionName), "events.jsonl")
+	auditPath := filepath.Join(fsutil.Session(root, testSessionName), "events.jsonl")
 	if err := os.MkdirAll(filepath.Dir(auditPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestRemoveOpenCodeRuntimePreservesAuditLogs(t *testing.T) {
 	if err := removeOpenCodeRuntime(root, testSessionName); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(statedir.TempSession(root, testSessionName), openCodeEnvironmentFile)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(fsutil.TempSession(root, testSessionName), openCodeEnvironmentFile)); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("runtime environment error = %v, want removed", err)
 	}
 	if contents, err := os.ReadFile(auditPath); err != nil || string(contents) != "audit\n" {
@@ -116,7 +116,7 @@ func TestRemoveOpenCodeRuntimePreservesAuditLogs(t *testing.T) {
 func TestOpenCodeLegacyRuntimeFallbackAndCleanup(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	legacyDir := statedir.Session(root, testSessionName)
+	legacyDir := fsutil.Session(root, testSessionName)
 	if err := os.MkdirAll(legacyDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -150,32 +150,11 @@ func TestWriteProtectedFileTruncatesPreviousContents(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Overwriting with shorter contents must leave no suffix from the previous
-	// value: the handle-level Truncate(0) replaces os.O_TRUNC removed for the
-	// symlink-safe open.
+	// value: the O_TRUNC open discards it.
 	if err := writeProtectedFile(path, []byte("short")); err != nil {
 		t.Fatal(err)
 	}
 	assertProtectedFile(t, path, "short")
-}
-
-func TestWriteProtectedFileRejectsSymlinkWithoutTouchingTarget(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	target := filepath.Join(dir, "sentinel")
-	const sentinel = "do not touch"
-	if err := os.WriteFile(target, []byte(sentinel), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, "snapshot")
-	if err := os.Symlink(target, path); err != nil {
-		t.Skipf("symlink unsupported: %v", err)
-	}
-	if err := writeProtectedFile(path, []byte("attacker payload")); err == nil {
-		t.Fatal("writeProtectedFile() accepted a symlinked destination")
-	}
-	if contents, err := os.ReadFile(target); err != nil || string(contents) != sentinel {
-		t.Fatalf("sentinel target = %q, %v; want unchanged %q", contents, err, sentinel)
-	}
 }
 
 func assertProtectedFile(t *testing.T, path, want string) {

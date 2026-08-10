@@ -10,11 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Harrison-Blair/fledge/internal/dispatcher"
+	"github.com/Harrison-Blair/fledge/internal/fsutil"
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/messaging"
 	"github.com/Harrison-Blair/fledge/internal/project"
-	"github.com/Harrison-Blair/fledge/internal/statedir"
 	"github.com/Harrison-Blair/fledge/internal/tui"
 	"github.com/Harrison-Blair/fledge/internal/watchproc"
 )
@@ -95,7 +94,7 @@ func TestStartCreatesAndReusesSession(t *testing.T) {
 			t.Errorf("non-OpenCode runtime artifact %s error = %v, want absent", name, err)
 		}
 	}
-	logEntries, err := os.ReadDir(statedir.Session(root, wantSessionName))
+	logEntries, err := os.ReadDir(fsutil.Session(root, wantSessionName))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +105,7 @@ func TestStartCreatesAndReusesSession(t *testing.T) {
 	if strings.Join(logNames, ",") != "events.jsonl,fledge.log" {
 		t.Fatalf("session log entries = %v, want only actual logs", logNames)
 	}
-	tmpEntries, err := os.ReadDir(statedir.TempSession(root, wantSessionName))
+	tmpEntries, err := os.ReadDir(fsutil.TempSession(root, wantSessionName))
 	if err != nil || len(tmpEntries) != 1 || tmpEntries[0].Name() != "events.lock" {
 		t.Fatalf("session temp entries = %v, %v; want events.lock", tmpEntries, err)
 	}
@@ -709,7 +708,7 @@ func TestStartResetsMessagingOnlyForFreshServer(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := replaceRecordSessionBinding(root, testSessionName, sessionID); err != nil {
+		if err := writeRecordSessionBinding(root, testSessionName, sessionID, true); err != nil {
 			t.Fatal(err)
 		}
 		created, err := store.Create(messaging.CreateParams{Sender: "user", Recipient: "worker", Body: "keep", RecipientPane: "pane"})
@@ -833,7 +832,7 @@ func TestStartFailureOwnership(t *testing.T) {
 		if _, statErr := os.Stat(sessionLogs); statErr != nil {
 			t.Fatalf("session log directory stat error = %v, want preserved", statErr)
 		}
-		sessionTmp := statedir.TempSession(root, "fledge-"+sessionSlug(root)+"-00000000")
+		sessionTmp := fsutil.TempSession(root, "fledge-"+sessionSlug(root)+"-00000000")
 		if _, statErr := os.Stat(sessionTmp); statErr != nil {
 			t.Fatalf("session temp directory stat error = %v, want preserved", statErr)
 		}
@@ -1071,7 +1070,7 @@ func TestStartOpenCodeUsesDurableSnapshotAndIsolatesControlPane(t *testing.T) {
 	if !strings.Contains(merged, instructionsReference) || !strings.Contains(merged, `"theme":"dark"`) {
 		t.Fatalf("server config = %q, want instruction path and original fields", merged)
 	}
-	assertProtectedFile(t, filepath.Join(statedir.TempSession(root, session), openCodeEnvironmentFile), original)
+	assertProtectedFile(t, filepath.Join(fsutil.TempSession(root, session), openCodeEnvironmentFile), original)
 	if len(client.startAgent.args) != 0 || len(client.promptCalls) != 0 {
 		t.Fatalf("OpenCode launch args = %#v, prompt calls = %#v; want no prompt submission", client.startAgent.args, client.promptCalls)
 	}
@@ -1096,7 +1095,7 @@ func TestStartOpenCodeRejectsMalformedInlineConfigBeforeLaunch(t *testing.T) {
 		return ""
 	}
 	session := "fledge-" + sessionSlug(root) + "-00000000"
-	if err := os.MkdirAll(statedir.TempSession(root, session), 0o700); err != nil {
+	if err := os.MkdirAll(fsutil.TempSession(root, session), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1110,7 +1109,7 @@ func TestStartOpenCodeRejectsMalformedInlineConfigBeforeLaunch(t *testing.T) {
 	if _, found, readErr := readRecord(root); readErr != nil || found {
 		t.Fatalf("record after failed Start() = found %v, error %v; want removed", found, readErr)
 	}
-	if _, statErr := os.Stat(statedir.TempSession(root, session)); !errors.Is(statErr, os.ErrNotExist) {
+	if _, statErr := os.Stat(fsutil.TempSession(root, session)); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("temporary session directory after failed preparation = %v, want removed", statErr)
 	}
 }
@@ -1133,7 +1132,7 @@ func TestStartOpenCodeRollbackRemovesRuntimeArtifacts(t *testing.T) {
 		t.Fatal("Start() error = nil")
 	}
 	session := "fledge-" + sessionSlug(root) + "-00000000"
-	if _, err := os.Stat(statedir.TempSession(root, session)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(fsutil.TempSession(root, session)); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("rollback temp directory error = %v, want removed", err)
 	}
 	if _, err := os.Stat(generatedPromptFile(root)); err != nil {
@@ -1155,7 +1154,7 @@ func TestStartReattachDoesNotRebuildOpenCodeSnapshot(t *testing.T) {
 	if err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout}); err != nil {
 		t.Fatal(err)
 	}
-	contents, err := os.ReadFile(filepath.Join(statedir.TempSession(root, testSessionName), openCodeEnvironmentFile))
+	contents, err := os.ReadFile(filepath.Join(fsutil.TempSession(root, testSessionName), openCodeEnvironmentFile))
 	if err != nil || string(contents) != `{"old":true}` {
 		t.Fatalf("environment snapshot after reattach = %q, %v", contents, err)
 	}
@@ -1217,7 +1216,7 @@ func TestOpenCodeRuntimeCleanupFollowsSessionDeletion(t *testing.T) {
 			if err := manager.Stop(context.Background(), root); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := os.Stat(statedir.TempSession(root, testSessionName)); !errors.Is(err, os.ErrNotExist) {
+			if _, err := os.Stat(fsutil.TempSession(root, testSessionName)); !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("temporary session directory error = %v, want removed", err)
 			}
 			if contents, err := os.ReadFile(auditPath); err != nil || string(contents) != "audit\n" {
@@ -1244,7 +1243,7 @@ func TestOpenCodeRuntimeRetainedWhenSessionDeletionFails(t *testing.T) {
 	if err := manager.Stop(context.Background(), root); err == nil {
 		t.Fatal("Stop() error = nil")
 	}
-	if _, err := os.Stat(filepath.Join(statedir.TempSession(root, testSessionName), openCodeEnvironmentFile)); err != nil {
+	if _, err := os.Stat(filepath.Join(fsutil.TempSession(root, testSessionName), openCodeEnvironmentFile)); err != nil {
 		t.Errorf("recoverable environment snapshot removed: %v", err)
 	}
 }
@@ -1718,7 +1717,7 @@ func registerTestAgent(t *testing.T, root, name, pane string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := replaceRecordSessionBinding(root, testSessionName, sessionID); err != nil {
+	if err := writeRecordSessionBinding(root, testSessionName, sessionID, true); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := store.RegisterAgent(messaging.RegisterParams{Name: name, PaneID: pane, Harness: "codex", Caller: "user"}); err != nil {
@@ -1900,7 +1899,7 @@ func TestStopSessionStates(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(sessionDirectory, "events.jsonl")); err != nil {
 				t.Errorf("messaging log after Stop: %v; want preserved", err)
 			}
-			if _, err := os.Stat(statedir.TempSession(root, testSessionName)); !errors.Is(err, os.ErrNotExist) {
+			if _, err := os.Stat(fsutil.TempSession(root, testSessionName)); !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("temporary session directory error = %v, want not exist", err)
 			}
 			if contents, err := os.ReadFile(logPath); err != nil || string(contents) != "keep me" {
@@ -2579,7 +2578,7 @@ func (f *fakeHerdr) Protocol(context.Context) (int, error) {
 	if f.protocol != 0 {
 		return f.protocol, nil
 	}
-	return dispatcher.RequiredHerdrProtocol, nil
+	return watchproc.RequiredHerdrProtocol, nil
 }
 
 func (f *fakeHerdr) Stop(ctx context.Context, name string) error {

@@ -1,4 +1,4 @@
-package watch
+package herdr
 
 import (
 	"bufio"

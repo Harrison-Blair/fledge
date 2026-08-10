@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Harrison-Blair/fledge/internal/fsutil"
 	"github.com/Harrison-Blair/fledge/internal/herdr"
-	"github.com/Harrison-Blair/fledge/internal/statedir"
 )
 
 const testSession = "fledge-test-1234abcd"
@@ -32,7 +32,7 @@ func TestWaitReadyReturnsImmediatelyForAnExistingMarker(t *testing.T) {
 	t.Parallel()
 
 	root := sessionRoot(t)
-	marker := filepath.Join(statedir.TempSession(root, testSession), readyFilename)
+	marker := filepath.Join(fsutil.TempSession(root, testSession), readyFilename)
 	if err := os.WriteFile(marker, []byte("ready\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestWaitReadyObservesAMarkerWrittenLater(t *testing.T) {
 	t.Parallel()
 
 	root := sessionRoot(t)
-	marker := filepath.Join(statedir.TempSession(root, testSession), readyFilename)
+	marker := filepath.Join(fsutil.TempSession(root, testSession), readyFilename)
 	done := make(chan error, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -100,7 +100,7 @@ func TestStopIsANoOpWithoutAWatcher(t *testing.T) {
 		t.Fatalf("Stop() with no lock = %v", err)
 	}
 	// A lock file nobody holds.
-	lockPath := filepath.Join(statedir.TempSession(root, testSession), lockFilename)
+	lockPath := filepath.Join(fsutil.TempSession(root, testSession), lockFilename)
 	if err := os.WriteFile(lockPath, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestStopReportsAHeldLockWithoutAPID(t *testing.T) {
 	t.Parallel()
 
 	root := sessionRoot(t)
-	lockPath := filepath.Join(statedir.TempSession(root, testSession), lockFilename)
+	lockPath := filepath.Join(fsutil.TempSession(root, testSession), lockFilename)
 	owner, err := acquire(lockPath)
 	if err != nil {
 		t.Fatal(err)
@@ -144,7 +144,7 @@ func TestStopRefusesToTerminateItself(t *testing.T) {
 	t.Parallel()
 
 	root := sessionRoot(t)
-	statePath := statedir.TempSession(root, testSession)
+	statePath := fsutil.TempSession(root, testSession)
 	lockPath := filepath.Join(statePath, lockFilename)
 	owner, err := acquire(lockPath)
 	if err != nil {
@@ -197,7 +197,7 @@ func TestRunDaemonYieldsToTheRunningSingleton(t *testing.T) {
 	t.Parallel()
 
 	root := sessionRoot(t)
-	lockPath := filepath.Join(statedir.TempSession(root, testSession), lockFilename)
+	lockPath := filepath.Join(fsutil.TempSession(root, testSession), lockFilename)
 	owner, err := acquire(lockPath)
 	if err != nil {
 		t.Fatal(err)

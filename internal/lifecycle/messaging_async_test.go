@@ -39,7 +39,7 @@ func newMessagingManager(t *testing.T) (*Manager, *fakeHerdr, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := replaceRecordSessionBinding(root, testSessionName, sessionID); err != nil {
+	if err := writeRecordSessionBinding(root, testSessionName, sessionID, true); err != nil {
 		t.Fatal(err)
 	}
 	for _, params := range []messaging.RegisterParams{

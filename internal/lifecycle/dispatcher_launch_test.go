@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Harrison-Blair/fledge/internal/dispatcher"
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/messaging"
 	"github.com/Harrison-Blair/fledge/internal/project"
+	"github.com/Harrison-Blair/fledge/internal/watchproc"
 )
 
 // Coordination has no polling fallback, so an old Herdr has to be refused up
@@ -21,7 +21,7 @@ func TestStartRejectsAnOlderHerdrProtocolWithRestartGuidance(t *testing.T) {
 
 	root := t.TempDir()
 	initTestProject(t, root)
-	client := &fakeHerdr{protocol: dispatcher.RequiredHerdrProtocol - 1}
+	client := &fakeHerdr{protocol: watchproc.RequiredHerdrProtocol - 1}
 	manager, _ := newTestManager(client, &fakeConfirmer{})
 	manager.lookPath = installedTestHarness
 	err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout})
@@ -58,7 +58,7 @@ func TestMutatingCommandsEnsureADispatcherIsRunning(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := replaceRecordSessionBinding(root, testSessionName, sessionID); err != nil {
+		if err := writeRecordSessionBinding(root, testSessionName, sessionID, true); err != nil {
 			t.Fatal(err)
 		}
 		for _, params := range []messaging.RegisterParams{

@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 
 	"github.com/Harrison-Blair/fledge/internal/fsutil"
-	"github.com/Harrison-Blair/fledge/internal/statedir"
 )
 
 const (
@@ -29,7 +28,7 @@ func prepareOpenCodeRuntime(root, session, instructionsPath, originalConfig stri
 	if err != nil {
 		return openCodeRuntime{}, err
 	}
-	environmentPath := filepath.Join(statedir.TempSession(root, session), openCodeEnvironmentFile)
+	environmentPath := filepath.Join(fsutil.TempSession(root, session), openCodeEnvironmentFile)
 	if err := writeProtectedFile(environmentPath, []byte(originalConfig)); err != nil {
 		return openCodeRuntime{}, errors.Join(err, removeOpenCodeRuntime(root, session))
 	}
@@ -85,8 +84,8 @@ func mergeOpenCodeConfig(original, instructionsPath string) (string, error) {
 
 func openCodePaneEnvironment(root, session string) (map[string]string, error) {
 	paths := []string{
-		filepath.Join(statedir.TempSession(root, session), openCodeEnvironmentFile),
-		filepath.Join(statedir.Session(root, session), openCodeEnvironmentFile),
+		filepath.Join(fsutil.TempSession(root, session), openCodeEnvironmentFile),
+		filepath.Join(fsutil.Session(root, session), openCodeEnvironmentFile),
 	}
 	var contents []byte
 	var err error
@@ -105,9 +104,9 @@ func openCodePaneEnvironment(root, session string) (map[string]string, error) {
 func removeOpenCodeRuntime(root, session string) error {
 	var result error
 	paths := []string{
-		filepath.Join(statedir.TempSession(root, session), openCodeEnvironmentFile),
-		filepath.Join(statedir.Session(root, session), openCodeInstructionsFile),
-		filepath.Join(statedir.Session(root, session), openCodeEnvironmentFile),
+		filepath.Join(fsutil.TempSession(root, session), openCodeEnvironmentFile),
+		filepath.Join(fsutil.Session(root, session), openCodeInstructionsFile),
+		filepath.Join(fsutil.Session(root, session), openCodeEnvironmentFile),
 	}
 	for _, path := range paths {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -118,7 +117,7 @@ func removeOpenCodeRuntime(root, session string) error {
 }
 
 func removeSessionTemporaryState(root, session string) error {
-	path := statedir.TempSession(root, session)
+	path := fsutil.TempSession(root, session)
 	if err := os.RemoveAll(path); err != nil {
 		return fmt.Errorf("remove session temporary directory %q: %w", path, err)
 	}
@@ -129,19 +128,13 @@ func writeProtectedFile(path string, contents []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create OpenCode runtime directory: %w", err)
 	}
-	file, err := fsutil.OpenRegular(path, os.O_WRONLY|os.O_CREATE, 0o600)
+	file, err := fsutil.OpenRegular(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", path, err)
 	}
 	if err := file.Chmod(0o600); err != nil {
 		_ = file.Close()
 		return fmt.Errorf("protect %s: %w", path, err)
-	}
-	// OpenRegular must not carry os.O_TRUNC (the Windows symlink-safety
-	// contract), so truncate through the validated handle instead.
-	if err := file.Truncate(0); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("truncate %s: %w", path, err)
 	}
 	if _, err := file.Write(contents); err != nil {
 		_ = file.Close()

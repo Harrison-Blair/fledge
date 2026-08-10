@@ -7,14 +7,14 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/Harrison-Blair/fledge/internal/fsutil"
 	"github.com/Harrison-Blair/fledge/internal/fswatch"
-	"github.com/Harrison-Blair/fledge/internal/statedir"
 )
 
 // WaitReady waits on filesystem notifications from the dispatcher state
 // directory. It never polls for a marker.
 func WaitReady(ctx context.Context, root, session string) error {
-	path := filepath.Join(statedir.TempSession(root, session), readyFilename)
+	path := filepath.Join(fsutil.TempSession(root, session), readyFilename)
 	if _, err := os.Stat(path); err == nil {
 		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
