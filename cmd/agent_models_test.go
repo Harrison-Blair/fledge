@@ -50,7 +50,7 @@ func TestAgentModelsScopesByExistingHarnessResolution(t *testing.T) {
 				discovered = append(discovered, selected.ID)
 				return harness.Catalog{Models: []harness.Model{
 					{Name: "Harness default", Description: "Use the harness default", Default: true},
-					{ID: "opus", Name: "Opus", Provider: "anthropic", Maker: "Claude", Description: "Moving alias"},
+					{ID: "opus", Name: "Opus", Provider: "anthropic", Description: "Moving alias"},
 				}}
 			})
 			var output bytes.Buffer
@@ -78,7 +78,7 @@ func TestAgentModelsPreservesWarningAndAvailableRows(t *testing.T) {
 		return harness.Catalog{
 			Models: []harness.Model{
 				{Name: "Harness default", Description: "Use the harness default", Default: true},
-				{ID: "cached-model", Name: "Cached Model", Maker: "OpenAI", Description: "Last cached model"},
+				{ID: "cached-model", Name: "Cached Model", Description: "Last cached model"},
 			},
 			Warning: "model discovery for Codex failed: cache unavailable",
 		}

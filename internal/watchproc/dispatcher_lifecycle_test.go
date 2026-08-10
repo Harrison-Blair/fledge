@@ -549,9 +549,15 @@ func TestDispatcherReconcilesPaneClosedDuringResubscribe(t *testing.T) {
 	if _, err := store.AgentByPane("p2"); err != nil {
 		t.Fatalf("workerB should still be active on p2: %v", err)
 	}
-	task, err := store.Task(taskID)
+	allTasks, err := store.Tasks()
 	if err != nil {
 		t.Fatal(err)
+	}
+	var task messaging.Task
+	for _, candidate := range allTasks {
+		if candidate.ID == taskID {
+			task = candidate
+		}
 	}
 	if task.Status != messaging.TaskOrphaned {
 		t.Fatalf("A's task status = %s, want orphaned", task.Status)

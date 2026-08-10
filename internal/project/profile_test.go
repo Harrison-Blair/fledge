@@ -54,29 +54,24 @@ func TestLoadOrchestratorProfileAcceptsSupportedTOMLStrings(t *testing.T) {
 		instructions string
 	}{
 		{
-			name:         "basic string and comments",
-			contents:     "# profile\ninstructions = \"line one\\nline two\" # editable\nschema_version = 1\n",
-			instructions: "line one\nline two",
+			name:         "inline basic string and comments",
+			contents:     "# profile\ninstructions = \"line one\" # editable\nschema_version = 1\n",
+			instructions: "line one",
 		},
 		{
-			name:         "literal string",
+			name:         "literal string is taken verbatim",
 			contents:     "schema_version=1\ninstructions='use \\ literally'\n",
 			instructions: `use \ literally`,
 		},
 		{
 			name:         "multiline basic string",
-			contents:     "schema_version = 1\ninstructions = \"\"\"\r\nfirst\r\nsecond \"quoted\"\"\"\"\n",
-			instructions: "first\nsecond \"quoted\"",
+			contents:     "schema_version = 1\ninstructions = \"\"\"\nfirst\nsecond\n\"\"\"\n",
+			instructions: "first\nsecond\n",
 		},
 		{
-			name:         "multiline literal string",
+			name:         "multiline literal string is taken verbatim",
 			contents:     "instructions = '''\nfirst\\nsecond\n'''\nschema_version = 1\n",
 			instructions: "first\\nsecond\n",
-		},
-		{
-			name:         "multiline basic continuation",
-			contents:     "schema_version=1\ninstructions=\"\"\"\nline one \\\n    line two\n\"\"\"\n",
-			instructions: "line one line two\n",
 		},
 	}
 
@@ -114,11 +109,8 @@ func TestLoadOrchestratorProfileRejectsInvalidSchema(t *testing.T) {
 		{name: "non-integer version", contents: "schema_version='1'\ninstructions='ok'\n", want: "expected a positive integer"},
 		{name: "unquoted instructions", contents: "schema_version=1\ninstructions=hello\n", want: "expected a quoted string"},
 		{name: "unterminated string", contents: "schema_version=1\ninstructions='hello\n", want: "unterminated string"},
-		{name: "bad escape", contents: "schema_version=1\ninstructions=\"bad\\q\"\n", want: "invalid string escape"},
 		{name: "trailing tokens", contents: "schema_version=1 nope\ninstructions='ok'\n", want: "unexpected content"},
 		{name: "table syntax", contents: "[profile]\nschema_version=1\ninstructions='ok'\n", want: "expected a bare key"},
-		{name: "literal control character", contents: "schema_version=1\ninstructions='bad\x00value'\n", want: "invalid control character"},
-		{name: "literal invalid UTF-8", contents: "schema_version=1\ninstructions='bad\xffvalue'\n", want: "invalid UTF-8"},
 	}
 
 	for _, test := range tests {

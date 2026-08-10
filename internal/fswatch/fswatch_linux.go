@@ -1,9 +1,6 @@
-//go:build linux
-
 package fswatch
 
 import (
-	"encoding/binary"
 	"fmt"
 	"sync"
 
@@ -25,12 +22,12 @@ type unixWatcher struct {
 	closeErr  error
 }
 
-// open watches dir, reporting either every entry change (name == "") or only
-// changes to the named entry. The reader goroutine blocks in poll over both the
-// inotify descriptor and a stop pipe, never over a bare read: closing a
-// descriptor out from under a blocked read neither reliably wakes the reader
-// nor prevents the number being recycled to an unrelated file.
-func open(dir, name string) (Watcher, error) {
+// open watches dir, reporting every change to one of its entries. The reader
+// goroutine blocks in poll over both the inotify descriptor and a stop pipe,
+// never over a bare read: closing a descriptor out from under a blocked read
+// neither reliably wakes the reader nor prevents the number being recycled to
+// an unrelated file.
+func open(dir string) (Watcher, error) {
 	inotify, err := unix.InotifyInit1(unix.IN_CLOEXEC)
 	if err != nil {
 		return nil, fmt.Errorf("create inotify watch for %q: %w", dir, err)
@@ -48,7 +45,7 @@ func open(dir, name string) (Watcher, error) {
 		inotify: inotify, stopRead: pipe[0], stopWrite: pipe[1],
 		events: make(chan struct{}, 1), errs: make(chan error, 1), finished: make(chan struct{}),
 	}
-	go w.read(name)
+	go w.read()
 	return w, nil
 }
 
@@ -72,7 +69,7 @@ func (w *unixWatcher) Close() error {
 	return w.closeErr
 }
 
-func (w *unixWatcher) read(name string) {
+func (w *unixWatcher) read() {
 	defer close(w.finished)
 	buffer := make([]byte, 64*1024)
 	for {
@@ -93,55 +90,15 @@ func (w *unixWatcher) read(name string) {
 		if fds[0].Revents&unix.POLLIN == 0 {
 			continue
 		}
-		read, err := unix.Read(w.inotify, buffer)
-		if err != nil {
+		if _, err := unix.Read(w.inotify, buffer); err != nil {
 			if err == unix.EINTR || err == unix.EAGAIN {
 				continue
 			}
 			w.fail(fmt.Errorf("read filesystem events: %w", err))
 			return
 		}
-		if !matched(buffer[:read], name) {
-			continue
-		}
 		w.signal()
 	}
-}
-
-// matched reports whether the batch holds a change the caller asked about. A
-// truncated trailing record is treated as a match rather than an error: losing
-// a wake is worse than delivering a spurious one, and every reader re-reads
-// state anyway.
-func matched(batch []byte, name string) bool {
-	for offset := 0; offset+unix.SizeofInotifyEvent <= len(batch); {
-		length := int(binary.NativeEndian.Uint32(batch[offset+12 : offset+16]))
-		if name == "" {
-			return true
-		}
-		start := offset + unix.SizeofInotifyEvent
-		end := start + length
-		if end > len(batch) {
-			return true
-		}
-		entry := batch[start:end]
-		if index := indexZero(entry); index >= 0 {
-			entry = entry[:index]
-		}
-		if string(entry) == name {
-			return true
-		}
-		offset = end
-	}
-	return false
-}
-
-func indexZero(value []byte) int {
-	for index, b := range value {
-		if b == 0 {
-			return index
-		}
-	}
-	return -1
 }
 
 func (w *unixWatcher) signal() {

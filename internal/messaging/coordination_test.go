@@ -6,52 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
-
-func TestActorValidationMatchesEventWriters(t *testing.T) {
-	t.Parallel()
-
-	at := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
-	accepted := true
-	base := event{Version: eventVersion, At: at, SessionID: "session-id"}
-	rejected := []event{
-		{Version: base.Version, Type: eventSessionStart, At: at, SessionID: base.SessionID, Session: "session-name"},
-		{Version: base.Version, Type: eventMessageCreated, At: at, SessionID: base.SessionID, MessageID: "m-1", Sender: "worker", Recipient: UserIdentity, Body: "message"},
-		{Version: base.Version, Type: eventMessageReplied, At: at, SessionID: base.SessionID, MessageID: "m-2", Sender: "worker", Recipient: UserIdentity, ReplyTo: "m-1", Body: "reply"},
-		{Version: base.Version, Type: eventReplyCreated, At: at, SessionID: base.SessionID, MessageID: "m-3", Sender: "worker", Recipient: UserIdentity, ReplyTo: "m-1", Body: "reply"},
-		{Version: base.Version, Type: eventDeliveryAttempt, At: at, SessionID: base.SessionID, MessageID: "m-1"},
-		{Version: base.Version, Type: eventDeliveryOutcome, At: at, SessionID: base.SessionID, MessageID: "m-1", Accepted: &accepted},
-		{Version: base.Version, Type: eventAcknowledged, At: at, SessionID: base.SessionID, MessageID: "m-1"},
-		{Version: base.Version, Type: eventAgentRegistered, At: at, SessionID: base.SessionID, AgentName: "worker", PaneID: "p1", Harness: "codex"},
-		{Version: base.Version, Type: eventAgentStopped, At: at, SessionID: base.SessionID, AgentName: "worker", PaneID: "p1"},
-		{Version: base.Version, Type: eventAgentStatus, At: at, SessionID: base.SessionID, AgentName: "worker", PaneID: "p1", Detail: "working"},
-		{Version: base.Version, Type: eventTaskAssigned, At: at, SessionID: base.SessionID, TaskID: "t-1", Assignee: "worker", Assigner: OrchestratorIdentity, Description: "work", TaskStatus: TaskActive},
-		{Version: base.Version, Type: eventWakeRequested, At: at, SessionID: base.SessionID, WakeID: "w-1", WakeKind: "message", Recipient: "worker", RecipientPane: "p1", Body: "wake"},
-		{Version: base.Version, Type: eventWakeAttempt, At: at, SessionID: base.SessionID, WakeID: "w-1"},
-		{Version: base.Version, Type: eventWakeOutcome, At: at, SessionID: base.SessionID, WakeID: "w-1", Accepted: &accepted},
-	}
-	for _, original := range rejected {
-		if err := validateEvent(original); err != nil {
-			t.Fatalf("valid %s setup event rejected: %v", original.Type, err)
-		}
-		withActor := original
-		withActor.Actor = "unexpected"
-		if err := validateEvent(withActor); err == nil {
-			t.Errorf("%s accepted an actor", original.Type)
-		}
-	}
-
-	allowed := []event{
-		{Version: base.Version, Type: eventTaskProgress, At: at, SessionID: base.SessionID, TaskID: "t-1", TaskStatus: TaskActive, Detail: "halfway", Actor: "worker"},
-		{Version: base.Version, Type: eventTaskCompleted, At: at, SessionID: base.SessionID, TaskID: "t-1", TaskStatus: TaskCompleted, Actor: OrchestratorIdentity},
-	}
-	for _, e := range allowed {
-		if err := validateEvent(e); err != nil {
-			t.Errorf("%s rejected its actor: %v", e.Type, err)
-		}
-	}
-}
 
 func TestAgentAuthorityHashIsDurableAndValidated(t *testing.T) {
 	store := coordinationTestStore(t)
@@ -133,7 +88,7 @@ func TestDelegationLineageCapacityTransitionsCascadeAndOrphan(t *testing.T) {
 	if _, err := store.TransitionTask("lead", parent.ID, TaskFailed, "failed"); err != nil {
 		t.Fatal(err)
 	}
-	child, _ = store.Task(child.ID)
+	child = taskByID(t, store, child.ID)
 	if child.Status != TaskCanceled {
 		t.Fatalf("child status = %s", child.Status)
 	}
@@ -144,7 +99,7 @@ func TestDelegationLineageCapacityTransitionsCascadeAndOrphan(t *testing.T) {
 	if err := store.StopAgent("other", "p4"); err != nil {
 		t.Fatal(err)
 	}
-	assigned, _ = store.Task(assigned.ID)
+	assigned = taskByID(t, store, assigned.ID)
 	if assigned.Status != TaskOrphaned {
 		t.Fatalf("orphan status = %s", assigned.Status)
 	}
@@ -157,4 +112,20 @@ func coordinationTestStore(t *testing.T) *Store {
 		t.Fatal(err)
 	}
 	return store
+}
+
+// taskByID looks one task up by ID through the exported Tasks projection.
+func taskByID(t *testing.T, store *Store, id string) Task {
+	t.Helper()
+	tasks, err := store.Tasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range tasks {
+		if task.ID == id {
+			return task
+		}
+	}
+	t.Fatalf("task %s not found", id)
+	return Task{}
 }

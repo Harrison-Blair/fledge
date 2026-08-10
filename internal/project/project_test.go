@@ -98,31 +98,6 @@ func TestInitPreservesConflictingCodexRulesAndReturnsError(t *testing.T) {
 	}
 }
 
-func TestInitMigratesExactLegacyCodexRules(t *testing.T) {
-	t.Parallel()
-
-	for name, contents := range map[string]string{
-		"previous": previousCodexRulesContents,
-		"legacy":   legacyCodexRulesContents,
-	} {
-		t.Run(name, func(t *testing.T) {
-			root := t.TempDir()
-			path := filepath.Join(root, ".codex", "rules", "fledge.rules")
-			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
-				t.Fatal(err)
-			}
-
-			if _, err := Init(root); err != nil {
-				t.Fatalf("Init() error = %v", err)
-			}
-			assertFileContents(t, path, codexRulesContents)
-		})
-	}
-}
-
 func TestInitPreservesCustomizedGeneratedCodexRules(t *testing.T) {
 	t.Parallel()
 
@@ -131,7 +106,7 @@ func TestInitPreservesCustomizedGeneratedCodexRules(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	contents := previousCodexRulesContents + "# customized\n"
+	contents := codexRulesContents + "# customized\n"
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +222,6 @@ func TestInitRejectsMalformedExistingMetadataBeforeWriting(t *testing.T) {
 	}{
 		{name: "invalid JSON", config: "{"},
 		{name: "unknown field", config: `{"schema_version":1,"other":true}`},
-		{name: "duplicate field", config: `{"schema_version":1,"schema_version":1}`},
 		{name: "missing version", config: `{}`},
 		{name: "unsupported version", config: `{"schema_version":2}`},
 		{name: "trailing value", config: `{"schema_version":1} {}`},

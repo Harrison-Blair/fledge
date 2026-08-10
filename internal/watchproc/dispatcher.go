@@ -293,17 +293,9 @@ func drain(ctx context.Context, client Herdr, session string, store *messaging.S
 		return err
 	}
 	for _, wake := range wakes {
-		if wake.Kind == "message" {
-			message, getErr := store.Get(wake.ReferenceID)
-			if getErr != nil {
-				return getErr
-			}
-			if message.Status == messaging.StatusPending {
-				if _, err := store.RecordAttempt(message.ID); err != nil {
-					return err
-				}
-			}
-		}
+		// A message wake's delivery status is projected onto its message by the
+		// wake attempt and outcome transitions, so the wake is the sole record
+		// the dispatcher writes.
 		if _, err := store.RecordWakeAttempt(wake.ID); err != nil {
 			return err
 		}
@@ -315,39 +307,10 @@ func drain(ctx context.Context, client Herdr, session string, store *messaging.S
 			if ctx.Err() != nil {
 				return errors.Join(ctx.Err(), err)
 			}
-			// Re-read after the prompt fails: a reply or another dispatcher can
-			// resolve an uncertain message while the prompt is in flight, and only
-			// a still-uncertain message may take a delivery outcome. A cached
-			// status would reintroduce that race and, worse, let RecordDelivery
-			// reject an already-terminal message and strand this replayable wake.
-			if wake.Kind == "message" {
-				message, getErr := store.Get(wake.ReferenceID)
-				if getErr != nil {
-					return getErr
-				}
-				if message.Status == messaging.StatusUncertain {
-					if _, recordErr := store.RecordDelivery(message.ID, false, err.Error()); recordErr != nil {
-						return recordErr
-					}
-				}
-			}
-			// The wake is independent replayable state and must always terminalize,
-			// even when its message was already delivered or failed.
 			if _, recordErr := store.RecordWakeOutcome(wake.ID, false, err.Error()); recordErr != nil {
 				return recordErr
 			}
 			continue
-		}
-		if wake.Kind == "message" {
-			message, getErr := store.Get(wake.ReferenceID)
-			if getErr != nil {
-				return getErr
-			}
-			if message.Status == messaging.StatusUncertain {
-				if _, err := store.RecordDelivery(message.ID, true, ""); err != nil {
-					return err
-				}
-			}
 		}
 		if _, err := store.RecordWakeOutcome(wake.ID, true, ""); err != nil {
 			return err

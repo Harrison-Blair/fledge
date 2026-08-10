@@ -61,16 +61,9 @@ func newAgentModelsCommand(lookPath harness.LookPath, discover catalogDiscoverer
 
 func modelGroup(selected harness.Harness, model harness.Model) string {
 	if model.Provider == "" {
-		if model.Maker != "" {
-			return modelCell(model.Maker)
-		}
 		return modelCell(selected.Name)
 	}
-	group := harness.ProviderName(model.Provider)
-	if harness.ProviderUsesCreatorGroups(model.Provider) && model.Maker != "" {
-		group += " / " + model.Maker
-	}
-	return modelCell(group)
+	return modelCell(harness.ProviderName(model.Provider))
 }
 
 func modelValue(model harness.Model) string {

@@ -187,11 +187,6 @@ func writeInbox(cmd *cobra.Command, messages []messaging.Message, identity strin
 		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "  %s\n", strings.ReplaceAll(message.Body, "\n", "\n  ")); err != nil {
 			return err
 		}
-		if message.Failure != "" {
-			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "  failure: %s\n", strings.ReplaceAll(message.Failure, "\n", "\n  ")); err != nil {
-				return err
-			}
-		}
 	}
 	return nil
 }

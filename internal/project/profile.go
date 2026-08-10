@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/Harrison-Blair/fledge/internal/fsutil"
 )
@@ -101,275 +99,186 @@ func loadProfileFile(path string) (OrchestratorProfile, error) {
 	return profile, nil
 }
 
+// parseProfile reads the two orchestrator profile keys (schema_version and
+// instructions) into a struct. It is a deliberately small reader rather than a
+// full TOML parser: it accepts bare-key assignments, blank lines and comments,
+// and single- or triple-quoted string values taken verbatim (no escape or
+// control-character grammar). Unknown keys, duplicate keys, missing keys, and
+// empty instructions are rejected.
 func parseProfile(input string) (OrchestratorProfile, error) {
-	parser := profileParser{input: input}
-	values := make(map[string]string, 2)
+	var profile struct {
+		SchemaVersion int
+		Instructions  string
+	}
+	seen := make(map[string]bool, 2)
 
+	rest := input
 	for {
-		parser.skipSpaceAndComments()
-		if parser.done() {
+		rest = skipSpaceAndComments(rest)
+		if rest == "" {
 			break
 		}
-		key, err := parser.readKey()
-		if err != nil {
-			return OrchestratorProfile{}, err
+		key, after := readKey(rest)
+		if key == "" {
+			return OrchestratorProfile{}, fmt.Errorf("expected a bare key")
 		}
 		if key != "schema_version" && key != "instructions" {
 			return OrchestratorProfile{}, fmt.Errorf("unknown key %q", key)
 		}
-		if _, exists := values[key]; exists {
+		if seen[key] {
 			return OrchestratorProfile{}, fmt.Errorf("duplicate key %q", key)
 		}
-		parser.skipHorizontalSpace()
-		if !parser.consume("=") {
+		seen[key] = true
+
+		after = strings.TrimLeft(after, " \t")
+		if !strings.HasPrefix(after, "=") {
 			return OrchestratorProfile{}, fmt.Errorf("key %q is missing '='", key)
 		}
-		parser.skipHorizontalSpace()
+		after = strings.TrimLeft(after[1:], " \t")
 
-		var value string
+		var (
+			value string
+			err   error
+		)
 		if key == "schema_version" {
-			value, err = parser.readInteger()
+			value, after, err = readInteger(after)
 		} else {
-			value, err = parser.readString()
+			value, after, err = readString(after)
 		}
 		if err != nil {
 			return OrchestratorProfile{}, fmt.Errorf("key %q: %w", key, err)
 		}
-		if err := parser.finishAssignment(); err != nil {
+		if after, err = finishLine(after); err != nil {
 			return OrchestratorProfile{}, fmt.Errorf("key %q: %w", key, err)
 		}
-		values[key] = value
+
+		if key == "schema_version" {
+			profile.SchemaVersion, _ = strconv.Atoi(value)
+		} else {
+			profile.Instructions = value
+		}
+		rest = after
 	}
 
-	versionText, ok := values["schema_version"]
-	if !ok {
+	if !seen["schema_version"] {
 		return OrchestratorProfile{}, fmt.Errorf("missing key %q", "schema_version")
 	}
-	version, err := strconv.Atoi(versionText)
-	if err != nil {
-		return OrchestratorProfile{}, fmt.Errorf("invalid schema_version %q", versionText)
+	if profile.SchemaVersion != SchemaVersion {
+		return OrchestratorProfile{}, fmt.Errorf("unsupported schema_version %d", profile.SchemaVersion)
 	}
-	if version != SchemaVersion {
-		return OrchestratorProfile{}, fmt.Errorf("unsupported schema_version %d", version)
-	}
-	instructions, ok := values["instructions"]
-	if !ok {
+	if !seen["instructions"] {
 		return OrchestratorProfile{}, fmt.Errorf("missing key %q", "instructions")
 	}
-	if strings.TrimSpace(instructions) == "" {
+	if strings.TrimSpace(profile.Instructions) == "" {
 		return OrchestratorProfile{}, fmt.Errorf("instructions must not be empty")
 	}
-
-	return OrchestratorProfile{SchemaVersion: version, Instructions: instructions}, nil
+	return OrchestratorProfile{SchemaVersion: profile.SchemaVersion, Instructions: profile.Instructions}, nil
 }
 
-type profileParser struct {
-	input string
-	pos   int
-}
-
-func (p *profileParser) done() bool {
-	return p.pos >= len(p.input)
-}
-
-func (p *profileParser) consume(value string) bool {
-	if !strings.HasPrefix(p.input[p.pos:], value) {
-		return false
-	}
-	p.pos += len(value)
-	return true
-}
-
-func (p *profileParser) skipHorizontalSpace() {
-	for !p.done() && (p.input[p.pos] == ' ' || p.input[p.pos] == '\t') {
-		p.pos++
-	}
-}
-
-func (p *profileParser) skipSpaceAndComments() {
+// skipSpaceAndComments drops leading whitespace and whole comment lines.
+func skipSpaceAndComments(s string) string {
 	for {
-		for !p.done() && unicode.IsSpace(rune(p.input[p.pos])) {
-			p.pos++
+		s = strings.TrimLeft(s, " \t\r\n")
+		if !strings.HasPrefix(s, "#") {
+			return s
 		}
-		if p.done() || p.input[p.pos] != '#' {
-			return
+		if idx := strings.IndexByte(s, '\n'); idx >= 0 {
+			s = s[idx+1:]
+		} else {
+			return ""
 		}
-		p.skipComment()
 	}
 }
 
-func (p *profileParser) skipComment() {
-	for !p.done() && p.input[p.pos] != '\n' {
-		p.pos++
-	}
-}
-
-func (p *profileParser) readKey() (string, error) {
-	start := p.pos
-	for !p.done() {
-		char := p.input[p.pos]
-		if (char >= 'a' && char <= 'z') || char == '_' {
-			p.pos++
+// readKey consumes a leading bare key (lowercase letters and underscores) and
+// returns it together with the unconsumed remainder.
+func readKey(s string) (string, string) {
+	i := 0
+	for i < len(s) {
+		c := s[i]
+		if (c >= 'a' && c <= 'z') || c == '_' {
+			i++
 			continue
 		}
 		break
 	}
-	if start == p.pos {
-		return "", fmt.Errorf("expected a bare key at byte %d", p.pos)
-	}
-	return p.input[start:p.pos], nil
+	return s[:i], s[i:]
 }
 
-func (p *profileParser) readInteger() (string, error) {
-	start := p.pos
-	for !p.done() && p.input[p.pos] >= '0' && p.input[p.pos] <= '9' {
-		p.pos++
+// readInteger consumes a run of decimal digits.
+func readInteger(s string) (string, string, error) {
+	i := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
 	}
-	if start == p.pos {
-		return "", fmt.Errorf("expected a positive integer")
+	if i == 0 {
+		return "", s, fmt.Errorf("expected a positive integer")
 	}
-	return p.input[start:p.pos], nil
+	return s[:i], s[i:], nil
 }
 
-func (p *profileParser) readString() (string, error) {
+// readString consumes a single- or triple-quoted string value verbatim.
+func readString(s string) (string, string, error) {
 	switch {
-	case p.consume("\"\"\""):
-		return p.readMultilineString("\"\"\"", true)
-	case p.consume("'''"):
-		return p.readMultilineString("'''", false)
-	case p.consume("\""):
-		return p.readSingleLineString('"', true)
-	case p.consume("'"):
-		return p.readSingleLineString('\'', false)
+	case strings.HasPrefix(s, `"""`):
+		return readDelimited(s[3:], `"""`)
+	case strings.HasPrefix(s, "'''"):
+		return readDelimited(s[3:], "'''")
+	case strings.HasPrefix(s, `"`):
+		return readInline(s[1:], '"')
+	case strings.HasPrefix(s, "'"):
+		return readInline(s[1:], '\'')
 	default:
-		return "", fmt.Errorf("expected a quoted string")
+		return "", s, fmt.Errorf("expected a quoted string")
 	}
 }
 
-func (p *profileParser) readSingleLineString(quote byte, escaped bool) (string, error) {
-	start := p.pos
-	for !p.done() {
-		char := p.input[p.pos]
-		if char == '\n' || char == '\r' {
-			return "", fmt.Errorf("unterminated string")
+// readInline reads until the closing quote on the same line.
+func readInline(s string, quote byte) (string, string, error) {
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' || s[i] == '\r' {
+			return "", s, fmt.Errorf("unterminated string")
 		}
-		if char == quote {
-			raw := p.input[start:p.pos]
-			p.pos++
-			if escaped {
-				return unescapeBasicString(raw)
-			}
-			return validateLiteralString(raw)
+		if s[i] == quote {
+			return s[:i], s[i+1:], nil
 		}
-		if escaped && char == '\\' {
-			p.pos++
-			if p.done() {
-				return "", fmt.Errorf("unterminated escape")
-			}
-		}
-		p.pos++
 	}
-	return "", fmt.Errorf("unterminated string")
+	return "", s, fmt.Errorf("unterminated string")
 }
 
-func (p *profileParser) readMultilineString(delimiter string, escaped bool) (string, error) {
-	if p.consume("\r\n") || p.consume("\n") {
-		// TOML trims the newline immediately following an opening delimiter.
+// readDelimited reads a multiline string up to its closing delimiter, trimming
+// a single newline immediately following the opening delimiter.
+func readDelimited(s, delimiter string) (string, string, error) {
+	if strings.HasPrefix(s, "\r\n") {
+		s = s[2:]
+	} else if strings.HasPrefix(s, "\n") {
+		s = s[1:]
 	}
-	start := p.pos
-	for !p.done() {
-		if strings.HasPrefix(p.input[p.pos:], delimiter) {
-			runLength := 0
-			for p.pos+runLength < len(p.input) && p.input[p.pos+runLength] == delimiter[0] {
-				runLength++
-			}
-			if runLength > 5 {
-				return "", fmt.Errorf("too many consecutive quote characters")
-			}
-			raw := p.input[start:p.pos] + strings.Repeat(delimiter[:1], runLength-len(delimiter))
-			p.pos += runLength
-			if escaped {
-				return unescapeBasicString(raw)
-			}
-			return validateLiteralString(raw)
-		}
-		p.pos++
+	idx := strings.Index(s, delimiter)
+	if idx < 0 {
+		return "", s, fmt.Errorf("unterminated multiline string")
 	}
-	return "", fmt.Errorf("unterminated multiline string")
+	return s[:idx], s[idx+len(delimiter):], nil
 }
 
-func validateLiteralString(raw string) (string, error) {
-	if !utf8.ValidString(raw) {
-		return "", fmt.Errorf("invalid UTF-8 in string")
-	}
-	for _, value := range raw {
-		if (value < 0x20 && value != '\t' && value != '\n' && value != '\r') || value == 0x7f {
-			return "", fmt.Errorf("invalid control character in string")
+// finishLine rejects trailing tokens after a value and consumes the line's
+// terminating newline (or an end-of-line comment).
+func finishLine(s string) (string, error) {
+	s = strings.TrimLeft(s, " \t")
+	if strings.HasPrefix(s, "#") {
+		if idx := strings.IndexByte(s, '\n'); idx >= 0 {
+			return s[idx+1:], nil
 		}
+		return "", nil
 	}
-	return raw, nil
-}
-
-func unescapeBasicString(raw string) (string, error) {
-	var value strings.Builder
-	for len(raw) > 0 {
-		if raw[0] == '\r' {
-			if len(raw) > 1 && raw[1] == '\n' {
-				raw = raw[2:]
-			} else {
-				raw = raw[1:]
-			}
-			value.WriteByte('\n')
-			continue
-		}
-		if raw[0] != '\\' {
-			r, size := utf8.DecodeRuneInString(raw)
-			if r == utf8.RuneError && size == 1 {
-				return "", fmt.Errorf("invalid UTF-8 in string")
-			}
-			if (r < 0x20 && r != '\t' && r != '\n') || r == 0x7f {
-				return "", fmt.Errorf("invalid control character in string")
-			}
-			value.WriteString(raw[:size])
-			raw = raw[size:]
-			continue
-		}
-		if len(raw) > 1 && (raw[1] == '\n' || raw[1] == '\r') {
-			raw = raw[1:]
-			if len(raw) > 1 && raw[0] == '\r' && raw[1] == '\n' {
-				raw = raw[2:]
-			} else {
-				raw = raw[1:]
-			}
-			for len(raw) > 0 && strings.ContainsRune(" \t\r\n", rune(raw[0])) {
-				raw = raw[1:]
-			}
-			continue
-		}
-		if len(raw) < 2 || !strings.ContainsRune(`btnfr"\uU`, rune(raw[1])) {
-			return "", fmt.Errorf("invalid string escape")
-		}
-
-		r, _, tail, err := strconv.UnquoteChar(raw, '"')
-		if err != nil {
-			return "", fmt.Errorf("invalid string escape: %w", err)
-		}
-		value.WriteRune(r)
-		raw = tail
+	switch {
+	case s == "":
+		return "", nil
+	case strings.HasPrefix(s, "\r\n"):
+		return s[2:], nil
+	case strings.HasPrefix(s, "\n"):
+		return s[1:], nil
+	default:
+		return "", fmt.Errorf("unexpected content")
 	}
-	return value.String(), nil
-}
-
-func (p *profileParser) finishAssignment() error {
-	p.skipHorizontalSpace()
-	if !p.done() && p.input[p.pos] == '#' {
-		p.skipComment()
-	}
-	if p.done() {
-		return nil
-	}
-	if p.consume("\r\n") || p.consume("\n") {
-		return nil
-	}
-	return fmt.Errorf("unexpected content at byte %d", p.pos)
 }

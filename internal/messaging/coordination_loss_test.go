@@ -75,9 +75,9 @@ func TestStopAgentOrphansWorkWhenTheAssignerIsGone(t *testing.T) {
 	if err := store.StopAgent("worker", "p2"); err != nil {
 		t.Fatalf("StopAgent(worker) with a departed assigner: %v", err)
 	}
-	orphaned, err := store.Task(task.ID)
-	if err != nil || orphaned.Status != TaskOrphaned {
-		t.Fatalf("task = %#v, %v", orphaned, err)
+	orphaned := taskByID(t, store, task.ID)
+	if orphaned.Status != TaskOrphaned {
+		t.Fatalf("task = %#v", orphaned)
 	}
 	if _, err := store.Agent("worker"); !errors.Is(err, ErrAgentNotFound) {
 		t.Fatalf("worker still active: %v", err)
@@ -104,9 +104,9 @@ func TestOrphaningWakesTheAssigner(t *testing.T) {
 	if err := store.StopAgent("child", "p3"); err != nil {
 		t.Fatal(err)
 	}
-	orphaned, err := store.Task(child.ID)
-	if err != nil || orphaned.Status != TaskOrphaned {
-		t.Fatalf("task = %#v, %v", orphaned, err)
+	orphaned := taskByID(t, store, child.ID)
+	if orphaned.Status != TaskOrphaned {
+		t.Fatalf("task = %#v", orphaned)
 	}
 	wakes, err := store.PendingWakes()
 	if err != nil {
@@ -283,9 +283,9 @@ func TestCascadeCancelWakesEveryDescendantAssignee(t *testing.T) {
 	if _, err := store.TransitionTask(OrchestratorIdentity, parent.ID, TaskCanceled, ""); err != nil {
 		t.Fatal(err)
 	}
-	canceled, err := store.Task(child.ID)
-	if err != nil || canceled.Status != TaskCanceled {
-		t.Fatalf("child = %#v, %v", canceled, err)
+	canceled := taskByID(t, store, child.ID)
+	if canceled.Status != TaskCanceled {
+		t.Fatalf("child = %#v", canceled)
 	}
 	woken := map[string]string{}
 	wakes, err := store.PendingWakes()

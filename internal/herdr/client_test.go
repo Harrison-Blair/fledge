@@ -222,7 +222,7 @@ func TestClientListResponses(t *testing.T) {
 	}{
 		{name: "empty", wantErr: "list Herdr sessions: decode JSON response: empty response"},
 		{name: "malformed", stdout: "{", wantPrefix: "list Herdr sessions: decode JSON response:"},
-		{name: "trailing JSON", stdout: "{} {}", wantErr: "list Herdr sessions: decode JSON response: unexpected trailing data"},
+		{name: "trailing JSON", stdout: "{} {}", wantPrefix: "list Herdr sessions: decode JSON response:"},
 	}
 
 	for _, test := range tests {
@@ -761,20 +761,5 @@ func assertStrings(t *testing.T, name string, got, want []string) {
 		if got[i] != want[i] {
 			t.Errorf("%s[%d] = %q, want %q", name, i, got[i], want[i])
 		}
-	}
-}
-
-func TestClientRejectsOversizeResponse(t *testing.T) {
-	configureHelper(t, "")
-	// Whitespace payload one byte past the cap: JSON validity cannot mask
-	// whether the size check runs before decoding. Delivered via a response
-	// file rather than an environment variable.
-	oversize := strings.Repeat(" ", MaxResponseBytes+1)
-	t.Setenv(helperSequenceEnv, writeSequence(t, []string{oversize}))
-
-	_, err := NewClient(helperBinary(t), nil, nil, nil).List(context.Background())
-	want := fmt.Sprintf("response exceeds %d bytes", MaxResponseBytes)
-	if err == nil || !strings.Contains(err.Error(), want) {
-		t.Fatalf("List() error = %v, want containing %q", err, want)
 	}
 }

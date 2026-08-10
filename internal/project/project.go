@@ -61,7 +61,7 @@ func Init(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := ensureCodexRulesForInit(root); err != nil {
+	if err := EnsureCodexRules(root); err != nil {
 		return "", err
 	}
 
@@ -178,64 +178,18 @@ func loadConfigFile(path string) (Config, error) {
 	}
 
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	config, err := decodeConfig(decoder)
-	if err != nil {
+	decoder.DisallowUnknownFields()
+	var config Config
+	if err := decoder.Decode(&config); err != nil {
 		return Config{}, fmt.Errorf("parse Fledge config %q: %w", path, err)
 	}
-	if err := ensureJSONEOF(decoder); err != nil {
-		return Config{}, fmt.Errorf("parse Fledge config %q: %w", path, err)
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return Config{}, fmt.Errorf("parse Fledge config %q: unexpected trailing content", path)
 	}
 	if config.SchemaVersion != SchemaVersion {
 		return Config{}, fmt.Errorf("parse Fledge config %q: unsupported schema_version %d", path, config.SchemaVersion)
 	}
 	return config, nil
-}
-
-func decodeConfig(decoder *json.Decoder) (Config, error) {
-	opening, err := decoder.Token()
-	if err != nil {
-		return Config{}, err
-	}
-	if delimiter, ok := opening.(json.Delim); !ok || delimiter != '{' {
-		return Config{}, errors.New("expected a JSON object")
-	}
-
-	var config Config
-	seenVersion := false
-	for decoder.More() {
-		token, err := decoder.Token()
-		if err != nil {
-			return Config{}, err
-		}
-		key, ok := token.(string)
-		if !ok {
-			return Config{}, errors.New("expected an object key")
-		}
-		if key != "schema_version" {
-			return Config{}, fmt.Errorf("unknown field %q", key)
-		}
-		if seenVersion {
-			return Config{}, fmt.Errorf("duplicate field %q", key)
-		}
-		seenVersion = true
-		if err := decoder.Decode(&config.SchemaVersion); err != nil {
-			return Config{}, fmt.Errorf("field %q: %w", key, err)
-		}
-	}
-	if _, err := decoder.Token(); err != nil {
-		return Config{}, err
-	}
-	return config, nil
-}
-
-func ensureJSONEOF(decoder *json.Decoder) error {
-	var extra any
-	if err := decoder.Decode(&extra); errors.Is(err, io.EOF) {
-		return nil
-	} else if err != nil {
-		return err
-	}
-	return errors.New("multiple JSON values")
 }
 
 func validateExistingConfig(path string) (bool, error) {

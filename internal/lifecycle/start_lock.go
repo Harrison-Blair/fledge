@@ -1,5 +1,3 @@
-//go:build !windows
-
 package lifecycle
 
 import (
@@ -9,11 +7,16 @@ import (
 	"os"
 	"syscall"
 	"time"
+
+	"github.com/Harrison-Blair/fledge/internal/fsutil"
 )
 
 // lockRetryInterval paces the non-blocking retries that keep a waiter
 // cancellable while another fledge process holds the session startup lock.
 const lockRetryInterval = 100 * time.Millisecond
+
+// startLockSubject names the startup lock in the errors fsutil.ReleaseFlock wraps.
+const startLockSubject = "Fledge session startup lock"
 
 // lockSessionRecord serializes Start/Stop on a dedicated, never-renamed
 // session.lock file. Locking session.json directly would orphan the flock the
@@ -30,11 +33,7 @@ func lockSessionRecord(ctx context.Context, root string) (func() error, error) {
 		_ = file.Close()
 		return nil, fmt.Errorf("lock Fledge session startup lock %q: %w", path, err)
 	}
-	return func() error {
-		unlockErr := syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
-		closeErr := file.Close()
-		return errorsJoinLock(unlockErr, closeErr)
-	}, nil
+	return func() error { return fsutil.ReleaseFlock(file, startLockSubject) }, nil
 }
 
 // waitForRecordLock retries a non-blocking exclusive flock so a caller whose
@@ -57,14 +56,4 @@ func waitForRecordLock(ctx context.Context, file *os.File) error {
 		case <-timer.C:
 		}
 	}
-}
-
-func errorsJoinLock(unlockErr, closeErr error) error {
-	if unlockErr != nil {
-		unlockErr = fmt.Errorf("unlock Fledge session startup lock: %w", unlockErr)
-	}
-	if closeErr != nil {
-		closeErr = fmt.Errorf("close Fledge session startup lock: %w", closeErr)
-	}
-	return errors.Join(unlockErr, closeErr)
 }

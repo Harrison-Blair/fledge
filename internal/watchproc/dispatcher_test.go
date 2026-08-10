@@ -84,9 +84,6 @@ func TestRunReplaysStableWakeAndRecordsOutcomes(t *testing.T) {
 		t.Fatal(err)
 	}
 	wakes, _ := store.PendingWakes()
-	if _, err := store.RecordAttempt(message.ID); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := store.RecordWakeAttempt(wakes[0].ID); err != nil {
 		t.Fatal(err)
 	}
@@ -131,14 +128,12 @@ func TestRunReplaysStableWakeAndRecordsOutcomes(t *testing.T) {
 	}
 }
 
-// A crash after a message's delivery outcome is persisted but before its wake
-// outcome is recorded leaves a delivered message beside a still-pending wake. On
-// relaunch the recipient's pane is gone, so drain's PromptAgent fails; recording
-// a delivery outcome on the already-delivered message would be rejected by the
-// store, surface as a drain error, and exit the dispatcher — permanently
-// stalling every later wake. drain must instead skip the outcome for the
-// terminal message and still terminalize the poison wake so the loop continues.
-func TestDrainTerminalizesFailedWakeForAlreadyDeliveredMessage(t *testing.T) {
+// A crash after a wake attempt is persisted but before its outcome is recorded
+// leaves a replayable uncertain wake. On relaunch the recipient's pane is gone,
+// so drain's PromptAgent fails. One undeliverable recipient must not stall the
+// rest: drain must terminalize the poison wake and keep going so every later
+// wake still goes out.
+func TestDrainTerminalizesFailedWakeAndContinues(t *testing.T) {
 	root, session := t.TempDir(), "fledge-test-1234abcd"
 	store := messaging.New(root, session)
 	if _, err := store.Initialize(); err != nil {
@@ -154,8 +149,7 @@ func TestDrainTerminalizesFailedWakeForAlreadyDeliveredMessage(t *testing.T) {
 	}
 
 	// Create the poison message first and drive it to the exact post-crash state:
-	// the message is delivered, but its wake never got an outcome, so it is still
-	// replayable.
+	// its wake was attempted but never got an outcome, so it is still replayable.
 	poison, err := store.Create(messaging.CreateParams{
 		Sender: messaging.UserIdentity, Recipient: "poison", RecipientPane: "p1", Body: "first"})
 	if err != nil {
@@ -174,13 +168,7 @@ func TestDrainTerminalizesFailedWakeForAlreadyDeliveredMessage(t *testing.T) {
 	if poisonWake.ID == "" {
 		t.Fatalf("no wake for poison message; wakes = %#v", wakes)
 	}
-	if _, err := store.RecordAttempt(poison.ID); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := store.RecordWakeAttempt(poisonWake.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.RecordDelivery(poison.ID, true, ""); err != nil {
 		t.Fatal(err)
 	} // Deliberately omit RecordWakeOutcome: this models the crash window.
 
@@ -197,13 +185,13 @@ func TestDrainTerminalizesFailedWakeForAlreadyDeliveredMessage(t *testing.T) {
 		t.Fatalf("drain returned %v, want nil", err)
 	}
 
-	// The already-delivered message must be untouched, not force-failed.
+	// The poison wake failed, and its message mirrors that failed status.
 	got, err := store.Get(poison.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != messaging.StatusDelivered {
-		t.Fatalf("poison message status = %s, want delivered", got.Status)
+	if got.Status != messaging.StatusFailed {
+		t.Fatalf("poison message status = %s, want failed", got.Status)
 	}
 	// The healthy message went out and is the sole accepted prompt.
 	delivered, err := store.Get(healthy.ID)

@@ -21,11 +21,9 @@ import (
 )
 
 const (
-	logFilename        = "events.jsonl"
-	lockFilename       = "events.lock"
-	legacyLogFilename  = "messages.jsonl"
-	legacyLockFilename = "messages.lock"
-	eventVersion       = 1
+	logFilename  = "events.jsonl"
+	lockFilename = "events.lock"
+	eventVersion = 1
 )
 
 // MaxBodyBytes is the largest permitted UTF-8 message body.
@@ -50,7 +48,8 @@ const (
 	StatusFailed    Status = "failed"
 )
 
-// Message is the stable, reconstructed view of one message.
+// Message is the stable, reconstructed view of one message. Its delivery Status
+// is projected from the wake that carries it to the recipient.
 type Message struct {
 	ID            string
 	Sender        string
@@ -60,10 +59,6 @@ type Message struct {
 	Status        Status
 	RecipientPane string
 	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	AttemptedAt   time.Time
-	DeliveredAt   time.Time
-	Failure       string
 }
 
 // CreateParams describes a new outbound message. RecipientPane binds the
@@ -141,7 +136,7 @@ func (s *Store) Initialize() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return sessionID, s.removeLegacyFiles()
+	return sessionID, nil
 }
 
 // Ensure validates that an existing log belongs to the store's session. If the
@@ -196,13 +191,10 @@ func (s *Store) SessionID() (string, error) {
 // cleanup.
 func (s *Store) RemoveLock() error {
 	return s.withRemovalLock(func() error {
-		var removeErr error
-		for _, lockPath := range []string{s.lockPath(), s.legacyLockPath()} {
-			if err := os.Remove(lockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-				removeErr = errors.Join(removeErr, fmt.Errorf("remove messaging lock %q: %w", lockPath, err))
-			}
+		if err := os.Remove(s.lockPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove messaging lock %q: %w", s.lockPath(), err)
 		}
-		return removeErr
+		return nil
 	})
 }
 
@@ -220,27 +212,6 @@ func (s *Store) RemoveAll() error {
 	})
 }
 
-// removeLegacyFiles deletes locks and the pre-session-folder message log from
-// layouts used by older Fledge versions.
-func (s *Store) removeLegacyFiles() error {
-	directory := fsutil.Root(s.root)
-	var removeErr error
-	for _, path := range []string{
-		filepath.Join(directory, logFilename),
-		filepath.Join(directory, lockFilename),
-		filepath.Join(directory, legacyLogFilename),
-		filepath.Join(directory, legacyLockFilename),
-		filepath.Join(s.statePath(), legacyLogFilename),
-		filepath.Join(s.statePath(), legacyLockFilename),
-		s.legacyLockPath(),
-	} {
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			removeErr = errors.Join(removeErr, fmt.Errorf("remove legacy messaging file %q: %w", path, err))
-		}
-	}
-	return removeErr
-}
-
 // Create appends a new pending message.
 func (s *Store) Create(params CreateParams) (Message, error) {
 	if err := validateCreate(params); err != nil {
@@ -248,7 +219,7 @@ func (s *Store) Create(params CreateParams) (Message, error) {
 	}
 	var created Message
 	err := s.withState(func(state *logState) error {
-		id, err := s.uniqueID(state)
+		id, err := s.uniqueID(state, "", messageTaken(state))
 		if err != nil {
 			return err
 		}
@@ -257,35 +228,17 @@ func (s *Store) Create(params CreateParams) (Message, error) {
 			MessageID: id, Sender: params.Sender, Recipient: params.Recipient,
 			Body: params.Body, RecipientPane: params.RecipientPane,
 		}
-		wake, err := s.wakeEventToPane(state, e.At, "message", id, params.Recipient, params.RecipientPane, messageWakeBody(e))
+		wake, err := s.wakeFor(state, e.At, "message", id, params.Recipient, params.RecipientPane, messageWakeBody(e), false)
 		if err != nil {
 			return err
 		}
-		if err := s.appendEvents([]event{e, wake}); err != nil {
-			return err
-		}
-		if err := applyEvent(state, e); err != nil {
-			return err
-		}
-		if err := applyEvent(state, wake); err != nil {
+		if err := s.commit(state, []event{e, *wake}); err != nil {
 			return err
 		}
 		created = state.messages[id]
 		return nil
 	})
 	return created, err
-}
-
-// RecordAttempt persists intent to submit a message before the Herdr call.
-// After this event, an absent outcome reconstructs as uncertain.
-func (s *Store) RecordAttempt(messageID string) (Message, error) {
-	return s.transition(messageID, eventDeliveryAttempt, false, "")
-}
-
-// RecordDelivery persists the reported Herdr outcome. accepted=true becomes
-// delivered; accepted=false becomes failed and is never retried by storage.
-func (s *Store) RecordDelivery(messageID string, accepted bool, detail string) (Message, error) {
-	return s.transition(messageID, eventDeliveryOutcome, accepted, detail)
 }
 
 // Reply creates a correlated reply without changing the original message.
@@ -314,33 +267,22 @@ func (s *Store) Reply(originalID, replier, replierPane, body, replyRecipientPane
 		} else if replyRecipientPane == "" {
 			return errors.New("agent recipient must have a pane")
 		}
-		id, err := s.uniqueID(state)
+		id, err := s.uniqueID(state, "", messageTaken(state))
 		if err != nil {
 			return err
 		}
 		at := s.now()
-		var batch []event
-		if original.Status == StatusUncertain {
-			// A reply from the recipient proves the original was delivered, so the
-			// same transaction resolves the interrupted attempt.
-			batch = append(batch, event{Version: eventVersion, Type: eventAcknowledged, At: at, SessionID: state.sessionID, MessageID: originalID})
-		}
 		replyEvent := event{Version: eventVersion, Type: eventReplyCreated, At: at, SessionID: state.sessionID, MessageID: id, Sender: replier, Recipient: original.Sender, ReplyTo: originalID, Body: body, RecipientPane: replyRecipientPane}
-		batch = append(batch, replyEvent)
+		batch := []event{replyEvent}
 		if original.Sender != "user" {
-			wake, wakeErr := s.wakeEventToPane(state, at, "message", id, original.Sender, replyRecipientPane, messageWakeBody(replyEvent))
+			wake, wakeErr := s.wakeFor(state, at, "message", id, original.Sender, replyRecipientPane, messageWakeBody(replyEvent), false)
 			if wakeErr != nil {
 				return wakeErr
 			}
-			batch = append(batch, wake)
+			batch = append(batch, *wake)
 		}
-		if err := s.appendEvents(batch); err != nil {
+		if err := s.commit(state, batch); err != nil {
 			return err
-		}
-		for _, e := range batch {
-			if err := applyEvent(state, e); err != nil {
-				return err
-			}
 		}
 		reply = state.messages[id]
 		return nil
@@ -362,19 +304,6 @@ func (s *Store) Get(messageID string) (Message, error) {
 	return result, err
 }
 
-// List returns all messages in creation order.
-func (s *Store) List() ([]Message, error) {
-	var result []Message
-	err := s.withState(func(state *logState) error {
-		result = make([]Message, 0, len(state.order))
-		for _, id := range state.order {
-			result = append(result, state.messages[id])
-		}
-		return nil
-	})
-	return result, err
-}
-
 // Inbox returns the selected identity's complete transcript in creation order.
 func (s *Store) Inbox(identity string) ([]Message, error) {
 	var result []Message
@@ -390,33 +319,19 @@ func (s *Store) Inbox(identity string) ([]Message, error) {
 	return result, err
 }
 
-func (s *Store) transition(messageID, kind string, accepted bool, detail string) (Message, error) {
-	var result Message
-	err := s.withState(func(state *logState) error {
-		message, ok := state.messages[messageID]
-		if !ok {
-			return fmt.Errorf("%w: %s", ErrNotFound, messageID)
-		}
-		if kind == eventDeliveryAttempt && message.Status != StatusPending {
-			return fmt.Errorf("cannot attempt message %s in status %s", messageID, message.Status)
-		}
-		if kind == eventDeliveryOutcome && message.Status != StatusUncertain {
-			return fmt.Errorf("cannot record outcome for message %s in status %s", messageID, message.Status)
-		}
-		e := event{Version: eventVersion, Type: kind, At: s.now(), SessionID: state.sessionID, MessageID: messageID, Detail: detail}
-		if kind == eventDeliveryOutcome {
-			e.Accepted = boolPointer(accepted)
-		}
-		if err := s.appendEvents([]event{e}); err != nil {
-			return err
-		}
+// commit appends events durably, then folds them into the in-memory state. On
+// an append error the caller returns without applying, and the dirty state is
+// discarded when the operation unwinds.
+func (s *Store) commit(state *logState, events []event) error {
+	if err := s.appendEvents(events); err != nil {
+		return err
+	}
+	for _, e := range events {
 		if err := applyEvent(state, e); err != nil {
 			return err
 		}
-		result = state.messages[messageID]
-		return nil
-	})
-	return result, err
+	}
+	return nil
 }
 
 func (s *Store) withState(operation func(*logState) error) error {
@@ -433,11 +348,7 @@ func (s *Store) withLock(operation func() error) error {
 	if err := s.ensureStateDirectory(); err != nil {
 		return err
 	}
-	path, err := s.activeLockPath()
-	if err != nil {
-		return err
-	}
-	return s.withAcquiredLock(path, operation)
+	return s.withAcquiredLock(s.lockPath(), operation)
 }
 
 // withRemovalLock runs remove under the session lock. Whether the lock may stay
@@ -447,11 +358,7 @@ func (s *Store) withRemovalLock(remove func() error) error {
 	if err := s.ensureStateDirectory(); err != nil {
 		return err
 	}
-	path, err := s.activeLockPath()
-	if err != nil {
-		return err
-	}
-	return s.removeUnderLock(path, remove)
+	return s.removeUnderLock(s.lockPath(), remove)
 }
 
 func (s *Store) withAcquiredLock(path string, operation func() error) error {
@@ -674,17 +581,41 @@ func authorize(message Message, recipient, pane string) error {
 	return nil
 }
 
-func (s *Store) uniqueID(state *logState) (string, error) {
+// uniqueID returns a fresh prefix+random identifier that neither collides with
+// the session ID nor is already taken. taken reports whether a candidate is in
+// use in whichever namespace (messages, or tasks and wakes) the caller owns.
+func (s *Store) uniqueID(state *logState, prefix string, taken func(string) bool) (string, error) {
 	for attempts := 0; attempts < 100; attempts++ {
 		id, err := s.newID()
 		if err != nil {
 			return "", err
 		}
-		if _, exists := state.messages[id]; !exists && id != state.sessionID {
+		id = prefix + id
+		if id != state.sessionID && !taken(id) {
 			return id, nil
 		}
 	}
-	return "", errors.New("message ID generator repeatedly returned duplicate IDs")
+	return "", errors.New("ID generator repeatedly returned duplicate IDs")
+}
+
+// messageTaken reports whether a message ID is already in use.
+func messageTaken(state *logState) func(string) bool {
+	return func(id string) bool {
+		_, ok := state.messages[id]
+		return ok
+	}
+}
+
+// taskOrWakeTaken reports whether an ID is already used by a task or a wake,
+// which share the "t-"/"w-" identifier namespace.
+func taskOrWakeTaken(state *logState) func(string) bool {
+	return func(id string) bool {
+		if _, ok := state.tasks[id]; ok {
+			return true
+		}
+		_, ok := state.wakes[id]
+		return ok
+	}
 }
 
 func (s *Store) newID() (string, error) {
@@ -704,23 +635,6 @@ func (s *Store) statePath() string { return fsutil.Session(s.root, s.session) }
 func (s *Store) tempPath() string  { return fsutil.TempSession(s.root, s.session) }
 func (s *Store) logPath() string   { return filepath.Join(s.statePath(), logFilename) }
 func (s *Store) lockPath() string  { return filepath.Join(s.tempPath(), lockFilename) }
-func (s *Store) legacyLockPath() string {
-	return filepath.Join(s.statePath(), lockFilename)
-}
-
-func (s *Store) activeLockPath() (string, error) {
-	if _, err := os.Lstat(s.lockPath()); err == nil {
-		return s.lockPath(), nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("inspect messaging lock %q: %w", s.lockPath(), err)
-	}
-	if _, err := os.Lstat(s.legacyLockPath()); err == nil {
-		return s.legacyLockPath(), nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("inspect legacy messaging lock %q: %w", s.legacyLockPath(), err)
-	}
-	return s.lockPath(), nil
-}
 
 func randomID() (string, error) {
 	var value [16]byte

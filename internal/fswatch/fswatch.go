@@ -28,16 +28,18 @@ func Directory(dir string) (Watcher, error) {
 	if strings.TrimSpace(dir) == "" {
 		return nil, errors.New("watch directory path is empty")
 	}
-	return open(dir, "")
+	return open(dir)
 }
 
-// File signals only on changes to the entry named by path, including its
-// creation and removal. The containing directory must already exist; the file
-// itself need not.
+// File signals on changes to the entry named by path, including its creation
+// and removal. It watches the containing directory, so a signal can stand for a
+// change to any neighbour; every reader re-reads the state it cares about, so a
+// spurious wake is harmless. The containing directory must already exist; the
+// file itself need not.
 func File(path string) (Watcher, error) {
-	dir, name := filepath.Dir(path), filepath.Base(path)
+	name := filepath.Base(path)
 	if strings.TrimSpace(path) == "" || name == "." || name == string(filepath.Separator) {
 		return nil, errors.New("watch file path does not name an entry")
 	}
-	return open(dir, name)
+	return open(filepath.Dir(path))
 }

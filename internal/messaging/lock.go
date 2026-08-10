@@ -1,5 +1,3 @@
-//go:build !windows
-
 package messaging
 
 import (
@@ -8,11 +6,16 @@ import (
 	"os"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/Harrison-Blair/fledge/internal/fsutil"
 )
 
 // lockAttempts bounds the retries acquireLock makes when the lock file it
 // locked turns out to have been unlinked or replaced while it waited.
 const lockAttempts = 5
+
+// lockSubject names the messaging lock in the errors fsutil.ReleaseFlock wraps.
+const lockSubject = "messaging lock"
 
 // removeUnderLock keeps the lock held while remove deletes the session's files,
 // so no other process can acquire it and write into files that are about to
@@ -37,12 +40,12 @@ func (s *Store) acquireLock(path string) (func() error, error) {
 		}
 		locked, err := namesLockedFile(file, path)
 		if err != nil {
-			return nil, errors.Join(err, releaseLock(file))
+			return nil, errors.Join(err, fsutil.ReleaseFlock(file, lockSubject))
 		}
 		if locked {
-			return func() error { return releaseLock(file) }, nil
+			return func() error { return fsutil.ReleaseFlock(file, lockSubject) }, nil
 		}
-		if err := releaseLock(file); err != nil {
+		if err := fsutil.ReleaseFlock(file, lockSubject); err != nil {
 			return nil, err
 		}
 	}
@@ -63,16 +66,4 @@ func namesLockedFile(file *os.File, path string) (bool, error) {
 		return false, fmt.Errorf("inspect messaging lock %q: %w", path, err)
 	}
 	return os.SameFile(info, current), nil
-}
-
-func releaseLock(file *os.File) error {
-	unlockErr := unix.Flock(int(file.Fd()), unix.LOCK_UN)
-	closeErr := file.Close()
-	if unlockErr != nil {
-		unlockErr = fmt.Errorf("unlock messaging log: %w", unlockErr)
-	}
-	if closeErr != nil {
-		closeErr = fmt.Errorf("close messaging lock: %w", closeErr)
-	}
-	return errors.Join(unlockErr, closeErr)
 }

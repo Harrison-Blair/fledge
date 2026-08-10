@@ -1,10 +1,9 @@
-//go:build windows
-
 package watchproc
 
 import (
 	"errors"
 	"os"
+	"syscall"
 )
 
 func terminateProcess(pid int) error {
@@ -12,8 +11,8 @@ func terminateProcess(pid int) error {
 	if err != nil {
 		return err
 	}
-	err = process.Kill()
-	if errors.Is(err, os.ErrProcessDone) {
+	err = process.Signal(syscall.SIGTERM)
+	if errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH) {
 		return nil
 	}
 	return err

@@ -119,29 +119,3 @@ func TestEnsureCodexRulesPreservesConflict(t *testing.T) {
 	}
 	assertFileContents(t, path, contents)
 }
-
-func TestEnsureCodexRulesRejectsLegacyPolicyWithoutMigrating(t *testing.T) {
-	t.Parallel()
-
-	for name, contents := range map[string]string{
-		"previous": previousCodexRulesContents,
-		"legacy":   legacyCodexRulesContents,
-	} {
-		t.Run(name, func(t *testing.T) {
-			root := t.TempDir()
-			path := filepath.Join(root, ".codex", "rules", "fledge.rules")
-			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
-				t.Fatal(err)
-			}
-
-			err := EnsureCodexRules(root)
-			if err == nil || !strings.Contains(err.Error(), "run fledge init") {
-				t.Fatalf("EnsureCodexRules() error = %v, want run-fledge-init guidance", err)
-			}
-			assertFileContents(t, path, contents)
-		})
-	}
-}

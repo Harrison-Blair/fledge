@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -83,9 +82,6 @@ func TestLifecycleInitializeEnsureAndReset(t *testing.T) {
 
 func TestRemoveLockKeepsLogAndRemoveAllDeletesSessionDirectory(t *testing.T) {
 	store := initializedStore(t)
-	if _, err := os.Stat(store.legacyLockPath()); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("new session legacy lock error = %v, want absent", err)
-	}
 
 	if err := store.RemoveLock(); err != nil {
 		t.Fatal(err)
@@ -108,103 +104,6 @@ func TestRemoveLockKeepsLogAndRemoveAllDeletesSessionDirectory(t *testing.T) {
 	}
 	if _, err := os.Stat(fsutil.Logs(store.root)); err != nil {
 		t.Fatalf("logs directory after RemoveAll: %v; want preserved", err)
-	}
-}
-
-func TestLegacySessionLockFallbackAndCleanup(t *testing.T) {
-	store := initializedStore(t)
-	if err := os.Rename(store.lockPath(), store.legacyLockPath()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Ensure(); err != nil {
-		t.Fatalf("Ensure() with legacy lock: %v", err)
-	}
-	if _, err := os.Stat(store.lockPath()); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("fallback created new lock: %v", err)
-	}
-	if _, err := os.Stat(store.legacyLockPath()); err != nil {
-		t.Fatalf("legacy lock after fallback: %v", err)
-	}
-	if err := store.RemoveLock(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(store.legacyLockPath()); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("legacy lock after cleanup: %v", err)
-	}
-}
-
-func TestInitializeWaitsForALegacyLockHeldByAnotherStore(t *testing.T) {
-	store := initializedStore(t)
-	// A session created by an older Fledge keeps its lock inside the log folder.
-	if err := os.Rename(store.lockPath(), store.legacyLockPath()); err != nil {
-		t.Fatal(err)
-	}
-
-	holder := New(store.root, store.session)
-	state, err := holder.loadState()
-	if err != nil {
-		t.Fatal(err)
-	}
-	lockPath, err := holder.activeLockPath()
-	if err != nil {
-		t.Fatal(err)
-	}
-	unlock, err := holder.acquireLock(lockPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	commit := func() {
-		t.Helper()
-		e := event{
-			Version: eventVersion, Type: eventMessageCreated, At: time.Now().UTC(), SessionID: state.sessionID,
-			MessageID: "committed-under-the-lock", Sender: "user", Recipient: "alice", Body: "committed", RecipientPane: "%1",
-		}
-		if err := holder.appendEvents([]event{e}); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	// The clock runs inside Initialize's critical section, so it reports whether
-	// Initialize got past a lock this store is still holding and parks it there
-	// until the interleaving has been forced.
-	entered := make(chan struct{}, 1)
-	proceed := make(chan struct{})
-	resetting := New(store.root, store.session, WithClock(func() time.Time {
-		select {
-		case entered <- struct{}{}:
-		default:
-		}
-		<-proceed
-		return time.Now().UTC()
-	}))
-	var initializeErr error
-	done := make(chan struct{})
-	go func() {
-		_, initializeErr = resetting.Initialize()
-		close(done)
-	}()
-
-	select {
-	case <-entered:
-		// Mutual exclusion is already broken. Let Initialize replace the log and
-		// then finish the append this holder was in the middle of.
-		close(proceed)
-		<-done
-		commit()
-	case <-time.After(500 * time.Millisecond):
-		// Initialize is waiting for the legacy lock, as every other entry point does.
-		commit()
-		close(proceed)
-	}
-	if err := unlock(); err != nil {
-		t.Fatal(err)
-	}
-	<-done
-	if initializeErr != nil {
-		t.Fatal(initializeErr)
-	}
-	if _, err := New(store.root, store.session).List(); err != nil {
-		t.Fatalf("log after Initialize raced a locked appender: %v", err)
 	}
 }
 
@@ -260,32 +159,6 @@ func TestInvalidSessionNameFailsBeforeCreatingDirectories(t *testing.T) {
 	}
 }
 
-func TestInitializeRemovesLegacyTopLevelFiles(t *testing.T) {
-	root := t.TempDir()
-	legacyDirectory := fsutil.Root(root)
-	if err := os.Mkdir(legacyDirectory, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{logFilename, lockFilename} {
-		if err := os.WriteFile(filepath.Join(legacyDirectory, name), []byte("legacy\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	store := New(root, testSession)
-	if _, err := store.Initialize(); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{logFilename, lockFilename} {
-		if _, err := os.Stat(filepath.Join(legacyDirectory, name)); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("legacy %s error = %v, want not exist", name, err)
-		}
-	}
-	if _, err := os.Stat(store.logPath()); err != nil {
-		t.Fatalf("session log: %v; want created", err)
-	}
-}
-
 func TestEnsureInitializesEmptyLog(t *testing.T) {
 	root := t.TempDir()
 	store := New(root, testSession)
@@ -298,8 +171,8 @@ func TestEnsureInitializesEmptyLog(t *testing.T) {
 	if _, err := store.Ensure(); err != nil {
 		t.Fatal(err)
 	}
-	if messages, err := store.List(); err != nil || len(messages) != 0 {
-		t.Fatalf("List() = %v, %v; want empty", messages, err)
+	if messages, err := store.Inbox("user"); err != nil || len(messages) != 0 {
+		t.Fatalf("Inbox() = %v, %v; want empty", messages, err)
 	}
 }
 
@@ -310,37 +183,33 @@ func TestStatusReconstruction(t *testing.T) {
 	if pending.Status != StatusPending {
 		t.Fatalf("Create status = %s, want pending", pending.Status)
 	}
-	uncertain, err := store.RecordAttempt(pending.ID)
-	if err != nil {
+	// Driving the message's wake to uncertain then delivered projects those
+	// statuses onto the message it carries.
+	if _, err := store.RecordWakeAttempt("w-" + pending.ID); err != nil {
 		t.Fatal(err)
 	}
-	if uncertain.Status != StatusUncertain || uncertain.AttemptedAt.IsZero() {
-		t.Fatalf("RecordAttempt = %#v", uncertain)
+	if got, err := store.Get(pending.ID); err != nil || got.Status != StatusUncertain {
+		t.Fatalf("after wake attempt = %#v, %v", got, err)
 	}
-	delivered, err := store.RecordDelivery(pending.ID, true, "")
-	if err != nil {
+	if _, err := store.RecordWakeOutcome("w-"+pending.ID, true, ""); err != nil {
 		t.Fatal(err)
 	}
-	if delivered.Status != StatusDelivered || delivered.DeliveredAt.IsZero() {
-		t.Fatalf("RecordDelivery(success) = %#v", delivered)
+	if got, err := store.Get(pending.ID); err != nil || got.Status != StatusDelivered {
+		t.Fatalf("after wake success = %#v, %v", got, err)
 	}
 
 	failed := mustCreate(t, store, CreateParams{Sender: "user", Recipient: "bob", Body: "failed", RecipientPane: "%2"})
-	if _, err := store.RecordAttempt(failed.ID); err != nil {
+	if _, err := store.RecordWakeAttempt("w-" + failed.ID); err != nil {
 		t.Fatal(err)
 	}
-	failed, err = store.RecordDelivery(failed.ID, false, "Herdr refused")
-	if err != nil {
+	if _, err := store.RecordWakeOutcome("w-"+failed.ID, false, "Herdr refused"); err != nil {
 		t.Fatal(err)
 	}
-	if failed.Status != StatusFailed || failed.Failure != "Herdr refused" {
-		t.Fatalf("RecordDelivery(failure) = %#v", failed)
-	}
-	if _, err := store.RecordAttempt(failed.ID); err == nil {
-		t.Fatal("failed message was allowed to retry")
+	if got, err := store.Get(failed.ID); err != nil || got.Status != StatusFailed {
+		t.Fatalf("after wake failure = %#v, %v", got, err)
 	}
 
-	got, err := store.List()
+	got, err := store.Inbox("user")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,7 +221,7 @@ func TestStatusReconstruction(t *testing.T) {
 func TestInterruptedAttemptReconstructsUncertainAndAppearsInTranscript(t *testing.T) {
 	store := initializedStore(t)
 	message := mustCreate(t, store, CreateParams{Sender: "user", Recipient: "alice", Body: "hello", RecipientPane: "%1"})
-	if _, err := store.RecordAttempt(message.ID); err != nil {
+	if _, err := store.RecordWakeAttempt("w-" + message.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -373,57 +242,6 @@ func TestInterruptedAttemptReconstructsUncertainAndAppearsInTranscript(t *testin
 	}
 }
 
-func TestLegacyAcknowledgementEventsReconstructAsDelivered(t *testing.T) {
-	store := initializedStore(t)
-	message := mustCreate(t, store, CreateParams{Sender: "user", Recipient: "alice", Body: "hello", RecipientPane: "%1"})
-	if _, err := store.RecordAttempt(message.ID); err != nil {
-		t.Fatal(err)
-	}
-	state, err := store.loadState()
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacy := event{Version: eventVersion, Type: eventAcknowledged, At: time.Now().UTC(), SessionID: state.sessionID, MessageID: message.ID}
-	if err := store.appendEvents([]event{legacy}); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := New(store.root, store.session).Get(message.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Status != StatusDelivered || got.DeliveredAt.IsZero() {
-		t.Fatalf("legacy acknowledged message = %#v", got)
-	}
-}
-
-func TestLegacyReplyEventReconstructsWithoutAwaitingAcknowledgement(t *testing.T) {
-	store := initializedStore(t)
-	original := mustCreate(t, store, CreateParams{Sender: "user", Recipient: "alice", Body: "question", RecipientPane: "%1"})
-	if _, err := store.RecordAttempt(original.ID); err != nil {
-		t.Fatal(err)
-	}
-	state, err := store.loadState()
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacyReply := event{
-		Version: eventVersion, Type: eventMessageReplied, At: time.Now().UTC(), SessionID: state.sessionID,
-		MessageID: "legacy-reply", Sender: "alice", Recipient: "user", ReplyTo: original.ID, Body: "answer",
-	}
-	if err := store.appendEvents([]event{legacyReply}); err != nil {
-		t.Fatal(err)
-	}
-
-	messages, err := New(store.root, store.session).List()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(messages) != 2 || messages[0].Status != StatusDelivered || messages[1].Status != StatusDelivered {
-		t.Fatalf("legacy reply reconstruction = %#v", messages)
-	}
-}
-
 func TestReplyPreservesOriginalAndUserReplyIsDelivered(t *testing.T) {
 	store := initializedStore(t)
 	original := deliveredMessage(t, store, CreateParams{Sender: "user", Recipient: "alice", Body: "question", RecipientPane: "%1"})
@@ -433,7 +251,7 @@ func TestReplyPreservesOriginalAndUserReplyIsDelivered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply.Sender != "alice" || reply.Recipient != "user" || reply.ReplyTo != original.ID || reply.Status != StatusDelivered || !reply.AttemptedAt.IsZero() {
+	if reply.Sender != "alice" || reply.Recipient != "user" || reply.ReplyTo != original.ID || reply.Status != StatusDelivered {
 		t.Fatalf("reply = %#v", reply)
 	}
 	gotOriginal, err := store.Get(original.ID)
@@ -462,32 +280,29 @@ func TestReplyPreservesOriginalAndUserReplyIsDelivered(t *testing.T) {
 	}
 }
 
-func TestReplyAcknowledgesAnUncertainOriginal(t *testing.T) {
+// A reply to an uncertain original is allowed and, unlike the retired
+// acknowledgement path, leaves the original's projected status untouched.
+func TestReplyToUncertainOriginalLeavesItUncertain(t *testing.T) {
 	store := initializedStore(t)
 	original := mustCreate(t, store, CreateParams{Sender: "user", Recipient: "alice", Body: "question", RecipientPane: "%1"})
-	if _, err := store.RecordAttempt(original.ID); err != nil {
+	if _, err := store.RecordWakeAttempt("w-" + original.ID); err != nil {
 		t.Fatal(err)
 	}
 	before := lineCount(t, store.logPath())
 
-	reply, err := store.Reply(original.ID, "alice", "%1", "answer", "")
-	if err != nil {
+	if _, err := store.Reply(original.ID, "alice", "%1", "answer", ""); err != nil {
 		t.Fatal(err)
 	}
-	// A reply from the recipient proves the original reached it, so the
-	// acknowledgement must be durable rather than only in-memory.
 	got, err := New(store.root, store.session).Get(original.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != StatusDelivered || !got.DeliveredAt.Equal(reply.CreatedAt) {
-		t.Fatalf("original after reply = %#v, want delivered at %v", got, reply.CreatedAt)
+	if got.Status != StatusUncertain {
+		t.Fatalf("original after reply = %#v, want uncertain", got)
 	}
-	if got := lineCount(t, store.logPath()); got != before+2 {
-		t.Fatalf("reply transaction appended %d events, want 2", got-before)
-	}
-	if _, err := store.RecordDelivery(original.ID, true, ""); err == nil {
-		t.Fatal("acknowledged message still accepted a delivery outcome")
+	// A reply to the local user appends only the reply_created event.
+	if got := lineCount(t, store.logPath()); got != before+1 {
+		t.Fatalf("reply transaction appended %d events, want 1", got-before)
 	}
 }
 
@@ -555,14 +370,14 @@ func TestInboxReturnsCompleteChronologicalTranscriptIndependentOfPane(t *testing
 		t.Fatal(err)
 	}
 	failed := mustCreate(t, store, CreateParams{Sender: "user", Recipient: "bob", Body: "failed", RecipientPane: "%2"})
-	if _, err := store.RecordAttempt(failed.ID); err != nil {
+	if _, err := store.RecordWakeAttempt("w-" + failed.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.RecordDelivery(failed.ID, false, "rejected"); err != nil {
+	if _, err := store.RecordWakeOutcome("w-"+failed.ID, false, "rejected"); err != nil {
 		t.Fatal(err)
 	}
 	uncertain := mustCreate(t, store, CreateParams{Sender: "user", Recipient: "alice", Body: "uncertain", RecipientPane: "%new"})
-	if _, err := store.RecordAttempt(uncertain.ID); err != nil {
+	if _, err := store.RecordWakeAttempt("w-" + uncertain.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -609,12 +424,12 @@ func TestConcurrentAppendsAreSerialized(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	messages, err := New(root, testSession).List()
+	messages, err := New(root, testSession).Inbox("user")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(messages) != writers {
-		t.Fatalf("List returned %d messages, want %d", len(messages), writers)
+		t.Fatalf("Inbox returned %d messages, want %d", len(messages), writers)
 	}
 	seen := make(map[string]bool, writers)
 	for _, message := range messages {
@@ -641,11 +456,7 @@ func TestRemoveAllCannotDestroyAnAppendCommittedUnderTheLock(t *testing.T) {
 		}
 		// Both racers queue behind a lock this test holds, so RemoveAll can win it
 		// first and hand the waiting appender any window it leaves open.
-		lockPath, err := store.activeLockPath()
-		if err != nil {
-			t.Fatal(err)
-		}
-		gate, err := store.acquireLock(lockPath)
+		gate, err := store.acquireLock(store.lockPath())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -662,11 +473,7 @@ func TestRemoveAllCannotDestroyAnAppendCommittedUnderTheLock(t *testing.T) {
 		go func() {
 			defer close(appended)
 			appender := New(root, testSession)
-			path, err := appender.activeLockPath()
-			if err != nil {
-				return
-			}
-			unlock, err := appender.acquireLock(path)
+			unlock, err := appender.acquireLock(appender.lockPath())
 			if err != nil {
 				return // RemoveAll already deleted the folder holding the lock.
 			}
@@ -768,12 +575,12 @@ func TestRepairsOnlyUnterminatedTail(t *testing.T) {
 	partial := `{"version":1,"type":"message_created"`
 	appendRaw(t, store.logPath(), partial)
 
-	messages, err := store.List()
+	messages, err := store.Inbox("user")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(messages) != 1 || messages[0].ID != message.ID {
-		t.Fatalf("List after tail repair = %#v", messages)
+		t.Fatalf("Inbox after tail repair = %#v", messages)
 	}
 	contents, err := os.ReadFile(store.logPath())
 	if err != nil {
@@ -789,14 +596,14 @@ func TestRejectsCompletedMalformedOrInvalidEvents(t *testing.T) {
 		"not-json\n",
 		`{"version":1,"type":"invented","at":"2026-01-01T00:00:00Z","session_id":"x"}` + "\n",
 		`{"version":1,"type":"session_start","at":"2026-01-01T00:00:00Z","session_id":"second","session":"s"}` + "\n",
-		`{"version":1,"type":"delivery_attempt","at":"2026-01-01T00:00:00Z","session_id":"wrong","message_id":"missing"}` + "\n",
+		`{"version":1,"type":"wake_outcome","at":"2026-01-01T00:00:00Z","session_id":"x","wake_id":"w-1"}` + "\n",
 	}
 	for index, invalid := range tests {
 		t.Run(fmt.Sprintf("case-%d", index), func(t *testing.T) {
 			store := initializedStore(t)
 			appendRaw(t, store.logPath(), invalid)
-			if _, err := store.List(); !errors.Is(err, ErrCorruptLog) {
-				t.Fatalf("List error = %v, want ErrCorruptLog", err)
+			if _, err := store.Inbox("user"); !errors.Is(err, ErrCorruptLog) {
+				t.Fatalf("Inbox error = %v, want ErrCorruptLog", err)
 			}
 			contents, err := os.ReadFile(store.logPath())
 			if err != nil {
@@ -853,17 +660,23 @@ func mustCreate(t *testing.T, store *Store, params CreateParams) Message {
 	return message
 }
 
+// deliveredMessage creates a message to an agent and drives its wake to a
+// delivered outcome, which projects the delivered status onto the message.
 func deliveredMessage(t *testing.T, store *Store, params CreateParams) Message {
 	t.Helper()
 	message := mustCreate(t, store, params)
-	if _, err := store.RecordAttempt(message.ID); err != nil {
+	wakeID := "w-" + message.ID
+	if _, err := store.RecordWakeAttempt(wakeID); err != nil {
 		t.Fatal(err)
 	}
-	message, err := store.RecordDelivery(message.ID, true, "")
+	if _, err := store.RecordWakeOutcome(wakeID, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	delivered, err := store.Get(message.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return message
+	return delivered
 }
 
 func appendRaw(t *testing.T, path, contents string) {

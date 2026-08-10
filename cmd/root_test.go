@@ -244,7 +244,7 @@ func TestAgentMessageCommandsRouteAndPrintResults(t *testing.T) {
 		sendResult:  messaging.Message{ID: "msg-send", Recipient: "reviewer"},
 		replyResult: messaging.Message{ID: "msg-reply"},
 		inboxResult: []messaging.Message{
-			{ID: "msg-failed", Sender: "user", Recipient: "reviewer", Body: "outgoing", Status: messaging.StatusFailed, Failure: "submission\nrejected"},
+			{ID: "msg-failed", Sender: "user", Recipient: "reviewer", Body: "outgoing", Status: messaging.StatusFailed},
 			{ID: "msg-inbox", Sender: "reviewer", Recipient: "user", ReplyTo: "msg-send", Body: "line one\nline two", Status: messaging.StatusDelivered},
 		},
 	}
@@ -276,7 +276,6 @@ func TestAgentMessageCommandsRouteAndPrintResults(t *testing.T) {
 		"Sent message msg-send to reviewer.",
 		"Replied to message msg-send with msg-reply.",
 		"msg-failed  failed  sent to reviewer",
-		"failure: submission\n  rejected",
 		"msg-inbox  delivered  received from reviewer",
 		"reply-to: msg-send",
 		"line one\n  line two",

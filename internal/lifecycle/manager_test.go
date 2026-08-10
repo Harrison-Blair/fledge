@@ -363,9 +363,9 @@ func TestStartRejectsSelectionFlagsWhenReattaching(t *testing.T) {
 	if err := initializeStateDirectory(root); err != nil {
 		t.Fatal(err)
 	}
-	// An unbound legacy record: the pre-lock reattach must reject the selection
-	// flags before binding, so MessagingSessionID stays empty. If binding ran
-	// first, a durable session ID would be written even though Start errors.
+	// An unbound legacy record reattaching to a running session: selection flags
+	// are rejected under the startup lock before any work, and the dropped legacy
+	// upgrade path means MessagingSessionID stays empty.
 	if created, err := createRecord(root, record{Version: recordVersion, SessionName: testSessionName}); err != nil || !created {
 		t.Fatalf("createRecord() = %v, %v", created, err)
 	}
@@ -384,109 +384,40 @@ func TestStartRejectsSelectionFlagsWhenReattaching(t *testing.T) {
 		t.Fatalf("readRecord() = %v, %v", found, err)
 	}
 	if value.MessagingSessionID != "" {
-		t.Fatalf("MessagingSessionID = %q, want empty (pre-lock reject must not bind)", value.MessagingSessionID)
+		t.Fatalf("MessagingSessionID = %q, want empty (rejected reattach must not write state)", value.MessagingSessionID)
 	}
 	if _, found, err := readPreferences(root); err != nil || found {
 		t.Fatalf("preferences after rejected reattach = %v, %v; want none", found, err)
 	}
 }
 
-// TestStartPostLockReattachBindsBeforeRejectingSelection covers the second
-// reattach path: the session is stopped at the first List and running at the
-// second (it started up between the two checks under the startup lock). That
-// path intentionally binds durable state and releases the lock before it
-// validates the selection flags, so Start still errors on the flags but leaves
-// the record bound.
-func TestStartPostLockReattachBindsBeforeRejectingSelection(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	initTestProject(t, root)
-	if err := initializeStateDirectory(root); err != nil {
-		t.Fatal(err)
-	}
-	sessionID, err := messaging.New(root, testSessionName).Initialize()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if created, err := createRecord(root, record{Version: recordVersion, SessionName: testSessionName}); err != nil || !created {
-		t.Fatalf("createRecord() = %v, %v", created, err)
-	}
-	client := &fakeHerdr{listSequence: [][]herdr.Session{
-		{{Name: testSessionName, Running: false}},
-		{{Name: testSessionName, Running: true}},
-	}}
-	manager, _ := newTestManager(client, &fakeConfirmer{})
-	manager.lookPath = installedTestHarness
-	launches := 0
-	manager.watchLauncher = func(string) error { launches++; return nil }
-
-	err = manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout, Harness: "codex", HarnessSet: true})
-	if err == nil || !strings.Contains(err.Error(), "cannot be used when reattaching") {
-		t.Fatalf("Start() error = %v", err)
-	}
-	if len(client.attachCalls) != 0 {
-		t.Fatalf("Attach() calls = %v, want none", client.attachCalls)
-	}
-	if launches != 0 {
-		t.Fatalf("watcher launches = %d, want 0 (selection rejected before the common tail)", launches)
-	}
-	value, found, err := readRecord(root)
-	if err != nil || !found {
-		t.Fatalf("readRecord() = %v, %v", found, err)
-	}
-	if value.MessagingSessionID != sessionID {
-		t.Fatalf("MessagingSessionID = %q, want %q (post-lock path must bind before the selection check)", value.MessagingSessionID, sessionID)
-	}
-}
-
-// TestStartPostLockReattachReleasesStartupLock covers the same post-lock
-// reattach path as the test above, but asserts the branch releases the startup
-// lock it owns before returning. The startup lock lives on the dedicated
+// TestStartReattachReleasesStartupLock asserts the single reattach path releases
+// the startup lock before it attaches. The startup lock lives on the dedicated
 // .fledge/session.lock file, whose inode is stable across every session.json
 // rewrite, so re-acquiring the same lock after Start returns reliably observes
-// whether unlock() actually ran regardless of any record binding. The record is
-// pre-bound to keep the reattach binder a no-op, holding the test on the
-// lock-release contract rather than record-binding behavior. A regression that
-// binds but omits unlock() keeps the flock held, so the bounded re-acquire
-// below blocks to its deadline and fails instead of succeeding at once.
-func TestStartPostLockReattachReleasesStartupLock(t *testing.T) {
+// whether unlock() actually ran. A regression that reattaches but omits unlock()
+// keeps the flock held, so the bounded re-acquire below blocks to its deadline
+// and fails instead of succeeding at once.
+func TestStartReattachReleasesStartupLock(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	initTestProject(t, root)
-	if err := initializeStateDirectory(root); err != nil {
-		t.Fatal(err)
-	}
-	sessionID, err := messaging.New(root, testSessionName).Initialize()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if created, err := createRecord(root, record{Version: recordVersion, SessionName: testSessionName, MessagingSessionID: sessionID}); err != nil || !created {
-		t.Fatalf("createRecord() = %v, %v", created, err)
-	}
-	client := &fakeHerdr{listSequence: [][]herdr.Session{
-		{{Name: testSessionName, Running: false}},
-		{{Name: testSessionName, Running: true}},
-	}}
+	writeTestRecord(t, root)
+	client := &fakeHerdr{sessions: []herdr.Session{{Name: testSessionName, Running: true}}}
 	manager, _ := newTestManager(client, &fakeConfirmer{})
-	manager.lookPath = installedTestHarness
-	manager.watchLauncher = func(string) error { return nil }
 
-	err = manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout, Harness: "codex", HarnessSet: true})
-	if err == nil || !strings.Contains(err.Error(), "cannot be used when reattaching") {
+	if err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout}); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
+	if len(client.attachCalls) != 1 {
+		t.Fatalf("Attach() calls = %d, want 1", len(client.attachCalls))
+	}
 
-	// The post-lock reattach path must release the startup lock it owns before
-	// returning. The dedicated session.lock inode is stable, so re-acquiring the
-	// same lock proves release: a leaked unlock() would keep the flock held and
-	// this bounded acquire would block to its deadline and fail.
 	lockCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	unlock, err := lockSessionRecord(lockCtx, root)
 	if err != nil {
-		t.Fatalf("re-acquire startup lock after reattach = %v; post-lock reattach path leaked the lock", err)
+		t.Fatalf("re-acquire startup lock after reattach = %v; reattach path leaked the lock", err)
 	}
 	if err := unlock(); err != nil {
 		t.Fatalf("unlock() = %v", err)
@@ -606,7 +537,7 @@ func TestStartRestartsStoppedSession(t *testing.T) {
 	if err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout, Harness: "codex", HarnessSet: true}); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	wantCalls := []string{"check", "list", "list", "start-server", "wait-ready", "rename-tab", "rename-pane", "split-pane", "start-agent", "focus-agent", "attach"}
+	wantCalls := []string{"check", "list", "start-server", "wait-ready", "rename-tab", "rename-pane", "split-pane", "start-agent", "focus-agent", "attach"}
 	if strings.Join(client.calls, ",") != strings.Join(wantCalls, ",") {
 		t.Fatalf("call order = %v, want %v", client.calls, wantCalls)
 	}
@@ -619,53 +550,10 @@ func TestStartRestartsStoppedSession(t *testing.T) {
 	}
 }
 
-func TestRevalidateLockedRecordCleansUpCreatedRecord(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name          string
-		corrupt       bool
-		sessionName   string
-		recordCreated bool
-		wantErr       bool
-		wantRemoved   bool
-	}{
-		{name: "read failure removes created record", corrupt: true, sessionName: testSessionName, recordCreated: true, wantErr: true, wantRemoved: true},
-		{name: "read failure preserves preexisting record", corrupt: true, sessionName: testSessionName, recordCreated: false, wantErr: true, wantRemoved: false},
-		{name: "changed record is preserved", corrupt: false, sessionName: "fledge-11111111111111111111111111111111", recordCreated: true, wantErr: true, wantRemoved: false},
-		{name: "matching record passes", corrupt: false, sessionName: testSessionName, recordCreated: false, wantErr: false, wantRemoved: false},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			root := t.TempDir()
-			if test.corrupt {
-				initTestProject(t, root)
-				if err := initializeStateDirectory(root); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(recordPath(root), []byte("{not json"), 0o600); err != nil {
-					t.Fatal(err)
-				}
-			} else {
-				writeTestRecord(t, root)
-			}
-
-			err := revalidateLockedRecord(root, test.sessionName, test.recordCreated)
-			if (err != nil) != test.wantErr {
-				t.Fatalf("revalidateLockedRecord() error = %v, wantErr %v", err, test.wantErr)
-			}
-			_, statErr := os.Stat(recordPath(root))
-			if removed := errors.Is(statErr, os.ErrNotExist); removed != test.wantRemoved {
-				t.Fatalf("record removed = %v (stat error %v), want removed %v", removed, statErr, test.wantRemoved)
-			}
-		})
-	}
-}
-
 func TestStartResetsMessagingOnlyForFreshServer(t *testing.T) {
 	t.Parallel()
 
-	t.Run("fresh server resets an old audit and drops legacy files", func(t *testing.T) {
+	t.Run("fresh server resets an old audit", func(t *testing.T) {
 		root := t.TempDir()
 		initTestProject(t, root)
 		session := "fledge-" + sessionSlug(root) + "-00000000"
@@ -676,10 +564,6 @@ func TestStartResetsMessagingOnlyForFreshServer(t *testing.T) {
 		if _, err := store.Create(messaging.CreateParams{Sender: "user", Recipient: "old", Body: "old", RecipientPane: "old-pane"}); err != nil {
 			t.Fatal(err)
 		}
-		legacyLog := filepath.Join(root, stateDirectory, "messages.jsonl")
-		if err := os.WriteFile(legacyLog, []byte("{}\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
 		client := &fakeHerdr{snapshot: testSnapshot()}
 		manager, _ := newTestManager(client, &fakeConfirmer{})
 		manager.lookPath = installedTestHarness
@@ -687,12 +571,9 @@ func TestStartResetsMessagingOnlyForFreshServer(t *testing.T) {
 		if err := manager.Start(context.Background(), root, StartOptions{Timeout: DefaultAgentTimeout, Harness: "codex", HarnessSet: true}); err != nil {
 			t.Fatal(err)
 		}
-		messages, err := messaging.New(root, session).List()
+		messages, err := messaging.New(root, session).Inbox(messaging.UserIdentity)
 		if err != nil || len(messages) != 0 {
 			t.Fatalf("fresh messages = %#v, %v", messages, err)
-		}
-		if _, err := os.Stat(legacyLog); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("legacy messages.jsonl error = %v, want removed", err)
 		}
 	})
 

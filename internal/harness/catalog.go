@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -34,7 +35,6 @@ type Model struct {
 	ID          string
 	Name        string
 	Provider    string
-	Maker       string
 	Description string
 	Default     bool
 }
@@ -121,25 +121,29 @@ func Discover(ctx context.Context, selected Harness, options DiscoveryOptions) C
 		models []Model
 		err    error
 	)
-	switch selected.ID {
-	case "claude":
+	commandArms := map[string]struct {
+		args  []string
+		parse func([]byte) ([]Model, error)
+	}{
+		"pi":       {[]string{"--list-models"}, ParsePiModels},
+		"opencode": {[]string{"models"}, ParseOpenCodeModels},
+	}
+	switch {
+	case selected.ID == "claude":
 		models = claudeModels()
-	case "codex":
+	case selected.ID == "codex":
 		models, err = discoverCodex(discoveryCtx, options.CodexCachePath)
-	case "pi":
-		var output []byte
-		output, err = runDiscoveryCommand(discoveryCtx, options.Runner, selected, "--list-models")
-		if err == nil {
-			models, err = ParsePiModels(output)
-		}
-	case "opencode":
-		var output []byte
-		output, err = runDiscoveryCommand(discoveryCtx, options.Runner, selected, "models")
-		if err == nil {
-			models, err = ParseOpenCodeModels(output)
-		}
 	default:
-		err = fmt.Errorf("unsupported harness %q", selected.ID)
+		arm, ok := commandArms[selected.ID]
+		if !ok {
+			err = fmt.Errorf("unsupported harness %q", selected.ID)
+			break
+		}
+		var output []byte
+		output, err = runDiscoveryCommand(discoveryCtx, options.Runner, selected, arm.args...)
+		if err == nil {
+			models, err = arm.parse(output)
+		}
 	}
 
 	if err != nil {
@@ -187,21 +191,21 @@ func commandRunner(ctx context.Context, path string, args ...string) ([]byte, er
 
 func claudeModels() []Model {
 	return []Model{
-		{ID: "fable", Name: "Fable (moving alias)", Provider: "anthropic", Maker: "Claude", Description: "Moving alias for the latest Claude Fable model"},
-		{ID: "haiku", Name: "Haiku (moving alias)", Provider: "anthropic", Maker: "Claude", Description: "Moving alias for the latest Claude Haiku model"},
-		{ID: "opus", Name: "Opus (moving alias)", Provider: "anthropic", Maker: "Claude", Description: "Moving alias for the latest Claude Opus model"},
-		{ID: "sonnet", Name: "Sonnet (moving alias)", Provider: "anthropic", Maker: "Claude", Description: "Moving alias for the latest Claude Sonnet model"},
-		{ID: "claude-fable-5", Name: "Claude Fable 5", Provider: "anthropic", Maker: "Claude", Description: "Current canonical Claude Fable 5 model"},
-		{ID: "claude-mythos-5", Name: "Claude Mythos 5", Provider: "anthropic", Maker: "Claude", Description: "Glasswing-restricted current canonical Claude Mythos 5 model"},
-		{ID: "claude-opus-5", Name: "Claude Opus 5", Provider: "anthropic", Maker: "Claude", Description: "Current canonical Claude Opus 5 model"},
-		{ID: "claude-opus-4-8", Name: "Claude Opus 4.8", Provider: "anthropic", Maker: "Claude", Description: "Current canonical Claude Opus 4.8 model"},
-		{ID: "claude-opus-4-7", Name: "Claude Opus 4.7", Provider: "anthropic", Maker: "Claude", Description: "Current canonical Claude Opus 4.7 model"},
-		{ID: "claude-opus-4-6", Name: "Claude Opus 4.6", Provider: "anthropic", Maker: "Claude", Description: "Current canonical Claude Opus 4.6 model"},
-		{ID: "claude-sonnet-5", Name: "Claude Sonnet 5", Provider: "anthropic", Maker: "Claude", Description: "Current canonical Claude Sonnet 5 model"},
-		{ID: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6", Provider: "anthropic", Maker: "Claude", Description: "Current canonical Claude Sonnet 4.6 model"},
-		{ID: "claude-haiku-4-5", Name: "Claude Haiku 4.5", Provider: "anthropic", Maker: "Claude", Description: "Current canonical Claude Haiku 4.5 model"},
-		{ID: "claude-opus-4-5", Name: "Claude Opus 4.5 (legacy)", Provider: "anthropic", Maker: "Claude", Description: "Active legacy Claude Opus 4.5 model"},
-		{ID: "claude-sonnet-4-5", Name: "Claude Sonnet 4.5 (legacy)", Provider: "anthropic", Maker: "Claude", Description: "Active legacy Claude Sonnet 4.5 model"},
+		{ID: "fable", Name: "Fable (moving alias)", Provider: "anthropic", Description: "Moving alias for the latest Claude Fable model"},
+		{ID: "haiku", Name: "Haiku (moving alias)", Provider: "anthropic", Description: "Moving alias for the latest Claude Haiku model"},
+		{ID: "opus", Name: "Opus (moving alias)", Provider: "anthropic", Description: "Moving alias for the latest Claude Opus model"},
+		{ID: "sonnet", Name: "Sonnet (moving alias)", Provider: "anthropic", Description: "Moving alias for the latest Claude Sonnet model"},
+		{ID: "claude-fable-5", Name: "Claude Fable 5", Provider: "anthropic", Description: "Current canonical Claude Fable 5 model"},
+		{ID: "claude-mythos-5", Name: "Claude Mythos 5", Provider: "anthropic", Description: "Glasswing-restricted current canonical Claude Mythos 5 model"},
+		{ID: "claude-opus-5", Name: "Claude Opus 5", Provider: "anthropic", Description: "Current canonical Claude Opus 5 model"},
+		{ID: "claude-opus-4-8", Name: "Claude Opus 4.8", Provider: "anthropic", Description: "Current canonical Claude Opus 4.8 model"},
+		{ID: "claude-opus-4-7", Name: "Claude Opus 4.7", Provider: "anthropic", Description: "Current canonical Claude Opus 4.7 model"},
+		{ID: "claude-opus-4-6", Name: "Claude Opus 4.6", Provider: "anthropic", Description: "Current canonical Claude Opus 4.6 model"},
+		{ID: "claude-sonnet-5", Name: "Claude Sonnet 5", Provider: "anthropic", Description: "Current canonical Claude Sonnet 5 model"},
+		{ID: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6", Provider: "anthropic", Description: "Current canonical Claude Sonnet 4.6 model"},
+		{ID: "claude-haiku-4-5", Name: "Claude Haiku 4.5", Provider: "anthropic", Description: "Current canonical Claude Haiku 4.5 model"},
+		{ID: "claude-opus-4-5", Name: "Claude Opus 4.5 (legacy)", Provider: "anthropic", Description: "Active legacy Claude Opus 4.5 model"},
+		{ID: "claude-sonnet-4-5", Name: "Claude Sonnet 4.5 (legacy)", Provider: "anthropic", Description: "Active legacy Claude Sonnet 4.5 model"},
 	}
 }
 
@@ -266,40 +270,25 @@ func ParseCodexModels(data []byte) ([]Model, error) {
 		models = append(models, Model{
 			ID:          entry.Slug,
 			Name:        name,
-			Maker:       makerFor("", entry.Slug),
 			Description: entry.Description,
 		})
 	}
 	return models, nil
 }
 
-// ParsePiModels parses the column-oriented output of pi --list-models.
-func ParsePiModels(data []byte) ([]Model, error) {
+// scanModels strips ANSI escapes from each line of data, skips blanks, and
+// hands every remaining line to extract, collecting the models it accepts.
+func scanModels(data []byte, extract func(line string) (Model, bool)) ([]Model, error) {
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	var models []Model
 	for scanner.Scan() {
 		line := strings.TrimSpace(stripANSI(scanner.Text()))
-		lower := strings.ToLower(line)
-		if line == "" || strings.HasPrefix(lower, "provider ") ||
-			strings.HasPrefix(lower, "no models") || strings.HasPrefix(lower, "use /login") {
+		if line == "" {
 			continue
 		}
-		fields := strings.Fields(line)
-		if len(fields) < 2 || strings.EqualFold(fields[0], "provider") || strings.HasSuffix(fields[0], ":") {
-			continue
+		if model, ok := extract(line); ok {
+			models = append(models, model)
 		}
-		provider, modelID := fields[0], fields[1]
-		if provider == "" || modelID == "" {
-			continue
-		}
-		launchID := provider + "/" + modelID
-		models = append(models, Model{
-			ID:          launchID,
-			Name:        modelID,
-			Provider:    provider,
-			Maker:       makerFor(provider, modelID),
-			Description: "Pi route: " + launchID,
-		})
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
@@ -307,32 +296,50 @@ func ParsePiModels(data []byte) ([]Model, error) {
 	return models, nil
 }
 
+// ParsePiModels parses the column-oriented output of pi --list-models.
+func ParsePiModels(data []byte) ([]Model, error) {
+	return scanModels(data, func(line string) (Model, bool) {
+		lower := strings.ToLower(line)
+		if strings.HasPrefix(lower, "provider ") ||
+			strings.HasPrefix(lower, "no models") || strings.HasPrefix(lower, "use /login") {
+			return Model{}, false
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 || strings.EqualFold(fields[0], "provider") || strings.HasSuffix(fields[0], ":") {
+			return Model{}, false
+		}
+		provider, modelID := fields[0], fields[1]
+		if provider == "" || modelID == "" {
+			return Model{}, false
+		}
+		launchID := provider + "/" + modelID
+		return Model{
+			ID:          launchID,
+			Name:        modelID,
+			Provider:    provider,
+			Description: "Pi route: " + launchID,
+		}, true
+	})
+}
+
 // ParseOpenCodeModels parses provider/model IDs emitted by opencode models.
 func ParseOpenCodeModels(data []byte) ([]Model, error) {
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	var models []Model
-	for scanner.Scan() {
-		line := strings.TrimSpace(stripANSI(scanner.Text()))
-		if line == "" || strings.HasPrefix(strings.ToLower(line), "error") {
-			continue
+	return scanModels(data, func(line string) (Model, bool) {
+		if strings.HasPrefix(strings.ToLower(line), "error") {
+			return Model{}, false
 		}
 		id := strings.Fields(line)[0]
 		provider, modelID, ok := strings.Cut(id, "/")
 		if !ok || provider == "" || modelID == "" {
-			continue
+			return Model{}, false
 		}
-		models = append(models, Model{
+		return Model{
 			ID:          id,
 			Name:        modelID,
 			Provider:    provider,
-			Maker:       makerFor(provider, modelID),
 			Description: "OpenCode route: " + id,
-		})
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	return models, nil
+		}, true
+	})
 }
 
 func normalizeAndSort(models []Model) []Model {
@@ -346,61 +353,17 @@ func normalizeAndSort(models []Model) []Model {
 		if model.Name == "" {
 			model.Name = model.ID
 		}
-		if model.Maker == "" {
-			model.Maker = makerFor(model.Provider, model.ID)
-		}
 		normalized = append(normalized, model)
 	}
 
 	sort.SliceStable(normalized, func(i, j int) bool {
 		left, right := normalized[i], normalized[j]
-		if left.Provider != "" || right.Provider != "" {
-			if comparison := compareProviders(left.Provider, right.Provider); comparison != 0 {
-				return comparison < 0
-			}
-			if !ProviderUsesCreatorGroups(left.Provider) {
-				return compareNames(left.Name, right.Name) < 0
-			}
-		}
-		if comparison := compareMakers(left.Maker, right.Maker); comparison != 0 {
+		if comparison := compareProviders(left.Provider, right.Provider); comparison != 0 {
 			return comparison < 0
 		}
 		return compareNames(left.Name, right.Name) < 0
 	})
 	return normalized
-}
-
-func makerFor(provider, model string) string {
-	value := strings.ToLower(model)
-	if !ProviderUsesCreatorGroups(provider) {
-		value = strings.ToLower(provider + " " + model)
-	}
-	matches := []struct {
-		keys  []string
-		maker string
-	}{
-		{[]string{"anthropic", "claude"}, "Claude"},
-		{[]string{"openai", "codex", "gpt-", "o1", "o3", "o4"}, "OpenAI"},
-		{[]string{"zhipu", "zai", "glm"}, "Zhipu"},
-		{[]string{"deepseek"}, "DeepSeek"},
-		{[]string{"google", "gemini"}, "Google"},
-		{[]string{"xai", "grok"}, "xAI"},
-		{[]string{"mistral"}, "Mistral"},
-		{[]string{"meta", "llama"}, "Meta"},
-		{[]string{"moonshot", "kimi"}, "Moonshot"},
-		{[]string{"alibaba", "qwen"}, "Alibaba"},
-	}
-	for _, match := range matches {
-		for _, key := range match.keys {
-			if strings.Contains(value, key) {
-				return match.maker
-			}
-		}
-	}
-	if ProviderUsesCreatorGroups(provider) || provider == "" {
-		return "Other"
-	}
-	return ProviderName(provider)
 }
 
 // ProviderName returns a human-friendly provider group name.
@@ -413,75 +376,24 @@ func ProviderName(provider string) string {
 	case "opencode":
 		return "OpenCode Zen"
 	default:
-		return normalizeProviderName(provider)
-	}
-}
-
-// ProviderUsesCreatorGroups reports whether a provider group should have
-// separate model-maker subgroups in a picker.
-func ProviderUsesCreatorGroups(provider string) bool {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "opencode-go", "opencode":
-		return true
-	default:
-		return false
+		words := strings.Fields(strings.NewReplacer("-", " ", "_", " ").Replace(strings.TrimSpace(provider)))
+		for index, word := range words {
+			runes := []rune(strings.ToLower(word))
+			if len(runes) > 0 {
+				runes[0] = unicode.ToUpper(runes[0])
+			}
+			words[index] = string(runes)
+		}
+		return strings.Join(words, " ")
 	}
 }
 
 func compareProviders(left, right string) int {
-	leftRank, leftPreferred := preferredProviderRank(left)
-	rightRank, rightPreferred := preferredProviderRank(right)
-	if leftPreferred != rightPreferred {
-		if leftPreferred {
-			return -1
-		}
-		return 1
-	}
-	if leftPreferred && leftRank != rightRank {
-		return leftRank - rightRank
-	}
 	return strings.Compare(strings.ToLower(ProviderName(left)), strings.ToLower(ProviderName(right)))
-}
-
-func preferredProviderRank(provider string) (int, bool) {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "openai-codex":
-		return 0, true
-	case "opencode-go":
-		return 1, true
-	case "opencode":
-		return 2, true
-	default:
-		return 0, false
-	}
-}
-
-func compareMakers(left, right string) int {
-	leftOther := strings.EqualFold(left, "Other")
-	rightOther := strings.EqualFold(right, "Other")
-	if leftOther != rightOther {
-		if leftOther {
-			return 1
-		}
-		return -1
-	}
-	return strings.Compare(strings.ToLower(left), strings.ToLower(right))
 }
 
 func compareNames(left, right string) int {
 	return strings.Compare(strings.ToLower(left), strings.ToLower(right))
-}
-
-func normalizeProviderName(provider string) string {
-	words := strings.Fields(strings.NewReplacer("-", " ", "_", " ").Replace(strings.TrimSpace(provider)))
-	for index, word := range words {
-		runes := []rune(strings.ToLower(word))
-		if len(runes) > 0 {
-			runes[0] = unicode.ToUpper(runes[0])
-		}
-		words[index] = string(runes)
-	}
-	return strings.Join(words, " ")
 }
 
 func harnessName(selected Harness) string {
@@ -494,46 +406,12 @@ func harnessName(selected Harness) string {
 	return "harness"
 }
 
-// stripANSI removes CSI and OSC escape sequences commonly emitted by model
-// listing commands when they mistakenly color redirected output.
+// csiPattern matches an ANSI CSI escape sequence: ESC '[', parameter bytes
+// (0x30-0x3f), intermediate bytes (0x20-0x2f), and a final byte (0x40-0x7e).
+var csiPattern = regexp.MustCompile("\x1b\\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]")
+
+// stripANSI removes CSI escape sequences commonly emitted by model listing
+// commands when they mistakenly color redirected output.
 func stripANSI(value string) string {
-	var output strings.Builder
-	for index := 0; index < len(value); {
-		if value[index] != '\x1b' {
-			output.WriteByte(value[index])
-			index++
-			continue
-		}
-		index++
-		if index >= len(value) {
-			break
-		}
-		switch value[index] {
-		case '[':
-			index++
-			for index < len(value) {
-				final := value[index]
-				index++
-				if final >= 0x40 && final <= 0x7e {
-					break
-				}
-			}
-		case ']':
-			index++
-			for index < len(value) {
-				if value[index] == '\a' {
-					index++
-					break
-				}
-				if value[index] == '\x1b' && index+1 < len(value) && value[index+1] == '\\' {
-					index += 2
-					break
-				}
-				index++
-			}
-		default:
-			index++
-		}
-	}
-	return output.String()
+	return csiPattern.ReplaceAllString(value, "")
 }

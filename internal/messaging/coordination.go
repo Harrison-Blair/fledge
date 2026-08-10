@@ -89,22 +89,22 @@ type RegisterParams struct {
 func validateCoordinationEvent(e event) error {
 	switch e.Type {
 	case eventAgentRegistered:
-		if blank(e.AgentName, e.PaneID, e.Harness) || e.Actor != "" {
+		if blank(e.AgentName, e.PaneID, e.Harness) {
 			return errors.New("invalid agent_registered fields")
 		}
 		if e.AuthorityHash != "" && !validAuthorityHash(e.AuthorityHash) {
 			return errors.New("agent_registered has an invalid authority hash")
 		}
 	case eventAgentStopped:
-		if blank(e.AgentName, e.PaneID) || e.Actor != "" {
+		if blank(e.AgentName, e.PaneID) {
 			return errors.New("invalid agent_stopped fields")
 		}
 	case eventAgentStatus:
-		if blank(e.AgentName, e.PaneID, e.Detail) || e.Actor != "" {
+		if blank(e.AgentName, e.PaneID, e.Detail) {
 			return errors.New("invalid agent_status_changed fields")
 		}
 	case eventTaskAssigned:
-		if blank(e.TaskID, e.Assignee, e.Assigner, e.Description) || e.TaskStatus != TaskActive || e.Actor != "" {
+		if blank(e.TaskID, e.Assignee, e.Assigner, e.Description) || e.TaskStatus != TaskActive {
 			return errors.New("invalid task_assigned fields")
 		}
 	case eventTaskProgress, eventTaskBlocked, eventTaskDecision, eventTaskResumed,
@@ -113,19 +113,16 @@ func validateCoordinationEvent(e event) error {
 			return errors.New("task transition is missing fields")
 		}
 	case eventWakeRequested:
-		if blank(e.WakeID, e.WakeKind, e.Recipient, e.RecipientPane, e.Body) || e.Actor != "" {
+		if blank(e.WakeID, e.WakeKind, e.Recipient, e.RecipientPane, e.Body) {
 			return errors.New("invalid wake_requested fields")
 		}
 	case eventWakeAttempt:
-		if blank(e.WakeID) || e.Actor != "" {
+		if blank(e.WakeID) {
 			return errors.New("invalid wake_attempt fields")
 		}
 	case eventWakeOutcome:
-		if blank(e.WakeID) || e.Accepted == nil || e.Actor != "" {
+		if blank(e.WakeID) || e.Accepted == nil {
 			return errors.New("invalid wake_outcome fields")
-		}
-		if *e.Accepted && e.Detail != "" {
-			return errors.New("accepted wake outcome has failure detail")
 		}
 	}
 	return nil
@@ -212,6 +209,7 @@ func applyCoordinationEvent(state *logState, e event) error {
 		}
 		wake.Status, wake.UpdatedAt = StatusUncertain, e.At
 		state.wakes[e.WakeID] = wake
+		projectMessageStatus(state, wake)
 	case eventWakeOutcome:
 		wake, ok := state.wakes[e.WakeID]
 		if !ok || wake.Status != StatusUncertain {
@@ -224,8 +222,23 @@ func applyCoordinationEvent(state *logState, e event) error {
 			wake.Status, wake.Failure = StatusFailed, e.Detail
 		}
 		state.wakes[e.WakeID] = wake
+		projectMessageStatus(state, wake)
 	}
 	return nil
+}
+
+// projectMessageStatus mirrors a message wake's delivery status onto the message
+// it carries. Task and agent wakes reference no message and are ignored.
+func projectMessageStatus(state *logState, wake Wake) {
+	if wake.Kind != "message" {
+		return
+	}
+	message, ok := state.messages[wake.ReferenceID]
+	if !ok {
+		return
+	}
+	message.Status = wake.Status
+	state.messages[wake.ReferenceID] = message
 }
 
 // RegisterAgent atomically records a pane and its optional initial task.
@@ -250,27 +263,22 @@ func (s *Store) RegisterAgent(params RegisterParams) (Agent, *Task, error) {
 			AgentName: params.Name, PaneID: params.PaneID, Harness: params.Harness,
 			AuthorityHash: params.AuthorityHash, CanDelegate: params.CanDelegate, ParentTaskID: params.ParentTaskID}}
 		if strings.TrimSpace(params.Task) != "" {
-			taskID, err := s.prefixedID(state, "t-")
+			taskID, err := s.uniqueID(state, "t-", taskOrWakeTaken(state))
 			if err != nil {
 				return err
 			}
 			events = append(events, event{Version: eventVersion, Type: eventTaskAssigned, At: at, SessionID: state.sessionID,
 				TaskID: taskID, ParentTaskID: params.ParentTaskID, Assignee: params.Name,
 				Assigner: params.Caller, Description: strings.TrimSpace(params.Task), TaskStatus: TaskActive})
-			wake, err := s.wakeEventToPane(state, at, "task-assigned", taskID, params.Name, params.PaneID,
-				fmt.Sprintf("[Fledge task]\nID: %s\nAssigned by: %s\nTask:\n%s\n\nReport progress with: fledge agent task progress %s <text> — finish with fledge agent task complete %s --file <path> (its summary reaches me; no separate message needed).", taskID, params.Caller, strings.TrimSpace(params.Task), taskID, taskID))
+			wake, err := s.wakeFor(state, at, "task-assigned", taskID, params.Name, params.PaneID,
+				fmt.Sprintf("[Fledge task]\nID: %s\nAssigned by: %s\nTask:\n%s\n\nReport progress with: fledge agent task progress %s <text> — finish with fledge agent task complete %s --file <path> (its summary reaches me; no separate message needed).", taskID, params.Caller, strings.TrimSpace(params.Task), taskID, taskID), false)
 			if err != nil {
 				return err
 			}
-			events = append(events, wake)
+			events = append(events, *wake)
 		}
-		if err := s.appendEvents(events); err != nil {
+		if err := s.commit(state, events); err != nil {
 			return err
-		}
-		for _, e := range events {
-			if err := applyEvent(state, e); err != nil {
-				return err
-			}
 		}
 		result = state.agents[params.Name]
 		if len(events) > 1 {
@@ -328,23 +336,15 @@ func (s *Store) StopAgent(name, paneID string) error {
 			if task.Assignee == name && !terminal(task.Status) {
 				events = append(events, event{Version: eventVersion, Type: eventTaskOrphaned, At: at, SessionID: state.sessionID,
 					TaskID: id, TaskStatus: TaskOrphaned, Detail: "assignee pane stopped"})
-				if wake, err := s.optionalWakeEvent(state, at, "task-orphaned", id, task.Assigner,
-					fmt.Sprintf("Task %s became orphaned because agent %s stopped.", id, name)); err != nil {
+				if wake, err := s.wakeFor(state, at, "task-orphaned", id, task.Assigner, "",
+					fmt.Sprintf("Task %s became orphaned because agent %s stopped.", id, name), true); err != nil {
 					return err
 				} else if wake != nil {
 					events = append(events, *wake)
 				}
 			}
 		}
-		if err := s.appendEvents(events); err != nil {
-			return err
-		}
-		for _, e := range events {
-			if err := applyEvent(state, e); err != nil {
-				return err
-			}
-		}
-		return nil
+		return s.commit(state, events)
 	})
 }
 
@@ -487,7 +487,7 @@ func (s *Store) RecordAgentStatus(paneID, status string) error {
 		}
 		if active != nil && (status == "blocked" || status == "idle" || status == "failed" || status == "stopped") {
 			body := fmt.Sprintf("Agent %s entered Herdr status %s while owning task %s.", agent.Name, status, active.ID)
-			wake, err := s.optionalWakeEvent(state, at, "agent-"+status, active.ID, active.Assigner, body)
+			wake, err := s.wakeFor(state, at, "agent-"+status, active.ID, active.Assigner, "", body, true)
 			if err != nil {
 				return err
 			}
@@ -495,15 +495,7 @@ func (s *Store) RecordAgentStatus(paneID, status string) error {
 				events = append(events, *wake)
 			}
 		}
-		if err := s.appendEvents(events); err != nil {
-			return err
-		}
-		for _, e := range events {
-			if err := applyEvent(state, e); err != nil {
-				return err
-			}
-		}
-		return nil
+		return s.commit(state, events)
 	})
 }
 
@@ -540,7 +532,7 @@ func (s *Store) AssignTask(caller, assignee, parentID, description string) (Task
 		if err := ensureCapacity(state, assignee); err != nil {
 			return err
 		}
-		id, err := s.prefixedID(state, "t-")
+		id, err := s.uniqueID(state, "t-", taskOrWakeTaken(state))
 		if err != nil {
 			return err
 		}
@@ -548,18 +540,12 @@ func (s *Store) AssignTask(caller, assignee, parentID, description string) (Task
 		assigned := event{Version: eventVersion, Type: eventTaskAssigned, At: at, SessionID: state.sessionID,
 			TaskID: id, ParentTaskID: parentID, Assignee: assignee, Assigner: caller,
 			Description: strings.TrimSpace(description), TaskStatus: TaskActive}
-		wake, err := s.wakeEvent(state, at, "task-assigned", id, assignee,
-			fmt.Sprintf("[Fledge task]\nID: %s\nAssigned by: %s\nTask:\n%s", id, caller, strings.TrimSpace(description)))
+		wake, err := s.wakeFor(state, at, "task-assigned", id, assignee, "",
+			fmt.Sprintf("[Fledge task]\nID: %s\nAssigned by: %s\nTask:\n%s", id, caller, strings.TrimSpace(description)), false)
 		if err != nil {
 			return err
 		}
-		if err := s.appendEvents([]event{assigned, wake}); err != nil {
-			return err
-		}
-		if err := applyEvent(state, assigned); err != nil {
-			return err
-		}
-		if err := applyEvent(state, wake); err != nil {
+		if err := s.commit(state, []event{assigned, *wake}); err != nil {
 			return err
 		}
 		result = state.tasks[id]
@@ -573,19 +559,6 @@ func (s *Store) Tasks() ([]Task, error) {
 	err := s.withState(func(state *logState) error {
 		for _, id := range state.taskOrder {
 			result = append(result, state.tasks[id])
-		}
-		return nil
-	})
-	return result, err
-}
-
-func (s *Store) Task(id string) (Task, error) {
-	var result Task
-	err := s.withState(func(state *logState) error {
-		var ok bool
-		result, ok = state.tasks[id]
-		if !ok {
-			return fmt.Errorf("%w: %s", ErrTaskNotFound, id)
 		}
 		return nil
 	})
@@ -642,7 +615,7 @@ func (s *Store) TransitionTask(caller, id string, target TaskStatus, detail stri
 				if changed.Detail != "" {
 					body += ": " + changed.Detail
 				}
-				wake, err := s.optionalWakeEvent(state, at, kind, changed.TaskID, recipient, body)
+				wake, err := s.wakeFor(state, at, kind, changed.TaskID, recipient, "", body, true)
 				if err != nil {
 					return err
 				}
@@ -651,13 +624,8 @@ func (s *Store) TransitionTask(caller, id string, target TaskStatus, detail stri
 				}
 			}
 		}
-		if err := s.appendEvents(events); err != nil {
+		if err := s.commit(state, events); err != nil {
 			return err
-		}
-		for _, e := range events {
-			if err := applyEvent(state, e); err != nil {
-				return err
-			}
 		}
 		result = state.tasks[id]
 		return nil
@@ -749,10 +717,7 @@ func (s *Store) RecordProgress(caller, id, detail string) (Task, error) {
 			return errors.New("progress detail must not be blank")
 		}
 		e := event{Version: eventVersion, Type: eventTaskProgress, At: s.now(), SessionID: state.sessionID, TaskID: id, TaskStatus: TaskActive, Detail: strings.TrimSpace(detail), Actor: caller}
-		if err := s.appendEvents([]event{e}); err != nil {
-			return err
-		}
-		if err := applyEvent(state, e); err != nil {
+		if err := s.commit(state, []event{e}); err != nil {
 			return err
 		}
 		result = state.tasks[id]
@@ -761,60 +726,39 @@ func (s *Store) RecordProgress(caller, id, detail string) (Task, error) {
 	return result, err
 }
 
-func (s *Store) prefixedID(state *logState, prefix string) (string, error) {
-	for attempts := 0; attempts < 100; attempts++ {
-		id, err := s.newID()
-		if err != nil {
-			return "", err
-		}
-		id = prefix + id
-		if _, ok := state.tasks[id]; !ok {
-			if _, ok := state.wakes[id]; !ok {
-				return id, nil
+// wakeFor builds the wake-request event for one recipient. A non-empty pane
+// addresses that pane directly, because a recipient's own agent event may not be
+// applied yet (as when registration and its first task commit together); an
+// empty pane resolves the recipient's active pane. When optional, a user,
+// absent, or inactive recipient yields (nil, nil) so a durable transition is
+// never blocked by a departed recipient — a worker must still be able to finish,
+// fail, or orphan its work after the agent that assigned it is gone.
+func (s *Store) wakeFor(state *logState, at time.Time, kind, reference, recipient, pane, body string, optional bool) (*event, error) {
+	if optional && (recipient == UserIdentity || recipient == "") {
+		return nil, nil
+	}
+	if pane == "" {
+		agent, ok := activeAgent(state, recipient)
+		if !ok {
+			if optional {
+				return nil, nil
 			}
+			return nil, fmt.Errorf("cannot wake inactive agent %q", recipient)
 		}
+		pane = agent.PaneID
 	}
-	return "", errors.New("ID generator repeatedly returned duplicates")
-}
-
-func (s *Store) wakeEvent(state *logState, at time.Time, kind, reference, recipient, body string) (event, error) {
-	agent, ok := activeAgent(state, recipient)
-	if !ok {
-		return event{}, fmt.Errorf("cannot wake inactive agent %q", recipient)
-	}
-	return s.wakeEventToPane(state, at, kind, reference, recipient, agent.PaneID, body)
-}
-
-func (s *Store) wakeEventToPane(state *logState, at time.Time, kind, reference, recipient, pane, body string) (event, error) {
+	// A stable "w-"+reference wake ID makes protocol delivery idempotent; fall
+	// back to a fresh ID only when there is no reference or it is already taken.
 	id := "w-" + reference
 	if reference == "" || state.wakes[id].ID != "" {
 		var err error
-		id, err = s.prefixedID(state, "w-")
-		if err != nil {
-			return event{}, err
+		if id, err = s.uniqueID(state, "w-", taskOrWakeTaken(state)); err != nil {
+			return nil, err
 		}
 	}
-	return event{Version: eventVersion, Type: eventWakeRequested, At: at, SessionID: state.sessionID,
+	return &event{Version: eventVersion, Type: eventWakeRequested, At: at, SessionID: state.sessionID,
 		WakeID: id, WakeKind: kind, TaskID: reference, Recipient: recipient,
 		RecipientPane: pane, Body: body}, nil
-}
-
-// optionalWakeEvent builds the wake a transition wants, or nothing when there
-// is nobody to wake. A departed recipient must never block the durable
-// transition: a worker still has to be able to complete, fail, or orphan its
-// own work after the agent that assigned it is gone.
-func (s *Store) optionalWakeEvent(state *logState, at time.Time, kind, reference, recipient, body string) (*event, error) {
-	if recipient == UserIdentity || recipient == "" {
-		return nil, nil
-	}
-	if _, ok := activeAgent(state, recipient); !ok {
-		return nil, nil
-	}
-	wake, err := s.wakeEvent(state, at, kind, reference, recipient, body)
-	if err != nil {
-		return nil, err
-	}
-	return &wake, nil
 }
 
 func (s *Store) PendingWakes() ([]Wake, error) {
@@ -855,10 +799,7 @@ func (s *Store) transitionWake(id, kind string, accepted bool, detail string) (W
 		if kind == eventWakeOutcome {
 			e.Accepted = boolPointer(accepted)
 		}
-		if err := s.appendEvents([]event{e}); err != nil {
-			return err
-		}
-		if err := applyEvent(state, e); err != nil {
+		if err := s.commit(state, []event{e}); err != nil {
 			return err
 		}
 		result = state.wakes[id]

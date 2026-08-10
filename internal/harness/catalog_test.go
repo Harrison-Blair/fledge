@@ -96,8 +96,8 @@ func TestDiscoverClaudeCatalogIsExact(t *testing.T) {
 			continue
 		}
 		if model.Name != metadata.name || model.Description != metadata.description ||
-			model.Provider != "anthropic" || model.Maker != "Claude" {
-			t.Errorf("Claude model %q = %#v, want name %q, description %q, Anthropic/Claude metadata", model.ID, model, metadata.name, metadata.description)
+			model.Provider != "anthropic" {
+			t.Errorf("Claude model %q = %#v, want name %q, description %q, anthropic provider", model.ID, model, metadata.name, metadata.description)
 		}
 		delete(want, model.ID)
 	}
@@ -127,7 +127,7 @@ func TestDiscoverCodexCache(t *testing.T) {
 	if got, want := catalog.Models[2].Name, "gpt-5.5"; got != want {
 		t.Errorf("fallback name = %q, want %q", got, want)
 	}
-	if catalog.Models[1].Maker != "OpenAI" || catalog.Models[1].Description != "frontier" {
+	if catalog.Models[1].Description != "frontier" {
 		t.Errorf("model metadata = %#v", catalog.Models[1])
 	}
 }
@@ -296,7 +296,7 @@ func TestParsePiModelsPreservesCompleteRoutesAndIgnoresANSIHeaders(t *testing.T)
 
 func TestParseOpenCodeModelsPreservesIDsAndStripsANSI(t *testing.T) {
 	models, err := ParseOpenCodeModels([]byte(
-		"\x1b]8;;https://example.test\aopenrouter/anthropic/claude-sonnet-4\x1b]8;;\a details\n" +
+		"\x1b[1mopenrouter/anthropic/claude-sonnet-4\x1b[0m\n" +
 			"\x1b[31mzhipu/glm-5\x1b[0m\n" +
 			"not-qualified\n" +
 			"Error loading ignored/provider\n"))
@@ -309,23 +309,19 @@ func TestParseOpenCodeModelsPreservesIDsAndStripsANSI(t *testing.T) {
 	}
 }
 
-func TestProviderNamesAndGrouping(t *testing.T) {
+func TestProviderNames(t *testing.T) {
 	tests := []struct {
 		provider string
 		name     string
-		grouped  bool
 	}{
 		{provider: "openai-codex", name: "OpenAI Codex"},
-		{provider: "opencode-go", name: "OpenCode Go", grouped: true},
-		{provider: "opencode", name: "OpenCode Zen", grouped: true},
+		{provider: "opencode-go", name: "OpenCode Go"},
+		{provider: "opencode", name: "OpenCode Zen"},
 		{provider: "some_provider", name: "Some Provider"},
 	}
 	for _, test := range tests {
 		if got := ProviderName(test.provider); got != test.name {
 			t.Errorf("ProviderName(%q) = %q, want %q", test.provider, got, test.name)
-		}
-		if got := ProviderUsesCreatorGroups(test.provider); got != test.grouped {
-			t.Errorf("ProviderUsesCreatorGroups(%q) = %v, want %v", test.provider, got, test.grouped)
 		}
 	}
 }

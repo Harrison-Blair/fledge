@@ -13,11 +13,7 @@ import (
 const (
 	eventSessionStart    = "session_start"
 	eventMessageCreated  = "message_created"
-	eventMessageReplied  = "message_replied" // Legacy reply-and-acknowledge event.
 	eventReplyCreated    = "reply_created"
-	eventDeliveryAttempt = "delivery_attempt"
-	eventDeliveryOutcome = "delivery_outcome"
-	eventAcknowledged    = "acknowledged"
 	eventAgentRegistered = "agent_registered"
 	eventAgentStopped    = "agent_stopped"
 	eventAgentStatus     = "agent_status_changed"
@@ -164,51 +160,15 @@ func validateEvent(e event) error {
 		if strings.TrimSpace(e.Session) == "" {
 			return errors.New("session_start is missing Herdr session name")
 		}
-		if e.MessageID != "" || e.Sender != "" || e.Recipient != "" || e.ReplyTo != "" || e.Body != "" || e.RecipientPane != "" || e.Accepted != nil || e.Detail != "" || e.Actor != "" {
-			return errors.New("session_start has unexpected fields")
-		}
-	case eventMessageCreated, eventMessageReplied, eventReplyCreated:
-		if e.Session != "" {
-			return errors.New("message event has unexpected session name")
-		}
+	case eventMessageCreated, eventReplyCreated:
 		if strings.TrimSpace(e.MessageID) == "" || strings.TrimSpace(e.Sender) == "" || strings.TrimSpace(e.Recipient) == "" {
 			return errors.New("message event is missing identity fields")
 		}
 		if err := ValidateBody(e.Body); err != nil {
 			return err
 		}
-		if e.Sender == e.Recipient {
-			return errors.New("message sender and recipient must differ")
-		}
-		if e.Type == eventMessageCreated && e.ReplyTo != "" {
-			return errors.New("message_created must not have reply_to")
-		}
-		if (e.Type == eventMessageReplied || e.Type == eventReplyCreated) && e.ReplyTo == "" {
+		if e.Type == eventReplyCreated && strings.TrimSpace(e.ReplyTo) == "" {
 			return errors.New("reply event is missing reply_to")
-		}
-		if e.Recipient == "user" && e.RecipientPane != "" {
-			return errors.New("user message has a recipient pane")
-		}
-		if e.Recipient != "user" && e.RecipientPane == "" {
-			return errors.New("agent message is missing recipient pane")
-		}
-		if e.Accepted != nil || e.Detail != "" || e.Actor != "" {
-			return errors.New("message event has outcome fields")
-		}
-	case eventDeliveryAttempt:
-		if e.MessageID == "" || e.Session != "" || e.Sender != "" || e.Recipient != "" || e.ReplyTo != "" || e.Body != "" || e.RecipientPane != "" || e.Accepted != nil || e.Detail != "" || e.Actor != "" {
-			return errors.New("invalid delivery_attempt fields")
-		}
-	case eventDeliveryOutcome:
-		if e.MessageID == "" || e.Session != "" || e.Accepted == nil || e.Sender != "" || e.Recipient != "" || e.ReplyTo != "" || e.Body != "" || e.RecipientPane != "" || e.Actor != "" {
-			return errors.New("invalid delivery_outcome fields")
-		}
-		if *e.Accepted && e.Detail != "" {
-			return errors.New("accepted delivery outcome has failure detail")
-		}
-	case eventAcknowledged:
-		if e.MessageID == "" || e.Session != "" || e.Sender != "" || e.Recipient != "" || e.ReplyTo != "" || e.Body != "" || e.RecipientPane != "" || e.Accepted != nil || e.Detail != "" || e.Actor != "" {
-			return errors.New("invalid acknowledged fields")
 		}
 	case eventAgentRegistered, eventAgentStopped, eventAgentStatus,
 		eventTaskAssigned, eventTaskProgress, eventTaskBlocked, eventTaskDecision,
@@ -240,11 +200,11 @@ func applyEvent(state *logState, e event) error {
 		return fmt.Errorf("event belongs to session %q, expected %q", e.SessionID, state.sessionID)
 	}
 	switch e.Type {
-	case eventMessageCreated, eventMessageReplied, eventReplyCreated:
+	case eventMessageCreated, eventReplyCreated:
 		if _, exists := state.messages[e.MessageID]; exists {
 			return fmt.Errorf("duplicate message ID %q", e.MessageID)
 		}
-		if e.Type == eventMessageReplied || e.Type == eventReplyCreated {
+		if e.Type == eventReplyCreated {
 			original, exists := state.messages[e.ReplyTo]
 			if !exists {
 				return fmt.Errorf("reply target %q does not exist", e.ReplyTo)
@@ -255,68 +215,18 @@ func applyEvent(state *logState, e event) error {
 			if original.Status != StatusDelivered && original.Status != StatusUncertain {
 				return fmt.Errorf("reply target %q is in status %s", e.ReplyTo, original.Status)
 			}
-			if e.Type == eventMessageReplied && original.Status == StatusUncertain {
-				original.Status = StatusDelivered
-				original.DeliveredAt = e.At
-				original.UpdatedAt = e.At
-				state.messages[e.ReplyTo] = original
-			}
 		}
+		// A message's delivery status is projected from its wake; only a message
+		// to the local user, which has no wake, is delivered on creation.
 		status := StatusPending
-		var deliveredAt time.Time
 		if e.Recipient == "user" {
 			status = StatusDelivered
-			deliveredAt = e.At
 		}
 		state.messages[e.MessageID] = Message{
 			ID: e.MessageID, Sender: e.Sender, Recipient: e.Recipient, ReplyTo: e.ReplyTo,
-			Body: e.Body, Status: status, RecipientPane: e.RecipientPane,
-			CreatedAt: e.At, UpdatedAt: e.At, DeliveredAt: deliveredAt,
+			Body: e.Body, Status: status, RecipientPane: e.RecipientPane, CreatedAt: e.At,
 		}
 		state.order = append(state.order, e.MessageID)
-	case eventDeliveryAttempt:
-		message, ok := state.messages[e.MessageID]
-		if !ok {
-			return fmt.Errorf("delivery attempt references unknown message %q", e.MessageID)
-		}
-		if message.Status != StatusPending {
-			return fmt.Errorf("delivery attempt for message %q in status %s", e.MessageID, message.Status)
-		}
-		message.Status = StatusUncertain
-		message.AttemptedAt = e.At
-		message.UpdatedAt = e.At
-		state.messages[e.MessageID] = message
-	case eventDeliveryOutcome:
-		message, ok := state.messages[e.MessageID]
-		if !ok {
-			return fmt.Errorf("delivery outcome references unknown message %q", e.MessageID)
-		}
-		if message.Status != StatusUncertain {
-			return fmt.Errorf("delivery outcome for message %q in status %s", e.MessageID, message.Status)
-		}
-		if *e.Accepted {
-			message.Status = StatusDelivered
-			message.DeliveredAt = e.At
-		} else {
-			message.Status = StatusFailed
-			message.Failure = e.Detail
-		}
-		message.UpdatedAt = e.At
-		state.messages[e.MessageID] = message
-	case eventAcknowledged:
-		message, ok := state.messages[e.MessageID]
-		if !ok {
-			return fmt.Errorf("acknowledgement references unknown message %q", e.MessageID)
-		}
-		if message.Status != StatusDelivered && message.Status != StatusUncertain {
-			return fmt.Errorf("acknowledgement for message %q in status %s", e.MessageID, message.Status)
-		}
-		if message.Status == StatusUncertain {
-			message.Status = StatusDelivered
-			message.DeliveredAt = e.At
-			message.UpdatedAt = e.At
-			state.messages[e.MessageID] = message
-		}
 	case eventAgentRegistered, eventAgentStopped, eventAgentStatus,
 		eventTaskAssigned, eventTaskProgress, eventTaskBlocked, eventTaskDecision,
 		eventTaskResumed, eventTaskCompleted, eventTaskFailed, eventTaskCanceled,

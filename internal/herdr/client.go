@@ -18,10 +18,6 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/fswatch"
 )
 
-// MaxResponseBytes bounds how much stdout Fledge buffers from a single Herdr
-// CLI invocation, protecting against an unbounded or misbehaving response.
-const MaxResponseBytes = 4 << 20
-
 // Session is a named Herdr session returned by the Herdr CLI.
 type Session struct {
 	Name       string `json:"name"`
@@ -384,32 +380,12 @@ func (c *Client) Delete(ctx context.Context, name string) error {
 }
 
 func (c *Client) runJSON(ctx context.Context, destination any, args ...string) error {
-	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-
 	command := exec.CommandContext(ctx, c.binary, args...)
-	stdoutPipe, err := command.StdoutPipe()
-	if err != nil {
-		return err
-	}
 	command.Stderr = &stderr
-	if err := command.Start(); err != nil {
-		return err
-	}
 
-	_, readErr := io.CopyN(&stdout, stdoutPipe, MaxResponseBytes+1)
-	if readErr != nil && !errors.Is(readErr, io.EOF) {
-		_ = command.Process.Kill()
-		_ = command.Wait()
-		return fmt.Errorf("read JSON response: %w", readErr)
-	}
-	if stdout.Len() > MaxResponseBytes {
-		_ = command.Process.Kill()
-		_ = command.Wait()
-		return fmt.Errorf("response exceeds %d bytes", MaxResponseBytes)
-	}
-
-	if err := command.Wait(); err != nil {
+	stdout, err := command.Output()
+	if err != nil {
 		message := strings.TrimSpace(stderr.String())
 		if message == "" {
 			return err
@@ -420,19 +396,12 @@ func (c *Client) runJSON(ctx context.Context, destination any, args ...string) e
 	if destination == nil {
 		return nil
 	}
-	if stdout.Len() == 0 {
+	if len(stdout) == 0 {
 		return errors.New("decode JSON response: empty response")
 	}
-
-	decoder := json.NewDecoder(&stdout)
-	if err := decoder.Decode(destination); err != nil {
+	if err := json.Unmarshal(stdout, destination); err != nil {
 		return fmt.Errorf("decode JSON response: %w", err)
 	}
-
-	if decoder.Decode(&struct{}{}) != io.EOF {
-		return errors.New("decode JSON response: unexpected trailing data")
-	}
-
 	return nil
 }
 

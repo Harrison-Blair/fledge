@@ -220,87 +220,75 @@ func (m *Manager) Start(ctx context.Context, dir string, options StartOptions) e
 	if protocol < watchproc.RequiredHerdrProtocol {
 		return fmt.Errorf("Herdr protocol %d is unsupported; protocol %d or newer is required. Upgrade Herdr, then restart with fledge stop and fledge start", protocol, watchproc.RequiredHerdrProtocol)
 	}
-	existingRecord, recordFound, err := readRecord(root)
+	if err := ValidateAgentTimeout(options.Timeout); err != nil {
+		return err
+	}
+	if err := initializeStateDirectory(root); err != nil {
+		return err
+	}
+
+	// A single startup lock guards the whole read -> list -> attach-or-create
+	// flow, so the record and the live session are observed under one hold.
+	unlock, err := lockSessionRecord(ctx, root)
 	if err != nil {
 		return err
+	}
+	existingRecord, recordFound, err := readRecord(root)
+	if err != nil {
+		return errors.Join(err, unlock())
 	}
 	sessions, err := m.herdr.List(ctx)
 	if err != nil {
-		return err
+		return errors.Join(err, unlock())
 	}
 	if recordFound {
-		// Pre-lock reattach validates the selection flags before binding, so a
-		// rejected reattach never creates or upgrades durable messaging state.
-		handled, reattachErr := m.reattachRunningSession(ctx, root, sessions, options, existingRecord, true,
-			func(value record) (record, error) {
-				return m.bindExistingRecord(ctx, root, value)
-			})
-		if handled {
-			return reattachErr
+		if session, exists := sessionByName(sessions, existingRecord.SessionName); exists && session.Running {
+			if options.HasSelection() {
+				return errors.Join(errors.New("startup selection flags cannot be used when reattaching to an existing orchestrator"), unlock())
+			}
+			if err := unlock(); err != nil {
+				return err
+			}
+			m.logSessionEvent(root, existingRecord.SessionName, "reattached to running session", "session", existingRecord.SessionName)
+			m.launchWatcherWarn(root)
+			return m.herdr.Attach(ctx, existingRecord.SessionName, root)
 		}
-	}
-	if err := ValidateAgentTimeout(options.Timeout); err != nil {
-		return err
 	}
 
 	profile, err := project.LoadOrchestratorProfile(root)
 	if err != nil {
-		return err
+		return errors.Join(err, unlock())
 	}
 	_, selectedHarness, nativeArgs, _, err := m.resolveSelection(ctx, selectionInput{
 		Name: "orchestrator", Harness: options.Harness, Model: options.Model, ModelSet: options.ModelSet,
 		NativeArgs: options.NativeArgs, Root: root,
 	})
 	if err != nil {
-		return err
+		return errors.Join(err, unlock())
 	}
 	if selectedHarness.ID == "codex" {
 		if err := project.EnsureCodexRules(root); err != nil {
-			return err
+			return errors.Join(err, unlock())
 		}
 	}
 
 	value := existingRecord
 	recordCreated := false
 	if !recordFound {
-		value, recordCreated, err = m.loadOrCreateRecord(root)
+		created := record{Version: recordVersion}
+		created.SessionName, err = generateSessionName(root, m.random)
 		if err != nil {
-			return err
+			return errors.Join(err, unlock())
 		}
-		if !recordCreated {
-			return errors.New("another fledge start initialized this project concurrently; retry the command")
+		createdByUs, createErr := createRecord(root, created)
+		if createErr != nil {
+			return errors.Join(createErr, unlock())
 		}
-	}
-	unlock, err := lockSessionRecord(ctx, root)
-	if err != nil {
-		if recordCreated {
-			return errors.Join(err, removeRecordIfMatches(root, value.SessionName))
+		if !createdByUs {
+			return errors.Join(errors.New("another fledge start initialized this project concurrently; retry the command"), unlock())
 		}
-		return err
-	}
-	if err := revalidateLockedRecord(root, value.SessionName, recordCreated); err != nil {
-		return errors.Join(err, unlock())
-	}
-	if recordFound {
-		lockedSessions, listErr := m.herdr.List(ctx)
-		if listErr != nil {
-			return errors.Join(listErr, unlock())
-		}
-		// Post-lock reattach binds durable state and releases the startup lock
-		// this branch owns before validating selection flags, so a session that
-		// began running between the two List calls is bound and unlocked even
-		// when the flags then make Start return an error.
-		handled, reattachErr := m.reattachRunningSession(ctx, root, lockedSessions, options, value, false,
-			func(value record) (record, error) {
-				bound, bindErr := bindRecordToStore(root, value)
-				if bindErr != nil {
-					return record{}, errors.Join(bindErr, unlock())
-				}
-				return bound, unlock()
-			})
-		if handled {
-			return reattachErr
-		}
+		value = created
+		recordCreated = true
 	}
 	generatedInstructions := orchestratorInstructions(profile.Instructions, "")
 	generatedPrompt, err := project.EnsureGeneratedOrchestratorPrompt(root, generatedInstructions)
@@ -348,64 +336,6 @@ func (m *Manager) Start(ctx context.Context, dir string, options StartOptions) e
 
 	m.launchWatcherWarn(root)
 	return m.herdr.Attach(ctx, value.SessionName, root)
-}
-
-// revalidateLockedRecord re-reads the session record after the startup lock is
-// acquired, removing a record this start attempt created when it can no longer
-// be read back.
-func revalidateLockedRecord(root, sessionName string, recordCreated bool) error {
-	lockedRecord, stillPresent, readErr := readRecord(root)
-	if readErr != nil {
-		if recordCreated {
-			return errors.Join(readErr, removeRecord(root))
-		}
-		return readErr
-	}
-	if !stillPresent || lockedRecord.SessionName != sessionName {
-		return errors.New("Fledge session record changed while waiting for startup; retry the command")
-	}
-	return nil
-}
-
-// reattachBinder binds a record to its durable messaging state and returns the
-// (possibly upgraded) record. The pre-lock and post-lock reattach paths supply
-// different binders because they own the startup lock differently.
-type reattachBinder func(record) (record, error)
-
-// reattachRunningSession attaches to an already-running orchestrator, sharing
-// the running-session check, log, watcher launch, and attach across Start's two
-// reattach paths. The paths differ only in whether selection flags are rejected
-// before or after binding (selectionBeforeBind) and in which binder runs; the
-// binder is invoked only once the session is confirmed running, so a caller
-// that owns the startup lock keeps it when this returns not-handled. handled
-// reports whether the running-session path was taken; when true, Start returns
-// the accompanying error verbatim.
-func (m *Manager) reattachRunningSession(
-	ctx context.Context,
-	root string,
-	sessions []herdr.Session,
-	options StartOptions,
-	value record,
-	selectionBeforeBind bool,
-	bind reattachBinder,
-) (bool, error) {
-	session, exists := sessionByName(sessions, value.SessionName)
-	if !exists || !session.Running {
-		return false, nil
-	}
-	if selectionBeforeBind && options.HasSelection() {
-		return true, errors.New("startup selection flags cannot be used when reattaching to an existing orchestrator")
-	}
-	bound, err := bind(value)
-	if err != nil {
-		return true, err
-	}
-	if !selectionBeforeBind && options.HasSelection() {
-		return true, errors.New("startup selection flags cannot be used when reattaching to an existing orchestrator")
-	}
-	m.logSessionEvent(root, bound.SessionName, "reattached to running session", "session", bound.SessionName)
-	m.launchWatcherWarn(root)
-	return true, m.herdr.Attach(ctx, bound.SessionName, root)
 }
 
 type selectionInput struct {
@@ -513,12 +443,9 @@ func callerInput(paneID string, snapshot herdr.Snapshot, available bool) tui.Cal
 func modelChoices(models []harness.Model) []tui.Choice {
 	choices := make([]tui.Choice, 0, len(models))
 	for _, model := range models {
-		group := model.Maker
+		group := ""
 		if model.Provider != "" {
 			group = harness.ProviderName(model.Provider)
-			if harness.ProviderUsesCreatorGroups(model.Provider) && model.Maker != "" {
-				group += " / " + model.Maker
-			}
 		}
 		choices = append(choices, tui.Choice{Value: model.ID, Label: model.Name, Group: group})
 	}
@@ -1115,45 +1042,6 @@ type record struct {
 	MessagingSessionID string `json:"messaging_session_id,omitempty"`
 }
 
-// bindExistingRecord upgrades a legacy running-session record while the
-// startup lock excludes stop/start races. Coordination commands can then
-// validate the record entirely from durable local state, without a Herdr call.
-func (m *Manager) bindExistingRecord(ctx context.Context, root string, value record) (record, error) {
-	unlock, err := lockSessionRecord(ctx, root)
-	if err != nil {
-		return record{}, err
-	}
-	locked, found, err := readRecord(root)
-	if err != nil {
-		return record{}, errors.Join(err, unlock())
-	}
-	if !found || locked.SessionName != value.SessionName ||
-		(value.MessagingSessionID != "" && locked.MessagingSessionID != value.MessagingSessionID) {
-		return record{}, errors.Join(errors.New("Fledge session record changed while binding its durable session; retry the command"), unlock())
-	}
-	bound, bindErr := bindRecordToStore(root, locked)
-	return bound, errors.Join(bindErr, unlock())
-}
-
-func bindRecordToStore(root string, value record) (record, error) {
-	store := messaging.New(root, value.SessionName)
-	sessionID, err := store.Ensure()
-	if err != nil {
-		return record{}, err
-	}
-	if value.MessagingSessionID != "" && value.MessagingSessionID != sessionID {
-		return record{}, fmt.Errorf("%w: record has %q, log has %q", messaging.ErrSessionMismatch, value.MessagingSessionID, sessionID)
-	}
-	if value.MessagingSessionID == sessionID {
-		return value, nil
-	}
-	if err := writeRecordSessionBinding(root, value.SessionName, sessionID, false); err != nil {
-		return record{}, err
-	}
-	value.MessagingSessionID = sessionID
-	return value, nil
-}
-
 func writeRecordSessionBinding(root, session, sessionID string, replace bool) error {
 	if strings.TrimSpace(sessionID) == "" {
 		return errors.New("messaging session ID is empty")
@@ -1183,47 +1071,6 @@ func rewriteRecord(root string, value record) error {
 	}
 	contents = append(contents, '\n')
 	return fsutil.WriteFileAtomic(path, contents, 0o600)
-}
-
-func (m *Manager) loadOrCreateRecord(root string) (record, bool, error) {
-	existing, found, err := readRecord(root)
-	if err != nil {
-		return record{}, false, err
-	}
-	if found {
-		if err := initializeStateDirectory(root); err != nil {
-			return record{}, false, err
-		}
-		return existing, false, nil
-	}
-
-	if err := initializeStateDirectory(root); err != nil {
-		return record{}, false, err
-	}
-
-	created := record{Version: recordVersion}
-	created.SessionName, err = generateSessionName(root, m.random)
-	if err != nil {
-		return record{}, false, err
-	}
-
-	createdByUs, err := createRecord(root, created)
-	if err != nil {
-		return record{}, false, err
-	}
-	if createdByUs {
-		return created, true, nil
-	}
-
-	// Another start won the race to initialize this directory.
-	existing, found, err = readRecord(root)
-	if err != nil {
-		return record{}, false, err
-	}
-	if !found {
-		return record{}, false, errors.New("Fledge session record disappeared during creation")
-	}
-	return existing, false, nil
 }
 
 func canonicalDirectory(dir string) (string, error) {
