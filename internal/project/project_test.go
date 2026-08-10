@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestInitCreatesProjectFiles(t *testing.T) {
@@ -349,6 +350,71 @@ func TestFindSkipsDirectoriesWithoutMarker(t *testing.T) {
 	if !errors.Is(err, ErrNotInitialized) {
 		t.Fatalf("Find() error = %v, want ErrNotInitialized", err)
 	}
+}
+
+func TestEnsureRuntimeIgnoreAppendsMissingRuntimeEntries(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		give string
+		want string
+	}{
+		{
+			name: "custom user entries preserved and runtime entries appended",
+			give: "session.json\nlocal-cache/\n",
+			want: "session.json\nlocal-cache/\n" + "session.lock\npreferences.json\nlogs/\ntmp/\nprofiles/generated/\n",
+		},
+		{
+			name: "exact legacy contents migrated wholesale",
+			give: legacyIgnoreContents,
+			want: ignoreContents,
+		},
+		{
+			name: "no trailing newline still gains a separator",
+			give: "session.json",
+			want: "session.json\n" + "session.lock\npreferences.json\nlogs/\ntmp/\nprofiles/generated/\n",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			writeStateFile(t, root, ".gitignore", test.give)
+
+			if err := EnsureRuntimeIgnore(root); err != nil {
+				t.Fatalf("EnsureRuntimeIgnore() error = %v", err)
+			}
+			assertFileContents(t, filepath.Join(root, stateDirectory, ".gitignore"), test.want)
+		})
+	}
+}
+
+func TestEnsureRuntimeIgnoreIsNoOpWhenAllEntriesPresent(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeStateFile(t, root, ".gitignore", ignoreContents)
+	path := filepath.Join(root, stateDirectory, ".gitignore")
+
+	// A no-op must not rewrite the file, so pin an old mtime and confirm it holds.
+	old := time.Unix(1000, 0)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureRuntimeIgnore(root); err != nil {
+		t.Fatalf("EnsureRuntimeIgnore() error = %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.ModTime().Equal(old) {
+		t.Errorf("gitignore was rewritten (mtime = %v, want %v); expected a no-op", info.ModTime(), old)
+	}
+	assertFileContents(t, path, ignoreContents)
 }
 
 func assertFileContents(t *testing.T, path, want string) {

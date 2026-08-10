@@ -45,6 +45,26 @@ func TestEnsureGeneratedOrchestratorPromptReusesRefreshesAndProtectsFile(t *test
 	}
 }
 
+func TestEnsureGeneratedOrchestratorPromptReportsUnreadableExisting(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	// A directory at the prompt path makes ReadFile fail with something other
+	// than not-exist, which must surface rather than silently recreating the
+	// file (which would then fail to write over the directory anyway).
+	path := filepath.Join(root, stateDirectory, profilesDir, generatedProfilesDir, generatedOrchestratorFilename)
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := EnsureGeneratedOrchestratorPrompt(root, "policy")
+	if err == nil {
+		t.Fatal("EnsureGeneratedOrchestratorPrompt() error = nil, want a read failure")
+	}
+	if !strings.Contains(err.Error(), "read generated orchestrator prompt") {
+		t.Errorf("EnsureGeneratedOrchestratorPrompt() error = %v, want a wrapped read error", err)
+	}
+}
+
 func TestLoadOrchestratorProfileAcceptsSupportedTOMLStrings(t *testing.T) {
 	t.Parallel()
 

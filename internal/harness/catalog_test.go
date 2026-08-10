@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -357,6 +358,85 @@ func TestDiscoveryDeduplicatesAndSortsModels(t *testing.T) {
 		},
 	})
 	assertModelIDs(t, catalog.Models, []string{"", "alpha/a-model", "zeta/z-model"})
+}
+
+func TestCommandRunnerExecutesRealScripts(t *testing.T) {
+	dir := t.TempDir()
+	writeScript := func(name, body string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	t.Run("exit zero returns combined output", func(t *testing.T) {
+		path := writeScript("ok.sh", "printf 'openai/gpt-5\\nanthropic/claude\\n'\nexit 0\n")
+		out, err := commandRunner(context.Background(), path)
+		if err != nil {
+			t.Fatalf("commandRunner() error = %v", err)
+		}
+		if want := "openai/gpt-5\nanthropic/claude\n"; string(out) != want {
+			t.Errorf("commandRunner() output = %q, want %q", out, want)
+		}
+	})
+
+	t.Run("non-zero with output wraps detail", func(t *testing.T) {
+		path := writeScript("fail.sh", "echo boom\nexit 3\n")
+		out, err := commandRunner(context.Background(), path)
+		if out != nil {
+			t.Errorf("commandRunner() output = %q, want nil on failure", out)
+		}
+		if err == nil {
+			t.Fatal("commandRunner() error = nil, want failure")
+		}
+		if !strings.Contains(err.Error(), "boom") || !strings.Contains(err.Error(), "exit status 3") {
+			t.Errorf("commandRunner() error = %q, want wrapped exit status and detail", err)
+		}
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			t.Errorf("commandRunner() error = %v, want it to wrap *exec.ExitError", err)
+		}
+	})
+
+	t.Run("non-zero without output returns bare error", func(t *testing.T) {
+		path := writeScript("bare.sh", "exit 4\n")
+		out, err := commandRunner(context.Background(), path)
+		if out != nil {
+			t.Errorf("commandRunner() output = %q, want nil on failure", out)
+		}
+		if err == nil {
+			t.Fatal("commandRunner() error = nil, want failure")
+		}
+		if err.Error() != "exit status 4" {
+			t.Errorf("commandRunner() error = %q, want bare %q", err, "exit status 4")
+		}
+	})
+}
+
+func TestDefaultCodexCachePathFallsBackToHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", "")
+	t.Setenv("HOME", home)
+
+	got, err := defaultCodexCachePath()
+	if err != nil {
+		t.Fatalf("defaultCodexCachePath() error = %v", err)
+	}
+	if want := filepath.Join(home, ".codex", "models_cache.json"); got != want {
+		t.Errorf("defaultCodexCachePath() = %q, want %q", got, want)
+	}
+}
+
+func TestParsePiModelsDropsLoneTokensAndLabelLines(t *testing.T) {
+	models, err := ParsePiModels([]byte(
+		"solo\n" +
+			"group: heading\n" +
+			"openai gpt-5.6 400K 128K yes yes\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertModelIDs(t, models, []string{"openai/gpt-5.6"})
 }
 
 func assertModelIDs(t *testing.T, models []Model, want []string) {

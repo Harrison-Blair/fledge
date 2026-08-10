@@ -468,6 +468,37 @@ func TestClientWaitReadyDoesNotRetryWithoutAChangeEvent(t *testing.T) {
 	}
 }
 
+func TestClientWaitReadyReportsWatchChannelClosure(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*fakeWatcher)
+	}{
+		{name: "events channel closed", setup: func(w *fakeWatcher) { close(w.events) }},
+		{name: "errors channel closed", setup: func(w *fakeWatcher) { close(w.errors) }},
+		{name: "nil error delivered", setup: func(w *fakeWatcher) { w.errors <- nil }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configureHelper(t, "")
+			// The first snapshot fails (empty response) so WaitReady enters its
+			// watch loop, where the closed/nil channel is the only signal.
+			t.Setenv(helperSequenceEnv, writeSequence(t, []string{
+				`{"sessions":[{"name":"session-name","running":true,"socket_path":"/herdr/session.sock"}]}`,
+				"",
+			}))
+			watcher := newFakeWatcher()
+			test.setup(watcher)
+			client := NewClient(helperBinary(t), nil, nil, nil)
+			client.watch = func(string) (fswatch.Watcher, error) { return watcher, nil }
+
+			_, err := client.WaitReady(context.Background(), "session-name", 30*time.Second)
+			if err == nil || !strings.Contains(err.Error(), "filesystem watch ended") {
+				t.Fatalf("WaitReady() error = %v, want 'filesystem watch ended'", err)
+			}
+		})
+	}
+}
+
 type fakeWatcher struct {
 	events chan struct{}
 	errors chan error
@@ -529,6 +560,13 @@ func TestClientLayoutAndAgentCommands(t *testing.T) {
 				return client.StartAgent(context.Background(), "s", "worker", "codex", "w1:p2", 45*time.Second, []string{"--model", "gpt-custom", "--foo"})
 			},
 			wantArgs: []string{"--session", "s", "agent", "start", "worker", "--kind", "codex", "--pane", "w1:p2", "--timeout", "45000", "--", "--model", "gpt-custom", "--foo"},
+		},
+		{
+			name: "start agent without native args omits the trailing dash",
+			operation: func(client *Client) error {
+				return client.StartAgent(context.Background(), "s", "worker", "codex", "w1:p2", 45*time.Second, nil)
+			},
+			wantArgs: []string{"--session", "s", "agent", "start", "worker", "--kind", "codex", "--pane", "w1:p2", "--timeout", "45000"},
 		},
 		{
 			name: "prompt agent",

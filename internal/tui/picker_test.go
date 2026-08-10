@@ -44,6 +44,7 @@ func TestClassifyCaller(t *testing.T) {
 		{name: "known shell pane", input: CallerInput{PaneID: "pane-1", SessionAgentsAvailable: true, PaneIDs: []string{"pane-1"}}, want: CallerDirectUser},
 		{name: "different session pane", input: CallerInput{PaneID: "pane-1", SessionAgentsAvailable: true, PaneIDs: []string{"pane-2"}, Agents: []PaneAgent{{PaneID: "pane-2", Harness: "claude"}}}, want: CallerUnknown},
 		{name: "unrecognized occupant", input: CallerInput{PaneID: "pane-1", SessionAgentsAvailable: true, PaneIDs: []string{"pane-1"}, Agents: []PaneAgent{{PaneID: "pane-1", Harness: "shell"}}}, want: CallerDirectUser},
+		{name: "unrecognized harness and pane absent from layout", input: CallerInput{PaneID: "pane-1", SessionAgentsAvailable: true, PaneIDs: []string{"pane-2"}, Agents: []PaneAgent{{PaneID: "pane-1", Harness: "shell"}}}, want: CallerUnknown},
 	}
 
 	for _, test := range tests {
@@ -421,6 +422,139 @@ func TestSelectPrependsGroupDefaultsPerGroup(t *testing.T) {
 				t.Errorf("model choices = %#v, want %#v", prompts.seenChoices[0], test.want)
 			}
 		})
+	}
+}
+
+func TestChoiceModelFilterEditing(t *testing.T) {
+	t.Parallel()
+
+	choices := []Choice{{Value: "codex", Label: "Codex"}, {Value: "claude", Label: "Claude"}}
+	model := newChoiceModel("Harness", choices, true)
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("cla")})
+	model = updated.(choiceModel)
+	if model.filter != "cla" || len(model.visible) != 1 || model.choices[model.visible[0]].Value != "claude" {
+		t.Fatalf("after typing: filter=%q visible=%#v", model.filter, model.visible)
+	}
+
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	model = updated.(choiceModel)
+	if model.filter != "cl" || len(model.visible) != 1 || model.choices[model.visible[0]].Value != "claude" {
+		t.Fatalf("after backspace: filter=%q visible=%#v", model.filter, model.visible)
+	}
+
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	model = updated.(choiceModel)
+	if model.filter != "" || len(model.visible) != len(choices) {
+		t.Fatalf("after ctrl+u: filter=%q visible=%#v", model.filter, model.visible)
+	}
+
+	// A non-filterable model ignores filter-editing keys entirely.
+	plain := newChoiceModel("Harness", choices, false)
+	updated, _ = plain.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	if got := updated.(choiceModel).filter; got != "" {
+		t.Errorf("non-filterable filter = %q, want empty", got)
+	}
+}
+
+func TestTextModelBackspaceClearsError(t *testing.T) {
+	t.Parallel()
+
+	model := textModel{title: "Name", value: "Bad", validate: ValidateAgentName}
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(textModel)
+	if model.err == nil {
+		t.Fatal("expected validation error after invalid enter")
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	model = updated.(textModel)
+	if model.err != nil {
+		t.Errorf("err after backspace = %v, want cleared", model.err)
+	}
+	if model.value != "Ba" {
+		t.Errorf("value after backspace = %q, want %q", model.value, "Ba")
+	}
+}
+
+func TestSelectorWrapsPromptErrorsPerStage(t *testing.T) {
+	t.Parallel()
+
+	failure := errors.New("prompt boom")
+	tests := []struct {
+		name    string
+		request SelectionRequest
+		want    string
+	}{
+		{
+			name:    "harness stage",
+			request: SelectionRequest{Harnesses: []Choice{{Value: "codex"}}},
+			want:    "select harness:",
+		},
+		{
+			name: "model stage",
+			request: SelectionRequest{
+				Harness: "pi",
+				Models:  func(context.Context, string) ([]Choice, error) { return []Choice{{Value: "m"}}, nil },
+			},
+			want: "select model:",
+		},
+		{
+			name:    "name stage",
+			request: SelectionRequest{Harness: "pi", Model: "custom/model"},
+			want:    "select agent name:",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			prompts := &fakePromptRunner{err: failure}
+			selector := testSelector(t, true, prompts)
+			_, err := selector.Select(context.Background(), test.request)
+			if err == nil || !strings.Contains(err.Error(), test.want) || !errors.Is(err, failure) {
+				t.Fatalf("Select() error = %v, want %q wrapping %v", err, test.want, failure)
+			}
+		})
+	}
+}
+
+func TestSelectorWrapsModelLoaderFailure(t *testing.T) {
+	t.Parallel()
+
+	failure := errors.New("catalog down")
+	prompts := &fakePromptRunner{choices: []string{"ignored"}, text: "worker-1"}
+	selector := testSelector(t, true, prompts)
+	_, err := selector.Select(context.Background(), SelectionRequest{
+		Harness: "pi",
+		Models:  func(context.Context, string) ([]Choice, error) { return nil, failure },
+	})
+	if err == nil || !strings.Contains(err.Error(), "load models for pi:") || !errors.Is(err, failure) {
+		t.Fatalf("Select() error = %v, want 'load models for pi:' wrapping %v", err, failure)
+	}
+}
+
+func TestSelectorRequiresInstalledHarnesses(t *testing.T) {
+	t.Parallel()
+
+	prompts := &fakePromptRunner{}
+	selector := testSelector(t, true, prompts)
+	_, err := selector.Select(context.Background(), SelectionRequest{})
+	if err == nil || !strings.Contains(err.Error(), "no installed harnesses are available") {
+		t.Fatalf("Select() error = %v, want no-harnesses error", err)
+	}
+	if len(prompts.calls) != 0 {
+		t.Errorf("prompt calls = %#v, want none", prompts.calls)
+	}
+}
+
+func TestWithHarnessDefaultsDoesNotDoublePrependDefault(t *testing.T) {
+	t.Parallel()
+
+	// Ungrouped choices that already carry a harness-default entry are returned
+	// unchanged rather than gaining a second one.
+	choices := []Choice{{Value: "", Label: "Harness default"}, {Value: "gpt-5", Label: "GPT-5"}}
+	got := withHarnessDefaults(choices)
+	if !reflect.DeepEqual(got, choices) {
+		t.Errorf("withHarnessDefaults() = %#v, want unchanged %#v", got, choices)
 	}
 }
 

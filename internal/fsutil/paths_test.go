@@ -24,6 +24,9 @@ func TestPathsNestSessionLogsBeneathState(t *testing.T) {
 	if got, want := TempSession(root, "fledge-demo-0a1b2c3d"), filepath.Join(root, ".fledge", "tmp", "fledge-demo-0a1b2c3d"); got != want {
 		t.Errorf("TempSession() = %q, want %q", got, want)
 	}
+	if got, want := Context(root, "fledge-demo-0a1b2c3d"), filepath.Join(root, ".fledge", "tmp", "fledge-demo-0a1b2c3d", "context"); got != want {
+		t.Errorf("Context() = %q, want %q", got, want)
+	}
 }
 
 func TestValidSessionDirName(t *testing.T) {

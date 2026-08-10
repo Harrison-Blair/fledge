@@ -404,6 +404,11 @@ func TestCommandsPropagateManagerErrorsWithoutPrinting(t *testing.T) {
 		manager *fakeManager
 	}{
 		{name: "init", args: []string{"init", "/explicit"}, manager: &fakeManager{initErr: failure}},
+		{name: "start", args: []string{"start"}, manager: &fakeManager{startErr: failure}},
+		{name: "stop", args: []string{"stop"}, manager: &fakeManager{stopErr: failure}},
+		{name: "spawn", args: []string{"agent", "spawn", "-n", "worker"}, manager: &fakeManager{spawnErr: failure}},
+		{name: "stop agent", args: []string{"agent", "stop", "reviewer"}, manager: &fakeManager{stopAgentErr: failure}},
+		{name: "watch", args: []string{"watch"}, manager: &fakeManager{watchErr: failure}},
 		{name: "send", args: []string{"agent", "message", "send", "worker", "body"}, manager: &fakeManager{sendErr: failure}},
 		{name: "reply", args: []string{"agent", "message", "reply", "msg-1", "body"}, manager: &fakeManager{replyErr: failure}},
 		{name: "inbox", args: []string{"agent", "message", "inbox"}, manager: &fakeManager{inboxErr: failure}},
@@ -450,6 +455,22 @@ func TestInitUsesExplicitOrCurrentPath(t *testing.T) {
 	}
 	if got := strings.Join(manager.initPaths, ","); got != "/explicit,/current" {
 		t.Errorf("Init() paths = %q", got)
+	}
+}
+
+func TestInitWithoutArgsWrapsCurrentDirectoryError(t *testing.T) {
+	t.Parallel()
+
+	manager := &fakeManager{}
+	command := newRootCommand(manager, func() (string, error) { return "", errors.New("cwd failed") }, testVersion)
+	command.SetArgs([]string{"init"})
+
+	err := command.Execute()
+	if err == nil || !strings.Contains(err.Error(), "get current directory") {
+		t.Fatalf("Execute() error = %v, want wrapped cwd error", err)
+	}
+	if len(manager.initPaths) != 0 {
+		t.Fatalf("Init() called after cwd error: %#v", manager.initPaths)
 	}
 }
 
@@ -583,6 +604,10 @@ type fakeManager struct {
 	inboxResult     []messaging.Message
 	initErr         error
 	startErr        error
+	stopErr         error
+	spawnErr        error
+	stopAgentErr    error
+	watchErr        error
 	sendErr         error
 	replyErr        error
 	inboxErr        error
@@ -653,25 +678,25 @@ func (f *fakeManager) SetOutput(output io.Writer) {
 
 func (f *fakeManager) Stop(_ context.Context, dir string) error {
 	f.stopDirs = append(f.stopDirs, dir)
-	return nil
+	return f.stopErr
 }
 
 func (f *fakeManager) Watch(_ context.Context, dir string, options lifecycle.WatchOptions) error {
 	f.watchDirs = append(f.watchDirs, dir)
 	f.watchOptions = append(f.watchOptions, options)
-	return nil
+	return f.watchErr
 }
 
 func (f *fakeManager) Spawn(_ context.Context, dir string, options lifecycle.SpawnOptions) error {
 	f.spawnDirs = append(f.spawnDirs, dir)
 	f.spawnOptions = append(f.spawnOptions, options)
-	return nil
+	return f.spawnErr
 }
 
 func (f *fakeManager) StopAgent(_ context.Context, dir, name string) error {
 	f.stopAgentDirs = append(f.stopAgentDirs, dir)
 	f.stopAgentNames = append(f.stopAgentNames, name)
-	return nil
+	return f.stopAgentErr
 }
 
 func (f *fakeManager) SendMessage(_ context.Context, dir, recipient, body string) (messaging.Message, error) {

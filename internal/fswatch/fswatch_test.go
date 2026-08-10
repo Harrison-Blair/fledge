@@ -137,3 +137,21 @@ func TestMissingDirectoryIsReported(t *testing.T) {
 		t.Fatal("File(\"\") returned no error")
 	}
 }
+
+// TestValidationRejectsNonEntryPaths exercises the pure validation guards that
+// reject paths before any descriptor is opened: a blank directory and file
+// paths that name a directory ("." or the separator) rather than an entry.
+func TestValidationRejectsNonEntryPaths(t *testing.T) {
+	t.Parallel()
+
+	for _, dir := range []string{"", "   ", "\t\n"} {
+		if _, err := Directory(dir); err == nil {
+			t.Errorf("Directory(%q) returned no error", dir)
+		}
+	}
+	for _, path := range []string{".", "/", "   "} {
+		if _, err := File(path); err == nil {
+			t.Errorf("File(%q) returned no error", path)
+		}
+	}
+}

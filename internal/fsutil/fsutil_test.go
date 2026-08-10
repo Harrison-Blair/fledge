@@ -3,6 +3,7 @@ package fsutil
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -73,5 +74,38 @@ func TestWriteFileAtomicCreatesAndReplaces(t *testing.T) {
 	}
 	if len(entries) != 1 || entries[0].Name() != "record.json" {
 		t.Fatalf("directory entries = %v; want only record.json", entries)
+	}
+}
+
+func TestWriteFileAtomicWrapsRenameFailureAndRemovesTemp(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	// A non-empty directory at the destination path makes the final rename fail,
+	// exercising the "replace" error branch after the temporary file is written.
+	path := filepath.Join(directory, "target")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "child"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := WriteFileAtomic(path, []byte("data"), 0o600)
+	if err == nil {
+		t.Fatal("WriteFileAtomic() error = nil, want a rename failure")
+	}
+	if !strings.Contains(err.Error(), "replace") || !strings.Contains(err.Error(), path) {
+		t.Errorf("WriteFileAtomic() error = %v, want a wrapped 'replace' error naming %q", err, path)
+	}
+
+	// The sibling temporary file must not survive a failed replacement.
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".tmp") {
+			t.Errorf("leftover temporary file %q after failed rename", entry.Name())
+		}
 	}
 }

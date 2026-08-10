@@ -239,6 +239,16 @@ func TestAppendOrchestratorInstructionsPrecedeNativePassthroughDash(t *testing.T
 	}
 }
 
+func TestAppendOrchestratorInstructionsRejectsUnsupportedHarness(t *testing.T) {
+	got, err := AppendOrchestratorInstructions(Harness{ID: "other"}, []string{"--user", "value"}, "policy", "path")
+	if got != nil {
+		t.Errorf("AppendOrchestratorInstructions() args = %#v, want nil", got)
+	}
+	if err == nil || !strings.Contains(err.Error(), `unsupported harness "other"`) {
+		t.Fatalf("AppendOrchestratorInstructions() error = %v, want unsupported harness", err)
+	}
+}
+
 func TestCodexOrchestratorInstructionsAreTOMLSafe(t *testing.T) {
 	const instructions = "quote \" slash \\ newline\n tab\t delete\x7f snow 雪"
 	got, err := AppendOrchestratorInstructions(Harness{ID: "codex"}, nil, instructions, ".fledge/profiles/generated/orchestrator.md")
