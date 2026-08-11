@@ -121,8 +121,24 @@ type logState struct {
 	agents    map[string]Agent
 	tasks     map[string]Task
 	taskOrder []string
-	wakes     map[string]Wake
-	wakeOrder []string
+	// taskSupervision is a private, replay-derived projection. It deliberately
+	// does not extend the durable event schema or the exported Task/Agent views:
+	// every field can be reconstructed from task, status, and wake events.
+	taskSupervision map[string]taskSupervision
+	wakes           map[string]Wake
+	wakeOrder       []string
+}
+
+// taskSupervision describes one assignment or resume activation episode.
+// Resuming a task replaces the prior episode, including its start evidence and
+// any prior no-start alert.
+type taskSupervision struct {
+	activatedAt    time.Time
+	deliveryWake   string
+	deliveryAt     time.Time
+	deliveryFailed bool
+	startedAt      time.Time
+	alerted        bool
 }
 
 func decodeEvent(data []byte, result *event) error {

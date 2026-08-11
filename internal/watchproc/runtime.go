@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/fsutil"
 	"github.com/Harrison-Blair/fledge/internal/herdr"
@@ -41,6 +42,14 @@ type Options struct {
 	WatchFile WatchFile
 	Subscribe Subscribe
 	Ready     func()
+
+	// clock, newTimer, eventApplied, and selectPrepared are internal deterministic seams.
+	// Production uses the wall clock and one reusable runtime timer, and does not
+	// observe individual applications or select boundaries.
+	clock          func() time.Time
+	newTimer       func(time.Duration) dispatcherTimer
+	eventApplied   func()
+	selectPrepared func(deadlineEnabled bool)
 }
 
 func Run(ctx context.Context, options Options) (result error) {

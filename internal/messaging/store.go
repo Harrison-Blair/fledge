@@ -420,7 +420,8 @@ func (s *Store) loadState() (*logState, error) {
 	}
 	state := &logState{
 		messages: make(map[string]Message), agents: make(map[string]Agent),
-		tasks: make(map[string]Task), wakes: make(map[string]Wake),
+		tasks: make(map[string]Task), taskSupervision: make(map[string]taskSupervision),
+		wakes: make(map[string]Wake),
 	}
 	lines := bytes.Split(data, []byte{'\n'})
 	for index, line := range lines[:len(lines)-1] {

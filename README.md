@@ -241,6 +241,18 @@ agent that assigned the work; cancellation wakes the assignee that has to stop.
 Progress is recorded durably and wakes nobody. Ordinary messages always wake
 their recipient.
 
+Assignment startup is supervised without treating a newly woken pane's initial
+idle state as a failure. The dispatcher waits until the assignment or resume
+wake has a terminal delivery outcome, then gives the assignee a fixed five
+seconds to show real `working` status or record task progress. If neither occurs,
+the assigner receives one `agent-idle` wake saying the task did not start. A
+failed wake delivery begins the same grace period at the recorded failure time;
+pending or uncertain delivery does not. The no-start wake is sent only to a
+live managed assigner; direct-user assignments and tasks whose assigner has
+departed are excluded. Pausing, finishing, canceling, or orphaning the task
+cancels supervision, and resuming it starts a fresh episode. Once work has
+started, a later idle status continues to wake the assigner immediately.
+
 Orchestrators stop a worker with `fledge agent stop` once its task is terminal.
 Managed agents never poll the Fledge inbox or use direct Herdr commands to
 inspect or collect agent output.
@@ -295,10 +307,13 @@ Fledge starts, reattaches, or successfully spawns a worker, and held to a single
 instance by a session lock. It is mandatory: it is the only thing that turns a
 durable coordination event into an agent wake.
 
-The dispatcher waits on two event sources and no clock. Filesystem
-notifications tell it the session ledger has grown; a Herdr protocol 19 event
-subscription tells it that a registered pane changed agent status or closed. It
-never polls either one, and it has no configuration to tune.
+The dispatcher waits on filesystem notifications, a Herdr event subscription,
+and at most one resettable startup-grace timer. Filesystem notifications tell it
+the session ledger has grown; a Herdr protocol 19 event subscription tells it
+that a registered pane changed agent status or closed. At a grace deadline it
+takes a fresh Herdr snapshot before auditing, so a working observation at the
+boundary wins the race. It never polls any source, creates no per-task timer
+goroutines, and has no timing configuration to tune.
 
 Each requested wake carries a stable delivery ID and is replayed until a
 terminal outcome is durably recorded, so a dispatcher killed mid-delivery

@@ -8,6 +8,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 	"github.com/Harrison-Blair/fledge/internal/messaging"
@@ -24,6 +26,22 @@ type FileWatcher interface {
 type WatchFile func(string) (FileWatcher, error)
 type Subscribe func(context.Context, []string, func(), func(herdr.Event)) error
 
+type dispatcherTimer interface {
+	C() <-chan time.Time
+	Stop() bool
+	Reset(time.Duration) bool
+}
+
+type runtimeTimer struct{ timer *time.Timer }
+
+func (t *runtimeTimer) C() <-chan time.Time            { return t.timer.C }
+func (t *runtimeTimer) Stop() bool                     { return t.timer.Stop() }
+func (t *runtimeTimer) Reset(delay time.Duration) bool { return t.timer.Reset(delay) }
+
+func newRuntimeTimer(delay time.Duration) dispatcherTimer {
+	return &runtimeTimer{timer: time.NewTimer(delay)}
+}
+
 // runDispatcher turns durable coordination events and Herdr push events into
 // agent wakes without polling either source.
 func runDispatcher(ctx context.Context, options Options) error {
@@ -33,6 +51,12 @@ func runDispatcher(ctx context.Context, options Options) error {
 	if options.WatchFile == nil {
 		options.WatchFile = watchLedger
 	}
+	if options.clock == nil {
+		options.clock = time.Now
+	}
+	if options.newTimer == nil {
+		options.newTimer = newRuntimeTimer
+	}
 	protocol, err := options.Herdr.Protocol(ctx)
 	if err != nil {
 		return fmt.Errorf("resolve Herdr protocol for dispatcher: %w", err)
@@ -40,7 +64,7 @@ func runDispatcher(ctx context.Context, options Options) error {
 	if protocol < RequiredHerdrProtocol {
 		return fmt.Errorf("Herdr protocol %d is unsupported; protocol %d or newer is required. Upgrade Herdr, then run fledge stop and fledge start", protocol, RequiredHerdrProtocol)
 	}
-	store := messaging.New(options.Root, options.Session)
+	store := messaging.New(options.Root, options.Session, messaging.WithClock(options.clock))
 	if _, err := store.Ensure(); err != nil {
 		return err
 	}
@@ -56,13 +80,79 @@ func runDispatcher(ctx context.Context, options Options) error {
 		}
 		options.Subscribe = subscribe
 	}
-	if err := drain(ctx, options.Herdr, options.Session, store); err != nil {
+	panes, err := activePanes(store)
+	if err != nil {
+		return err
+	}
+	// No pane has acknowledged event coverage yet. Deliver unrelated work and
+	// replay activations whose recipients are no longer live, but leave a live
+	// assignee's activation pending until its subscription is ready. Otherwise a
+	// fast worker can run working -> idle entirely before the stream exists and
+	// leave only the latest idle snapshot for startup supervision to observe.
+	if err := drainCovered(ctx, options.Herdr, options.Session, store, nil); err != nil {
+		return err
+	}
+
+	var deadlineTimer dispatcherTimer
+	var deadlineEvents <-chan time.Time
+	deadlineAuditReady := true
+	selectDeadlineEvents := func() {
+		deadlineEvents = nil
+		if deadlineAuditReady && deadlineTimer != nil {
+			deadlineEvents = deadlineTimer.C()
+		}
+	}
+	stopDeadlineTimer := func() {
+		if deadlineTimer == nil {
+			return
+		}
+		if !deadlineTimer.Stop() {
+			select {
+			case <-deadlineTimer.C():
+			default:
+			}
+		}
+	}
+	defer stopDeadlineTimer()
+	rescheduleDeadline := func() error {
+		deadline, err := store.NextAgentIdleDeadline()
+		if err != nil {
+			return err
+		}
+		if deadline.IsZero() {
+			stopDeadlineTimer()
+			deadlineTimer = nil
+			selectDeadlineEvents()
+			return nil
+		}
+		delay := deadline.Sub(options.clock().UTC())
+		if delay < 0 {
+			delay = 0
+		}
+		if deadlineTimer == nil {
+			deadlineTimer = options.newTimer(delay)
+		} else {
+			stopDeadlineTimer()
+			deadlineTimer.Reset(delay)
+		}
+		selectDeadlineEvents()
+		return nil
+	}
+	if err := rescheduleDeadline(); err != nil {
 		return err
 	}
 
 	type generationEvent struct {
 		generation int
 		event      herdr.Event
+	}
+	// eventIngress serializes one acknowledged subscription's callbacks with a
+	// deadline audit. The callback holds the gate until its event is queued; the
+	// deadline path can therefore drain to an exact boundary and keep later
+	// callbacks from overtaking the audit.
+	type eventIngress struct {
+		gate      sync.Mutex
+		accepting bool
 	}
 	events := make(chan generationEvent, 16)
 	type streamResult struct {
@@ -81,12 +171,68 @@ func runDispatcher(ctx context.Context, options Options) error {
 		release    chan struct{}
 	}
 	readyResults := make(chan streamReady, 4)
-	panes, err := activePanes(store)
-	if err != nil {
-		return err
-	}
-
 	generation := 0
+	var currentIngress *eventIngress
+	var coveredPanes []string
+	applyStreamEvent := func(wrapped generationEvent) error {
+		// An event buffered by a torn-down stream must not run against the new
+		// generation's just-reconciled registry and undo it.
+		if wrapped.generation != generation {
+			return nil
+		}
+		event := wrapped.event
+		var err error
+		if event.Type == "pane.closed" {
+			err = store.StopAgentByPane(event.PaneID)
+		} else {
+			err = store.RecordAgentStatus(event.PaneID, event.AgentStatus)
+		}
+		if err != nil {
+			return err
+		}
+		if err := rescheduleDeadline(); err != nil {
+			return err
+		}
+		if options.eventApplied != nil {
+			options.eventApplied()
+		}
+		return nil
+	}
+	// quiesceStreamEvents applies everything accepted by the current
+	// subscription and returns with its ingress gate held. Draining before
+	// taking the gate prevents a full events channel from deadlocking with an
+	// onEvent callback that already holds the gate. Once the gate is acquired,
+	// that callback has either queued its event or observed cancellation, and a
+	// final drain establishes a precise ordering boundary.
+	quiesceStreamEvents := func() (func(), error) {
+		for {
+			select {
+			case wrapped := <-events:
+				if err := applyStreamEvent(wrapped); err != nil {
+					return nil, err
+				}
+				continue
+			default:
+			}
+
+			ingress := currentIngress
+			if ingress == nil {
+				return func() {}, nil
+			}
+			ingress.gate.Lock()
+			for {
+				select {
+				case wrapped := <-events:
+					if err := applyStreamEvent(wrapped); err != nil {
+						ingress.gate.Unlock()
+						return nil, err
+					}
+				default:
+					return ingress.gate.Unlock, nil
+				}
+			}
+		}
+	}
 	stopStream := func() {}
 	defer func() { stopStream() }()
 	announced := false
@@ -102,7 +248,23 @@ func runDispatcher(ctx context.Context, options Options) error {
 	// agent has stopped and the next spawn will register another. The dispatcher
 	// keeps consuming the ledger and simply holds no subscription, so it stays
 	// available to deliver that spawn's wakes instead of exiting for good.
-	restart := func() {
+	restart := func() error {
+		// Establish the outgoing generation's exact acceptance boundary before
+		// canceling it. Events whose callbacks acquired ingress before this point
+		// are durable and must be applied; callbacks acquiring it afterward see
+		// accepting=false and are deterministically discarded.
+		releaseIngress, err := quiesceStreamEvents()
+		if err != nil {
+			return err
+		}
+		panes, err = activePanes(store)
+		if err != nil {
+			releaseIngress()
+			return err
+		}
+		if currentIngress != nil {
+			currentIngress.accepting = false
+		}
 		stopStream()
 		// Bump the generation on every teardown, not only when resubscribing. The
 		// stream just canceled will still deliver a terminal streamResult tagged
@@ -111,14 +273,21 @@ func runDispatcher(ctx context.Context, options Options) error {
 		// compare stale, so an idle transition rests instead of mistaking the
 		// canceled stream's end for a fatal stream failure.
 		generation++
+		currentIngress = nil
+		coveredPanes = nil
+		deadlineAuditReady = len(panes) == 0
+		selectDeadlineEvents()
+		releaseIngress()
 		if len(panes) == 0 {
 			stopStream = func() {}
 			announce()
-			return
+			return nil
 		}
 		streamCtx, cancel := context.WithCancel(ctx)
 		stopStream = cancel
 		current := generation
+		ingress := &eventIngress{accepting: true}
+		currentIngress = ingress
 		ids := append([]string(nil), panes...)
 		// onReady runs synchronously inside Subscribe once Herdr acknowledges the
 		// subscription and before any stream event is read. Snapshotting from here
@@ -145,6 +314,11 @@ func runDispatcher(ctx context.Context, options Options) error {
 			}
 		}
 		onEvent := func(event herdr.Event) {
+			ingress.gate.Lock()
+			defer ingress.gate.Unlock()
+			if !ingress.accepting {
+				return
+			}
 			select {
 			case events <- generationEvent{generation: current, event: event}:
 			case <-streamCtx.Done():
@@ -161,9 +335,41 @@ func runDispatcher(ctx context.Context, options Options) error {
 			case <-streamCtx.Done():
 			}
 		}()
+		return nil
 	}
-	restart()
+	if err := restart(); err != nil {
+		return err
+	}
+	drainLedger := func() error {
+		current, err := activePanes(store)
+		if err != nil {
+			return err
+		}
+		changed := !samePanes(current, panes)
+		// The outgoing acknowledged stream remains authoritative until restart
+		// quiesces its ingress. Deliver everything it already covers, plus all
+		// non-activation wakes, before replacing it. A skipped wake never blocks a
+		// later eligible wake in ledger order.
+		if err := drainCovered(ctx, options.Herdr, options.Session, store, coveredPanes); err != nil {
+			return err
+		}
+		if changed {
+			if err := restart(); err != nil {
+				return err
+			}
+			// Quiescing can itself append status wakes. Drain those immediately,
+			// while continuing to hold live activation wakes until replacement
+			// readiness establishes coverage.
+			if err := drainCovered(ctx, options.Herdr, options.Session, store, coveredPanes); err != nil {
+				return err
+			}
+		}
+		return rescheduleDeadline()
+	}
 	for {
+		if options.selectPrepared != nil {
+			options.selectPrepared(deadlineEvents != nil)
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -172,6 +378,13 @@ func runDispatcher(ctx context.Context, options Options) error {
 			// already being torn down and its snapshot describes a pane set we no
 			// longer subscribe to.
 			if ready.generation != generation {
+				close(ready.release)
+				continue
+			}
+			// Subscribe promises one readiness callback. Treat any duplicate as
+			// stale so an older snapshot can never overwrite status reconciled by a
+			// later deadline audit in this generation.
+			if deadlineAuditReady {
 				close(ready.release)
 				continue
 			}
@@ -190,21 +403,21 @@ func runDispatcher(ctx context.Context, options Options) error {
 				return err
 			}
 			close(ready.release)
+			// Coverage becomes usable only after reconciliation has completed and
+			// the synchronous onReady callback has been released. Settle deferred
+			// activations immediately afterward, before selecting another source.
+			coveredPanes = append(coveredPanes[:0], ready.panes...)
+			deadlineAuditReady = true
+			selectDeadlineEvents()
+			if err := drainCovered(ctx, options.Herdr, options.Session, store, coveredPanes); err != nil {
+				return err
+			}
+			if err := rescheduleDeadline(); err != nil {
+				return err
+			}
 			announce()
 		case wrapped := <-events:
-			// An event buffered by a torn-down stream must not run against the new
-			// generation's just-reconciled registry and undo it.
-			if wrapped.generation != generation {
-				continue
-			}
-			event := wrapped.event
-			var err error
-			if event.Type == "pane.closed" {
-				err = store.StopAgentByPane(event.PaneID)
-			} else {
-				err = store.RecordAgentStatus(event.PaneID, event.AgentStatus)
-			}
-			if err != nil {
+			if err := applyStreamEvent(wrapped); err != nil {
 				return err
 			}
 		case result := <-streamErrors:
@@ -220,19 +433,48 @@ func runDispatcher(ctx context.Context, options Options) error {
 				return fmt.Errorf("watch session ledger: %w", err)
 			}
 		case <-fileEvents.Events():
-			if err := drain(ctx, options.Herdr, options.Session, store); err != nil {
+			if err := drainLedger(); err != nil {
 				return err
 			}
-			current, err := activePanes(store)
+		case <-deadlineEvents:
+			// The timer is only a prompt to re-check authoritative state. Apply all
+			// pushes already accepted by this acknowledged subscription before the
+			// snapshot. Pushes accepted while that snapshot and its reconciliation
+			// are in flight are applied afterward, in stream order. Holding the
+			// ingress gate across the audit then gives the audit a precise place in
+			// that ordering and prevents a queued working observation from being
+			// hidden by a latest-idle snapshot.
+			releaseIngress, err := quiesceStreamEvents()
 			if err != nil {
 				return err
 			}
-			if strings.Join(current, "\x00") != strings.Join(panes, "\x00") {
-				panes = current
-				restart()
+			releaseIngress()
+			subscribed := append([]string(nil), coveredPanes...)
+			snapshot, err := options.Herdr.Snapshot(ctx, options.Session)
+			if err != nil {
+				return fmt.Errorf("reconcile Herdr snapshot for agent-idle deadline: %w", err)
+			}
+			if err := reconcileSnapshot(store, subscribed, snapshot); err != nil {
+				return err
+			}
+			releaseIngress, err = quiesceStreamEvents()
+			if err != nil {
+				return err
+			}
+			_, auditErr := store.AuditDueAgentIdle()
+			releaseIngress()
+			if auditErr != nil {
+				return auditErr
+			}
+			if err := drainLedger(); err != nil {
+				return err
 			}
 		}
 	}
+}
+
+func samePanes(left, right []string) bool {
+	return strings.Join(left, "\x00") == strings.Join(right, "\x00")
 }
 
 func activePanes(store *messaging.Store) ([]string, error) {
@@ -288,11 +530,37 @@ func reconcileSnapshot(store *messaging.Store, subscribed []string, snapshot her
 // the remaining wakes still go out. Only a storage failure, which would make
 // outcomes unrecordable, ends the dispatcher.
 func drain(ctx context.Context, client Herdr, session string, store *messaging.Store) error {
+	panes, err := activePanes(store)
+	if err != nil {
+		return err
+	}
+	return drainCovered(ctx, client, session, store, panes)
+}
+
+// drainCovered submits every eligible pending wake without letting a deferred
+// activation stall later ledger entries. A task activation for a live pane is
+// eligible only while an acknowledged subscription covers that pane. An
+// activation whose pane is no longer registered is still attempted so replay
+// can reach a terminal outcome rather than remaining pending forever.
+func drainCovered(ctx context.Context, client Herdr, session string, store *messaging.Store, coveredPanes []string) error {
+	covered := make(map[string]struct{}, len(coveredPanes))
+	for _, paneID := range coveredPanes {
+		covered[paneID] = struct{}{}
+	}
 	wakes, err := store.PendingWakes()
 	if err != nil {
 		return err
 	}
 	for _, wake := range wakes {
+		if activationWake(wake.Kind) {
+			if _, ok := covered[wake.RecipientPane]; !ok {
+				if _, agentErr := store.AgentByPane(wake.RecipientPane); agentErr == nil {
+					continue
+				} else if !errors.Is(agentErr, messaging.ErrAgentNotFound) {
+					return agentErr
+				}
+			}
+		}
 		// A message wake's delivery status is projected onto its message by the
 		// wake attempt and outcome transitions, so the wake is the sole record
 		// the dispatcher writes.
@@ -317,6 +585,10 @@ func drain(ctx context.Context, client Herdr, session string, store *messaging.S
 		}
 	}
 	return nil
+}
+
+func activationWake(kind string) bool {
+	return kind == "task-assigned" || kind == "task-resumed"
 }
 
 func socketSubscriber(ctx context.Context, client Herdr, session string) (Subscribe, error) {

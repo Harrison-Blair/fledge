@@ -22,6 +22,10 @@ const (
 	TaskOrphaned      TaskStatus = "orphaned"
 )
 
+// agentStartGrace is intentionally fixed: startup supervision is a dispatcher
+// correctness safeguard, not a user-tunable task policy.
+const agentStartGrace = 5 * time.Second
+
 // UserIdentity and OrchestratorIdentity are the two privileged coordination
 // identities. Both bypass delegation and transition authorization, so neither
 // name may be claimed by a spawned agent.
@@ -173,6 +177,9 @@ func applyCoordinationEvent(state *logState, e event) error {
 		}
 		agent.Status, agent.UpdatedAt = e.Detail, e.At
 		state.agents[e.AgentName] = agent
+		if e.Detail == "working" {
+			markAgentTaskStarted(state, e.AgentName, e.At)
+		}
 	case eventTaskAssigned:
 		if _, exists := state.tasks[e.TaskID]; exists {
 			return fmt.Errorf("duplicate task ID %q", e.TaskID)
@@ -186,6 +193,7 @@ func applyCoordinationEvent(state *logState, e event) error {
 			Assigner: e.Assigner, Description: e.Description, Status: TaskActive,
 			CreatedAt: e.At, UpdatedAt: e.At}
 		state.taskOrder = append(state.taskOrder, e.TaskID)
+		state.taskSupervision[e.TaskID] = taskSupervision{activatedAt: e.At}
 	case eventTaskProgress, eventTaskBlocked, eventTaskDecision, eventTaskResumed,
 		eventTaskCompleted, eventTaskFailed, eventTaskCanceled, eventTaskOrphaned:
 		task, ok := state.tasks[e.TaskID]
@@ -194,6 +202,15 @@ func applyCoordinationEvent(state *logState, e event) error {
 		}
 		task.Status, task.Detail, task.UpdatedAt = e.TaskStatus, e.Detail, e.At
 		state.tasks[e.TaskID] = task
+		if e.Type == eventTaskResumed {
+			state.taskSupervision[e.TaskID] = taskSupervision{activatedAt: e.At}
+		} else if e.Type == eventTaskProgress {
+			supervision := state.taskSupervision[e.TaskID]
+			if !e.At.Before(supervision.activatedAt) && supervision.startedAt.IsZero() {
+				supervision.startedAt = e.At
+				state.taskSupervision[e.TaskID] = supervision
+			}
+		}
 	case eventWakeRequested:
 		if _, exists := state.wakes[e.WakeID]; exists {
 			return fmt.Errorf("duplicate wake ID %q", e.WakeID)
@@ -202,6 +219,7 @@ func applyCoordinationEvent(state *logState, e event) error {
 			Recipient: e.Recipient, RecipientPane: e.RecipientPane, Body: e.Body,
 			Status: StatusPending, CreatedAt: e.At, UpdatedAt: e.At}
 		state.wakeOrder = append(state.wakeOrder, e.WakeID)
+		projectTaskSupervisionWake(state, e)
 	case eventWakeAttempt:
 		wake, ok := state.wakes[e.WakeID]
 		if !ok || wake.Status != StatusPending {
@@ -223,8 +241,58 @@ func applyCoordinationEvent(state *logState, e event) error {
 		}
 		state.wakes[e.WakeID] = wake
 		projectMessageStatus(state, wake)
+		projectTaskSupervisionOutcome(state, wake)
 	}
 	return nil
+}
+
+func markAgentTaskStarted(state *logState, agentName string, at time.Time) {
+	for _, id := range state.taskOrder {
+		task := state.tasks[id]
+		if task.Assignee != agentName || task.Status != TaskActive {
+			continue
+		}
+		supervision := state.taskSupervision[id]
+		if !at.Before(supervision.activatedAt) && supervision.startedAt.IsZero() {
+			supervision.startedAt = at
+			state.taskSupervision[id] = supervision
+		}
+		return
+	}
+}
+
+func projectTaskSupervisionWake(state *logState, e event) {
+	supervision, ok := state.taskSupervision[e.TaskID]
+	if !ok || e.At.Before(supervision.activatedAt) {
+		return
+	}
+	switch e.WakeKind {
+	case "task-assigned":
+		task := state.tasks[e.TaskID]
+		if task.CreatedAt.Equal(supervision.activatedAt) && e.At.Equal(supervision.activatedAt) {
+			supervision.deliveryWake = e.WakeID
+		}
+	case "task-resumed":
+		if e.At.Equal(supervision.activatedAt) {
+			supervision.deliveryWake = e.WakeID
+		}
+	case "agent-idle":
+		supervision.alerted = true
+	}
+	state.taskSupervision[e.TaskID] = supervision
+}
+
+func projectTaskSupervisionOutcome(state *logState, wake Wake) {
+	supervision, ok := state.taskSupervision[wake.ReferenceID]
+	if !ok || supervision.deliveryWake != wake.ID {
+		return
+	}
+	if wake.Status != StatusDelivered && wake.Status != StatusFailed {
+		return
+	}
+	supervision.deliveryAt = wake.UpdatedAt
+	supervision.deliveryFailed = wake.Status == StatusFailed
+	state.taskSupervision[wake.ReferenceID] = supervision
 }
 
 // projectMessageStatus mirrors a message wake's delivery status onto the message
@@ -455,9 +523,11 @@ func (s *Store) Agent(name string) (Agent, error) {
 	return result, err
 }
 
-// RecordAgentStatus consumes one pane-bound Herdr push event. The wake matrix
+// RecordAgentStatus consumes one pane-bound Herdr observation. The wake matrix
 // is deliberately small: blocked and unexpectedly idle/terminal work wake the
-// task's assigner; working merely re-arms the registry projection.
+// task's assigner. A post-activation working observation is also durable start
+// evidence, even when the public registry already contains the synthetic
+// working value installed at registration.
 func (s *Store) RecordAgentStatus(paneID, status string) error {
 	return s.withState(func(state *logState) error {
 		var agent Agent
@@ -470,24 +540,29 @@ func (s *Store) RecordAgentStatus(paneID, status string) error {
 		if agent.Name == "" {
 			return nil
 		}
-		if agent.Status == status {
+		active := activeTaskForAssignee(state, agent.Name)
+		needsStartEvidence := false
+		if status == "working" && active != nil {
+			supervision := state.taskSupervision[active.ID]
+			needsStartEvidence = supervision.startedAt.IsZero()
+		}
+		if agent.Status == status && !needsStartEvidence {
 			return nil
 		}
 		at := s.now()
 		events := []event{{Version: eventVersion, Type: eventAgentStatus, At: at, SessionID: state.sessionID,
 			AgentName: agent.Name, PaneID: paneID, Detail: status}}
-		var active *Task
-		for _, id := range state.taskOrder {
-			task := state.tasks[id]
-			if task.Assignee == agent.Name && !terminal(task.Status) {
-				copy := task
-				active = &copy
-				break
-			}
+		owned := unfinishedTaskForAssignee(state, agent.Name)
+		wakeTask := owned
+		shouldWake := status == "blocked" || status == "failed" || status == "stopped"
+		if status == "idle" && active != nil {
+			supervision := state.taskSupervision[active.ID]
+			shouldWake = !supervision.startedAt.IsZero()
+			wakeTask = active
 		}
-		if active != nil && (status == "blocked" || status == "idle" || status == "failed" || status == "stopped") {
-			body := fmt.Sprintf("Agent %s entered Herdr status %s while owning task %s.", agent.Name, status, active.ID)
-			wake, err := s.wakeFor(state, at, "agent-"+status, active.ID, active.Assigner, "", body, true)
+		if shouldWake && wakeTask != nil {
+			body := fmt.Sprintf("Agent %s entered Herdr status %s while owning task %s.", agent.Name, status, wakeTask.ID)
+			wake, err := s.wakeFor(state, at, "agent-"+status, wakeTask.ID, wakeTask.Assigner, "", body, true)
 			if err != nil {
 				return err
 			}
@@ -497,6 +572,120 @@ func (s *Store) RecordAgentStatus(paneID, status string) error {
 		}
 		return s.commit(state, events)
 	})
+}
+
+func activeTaskForAssignee(state *logState, assignee string) *Task {
+	for _, id := range state.taskOrder {
+		task := state.tasks[id]
+		if task.Assignee == assignee && task.Status == TaskActive {
+			copy := task
+			return &copy
+		}
+	}
+	return nil
+}
+
+func unfinishedTaskForAssignee(state *logState, assignee string) *Task {
+	for _, id := range state.taskOrder {
+		task := state.tasks[id]
+		if task.Assignee == assignee && !terminal(task.Status) {
+			copy := task
+			return &copy
+		}
+	}
+	return nil
+}
+
+// NextAgentIdleDeadline returns the earliest no-start audit deadline. A zero
+// time means there is no currently supervisable activation. Pending/uncertain
+// delivery, started work, paused or terminal work, and inactive participants do
+// not produce a deadline.
+func (s *Store) NextAgentIdleDeadline() (time.Time, error) {
+	var earliest time.Time
+	err := s.withState(func(state *logState) error {
+		for _, id := range state.taskOrder {
+			deadline, ok := agentIdleDeadline(state, id)
+			if ok && (earliest.IsZero() || deadline.Before(earliest)) {
+				earliest = deadline
+			}
+		}
+		return nil
+	})
+	return earliest, err
+}
+
+// AuditDueAgentIdle atomically appends one activation-scoped agent-idle wake
+// for every deadline due at the store clock. Replay of that wake suppresses any
+// duplicate audit, including after a dispatcher restart.
+func (s *Store) AuditDueAgentIdle() ([]Wake, error) {
+	var result []Wake
+	err := s.withState(func(state *logState) error {
+		at := s.now()
+		var events []event
+		var reserved []string
+		for _, id := range state.taskOrder {
+			deadline, ok := agentIdleDeadline(state, id)
+			if !ok || deadline.After(at) {
+				continue
+			}
+			task := state.tasks[id]
+			supervision := state.taskSupervision[id]
+			delivery := "was delivered"
+			if supervision.deliveryFailed {
+				delivery = "delivery failed"
+			}
+			body := fmt.Sprintf("Agent %s did not start task %s within 5 seconds after its activation wake %s.",
+				task.Assignee, task.ID, delivery)
+			wake, err := s.wakeFor(state, at, "agent-idle", id, task.Assigner, "", body, true)
+			if err != nil {
+				return err
+			}
+			if wake == nil {
+				continue
+			}
+			events = append(events, *wake)
+			// Reserve generated IDs while the whole due set is assembled. The
+			// placeholders are removed before commit so applyEvent can project the
+			// actual wake requests normally.
+			state.wakes[wake.WakeID] = Wake{ID: wake.WakeID}
+			reserved = append(reserved, wake.WakeID)
+		}
+		for _, id := range reserved {
+			delete(state.wakes, id)
+		}
+		if len(events) == 0 {
+			return nil
+		}
+		if err := s.commit(state, events); err != nil {
+			return err
+		}
+		for _, e := range events {
+			result = append(result, state.wakes[e.WakeID])
+		}
+		return nil
+	})
+	return result, err
+}
+
+func agentIdleDeadline(state *logState, taskID string) (time.Time, bool) {
+	task, ok := state.tasks[taskID]
+	if !ok || task.Status != TaskActive {
+		return time.Time{}, false
+	}
+	if _, assigneeActive := activeAgent(state, task.Assignee); !assigneeActive {
+		return time.Time{}, false
+	}
+	if task.Assigner == UserIdentity {
+		return time.Time{}, false
+	}
+	if _, assignerActive := activeAgent(state, task.Assigner); !assignerActive {
+		return time.Time{}, false
+	}
+	supervision, ok := state.taskSupervision[taskID]
+	if !ok || supervision.deliveryAt.IsZero() || !supervision.startedAt.IsZero() || supervision.alerted {
+		return time.Time{}, false
+	}
+	return supervision.deliveryAt.Add(agentStartGrace), true
 }
 
 func activeAgent(state *logState, name string) (Agent, bool) {
