@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1710,28 +1711,32 @@ func TestStopSessionStates(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name        string
-		sessions    []herdr.Session
-		wantStops   int
-		wantDeletes int
-		wantOutput  string
+		name           string
+		sessions       []herdr.Session
+		wantStops      int
+		wantDeletes    int
+		wantOutput     string
+		questionFormat string
 	}{
 		{
-			name:        "running",
-			sessions:    []herdr.Session{{Name: testSessionName, Running: true}},
-			wantStops:   1,
-			wantDeletes: 1,
-			wantOutput:  "Stopped and deleted",
+			name:           "running",
+			sessions:       []herdr.Session{{Name: testSessionName, Running: true}},
+			wantStops:      1,
+			wantDeletes:    1,
+			wantOutput:     "Stopped and deleted",
+			questionFormat: "[Fledge] Stop and delete %q in %s?",
 		},
 		{
-			name:        "stopped",
-			sessions:    []herdr.Session{{Name: testSessionName, Running: false}},
-			wantDeletes: 1,
-			wantOutput:  "Stopped and deleted",
+			name:           "stopped",
+			sessions:       []herdr.Session{{Name: testSessionName, Running: false}},
+			wantDeletes:    1,
+			wantOutput:     "Stopped and deleted",
+			questionFormat: "[Fledge] Delete stopped %q in %s?",
 		},
 		{
-			name:       "missing",
-			wantOutput: "Removed stale",
+			name:           "missing",
+			wantOutput:     "Removed stale",
+			questionFormat: "[Fledge] Remove stale %q in %s?",
 		},
 	}
 
@@ -1786,8 +1791,9 @@ func TestStopSessionStates(t *testing.T) {
 			if !strings.Contains(output.String(), test.wantOutput) {
 				t.Errorf("output = %q, want substring %q", output, test.wantOutput)
 			}
-			if len(confirmer.questions) != 1 || !strings.Contains(confirmer.questions[0], root) {
-				t.Errorf("confirmation questions = %#v, want project root", confirmer.questions)
+			wantQuestion := fmt.Sprintf(test.questionFormat, testSessionName, root)
+			if len(confirmer.questions) != 1 || confirmer.questions[0] != wantQuestion {
+				t.Errorf("confirmation questions = %#v, want exactly %q", confirmer.questions, wantQuestion)
 			}
 		})
 	}

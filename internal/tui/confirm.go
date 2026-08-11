@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/term"
@@ -46,6 +47,7 @@ func (c *Confirmer) Confirm(question string) (bool, error) {
 
 type confirmModel struct {
 	question  string
+	input     []rune
 	confirmed bool
 }
 
@@ -59,17 +61,42 @@ func (m confirmModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	switch key.String() {
-	case "y", "Y":
-		m.confirmed = true
+	switch key.Type {
+	case tea.KeyEnter:
+		answer := string(m.input)
+		m.confirmed = answer == "y" || answer == "Y"
 		return m, tea.Quit
-	case "enter", "n", "N", "q", "Q", "esc", "ctrl+c":
+	case tea.KeyEsc, tea.KeyCtrlC:
+		m.confirmed = false
 		return m, tea.Quit
-	default:
+	case tea.KeyBackspace:
+		if len(m.input) > 0 {
+			m.input = m.input[:len(m.input)-1]
+		}
+		return m, nil
+	case tea.KeySpace:
+		m.input = appendPrintableRunes(m.input, key.Runes)
+		if len(key.Runes) == 0 {
+			m.input = append(m.input, ' ')
+		}
+		return m, nil
+	case tea.KeyRunes:
+		m.input = appendPrintableRunes(m.input, key.Runes)
 		return m, nil
 	}
+
+	return m, nil
 }
 
 func (m confirmModel) View() string {
-	return m.question + " [y/N] "
+	return m.question + " [y/N] " + string(m.input)
+}
+
+func appendPrintableRunes(destination, runes []rune) []rune {
+	for _, value := range runes {
+		if unicode.IsPrint(value) {
+			destination = append(destination, value)
+		}
+	}
+	return destination
 }

@@ -1219,12 +1219,12 @@ func sessionByName(sessions []herdr.Session, name string) (herdr.Session, bool) 
 
 func stopQuestion(root, name string, session herdr.Session, exists bool) string {
 	if !exists {
-		return fmt.Sprintf("Herdr session %q is missing. Remove the stale Fledge session for %s?", name, root)
+		return fmt.Sprintf("[Fledge] Remove stale %q in %s?", name, root)
 	}
 	if !session.Running {
-		return fmt.Sprintf("Delete stopped Fledge session %q for %s?", name, root)
+		return fmt.Sprintf("[Fledge] Delete stopped %q in %s?", name, root)
 	}
-	return fmt.Sprintf("Stop and delete Fledge session %q for %s?", name, root)
+	return fmt.Sprintf("[Fledge] Stop and delete %q in %s?", name, root)
 }
 
 func removeRecord(root string) error {
