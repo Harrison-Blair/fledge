@@ -95,6 +95,7 @@ type Herdr interface {
 	ClosePane(context.Context, string, string) error
 	FocusAgent(context.Context, string, string) error
 	StartAgent(context.Context, string, string, string, string, time.Duration, []string) error
+	WaitPaneOutput(context.Context, string, string, time.Duration) error
 	PromptAgent(context.Context, string, string, string) error
 	List(context.Context) ([]herdr.Session, error)
 	Protocol(context.Context) (int, error)
@@ -109,19 +110,20 @@ type Confirmer interface {
 
 // Manager coordinates project state, Herdr, and user confirmation.
 type Manager struct {
-	herdr           Herdr
-	confirmer       Confirmer
-	output          io.Writer
-	random          io.Reader
-	authorityRandom io.Reader
-	selector        selectionResolver
-	lookPath        harness.LookPath
-	getenv          func(string) string
-	logFactory      func(root, session string) (*slog.Logger, io.Closer, error)
-	watchLauncher   func(root string) error
-	watchRunner     func(context.Context, watchproc.Options) error
-	watchStopper    func(root, session string) error
-	homeDir         func() (string, error)
+	herdr                Herdr
+	confirmer            Confirmer
+	output               io.Writer
+	random               io.Reader
+	authorityRandom      io.Reader
+	selector             selectionResolver
+	lookPath             harness.LookPath
+	getenv               func(string) string
+	logFactory           func(root, session string) (*slog.Logger, io.Closer, error)
+	watchLauncher        func(root string) error
+	watchRunner          func(context.Context, watchproc.Options) error
+	watchStopper         func(root, session string) error
+	homeDir              func() (string, error)
+	paneReadinessContext func(context.Context, time.Duration) (context.Context, context.CancelFunc)
 }
 
 type selectionResolver interface {
@@ -131,17 +133,18 @@ type selectionResolver interface {
 // NewManager creates a session lifecycle manager.
 func NewManager(client Herdr, confirmer Confirmer, input io.Reader, output io.Writer) *Manager {
 	manager := &Manager{
-		herdr:           client,
-		confirmer:       confirmer,
-		output:          output,
-		random:          rand.Reader,
-		authorityRandom: rand.Reader,
-		lookPath:        exec.LookPath,
-		getenv:          os.Getenv,
-		watchLauncher:   launchWatcher,
-		watchRunner:     watchproc.Run,
-		watchStopper:    watchproc.Stop,
-		homeDir:         os.UserHomeDir,
+		herdr:                client,
+		confirmer:            confirmer,
+		output:               output,
+		random:               rand.Reader,
+		authorityRandom:      rand.Reader,
+		lookPath:             exec.LookPath,
+		getenv:               os.Getenv,
+		watchLauncher:        launchWatcher,
+		watchRunner:          watchproc.Run,
+		watchStopper:         watchproc.Stop,
+		homeDir:              os.UserHomeDir,
+		paneReadinessContext: context.WithTimeout,
 	}
 	stdin, stdinOK := input.(*os.File)
 	stdout, stdoutOK := output.(*os.File)
@@ -529,7 +532,7 @@ func (m *Manager) initializeOrchestrator(
 	if _, err := m.herdr.SplitPane(ctx, session, pane.PaneID, root, controlEnvironment); err != nil {
 		return true, err
 	}
-	if err := m.herdr.StartAgent(ctx, session, "orchestrator", selectedHarness.ID, pane.PaneID, timeout, nativeArgs); err != nil {
+	if err := m.startAgent(ctx, logger, session, "orchestrator", selectedHarness.ID, pane.PaneID, timeout, nativeArgs); err != nil {
 		return true, err
 	}
 	if _, _, err := messaging.New(root, session).RegisterAgent(messaging.RegisterParams{
@@ -543,6 +546,133 @@ func (m *Manager) initializeOrchestrator(
 		return true, err
 	}
 	return true, nil
+}
+
+const paneReadinessRetryLimit = 5 * time.Second
+
+// startAgent applies the one transient launch policy shared by the initial
+// orchestrator and ordinary spawned agents. A newly created pane can briefly
+// still belong to its starting shell; only Herdr's exact agent_pane_busy code
+// enters the server-owned readiness wait and one identical final attempt.
+func (m *Manager) startAgent(
+	ctx context.Context,
+	logger *slog.Logger,
+	session, name, kind, paneID string,
+	timeout time.Duration,
+	nativeArgs []string,
+) error {
+	if err := m.herdr.StartAgent(ctx, session, name, kind, paneID, timeout, nativeArgs); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return errors.Join(err, ctxErr)
+		}
+		if !herdr.IsErrorCode(err, "agent_pane_busy") || hasConflictingAgentStartCause(err, "agent_pane_busy") {
+			return err
+		}
+
+		budget := min(timeout, paneReadinessRetryLimit)
+		readinessCtx, cancel := m.paneReadinessContext(ctx, budget)
+		readinessErr := m.herdr.WaitPaneOutput(readinessCtx, session, paneID, budget)
+		cancel()
+
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf(
+				"wait for agent %q pane readiness after transient agent_pane_busy: %w",
+				name, errors.Join(readinessErr, ctxErr),
+			)
+		}
+
+		readinessTimedOut := paneReadinessTimedOut(readinessErr)
+		if readinessErr != nil && !readinessTimedOut {
+			return fmt.Errorf("wait for agent %q pane readiness after transient agent_pane_busy: %w", name, readinessErr)
+		}
+
+		finalErr := m.herdr.StartAgent(ctx, session, name, kind, paneID, timeout, nativeArgs)
+		if finalErr == nil {
+			logger.Debug("agent start recovered after pane readiness wait", "name", name, "pane", paneID, "readiness_timeout", readinessTimedOut)
+			return nil
+		}
+		unavailableErr := fmt.Errorf(
+			"agent %q pane %q remained unavailable after one readiness retry: %w",
+			name, paneID, finalErr,
+		)
+		if readinessTimedOut {
+			return errors.Join(unavailableErr, fmt.Errorf("pane readiness wait reached its %s deadline before the final attempt: %w", budget, readinessErr))
+		}
+		return unavailableErr
+	}
+	return nil
+}
+
+// paneReadinessTimedOut classifies only the error returned by the wait. A local
+// CommandContext deadline is retryable only when Herdr recorded that it caused
+// the command's termination. A structured Herdr error other than the exact
+// timeout code, or any independent process/transport failure, takes priority
+// even when joined with context.DeadlineExceeded.
+func paneReadinessTimedOut(err error) bool {
+	if err == nil || hasFatalPaneReadinessCause(err) {
+		return false
+	}
+	return herdr.IsErrorCode(err, "timeout") || errors.Is(err, context.DeadlineExceeded)
+}
+
+// hasFatalPaneReadinessCause treats the private Herdr cancellation marker as
+// one indivisible cause, so its raw ExitError and local deadline remain
+// inspectable without looking like independent failures. Every unmarked
+// ExitError, bare deadline, unstructured response, and generic leaf is fatal.
+// Exact structured Herdr timeouts are authoritative and retain their own
+// process error via Unwrap.
+func hasFatalPaneReadinessCause(err error) bool {
+	if err == nil {
+		return false
+	}
+	if herdr.IsCommandContextTermination(err) {
+		return !errors.Is(err, context.DeadlineExceeded)
+	}
+	if herdr.IsUnstructuredCommandError(err) {
+		return true
+	}
+	if commandErr, ok := err.(*herdr.CommandError); ok {
+		return commandErr == nil || commandErr.Code != "timeout"
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, child := range joined.Unwrap() {
+			if hasFatalPaneReadinessCause(child) {
+				return true
+			}
+		}
+		return false
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return hasFatalPaneReadinessCause(wrapped.Unwrap())
+	}
+	return true
+}
+
+// hasConflictingAgentStartCause permits wrappers and joins only when every
+// terminal command cause is the expected structured code. CommandError's own
+// process failure is part of that structured cause and is not a conflict.
+func hasConflictingAgentStartCause(err error, code string) bool {
+	if err == nil {
+		return false
+	}
+	if herdr.IsUnstructuredCommandError(err) {
+		return true
+	}
+	if commandErr, ok := err.(*herdr.CommandError); ok {
+		return commandErr == nil || commandErr.Code != code
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, child := range joined.Unwrap() {
+			if hasConflictingAgentStartCause(child, code) {
+				return true
+			}
+		}
+		return false
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return hasConflictingAgentStartCause(wrapped.Unwrap(), code)
+	}
+	return true
 }
 
 func initialLayout(snapshot herdr.Snapshot) (herdr.Tab, herdr.Pane, error) {
@@ -706,7 +836,7 @@ func (m *Manager) Spawn(ctx context.Context, dir string, options SpawnOptions) (
 	if err := m.herdr.RenamePane(ctx, value.SessionName, pane.PaneID, selection.Name); err != nil {
 		return errors.Join(err, rollback())
 	}
-	if err := m.herdr.StartAgent(ctx, value.SessionName, selection.Name, selectedHarness.ID, pane.PaneID, options.Timeout, nativeArgs); err != nil {
+	if err := m.startAgent(ctx, logger, value.SessionName, selection.Name, selectedHarness.ID, pane.PaneID, options.Timeout, nativeArgs); err != nil {
 		return errors.Join(err, rollback())
 	}
 	_, _, err = store.RegisterAgent(messaging.RegisterParams{

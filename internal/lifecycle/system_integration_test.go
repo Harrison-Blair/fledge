@@ -287,6 +287,10 @@ func (f *systemFakeHerdr) StartAgent(_ context.Context, _, _, _, pane string, _ 
 	return nil
 }
 
+func (f *systemFakeHerdr) WaitPaneOutput(context.Context, string, string, time.Duration) error {
+	return nil
+}
+
 func (f *systemFakeHerdr) PromptAgent(_ context.Context, session, recipient, prompt string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

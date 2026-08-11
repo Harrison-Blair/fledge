@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/fswatch"
@@ -77,13 +78,115 @@ type AgentSession struct {
 	Value  string `json:"value"`
 }
 
+// CommandError is a machine-readable error returned by the Herdr CLI. Herdr
+// writes these responses to stderr and exits non-zero; Err retains that process
+// error so callers can inspect either layer with errors.As/errors.Is.
+type CommandError struct {
+	Code      string
+	Message   string
+	RequestID string
+	Err       error
+}
+
+func (e *CommandError) Error() string {
+	detail := e.Code
+	if e.Message != "" {
+		detail += ": " + e.Message
+	}
+	if e.RequestID != "" {
+		detail += fmt.Sprintf(" (request %s)", e.RequestID)
+	}
+	if e.Err != nil {
+		return e.Err.Error() + ": " + detail
+	}
+	return detail
+}
+
+// Unwrap exposes the CLI process failure beneath the structured Herdr error.
+func (e *CommandError) Unwrap() error { return e.Err }
+
+// IsErrorCode reports whether err's chain contains a structured Herdr error
+// with exactly code. Plain text and malformed JSON errors never classify.
+func IsErrorCode(err error, code string) bool {
+	if err == nil {
+		return false
+	}
+	if commandErr, ok := err.(*CommandError); ok && commandErr != nil && commandErr.Code == code {
+		return true
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, child := range joined.Unwrap() {
+			if IsErrorCode(child, code) {
+				return true
+			}
+		}
+		return false
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return IsErrorCode(wrapped.Unwrap(), code)
+	}
+	return false
+}
+
+// commandOutputError is a nonempty stderr response that did not satisfy the
+// complete structured Herdr error schema. It intentionally exposes no error
+// code, while retaining the process failure through Unwrap.
+type commandOutputError struct {
+	message string
+	err     error
+}
+
+func (e *commandOutputError) Error() string {
+	if e.err == nil {
+		return e.message
+	}
+	return e.err.Error() + ": " + e.message
+}
+
+func (e *commandOutputError) Unwrap() error { return e.err }
+
+// IsUnstructuredCommandError reports whether a command failure included
+// nonempty stderr that was not a complete Herdr error response. Callers may use
+// this to keep an independently reported generic failure from being mistaken
+// for a context timeout without interpreting the stderr text.
+func IsUnstructuredCommandError(err error) bool {
+	var outputErr *commandOutputError
+	return errors.As(err, &outputErr) && outputErr != nil
+}
+
+// commandContextTerminationError records that CommandContext successfully
+// signaled a running command and the process consequently terminated by a
+// signal. Its two causes preserve both the raw process error and the context
+// cause for errors.As/errors.Is callers.
+type commandContextTerminationError struct {
+	processErr error
+	cause      error
+}
+
+func (e *commandContextTerminationError) Error() string {
+	return e.processErr.Error() + "\n" + e.cause.Error()
+}
+
+func (e *commandContextTerminationError) Unwrap() []error {
+	return []error{e.processErr, e.cause}
+}
+
+// IsCommandContextTermination reports whether err itself is the private
+// command-termination marker. It deliberately does not search joined branches;
+// callers classifying an error tree must still inspect every sibling cause.
+func IsCommandContextTermination(err error) bool {
+	_, ok := err.(*commandContextTerminationError)
+	return ok
+}
+
 // Client invokes a Herdr executable.
 type Client struct {
-	binary string
-	stdin  io.Reader
-	stdout io.Writer
-	stderr io.Writer
-	watch  func(string) (fswatch.Watcher, error)
+	binary           string
+	stdin            io.Reader
+	stdout           io.Writer
+	stderr           io.Writer
+	watch            func(string) (fswatch.Watcher, error)
+	afterCommandWait func()
 }
 
 // NewClient creates a Herdr CLI client.
@@ -341,6 +444,23 @@ func (c *Client) StartAgent(ctx context.Context, session, name, kind, paneID str
 	return nil
 }
 
+// WaitPaneOutput asks Herdr's server to wait until the pane has any rendered
+// output. The server owns the bounded wait; ctx only propagates caller
+// cancellation to the CLI process.
+func (c *Client) WaitPaneOutput(ctx context.Context, session, paneID string, timeout time.Duration) error {
+	args := []string{
+		"pane", "wait-output", paneID,
+		"--source", "recent",
+		"--regex", ".",
+		"--raw",
+		"--timeout", strconv.FormatInt(timeout.Milliseconds(), 10),
+	}
+	if err := c.runSessionJSON(ctx, session, nil, args...); err != nil {
+		return fmt.Errorf("wait for Herdr pane %q output: %w", paneID, err)
+	}
+	return nil
+}
+
 func (c *Client) PromptAgent(ctx context.Context, session, target, prompt string) error {
 	if err := c.runSessionJSON(ctx, session, nil, "agent", "prompt", target, prompt); err != nil {
 		return fmt.Errorf("prompt Herdr agent %q: %w", target, err)
@@ -382,15 +502,47 @@ func (c *Client) Delete(ctx context.Context, name string) error {
 func (c *Client) runJSON(ctx context.Context, destination any, args ...string) error {
 	var stderr bytes.Buffer
 	command := exec.CommandContext(ctx, c.binary, args...)
+	var cancellationApplied atomic.Bool
+	commandCancel := command.Cancel
+	command.Cancel = func() error {
+		err := commandCancel()
+		if err == nil {
+			cancellationApplied.Store(true)
+		}
+		return err
+	}
 	command.Stderr = &stderr
 
 	stdout, err := command.Output()
 	if err != nil {
-		message := strings.TrimSpace(stderr.String())
-		if message == "" {
-			return err
+		// This nil-by-default hook is a test seam after exec.Wait has finalized
+		// ProcessState but before context provenance is classified.
+		if c.afterCommandWait != nil {
+			c.afterCommandWait()
 		}
-		return fmt.Errorf("%w: %s", err, message)
+		message := strings.TrimSpace(stderr.String())
+		commandErr := err
+		if message != "" {
+			if structuredErr, ok := decodeCommandError(message, err); ok {
+				commandErr = structuredErr
+			} else {
+				commandErr = &commandOutputError{message: message, err: err}
+			}
+		}
+		// Once CommandContext has started a process, killing it on cancellation
+		// normally returns an *exec.ExitError rather than ctx.Err(). Mark only a
+		// successful cancellation signal whose resulting process state confirms
+		// signal termination; a context becoming done beside an independent
+		// nonzero exit must remain an ordinary joined failure.
+		if ctxErr := ctx.Err(); ctxErr != nil && !errors.Is(commandErr, ctxErr) {
+			var exitErr *exec.ExitError
+			if message == "" && cancellationApplied.Load() && errors.As(err, &exitErr) &&
+				exitErr.ProcessState != nil && !exitErr.ProcessState.Exited() {
+				return &commandContextTerminationError{processErr: commandErr, cause: ctxErr}
+			}
+			return errors.Join(commandErr, ctxErr)
+		}
+		return commandErr
 	}
 
 	if destination == nil {
@@ -403,6 +555,35 @@ func (c *Client) runJSON(ctx context.Context, destination any, args ...string) e
 		return fmt.Errorf("decode JSON response: %w", err)
 	}
 	return nil
+}
+
+func decodeCommandError(stderr string, exitErr error) (*CommandError, bool) {
+	var response struct {
+		ID    *string `json:"id"`
+		Error *struct {
+			Code    *string `json:"code"`
+			Message *string `json:"message"`
+		} `json:"error"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(stderr))
+	if err := decoder.Decode(&response); err != nil {
+		return nil, false
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return nil, false
+	}
+	if response.ID == nil || strings.TrimSpace(*response.ID) == "" ||
+		response.Error == nil || response.Error.Code == nil || response.Error.Message == nil ||
+		strings.TrimSpace(*response.Error.Code) == "" || strings.TrimSpace(*response.Error.Message) == "" {
+		return nil, false
+	}
+	return &CommandError{
+		Code:      *response.Error.Code,
+		Message:   *response.Error.Message,
+		RequestID: *response.ID,
+		Err:       exitErr,
+	}, true
 }
 
 func (c *Client) runSessionJSON(ctx context.Context, session string, destination any, args ...string) error {

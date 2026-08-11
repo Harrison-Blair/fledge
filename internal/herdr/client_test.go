@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -23,6 +24,8 @@ const (
 	helperStdoutEnv  = "FLEDGE_HERDR_TEST_STDOUT"
 	helperStderrEnv  = "FLEDGE_HERDR_TEST_STDERR"
 	helperExitEnv    = "FLEDGE_HERDR_TEST_EXIT"
+	helperBlockEnv   = "FLEDGE_HERDR_TEST_BLOCK"
+	helperReadyEnv   = "FLEDGE_HERDR_TEST_READY"
 	// helperSequenceEnv names a directory holding one response file per planned
 	// invocation, letting a test script a sequence of differing Herdr replies.
 	helperSequenceEnv = "FLEDGE_HERDR_TEST_SEQUENCE"
@@ -75,6 +78,18 @@ func runHerdrHelper() {
 
 	_, _ = io.WriteString(os.Stdout, os.Getenv(helperStdoutEnv))
 	_, _ = io.WriteString(os.Stderr, os.Getenv(helperStderrEnv))
+	if os.Getenv(helperBlockEnv) == "1" {
+		if ready := os.Getenv(helperReadyEnv); ready != "" {
+			if err := os.WriteFile(ready, nil, 0o600); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(2)
+			}
+		}
+		// Keep the child alive until CommandContext terminates it. A timer keeps
+		// the helper from being diagnosed as a deadlocked standalone process if a
+		// test fails before cancellation reaches the child.
+		<-time.After(time.Hour)
+	}
 
 	if value := os.Getenv(helperExitEnv); value != "" {
 		code, err := strconv.Atoi(value)
@@ -745,6 +760,310 @@ func TestClientListCommandErrors(t *testing.T) {
 	}
 }
 
+func TestClientDecodesStructuredCommandErrors(t *testing.T) {
+	configureHelper(t, "")
+	t.Setenv(helperStderrEnv, `{"id":"req-7","error":{"code":"agent_pane_busy","message":"pane shell still owns foreground"}}`)
+	t.Setenv(helperExitEnv, "19")
+
+	err := NewClient(helperBinary(t), nil, nil, nil).StartAgent(
+		context.Background(), "s", "worker", "codex", "w1:p2", 45*time.Second, nil,
+	)
+	if err == nil {
+		t.Fatal("StartAgent() error = nil")
+	}
+	var commandErr *CommandError
+	if !errors.As(err, &commandErr) {
+		t.Fatalf("StartAgent() error = %T %v, want *CommandError in chain", err, err)
+	}
+	if commandErr.Code != "agent_pane_busy" || commandErr.Message != "pane shell still owns foreground" || commandErr.RequestID != "req-7" {
+		t.Fatalf("CommandError = %#v", commandErr)
+	}
+	if !IsErrorCode(err, "agent_pane_busy") || IsErrorCode(err, "agent_name_taken") {
+		t.Fatalf("structured classification was not exact: %v", err)
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 19 {
+		t.Fatalf("underlying exit error = %#v, want exit code 19", exitErr)
+	}
+	want := `start Herdr agent "worker": exit status 19: agent_pane_busy: pane shell still owns foreground (request req-7)`
+	if err.Error() != want {
+		t.Fatalf("StartAgent() error = %q, want %q", err, want)
+	}
+}
+
+func TestIsErrorCodeSearchesJoinedErrorsWithExactEquality(t *testing.T) {
+	busyErr := &CommandError{Code: "agent_pane_busy", Message: "busy", RequestID: "req-busy"}
+	fatalErr := &CommandError{Code: "input_failed", Message: "fatal", RequestID: "req-fatal"}
+	for _, err := range []error{errors.Join(busyErr, fatalErr), errors.Join(fatalErr, busyErr)} {
+		if !IsErrorCode(err, "agent_pane_busy") || !IsErrorCode(err, "input_failed") {
+			t.Fatalf("IsErrorCode() did not search every joined branch: %v", err)
+		}
+		if IsErrorCode(err, "Agent_Pane_Busy") || IsErrorCode(err, "agent_pane") {
+			t.Fatalf("IsErrorCode() used non-exact matching: %v", err)
+		}
+	}
+}
+
+func TestClientCommandErrorClassificationRejectsAmbiguousStderr(t *testing.T) {
+	tests := []struct {
+		name       string
+		stderr     string
+		classified string
+	}{
+		{name: "plain text", stderr: "agent_pane_busy: try again"},
+		{name: "malformed JSON", stderr: `{"id":"req-1","error":{"code":"agent_pane_busy","message":"try again"}`},
+		{name: "trailing output", stderr: `{"id":"req-1","error":{"code":"agent_pane_busy","message":"try again"}} warning`},
+		{name: "trailing JSON", stderr: `{"id":"req-1","error":{"code":"agent_pane_busy","message":"try again"}} {}`},
+		{name: "missing request id", stderr: `{"error":{"code":"agent_pane_busy","message":"try again"}}`},
+		{name: "null request id", stderr: `{"id":null,"error":{"code":"agent_pane_busy","message":"try again"}}`},
+		{name: "empty request id", stderr: `{"id":"","error":{"code":"agent_pane_busy","message":"try again"}}`},
+		{name: "blank request id", stderr: `{"id":" \t","error":{"code":"agent_pane_busy","message":"try again"}}`},
+		{name: "wrong type request id", stderr: `{"id":7,"error":{"code":"agent_pane_busy","message":"try again"}}`},
+		{name: "missing error", stderr: `{"id":"req-1"}`},
+		{name: "null error", stderr: `{"id":"req-1","error":null}`},
+		{name: "wrong type error", stderr: `{"id":"req-1","error":"agent_pane_busy"}`},
+		{name: "missing code", stderr: `{"id":"req-1","error":{"message":"try again"}}`},
+		{name: "null code", stderr: `{"id":"req-1","error":{"code":null,"message":"try again"}}`},
+		{name: "empty code", stderr: `{"id":"req-1","error":{"code":"","message":"try again"}}`},
+		{name: "blank code", stderr: `{"id":"req-1","error":{"code":" \t","message":"try again"}}`},
+		{name: "wrong type code", stderr: `{"id":"req-1","error":{"code":7,"message":"try again"}}`},
+		{name: "missing message", stderr: `{"id":"req-1","error":{"code":"agent_pane_busy"}}`},
+		{name: "null message", stderr: `{"id":"req-1","error":{"code":"agent_pane_busy","message":null}}`},
+		{name: "empty message", stderr: `{"id":"req-1","error":{"code":"agent_pane_busy","message":""}}`},
+		{name: "blank message", stderr: `{"id":"req-1","error":{"code":"agent_pane_busy","message":" \t"}}`},
+		{name: "wrong type message", stderr: `{"id":"req-1","error":{"code":"agent_pane_busy","message":7}}`},
+		{name: "unrelated JSON", stderr: `{"code":"agent_pane_busy","message":"try again"}`},
+		{name: "other structured code", stderr: `{"id":"req-2","error":{"code":"agent_name_taken","message":"worker exists"}}`, classified: "agent_name_taken"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configureHelper(t, "")
+			t.Setenv(helperStderrEnv, test.stderr)
+			t.Setenv(helperExitEnv, "1")
+
+			_, err := NewClient(helperBinary(t), nil, nil, nil).List(context.Background())
+			if err == nil {
+				t.Fatal("List() error = nil")
+			}
+			if IsErrorCode(err, "agent_pane_busy") {
+				t.Fatalf("List() error ambiguously classified as busy: %v", err)
+			}
+			var commandErr *CommandError
+			if test.classified == "" {
+				if errors.As(err, &commandErr) {
+					t.Fatalf("List() error = %#v, want generic command failure", commandErr)
+				}
+				if !IsUnstructuredCommandError(err) {
+					t.Fatalf("List() error = %T %v, want unstructured command failure", err, err)
+				}
+				return
+			}
+			if IsUnstructuredCommandError(err) {
+				t.Fatalf("List() error = %T %v, want structured command failure", err, err)
+			}
+			if !errors.As(err, &commandErr) || !IsErrorCode(err, test.classified) {
+				t.Fatalf("List() error = %T %v, want structured code %q", err, err, test.classified)
+			}
+		})
+	}
+}
+
+func TestClientWaitPaneOutput(t *testing.T) {
+	t.Run("exact command", func(t *testing.T) {
+		capture := filepath.Join(t.TempDir(), "invocation.json")
+		configureHelper(t, capture)
+		client := NewClient(helperBinary(t), nil, nil, nil)
+
+		if err := client.WaitPaneOutput(context.Background(), "session-name", "w1:p2", 5*time.Second); err != nil {
+			t.Fatalf("WaitPaneOutput() error = %v", err)
+		}
+		want := []string{
+			"--session", "session-name", "pane", "wait-output", "w1:p2",
+			"--source", "recent", "--regex", ".", "--raw", "--timeout", "5000",
+		}
+		assertStrings(t, "args", readInvocation(t, capture).Args, want)
+	})
+
+	t.Run("caller cancellation", func(t *testing.T) {
+		configureHelper(t, "")
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		err := NewClient(helperBinary(t), nil, nil, nil).WaitPaneOutput(ctx, "session-name", "w1:p2", 5*time.Second)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("WaitPaneOutput() error = %v, want context.Canceled", err)
+		}
+	})
+}
+
+type triggeredContext struct {
+	context.Context
+	done  chan struct{}
+	cause error
+}
+
+func newTriggeredContext(cause error) (*triggeredContext, func()) {
+	ctx := &triggeredContext{Context: context.Background(), done: make(chan struct{}), cause: cause}
+	return ctx, func() { close(ctx.done) }
+}
+
+func (c *triggeredContext) Done() <-chan struct{} { return c.done }
+
+func (c *triggeredContext) Err() error {
+	select {
+	case <-c.done:
+		return c.cause
+	default:
+		return nil
+	}
+}
+
+func TestClientWaitPaneOutputPreservesInFlightContextCauses(t *testing.T) {
+	tests := []struct {
+		name           string
+		cause          error
+		stderr         string
+		structuredCode string
+		unstructured   bool
+		termination    bool
+	}{
+		{name: "cancellation with process failure", cause: context.Canceled, termination: true},
+		{name: "deadline with process failure", cause: context.DeadlineExceeded, termination: true},
+		{
+			name:         "deadline with generic failure",
+			cause:        context.DeadlineExceeded,
+			stderr:       "pane output unavailable",
+			unstructured: true,
+		},
+		{
+			name:           "deadline with structured failure",
+			cause:          context.DeadlineExceeded,
+			stderr:         `{"id":"req-deadline","error":{"code":"input_failed","message":"pane disappeared"}}`,
+			structuredCode: "input_failed",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			capture := filepath.Join(t.TempDir(), "invocation.json")
+			ready := filepath.Join(t.TempDir(), "ready")
+			configureHelper(t, capture)
+			t.Setenv(helperBlockEnv, "1")
+			t.Setenv(helperReadyEnv, ready)
+			t.Setenv(helperStderrEnv, test.stderr)
+			ctx, trigger := newTriggeredContext(test.cause)
+			binary := helperBinary(t)
+			result := make(chan error, 1)
+			go func() {
+				result <- NewClient(binary, nil, nil, nil).WaitPaneOutput(ctx, "session-name", "w1:p2", 5*time.Second)
+			}()
+
+			deadline := time.Now().Add(10 * time.Second)
+			for {
+				if _, err := os.Stat(ready); err == nil {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("blocking helper did not start")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			trigger()
+
+			var err error
+			select {
+			case err = <-result:
+			case <-time.After(10 * time.Second):
+				t.Fatal("WaitPaneOutput() did not return after context completion")
+			}
+			if !errors.Is(err, test.cause) {
+				t.Fatalf("WaitPaneOutput() error = %v, want context cause %v", err, test.cause)
+			}
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) {
+				t.Fatalf("WaitPaneOutput() error = %T %v, want *exec.ExitError in chain", err, err)
+			}
+			if test.termination && (exitErr.ProcessState == nil || exitErr.ProcessState.Exited()) {
+				t.Fatalf("context-killed process state = %#v, want signal termination with Exited false", exitErr.ProcessState)
+			}
+			var terminationErr *commandContextTerminationError
+			if got := errors.As(err, &terminationErr); got != test.termination {
+				t.Fatalf("command cancellation marker present = %v, want %v: %v", got, test.termination, err)
+			}
+			if test.termination {
+				want := fmt.Sprintf("wait for Herdr pane %q output: %s\n%s", "w1:p2", exitErr.Error(), test.cause.Error())
+				if err.Error() != want {
+					t.Fatalf("WaitPaneOutput() error = %q, want %q", err, want)
+				}
+			}
+			if got := IsUnstructuredCommandError(err); got != test.unstructured {
+				t.Fatalf("IsUnstructuredCommandError(%v) = %v, want %v", err, got, test.unstructured)
+			}
+			var commandErr *CommandError
+			if test.structuredCode == "" {
+				if errors.As(err, &commandErr) {
+					t.Fatalf("WaitPaneOutput() error = %#v, want no structured error", commandErr)
+				}
+				return
+			}
+			if !errors.As(err, &commandErr) || !IsErrorCode(err, test.structuredCode) {
+				t.Fatalf("WaitPaneOutput() error = %T %v, want structured code %q", err, err, test.structuredCode)
+			}
+			if commandErr.RequestID != "req-deadline" {
+				t.Fatalf("CommandError request id = %q, want req-deadline", commandErr.RequestID)
+			}
+		})
+	}
+}
+
+func TestClientDoesNotMarkProcessExitCompletedBeforeCancellation(t *testing.T) {
+	configureHelper(t, "")
+	t.Setenv(helperExitEnv, "23")
+	ctx, trigger := newTriggeredContext(context.DeadlineExceeded)
+	waitCompleted := make(chan struct{})
+	classify := make(chan struct{})
+	client := NewClient(helperBinary(t), nil, nil, nil)
+	client.afterCommandWait = func() {
+		close(waitCompleted)
+		<-classify
+	}
+	result := make(chan error, 1)
+	go func() {
+		result <- client.WaitPaneOutput(ctx, "session-name", "w1:p2", 5*time.Second)
+	}()
+
+	select {
+	case <-waitCompleted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("WaitPaneOutput() did not reach post-Wait classification seam")
+	}
+	trigger()
+	close(classify)
+
+	var err error
+	select {
+	case err = <-result:
+	case <-time.After(10 * time.Second):
+		t.Fatal("WaitPaneOutput() did not return after classification resumed")
+	}
+
+	if err == nil {
+		t.Fatal("WaitPaneOutput() error = nil")
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ProcessState == nil || exitErr.ExitCode() != 23 || !exitErr.ProcessState.Exited() {
+		t.Fatalf("WaitPaneOutput() error = %T %v, want completed exit status 23", err, err)
+	}
+	var terminationErr *commandContextTerminationError
+	if errors.As(err, &terminationErr) {
+		t.Fatalf("WaitPaneOutput() error = %v, must not mark an exit completed before cancellation", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WaitPaneOutput() error = %v, want later context deadline retained as an independent cause", err)
+	}
+}
+
 func helperBinary(t *testing.T) string {
 	t.Helper()
 
@@ -763,6 +1082,8 @@ func configureHelper(t *testing.T, capture string) {
 	t.Setenv(helperStdoutEnv, "")
 	t.Setenv(helperStderrEnv, "")
 	t.Setenv(helperExitEnv, "")
+	t.Setenv(helperBlockEnv, "")
+	t.Setenv(helperReadyEnv, "")
 	t.Setenv(helperSequenceEnv, "")
 }
 

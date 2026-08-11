@@ -2306,6 +2306,7 @@ type fakeHerdr struct {
 	stopHook          func()
 	calls             []string
 	startAgent        startAgentCall
+	startAgentCalls   []startAgentCall
 	prompt            string
 	promptCalls       []promptCall
 	createdTab        herdr.Tab
@@ -2314,7 +2315,11 @@ type fakeHerdr struct {
 	createWorkspace   createWorkspaceCall
 	createCall        createTabCall
 	startErr          error
+	startErrs         []error
 	startHook         func()
+	waitPaneCalls     []waitPaneOutputCall
+	waitPaneErr       error
+	waitPaneHook      func(context.Context) error
 	promptErr         error
 	promptHook        func()
 	renameErr         error
@@ -2338,6 +2343,12 @@ type startAgentCall struct {
 	pane    string
 	timeout time.Duration
 	args    []string
+}
+
+type waitPaneOutputCall struct {
+	session string
+	pane    string
+	timeout time.Duration
 }
 
 type createTabCall struct {
@@ -2430,10 +2441,24 @@ func (f *fakeHerdr) FocusAgent(context.Context, string, string) error {
 func (f *fakeHerdr) StartAgent(_ context.Context, session, name, kind, pane string, timeout time.Duration, args []string) error {
 	f.calls = append(f.calls, "start-agent")
 	f.startAgent = startAgentCall{session: session, name: name, kind: kind, pane: pane, timeout: timeout, args: append([]string(nil), args...)}
+	f.startAgentCalls = append(f.startAgentCalls, f.startAgent)
 	if f.startHook != nil {
 		f.startHook()
 	}
+	if len(f.startErrs) > 0 {
+		err := f.startErrs[0]
+		f.startErrs = f.startErrs[1:]
+		return err
+	}
 	return f.startErr
+}
+func (f *fakeHerdr) WaitPaneOutput(ctx context.Context, session, pane string, timeout time.Duration) error {
+	f.calls = append(f.calls, "wait-pane-output")
+	f.waitPaneCalls = append(f.waitPaneCalls, waitPaneOutputCall{session: session, pane: pane, timeout: timeout})
+	if f.waitPaneHook != nil {
+		return f.waitPaneHook(ctx)
+	}
+	return f.waitPaneErr
 }
 func (f *fakeHerdr) PromptAgent(_ context.Context, session string, recipient string, prompt string) error {
 	f.calls = append(f.calls, "prompt-agent")
