@@ -1,3 +1,17 @@
-/fledge
+# Build output
 /bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test, coverage, and profiling output
 *.test
+*.out
+coverage.*
+*.prof
+
+# Local Go workspaces
+go.work
+go.work.sum
