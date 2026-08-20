@@ -1,0 +1,42 @@
+name: Test
+
+on:
+  workflow_call:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test
+        shell: bash
+        run: |
+          status=0
+          go test -trimpath -buildvcs=true -race -covermode=atomic -coverprofile=coverage.out ./... || status=$?
+
+          if [[ -s coverage.out ]]; then
+            total="$(go tool cover -func=coverage.out 2>/dev/null | awk '/^total:/ {print $3}' || true)"
+            if [[ -n "$total" ]]; then
+              {
+                echo "## Test coverage"
+                echo
+                echo "Total: **$total**"
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+
+          exit "$status"
