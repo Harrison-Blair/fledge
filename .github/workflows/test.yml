@@ -1,6 +1,7 @@
 name: Test
 
 on:
+  workflow_call:
   pull_request:
   push:
     branches: [main]
@@ -9,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: test-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -22,14 +23,20 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Test
+        shell: bash
         run: |
           status=0
           go test -trimpath -buildvcs=true -race -covermode=atomic -coverprofile=coverage.out ./... || status=$?
-          if [ -f coverage.out ]; then
-            {
-              echo "## Test coverage"
-              echo
-              go tool cover -func=coverage.out | awk '/^total:/ {print "Total: **" $3 "**"}'
-            } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ -s coverage.out ]]; then
+            total="$(go tool cover -func=coverage.out 2>/dev/null | awk '/^total:/ {print $3}' || true)"
+            if [[ -n "$total" ]]; then
+              {
+                echo "## Test coverage"
+                echo
+                echo "Total: **$total**"
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
           fi
+
           exit "$status"

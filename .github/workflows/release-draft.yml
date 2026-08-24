@@ -1,0 +1,200 @@
+name: Release Draft
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to draft, without the v prefix (for example, 0.0.3)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-draft-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Validate release request
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.validate.outputs.tag }}
+      version: ${{ steps.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Validate version and release state
+        id: validate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Release drafts must be started from the main branch; got $GITHUB_REF." >&2
+            exit 1
+          fi
+
+          if [[ ! "$REQUESTED_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Invalid version '$REQUESTED_VERSION': expected MAJOR.MINOR.PATCH without a v prefix." >&2
+            exit 1
+          fi
+
+          file_version="$(< internal/version/VERSION)"
+          file_version="${file_version#"${file_version%%[![:space:]]*}"}"
+          file_version="${file_version%"${file_version##*[![:space:]]}"}"
+          if [[ "$REQUESTED_VERSION" != "$file_version" ]]; then
+            echo "Requested version $REQUESTED_VERSION does not match internal/version/VERSION ($file_version)." >&2
+            exit 1
+          fi
+
+          tag="v$REQUESTED_VERSION"
+          export TAG="$tag"
+
+          while IFS= read -r existing_tag; do
+            [[ "$existing_tag" == "$tag" ]] && continue
+            [[ "$existing_tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || continue
+            highest="$(printf '%s\n%s\n' "$existing_tag" "$tag" | sort -V | tail -n 1)"
+            if [[ "$highest" != "$tag" ]]; then
+              echo "$tag is not newer than existing version $existing_tag." >&2
+              exit 1
+            fi
+          done < <(git tag --list)
+
+          release_info="$(
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq '.[] | select(.tag_name == env.TAG) | [.id, .draft, .html_url] | @tsv'
+          )"
+
+          if [[ "$release_info" == *$'\n'* ]]; then
+            echo "Multiple GitHub releases use $tag; resolve the conflict manually." >&2
+            exit 1
+          fi
+
+          if [[ -n "$release_info" ]]; then
+            IFS=$'\t' read -r _ is_draft release_url <<< "$release_info"
+            if [[ "$is_draft" != "true" ]]; then
+              echo "$tag is already published: $release_url" >&2
+              exit 1
+            fi
+            echo "An existing draft for $tag will be refreshed after CI passes."
+          elif git show-ref --verify --quiet "refs/tags/$tag"; then
+            tag_sha="$(git rev-list -n 1 "$tag")"
+            if [[ "$tag_sha" != "$TARGET_SHA" ]]; then
+              echo "$tag already marks commit $tag_sha instead of current main commit $TARGET_SHA." >&2
+              exit 1
+            fi
+            echo "$tag already marks the current main commit and will be used for the draft."
+          fi
+
+          echo "version=$REQUESTED_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  lint:
+    name: Lint
+    needs: preflight
+    uses: ./.github/workflows/lint.yml
+    permissions:
+      contents: read
+
+  test:
+    name: Test
+    needs: preflight
+    uses: ./.github/workflows/test.yml
+    permissions:
+      contents: read
+
+  build:
+    name: Build
+    needs: preflight
+    uses: ./.github/workflows/build.yml
+    permissions:
+      contents: read
+
+  draft:
+    name: Create or refresh draft
+    needs: [preflight, lint, test, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.preflight.outputs.tag }}
+      TARGET_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Create or refresh release draft
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          release_info="$(
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq '.[] | select(.tag_name == env.TAG) | [.id, .draft, .html_url] | @tsv'
+          )"
+
+          if [[ "$release_info" == *$'\n'* ]]; then
+            echo "Multiple GitHub releases use $TAG; resolve the conflict manually." >&2
+            exit 1
+          fi
+
+          if [[ -n "$release_info" ]]; then
+            IFS=$'\t' read -r release_id is_draft release_url <<< "$release_info"
+            if [[ "$is_draft" != "true" ]]; then
+              echo "$TAG was published while CI was running: $release_url" >&2
+              exit 1
+            fi
+
+            if git show-ref --verify --quiet "refs/tags/$TAG"; then
+              tag_sha="$(git rev-list -n 1 "$TAG")"
+              if [[ "$tag_sha" != "$TARGET_SHA" ]]; then
+                git tag --force "$TAG" "$TARGET_SHA"
+                git push --force origin "refs/tags/$TAG"
+              fi
+            else
+              git tag "$TAG" "$TARGET_SHA"
+              git push origin "refs/tags/$TAG"
+            fi
+
+            notes_json="$RUNNER_TEMP/release-notes.json"
+            update_json="$RUNNER_TEMP/release-update.json"
+            gh api --method POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+              --raw-field tag_name="$TAG" \
+              --raw-field target_commitish="$TARGET_SHA" > "$notes_json"
+            jq --arg tag "$TAG" --arg target "$TARGET_SHA" \
+              '{tag_name: $tag, target_commitish: $target, name: .name, body: .body, draft: true, prerelease: false}' \
+              "$notes_json" > "$update_json"
+            release_url="$(
+              gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+                --input "$update_json" --jq '.html_url'
+            )"
+          else
+            if git show-ref --verify --quiet "refs/tags/$TAG"; then
+              tag_sha="$(git rev-list -n 1 "$TAG")"
+              if [[ "$tag_sha" != "$TARGET_SHA" ]]; then
+                echo "$TAG changed while CI was running and no longer marks $TARGET_SHA." >&2
+                exit 1
+              fi
+              release_url="$(gh release create "$TAG" --verify-tag --generate-notes --draft)"
+            else
+              release_url="$(gh release create "$TAG" --target "$TARGET_SHA" --generate-notes --draft)"
+            fi
+          fi
+
+          echo "url=$release_url" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Release draft"
+            echo
+            echo "Draft [$TAG]($release_url) is ready for review."
+          } >> "$GITHUB_STEP_SUMMARY"

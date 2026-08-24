@@ -1,6 +1,7 @@
 name: Build
 
 on:
+  workflow_call:
   pull_request:
   push:
     branches: [main]
@@ -9,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: build-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -31,4 +32,4 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Build
-        run: go build -trimpath -buildvcs=true -o "$RUNNER_TEMP/fledge" .
+        run: go build -trimpath -buildvcs=true -o "$RUNNER_TEMP/fledge-linux-$GOARCH" .
