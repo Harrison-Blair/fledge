@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -20,12 +22,40 @@ type Herder interface {
 	Stop(context.Context, string) error
 }
 
+// AgentChoice is the agent to run in a fresh session's orchestrator pane. An
+// empty Harness leaves the pane at a shell prompt, and an empty Model accepts
+// the harness default.
+type AgentChoice struct {
+	Harness string
+	Model   string
+}
+
+// Chooser obtains the agent to run in a fresh session.
+type Chooser interface {
+	Choose(context.Context) (AgentChoice, error)
+}
+
+// Bootstrapper is the Herder surface needed to prepare a fresh session.
+type Bootstrapper interface {
+	Status(context.Context) (herdr.Status, error)
+	Workspaces(context.Context) ([]herdr.Workspace, error)
+	Panes(context.Context, string) ([]herdr.Pane, error)
+	RenameWorkspace(context.Context, string, string) error
+	RenameTab(context.Context, string, string) error
+	StartAgent(context.Context, herdr.StartAgentOptions) (herdr.Agent, error)
+}
+
 // StartDependencies contains the external operations used by Start.
 type StartDependencies struct {
 	Herder  Herder
 	Entropy io.Reader
 	Now     func() time.Time
 	Getenv  func(string) string
+	Chooser Chooser
+	// Scoped addresses the Herder server of one session by name.
+	Scoped func(sessionName string) Bootstrapper
+	// Diagnostics receives the bootstrap report written after Herder exits.
+	Diagnostics io.Writer
 }
 
 // Start attaches to the sole running session registered by the nearest Fledge
@@ -60,6 +90,15 @@ func Start(ctx context.Context, path string, deps StartDependencies) error {
 	running := registeredRunningNames(records, sessions)
 	switch len(running) {
 	case 0:
+		if deps.Chooser == nil {
+			return fmt.Errorf("start Fledge session: chooser is nil")
+		}
+		if deps.Scoped == nil {
+			return fmt.Errorf("start Fledge session: scoped Herder client is nil")
+		}
+		if deps.Diagnostics == nil {
+			return fmt.Errorf("start Fledge session: diagnostics is nil")
+		}
 		unavailable := make(map[string]struct{}, len(sessions))
 		for _, listed := range sessions {
 			unavailable[listed.Name] = struct{}{}
@@ -68,8 +107,45 @@ func Start(ctx context.Context, path string, deps StartDependencies) error {
 		if err != nil {
 			return fmt.Errorf("start Fledge session: %w", err)
 		}
-		if err := deps.Herder.Launch(ctx, root, record.HerdrSessionName); err != nil {
-			return fmt.Errorf("start Fledge session: launch %q: %w", record.HerdrSessionName, err)
+		choice, err := deps.Chooser.Choose(ctx)
+		if err != nil {
+			return fmt.Errorf("start Fledge session: choose agent: %w", err)
+		}
+
+		logPath := filepath.Join(record.Path, bootstrapLogName)
+		logFile, err := os.OpenFile(logPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+		var log io.Writer = logFile
+		if err != nil {
+			log = io.Discard
+			fmt.Fprintf(deps.Diagnostics, "fledge: cannot write %s: %v\n", logPath, err)
+		} else {
+			defer logFile.Close()
+		}
+
+		// Herder needs its own terminal, so the session is prepared through the
+		// CLI while its TUI holds the foreground.
+		bootCtx, cancel := context.WithCancel(ctx)
+		done := make(chan error, 1)
+		go func() {
+			done <- bootstrap(bootCtx, deps.Scoped(record.HerdrSessionName), bootstrapInput{
+				Root:   root,
+				Choice: choice,
+				Log:    log,
+			}, defaultBootstrapTiming)
+		}()
+
+		launchErr := deps.Herder.Launch(ctx, root, record.HerdrSessionName)
+		cancel()
+		bootErr := <-done
+
+		if launchErr != nil {
+			return fmt.Errorf("start Fledge session: launch %q: %w", record.HerdrSessionName, launchErr)
+		}
+		// Quitting Herder before the bootstrap finishes cancels it, which is a
+		// choice rather than a failure.
+		if bootErr != nil && !errors.Is(bootErr, context.Canceled) {
+			fmt.Fprintf(deps.Diagnostics, "fledge: session bootstrap failed (see %s): %v\n", logPath, bootErr)
+			return fmt.Errorf("start Fledge session: bootstrap: %w", bootErr)
 		}
 		return nil
 	case 1:
