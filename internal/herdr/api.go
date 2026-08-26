@@ -178,12 +178,18 @@ func (c *Client) RenameWorkspace(ctx context.Context, id, label string) error {
 	return c.invoke(ctx, "workspace_info", nil, "workspace", "rename", id, label)
 }
 
-// Tabs returns the tabs of one workspace.
+// Tabs returns the tabs of one workspace, or of every workspace when
+// workspaceID is empty.
 func (c *Client) Tabs(ctx context.Context, workspaceID string) ([]Tab, error) {
+	args := []string{"tab", "list"}
+	if workspaceID != "" {
+		args = append(args, "--workspace", workspaceID)
+	}
+
 	var payload struct {
 		Tabs []Tab `json:"tabs"`
 	}
-	if err := c.invoke(ctx, "tab_list", &payload, "tab", "list", "--workspace", workspaceID); err != nil {
+	if err := c.invoke(ctx, "tab_list", &payload, args...); err != nil {
 		return nil, err
 	}
 	for _, tab := range payload.Tabs {

@@ -64,7 +64,7 @@ func TestAPIRequests(t *testing.T) {
 	}{
 		{
 			name:   "status",
-			output: `{"client":{"version":"0.8.2"},"server":{"status":"running","running":true},"update":{}}`,
+			output: `{"client":{"version":"0.8.2"},"server":{"status":"running","running":true},"update":{}}` + "\n",
 			call: func(ctx context.Context, c *Client) (any, error) {
 				return c.Status(ctx)
 			},
@@ -73,7 +73,7 @@ func TestAPIRequests(t *testing.T) {
 		},
 		{
 			name:   "workspaces",
-			output: envelope(`{"type":"workspace_list","workspaces":[` + workspaceJSON + `]}`),
+			output: envelope(`{"type":"workspace_list","workspaces":[`+workspaceJSON+`]}`) + "\n",
 			call: func(ctx context.Context, c *Client) (any, error) {
 				return c.Workspaces(ctx)
 			},
@@ -122,6 +122,15 @@ func TestAPIRequests(t *testing.T) {
 				return nil, c.RenameTab(ctx, "w1:t1", "renamed")
 			},
 			wantArgv: []string{"tab", "rename", "w1:t1", "renamed"},
+		},
+		{
+			name:   "tabs everywhere",
+			output: envelope(`{"type":"tab_list","tabs":[` + tabJSON + `]}`),
+			call: func(ctx context.Context, c *Client) (any, error) {
+				return c.Tabs(ctx, "")
+			},
+			wantArgv: []string{"tab", "list"},
+			want:     []Tab{wantTab},
 		},
 		{
 			name:   "panes in workspace",
@@ -344,6 +353,54 @@ func TestAPIRejectsInvalidOutput(t *testing.T) {
 			_, err := New(nil, nil, nil).Agents(context.Background())
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("Agents error = %v, want containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestAPIRejectsMissingIdentifiers(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		call   func(context.Context, *Client) error
+		want   string
+	}{
+		{
+			name:   "workspace without workspace_id",
+			output: envelope(`{"type":"workspace_list","workspaces":[{"label":"fledge","number":1}]}`),
+			call: func(ctx context.Context, c *Client) error {
+				_, err := c.Workspaces(ctx)
+				return err
+			},
+			want: "missing workspace_id",
+		},
+		{
+			name:   "tab without workspace_id",
+			output: envelope(`{"type":"tab_list","tabs":[{"tab_id":"w1:t1","label":"1"}]}`),
+			call: func(ctx context.Context, c *Client) error {
+				_, err := c.Tabs(ctx, "w1")
+				return err
+			},
+			want: "missing tab_id or workspace_id",
+		},
+		{
+			name:   "pane without tab_id",
+			output: envelope(`{"type":"pane_list","panes":[{"pane_id":"w1:p1","workspace_id":"w1"}]}`),
+			call: func(ctx context.Context, c *Client) error {
+				_, err := c.Panes(ctx, "w1")
+				return err
+			},
+			want: "missing pane_id, workspace_id, or tab_id",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			recordingHerdr(t, tc.output)
+
+			err := tc.call(context.Background(), New(nil, nil, nil))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want containing %q", err, tc.want)
 			}
 		})
 	}
