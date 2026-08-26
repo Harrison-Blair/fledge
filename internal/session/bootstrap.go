@@ -127,7 +127,7 @@ func startAgent(ctx context.Context, h Bootstrapper, in bootstrapInput, t bootst
 			return nil
 		}
 		var reported *herdr.Error
-		if !errors.As(err, &reported) || attempt >= t.StartRetries {
+		if !errors.As(err, &reported) || reported.Code != "agent_pane_busy" || attempt >= t.StartRetries {
 			return logFail(in.Log, halted(ctx, fmt.Errorf("start %s: %w", in.Choice.Harness, err)))
 		}
 		logStep(in.Log, "start %s attempt %d failed: %v", in.Choice.Harness, attempt, err)
@@ -140,7 +140,7 @@ func startAgent(ctx context.Context, h Bootstrapper, in bootstrapInput, t bootst
 // halted reports cancellation when the context ended, so a subprocess killed
 // by Herder's exit is not reported as a bootstrap failure.
 func halted(ctx context.Context, err error) error {
-	if errors.Is(ctx.Err(), context.Canceled) {
+	if err != nil && (errors.Is(err, context.Canceled) || errors.Is(herdr.ContextCause(err), context.Canceled)) && ctx.Err() != nil {
 		return ctx.Err()
 	}
 	return err

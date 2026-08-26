@@ -11,6 +11,7 @@ const (
 	namePrefix       = "fledge-"
 	randomByteCount  = 4
 	maxSessionLength = 64
+	minSessionLength = len(namePrefix) + 1 + 1 + randomByteCount*2
 )
 
 // Slug converts a project name to the filesystem-safe character set accepted
@@ -40,13 +41,19 @@ func Slug(projectName string) string {
 
 // GenerateName creates a collision-free Fledge Herder session name. Names in
 // unavailable include both local records and all sessions known to Herder.
-func GenerateName(projectName string, unavailable map[string]struct{}, entropy io.Reader) (string, error) {
+func GenerateName(projectName string, maxNameLength int, unavailable map[string]struct{}, entropy io.Reader) (string, error) {
+	if maxNameLength < minSessionLength {
+		return "", fmt.Errorf("generate session name: maximum length %d is too short", maxNameLength)
+	}
+	if maxNameLength > maxSessionLength {
+		maxNameLength = maxSessionLength
+	}
 	if entropy == nil {
 		return "", fmt.Errorf("generate session name: entropy reader is nil")
 	}
 
 	slug := Slug(projectName)
-	maxSlugLength := maxSessionLength - len(namePrefix) - 1 - randomByteCount*2
+	maxSlugLength := maxNameLength - len(namePrefix) - 1 - randomByteCount*2
 	if len(slug) > maxSlugLength {
 		slug = strings.TrimRight(slug[:maxSlugLength], "._-")
 		if slug == "" {

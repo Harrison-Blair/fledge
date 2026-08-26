@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // recordingHerdr installs a fake herdr that records its argument vector and
@@ -477,6 +478,148 @@ func TestStatusRejectsInvalidOutput(t *testing.T) {
 			_, err := New(nil, nil, nil).Status(context.Background())
 			if err == nil || !strings.Contains(err.Error(), "herdr status --json: decode output") {
 				t.Fatalf("Status error = %v", err)
+			}
+		})
+	}
+}
+
+func TestRunUsesInjectedBinaryOnlyForAmbientClient(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		herdrEnv   string
+		injected   bool
+		named      bool
+		wantBinary string
+	}{
+		{name: "ambient pane", herdrEnv: "1", injected: true, wantBinary: "injected"},
+		{name: "outside pane", herdrEnv: "0", injected: true, wantBinary: "path"},
+		{name: "named client", herdrEnv: "1", injected: true, named: true, wantBinary: "path"},
+		{name: "missing injected path", herdrEnv: "1", wantBinary: "path"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			selection := filepath.Join(t.TempDir(), "selection")
+			output := envelope(`{"type":"agent_list","agents":[]}`)
+			fakeHerdr(t, `printf 'path\n' >>"$HERDR_FAKE_SELECTION"; printf '%s' "$HERDR_FAKE_OUTPUT"`)
+			injectedPath := filepath.Join(t.TempDir(), " injected herdr ")
+			fakeHerdrExecutable(t, injectedPath, `printf 'injected\n' >>"$HERDR_FAKE_SELECTION"; printf '%s' "$HERDR_FAKE_OUTPUT"`)
+			t.Setenv("HERDR_FAKE_SELECTION", selection)
+			t.Setenv("HERDR_FAKE_OUTPUT", output)
+			t.Setenv("HERDR_ENV", test.herdrEnv)
+			if test.injected {
+				t.Setenv("HERDR_BIN_PATH", injectedPath)
+			} else {
+				t.Setenv("HERDR_BIN_PATH", "")
+			}
+
+			client := New(nil, nil, nil)
+			if test.named {
+				client = client.WithSession("managed")
+			}
+			if _, err := client.Agents(context.Background()); err != nil {
+				t.Fatalf("Agents: %v", err)
+			}
+			contents, err := os.ReadFile(selection)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.TrimSpace(string(contents)); got != test.wantBinary {
+				t.Fatalf("binary = %q, want %q", got, test.wantBinary)
+			}
+		})
+	}
+}
+
+func TestRunDoesNotFallBackAfterInjectedBinaryFailure(t *testing.T) {
+	selection := filepath.Join(t.TempDir(), "selection")
+	fakeHerdr(t, `printf 'path\n' >>"$HERDR_FAKE_SELECTION"; printf '%s' '{"id":"cli:fake","result":{"type":"agent_list","agents":[]}}'`)
+	t.Setenv("HERDR_FAKE_SELECTION", selection)
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_BIN_PATH", filepath.Join(t.TempDir(), "missing-herdr"))
+
+	_, err := New(nil, nil, nil).Agents(context.Background())
+	if err == nil || !strings.HasPrefix(err.Error(), "herdr agent list:") {
+		t.Fatalf("Agents error = %v, want logical herdr operation", err)
+	}
+	if _, statErr := os.Stat(selection); !os.IsNotExist(statErr) {
+		t.Fatalf("PATH binary ran after injected failure; stat error = %v", statErr)
+	}
+}
+
+func TestRunRecordsCancellationCauseAtSubprocessFailure(t *testing.T) {
+	started := filepath.Join(t.TempDir(), "started")
+	fakeHerdr(t, `: >"$HERDR_FAKE_STARTED"
+exec sleep 600`)
+	t.Setenv("HERDR_FAKE_STARTED", started)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := New(nil, nil, nil).Agents(ctx)
+		done <- err
+	}()
+	startupDeadline := time.NewTimer(2 * time.Second)
+	defer startupDeadline.Stop()
+	poll := time.NewTicker(time.Millisecond)
+	defer poll.Stop()
+	for {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		select {
+		case <-startupDeadline.C:
+			t.Fatal("fake Herdr did not start")
+		case <-poll.C:
+		}
+	}
+	cancel()
+	completionDeadline := time.NewTimer(2 * time.Second)
+	defer completionDeadline.Stop()
+	var err error
+	select {
+	case err = <-done:
+	case <-completionDeadline.C:
+		t.Fatal("cancelled fake Herdr did not exit")
+	}
+	if !errors.Is(ContextCause(err), context.Canceled) {
+		t.Fatalf("ContextCause(%v) = %v, want context.Canceled", err, ContextCause(err))
+	}
+}
+
+func TestGlobalMethodsIgnoreInjectedBinary(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		output string
+		call   func(context.Context, *Client) error
+	}{
+		{
+			name:   "list",
+			output: `{"sessions":[]}`,
+			call: func(ctx context.Context, client *Client) error {
+				_, err := client.List(ctx)
+				return err
+			},
+		},
+		{
+			name: "launch",
+			call: func(ctx context.Context, client *Client) error {
+				return client.Launch(ctx, t.TempDir(), "managed")
+			},
+		},
+		{
+			name: "stop",
+			call: func(ctx context.Context, client *Client) error {
+				return client.Stop(ctx, "managed")
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fakeHerdr(t, `printf '%s' "$HERDR_FAKE_OUTPUT"`)
+			t.Setenv("HERDR_FAKE_OUTPUT", test.output)
+			t.Setenv("HERDR_ENV", "1")
+			t.Setenv("HERDR_BIN_PATH", filepath.Join(t.TempDir(), "missing-herdr"))
+
+			if err := test.call(context.Background(), New(nil, nil, nil)); err != nil {
+				t.Fatalf("global method used injected binary: %v", err)
 			}
 		})
 	}

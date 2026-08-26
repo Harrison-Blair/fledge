@@ -6,7 +6,7 @@ package catalog
 import (
 	"bytes"
 	"context"
-	"os/exec"
+	"fledge/internal/subprocess"
 	"slices"
 	"strings"
 	"sync"
@@ -180,11 +180,8 @@ func run(ctx context.Context, timeout time.Duration, name string, args ...string
 	defer cancel()
 
 	var stdout bytes.Buffer
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := subprocess.CommandContext(ctx, name, args...)
 	cmd.Stdout = &stdout
-	// A killed harness can leave children holding the output pipe open, which
-	// would block Run past the timeout; WaitDelay bounds that drain.
-	cmd.WaitDelay = 500 * time.Millisecond
 	if err := cmd.Run(); err != nil {
 		return "", false
 	}

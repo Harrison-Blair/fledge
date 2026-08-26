@@ -176,7 +176,7 @@ func TestCreatePublishesExactRecordAndRetainsExistingRecords(t *testing.T) {
 	}
 	createdAt := time.Date(2026, 8, 24, 14, 15, 16, 987654321, time.FixedZone("EDT", -4*60*60))
 
-	record, err := Create(root, nil, bytes.NewReader([]byte{0xab, 0xcd, 0xef, 0x12}), createdAt)
+	record, err := Create(root, AgentChoice{}, maxSessionLength, nil, bytes.NewReader([]byte{0xab, 0xcd, 0xef, 0x12}), createdAt)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -195,6 +195,18 @@ func TestCreatePublishesExactRecordAndRetainsExistingRecords(t *testing.T) {
 	if string(data) != wantJSON {
 		t.Fatalf("config.json = %q, want %q", data, wantJSON)
 	}
+	for path, want := range map[string]string{
+		"claim.json":   "{\"schema_version\":1}\n",
+		"pending.json": "{\"schema_version\":1,\"harness\":\"\",\"model\":\"\"}\n",
+	} {
+		data, err := os.ReadFile(filepath.Join(record.Path, path))
+		if err != nil {
+			t.Fatalf("read published %s: %v", path, err)
+		}
+		if string(data) != want {
+			t.Fatalf("%s = %q, want %q", path, data, want)
+		}
+	}
 
 	records, err := Load(root)
 	if err != nil {
@@ -203,6 +215,209 @@ func TestCreatePublishesExactRecordAndRetainsExistingRecords(t *testing.T) {
 	if len(records) != 1 || records[0].HerdrSessionName != record.HerdrSessionName {
 		t.Fatalf("Load() after Create() = %#v", records)
 	}
+}
+
+func TestLoadClaimAndPendingMetadata(t *testing.T) {
+	root := newProject(t)
+	name := "claimed"
+	dir := writeRecord(t, root, name, `{"schema_version":1,"herdr_session_name":"claimed","created_at":"2026-08-24T14:15:16Z"}`)
+	if err := os.WriteFile(filepath.Join(dir, "claim.json"), []byte(`{"schema_version":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pending.json"), []byte(`{"schema_version":1,"harness":"claude","model":"opus"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	records, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || !records[0].Claimed || records[0].PendingChoice == nil || *records[0].PendingChoice != (AgentChoice{Harness: "claude", Model: "opus"}) {
+		t.Fatalf("Load() records = %#v", records)
+	}
+	if err := ClearPending(records[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := ClearPending(records[0]); err != nil {
+		t.Fatalf("ClearPending() second call: %v", err)
+	}
+}
+
+func TestLoadRejectsOrphanAndNullSidecars(t *testing.T) {
+	for _, test := range []struct{ name, claim, pending, want string }{
+		{name: "orphan", pending: `{"schema_version":1,"harness":"","model":""}`, want: "without a claim"},
+		{name: "null", claim: `{"schema_version":null}`, want: "must not be null"},
+		{name: "model only", claim: `{"schema_version":1}`, pending: `{"schema_version":1,"harness":"","model":"opus"}`, want: "requires harness"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := newProject(t)
+			dir := writeRecord(t, root, "record", `{"schema_version":1,"herdr_session_name":"record","created_at":"2026-08-24T14:15:16Z"}`)
+			if test.claim != "" {
+				if err := os.WriteFile(filepath.Join(dir, "claim.json"), []byte(test.claim), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if test.pending != "" {
+				if err := os.WriteFile(filepath.Join(dir, "pending.json"), []byte(test.pending), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := Load(root); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Load() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsInvalidSidecars(t *testing.T) {
+	tests := []struct {
+		name string
+		file string
+		data string
+		want string
+	}{
+		{name: "malformed claim", file: "claim.json", data: "{", want: "EOF"},
+		{name: "claim unknown field", file: "claim.json", data: `{"schema_version":1,"extra":true}`, want: `unknown field "extra"`},
+		{name: "claim duplicate field", file: "claim.json", data: `{"schema_version":1,"schema_version":1}`, want: `duplicate field "schema_version"`},
+		{name: "claim missing field", file: "claim.json", data: `{}`, want: "must contain schema_version"},
+		{name: "pending unknown field", file: "pending.json", data: `{"schema_version":1,"harness":"","model":"","extra":true}`, want: `unknown field "extra"`},
+		{name: "pending duplicate field", file: "pending.json", data: `{"schema_version":1,"harness":"","harness":"","model":""}`, want: `duplicate field "harness"`},
+		{name: "pending missing field", file: "pending.json", data: `{"schema_version":1,"harness":""}`, want: "must contain schema_version, harness, and model"},
+		{name: "pending null field", file: "pending.json", data: `{"schema_version":1,"harness":null,"model":""}`, want: "must not be null"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := newProject(t)
+			dir := writeRecord(t, root, "record", `{"schema_version":1,"herdr_session_name":"record","created_at":"2026-08-24T14:15:16Z"}`)
+			if test.file == "pending.json" {
+				if err := os.WriteFile(filepath.Join(dir, "claim.json"), []byte(`{"schema_version":1}`), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(dir, test.file), []byte(test.data), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(root); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Load() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsInvalidSidecarFileTypes(t *testing.T) {
+	for _, sidecar := range []string{"claim.json", "pending.json"} {
+		t.Run(sidecar+" symlink", func(t *testing.T) {
+			root := newProject(t)
+			dir := writeRecord(t, root, "record", `{"schema_version":1,"herdr_session_name":"record","created_at":"2026-08-24T14:15:16Z"}`)
+			target := filepath.Join(t.TempDir(), sidecar)
+			if err := os.WriteFile(target, []byte(`{"schema_version":1}`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, filepath.Join(dir, sidecar)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(root); err == nil || !strings.Contains(err.Error(), "is a symlink") {
+				t.Fatalf("Load() error = %v, want symlink rejection", err)
+			}
+		})
+
+		t.Run(sidecar+" directory", func(t *testing.T) {
+			root := newProject(t)
+			dir := writeRecord(t, root, "record", `{"schema_version":1,"herdr_session_name":"record","created_at":"2026-08-24T14:15:16Z"}`)
+			if err := os.Mkdir(filepath.Join(dir, sidecar), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(root); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+				t.Fatalf("Load() error = %v, want nonregular rejection", err)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsMultipleClaims(t *testing.T) {
+	root := newProject(t)
+	for _, name := range []string{"first", "second"} {
+		dir := writeRecord(t, root, name, `{"schema_version":1,"herdr_session_name":"`+name+`","created_at":"2026-08-24T14:15:16Z"}`)
+		if err := os.WriteFile(filepath.Join(dir, "claim.json"), []byte(`{"schema_version":1}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Load(root); err == nil || !strings.Contains(err.Error(), "multiple claimed records") {
+		t.Fatalf("Load() error = %v, want multiple-claims rejection", err)
+	}
+}
+
+func TestClaimPublishesOnlyAfterPreparingTemporaryFile(t *testing.T) {
+	root := newProject(t)
+	dir := writeRecord(t, root, "record", `{"schema_version":1,"herdr_session_name":"record","created_at":"2026-08-24T14:15:16Z"}`)
+	record := Record{HerdrSessionName: "record", Path: dir}
+
+	err := claim(record, func(temporaryPath, finalPath string) error {
+		if _, err := os.Lstat(finalPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("claim final path before publish error = %v, want not exist", err)
+		}
+		data, err := os.ReadFile(temporaryPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := string(data), "{\"schema_version\":1}\n"; got != want {
+			t.Fatalf("temporary claim = %q, want %q", got, want)
+		}
+		info, err := os.Stat(temporaryPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o644 {
+			t.Fatalf("temporary claim mode = %#o, want 0644", info.Mode().Perm())
+		}
+		return os.Link(temporaryPath, finalPath)
+	})
+	if err != nil {
+		t.Fatalf("claim() error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "claim.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(data), "{\"schema_version\":1}\n"; got != want {
+		t.Fatalf("claim.json = %q, want %q", got, want)
+	}
+	assertNoClaimTemporaryFiles(t, dir)
+}
+
+func TestClaimDoesNotOverwriteAndCleansTemporaryFile(t *testing.T) {
+	root := newProject(t)
+	dir := writeRecord(t, root, "record", `{"schema_version":1,"herdr_session_name":"record","created_at":"2026-08-24T14:15:16Z"}`)
+	claimPath := filepath.Join(dir, "claim.json")
+	if err := os.WriteFile(claimPath, []byte("existing claim\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	record := Record{HerdrSessionName: "record", Path: dir}
+	if err := Claim(record); err == nil || !strings.Contains(err.Error(), "already claimed") {
+		t.Fatalf("Claim() error = %v, want already-claimed error", err)
+	}
+	data, err := os.ReadFile(claimPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(data), "existing claim\n"; got != want {
+		t.Fatalf("claim.json changed to %q, want %q", got, want)
+	}
+	assertNoClaimTemporaryFiles(t, dir)
+}
+
+func TestClaimCleansTemporaryFileAfterPublishFailure(t *testing.T) {
+	root := newProject(t)
+	dir := writeRecord(t, root, "record", `{"schema_version":1,"herdr_session_name":"record","created_at":"2026-08-24T14:15:16Z"}`)
+	want := errors.New("link failed")
+	err := claim(Record{HerdrSessionName: "record", Path: dir}, func(string, string) error { return want })
+	if !errors.Is(err, want) {
+		t.Fatalf("claim() error = %v, want wrapped %v", err, want)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "claim.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("claim final path error = %v, want not exist", err)
+	}
+	assertNoClaimTemporaryFiles(t, dir)
 }
 
 func TestCreateRetriesGlobalAndLocalCollisions(t *testing.T) {
@@ -221,7 +436,7 @@ func TestCreateRetriesGlobalAndLocalCollisions(t *testing.T) {
 		0, 0, 0, 3,
 	})
 
-	record, err := Create(root, unavailable, entropy, time.Now())
+	record, err := Create(root, AgentChoice{}, maxSessionLength, unavailable, entropy, time.Now())
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -241,7 +456,7 @@ func TestCreateCleansTemporaryDirectoryAfterPublishFailure(t *testing.T) {
 	root := newProject(t)
 	want := errors.New("rename failed")
 
-	_, err := create(root, nil, bytes.NewReader([]byte{1, 2, 3, 4}), time.Now(), func(string, string) error {
+	_, err := create(root, AgentChoice{}, maxSessionLength, nil, bytes.NewReader([]byte{1, 2, 3, 4}), time.Now(), func(string, string) error {
 		return want
 	})
 	if !errors.Is(err, want) {
@@ -292,5 +507,18 @@ func assertLoadSymlinkError(t *testing.T, root string) {
 	_, err := Load(root)
 	if err == nil || !strings.Contains(err.Error(), "symlink") {
 		t.Fatalf("Load() error = %v, want symlink error", err)
+	}
+}
+
+func assertNoClaimTemporaryFiles(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".claim-") {
+			t.Fatalf("temporary claim %q remains", entry.Name())
+		}
 	}
 }

@@ -48,10 +48,22 @@ func TestParsePiTableSkipsUnusableLines(t *testing.T) {
 		{name: "header only", out: "provider  model  context\n"},
 		{name: "blank lines", out: "\n   \n"},
 		{name: "single field", out: "openai-codex\n"},
+		{name: "rows without header", out: "opencode  claude-opus-4-8  1M\n"},
+		{name: "case-sensitive header", out: "Provider  model\nopencode  claude-opus-4-8  1M\n"},
 		{
 			name: "row without trailing newline",
-			out:  "opencode  claude-opus-4-8  1M",
+			out:  "provider model\nopencode  claude-opus-4-8  1M",
 			want: []piRow{{provider: "opencode", model: "claude-opus-4-8"}},
+		},
+		{
+			name: "ignores prose before extended header",
+			out:  "Available models\nrun pi with a model\nprovider model context extra\nopencode claude-opus-4-8 1M yes\n",
+			want: []piRow{{provider: "opencode", model: "claude-opus-4-8"}},
+		},
+		{
+			name: "skips blanks short lines and repeated headers",
+			out:  "provider model context\n\nopencode\nprovider model context\nopencode big-pickle 200K\n",
+			want: []piRow{{provider: "opencode", model: "big-pickle"}},
 		},
 	}
 

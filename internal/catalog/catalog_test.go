@@ -224,7 +224,7 @@ func TestModelsIgnoresTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fakeHarnesses(t, map[string]string{"pi": sleepBin + " 2"})
+	fakeHarnesses(t, map[string]string{"pi": "exec " + sleepBin + " 2"})
 
 	start := time.Now()
 	got := Models(context.Background(), Pi, 100*time.Millisecond)

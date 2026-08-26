@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"fledge/internal/herdr"
 )
@@ -51,7 +52,7 @@ func TestSpawnPlacements(t *testing.T) {
 			name:  "tab splits its focused pane",
 			opts:  SpawnOptions{Name: "rev", Kind: "pi", Tab: "ws1:tab3", Split: "down", Ratio: &ratio},
 			panes: []herdr.Pane{{ID: "ws1:tab3:pane1", TabID: "ws1:tab3"}, {ID: "ws1:tab3:pane2", TabID: "ws1:tab3", Focused: true}, {ID: "ws1:tab4:pane1", TabID: "ws1:tab4", Focused: true}},
-			wantCalls: []string{"Panes(ws1)", "SplitPane(ws1:tab3:pane2,down,0.35)",
+			wantCalls: []string{"Panes()", "SplitPane(ws1:tab3:pane2,down,0.35)",
 				"StartAgent(rev,pi,ws1:tab3:pane7)"},
 			want: SpawnResult{Name: "rev", Kind: "pi", WorkspaceID: "ws1", TabID: "ws1:tab3", PaneID: "ws1:tab3:pane7"},
 		},
@@ -59,7 +60,7 @@ func TestSpawnPlacements(t *testing.T) {
 			name:      "tab without a focused pane splits the first one",
 			opts:      SpawnOptions{Name: "rev", Kind: "pi", Tab: "ws1:tab3"},
 			panes:     []herdr.Pane{{ID: "ws1:tab4:pane1", TabID: "ws1:tab4", Focused: true}, {ID: "ws1:tab3:pane1", TabID: "ws1:tab3"}, {ID: "ws1:tab3:pane2", TabID: "ws1:tab3"}},
-			wantCalls: []string{"Panes(ws1)", "SplitPane(ws1:tab3:pane1,right,-)", "StartAgent(rev,pi,ws1:tab3:pane7)"},
+			wantCalls: []string{"Panes()", "SplitPane(ws1:tab3:pane1,right,-)", "StartAgent(rev,pi,ws1:tab3:pane7)"},
 			want:      SpawnResult{Name: "rev", Kind: "pi", WorkspaceID: "ws1", TabID: "ws1:tab3", PaneID: "ws1:tab3:pane7"},
 		},
 		{
@@ -173,17 +174,103 @@ func TestSpawnAcceptsBoundaryNamesAndSplits(t *testing.T) {
 func TestSpawnClosesTheNewPaneWhenTheAgentFailsToStart(t *testing.T) {
 	client := newFakeHerder()
 	want := errors.New("harness never reached the prompt")
+	closeErr := errors.New("close failed")
 	client.errs["StartAgent"] = want
-	client.errs["ClosePane"] = errors.New("close failed")
+	client.errs["ClosePane"] = closeErr
 
 	_, err := Spawn(context.Background(), client, Caller{}, SpawnOptions{Name: "rev", Kind: "claude", Pane: "ws1:tab3:pane2"})
 	if !errors.Is(err, want) {
 		t.Fatalf("Spawn() error = %v, want %v", err, want)
 	}
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("Spawn() error = %v, want cleanup failure %v", err, closeErr)
+	}
 	if !strings.Contains(err.Error(), "ws1:tab3:pane7") {
 		t.Fatalf("Spawn() error = %v, want it to name the new pane", err)
 	}
 	wantCalls := []string{"SplitPane(ws1:tab3:pane2,right,-)", "StartAgent(rev,claude,ws1:tab3:pane7)", "ClosePane(ws1:tab3:pane7)"}
+	if !reflect.DeepEqual(client.calls, wantCalls) {
+		t.Fatalf("calls = %#v, want %#v", client.calls, wantCalls)
+	}
+}
+
+func TestSpawnFailureUsesFreshCleanupContextAndPreservesAllFailures(t *testing.T) {
+	type contextKey string
+	const key contextKey = "request"
+
+	startErr := errors.New("start subprocess failed")
+	cleanupErr := errors.New("close pane failed")
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), key, "preserved"))
+	defer cancel()
+
+	client := newFakeHerder()
+	client.onStartAgent = func(context.Context) error {
+		cancel()
+		return startErr
+	}
+	client.onClosePane = func(cleanupCtx context.Context) error {
+		if err := cleanupCtx.Err(); err != nil {
+			t.Errorf("cleanup context already ended: %v", err)
+		}
+		if got := cleanupCtx.Value(key); got != "preserved" {
+			t.Errorf("cleanup context value = %v, want preserved", got)
+		}
+		deadline, ok := cleanupCtx.Deadline()
+		if !ok {
+			t.Error("cleanup context has no deadline")
+		} else if remaining := time.Until(deadline); remaining < 4*time.Second || remaining > cleanupTimeout {
+			t.Errorf("cleanup deadline is %v away, want approximately %v", remaining, cleanupTimeout)
+		}
+		return cleanupErr
+	}
+
+	_, err := Spawn(ctx, client, Caller{}, SpawnOptions{Name: "rev", Kind: "claude", Pane: "source-pane"})
+	for _, want := range []error{startErr, context.Canceled, cleanupErr} {
+		if !errors.Is(err, want) {
+			t.Errorf("Spawn() error = %v, want it to include %v", err, want)
+		}
+	}
+	wantCalls := []string{"SplitPane(source-pane,right,-)", "StartAgent(rev,claude,ws1:tab3:pane7)", "ClosePane(ws1:tab3:pane7)"}
+	if !reflect.DeepEqual(client.calls, wantCalls) {
+		t.Fatalf("calls = %#v, want %#v", client.calls, wantCalls)
+	}
+}
+
+func TestSpawnDoesNotAttributeCancellationThatBeginsDuringCleanup(t *testing.T) {
+	startErr := errors.New("start failed")
+	cleanupErr := errors.New("cleanup failed")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client := newFakeHerder()
+	client.errs["StartAgent"] = startErr
+	client.onClosePane = func(context.Context) error {
+		cancel()
+		return cleanupErr
+	}
+
+	_, err := Spawn(ctx, client, Caller{}, SpawnOptions{Name: "rev", Kind: "claude", Pane: "source-pane"})
+	if !errors.Is(err, startErr) || !errors.Is(err, cleanupErr) {
+		t.Fatalf("Spawn() error = %v, want start and cleanup failures", err)
+	}
+	if errors.Is(err, context.Canceled) {
+		t.Fatalf("Spawn() error = %v, must not attribute cleanup-time cancellation", err)
+	}
+}
+
+func TestSpawnTreatsTabIDsAsOpaqueAcrossWorkspaces(t *testing.T) {
+	client := newFakeHerder()
+	client.panes = []herdr.Pane{
+		{ID: "other-pane", WorkspaceID: "workspace-a", TabID: "other-tab", Focused: true},
+		{ID: "first-target-pane", WorkspaceID: "workspace-b", TabID: "opaque-tab-id"},
+		{ID: "focused-target-pane", WorkspaceID: "workspace-b", TabID: "opaque-tab-id", Focused: true},
+	}
+
+	_, err := Spawn(context.Background(), client, Caller{}, SpawnOptions{Name: "rev", Kind: "pi", Tab: "opaque-tab-id"})
+	if err != nil {
+		t.Fatalf("Spawn() error = %v", err)
+	}
+	wantCalls := []string{"Panes()", "SplitPane(focused-target-pane,right,-)", "StartAgent(rev,pi,ws1:tab3:pane7)"}
 	if !reflect.DeepEqual(client.calls, wantCalls) {
 		t.Fatalf("calls = %#v, want %#v", client.calls, wantCalls)
 	}
@@ -210,14 +297,14 @@ func TestSpawnPropagatesPlacementFailures(t *testing.T) {
 			opts:      SpawnOptions{Name: "rev", Kind: "claude", Tab: "ws1:tab3"},
 			panes:     []herdr.Pane{{ID: "ws1:tab4:pane1", TabID: "ws1:tab4"}},
 			wantErr:   `tab "ws1:tab3" has no panes`,
-			wantCalls: []string{"Panes(ws1)"},
+			wantCalls: []string{"Panes()"},
 		},
 		{
 			name:      "tab listing failure",
 			opts:      SpawnOptions{Name: "rev", Kind: "claude", Tab: "ws1:tab3"},
 			errs:      map[string]error{"Panes": errors.New("pane list failed")},
 			wantErr:   "pane list failed",
-			wantCalls: []string{"Panes(ws1)"},
+			wantCalls: []string{"Panes()"},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

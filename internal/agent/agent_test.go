@@ -30,6 +30,8 @@ type fakeHerder struct {
 	calls        []string
 	startArgs    []string
 	promptOpts   herdr.PromptOptions
+	onStartAgent func(context.Context) error
+	onClosePane  func(context.Context) error
 }
 
 func newFakeHerder() *fakeHerder {
@@ -73,14 +75,20 @@ func (f *fakeHerder) SplitPane(_ context.Context, options herdr.SplitOptions) (h
 	return f.newPane, f.errs["SplitPane"]
 }
 
-func (f *fakeHerder) ClosePane(_ context.Context, id string) error {
+func (f *fakeHerder) ClosePane(ctx context.Context, id string) error {
 	f.record(fmt.Sprintf("ClosePane(%s)", id))
+	if f.onClosePane != nil {
+		return f.onClosePane(ctx)
+	}
 	return f.errs["ClosePane"]
 }
 
-func (f *fakeHerder) StartAgent(_ context.Context, options herdr.StartAgentOptions) (herdr.Agent, error) {
+func (f *fakeHerder) StartAgent(ctx context.Context, options herdr.StartAgentOptions) (herdr.Agent, error) {
 	f.record(fmt.Sprintf("StartAgent(%s,%s,%s)", options.Name, options.Kind, options.PaneID))
 	f.startArgs = options.Args
+	if f.onStartAgent != nil {
+		return f.started, f.onStartAgent(ctx)
+	}
 	return f.started, f.errs["StartAgent"]
 }
 

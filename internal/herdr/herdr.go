@@ -5,9 +5,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fledge/internal/subprocess"
 	"fmt"
 	"io"
-	"os/exec"
 	"strings"
 )
 
@@ -17,6 +17,7 @@ type Session struct {
 	Running    bool   `json:"running"`
 	Default    bool   `json:"default"`
 	SocketPath string `json:"socket_path"`
+	SessionDir string `json:"session_dir"`
 }
 
 // Client invokes the Herder CLI. The configured streams are connected to an
@@ -40,7 +41,7 @@ func New(stdin io.Reader, stdout, stderr io.Writer) *Client {
 
 // List returns every named Herder session, including stopped sessions.
 func (c *Client) List(ctx context.Context) ([]Session, error) {
-	cmd := exec.CommandContext(ctx, "herdr", "session", "list", "--json")
+	cmd := subprocess.CommandContext(ctx, "herdr", "session", "list", "--json")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -67,6 +68,7 @@ func (c *Client) List(ctx context.Context) ([]Session, error) {
 		Running    *bool   `json:"running"`
 		Default    *bool   `json:"default"`
 		SocketPath *string `json:"socket_path"`
+		SessionDir *string `json:"session_dir"`
 	}
 	if err := json.Unmarshal(payload.Sessions, &entries); err != nil {
 		return nil, fmt.Errorf("herdr session list --json: decode sessions: %w", err)
@@ -85,6 +87,9 @@ func (c *Client) List(ctx context.Context) ([]Session, error) {
 			Default:    *entry.Default,
 			SocketPath: *entry.SocketPath,
 		}
+		if entry.SessionDir != nil {
+			sessions[i].SessionDir = *entry.SessionDir
+		}
 	}
 	return sessions, nil
 }
@@ -92,7 +97,7 @@ func (c *Client) List(ctx context.Context) ([]Session, error) {
 // Launch attaches to name, creating the named session when it does not exist.
 // Herder inherits the configured streams and runs from projectRoot.
 func (c *Client) Launch(ctx context.Context, projectRoot, name string) error {
-	cmd := exec.CommandContext(ctx, "herdr", "--session", name)
+	cmd := subprocess.CommandContext(ctx, "herdr", "--session", name)
 	cmd.Dir = projectRoot
 	cmd.Stdin = c.stdin
 	cmd.Stdout = c.stdout
@@ -105,7 +110,7 @@ func (c *Client) Launch(ctx context.Context, projectRoot, name string) error {
 
 // Stop stops the named Herder session.
 func (c *Client) Stop(ctx context.Context, name string) error {
-	cmd := exec.CommandContext(ctx, "herdr", "session", "stop", name, "--json")
+	cmd := subprocess.CommandContext(ctx, "herdr", "session", "stop", name, "--json")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

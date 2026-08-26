@@ -14,11 +14,21 @@ func fakeHerdr(t *testing.T, script string) {
 	t.Helper()
 	binDir := t.TempDir()
 	path := filepath.Join(binDir, "herdr")
+	fakeHerdrExecutable(t, path, script)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("HERDR_ENV", "")
+	t.Setenv("HERDR_BIN_PATH", "")
+}
+
+func fakeHerdrExecutable(t *testing.T, path, script string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	contents := "#!/bin/sh\nset -eu\n" + script
 	if err := os.WriteFile(path, []byte(contents), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 func TestList(t *testing.T) {
@@ -29,14 +39,14 @@ test "$2" = list
 test "$3" = --json
 printf '%s' "$HERDR_FAKE_OUTPUT"
 `)
-	t.Setenv("HERDR_FAKE_OUTPUT", `{"sessions":[{"name":"alpha","running":true,"default":false,"socket_path":"/tmp/alpha.sock","future_field":"accepted"},{"name":"old","running":false,"default":false,"socket_path":"/tmp/old.sock"}],"future_field":"accepted"}`)
+	t.Setenv("HERDR_FAKE_OUTPUT", `{"sessions":[{"name":"alpha","running":true,"default":false,"socket_path":"/tmp/alpha.sock","session_dir":"/tmp/herdr data","future_field":"accepted"},{"name":"old","running":false,"default":false,"socket_path":"/tmp/old.sock"}],"future_field":"accepted"}`)
 
 	got, err := New(nil, nil, nil).List(context.Background())
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	want := []Session{
-		{Name: "alpha", Running: true, SocketPath: "/tmp/alpha.sock"},
+		{Name: "alpha", Running: true, SocketPath: "/tmp/alpha.sock", SessionDir: "/tmp/herdr data"},
 		{Name: "old", SocketPath: "/tmp/old.sock"},
 	}
 	if !reflect.DeepEqual(got, want) {

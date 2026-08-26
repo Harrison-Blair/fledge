@@ -5,8 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fledge/internal/subprocess"
 	"fmt"
-	"os/exec"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -16,6 +17,34 @@ type Error struct {
 	Operation string
 	Code      string
 	Message   string
+}
+
+type contextError struct {
+	err   error
+	cause error
+}
+
+func (e *contextError) Error() string { return e.err.Error() }
+
+func (e *contextError) Unwrap() error { return e.err }
+
+// ContextCause reports the context error observed immediately after a Herdr
+// subprocess failed. It is nil when the subprocess itself was not cancelled.
+func ContextCause(err error) error {
+	var reported interface{ ContextCause() error }
+	if errors.As(err, &reported) {
+		return reported.ContextCause()
+	}
+	return nil
+}
+
+func (e *contextError) ContextCause() error { return e.cause }
+
+func withContextCause(err, cause error) error {
+	if cause == nil {
+		return err
+	}
+	return &contextError{err: err, cause: cause}
 }
 
 func (e *Error) Error() string {
@@ -403,15 +432,22 @@ func (c *Client) run(ctx context.Context, args ...string) ([]byte, string, error
 	}
 	operation := "herdr " + strings.Join(argv, " ")
 
-	cmd := exec.CommandContext(ctx, "herdr", argv...)
+	executable := "herdr"
+	if c.session == "" && os.Getenv("HERDR_ENV") == "1" {
+		if injected := os.Getenv("HERDR_BIN_PATH"); injected != "" {
+			executable = injected
+		}
+	}
+	cmd := subprocess.CommandContext(ctx, executable, argv...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		cause := ctx.Err()
 		if reported := decodeError(operation, stderr.Bytes()); reported != nil {
-			return nil, operation, reported
+			return nil, operation, withContextCause(reported, cause)
 		}
-		return nil, operation, commandError(operation, err, stderr.String())
+		return nil, operation, withContextCause(commandError(operation, err, stderr.String()), cause)
 	}
 	return stdout.Bytes(), operation, nil
 }

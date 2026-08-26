@@ -37,7 +37,7 @@ func TestGenerateNameRetriesUnavailableNames(t *testing.T) {
 		0xab, 0xcd, 0xef, 0x12,
 	})
 
-	got, err := GenerateName("Project", unavailable, entropy)
+	got, err := GenerateName("Project", maxSessionLength, unavailable, entropy)
 	if err != nil {
 		t.Fatalf("GenerateName() error = %v", err)
 	}
@@ -47,7 +47,7 @@ func TestGenerateNameRetriesUnavailableNames(t *testing.T) {
 }
 
 func TestGenerateNameLimitsNameTo64Bytes(t *testing.T) {
-	got, err := GenerateName(strings.Repeat("a", 80), nil, bytes.NewReader([]byte{1, 2, 3, 4}))
+	got, err := GenerateName(strings.Repeat("a", 80), maxSessionLength, nil, bytes.NewReader([]byte{1, 2, 3, 4}))
 	if err != nil {
 		t.Fatalf("GenerateName() error = %v", err)
 	}
@@ -61,14 +61,52 @@ func TestGenerateNameLimitsNameTo64Bytes(t *testing.T) {
 
 func TestGenerateNameReportsEntropyFailure(t *testing.T) {
 	want := errors.New("entropy failed")
-	_, err := GenerateName("project", nil, errorReader{err: want})
+	_, err := GenerateName("project", maxSessionLength, nil, errorReader{err: want})
 	if !errors.Is(err, want) {
 		t.Fatalf("GenerateName() error = %v, want wrapped %v", err, want)
 	}
 }
 
+func TestGenerateNameRejectsTooShortLimitBeforeReadingEntropy(t *testing.T) {
+	entropy := &countingReader{}
+	_, err := GenerateName("project", minSessionLength-1, nil, entropy)
+	if err == nil || !strings.Contains(err.Error(), "too short") {
+		t.Fatalf("GenerateName() error = %v, want too-short error", err)
+	}
+	if entropy.reads != 0 {
+		t.Fatalf("GenerateName() entropy reads = %d, want 0", entropy.reads)
+	}
+}
+
+func TestGenerateNameAcceptsMinimumAndClampsLargeLimit(t *testing.T) {
+	got, err := GenerateName("project", minSessionLength, nil, bytes.NewReader([]byte{1, 2, 3, 4}))
+	if err != nil {
+		t.Fatalf("GenerateName() at minimum error = %v", err)
+	}
+	if got != "fledge-p-01020304" {
+		t.Fatalf("GenerateName() at minimum = %q, want shortest valid name", got)
+	}
+
+	got, err = GenerateName(strings.Repeat("a", 80), maxSessionLength+1, nil, bytes.NewReader([]byte{0xab, 0xcd, 0xef, 0x12}))
+	if err != nil {
+		t.Fatalf("GenerateName() above maximum error = %v", err)
+	}
+	if len(got) != maxSessionLength || !strings.HasSuffix(got, "-abcdef12") {
+		t.Fatalf("GenerateName() above maximum = %q, want 64-byte clamped name with full hash", got)
+	}
+}
+
 type errorReader struct {
 	err error
+}
+
+type countingReader struct {
+	reads int
+}
+
+func (r *countingReader) Read(p []byte) (int, error) {
+	r.reads++
+	return 0, errors.New("entropy should not be read")
 }
 
 func (r errorReader) Read([]byte) (int, error) {

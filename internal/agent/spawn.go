@@ -2,14 +2,17 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
-	"strings"
+	"time"
 
 	"fledge/internal/herdr"
 )
 
 const defaultSplitDirection = "right"
+
+const cleanupTimeout = 5 * time.Second
 
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 
@@ -57,14 +60,25 @@ func Spawn(ctx context.Context, h Herder, caller Caller, opts SpawnOptions) (Spa
 	if opts.Model != "" {
 		args = append([]string{"--model", opts.Model}, opts.Args...)
 	}
-	if _, err := h.StartAgent(ctx, herdr.StartAgentOptions{
+	if _, startErr := h.StartAgent(ctx, herdr.StartAgentOptions{
 		Name:   opts.Name,
 		Kind:   opts.Kind,
 		PaneID: pane.ID,
 		Args:   args,
-	}); err != nil {
-		_ = h.ClosePane(ctx, pane.ID)
-		return SpawnResult{}, fmt.Errorf("spawn agent %q: start in pane %q: %w", opts.Name, pane.ID, err)
+	}); startErr != nil {
+		callerErr := ctx.Err()
+		cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+		cleanupErr := h.ClosePane(cleanupCtx, pane.ID)
+		cancelCleanup()
+
+		failures := []error{fmt.Errorf("start in pane %q: %w", pane.ID, startErr)}
+		if callerErr != nil && !errors.Is(startErr, callerErr) {
+			failures = append(failures, callerErr)
+		}
+		if cleanupErr != nil {
+			failures = append(failures, fmt.Errorf("close pane %q: %w", pane.ID, cleanupErr))
+		}
+		return SpawnResult{}, fmt.Errorf("spawn agent %q: %w", opts.Name, errors.Join(failures...))
 	}
 
 	return SpawnResult{
@@ -161,8 +175,7 @@ func rootPaneOfNewTab(ctx context.Context, h Herder, workspaceID, label string) 
 
 // tabHostPane returns the pane to split for a tab, preferring its focused pane.
 func tabHostPane(ctx context.Context, h Herder, tabID string) (herdr.Pane, error) {
-	workspaceID, _, _ := strings.Cut(tabID, ":")
-	panes, err := h.Panes(ctx, workspaceID)
+	panes, err := h.Panes(ctx, "")
 	if err != nil {
 		return herdr.Pane{}, err
 	}

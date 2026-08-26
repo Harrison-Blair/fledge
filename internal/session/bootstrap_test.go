@@ -34,7 +34,7 @@ type fakeBootstrapper struct {
 	startErrs  []error
 
 	onStatus          func(int)
-	onStart           func(int)
+	onStart           func(context.Context, int)
 	onRenameWorkspace func(context.Context) error
 
 	statusCalls      int
@@ -92,7 +92,7 @@ func (f *fakeBootstrapper) RenameTab(_ context.Context, id, label string) error 
 	return nil
 }
 
-func (f *fakeBootstrapper) StartAgent(_ context.Context, options herdr.StartAgentOptions) (herdr.Agent, error) {
+func (f *fakeBootstrapper) StartAgent(ctx context.Context, options herdr.StartAgentOptions) (herdr.Agent, error) {
 	f.mu.Lock()
 	f.started = append(f.started, options)
 	call := len(f.started)
@@ -104,7 +104,7 @@ func (f *fakeBootstrapper) StartAgent(_ context.Context, options herdr.StartAgen
 	f.mu.Unlock()
 
 	if notify != nil {
-		notify(call)
+		notify(ctx, call)
 	}
 	return herdr.Agent{}, err
 }
@@ -251,7 +251,7 @@ func TestBootstrapStopsWhenCancelled(t *testing.T) {
 }
 
 func TestBootstrapRetriesHerderRejections(t *testing.T) {
-	rejected := &herdr.Error{Operation: "agent start", Code: "pane_busy", Message: "no shell prompt"}
+	rejected := &herdr.Error{Operation: "agent start", Code: "agent_pane_busy", Message: "wording does not control retries"}
 	server := readyBootstrapper()
 	server.startErrs = []error{rejected, rejected, nil}
 
@@ -265,7 +265,7 @@ func TestBootstrapRetriesHerderRejections(t *testing.T) {
 }
 
 func TestBootstrapStopsRetryingAtTheLimit(t *testing.T) {
-	rejected := &herdr.Error{Operation: "agent start", Code: "pane_busy", Message: "no shell prompt"}
+	rejected := &herdr.Error{Operation: "agent start", Code: "agent_pane_busy", Message: "no shell prompt"}
 	server := readyBootstrapper()
 	server.startErrs = []error{rejected}
 	var log bytes.Buffer
@@ -283,16 +283,28 @@ func TestBootstrapStopsRetryingAtTheLimit(t *testing.T) {
 }
 
 func TestBootstrapDoesNotRetryOtherFailures(t *testing.T) {
-	refused := errors.New("connection refused")
-	server := readyBootstrapper()
-	server.startErrs = []error{refused}
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "transport error", err: errors.New("connection refused")},
+		{name: "not ready", err: &herdr.Error{Operation: "agent start", Code: "agent_not_ready", Message: "busy"}},
+		{name: "pane unavailable", err: &herdr.Error{Operation: "agent start", Code: "agent_pane_unavailable", Message: "busy"}},
+		{name: "old similar code", err: &herdr.Error{Operation: "agent start", Code: "pane_busy", Message: "no shell prompt"}},
+		{name: "unknown code", err: &herdr.Error{Operation: "agent start", Code: "future_failure", Message: "busy"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := readyBootstrapper()
+			server.startErrs = []error{test.err}
 
-	err := bootstrap(context.Background(), server, bootstrapArgs(AgentChoice{Harness: "codex"}, &bytes.Buffer{}), fastTiming())
-	if !errors.Is(err, refused) {
-		t.Fatalf("bootstrap() error = %v, want %v", err, refused)
-	}
-	if len(server.started) != 1 {
-		t.Fatalf("StartAgent calls = %d, want no retry", len(server.started))
+			err := bootstrap(context.Background(), server, bootstrapArgs(AgentChoice{Harness: "codex"}, &bytes.Buffer{}), fastTiming())
+			if !errors.Is(err, test.err) {
+				t.Fatalf("bootstrap() error = %v, want %v", err, test.err)
+			}
+			if len(server.started) != 1 {
+				t.Fatalf("StartAgent calls = %d, want no retry", len(server.started))
+			}
+		})
 	}
 }
 
