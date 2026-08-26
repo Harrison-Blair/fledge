@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 
+	agentcmd "fledge/cmd/agent"
 	initcmd "fledge/cmd/init"
 	startcmd "fledge/cmd/start"
 	stopcmd "fledge/cmd/stop"
@@ -23,6 +24,7 @@ func New() *cobra.Command {
 	}
 
 	versioncmd.Configure(command)
+	command.AddCommand(agentcmd.New())
 	command.AddCommand(initcmd.New())
 	command.AddCommand(startcmd.New())
 	command.AddCommand(stopcmd.New())

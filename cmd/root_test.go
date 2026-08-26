@@ -18,7 +18,7 @@ func TestBareRootShowsHelp(t *testing.T) {
 	if err := command.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	for _, want := range []string{"Manage project-local Herder sessions", "init", "start", "stop"} {
+	for _, want := range []string{"Manage project-local Herder sessions", "agent", "init", "start", "stop"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("help output missing %q:\n%s", want, output.String())
 		}
