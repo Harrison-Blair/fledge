@@ -11,12 +11,18 @@ import (
 	"time"
 )
 
-// cursorSample stands in for authenticated cursor-agent --list-models output.
-// That format is unverified, so the fake pads a column and emits an error line
-// to exercise the leading-token and skip rules.
-const cursorSample = `gpt-5.5  (default)
-claude-opus-4-8
-Error: partial listing failure
+// cursorSample is a trimmed excerpt of real cursor-agent --list-models output:
+// the heading, five model rows, and the usage tip that closes the listing. The
+// tip quotes a model ID, so it also guards against the prose being parsed.
+const cursorSample = `Available models
+
+auto - Auto (default)
+gpt-5.3-codex-low - Codex 5.3 Low
+composer-2.5 - Composer 2.5 (current)
+claude-opus-5-thinking-high - Claude Opus 5 1M Thinking
+gemini-3.7-flash-high - Gemini 3.7 Flash
+
+Tip: use --model <id> (or /model <id> in interactive mode) to switch. Parameterized models also accept quoted overrides, e.g. --model 'claude-opus-4-8[context=1m,effort=high,fast=false]'.
 `
 
 const (
@@ -28,6 +34,7 @@ printf '%s' "$PI_FAKE_OUTPUT"
 	openCodeFake = `
 test "$#" -eq 1
 test "$1" = models
+printf 'stderr/noise\n' >&2
 printf '%s' "$OPENCODE_FAKE_OUTPUT"
 `
 	cursorFake = `
@@ -104,10 +111,16 @@ func TestModels(t *testing.T) {
 			want:    []string{"claude-fable-5", "claude-opus-4-8"},
 		},
 		{
-			name:    "cursor takes the leading token and skips error lines",
+			name:    "cursor takes the ID before the separator and skips prose",
 			harness: Cursor,
 			bins:    map[string]string{"cursor-agent": cursorFake},
-			want:    []string{"claude-opus-4-8", "gpt-5.5"},
+			want: []string{
+				"auto",
+				"claude-opus-5-thinking-high",
+				"composer-2.5",
+				"gemini-3.7-flash-high",
+				"gpt-5.3-codex-low",
+			},
 		},
 	}
 
@@ -220,7 +233,9 @@ func TestModelsIgnoresTimeout(t *testing.T) {
 	if len(got) != 0 {
 		t.Fatalf("Models(pi) = %#v, want none", got)
 	}
-	if elapsed > time.Second {
+	// The fake sleeps for 2s, so any bound below that proves run stopped
+	// waiting on the killed child rather than outliving it.
+	if elapsed > 1500*time.Millisecond {
 		t.Fatalf("Models(pi) took %v, want a prompt return", elapsed)
 	}
 }
@@ -242,5 +257,37 @@ func TestModelsRejectsUnknownHarness(t *testing.T) {
 
 	if got := Models(context.Background(), Harness("gemini"), time.Minute); got != nil {
 		t.Fatalf("Models(gemini) = %#v, want nil", got)
+	}
+}
+
+func TestModelsClaudeQueriesSourcesConcurrently(t *testing.T) {
+	sleepBin, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stall := sleepBin + " 0.3\n"
+	fakeHarnesses(t, map[string]string{"pi": stall + piFake, "opencode": stall + openCodeFake})
+	t.Setenv("PI_FAKE_OUTPUT", piSample)
+	t.Setenv("OPENCODE_FAKE_OUTPUT", openCodeSample)
+
+	start := time.Now()
+	got := Models(context.Background(), Claude, time.Minute)
+	elapsed := time.Since(start)
+
+	want := []string{"claude-fable-5", "claude-opus-4-8"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Models(claude) = %#v, want %#v", got, want)
+	}
+	if elapsed >= 500*time.Millisecond {
+		t.Fatalf("Models(claude) took %v, want the sources queried concurrently", elapsed)
+	}
+}
+
+func TestModelsRejectsNonPositiveTimeout(t *testing.T) {
+	fakeHarnesses(t, map[string]string{"pi": piFake})
+	t.Setenv("PI_FAKE_OUTPUT", piSample)
+
+	if got := Models(context.Background(), Pi, 0); len(got) != 0 {
+		t.Fatalf("Models(pi) = %#v, want none", got)
 	}
 }

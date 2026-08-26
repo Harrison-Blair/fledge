@@ -30,14 +30,20 @@ const codexProvider = "openai-codex"
 // claudePrefix marks the models Claude Code accepts.
 const claudePrefix = "claude-"
 
+// cursorSeparator divides a model ID from its description in cursor-agent
+// --list-models output.
+const cursorSeparator = " - "
+
 // Harnesses returns every supported harness in presentation order.
 func Harnesses() []Harness {
 	return []Harness{Pi, Claude, Codex, OpenCode, Cursor}
 }
 
 // Models returns the model IDs harness accepts via --model, sorted and
-// de-duplicated. It never fails: a missing binary, a non-zero exit, or a
-// timeout all yield an empty list, as does an unrecognized harness.
+// de-duplicated. timeout bounds each harness command and must be positive; a
+// non-positive timeout reports no models. Models never fails: a missing
+// binary, a non-zero exit, or a timeout all yield an empty list, as does an
+// unrecognized harness.
 func Models(ctx context.Context, harness Harness, timeout time.Duration) []string {
 	switch harness {
 	case Pi:
@@ -110,9 +116,10 @@ func claudeModels(ctx context.Context, timeout time.Duration) []string {
 	return normalize(ids)
 }
 
-// cursorModels reports the models cursor-agent lists. The command fails while
-// unauthenticated, and its authenticated columns are unverified, so only the
-// leading token of each line is trusted.
+// cursorModels reports the models cursor-agent lists, which the command prints
+// as "id - description" rows framed by a heading and a usage tip. Only the
+// rows carry the separator, so it also skips the surrounding prose. The
+// command fails while unauthenticated.
 func cursorModels(ctx context.Context, timeout time.Duration) []string {
 	out, ok := run(ctx, timeout, "cursor-agent", "--list-models")
 	if !ok {
@@ -120,10 +127,11 @@ func cursorModels(ctx context.Context, timeout time.Duration) []string {
 	}
 	var ids []string
 	for _, line := range parseLines(out) {
-		if strings.HasPrefix(line, "Error") {
+		id, _, found := strings.Cut(line, cursorSeparator)
+		if !found {
 			continue
 		}
-		ids = append(ids, strings.Fields(line)[0])
+		ids = append(ids, strings.TrimSpace(id))
 	}
 	return normalize(ids)
 }
@@ -175,8 +183,8 @@ func run(ctx context.Context, timeout time.Duration, name string, args ...string
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdout = &stdout
 	// A killed harness can leave children holding the output pipe open, which
-	// would block Run past the timeout; WaitDelay bounds that wait.
-	cmd.WaitDelay = timeout
+	// would block Run past the timeout; WaitDelay bounds that drain.
+	cmd.WaitDelay = 500 * time.Millisecond
 	if err := cmd.Run(); err != nil {
 		return "", false
 	}
