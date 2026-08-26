@@ -33,8 +33,9 @@ type fakeBootstrapper struct {
 	panes      []herdr.Pane
 	startErrs  []error
 
-	onStatus func(int)
-	onStart  func(int)
+	onStatus          func(int)
+	onStart           func(int)
+	onRenameWorkspace func(context.Context) error
 
 	statusCalls      int
 	workspaceCalls   int
@@ -72,10 +73,15 @@ func (f *fakeBootstrapper) Panes(context.Context, string) ([]herdr.Pane, error) 
 	return f.panes, nil
 }
 
-func (f *fakeBootstrapper) RenameWorkspace(_ context.Context, id, label string) error {
+func (f *fakeBootstrapper) RenameWorkspace(ctx context.Context, id, label string) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.renamedWorkspace = append(f.renamedWorkspace, renameCall{id: id, label: label})
+	blocked := f.onRenameWorkspace
+	f.mu.Unlock()
+
+	if blocked != nil {
+		return blocked(ctx)
+	}
 	return nil
 }
 
@@ -119,6 +125,13 @@ func readyBootstrapper() *fakeBootstrapper {
 			{ID: "w1:p2", WorkspaceID: "w1", TabID: "w1:t2"},
 		},
 	}
+}
+
+// startedBootstrapper is a Herder server that is already running.
+func startedBootstrapper() *fakeBootstrapper {
+	server := readyBootstrapper()
+	server.statuses = []statusResult{{running: true}}
+	return server
 }
 
 func fastTiming() bootstrapTiming {
@@ -280,5 +293,24 @@ func TestBootstrapDoesNotRetryOtherFailures(t *testing.T) {
 	}
 	if len(server.started) != 1 {
 		t.Fatalf("StartAgent calls = %d, want no retry", len(server.started))
+	}
+}
+
+func TestBootstrapKeepsFailureDetailWhenTheDeadlinePasses(t *testing.T) {
+	killed := errors.New("signal: killed")
+	server := startedBootstrapper()
+	server.onRenameWorkspace = func(ctx context.Context) error {
+		<-ctx.Done()
+		return killed
+	}
+	timing := fastTiming()
+	timing.Deadline = 20 * time.Millisecond
+
+	err := bootstrap(context.Background(), server, bootstrapArgs(AgentChoice{Harness: "pi"}, &bytes.Buffer{}), timing)
+	if !errors.Is(err, killed) {
+		t.Fatalf("bootstrap() error = %v, want the failure detail kept", err)
+	}
+	if errors.Is(err, context.Canceled) {
+		t.Fatalf("bootstrap() error = %v, want a deadline reported as a failure", err)
 	}
 }

@@ -352,13 +352,6 @@ func (f *fakeChooser) Choose(context.Context) (AgentChoice, error) {
 	return f.choice, f.err
 }
 
-// startedBootstrapper is a Herder server that is already running.
-func startedBootstrapper() *fakeBootstrapper {
-	server := readyBootstrapper()
-	server.statuses = []statusResult{{running: true}}
-	return server
-}
-
 // freshStartDeps drives case 0 with a scripted chooser and Herder server.
 func freshStartDeps(client Herder, chooser Chooser, server Bootstrapper, diagnostics io.Writer) (StartDependencies, *[]string) {
 	scoped := &[]string{}
@@ -461,7 +454,7 @@ func TestStartAttachSkipsAgentChoiceAndBootstrap(t *testing.T) {
 	}
 }
 
-func TestStartAbandonsLaunchWhenAgentChoiceFails(t *testing.T) {
+func TestStartWritesNoRecordWhenAgentChoiceFails(t *testing.T) {
 	root, _ := lifecycleProject(t, "project")
 	want := errors.New("selection cancelled")
 	client := &fakeHerder{}
@@ -482,8 +475,8 @@ func TestStartAbandonsLaunchWhenAgentChoiceFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 1 {
-		t.Fatalf("records = %#v, want the fresh record retained", records)
+	if len(records) != 0 {
+		t.Fatalf("records = %#v, want none published for a dismissed picker", records)
 	}
 }
 
@@ -562,5 +555,26 @@ func TestStartIgnoresBootstrapCancelledByHerderExit(t *testing.T) {
 	}
 	if len(server.started) != 0 {
 		t.Fatalf("StartAgent calls = %#v, want none", server.started)
+	}
+}
+
+func TestStartIgnoresBootstrapSubprocessKilledByHerderExit(t *testing.T) {
+	root, _ := lifecycleProject(t, "project")
+	server := startedBootstrapper()
+	// Cancelling the bootstrap kills the herdr child, which reports the signal
+	// rather than the cancellation.
+	server.onRenameWorkspace = func(ctx context.Context) error {
+		<-ctx.Done()
+		return errors.New("signal: killed")
+	}
+	client := &fakeHerder{}
+	var diagnostics bytes.Buffer
+
+	deps, _ := freshStartDeps(client, &fakeChooser{choice: AgentChoice{Harness: "pi"}}, server, &diagnostics)
+	if err := Start(context.Background(), root, deps); err != nil {
+		t.Fatalf("Start() error = %v, want a killed subprocess to be silent", err)
+	}
+	if diagnostics.Len() != 0 {
+		t.Fatalf("diagnostics = %q, want empty", diagnostics.String())
 	}
 }

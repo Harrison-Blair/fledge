@@ -92,12 +92,12 @@ func bootstrap(ctx context.Context, h Bootstrapper, in bootstrapInput, t bootstr
 
 	label := workspacePrefix + filepath.Base(in.Root)
 	if err := h.RenameWorkspace(ctx, workspace.ID, label); err != nil {
-		return logFail(in.Log, fmt.Errorf("rename workspace %s: %w", workspace.ID, err))
+		return logFail(in.Log, halted(ctx, fmt.Errorf("rename workspace %s: %w", workspace.ID, err)))
 	}
 	logStep(in.Log, "renamed workspace to %s", label)
 
 	if err := h.RenameTab(ctx, tabID, orchestratorName); err != nil {
-		return logFail(in.Log, fmt.Errorf("rename tab %s: %w", tabID, err))
+		return logFail(in.Log, halted(ctx, fmt.Errorf("rename tab %s: %w", tabID, err)))
 	}
 	logStep(in.Log, "renamed tab to %s", orchestratorName)
 
@@ -128,13 +128,22 @@ func startAgent(ctx context.Context, h Bootstrapper, in bootstrapInput, t bootst
 		}
 		var reported *herdr.Error
 		if !errors.As(err, &reported) || attempt >= t.StartRetries {
-			return logFail(in.Log, fmt.Errorf("start %s: %w", in.Choice.Harness, err))
+			return logFail(in.Log, halted(ctx, fmt.Errorf("start %s: %w", in.Choice.Harness, err)))
 		}
 		logStep(in.Log, "start %s attempt %d failed: %v", in.Choice.Harness, attempt, err)
 		if err := sleep(ctx, t.RetryDelay); err != nil {
 			return logFail(in.Log, fmt.Errorf("start %s: %w", in.Choice.Harness, err))
 		}
 	}
+}
+
+// halted reports cancellation when the context ended, so a subprocess killed
+// by Herder's exit is not reported as a bootstrap failure.
+func halted(ctx context.Context, err error) error {
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return ctx.Err()
+	}
+	return err
 }
 
 // poll calls ready until it succeeds, reporting why the context ended first.

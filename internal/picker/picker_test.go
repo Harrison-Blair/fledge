@@ -1,6 +1,7 @@
 package picker
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"strings"
@@ -30,6 +31,10 @@ func press(t *testing.T, start tea.Model, msgs ...tea.Msg) (model, tea.Cmd) {
 	}
 	return final, cmd
 }
+
+// altScreenEnter is the escape sequence Bubble Tea writes when a program takes
+// over the alternate screen.
+const altScreenEnter = "\x1b[?1049h"
 
 func runes(text string) tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(text)}
@@ -90,6 +95,19 @@ func TestSelectModelFilteringOwnsItsKeys(t *testing.T) {
 	}
 	if got := final.list.FilterInput.Value(); got != "q" {
 		t.Fatalf("filter text = %q, want q", got)
+	}
+}
+
+func TestSelectModelEscapeCancelsWithFilterApplied(t *testing.T) {
+	filtered := newModel("harness", selectOptions)
+	filtered.list.SetFilterText("claude")
+
+	final, cmd := press(t, filtered, tea.KeyMsg{Type: tea.KeyEsc})
+	if final.done {
+		t.Fatalf("escape selected %#v", final.chosen)
+	}
+	if !quits(cmd) {
+		t.Fatal("escape did not quit the program with a filter applied")
 	}
 }
 
@@ -177,6 +195,16 @@ func TestSelectModelViewKeepsChoiceInScrollback(t *testing.T) {
 	view := final.View()
 	if !strings.Contains(view, "Model for claude") || !strings.Contains(view, "pi") {
 		t.Fatalf("final view = %q, want the question and the choice", view)
+	}
+}
+
+func TestSelectStaysOutOfTheAlternateScreen(t *testing.T) {
+	var output bytes.Buffer
+	if _, err := Select(strings.NewReader("\r"), &output, "harness", selectOptions); err != nil {
+		t.Fatalf("Select() error = %v", err)
+	}
+	if strings.Contains(output.String(), altScreenEnter) {
+		t.Fatal("Select() entered the alternate screen, which hides the choice from scrollback")
 	}
 }
 

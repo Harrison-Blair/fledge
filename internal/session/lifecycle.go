@@ -103,23 +103,25 @@ func Start(ctx context.Context, path string, deps StartDependencies) error {
 		for _, listed := range sessions {
 			unavailable[listed.Name] = struct{}{}
 		}
-		record, err := Create(root, unavailable, deps.Entropy, deps.Now())
-		if err != nil {
-			return fmt.Errorf("start Fledge session: %w", err)
-		}
+		// The choice is made before the record so a dismissed picker leaves
+		// nothing behind.
 		choice, err := deps.Chooser.Choose(ctx)
 		if err != nil {
 			return fmt.Errorf("start Fledge session: choose agent: %w", err)
 		}
+		record, err := Create(root, unavailable, deps.Entropy, deps.Now())
+		if err != nil {
+			return fmt.Errorf("start Fledge session: %w", err)
+		}
 
 		logPath := filepath.Join(record.Path, bootstrapLogName)
+		var log io.Writer = io.Discard
 		logFile, err := os.OpenFile(logPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
-		var log io.Writer = logFile
 		if err != nil {
-			log = io.Discard
 			fmt.Fprintf(deps.Diagnostics, "fledge: cannot write %s: %v\n", logPath, err)
 		} else {
 			defer logFile.Close()
+			log = logFile
 		}
 
 		// Herder needs its own terminal, so the session is prepared through the
