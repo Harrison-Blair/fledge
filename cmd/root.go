@@ -21,6 +21,7 @@ func New() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
+		SilenceUsage: true,
 	}
 
 	versioncmd.Configure(command)

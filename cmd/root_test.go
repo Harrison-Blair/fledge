@@ -37,6 +37,21 @@ func TestRootRejectsArguments(t *testing.T) {
 	}
 }
 
+func TestRuntimeErrorsDoNotPrintUsage(t *testing.T) {
+	command := New()
+	var output bytes.Buffer
+	command.SetOut(&output)
+	command.SetErr(&output)
+	command.SetArgs([]string{"start", t.TempDir() + "/missing"})
+
+	if err := command.Execute(); err == nil {
+		t.Fatal("Execute() error = nil, want start failure")
+	}
+	if strings.Contains(output.String(), "Usage:") {
+		t.Fatalf("runtime error printed usage:\n%s", output.String())
+	}
+}
+
 func TestRootHelpAndVersionShortCircuit(t *testing.T) {
 	for _, test := range []struct {
 		name string
