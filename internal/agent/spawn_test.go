@@ -133,6 +133,8 @@ func TestSpawnRejectsInvalidOptionsWithoutCallingHerder(t *testing.T) {
 		{name: "tab and pane", opts: SpawnOptions{Name: "rev", Kind: "claude", Tab: "ws1:tab3", Pane: "ws1:tab3:pane1"}, wantErr: "at most one"},
 		{name: "workspace and pane", opts: SpawnOptions{Name: "rev", Kind: "claude", Workspace: "wsX", Pane: "ws1:tab3:pane1"}, wantErr: "at most one"},
 		{name: "unknown split", opts: SpawnOptions{Name: "rev", Kind: "claude", Pane: "ws1:tab3:pane1", Split: "sideways"}, wantErr: "must be right or down"},
+		{name: "split without a split placement", opts: SpawnOptions{Name: "rev", Kind: "claude", Split: "down"}, wantErr: "split applies"},
+		{name: "split with a workspace", opts: SpawnOptions{Name: "rev", Kind: "claude", Workspace: "new", Split: "right"}, wantErr: "split applies"},
 		{name: "ratio without a split placement", opts: SpawnOptions{Name: "rev", Kind: "claude", Ratio: &ratio}, wantErr: "ratio applies"},
 		{name: "ratio with a workspace", opts: SpawnOptions{Name: "rev", Kind: "claude", Workspace: "new", Ratio: &ratio}, wantErr: "ratio applies"},
 	} {

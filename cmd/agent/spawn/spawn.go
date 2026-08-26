@@ -69,7 +69,7 @@ func newCommand(spawn spawnOperation) *cobra.Command {
 	flags.StringVar(&options.Workspace, "workspace", "", `place the agent in "new" or an existing workspace ID`)
 	flags.StringVar(&options.Tab, "tab", "", "split a pane of this tab ID")
 	flags.StringVar(&options.Pane, "pane", "", "split this pane ID")
-	flags.StringVar(&options.Split, "split", "", "split direction: right or down")
+	flags.StringVar(&options.Split, "split", "", "direction for --tab or --pane placement: right or down (default right)")
 	flags.Float64Var(&ratio, "ratio", 0, "fraction of the split pane given to the agent")
 	flags.StringVar(&options.Label, "label", "", "workspace or tab label (defaults to the agent name)")
 	_ = command.MarkFlagRequired("kind")

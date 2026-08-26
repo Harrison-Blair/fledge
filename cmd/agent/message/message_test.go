@@ -28,6 +28,11 @@ func TestMessageFlagsBecomeOptions(t *testing.T) {
 			args: []string{"reviewer", "status?", "--wait", "--until", "idle", "--until", "waiting", "--timeout", "2500"},
 			want: internalagent.MessageOptions{Target: "reviewer", Text: "status?", Wait: true, Until: []string{"idle", "waiting"}, TimeoutMS: 2500},
 		},
+		{
+			name: "a comma-separated state stays one value",
+			args: []string{"reviewer", "status?", "--until", "idle,waiting"},
+			want: internalagent.MessageOptions{Target: "reviewer", Text: "status?", Until: []string{"idle,waiting"}},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			called := false

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func TestBareAgentShowsHelpWithSubcommands(t *testing.T) {
@@ -22,13 +24,14 @@ func TestBareAgentShowsHelpWithSubcommands(t *testing.T) {
 	}
 }
 
-func TestAgentRejectsArguments(t *testing.T) {
-	command := New()
-	command.SetOut(&bytes.Buffer{})
-	command.SetErr(&bytes.Buffer{})
-	command.SetArgs([]string{"unexpected"})
+func TestAgentRejectsArgumentsBelowARoot(t *testing.T) {
+	root := &cobra.Command{Use: "fledge"}
+	root.AddCommand(New())
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{"agent", "unexpected"})
 
-	if err := command.Execute(); err == nil {
+	if err := root.Execute(); err == nil {
 		t.Fatal("Execute() error = nil, want argument error")
 	}
 }

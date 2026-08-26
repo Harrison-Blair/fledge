@@ -98,6 +98,9 @@ func validateSpawn(opts SpawnOptions) (string, error) {
 	if opts.Split != "" && opts.Split != defaultSplitDirection && opts.Split != "down" {
 		return "", fmt.Errorf("split %q must be right or down", opts.Split)
 	}
+	if opts.Split != "" && opts.Tab == "" && opts.Pane == "" {
+		return "", fmt.Errorf("split applies to tab and pane placement only")
+	}
 	if opts.Ratio != nil && opts.Tab == "" && opts.Pane == "" {
 		return "", fmt.Errorf("ratio applies to tab and pane placement only")
 	}
