@@ -22,9 +22,10 @@ type Session struct {
 // Client invokes the Herder CLI. The configured streams are connected to an
 // interactive Herder process launched by Launch.
 type Client struct {
-	stdin  io.Reader
-	stdout io.Writer
-	stderr io.Writer
+	stdin   io.Reader
+	stdout  io.Writer
+	stderr  io.Writer
+	session string
 }
 
 // New returns a Herder client whose interactive child uses the supplied
