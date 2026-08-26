@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -45,12 +46,10 @@ func TestStartCreatesFreshSessionFromNestedPath(t *testing.T) {
 	}}
 	now := time.Date(2026, 8, 24, 12, 13, 14, 0, time.UTC)
 
-	err := Start(context.Background(), nested, StartDependencies{
-		Herder:  client,
-		Entropy: bytes.NewReader([]byte{0, 0, 0, 2, 0, 0, 0, 3}),
-		Now:     func() time.Time { return now },
-		Getenv:  emptyEnv,
-	})
+	deps, _ := freshStartDeps(client, &fakeChooser{}, startedBootstrapper(), &bytes.Buffer{})
+	deps.Entropy = bytes.NewReader([]byte{0, 0, 0, 2, 0, 0, 0, 3})
+	deps.Now = func() time.Time { return now }
+	err := Start(context.Background(), nested, deps)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -130,12 +129,8 @@ func TestStartRetainsFreshRecordAfterLaunchFailure(t *testing.T) {
 	want := errors.New("launch failed")
 	client := &fakeHerder{launchErr: want}
 
-	err := Start(context.Background(), root, StartDependencies{
-		Herder:  client,
-		Entropy: bytes.NewReader([]byte{1, 2, 3, 4}),
-		Now:     time.Now,
-		Getenv:  emptyEnv,
-	})
+	deps, _ := freshStartDeps(client, &fakeChooser{}, startedBootstrapper(), &bytes.Buffer{})
+	err := Start(context.Background(), root, deps)
 	if !errors.Is(err, want) {
 		t.Fatalf("Start() error = %v, want wrapped %v", err, want)
 	}
@@ -318,6 +313,7 @@ func TestStopPropagatesListAndConfirmationFailures(t *testing.T) {
 
 type fakeHerder struct {
 	sessions   []herdr.Session
+	launchWait <-chan struct{}
 	listErr    error
 	launchErr  error
 	stopErrors map[string]error
@@ -337,8 +333,40 @@ func (f *fakeHerder) List(context.Context) ([]herdr.Session, error) {
 }
 
 func (f *fakeHerder) Launch(_ context.Context, root, name string) error {
+	if f.launchWait != nil {
+		<-f.launchWait
+	}
 	f.launches = append(f.launches, launchCall{root: root, name: name})
 	return f.launchErr
+}
+
+// fakeChooser answers the agent question with one scripted choice.
+type fakeChooser struct {
+	choice AgentChoice
+	err    error
+	calls  int
+}
+
+func (f *fakeChooser) Choose(context.Context) (AgentChoice, error) {
+	f.calls++
+	return f.choice, f.err
+}
+
+// freshStartDeps drives case 0 with a scripted chooser and Herder server.
+func freshStartDeps(client Herder, chooser Chooser, server Bootstrapper, diagnostics io.Writer) (StartDependencies, *[]string) {
+	scoped := &[]string{}
+	return StartDependencies{
+		Herder:  client,
+		Entropy: bytes.NewReader([]byte{1, 2, 3, 4}),
+		Now:     time.Now,
+		Getenv:  emptyEnv,
+		Chooser: chooser,
+		Scoped: func(name string) Bootstrapper {
+			*scoped = append(*scoped, name)
+			return server
+		},
+		Diagnostics: diagnostics,
+	}, scoped
 }
 
 func (f *fakeHerder) Stop(_ context.Context, name string) error {
@@ -402,4 +430,151 @@ func recordNamesContain(records []Record, name string) bool {
 		}
 	}
 	return false
+}
+
+func TestStartAttachSkipsAgentChoiceAndBootstrap(t *testing.T) {
+	root, _ := lifecycleProject(t, "project")
+	writeLifecycleRecord(t, root, "registered")
+	client := &fakeHerder{sessions: []herdr.Session{{Name: "registered", Running: true}}}
+	chooser := &fakeChooser{}
+	var diagnostics bytes.Buffer
+
+	deps, scoped := freshStartDeps(client, chooser, startedBootstrapper(), &diagnostics)
+	if err := Start(context.Background(), root, deps); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if chooser.calls != 0 {
+		t.Fatalf("Choose() calls = %d, want none when re-attaching", chooser.calls)
+	}
+	if len(*scoped) != 0 {
+		t.Fatalf("bootstrapped sessions = %#v, want none when re-attaching", *scoped)
+	}
+	if diagnostics.Len() != 0 {
+		t.Fatalf("diagnostics = %q, want empty", diagnostics.String())
+	}
+}
+
+func TestStartWritesNoRecordWhenAgentChoiceFails(t *testing.T) {
+	root, _ := lifecycleProject(t, "project")
+	want := errors.New("selection cancelled")
+	client := &fakeHerder{}
+	chooser := &fakeChooser{err: want}
+
+	deps, scoped := freshStartDeps(client, chooser, startedBootstrapper(), &bytes.Buffer{})
+	err := Start(context.Background(), root, deps)
+	if !errors.Is(err, want) {
+		t.Fatalf("Start() error = %v, want wrapped %v", err, want)
+	}
+	if len(client.launches) != 0 {
+		t.Fatalf("launches = %#v, want none", client.launches)
+	}
+	if len(*scoped) != 0 {
+		t.Fatalf("bootstrapped sessions = %#v, want none", *scoped)
+	}
+	records, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("records = %#v, want none published for a dismissed picker", records)
+	}
+}
+
+func TestStartBootstrapsFreshSessionWhileHerderRuns(t *testing.T) {
+	root, _ := lifecycleProject(t, "project")
+	server := startedBootstrapper()
+	released := make(chan struct{})
+	server.onStart = func(int) { close(released) }
+	client := &fakeHerder{launchWait: released}
+	chooser := &fakeChooser{choice: AgentChoice{Harness: "claude", Model: "opus"}}
+	var diagnostics bytes.Buffer
+
+	deps, scoped := freshStartDeps(client, chooser, server, &diagnostics)
+	if err := Start(context.Background(), root, deps); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if chooser.calls != 1 {
+		t.Fatalf("Choose() calls = %d, want one", chooser.calls)
+	}
+	name := "fledge-project-01020304"
+	if want := []string{name}; !reflect.DeepEqual(*scoped, want) {
+		t.Fatalf("bootstrapped sessions = %#v, want %#v", *scoped, want)
+	}
+	if want := []herdr.StartAgentOptions{{Name: "orchestrator", Kind: "claude", PaneID: "w1:p2", Args: []string{"--model", "opus"}}}; !reflect.DeepEqual(server.started, want) {
+		t.Fatalf("StartAgent options = %#v, want %#v", server.started, want)
+	}
+	if diagnostics.Len() != 0 {
+		t.Fatalf("diagnostics = %q, want empty", diagnostics.String())
+	}
+
+	log, err := os.ReadFile(filepath.Join(root, ".fledge", "sessions", name, bootstrapLogName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(log), "started claude") {
+		t.Fatalf("bootstrap log = %q, want the agent recorded", log)
+	}
+}
+
+func TestStartReportsBootstrapFailure(t *testing.T) {
+	root, _ := lifecycleProject(t, "project")
+	want := errors.New("agent start refused")
+	server := startedBootstrapper()
+	server.startErrs = []error{want}
+	released := make(chan struct{})
+	server.onStart = func(int) { close(released) }
+	client := &fakeHerder{launchWait: released}
+	var diagnostics bytes.Buffer
+
+	deps, _ := freshStartDeps(client, &fakeChooser{choice: AgentChoice{Harness: "pi"}}, server, &diagnostics)
+	err := Start(context.Background(), root, deps)
+	if !errors.Is(err, want) {
+		t.Fatalf("Start() error = %v, want wrapped %v", err, want)
+	}
+	report := diagnostics.String()
+	if !strings.Contains(report, "bootstrap failed") || !strings.Contains(report, bootstrapLogName) {
+		t.Fatalf("diagnostics = %q, want a bootstrap failure naming the log", report)
+	}
+	if len(client.launches) != 1 {
+		t.Fatalf("launches = %#v, want the session to have been launched", client.launches)
+	}
+}
+
+func TestStartIgnoresBootstrapCancelledByHerderExit(t *testing.T) {
+	root, _ := lifecycleProject(t, "project")
+	server := &fakeBootstrapper{statuses: []statusResult{{running: false}}}
+	client := &fakeHerder{}
+	var diagnostics bytes.Buffer
+
+	deps, _ := freshStartDeps(client, &fakeChooser{choice: AgentChoice{Harness: "pi"}}, server, &diagnostics)
+	if err := Start(context.Background(), root, deps); err != nil {
+		t.Fatalf("Start() error = %v, want a cancelled bootstrap to be silent", err)
+	}
+	if diagnostics.Len() != 0 {
+		t.Fatalf("diagnostics = %q, want empty", diagnostics.String())
+	}
+	if len(server.started) != 0 {
+		t.Fatalf("StartAgent calls = %#v, want none", server.started)
+	}
+}
+
+func TestStartIgnoresBootstrapSubprocessKilledByHerderExit(t *testing.T) {
+	root, _ := lifecycleProject(t, "project")
+	server := startedBootstrapper()
+	// Cancelling the bootstrap kills the herdr child, which reports the signal
+	// rather than the cancellation.
+	server.onRenameWorkspace = func(ctx context.Context) error {
+		<-ctx.Done()
+		return errors.New("signal: killed")
+	}
+	client := &fakeHerder{}
+	var diagnostics bytes.Buffer
+
+	deps, _ := freshStartDeps(client, &fakeChooser{choice: AgentChoice{Harness: "pi"}}, server, &diagnostics)
+	if err := Start(context.Background(), root, deps); err != nil {
+		t.Fatalf("Start() error = %v, want a killed subprocess to be silent", err)
+	}
+	if diagnostics.Len() != 0 {
+		t.Fatalf("diagnostics = %q, want empty", diagnostics.String())
+	}
 }
