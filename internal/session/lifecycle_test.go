@@ -478,6 +478,158 @@ func TestStableClaimAfterSessionDeletion(t *testing.T) {
 	}
 }
 
+func TestStartNewDiscardsStoppedClaimAndCreatesFreshSession(t *testing.T) {
+	root, _ := lifecycleProject(t, "project")
+	writeLifecycleRecord(t, root, "fledge-old-00000001")
+	records, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Claim(records[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(records[0].Path, "pending.json"), []byte(`{"schema_version":1,"harness":"claude","model":"opus"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeHerder{sessions: []herdr.Session{{Name: "fledge-old-00000001", Running: false}}}
+	chooser := &fakeChooser{choice: AgentChoice{Harness: "claude", Model: "opus"}}
+	server := startedBootstrapper()
+	released := make(chan struct{})
+	release := closeOnCleanup(t, released)
+	server.onStart = func(context.Context, int) { release() }
+	client.launchWait = released
+	var diagnostics bytes.Buffer
+
+	deps, scoped := freshStartDeps(client, chooser, server, &diagnostics)
+	deps.New = true
+	if err := Start(context.Background(), root, deps); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if chooser.calls != 1 {
+		t.Fatalf("Choose() calls = %d, want one", chooser.calls)
+	}
+	newRecords, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(newRecords) != 2 {
+		t.Fatalf("records = %#v, want 2", newRecords)
+	}
+	old := recordByName(newRecords, "fledge-old-00000001")
+	if old.Claimed || old.PendingChoice != nil {
+		t.Fatalf("old record = %#v, want unclaimed with no pending choice", old)
+	}
+	name := "fledge-project-01020304"
+	fresh := recordByName(newRecords, name)
+	if !fresh.Claimed {
+		t.Fatalf("fresh record = %#v, want claimed", fresh)
+	}
+	if want := []launchCall{{root: root, name: name}}; !reflect.DeepEqual(client.Launches(), want) {
+		t.Fatalf("launches = %#v, want %#v", client.Launches(), want)
+	}
+	if want := []string{name}; !reflect.DeepEqual(*scoped, want) {
+		t.Fatalf("bootstrapped sessions = %#v, want %#v", *scoped, want)
+	}
+	if diagnostics.Len() != 0 {
+		t.Fatalf("diagnostics = %q, want empty", diagnostics.String())
+	}
+}
+
+func TestStartNewRejectsRunningRegisteredSession(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		claim bool
+	}{
+		{name: "claimed", claim: true},
+		{name: "unclaimed", claim: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root, _ := lifecycleProject(t, "project")
+			writeLifecycleRecord(t, root, "registered")
+			if test.claim {
+				records, err := Load(root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := Claim(records[0]); err != nil {
+					t.Fatal(err)
+				}
+			}
+			client := &fakeHerder{sessions: []herdr.Session{{Name: "registered", Running: true}}}
+			chooser := &fakeChooser{}
+
+			deps, _ := freshStartDeps(client, chooser, startedBootstrapper(), &bytes.Buffer{})
+			deps.New = true
+			var released bool
+			deps.acquireLock = func(context.Context, string) (func() error, error) {
+				return func() error {
+					released = true
+					return nil
+				}, nil
+			}
+
+			err := Start(context.Background(), root, deps)
+			if err == nil || !strings.Contains(err.Error(), "fledge stop") {
+				t.Fatalf("Start() error = %v, want a %q hint", err, "fledge stop")
+			}
+			if !released {
+				t.Fatal("project lock was not released")
+			}
+			if chooser.calls != 0 {
+				t.Fatalf("Choose() calls = %d, want 0", chooser.calls)
+			}
+			if len(client.Launches()) != 0 {
+				t.Fatalf("launches = %#v, want none", client.Launches())
+			}
+			if test.claim {
+				records, err := Load(root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !records[0].Claimed {
+					t.Fatalf("records after rejected --new = %#v, want claim retained", records)
+				}
+				if _, err := os.Stat(filepath.Join(records[0].Path, "claim.json")); err != nil {
+					t.Fatalf("claim.json after rejected --new: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestStartNewWithoutClaimUsesPickerPath(t *testing.T) {
+	root, _ := lifecycleProject(t, "project")
+	writeLifecycleRecord(t, root, "fledge-old-00000001")
+	client := &fakeHerder{sessions: []herdr.Session{{Name: "fledge-old-00000001", Running: false}}}
+	chooser := &fakeChooser{choice: AgentChoice{Harness: "claude", Model: "opus"}}
+	server := startedBootstrapper()
+	released := make(chan struct{})
+	release := closeOnCleanup(t, released)
+	server.onStart = func(context.Context, int) { release() }
+	client.launchWait = released
+	var diagnostics bytes.Buffer
+
+	deps, scoped := freshStartDeps(client, chooser, server, &diagnostics)
+	deps.New = true
+	if err := Start(context.Background(), root, deps); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if chooser.calls != 1 {
+		t.Fatalf("Choose() calls = %d, want one", chooser.calls)
+	}
+	records, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("records = %#v, want 2", records)
+	}
+	name := "fledge-project-01020304"
+	if want := []string{name}; !reflect.DeepEqual(*scoped, want) {
+		t.Fatalf("bootstrapped sessions = %#v, want %#v", *scoped, want)
+	}
+}
+
 func TestStartRejectsMalformedRecordsBeforeListing(t *testing.T) {
 	root, _ := lifecycleProject(t, "project")
 	writeRecord(t, root, "bad", `{}`)

@@ -39,11 +39,11 @@ func Harnesses() []Harness {
 	return []Harness{Pi, Claude, Codex, OpenCode, Cursor}
 }
 
-// Models returns the model IDs harness accepts via --model, sorted and
-// de-duplicated. timeout bounds each harness command and must be positive; a
-// non-positive timeout reports no models. Models never fails: a missing
-// binary, a non-zero exit, or a timeout all yield an empty list, as does an
-// unrecognized harness.
+// Models returns the model IDs harness accepts via --model, de-duplicated
+// and ordered highest-first (descending natural order). timeout bounds each
+// harness command and must be positive; a non-positive timeout reports no
+// models. Models never fails: a missing binary, a non-zero exit, or a
+// timeout all yield an empty list, as does an unrecognized harness.
 func Models(ctx context.Context, harness Harness, timeout time.Duration) []string {
 	switch harness {
 	case Pi:
@@ -164,12 +164,13 @@ func claudeName(model string) string {
 	return model
 }
 
-// normalize sorts ids and drops duplicates, reporting no models as a nil slice.
+// normalize sorts ids highest-first in descending natural order and drops
+// duplicates, reporting no models as a nil slice.
 func normalize(ids []string) []string {
 	if len(ids) == 0 {
 		return nil
 	}
-	slices.Sort(ids)
+	slices.SortFunc(ids, compareIDs)
 	return slices.Compact(ids)
 }
 

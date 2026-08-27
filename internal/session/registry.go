@@ -397,6 +397,20 @@ func ClearPending(record Record) error {
 	return fmt.Errorf("clear pending session metadata %q: %w", record.HerdrSessionName, err)
 }
 
+// Unclaim discards a record's claim so a later start creates a fresh session.
+// Pending metadata is removed first because a record with pending metadata and
+// no claim fails to load.
+func Unclaim(record Record) error {
+	if err := ClearPending(record); err != nil {
+		return err
+	}
+	err := os.Remove(filepath.Join(record.Path, "claim.json"))
+	if err == nil || errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return fmt.Errorf("unclaim session record %q: %w", record.HerdrSessionName, err)
+}
+
 func readSidecar(path string, decode func([]byte) (any, error)) (any, bool, error) {
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {

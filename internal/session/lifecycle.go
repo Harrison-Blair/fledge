@@ -53,6 +53,9 @@ type StartDependencies struct {
 	Now     func() time.Time
 	Getenv  func(string) string
 	Chooser Chooser
+	// New discards this project's existing claim before choosing an agent, so
+	// the start creates a fresh session instead of reattaching.
+	New bool
 	// Scoped addresses the Herder server of one session by name.
 	Scoped func(sessionName string) Bootstrapper
 	// Diagnostics receives the bootstrap report written after Herder exits.
@@ -109,6 +112,19 @@ func Start(ctx context.Context, path string, deps StartDependencies) error {
 
 	running := registeredRunningNames(records, sessions)
 	claimed := claimedRecord(records)
+	// --new refuses while a registered session is running and otherwise
+	// discards any existing claim so a fresh session is chosen below.
+	if deps.New {
+		if len(running) != 0 {
+			return finish(fmt.Errorf("start Fledge session: registered sessions are still running: %s; run \"fledge stop\" first", strings.Join(running, ", ")))
+		}
+		if claimed != nil {
+			if err := Unclaim(*claimed); err != nil {
+				return finish(fmt.Errorf("start Fledge session: %w", err))
+			}
+			claimed = nil
+		}
+	}
 	if claimed != nil {
 		for _, name := range running {
 			if name != claimed.HerdrSessionName {

@@ -60,8 +60,10 @@ fledge start
 
 The first start asks which agent harness and model to run in the orchestrator
 pane; choose `none — shell only` if you do not want an agent. Later starts
-reattach to the same running session. To stop the project's sessions and their
-panes, return to a shell and run:
+reattach to the same running session. Run `fledge start --new` to discard that
+attachment and choose a fresh agent and session; it refuses while a session is
+running. To stop the project's sessions and their panes, return to a shell and
+run:
 
 ```sh
 fledge stop

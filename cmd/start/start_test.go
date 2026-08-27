@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"fledge/internal/picker"
@@ -121,15 +122,54 @@ func TestStartPropagatesError(t *testing.T) {
 	}
 }
 
+func TestStartNewFlagSetsDependency(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "default", args: nil, want: false},
+		{name: "new", args: []string{"--new"}, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := &fdBuffer{fd: 10}
+			output := &fdBuffer{fd: 11}
+
+			called := false
+			command := newCommand(func(_ context.Context, _ string, deps session.StartDependencies) error {
+				called = true
+				if deps.New != test.want {
+					t.Fatalf("New = %v, want %v", deps.New, test.want)
+				}
+				return nil
+			}, func(int) bool { return false })
+			command.SetIn(input)
+			command.SetOut(output)
+			command.SetArgs(test.args)
+
+			if err := command.Execute(); err != nil {
+				t.Fatalf("Execute() error = %v", err)
+			}
+			if !called {
+				t.Fatal("start operation was not called")
+			}
+		})
+	}
+}
+
 func TestStartHelpDoesNotRunOperation(t *testing.T) {
 	command := newCommand(func(context.Context, string, session.StartDependencies) error {
 		t.Fatal("start operation called")
 		return nil
 	}, func(int) bool { return false })
-	command.SetOut(&bytes.Buffer{})
+	var help bytes.Buffer
+	command.SetOut(&help)
 	command.SetArgs([]string{"--help"})
 
 	if err := command.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
+	}
+	if !strings.Contains(help.String(), "--new") {
+		t.Fatalf("help = %q, want the --new flag documented", help.String())
 	}
 }

@@ -28,6 +28,7 @@ func New() *cobra.Command {
 }
 
 func newCommand(start startOperation, isTerminal terminalDetector) *cobra.Command {
+	var newSession bool
 	command := &cobra.Command{
 		Use:   "start [path]",
 		Short: "Start or attach to this project's Herder session",
@@ -59,9 +60,12 @@ func newCommand(start startOperation, isTerminal terminalDetector) *cobra.Comman
 					return client.WithSession(sessionName)
 				},
 				Diagnostics: cmd.ErrOrStderr(),
+				New:         newSession,
 			})
 		},
 	}
+
+	command.Flags().BoolVar(&newSession, "new", false, "Discard this project's session claim and start a fresh session (stop running sessions first)")
 
 	return command
 }
