@@ -271,6 +271,20 @@ func (c *Client) Panes(ctx context.Context, workspaceID string) ([]Pane, error) 
 	return payload.Panes, nil
 }
 
+// CurrentPane returns the live pane corresponding to the invoking terminal.
+func (c *Client) CurrentPane(ctx context.Context) (Pane, error) {
+	var payload struct {
+		Pane Pane `json:"pane"`
+	}
+	if err := c.invoke(ctx, "pane_current", &payload, "pane", "current", "--current"); err != nil {
+		return Pane{}, err
+	}
+	if err := validatePane(payload.Pane); err != nil {
+		return Pane{}, err
+	}
+	return payload.Pane, nil
+}
+
 // SplitPane splits a pane and returns the new, unfocused sibling pane.
 func (c *Client) SplitPane(ctx context.Context, options SplitOptions) (Pane, error) {
 	args := []string{"pane", "split", "--pane", options.PaneID, "--direction", options.Direction}

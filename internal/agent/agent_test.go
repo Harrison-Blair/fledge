@@ -14,6 +14,7 @@ import (
 
 	"fledge/internal/herdr"
 	"fledge/internal/project"
+	"fledge/internal/session"
 )
 
 type fakeHerder struct {
@@ -32,6 +33,15 @@ type fakeHerder struct {
 	promptOpts   herdr.PromptOptions
 	onStartAgent func(context.Context) error
 	onClosePane  func(context.Context) error
+}
+
+type connectPaneResolver struct {
+	pane herdr.Pane
+	err  error
+}
+
+func (f connectPaneResolver) CurrentPane(context.Context) (herdr.Pane, error) {
+	return f.pane, f.err
 }
 
 func newFakeHerder() *fakeHerder {
@@ -108,25 +118,30 @@ func (f *fakeHerder) GetAgent(_ context.Context, target string) (herdr.Agent, er
 	return f.found, f.errs["GetAgent"]
 }
 
-func TestConnectInsideHerderPaneUsesAmbientSession(t *testing.T) {
+func TestConnectInsideHerderPaneValidatesProjectSession(t *testing.T) {
+	root := agentProject(t, "fledge-demo-00000001")
 	env := map[string]string{
-		"HERDR_ENV":          "1",
-		"HERDR_WORKSPACE_ID": "wsE",
-		"HERDR_PANE_ID":      "wsE:tab1:pane4",
+		"HERDR_ENV":     "1",
+		"HERDR_SESSION": "fledge-demo-00000001",
+		"HERDR_PANE_ID": "wsE:tab1:pane4",
 	}
-	caller, client, err := Connect(context.Background(), t.TempDir(), func(name string) string { return env[name] }, func(context.Context) ([]herdr.Session, error) {
-		t.Fatal("listed Herder sessions from inside a pane")
-		return nil, nil
+	caller, client, err := Connect(context.Background(), root, func(name string) string { return env[name] }, func(context.Context) ([]herdr.Session, error) {
+		return []herdr.Session{{Name: "fledge-demo-00000001", Running: true}}, nil
+	}, func(name string) session.PaneResolver {
+		if name != "fledge-demo-00000001" {
+			t.Fatalf("scoped session = %q", name)
+		}
+		return connectPaneResolver{pane: herdr.Pane{ID: "wsE:tab1:pane4", WorkspaceID: "wsMoved", TabID: "wsMoved:tab2"}}
 	})
 	if err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
-	want := Caller{WorkspaceID: "wsE", PaneID: "wsE:tab1:pane4"}
+	want := Caller{Session: "fledge-demo-00000001", WorkspaceID: "wsMoved", PaneID: "wsE:tab1:pane4"}
 	if caller != want {
 		t.Fatalf("caller = %#v, want %#v", caller, want)
 	}
-	if !reflect.DeepEqual(client, herdr.New(nil, nil, nil)) {
-		t.Fatalf("client = %#v, want an unscoped client", client)
+	if !reflect.DeepEqual(client, herdr.New(nil, nil, nil).WithSession("fledge-demo-00000001")) {
+		t.Fatalf("client = %#v, want a project-scoped client", client)
 	}
 }
 
@@ -157,7 +172,7 @@ func TestConnectOutsideHerderResolvesProjectSession(t *testing.T) {
 			root := agentProject(t, "fledge-demo-00000001", "fledge-demo-00000002")
 			caller, client, err := Connect(context.Background(), root, emptyEnv, func(context.Context) ([]herdr.Session, error) {
 				return test.sessions, nil
-			})
+			}, nil)
 
 			if test.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
@@ -175,6 +190,49 @@ func TestConnectOutsideHerderResolvesProjectSession(t *testing.T) {
 				t.Fatalf("client is not scoped to %q", test.want)
 			}
 		})
+	}
+}
+
+func TestConnectRejectsStaleAndCrossProjectAmbientSessions(t *testing.T) {
+	root := agentProject(t, "session-a")
+	tests := []struct {
+		name    string
+		session string
+		pane    herdr.Pane
+		want    string
+	}{
+		{name: "cross project", session: "session-b", want: "does not belong"},
+		{name: "stale pane", session: "session-a", pane: herdr.Pane{ID: "live", WorkspaceID: "ws", TabID: "tab"}, want: "is stale"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			env := map[string]string{"HERDR_ENV": "1", "HERDR_SESSION": test.session, "HERDR_PANE_ID": "stale"}
+			_, _, err := Connect(context.Background(), root, func(name string) string { return env[name] }, func(context.Context) ([]herdr.Session, error) {
+				return []herdr.Session{{Name: "session-a", Running: true}, {Name: "session-b", Running: true}}, nil
+			}, func(string) session.PaneResolver { return connectPaneResolver{pane: test.pane} })
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Connect() error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestConnectKeepsSimultaneousProjectSessionsIsolated(t *testing.T) {
+	rootA := agentProject(t, "session-a")
+	rootB := agentProject(t, "session-b")
+	listed := []herdr.Session{{Name: "session-a", Running: true}, {Name: "session-b", Running: true}}
+	list := func(context.Context) ([]herdr.Session, error) { return listed, nil }
+	for _, test := range []struct {
+		root string
+		want string
+	}{{root: rootA, want: "session-a"}, {root: rootB, want: "session-b"}} {
+		caller, client, err := Connect(context.Background(), test.root, emptyEnv, list, nil)
+		if err != nil {
+			t.Fatalf("Connect(%q) error = %v", test.root, err)
+		}
+		if caller.Session != test.want || !reflect.DeepEqual(client, herdr.New(nil, nil, nil).WithSession(test.want)) {
+			t.Fatalf("Connect(%q) = %#v, %#v; want session %q", test.root, caller, client, test.want)
+		}
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"fledge/internal/subprocess"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 )
 
@@ -99,6 +100,7 @@ func (c *Client) List(ctx context.Context) ([]Session, error) {
 func (c *Client) Launch(ctx context.Context, projectRoot, name string) error {
 	cmd := subprocess.CommandContext(ctx, "herdr", "--session", name)
 	cmd.Dir = projectRoot
+	cmd.Env = launchEnvironment(os.Environ())
 	cmd.Stdin = c.stdin
 	cmd.Stdout = c.stdout
 	cmd.Stderr = c.stderr
@@ -106,6 +108,26 @@ func (c *Client) Launch(ctx context.Context, projectRoot, name string) error {
 		return fmt.Errorf("herdr --session %s: %w", name, err)
 	}
 	return nil
+}
+
+func launchEnvironment(environment []string) []string {
+	blocked := map[string]struct{}{
+		"HERDR_ENV":          {},
+		"HERDR_SOCKET_PATH":  {},
+		"HERDR_SESSION":      {},
+		"HERDR_WORKSPACE_ID": {},
+		"HERDR_TAB_ID":       {},
+		"HERDR_PANE_ID":      {},
+		"HERDR_BIN_PATH":     {},
+	}
+	filtered := make([]string, 0, len(environment))
+	for _, entry := range environment {
+		name, _, _ := strings.Cut(entry, "=")
+		if _, remove := blocked[name]; !remove {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
 }
 
 // Stop stops the named Herder session.

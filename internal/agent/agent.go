@@ -24,8 +24,7 @@ type Herder interface {
 	GetAgent(context.Context, string) (herdr.Agent, error)
 }
 
-// Caller is the Herder context the command was invoked from. Session is empty
-// when Fledge already runs inside one of the session's panes.
+// Caller is the validated Herder context the command was invoked from.
 type Caller struct {
 	Session     string
 	WorkspaceID string
@@ -34,20 +33,22 @@ type Caller struct {
 
 // Connect resolves the caller's Herder context and returns a client scoped to
 // the session that context belongs to.
-func Connect(ctx context.Context, path string, getenv func(string) string, list func(context.Context) ([]herdr.Session, error)) (Caller, *herdr.Client, error) {
-	if getenv("HERDR_ENV") == "1" {
-		caller := Caller{
-			WorkspaceID: getenv("HERDR_WORKSPACE_ID"),
-			PaneID:      getenv("HERDR_PANE_ID"),
-		}
-		return caller, herdr.New(nil, nil, nil), nil
-	}
-
+func Connect(ctx context.Context, path string, getenv func(string) string, list func(context.Context) ([]herdr.Session, error), scoped func(string) session.PaneResolver) (Caller, *herdr.Client, error) {
 	name, err := session.RunningSession(ctx, path, list)
 	if err != nil {
 		return Caller{}, nil, err
 	}
-	return Caller{Session: name}, herdr.New(nil, nil, nil).WithSession(name), nil
+	client := herdr.New(nil, nil, nil).WithSession(name)
+	caller := Caller{Session: name}
+	if getenv("HERDR_ENV") == "1" {
+		_, pane, err := session.ValidateAmbientPane(ctx, getenv, []string{name}, scoped)
+		if err != nil {
+			return Caller{}, nil, fmt.Errorf("connect to Fledge session: %w", err)
+		}
+		caller.WorkspaceID = pane.WorkspaceID
+		caller.PaneID = pane.ID
+	}
+	return caller, client, nil
 }
 
 // MessageOptions describes prompt submission to one agent.

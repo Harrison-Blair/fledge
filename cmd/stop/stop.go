@@ -3,6 +3,7 @@ package stop
 
 import (
 	"context"
+	"crypto/rand"
 	"os"
 
 	"fledge/internal/herdr"
@@ -44,6 +45,10 @@ func newCommand(stop stopOperation, isTerminal terminalDetector) *cobra.Command 
 				},
 				Output: output,
 				Getenv: os.Getenv,
+				Scoped: func(sessionName string) session.PaneResolver {
+					return client.WithSession(sessionName)
+				},
+				Entropy: rand.Reader,
 			})
 		},
 	}

@@ -644,6 +644,30 @@ func TestStartRejectsMalformedRecordsBeforeListing(t *testing.T) {
 	}
 }
 
+func TestStartRejectsInvalidStopIntentBeforeClaimOrLaunch(t *testing.T) {
+	root, _ := lifecycleProject(t, "project")
+	writeLifecycleRecord(t, root, "managed")
+	records, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := recordByName(records, "managed")
+	if err := os.WriteFile(filepath.Join(record.Path, stopIntentFileName), []byte(`{"schema_version":1,"intent_id":"invalid"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeHerder{sessions: []herdr.Session{{Name: "managed", Running: true}}}
+	err = Start(context.Background(), root, startDeps(client))
+	if err == nil || !strings.Contains(err.Error(), "read stop intent") {
+		t.Fatalf("Start() error = %v, want invalid stop intent", err)
+	}
+	if len(client.launches) != 0 {
+		t.Fatalf("Start() launches = %q, want none", client.launches)
+	}
+	if _, err := os.Lstat(filepath.Join(record.Path, "claim.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("claim after rejected intent = %v, want absent", err)
+	}
+}
+
 func TestStopNoRunningSessionsReportsNoOp(t *testing.T) {
 	root, _ := lifecycleProject(t, "project")
 	writeLifecycleRecord(t, root, "stopped")
@@ -684,11 +708,20 @@ func TestStopConfirmsSortedSnapshotAndStopsSelfLast(t *testing.T) {
 		Confirmer: confirmer,
 		Output:    &bytes.Buffer{},
 		Getenv: func(name string) string {
-			if name == "HERDR_SESSION" {
+			switch name {
+			case "HERDR_ENV":
+				return "1"
+			case "HERDR_SESSION":
 				return "alpha"
+			case "HERDR_PANE_ID":
+				return "pane-alpha"
 			}
 			return ""
 		},
+		Scoped: func(string) PaneResolver {
+			return lifecyclePaneResolver{pane: herdr.Pane{ID: "pane-alpha", WorkspaceID: "workspace", TabID: "tab"}}
+		},
+		Entropy: bytes.NewReader(make([]byte, 16)),
 	})
 	if err != nil {
 		t.Fatalf("Stop() error = %v", err)
@@ -731,6 +764,112 @@ func TestStopCancellationLeavesSnapshotUntouched(t *testing.T) {
 	}
 }
 
+func TestStopRejectsManagedCrossProjectIdentityBeforeConfirmation(t *testing.T) {
+	root, _ := lifecycleProject(t, "project")
+	writeLifecycleRecord(t, root, "session-a")
+	client := &fakeHerder{sessions: []herdr.Session{{Name: "session-a", Running: true}, {Name: "session-b", Running: true}}}
+	confirmer := &fakeConfirmer{answer: true}
+	env := map[string]string{"HERDR_ENV": "1", "HERDR_SESSION": "session-b", "HERDR_PANE_ID": "pane-b"}
+	err := Stop(context.Background(), root, StopDependencies{
+		Herder:    client,
+		Confirmer: confirmer,
+		Output:    &bytes.Buffer{},
+		Getenv:    func(name string) string { return env[name] },
+		Scoped: func(string) PaneResolver {
+			t.Fatal("resolved a pane for a cross-project session")
+			return nil
+		},
+		Entropy: bytes.NewReader(make([]byte, 16)),
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not belong") {
+		t.Fatalf("Stop() error = %v, want cross-project rejection", err)
+	}
+	if confirmer.names != nil || len(client.stops) != 0 {
+		t.Fatalf("Stop() confirmed or mutated after rejection: names=%q stops=%q", confirmer.names, client.stops)
+	}
+}
+
+func TestStopRejectsInvalidIntentBeforeStopping(t *testing.T) {
+	root, _ := lifecycleProject(t, "project")
+	writeLifecycleRecord(t, root, "managed")
+	records, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(recordByName(records, "managed").Path, stopIntentFileName), []byte(`{"schema_version":1,"intent_id":"bad"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeHerder{sessions: []herdr.Session{{Name: "managed", Running: true}}}
+	err = Stop(context.Background(), root, StopDependencies{
+		Herder:    client,
+		Confirmer: &fakeConfirmer{answer: true},
+		Output:    &bytes.Buffer{},
+		Getenv:    emptyEnv,
+		Entropy:   bytes.NewReader(make([]byte, 16)),
+	})
+	if err == nil || !strings.Contains(err.Error(), "read stop intent") {
+		t.Fatalf("Stop() error = %v, want invalid intent error", err)
+	}
+	if len(client.stops) != 0 {
+		t.Fatalf("Stop() calls = %q, want none", client.stops)
+	}
+}
+
+func TestOverlappingStopsSerializeMarkerAndHerderMutation(t *testing.T) {
+	root, _ := lifecycleProject(t, "project")
+	writeLifecycleRecord(t, root, "managed")
+	client := &fakeHerder{sessions: []herdr.Session{{Name: "managed", Running: true}}}
+	firstEntered := make(chan struct{})
+	allowFirst := make(chan struct{})
+	var stopCalls int
+	client.onStop = func(string) {
+		stopCalls++
+		if stopCalls == 1 {
+			close(firstEntered)
+			<-allowFirst
+		}
+	}
+	lock := newSerialTestLock()
+	run := func(fill byte) error {
+		return Stop(context.Background(), root, StopDependencies{
+			Herder:      client,
+			Confirmer:   &fakeConfirmer{answer: true},
+			Output:      &bytes.Buffer{},
+			Getenv:      emptyEnv,
+			Entropy:     bytes.NewReader(bytes.Repeat([]byte{fill}, 16)),
+			acquireLock: lock.acquire,
+		})
+	}
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- run(1) }()
+	waitClosed(t, firstEntered, "first stop did not reach Herder")
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- run(2) }()
+	waitClosed(t, lock.secondAttempt, "second stop did not wait for project lock")
+	client.mu.Lock()
+	stopsBeforeRelease := len(client.stops)
+	client.mu.Unlock()
+	if stopsBeforeRelease != 1 {
+		t.Fatalf("Herder stops before first release = %d, want 1", stopsBeforeRelease)
+	}
+	close(allowFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first Stop() error = %v", err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatalf("second Stop() error = %v", err)
+	}
+	records, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := readStopIntent(recordByName(records, "managed"))
+	want := strings.Repeat("02", 16)
+	if err != nil || !intent.Exists || intent.ID != want {
+		t.Fatalf("final stop intent = %#v, %v; want %q", intent, err, want)
+	}
+}
+
 func TestStopContinuesAndAggregatesFailuresByName(t *testing.T) {
 	root, _ := lifecycleProject(t, "project")
 	for _, name := range []string{"alpha", "beta", "gamma"} {
@@ -746,12 +885,21 @@ func TestStopContinuesAndAggregatesFailuresByName(t *testing.T) {
 		},
 		stopErrors: map[string]error{"alpha": first, "gamma": second},
 	}
+	records, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldAlpha := strings.Repeat("a", 32)
+	if err := writeStopIntent(recordByName(records, "alpha"), oldAlpha); err != nil {
+		t.Fatal(err)
+	}
 
-	err := Stop(context.Background(), root, StopDependencies{
+	err = Stop(context.Background(), root, StopDependencies{
 		Herder:    client,
 		Confirmer: &fakeConfirmer{answer: true},
 		Output:    &bytes.Buffer{},
 		Getenv:    emptyEnv,
+		Entropy:   bytes.NewReader(make([]byte, 16)),
 	})
 	if !errors.Is(err, first) || !errors.Is(err, second) {
 		t.Fatalf("Stop() error = %v, want both failures", err)
@@ -761,6 +909,174 @@ func TestStopContinuesAndAggregatesFailuresByName(t *testing.T) {
 	}
 	if want := []string{"alpha", "beta", "gamma"}; !reflect.DeepEqual(client.stops, want) {
 		t.Fatalf("Stop() calls = %#v, want %#v", client.stops, want)
+	}
+	alpha, err := readStopIntent(recordByName(records, "alpha"))
+	if err != nil || !alpha.Exists || alpha.ID != oldAlpha {
+		t.Fatalf("alpha stop intent = %#v, %v; want restored %q", alpha, err, oldAlpha)
+	}
+	beta, err := readStopIntent(recordByName(records, "beta"))
+	if err != nil || !beta.Exists || beta.ID != strings.Repeat("0", 32) {
+		t.Fatalf("beta stop intent = %#v, %v; want invocation intent", beta, err)
+	}
+	gamma, err := readStopIntent(recordByName(records, "gamma"))
+	if err != nil || gamma.Exists {
+		t.Fatalf("gamma stop intent = %#v, %v; want restored absence", gamma, err)
+	}
+}
+
+func TestStartClassifiesOnlyExplicitIntentTransitionsAsCleanShutdown(t *testing.T) {
+	launchFailure := errors.New("exit status 1")
+	tests := []struct {
+		name           string
+		before         string
+		after          string
+		runningAfter   bool
+		cancelOnLaunch bool
+		listAfterErr   error
+		wantNil        bool
+	}{
+		{name: "explicit stop", after: strings.Repeat("1", 32), runningAfter: false, wantNil: true},
+		{name: "historical intent unchanged", before: strings.Repeat("1", 32), after: strings.Repeat("1", 32), runningAfter: false},
+		{name: "external stop without intent", runningAfter: false},
+		{name: "crash while still running", runningAfter: true},
+		{name: "changed intent but still running", after: strings.Repeat("2", 32), runningAfter: true},
+		{name: "canceled caller", after: strings.Repeat("3", 32), runningAfter: false, cancelOnLaunch: true},
+		{name: "post-stop list failure", after: strings.Repeat("4", 32), runningAfter: false, listAfterErr: errors.New("list failed")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root, _ := lifecycleProject(t, "project")
+			writeLifecycleRecord(t, root, "managed")
+			records, err := Load(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			record := recordByName(records, "managed")
+			if test.before != "" {
+				if err := writeStopIntent(record, test.before); err != nil {
+					t.Fatal(err)
+				}
+			}
+			client := &fakeHerder{sessions: []herdr.Session{{Name: "managed", Running: true}}, launchErr: launchFailure}
+			if test.listAfterErr != nil {
+				client.listResults = []listResult{
+					{sessions: []herdr.Session{{Name: "managed", Running: true}}},
+					{err: test.listAfterErr},
+				}
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			client.onLaunch = func(launchCall) {
+				if test.after != "" && test.after != test.before {
+					if err := writeStopIntent(record, test.after); err != nil {
+						t.Error(err)
+					}
+				}
+				client.mu.Lock()
+				client.sessions = []herdr.Session{{Name: "managed", Running: test.runningAfter}}
+				client.mu.Unlock()
+				if test.cancelOnLaunch {
+					cancel()
+				}
+			}
+			err = Start(ctx, root, startDeps(client))
+			if test.wantNil {
+				if err != nil {
+					t.Fatalf("Start() error = %v, want clean shutdown", err)
+				}
+				return
+			}
+			if !errors.Is(err, launchFailure) {
+				t.Fatalf("Start() error = %v, want launch failure", err)
+			}
+			if test.listAfterErr != nil && !errors.Is(err, test.listAfterErr) {
+				t.Fatalf("Start() error = %v, want list failure", err)
+			}
+		})
+	}
+}
+
+func TestExplicitStopMakesForegroundStartExitCleanly(t *testing.T) {
+	root, _ := lifecycleProject(t, "project")
+	writeLifecycleRecord(t, root, "managed")
+	records, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := recordByName(records, "managed")
+	launchStarted := make(chan struct{})
+	serverStopped := make(chan struct{})
+	client := &fakeHerder{
+		sessions:      []herdr.Session{{Name: "managed", Running: true}},
+		launchWait:    serverStopped,
+		launchErr:     errors.New("exit status 1"),
+		onLaunchStart: func(launchCall) { close(launchStarted) },
+	}
+	client.onStop = func(name string) {
+		intent, markerErr := readStopIntent(record)
+		if markerErr != nil || !intent.Exists || intent.ID != strings.Repeat("06", 16) {
+			t.Errorf("intent at Herder stop = %#v, %v", intent, markerErr)
+		}
+		client.mu.Lock()
+		client.sessions = []herdr.Session{{Name: name, Running: false}}
+		client.mu.Unlock()
+		close(serverStopped)
+	}
+	startDone := make(chan error, 1)
+	go func() { startDone <- Start(context.Background(), root, startDeps(client)) }()
+	waitClosed(t, launchStarted, "foreground start did not reach Herder")
+	if err := Stop(context.Background(), root, StopDependencies{
+		Herder:    client,
+		Confirmer: &fakeConfirmer{answer: true},
+		Output:    &bytes.Buffer{},
+		Getenv:    emptyEnv,
+		Entropy:   bytes.NewReader(bytes.Repeat([]byte{6}, 16)),
+	}); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	select {
+	case err := <-startDone:
+		if err != nil {
+			t.Fatalf("Start() error = %v, want clean intentional shutdown", err)
+		}
+	case <-time.After(testAsyncTimeout):
+		t.Fatal("foreground Start() did not return")
+	}
+}
+
+func TestStartClaimedReleasesOriginalLockBeforeIntentInspection(t *testing.T) {
+	root, _ := lifecycleProject(t, "project")
+	recordPath := filepath.Join(root, ".fledge", "sessions", "managed")
+	if err := os.MkdirAll(recordPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	record := Record{HerdrSessionName: "managed", Path: recordPath}
+	launchFailure := errors.New("exit status 1")
+	client := &fakeHerder{sessions: []herdr.Session{{Name: "managed", Running: true}}, launchErr: launchFailure}
+	originalReleased := false
+	client.onLaunch = func(launchCall) {
+		if err := writeStopIntent(record, strings.Repeat("5", 32)); err != nil {
+			t.Error(err)
+		}
+		client.mu.Lock()
+		client.sessions = []herdr.Session{{Name: "managed", Running: false}}
+		client.mu.Unlock()
+	}
+	deps := StartDependencies{
+		Herder: client,
+		acquireLock: func(context.Context, string) (func() error, error) {
+			if !originalReleased {
+				t.Fatal("intent inspection reacquired before original lock release")
+			}
+			return func() error { return nil }, nil
+		},
+	}
+	err := startClaimed(context.Background(), root, record, deps, cachedRelease(func() error {
+		originalReleased = true
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("startClaimed() error = %v, want intentional stop suppressed", err)
 	}
 }
 
@@ -812,6 +1128,7 @@ type fakeHerder struct {
 	onList          func(int)
 	onLaunchStart   func(launchCall)
 	onLaunch        func(launchCall)
+	onStop          func(string)
 	listCalls       int
 	launches        []launchCall
 	stops           []string
@@ -828,6 +1145,15 @@ type launchCall struct {
 }
 
 const testAsyncTimeout = 5 * time.Second
+
+func waitClosed(t *testing.T, channel <-chan struct{}, failure string) {
+	t.Helper()
+	select {
+	case <-channel:
+	case <-time.After(testAsyncTimeout):
+		t.Fatal(failure)
+	}
+}
 
 func testContext(t *testing.T) context.Context {
 	t.Helper()
@@ -1063,9 +1389,14 @@ func freshStartDeps(client Herder, chooser Chooser, server Bootstrapper, diagnos
 
 func (f *fakeHerder) Stop(_ context.Context, name string) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.stops = append(f.stops, name)
-	return f.stopErrors[name]
+	err := f.stopErrors[name]
+	notify := f.onStop
+	f.mu.Unlock()
+	if notify != nil {
+		notify(name)
+	}
+	return err
 }
 
 type fakeConfirmer struct {
@@ -1074,6 +1405,14 @@ type fakeConfirmer struct {
 	root     string
 	names    []string
 	selfStop bool
+}
+
+type lifecyclePaneResolver struct {
+	pane herdr.Pane
+}
+
+func (f lifecyclePaneResolver) CurrentPane(context.Context) (herdr.Pane, error) {
+	return f.pane, nil
 }
 
 func (f *fakeConfirmer) Confirm(root string, names []string, selfStop bool) (bool, error) {
@@ -1319,7 +1658,7 @@ func TestStartClaimedWatcherCachesEarlyReleaseFailure(t *testing.T) {
 		return releaseErr
 	}
 
-	err := startClaimed(ctx, t.TempDir(), Record{HerdrSessionName: "claimed"}, StartDependencies{Herder: client}, cachedRelease(release))
+	err := startClaimed(ctx, t.TempDir(), Record{HerdrSessionName: "claimed", Path: t.TempDir()}, StartDependencies{Herder: client}, cachedRelease(release))
 	if !errors.Is(err, launchErr) || !errors.Is(err, releaseErr) {
 		t.Fatalf("startClaimed() error = %v, want launch and release failures", err)
 	}
@@ -1363,6 +1702,7 @@ func TestStartClaimedWatcherReleasesLockAfterPublicationWhileLaunchRemainsActive
 	pendingStart := 0
 	pendingReacquire := 0
 	root := t.TempDir()
+	recordPath := t.TempDir()
 	t.Cleanup(func() {
 		releasePublication()
 		releaseLaunch()
@@ -1373,7 +1713,7 @@ func TestStartClaimedWatcherReleasesLockAfterPublicationWhileLaunchRemainsActive
 	})
 	pendingStart++
 	go func() {
-		err := startClaimed(ctx, root, Record{HerdrSessionName: "claimed"}, StartDependencies{Herder: client}, release)
+		err := startClaimed(ctx, root, Record{HerdrSessionName: "claimed", Path: recordPath}, StartDependencies{Herder: client}, release)
 		startWorkerErr <- err
 		errDone <- err
 	}()
@@ -1478,7 +1818,14 @@ func TestStartClaimedErrorOrder(t *testing.T) {
 		releaseLaunch()
 	}()
 	badPath := filepath.Join(t.TempDir(), "record")
-	if err := os.WriteFile(badPath, nil, 0o600); err != nil {
+	if err := os.Mkdir(badPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	pendingPath := filepath.Join(badPath, "pending.json")
+	if err := os.Mkdir(pendingPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pendingPath, "keep"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var diagnostics bytes.Buffer

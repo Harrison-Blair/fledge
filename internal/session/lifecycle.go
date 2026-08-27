@@ -132,6 +132,10 @@ func Start(ctx context.Context, path string, deps StartDependencies) error {
 			}
 		}
 		if contains(running, claimed.HerdrSessionName) {
+			before, err := readStopIntent(*claimed)
+			if err != nil {
+				return finish(fmt.Errorf("start Fledge session: %w", err))
+			}
 			if claimed.PendingChoice != nil {
 				if err := ClearPending(*claimed); err != nil {
 					return finish(fmt.Errorf("start Fledge session: %w", err))
@@ -140,10 +144,8 @@ func Start(ctx context.Context, path string, deps StartDependencies) error {
 			if err := release(); err != nil {
 				return fmt.Errorf("start Fledge session: release project lock: %w", err)
 			}
-			if err := deps.Herder.Launch(ctx, root, claimed.HerdrSessionName); err != nil {
-				return fmt.Errorf("start Fledge session: launch %q: %w", claimed.HerdrSessionName, err)
-			}
-			return nil
+			launchErr := deps.Herder.Launch(ctx, root, claimed.HerdrSessionName)
+			return finishAttachedLaunch(ctx, root, *claimed, deps, before, launchErr)
 		}
 		return startClaimed(ctx, root, *claimed, deps, release)
 	}
@@ -180,16 +182,18 @@ func Start(ctx context.Context, path string, deps StartDependencies) error {
 		return startClaimed(ctx, root, record, deps, release)
 	case 1:
 		record := recordByName(records, running[0])
+		before, err := readStopIntent(record)
+		if err != nil {
+			return finish(fmt.Errorf("start Fledge session: %w", err))
+		}
 		if err := Claim(record); err != nil {
 			return finish(fmt.Errorf("start Fledge session: %w", err))
 		}
 		if err := release(); err != nil {
 			return fmt.Errorf("start Fledge session: release project lock: %w", err)
 		}
-		if err := deps.Herder.Launch(ctx, root, running[0]); err != nil {
-			return fmt.Errorf("start Fledge session: launch %q: %w", running[0], err)
-		}
-		return nil
+		launchErr := deps.Herder.Launch(ctx, root, running[0])
+		return finishAttachedLaunch(ctx, root, record, deps, before, launchErr)
 	default:
 		return finish(fmt.Errorf("start Fledge session: multiple registered sessions are running: %s", strings.Join(running, ", ")))
 	}
@@ -252,6 +256,10 @@ func min(values ...int) int {
 func startClaimed(ctx context.Context, root string, record Record, deps StartDependencies, release func() error) error {
 	if record.PendingChoice != nil && (deps.Scoped == nil || deps.Diagnostics == nil) {
 		return joinStartRelease(fmt.Errorf("start Fledge session: claimed pending session requires bootstrap dependencies"), release)
+	}
+	before, err := readStopIntent(record)
+	if err != nil {
+		return joinStartRelease(fmt.Errorf("start Fledge session: %w", err), release)
 	}
 	watchCtx, cancelWatch := context.WithCancelCause(ctx)
 	bootCtx, cancelBoot := context.WithCancelCause(ctx)
@@ -320,7 +328,74 @@ func startClaimed(ctx context.Context, root string, record Record, deps StartDep
 	if bootErr != nil {
 		fmt.Fprintf(deps.Diagnostics, "fledge: session bootstrap failed (see %s): %v\n", logPath, bootErr)
 	}
-	return joinStartRelease(errors.Join(wrapLaunch(record.HerdrSessionName, launchErr), wrapBootstrap(bootErr), wrapState(stateErr)), release)
+	releaseErr := release()
+	var classifyErr error
+	if launchErr != nil && releaseErr == nil {
+		var intentional bool
+		intentional, classifyErr = classifyIntentionalStop(ctx, root, record, deps, before)
+		if intentional {
+			launchErr = nil
+		}
+	}
+	result := errors.Join(wrapLaunch(record.HerdrSessionName, launchErr), wrapBootstrap(bootErr), wrapState(stateErr), classifyErr)
+	if releaseErr != nil {
+		result = errors.Join(result, fmt.Errorf("start Fledge session: release project lock: %w", releaseErr))
+	}
+	return result
+}
+
+func finishAttachedLaunch(ctx context.Context, root string, record Record, deps StartDependencies, before stopIntent, launchErr error) error {
+	if launchErr == nil {
+		return nil
+	}
+	intentional, classifyErr := classifyIntentionalStop(ctx, root, record, deps, before)
+	if intentional {
+		launchErr = nil
+	}
+	return errors.Join(wrapLaunch(record.HerdrSessionName, launchErr), classifyErr)
+}
+
+func classifyIntentionalStop(ctx context.Context, root string, record Record, deps StartDependencies, before stopIntent) (bool, error) {
+	if ctx.Err() != nil {
+		return false, nil
+	}
+	acquire := deps.acquireLock
+	if acquire == nil {
+		acquire = acquireProjectLock
+	}
+	release, err := acquire(ctx, filepath.Join(root, ".fledge"))
+	if err != nil {
+		return false, fmt.Errorf("start Fledge session: inspect intentional stop for %q: lock project: %w", record.HerdrSessionName, err)
+	}
+	finish := func(result bool, operationErr error) (bool, error) {
+		if releaseErr := release(); releaseErr != nil {
+			operationErr = errors.Join(operationErr, fmt.Errorf("start Fledge session: inspect intentional stop for %q: release project lock: %w", record.HerdrSessionName, releaseErr))
+		}
+		if result && ctx.Err() != nil {
+			result = false
+		}
+		return result && operationErr == nil, operationErr
+	}
+	after, err := readStopIntent(record)
+	if err != nil {
+		return finish(false, fmt.Errorf("start Fledge session: inspect intentional stop for %q: %w", record.HerdrSessionName, err))
+	}
+	if !after.Exists || (before.Exists && before.ID == after.ID) {
+		return finish(false, nil)
+	}
+	sessions, err := deps.Herder.List(ctx)
+	if err != nil {
+		return finish(false, fmt.Errorf("start Fledge session: inspect intentional stop for %q: list Herder sessions: %w", record.HerdrSessionName, err))
+	}
+	for _, listed := range sessions {
+		if listed.Name == record.HerdrSessionName && listed.Running {
+			return finish(false, nil)
+		}
+	}
+	if ctx.Err() != nil {
+		return finish(false, nil)
+	}
+	return finish(true, nil)
 }
 
 func watchClaimedRunning(ctx context.Context, h Herder, record Record, release func() error) error {
@@ -403,6 +478,11 @@ type StopDependencies struct {
 	Confirmer Confirmer
 	Output    io.Writer
 	Getenv    func(string) string
+	// Scoped addresses the Herder server of one session by name.
+	Scoped  func(sessionName string) PaneResolver
+	Entropy io.Reader
+	// acquireLock is a test seam; production uses the Linux directory lock.
+	acquireLock func(context.Context, string) (func() error, error)
 }
 
 // Stop confirms and stops all running sessions registered by the nearest
@@ -442,14 +522,34 @@ func Stop(ctx context.Context, path string, deps StopDependencies) error {
 		return fmt.Errorf("stop Fledge sessions: confirmer is nil")
 	}
 
-	current := deps.Getenv("HERDR_SESSION")
-	selfStop := contains(targets, current)
+	current := ""
+	selfStop := false
+	if deps.Getenv("HERDR_ENV") == "1" {
+		validated, _, err := ValidateAmbientPane(ctx, deps.Getenv, targets, deps.Scoped)
+		if err != nil {
+			return fmt.Errorf("stop Fledge sessions: %w", err)
+		}
+		current = validated
+		selfStop = true
+	}
 	confirmed, err := deps.Confirmer.Confirm(root, append([]string(nil), targets...), selfStop)
 	if err != nil {
 		return fmt.Errorf("stop Fledge sessions: confirm: %w", err)
 	}
 	if !confirmed {
 		return nil
+	}
+	intentID, err := generateStopIntent(deps.Entropy)
+	if err != nil {
+		return fmt.Errorf("stop Fledge sessions: %w", err)
+	}
+	acquire := deps.acquireLock
+	if acquire == nil {
+		acquire = acquireProjectLock
+	}
+	release, err := acquire(ctx, filepath.Join(root, ".fledge"))
+	if err != nil {
+		return fmt.Errorf("stop Fledge sessions: lock project: %w", err)
 	}
 
 	stopOrder := append([]string(nil), targets...)
@@ -458,9 +558,23 @@ func Stop(ctx context.Context, path string, deps StopDependencies) error {
 	}
 	var failures []error
 	for _, name := range stopOrder {
-		if err := deps.Herder.Stop(ctx, name); err != nil {
+		record := recordByName(records, name)
+		previous, err := readStopIntent(record)
+		if err != nil {
 			failures = append(failures, fmt.Errorf("stop %q: %w", name, err))
+			continue
 		}
+		if err := writeStopIntent(record, intentID); err != nil {
+			failures = append(failures, fmt.Errorf("stop %q: %w", name, err))
+			continue
+		}
+		if err := deps.Herder.Stop(ctx, name); err != nil {
+			restoreErr := restoreStopIntent(record, previous)
+			failures = append(failures, fmt.Errorf("stop %q: %w", name, errors.Join(err, restoreErr)))
+		}
+	}
+	if releaseErr := release(); releaseErr != nil {
+		failures = append(failures, fmt.Errorf("release project lock: %w", releaseErr))
 	}
 	if len(failures) != 0 {
 		return fmt.Errorf("stop Fledge sessions: %w", errors.Join(failures...))

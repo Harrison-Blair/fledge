@@ -116,6 +116,29 @@ printf 'child stderr' >&2
 	}
 }
 
+func TestLaunchRemovesInheritedCallerIdentity(t *testing.T) {
+	fakeHerdr(t, `
+test "${HERDR_ENV-unset}" = unset
+test "${HERDR_SOCKET_PATH-unset}" = unset
+test "${HERDR_SESSION-unset}" = unset
+test "${HERDR_WORKSPACE_ID-unset}" = unset
+test "${HERDR_TAB_ID-unset}" = unset
+test "${HERDR_PANE_ID-unset}" = unset
+test "${HERDR_BIN_PATH-unset}" = unset
+test "$HERDR_CONFIG_PATH" = /tmp/herdr-config
+test "$FLEDGE_ORDINARY" = preserved
+`)
+	for _, name := range []string{"HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_SESSION", "HERDR_WORKSPACE_ID", "HERDR_TAB_ID", "HERDR_PANE_ID", "HERDR_BIN_PATH"} {
+		t.Setenv(name, "stale")
+	}
+	t.Setenv("HERDR_CONFIG_PATH", "/tmp/herdr-config")
+	t.Setenv("FLEDGE_ORDINARY", "preserved")
+
+	if err := New(nil, nil, nil).Launch(context.Background(), t.TempDir(), "clean"); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+}
+
 func TestLaunchReportsFailure(t *testing.T) {
 	fakeHerdr(t, `exit 8`)
 

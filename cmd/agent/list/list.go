@@ -11,6 +11,7 @@ import (
 
 	internalagent "fledge/internal/agent"
 	"fledge/internal/herdr"
+	"fledge/internal/session"
 
 	"github.com/spf13/cobra"
 )
@@ -24,7 +25,8 @@ func New() *cobra.Command {
 }
 
 func list(ctx context.Context) ([]herdr.Agent, error) {
-	_, client, err := internalagent.Connect(ctx, ".", os.Getenv, herdr.New(nil, nil, nil).List)
+	base := herdr.New(nil, nil, nil)
+	_, client, err := internalagent.Connect(ctx, ".", os.Getenv, base.List, func(name string) session.PaneResolver { return base.WithSession(name) })
 	if err != nil {
 		return nil, err
 	}
@@ -32,7 +34,8 @@ func list(ctx context.Context) ([]herdr.Agent, error) {
 }
 
 func rawList(ctx context.Context) (json.RawMessage, error) {
-	_, client, err := internalagent.Connect(ctx, ".", os.Getenv, herdr.New(nil, nil, nil).List)
+	base := herdr.New(nil, nil, nil)
+	_, client, err := internalagent.Connect(ctx, ".", os.Getenv, base.List, func(name string) session.PaneResolver { return base.WithSession(name) })
 	if err != nil {
 		return nil, err
 	}

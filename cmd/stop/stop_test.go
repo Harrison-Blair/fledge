@@ -26,7 +26,7 @@ func TestStopPathStreamsAndTerminalDetection(t *testing.T) {
 		if path != "project" {
 			t.Fatalf("path = %q, want project", path)
 		}
-		if deps.Herder == nil || deps.Getenv == nil {
+		if deps.Herder == nil || deps.Getenv == nil || deps.Scoped == nil || deps.Entropy == nil {
 			t.Fatalf("dependencies contain nil: %#v", deps)
 		}
 		if deps.Output != output {

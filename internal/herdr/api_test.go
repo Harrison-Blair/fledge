@@ -152,6 +152,15 @@ func TestAPIRequests(t *testing.T) {
 			want:     []Pane{wantPane},
 		},
 		{
+			name:   "current pane",
+			output: envelope(`{"type":"pane_current","pane":` + paneJSON + `}`),
+			call: func(ctx context.Context, c *Client) (any, error) {
+				return c.CurrentPane(ctx)
+			},
+			wantArgv: []string{"pane", "current", "--current"},
+			want:     wantPane,
+		},
+		{
 			name:   "split pane with ratio",
 			output: envelope(`{"type":"pane_info","pane":` + paneJSON + `}`),
 			call: func(ctx context.Context, c *Client) (any, error) {
@@ -404,6 +413,39 @@ func TestAPIRejectsMissingIdentifiers(t *testing.T) {
 				t.Fatalf("error = %v, want containing %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestCurrentPaneRejectsMalformedResult(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		want   string
+	}{
+		{name: "wrong type", output: envelope(`{"type":"pane_info","pane":` + paneJSON + `}`), want: `result type "pane_info", want "pane_current"`},
+		{name: "missing pane", output: envelope(`{"type":"pane_current"}`), want: "missing pane_id"},
+		{name: "malformed pane", output: envelope(`{"type":"pane_current","pane":{"pane_id":"p1"}}`), want: "missing pane_id, workspace_id, or tab_id"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recordingHerdr(t, test.output)
+			_, err := New(nil, nil, nil).CurrentPane(context.Background())
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("CurrentPane() error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestCurrentPaneReportsStructuredServerError(t *testing.T) {
+	fakeHerdr(t, `printf '%s' '{"error":{"code":"pane_not_found","message":"current pane is gone"}}' >&2; exit 1`)
+	_, err := New(nil, nil, nil).WithSession("managed").CurrentPane(context.Background())
+	var reported *Error
+	if !errors.As(err, &reported) {
+		t.Fatalf("CurrentPane() error = %v, want *Error", err)
+	}
+	if reported.Operation != "herdr --session managed pane current --current" || reported.Code != "pane_not_found" {
+		t.Fatalf("CurrentPane() structured error = %#v", reported)
 	}
 }
 
