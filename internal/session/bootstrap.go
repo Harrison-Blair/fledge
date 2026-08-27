@@ -14,7 +14,7 @@ import (
 const (
 	bootstrapLogName = "bootstrap.log"
 	orchestratorName = "orchestrator"
-	workspacePrefix  = "fledge-"
+	workspacePrefix  = "fledge:"
 )
 
 // bootstrapInput describes the session being prepared.

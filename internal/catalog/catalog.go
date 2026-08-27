@@ -40,7 +40,8 @@ func Harnesses() []Harness {
 }
 
 // Models returns the model IDs harness accepts via --model, de-duplicated
-// and ordered highest-first (descending natural order). timeout bounds each
+// and ordered by model family (see families), then highest-version-first
+// within each family. timeout bounds each
 // harness command and must be positive; a non-positive timeout reports no
 // models. Models never fails: a missing binary, a non-zero exit, or a
 // timeout all yield an empty list, as does an unrecognized harness.
@@ -164,13 +165,14 @@ func claudeName(model string) string {
 	return model
 }
 
-// normalize sorts ids highest-first in descending natural order and drops
-// duplicates, reporting no models as a nil slice.
+// normalize sorts ids by family rank, then highest-first in descending
+// natural order within a rank, and drops duplicates, reporting no models as
+// a nil slice.
 func normalize(ids []string) []string {
 	if len(ids) == 0 {
 		return nil
 	}
-	slices.SortFunc(ids, compareIDs)
+	slices.SortFunc(ids, compareModels)
 	return slices.Compact(ids)
 }
 

@@ -133,7 +133,7 @@ func TestChoosePresentsModelsForChosenHarness(t *testing.T) {
 		{ID: "claude-sonnet-4-5", Title: "claude-sonnet-4-5"},
 	}}
 	lookup := newModelLookup(map[catalog.Harness][]string{
-		catalog.Claude: {"claude-sonnet-4-5", "claude-opus-4-8"},
+		catalog.Claude: {"claude-opus-4-8", "claude-sonnet-4-5"},
 		catalog.Pi:     {"pi/one"},
 	})
 
@@ -150,7 +150,7 @@ func TestChoosePresentsModelsForChosenHarness(t *testing.T) {
 	}
 
 	models := script.calls[1].options
-	wantTitles := []string{defaultTitle, freeTextTitle, "claude-sonnet-4-5", "claude-opus-4-8"}
+	wantTitles := []string{defaultTitle, freeTextTitle, "claude-opus-4-8", "claude-sonnet-4-5"}
 	if got := optionTitles(models); !reflect.DeepEqual(got, wantTitles) {
 		t.Fatalf("model options = %#v, want %#v", got, wantTitles)
 	}

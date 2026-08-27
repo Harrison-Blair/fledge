@@ -77,8 +77,8 @@ func TestModels(t *testing.T) {
 			harness: Pi,
 			bins:    map[string]string{"pi": piFake},
 			want: []string{
-				"opencode/claude-opus-4-8",
 				"opencode/claude-fable-5",
+				"opencode/claude-opus-4-8",
 				"opencode/big-pickle",
 				"openai-codex/gpt-5.5",
 				"openai-codex/gpt-5.4",
@@ -90,9 +90,9 @@ func TestModels(t *testing.T) {
 			harness: OpenCode,
 			bins:    map[string]string{"opencode": openCodeFake},
 			want: []string{
-				"opencode/deepseek-v4-flash",
-				"opencode/claude-opus-4-8",
 				"opencode/claude-fable-5",
+				"opencode/claude-opus-4-8",
+				"opencode/deepseek-v4-flash",
 				"opencode/big-pickle",
 				"ollama/llama3",
 			},
@@ -107,17 +107,17 @@ func TestModels(t *testing.T) {
 			name:    "claude merges both catalogs",
 			harness: Claude,
 			bins:    map[string]string{"pi": piFake, "opencode": openCodeFake},
-			want:    []string{"claude-opus-4-8", "claude-fable-5"},
+			want:    []string{"claude-fable-5", "claude-opus-4-8"},
 		},
 		{
 			name:    "cursor takes the ID before the separator and skips prose",
 			harness: Cursor,
 			bins:    map[string]string{"cursor-agent": cursorFake},
 			want: []string{
+				"claude-opus-5-thinking-high",
 				"gpt-5.3-codex-low",
 				"gemini-3.7-flash-high",
 				"composer-2.5",
-				"claude-opus-5-thinking-high",
 				"auto",
 			},
 		},
@@ -147,12 +147,12 @@ func TestModelsClaudeUnionsAvailableSources(t *testing.T) {
 		{
 			name: "both sources",
 			bins: map[string]string{"pi": piFake, "opencode": openCodeFake},
-			want: []string{"claude-pi-only", "claude-opus-4-8", "claude-opencode-only"},
+			want: []string{"claude-opus-4-8", "claude-pi-only", "claude-opencode-only"},
 		},
 		{
 			name: "opencode missing",
 			bins: map[string]string{"pi": piFake},
-			want: []string{"claude-pi-only", "claude-opus-4-8"},
+			want: []string{"claude-opus-4-8", "claude-pi-only"},
 		},
 		{
 			name: "pi missing",
@@ -272,7 +272,7 @@ func TestModelsClaudeQueriesSourcesConcurrently(t *testing.T) {
 	got := Models(context.Background(), Claude, time.Minute)
 	elapsed := time.Since(start)
 
-	want := []string{"claude-opus-4-8", "claude-fable-5"}
+	want := []string{"claude-fable-5", "claude-opus-4-8"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Models(claude) = %#v, want %#v", got, want)
 	}

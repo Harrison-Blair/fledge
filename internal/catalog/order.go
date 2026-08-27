@@ -96,3 +96,14 @@ func compareIDs(a, b string) int {
 	}
 	return strings.Compare(b, a)
 }
+
+// compareModels orders model IDs by family rank ascending (see familyRank),
+// falling back to compareIDs within a rank so results stay
+// highest-version-first. It returns 0 only when compareIDs does (byte-identical
+// IDs), keeping slices.Compact correct in normalize.
+func compareModels(a, b string) int {
+	if d := familyRank(a) - familyRank(b); d != 0 {
+		return d
+	}
+	return compareIDs(a, b)
+}

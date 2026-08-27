@@ -158,7 +158,7 @@ func TestBootstrapPreparesSessionAndStartsAgentWithModel(t *testing.T) {
 	if server.statusCalls != 3 {
 		t.Fatalf("Status calls = %d, want polling until running", server.statusCalls)
 	}
-	if want := []renameCall{{id: "w1", label: "fledge-my-project"}}; !reflect.DeepEqual(server.renamedWorkspace, want) {
+	if want := []renameCall{{id: "w1", label: "fledge:my-project"}}; !reflect.DeepEqual(server.renamedWorkspace, want) {
 		t.Fatalf("workspace renames = %#v, want %#v", server.renamedWorkspace, want)
 	}
 	if want := []renameCall{{id: "w1:t2", label: "orchestrator"}}; !reflect.DeepEqual(server.renamedTab, want) {
@@ -175,7 +175,7 @@ func TestBootstrapPreparesSessionAndStartsAgentWithModel(t *testing.T) {
 	}
 
 	report := log.String()
-	for _, step := range []string{"Herder server running", "w1:p2", "fledge-my-project", "orchestrator", "started claude"} {
+	for _, step := range []string{"Herder server running", "w1:p2", "fledge:my-project", "orchestrator", "started claude"} {
 		if !strings.Contains(report, step) {
 			t.Fatalf("log = %q, want a line about %q", report, step)
 		}
