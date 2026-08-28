@@ -1,4 +1,4 @@
-package session
+package bootstrap
 
 import (
 	"context"
@@ -9,40 +9,54 @@ import (
 	"time"
 
 	"fledge/internal/herdr"
+	"fledge/internal/session/types"
 )
 
+// LogName is the bootstrap report file written inside a session record.
+const LogName = "bootstrap.log"
+
 const (
-	bootstrapLogName = "bootstrap.log"
 	orchestratorName = "orchestrator"
 	workspacePrefix  = "fledge:"
 )
 
-// bootstrapInput describes the session being prepared.
-type bootstrapInput struct {
+// Server is the Herder surface needed to prepare a fresh session.
+type Server interface {
+	Status(context.Context) (herdr.Status, error)
+	Workspaces(context.Context) ([]herdr.Workspace, error)
+	Panes(context.Context, string) ([]herdr.Pane, error)
+	RenameWorkspace(context.Context, string, string) error
+	RenameTab(context.Context, string, string) error
+	StartAgent(context.Context, herdr.StartAgentOptions) (herdr.Agent, error)
+}
+
+// Input describes the session being prepared.
+type Input struct {
 	Root   string
-	Choice AgentChoice
+	Choice types.AgentChoice
 	Log    io.Writer
 }
 
-// bootstrapTiming bounds the polling a fresh Herder server requires.
-type bootstrapTiming struct {
+// Timing bounds the polling a fresh Herder server requires.
+type Timing struct {
 	Poll         time.Duration
 	Deadline     time.Duration
 	StartRetries int
 	RetryDelay   time.Duration
 }
 
-var defaultBootstrapTiming = bootstrapTiming{
+// DefaultTiming is the polling schedule used outside tests.
+var DefaultTiming = Timing{
 	Poll:         200 * time.Millisecond,
 	Deadline:     30 * time.Second,
 	StartRetries: 3,
 	RetryDelay:   time.Second,
 }
 
-// bootstrap labels a fresh session's first workspace and tab, then starts the
+// Run labels a fresh session's first workspace and tab, then starts the
 // chosen agent in its root pane. It runs while Herder owns the terminal, so
 // every step is reported to in.Log rather than to the user.
-func bootstrap(ctx context.Context, h Bootstrapper, in bootstrapInput, t bootstrapTiming) error {
+func Run(ctx context.Context, h Server, in Input, t Timing) error {
 	ctx, cancel := context.WithTimeout(ctx, t.Deadline)
 	defer cancel()
 
@@ -110,7 +124,7 @@ func bootstrap(ctx context.Context, h Bootstrapper, in bootstrapInput, t bootstr
 
 // startAgent launches the chosen harness, retrying while Herder rejects the
 // request because the fresh pane has not reached its shell prompt.
-func startAgent(ctx context.Context, h Bootstrapper, in bootstrapInput, t bootstrapTiming, paneID string) error {
+func startAgent(ctx context.Context, h Server, in Input, t Timing, paneID string) error {
 	options := herdr.StartAgentOptions{
 		Name:   orchestratorName,
 		Kind:   in.Choice.Harness,

@@ -1,6 +1,6 @@
 //go:build linux
 
-package session
+package lock
 
 import (
 	"context"
@@ -19,7 +19,9 @@ type projectLock struct {
 	err  error
 }
 
-func acquireProjectLock(ctx context.Context, fledgeDir string) (func() error, error) {
+// Acquire takes the exclusive project lock on fledgeDir, waiting until the
+// holder releases it or ctx ends. The returned release is idempotent.
+func Acquire(ctx context.Context, fledgeDir string) (func() error, error) {
 	fd, err := unix.Open(fledgeDir, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open project lock directory: %w", err)

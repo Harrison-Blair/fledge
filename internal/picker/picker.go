@@ -1,6 +1,3 @@
-// Package picker presents a filterable terminal selection list. Terminal
-// detection is supplied by the CLI boundary so this package does not depend on
-// a particular file-descriptor implementation.
 package picker
 
 import (

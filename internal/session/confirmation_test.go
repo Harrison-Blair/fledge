@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"fledge/internal/session/sessiontest"
 )
 
 func TestTerminalConfirmerAcceptsOnlyYOrYes(t *testing.T) {
@@ -106,7 +108,7 @@ func TestTerminalConfirmerReturnsReadAndWriteFailures(t *testing.T) {
 	t.Run("read", func(t *testing.T) {
 		want := errors.New("interrupt")
 		_, err := (TerminalConfirmer{
-			Input:            errorReader{err: want},
+			Input:            sessiontest.ErrorReader{Err: want},
 			Output:           io.Discard,
 			InputIsTerminal:  true,
 			OutputIsTerminal: true,

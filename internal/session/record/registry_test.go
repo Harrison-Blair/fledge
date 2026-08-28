@@ -1,4 +1,4 @@
-package session
+package record
 
 import (
 	"bytes"
@@ -8,10 +8,13 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"fledge/internal/session/sessiontest"
+	"fledge/internal/session/types"
 )
 
 func TestLoadMissingSessionsDirectoryIsEmpty(t *testing.T) {
-	root := newProject(t)
+	root := sessiontest.NewProject(t)
 
 	records, err := Load(root)
 	if err != nil {
@@ -23,9 +26,9 @@ func TestLoadMissingSessionsDirectoryIsEmpty(t *testing.T) {
 }
 
 func TestLoadValidRecord(t *testing.T) {
-	root := newProject(t)
+	root := sessiontest.NewProject(t)
 	name := "fledge-My.Project-0123abcd"
-	recordDir := writeRecord(t, root, name, `{"schema_version":1,"herdr_session_name":"`+name+`","created_at":"2026-08-24T14:15:16Z"}`)
+	recordDir := sessiontest.WriteRecord(t, root, name, `{"schema_version":1,"herdr_session_name":"`+name+`","created_at":"2026-08-24T14:15:16Z"}`)
 
 	records, err := Load(root)
 	if err != nil {
@@ -109,8 +112,8 @@ func TestLoadRejectsInvalidRecords(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			root := newProject(t)
-			writeRecord(t, root, test.dirName, test.config)
+			root := sessiontest.NewProject(t)
+			sessiontest.WriteRecord(t, root, test.dirName, test.config)
 			_, err := Load(root)
 			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 				t.Fatalf("Load() error = %v, want containing %q", err, test.wantErr)
@@ -130,7 +133,7 @@ func TestLoadRejectsSymlinksInRecordPath(t *testing.T) {
 	})
 
 	t.Run("sessions directory", func(t *testing.T) {
-		root := newProject(t)
+		root := sessiontest.NewProject(t)
 		target := t.TempDir()
 		if err := os.Symlink(target, filepath.Join(root, ".fledge", "sessions")); err != nil {
 			t.Fatal(err)
@@ -139,7 +142,7 @@ func TestLoadRejectsSymlinksInRecordPath(t *testing.T) {
 	})
 
 	t.Run("record directory", func(t *testing.T) {
-		root := newProject(t)
+		root := sessiontest.NewProject(t)
 		sessions := filepath.Join(root, ".fledge", "sessions")
 		if err := os.Mkdir(sessions, 0o755); err != nil {
 			t.Fatal(err)
@@ -152,7 +155,7 @@ func TestLoadRejectsSymlinksInRecordPath(t *testing.T) {
 	})
 
 	t.Run("config file", func(t *testing.T) {
-		root := newProject(t)
+		root := sessiontest.NewProject(t)
 		recordDir := filepath.Join(root, ".fledge", "sessions", "valid")
 		if err := os.MkdirAll(recordDir, 0o755); err != nil {
 			t.Fatal(err)
@@ -176,7 +179,7 @@ func TestCreatePublishesExactRecordAndRetainsExistingRecords(t *testing.T) {
 	}
 	createdAt := time.Date(2026, 8, 24, 14, 15, 16, 987654321, time.FixedZone("EDT", -4*60*60))
 
-	record, err := Create(root, AgentChoice{}, maxSessionLength, nil, bytes.NewReader([]byte{0xab, 0xcd, 0xef, 0x12}), createdAt)
+	record, err := Create(root, types.AgentChoice{}, MaxSessionLength, nil, bytes.NewReader([]byte{0xab, 0xcd, 0xef, 0x12}), createdAt)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -218,9 +221,9 @@ func TestCreatePublishesExactRecordAndRetainsExistingRecords(t *testing.T) {
 }
 
 func TestLoadClaimAndPendingMetadata(t *testing.T) {
-	root := newProject(t)
+	root := sessiontest.NewProject(t)
 	name := "claimed"
-	dir := writeRecord(t, root, name, `{"schema_version":1,"herdr_session_name":"claimed","created_at":"2026-08-24T14:15:16Z"}`)
+	dir := sessiontest.WriteRecord(t, root, name, `{"schema_version":1,"herdr_session_name":"claimed","created_at":"2026-08-24T14:15:16Z"}`)
 	if err := os.WriteFile(filepath.Join(dir, "claim.json"), []byte(`{"schema_version":1}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +234,7 @@ func TestLoadClaimAndPendingMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 1 || !records[0].Claimed || records[0].PendingChoice == nil || *records[0].PendingChoice != (AgentChoice{Harness: "claude", Model: "opus"}) {
+	if len(records) != 1 || !records[0].Claimed || records[0].PendingChoice == nil || *records[0].PendingChoice != (types.AgentChoice{Harness: "claude", Model: "opus"}) {
 		t.Fatalf("Load() records = %#v", records)
 	}
 	if err := ClearPending(records[0]); err != nil {
@@ -249,8 +252,8 @@ func TestLoadRejectsOrphanAndNullSidecars(t *testing.T) {
 		{name: "model only", claim: `{"schema_version":1}`, pending: `{"schema_version":1,"harness":"","model":"opus"}`, want: "requires harness"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			root := newProject(t)
-			dir := writeRecord(t, root, "record", `{"schema_version":1,"herdr_session_name":"record","created_at":"2026-08-24T14:15:16Z"}`)
+			root := sessiontest.NewProject(t)
+			dir := sessiontest.WriteRecord(t, root, "record", `{"schema_version":1,"herdr_session_name":"record","created_at":"2026-08-24T14:15:16Z"}`)
 			if test.claim != "" {
 				if err := os.WriteFile(filepath.Join(dir, "claim.json"), []byte(test.claim), 0o644); err != nil {
 					t.Fatal(err)
@@ -287,8 +290,8 @@ func TestLoadRejectsInvalidSidecars(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			root := newProject(t)
-			dir := writeRecord(t, root, "record", `{"schema_version":1,"herdr_session_name":"record","created_at":"2026-08-24T14:15:16Z"}`)
+			root := sessiontest.NewProject(t)
+			dir := sessiontest.WriteRecord(t, root, "record", `{"schema_version":1,"herdr_session_name":"record","created_at":"2026-08-24T14:15:16Z"}`)
 			if test.file == "pending.json" {
 				if err := os.WriteFile(filepath.Join(dir, "claim.json"), []byte(`{"schema_version":1}`), 0o644); err != nil {
 					t.Fatal(err)
@@ -307,8 +310,8 @@ func TestLoadRejectsInvalidSidecars(t *testing.T) {
 func TestLoadRejectsInvalidSidecarFileTypes(t *testing.T) {
 	for _, sidecar := range []string{"claim.json", "pending.json"} {
 		t.Run(sidecar+" symlink", func(t *testing.T) {
-			root := newProject(t)
-			dir := writeRecord(t, root, "record", `{"schema_version":1,"herdr_session_name":"record","created_at":"2026-08-24T14:15:16Z"}`)
+			root := sessiontest.NewProject(t)
+			dir := sessiontest.WriteRecord(t, root, "record", `{"schema_version":1,"herdr_session_name":"record","created_at":"2026-08-24T14:15:16Z"}`)
 			target := filepath.Join(t.TempDir(), sidecar)
 			if err := os.WriteFile(target, []byte(`{"schema_version":1}`), 0o644); err != nil {
 				t.Fatal(err)
@@ -322,8 +325,8 @@ func TestLoadRejectsInvalidSidecarFileTypes(t *testing.T) {
 		})
 
 		t.Run(sidecar+" directory", func(t *testing.T) {
-			root := newProject(t)
-			dir := writeRecord(t, root, "record", `{"schema_version":1,"herdr_session_name":"record","created_at":"2026-08-24T14:15:16Z"}`)
+			root := sessiontest.NewProject(t)
+			dir := sessiontest.WriteRecord(t, root, "record", `{"schema_version":1,"herdr_session_name":"record","created_at":"2026-08-24T14:15:16Z"}`)
 			if err := os.Mkdir(filepath.Join(dir, sidecar), 0o755); err != nil {
 				t.Fatal(err)
 			}
@@ -335,9 +338,9 @@ func TestLoadRejectsInvalidSidecarFileTypes(t *testing.T) {
 }
 
 func TestLoadRejectsMultipleClaims(t *testing.T) {
-	root := newProject(t)
+	root := sessiontest.NewProject(t)
 	for _, name := range []string{"first", "second"} {
-		dir := writeRecord(t, root, name, `{"schema_version":1,"herdr_session_name":"`+name+`","created_at":"2026-08-24T14:15:16Z"}`)
+		dir := sessiontest.WriteRecord(t, root, name, `{"schema_version":1,"herdr_session_name":"`+name+`","created_at":"2026-08-24T14:15:16Z"}`)
 		if err := os.WriteFile(filepath.Join(dir, "claim.json"), []byte(`{"schema_version":1}`), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -348,8 +351,8 @@ func TestLoadRejectsMultipleClaims(t *testing.T) {
 }
 
 func TestClaimPublishesOnlyAfterPreparingTemporaryFile(t *testing.T) {
-	root := newProject(t)
-	dir := writeRecord(t, root, "record", `{"schema_version":1,"herdr_session_name":"record","created_at":"2026-08-24T14:15:16Z"}`)
+	root := sessiontest.NewProject(t)
+	dir := sessiontest.WriteRecord(t, root, "record", `{"schema_version":1,"herdr_session_name":"record","created_at":"2026-08-24T14:15:16Z"}`)
 	record := Record{HerdrSessionName: "record", Path: dir}
 
 	err := claim(record, func(temporaryPath, finalPath string) error {
@@ -386,8 +389,8 @@ func TestClaimPublishesOnlyAfterPreparingTemporaryFile(t *testing.T) {
 }
 
 func TestClaimDoesNotOverwriteAndCleansTemporaryFile(t *testing.T) {
-	root := newProject(t)
-	dir := writeRecord(t, root, "record", `{"schema_version":1,"herdr_session_name":"record","created_at":"2026-08-24T14:15:16Z"}`)
+	root := sessiontest.NewProject(t)
+	dir := sessiontest.WriteRecord(t, root, "record", `{"schema_version":1,"herdr_session_name":"record","created_at":"2026-08-24T14:15:16Z"}`)
 	claimPath := filepath.Join(dir, "claim.json")
 	if err := os.WriteFile(claimPath, []byte("existing claim\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -407,8 +410,8 @@ func TestClaimDoesNotOverwriteAndCleansTemporaryFile(t *testing.T) {
 }
 
 func TestClaimCleansTemporaryFileAfterPublishFailure(t *testing.T) {
-	root := newProject(t)
-	dir := writeRecord(t, root, "record", `{"schema_version":1,"herdr_session_name":"record","created_at":"2026-08-24T14:15:16Z"}`)
+	root := sessiontest.NewProject(t)
+	dir := sessiontest.WriteRecord(t, root, "record", `{"schema_version":1,"herdr_session_name":"record","created_at":"2026-08-24T14:15:16Z"}`)
 	want := errors.New("link failed")
 	err := claim(Record{HerdrSessionName: "record", Path: dir}, func(string, string) error { return want })
 	if !errors.Is(err, want) {
@@ -426,7 +429,7 @@ func TestCreateRetriesGlobalAndLocalCollisions(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, ".fledge"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeRecord(t, root, "fledge-project-00000001", `{"schema_version":1,"herdr_session_name":"fledge-project-00000001","created_at":"2026-08-24T14:15:16Z"}`)
+	sessiontest.WriteRecord(t, root, "fledge-project-00000001", `{"schema_version":1,"herdr_session_name":"fledge-project-00000001","created_at":"2026-08-24T14:15:16Z"}`)
 	unavailable := map[string]struct{}{
 		"fledge-project-00000002": {},
 	}
@@ -436,7 +439,7 @@ func TestCreateRetriesGlobalAndLocalCollisions(t *testing.T) {
 		0, 0, 0, 3,
 	})
 
-	record, err := Create(root, AgentChoice{}, maxSessionLength, unavailable, entropy, time.Now())
+	record, err := Create(root, types.AgentChoice{}, MaxSessionLength, unavailable, entropy, time.Now())
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -453,10 +456,10 @@ func TestCreateRetriesGlobalAndLocalCollisions(t *testing.T) {
 }
 
 func TestCreateCleansTemporaryDirectoryAfterPublishFailure(t *testing.T) {
-	root := newProject(t)
+	root := sessiontest.NewProject(t)
 	want := errors.New("rename failed")
 
-	_, err := create(root, AgentChoice{}, maxSessionLength, nil, bytes.NewReader([]byte{1, 2, 3, 4}), time.Now(), func(string, string) error {
+	_, err := create(root, types.AgentChoice{}, MaxSessionLength, nil, bytes.NewReader([]byte{1, 2, 3, 4}), time.Now(), func(string, string) error {
 		return want
 	})
 	if !errors.Is(err, want) {
@@ -479,27 +482,6 @@ func TestCreateCleansTemporaryDirectoryAfterPublishFailure(t *testing.T) {
 	if len(sessionEntries) != 0 {
 		t.Fatalf("partial session entries remain after failure: %v", sessionEntries)
 	}
-}
-
-func newProject(t *testing.T) string {
-	t.Helper()
-	root := t.TempDir()
-	if err := os.Mkdir(filepath.Join(root, ".fledge"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return root
-}
-
-func writeRecord(t *testing.T, root, name, config string) string {
-	t.Helper()
-	recordDir := filepath.Join(root, ".fledge", "sessions", name)
-	if err := os.MkdirAll(recordDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(recordDir, "config.json"), []byte(config), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return recordDir
 }
 
 func assertLoadSymlinkError(t *testing.T, root string) {

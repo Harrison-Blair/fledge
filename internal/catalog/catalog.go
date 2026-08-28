@@ -1,6 +1,3 @@
-// Package catalog reports the model identifiers each supported agent harness
-// accepts. Every lookup shells out to the harness CLI, so results reflect the
-// models installed on this machine.
 package catalog
 
 import (

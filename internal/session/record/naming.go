@@ -1,4 +1,4 @@
-package session
+package record
 
 import (
 	"encoding/hex"
@@ -10,8 +10,8 @@ import (
 const (
 	namePrefix       = "fledge-"
 	randomByteCount  = 4
-	maxSessionLength = 64
-	minSessionLength = len(namePrefix) + 1 + 1 + randomByteCount*2
+	MaxSessionLength = 64
+	MinSessionLength = len(namePrefix) + 1 + 1 + randomByteCount*2
 )
 
 // Slug converts a project name to the filesystem-safe character set accepted
@@ -42,11 +42,11 @@ func Slug(projectName string) string {
 // GenerateName creates a collision-free Fledge Herder session name. Names in
 // unavailable include both local records and all sessions known to Herder.
 func GenerateName(projectName string, maxNameLength int, unavailable map[string]struct{}, entropy io.Reader) (string, error) {
-	if maxNameLength < minSessionLength {
+	if maxNameLength < MinSessionLength {
 		return "", fmt.Errorf("generate session name: maximum length %d is too short", maxNameLength)
 	}
-	if maxNameLength > maxSessionLength {
-		maxNameLength = maxSessionLength
+	if maxNameLength > MaxSessionLength {
+		maxNameLength = MaxSessionLength
 	}
 	if entropy == nil {
 		return "", fmt.Errorf("generate session name: entropy reader is nil")
@@ -82,7 +82,7 @@ func validNameRune(r rune) bool {
 }
 
 func validHerderName(name string) bool {
-	if len(name) == 0 || len(name) > maxSessionLength {
+	if len(name) == 0 || len(name) > MaxSessionLength {
 		return false
 	}
 	for _, r := range name {

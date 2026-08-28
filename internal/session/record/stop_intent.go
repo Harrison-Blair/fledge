@@ -1,4 +1,4 @@
-package session
+package record
 
 import (
 	"encoding/hex"
@@ -11,11 +11,11 @@ import (
 	"regexp"
 )
 
-const stopIntentFileName = "stop.json"
+const StopIntentFileName = "stop.json"
 
 var stopIntentPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
-type stopIntent struct {
+type StopIntent struct {
 	ID     string
 	Exists bool
 }
@@ -25,7 +25,7 @@ type diskStopIntent struct {
 	IntentID      string `json:"intent_id"`
 }
 
-func generateStopIntent(entropy io.Reader) (string, error) {
+func GenerateStopIntent(entropy io.Reader) (string, error) {
 	if entropy == nil {
 		return "", fmt.Errorf("stop intent entropy is nil")
 	}
@@ -36,19 +36,19 @@ func generateStopIntent(entropy io.Reader) (string, error) {
 	return hex.EncodeToString(raw[:]), nil
 }
 
-func readStopIntent(record Record) (stopIntent, error) {
+func ReadStopIntent(record Record) (StopIntent, error) {
 	if record.Path == "" {
-		return stopIntent{}, fmt.Errorf("read stop intent for session %q: record path is empty", record.HerdrSessionName)
+		return StopIntent{}, fmt.Errorf("read stop intent for session %q: record path is empty", record.HerdrSessionName)
 	}
-	path := filepath.Join(record.Path, stopIntentFileName)
+	path := filepath.Join(record.Path, StopIntentFileName)
 	value, exists, err := readSidecar(path, decodeDiskStopIntent)
 	if err != nil {
-		return stopIntent{}, fmt.Errorf("read stop intent for session %q: %w", record.HerdrSessionName, err)
+		return StopIntent{}, fmt.Errorf("read stop intent for session %q: %w", record.HerdrSessionName, err)
 	}
 	if !exists {
-		return stopIntent{}, nil
+		return StopIntent{}, nil
 	}
-	return stopIntent{ID: value.(diskStopIntent).IntentID, Exists: true}, nil
+	return StopIntent{ID: value.(diskStopIntent).IntentID, Exists: true}, nil
 }
 
 func decodeDiskStopIntent(data []byte) (any, error) {
@@ -77,7 +77,7 @@ func decodeDiskStopIntent(data []byte) (any, error) {
 	return intent, nil
 }
 
-func writeStopIntent(record Record, id string) (err error) {
+func WriteStopIntent(record Record, id string) (err error) {
 	if record.Path == "" {
 		return fmt.Errorf("write stop intent for session %q: record path is empty", record.HerdrSessionName)
 	}
@@ -108,23 +108,23 @@ func writeStopIntent(record Record, id string) (err error) {
 	if closeErr := file.Close(); closeErr != nil {
 		return fmt.Errorf("write stop intent for session %q: %w", record.HerdrSessionName, closeErr)
 	}
-	if err := os.Rename(temporaryPath, filepath.Join(record.Path, stopIntentFileName)); err != nil {
+	if err := os.Rename(temporaryPath, filepath.Join(record.Path, StopIntentFileName)); err != nil {
 		return fmt.Errorf("write stop intent for session %q: publish: %w", record.HerdrSessionName, err)
 	}
 	return nil
 }
 
-func restoreStopIntent(record Record, previous stopIntent) error {
+func RestoreStopIntent(record Record, previous StopIntent) error {
 	if record.Path == "" {
 		return fmt.Errorf("restore stop intent for session %q: record path is empty", record.HerdrSessionName)
 	}
 	if previous.Exists {
-		if err := writeStopIntent(record, previous.ID); err != nil {
+		if err := WriteStopIntent(record, previous.ID); err != nil {
 			return fmt.Errorf("restore stop intent for session %q: %w", record.HerdrSessionName, err)
 		}
 		return nil
 	}
-	err := os.Remove(filepath.Join(record.Path, stopIntentFileName))
+	err := os.Remove(filepath.Join(record.Path, StopIntentFileName))
 	if err == nil || errors.Is(err, os.ErrNotExist) {
 		return nil
 	}

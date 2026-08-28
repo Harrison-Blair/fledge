@@ -1,4 +1,3 @@
-// Package agent spawns and drives the Herder agents of a Fledge session.
 package agent
 
 import (

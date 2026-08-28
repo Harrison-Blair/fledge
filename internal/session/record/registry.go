@@ -1,4 +1,4 @@
-package session
+package record
 
 import (
 	"bytes"
@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"fledge/internal/session/types"
 )
 
 const schemaVersion = 1
@@ -21,7 +23,7 @@ type Record struct {
 	CreatedAt        time.Time
 	Path             string
 	Claimed          bool
-	PendingChoice    *AgentChoice
+	PendingChoice    *types.AgentChoice
 }
 
 type diskRecord struct {
@@ -97,19 +99,19 @@ func Load(projectRoot string) ([]Record, error) {
 // unavailable set must contain all names reported by Herder, including stopped
 // sessions. The returned record remains the caller's to keep after launch or
 // stop failures.
-func Create(projectRoot string, choice AgentChoice, maxNameLength int, unavailable map[string]struct{}, entropy io.Reader, now time.Time) (Record, error) {
+func Create(projectRoot string, choice types.AgentChoice, maxNameLength int, unavailable map[string]struct{}, entropy io.Reader, now time.Time) (Record, error) {
 	return create(projectRoot, choice, maxNameLength, unavailable, entropy, now, os.Rename)
 }
 
-func create(projectRoot string, choice AgentChoice, maxNameLength int, unavailable map[string]struct{}, entropy io.Reader, now time.Time, rename func(string, string) error) (Record, error) {
+func create(projectRoot string, choice types.AgentChoice, maxNameLength int, unavailable map[string]struct{}, entropy io.Reader, now time.Time, rename func(string, string) error) (Record, error) {
 	if choice.Model != "" && choice.Harness == "" {
 		return Record{}, fmt.Errorf("create session record: model requires harness")
 	}
-	if maxNameLength < minSessionLength {
+	if maxNameLength < MinSessionLength {
 		return Record{}, fmt.Errorf("create session record: maximum length %d is too short", maxNameLength)
 	}
-	if maxNameLength > maxSessionLength {
-		maxNameLength = maxSessionLength
+	if maxNameLength > MaxSessionLength {
+		maxNameLength = MaxSessionLength
 	}
 	records, err := Load(projectRoot)
 	if err != nil {
@@ -284,7 +286,7 @@ func loadRecord(recordDir, directoryName string) (Record, error) {
 		if !record.Claimed {
 			return Record{}, fmt.Errorf("record %q has pending metadata without a claim", recordDir)
 		}
-		choice := AgentChoice{Harness: pending.(diskPending).Harness, Model: pending.(diskPending).Model}
+		choice := types.AgentChoice{Harness: pending.(diskPending).Harness, Model: pending.(diskPending).Model}
 		record.PendingChoice = &choice
 	}
 	return record, nil

@@ -1,6 +1,6 @@
 //go:build linux
 
-package session
+package lock
 
 import (
 	"context"
@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"fledge/internal/session/sessiontest"
 )
 
 const (
@@ -23,7 +25,7 @@ func acquireProjectStartLock(t *testing.T, path string) (func() error, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), projectStartLockTestTimeout)
 	t.Cleanup(cancel)
-	return acquireProjectLock(ctx, path)
+	return Acquire(ctx, path)
 }
 
 func projectStartLockDirectoryFDs(t *testing.T, path string) int {
@@ -53,7 +55,7 @@ func projectStartLockDirectoryFDs(t *testing.T, path string) int {
 }
 
 func TestProjectStartLockExcludesAndHonorsCancellation(t *testing.T) {
-	root := newProject(t)
+	root := sessiontest.NewProject(t)
 	path := filepath.Join(root, ".fledge")
 	release, err := acquireProjectStartLock(t, path)
 	if err != nil {
@@ -61,9 +63,9 @@ func TestProjectStartLockExcludesAndHonorsCancellation(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), projectStartLockContenderTimeout)
 	defer cancel()
-	_, err = acquireProjectLock(ctx, filepath.Join(root, ".fledge"))
+	_, err = Acquire(ctx, filepath.Join(root, ".fledge"))
 	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("acquireProjectLock() error = %v", err)
+		t.Fatalf("Acquire() error = %v", err)
 	}
 	if err := release(); err != nil {
 		t.Fatal(err)
@@ -96,14 +98,14 @@ func TestProjectStartLockRejectsSymlinkAndNonDirectory(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if _, err := acquireProjectLock(context.Background(), path); err == nil {
-			t.Fatalf("acquireProjectLock(%q) error = nil, want rejection", path)
+		if _, err := Acquire(context.Background(), path); err == nil {
+			t.Fatalf("Acquire(%q) error = nil, want rejection", path)
 		}
 	}
 }
 
 func TestProjectStartLockCancellationClosesContendedDescriptor(t *testing.T) {
-	root := newProject(t)
+	root := sessiontest.NewProject(t)
 	path := filepath.Join(root, ".fledge")
 	release, err := acquireProjectStartLock(t, path)
 	if err != nil {
@@ -115,7 +117,7 @@ func TestProjectStartLockCancellationClosesContendedDescriptor(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), projectStartLockContenderTimeout)
 	defer cancel()
-	if _, err := acquireProjectLock(ctx, path); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := Acquire(ctx, path); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("contended acquire error = %v, want deadline exceeded", err)
 	}
 	after := projectStartLockDirectoryFDs(t, path)
@@ -135,7 +137,7 @@ func TestProjectStartLockCancellationClosesContendedDescriptor(t *testing.T) {
 }
 
 func TestProjectStartLockConcurrentReleaseCachesResult(t *testing.T) {
-	root := newProject(t)
+	root := sessiontest.NewProject(t)
 	path := filepath.Join(root, ".fledge")
 	release, err := acquireProjectStartLock(t, path)
 	if err != nil {
@@ -188,7 +190,7 @@ func TestProjectStartLockConcurrentReleaseCachesResult(t *testing.T) {
 }
 
 func TestProjectStartLockReleasesOnProcessExit(t *testing.T) {
-	root := newProject(t)
+	root := sessiontest.NewProject(t)
 	path := filepath.Join(root, ".fledge")
 	ctx, cancel := context.WithTimeout(context.Background(), projectStartLockHelperTimeout)
 	defer cancel()
@@ -217,6 +219,6 @@ func TestProjectStartLockReleasesOnProcessExitHelper(t *testing.T) {
 		t.Fatal(err)
 	}
 	if release == nil {
-		t.Fatal("acquireProjectLock() returned nil release")
+		t.Fatal("Acquire() returned nil release")
 	}
 }

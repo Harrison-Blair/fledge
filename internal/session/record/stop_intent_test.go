@@ -1,4 +1,4 @@
-package session
+package record
 
 import (
 	"bytes"
@@ -12,20 +12,20 @@ func TestStopIntentRoundTripAndReplacement(t *testing.T) {
 	record := Record{HerdrSessionName: "managed", Path: t.TempDir()}
 	first := strings.Repeat("1", 32)
 	second := strings.Repeat("a", 32)
-	if err := writeStopIntent(record, first); err != nil {
-		t.Fatalf("writeStopIntent(first): %v", err)
+	if err := WriteStopIntent(record, first); err != nil {
+		t.Fatalf("WriteStopIntent(first): %v", err)
 	}
-	if err := writeStopIntent(record, second); err != nil {
-		t.Fatalf("writeStopIntent(second): %v", err)
+	if err := WriteStopIntent(record, second); err != nil {
+		t.Fatalf("WriteStopIntent(second): %v", err)
 	}
-	got, err := readStopIntent(record)
+	got, err := ReadStopIntent(record)
 	if err != nil {
-		t.Fatalf("readStopIntent: %v", err)
+		t.Fatalf("ReadStopIntent: %v", err)
 	}
 	if !got.Exists || got.ID != second {
-		t.Fatalf("readStopIntent = %#v, want %q", got, second)
+		t.Fatalf("ReadStopIntent = %#v, want %q", got, second)
 	}
-	info, err := os.Lstat(filepath.Join(record.Path, stopIntentFileName))
+	info, err := os.Lstat(filepath.Join(record.Path, StopIntentFileName))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,19 +52,19 @@ func TestStopIntentRejectsMalformedState(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			record := Record{HerdrSessionName: "managed", Path: t.TempDir()}
-			if err := os.WriteFile(filepath.Join(record.Path, stopIntentFileName), []byte(test.data), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(record.Path, StopIntentFileName), []byte(test.data), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			_, err := readStopIntent(record)
+			_, err := ReadStopIntent(record)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("readStopIntent() error = %v, want containing %q", err, test.want)
+				t.Fatalf("ReadStopIntent() error = %v, want containing %q", err, test.want)
 			}
 		})
 	}
 }
 
 func TestGenerateStopIntentUsesExactly128Bits(t *testing.T) {
-	id, err := generateStopIntent(bytes.NewReader([]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}))
+	id, err := GenerateStopIntent(bytes.NewReader([]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}))
 	if err != nil {
 		t.Fatal(err)
 	}

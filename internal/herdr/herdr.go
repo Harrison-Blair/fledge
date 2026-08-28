@@ -1,4 +1,3 @@
-// Package herdr provides the small Herder CLI surface used by Fledge.
 package herdr
 
 import (

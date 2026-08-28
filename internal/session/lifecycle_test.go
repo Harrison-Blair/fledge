@@ -15,6 +15,10 @@ import (
 
 	"fledge/internal/herdr"
 	"fledge/internal/project"
+	"fledge/internal/session/bootstrap"
+	"fledge/internal/session/lock"
+	"fledge/internal/session/record"
+	"fledge/internal/session/sessiontest"
 )
 
 func TestStartRejectsInsideHerderBeforeDiscovery(t *testing.T) {
@@ -65,7 +69,7 @@ func TestInitialNameLimitPreservesRawSessionDirectoryAndSocketCapacity(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := min(maxSessionLength, 103-len(dir+"sessions")-2-len("herdr.sock"), 103-len(dir+"sessions")-2-len("herdr-client.sock"))
+	want := min(record.MaxSessionLength, 103-len(dir+"sessions")-2-len("herdr.sock"), 103-len(dir+"sessions")-2-len("herdr-client.sock"))
 	if limit != want {
 		t.Fatalf("initialNameLimit() = %d, want %d using the raw session directory", limit, want)
 	}
@@ -87,15 +91,15 @@ func TestInitialNameLimitRejectsSixteenAndAcceptsSeventeen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("initialNameLimit() for 17-byte capacity error = %v", err)
 	}
-	if limit != minSessionLength {
-		t.Fatalf("initialNameLimit() for 17-byte capacity = %d, want %d", limit, minSessionLength)
+	if limit != record.MinSessionLength {
+		t.Fatalf("initialNameLimit() for 17-byte capacity = %d, want %d", limit, record.MinSessionLength)
 	}
 }
 
 func TestStartRejectsInvalidNameLimitBeforeChoiceOrFilesystemEffects(t *testing.T) {
 	root, _ := lifecycleProject(t, "project")
 	chooser := &fakeChooser{}
-	entropy := &countingReader{}
+	entropy := &sessiontest.CountingReader{}
 	client := &fakeHerder{sessions: []herdr.Session{{Default: true, SessionDir: "/" + strings.Repeat("a", 58)}}}
 	deps := StartDependencies{
 		Herder:  client,
@@ -111,8 +115,8 @@ func TestStartRejectsInvalidNameLimitBeforeChoiceOrFilesystemEffects(t *testing.
 	if err == nil || !strings.Contains(err.Error(), "no usable session-name capacity") {
 		t.Fatalf("Start() error = %v, want invalid-limit error", err)
 	}
-	if chooser.calls != 0 || entropy.reads != 0 {
-		t.Fatalf("Start() chooser/entropy reads = %d/%d, want 0/0", chooser.calls, entropy.reads)
+	if chooser.calls != 0 || entropy.Reads != 0 {
+		t.Fatalf("Start() chooser/entropy reads = %d/%d, want 0/0", chooser.calls, entropy.Reads)
 	}
 	if _, err := os.Lstat(filepath.Join(root, ".fledge", "sessions")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("sessions directory after invalid limit error = %v, want absent", err)
@@ -129,7 +133,7 @@ func TestStartCreatesFreshSessionFromNestedPath(t *testing.T) {
 	}}
 	now := time.Date(2026, 8, 24, 12, 13, 14, 0, time.UTC)
 
-	deps, _ := freshStartDeps(client, &fakeChooser{}, startedBootstrapper(), &bytes.Buffer{})
+	deps, _ := freshStartDeps(client, &fakeChooser{}, sessiontest.StartedBootstrapper(), &bytes.Buffer{})
 	deps.Entropy = bytes.NewReader([]byte{0, 0, 0, 2, 0, 0, 0, 3})
 	deps.Now = func() time.Time { return now }
 	err := Start(context.Background(), nested, deps)
@@ -140,7 +144,7 @@ func TestStartCreatesFreshSessionFromNestedPath(t *testing.T) {
 	if !reflect.DeepEqual(client.launches, wantLaunches) {
 		t.Fatalf("launches = %#v, want %#v", client.launches, wantLaunches)
 	}
-	records, err := Load(root)
+	records, err := record.Load(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +170,7 @@ func TestStartAttachesToSoleRegisteredRunningSession(t *testing.T) {
 	if !reflect.DeepEqual(client.launches, want) {
 		t.Fatalf("launches = %#v, want %#v", client.launches, want)
 	}
-	records, err := Load(root)
+	records, err := record.Load(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +200,7 @@ func TestStartClaimsAndReleasesBeforeHistoricalAttach(t *testing.T) {
 	if err := Start(context.Background(), root, deps); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	records, err := Load(root)
+	records, err := record.Load(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,12 +265,12 @@ func TestStartRetainsFreshRecordAfterLaunchFailure(t *testing.T) {
 	want := errors.New("launch failed")
 	client := &fakeHerder{launchErr: want}
 
-	deps, _ := freshStartDeps(client, &fakeChooser{}, startedBootstrapper(), &bytes.Buffer{})
+	deps, _ := freshStartDeps(client, &fakeChooser{}, sessiontest.StartedBootstrapper(), &bytes.Buffer{})
 	err := Start(context.Background(), root, deps)
 	if !errors.Is(err, want) {
 		t.Fatalf("Start() error = %v, want wrapped %v", err, want)
 	}
-	records, err := Load(root)
+	records, err := record.Load(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +295,7 @@ func TestConcurrentStartsSerializeChooserClaimAndName(t *testing.T) {
 			launchStarted <- call
 		},
 	}
-	deps, _ := freshStartDeps(client, chooser, startedBootstrapper(), &bytes.Buffer{})
+	deps, _ := freshStartDeps(client, chooser, sessiontest.StartedBootstrapper(), &bytes.Buffer{})
 	entropy := &countedReader{Reader: bytes.NewReader([]byte{1, 2, 3, 4})}
 	deps.Entropy = entropy
 	secondAcquire := make(chan struct{})
@@ -305,7 +309,7 @@ func TestConcurrentStartsSerializeChooserClaimAndName(t *testing.T) {
 		if call == 2 {
 			close(secondAcquire)
 		}
-		return acquireProjectLock(ctx, fledgeDir)
+		return lock.Acquire(ctx, fledgeDir)
 	}
 
 	errs := make(chan error, 2)
@@ -349,7 +353,7 @@ func TestConcurrentStartsSerializeChooserClaimAndName(t *testing.T) {
 	if entropy.Reads() != 1 {
 		t.Fatalf("entropy reads = %d, want one name generation", entropy.Reads())
 	}
-	records, err := Load(root)
+	records, err := record.Load(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,14 +370,14 @@ func TestStableClaimAfterLaunchFailure(t *testing.T) {
 	launchErr := errors.New("launch failed")
 	client := &fakeHerder{launchErr: launchErr}
 	chooser := &fakeChooser{choice: AgentChoice{}}
-	deps, _ := freshStartDeps(client, chooser, startedBootstrapper(), &bytes.Buffer{})
+	deps, _ := freshStartDeps(client, chooser, sessiontest.StartedBootstrapper(), &bytes.Buffer{})
 	entropy := &countedReader{Reader: bytes.NewReader([]byte{1, 2, 3, 4})}
 	deps.Entropy = entropy
 
 	if err := Start(context.Background(), root, deps); !errors.Is(err, launchErr) {
 		t.Fatalf("first Start() error = %v, want %v", err, launchErr)
 	}
-	records, err := Load(root)
+	records, err := record.Load(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -393,7 +397,7 @@ func TestStableClaimAfterLaunchFailure(t *testing.T) {
 	if launches := client.Launches(); len(launches) != 2 || launches[0].name != name || launches[1].name != name {
 		t.Fatalf("launches = %#v, want two attempts for %q", launches, name)
 	}
-	if records, err := Load(root); err != nil || len(records) != 1 || records[0].HerdrSessionName != name {
+	if records, err := record.Load(root); err != nil || len(records) != 1 || records[0].HerdrSessionName != name {
 		t.Fatalf("records after retry = %#v, %v; want one stable record", records, err)
 	}
 }
@@ -413,7 +417,7 @@ func TestStableClaimAfterDelayedLaunch(t *testing.T) {
 		},
 	}
 	lock := newSerialTestLock()
-	deps, _ := freshStartDeps(client, &fakeChooser{choice: AgentChoice{}}, startedBootstrapper(), &bytes.Buffer{})
+	deps, _ := freshStartDeps(client, &fakeChooser{choice: AgentChoice{}}, sessiontest.StartedBootstrapper(), &bytes.Buffer{})
 	deps.acquireLock = lock.acquire
 
 	errs := make(chan error, 2)
@@ -456,11 +460,11 @@ func TestStableClaimAfterDelayedLaunch(t *testing.T) {
 func TestStableClaimAfterSessionDeletion(t *testing.T) {
 	root, _ := lifecycleProject(t, "project")
 	writeLifecycleRecord(t, root, "gone")
-	records, err := Load(root)
+	records, err := record.Load(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Claim(records[0]); err != nil {
+	if err := record.Claim(records[0]); err != nil {
 		t.Fatal(err)
 	}
 	launchErr := errors.New("session is gone")
@@ -473,7 +477,7 @@ func TestStableClaimAfterSessionDeletion(t *testing.T) {
 	if launches := client.Launches(); len(launches) != 1 || launches[0].name != "gone" {
 		t.Fatalf("launches after external deletion = %#v, want the local claim reused", launches)
 	}
-	if records, err := Load(root); err != nil || len(records) != 1 || !records[0].Claimed {
+	if records, err := record.Load(root); err != nil || len(records) != 1 || !records[0].Claimed {
 		t.Fatalf("records after external deletion = %#v, %v; want retained claim", records, err)
 	}
 }
@@ -481,11 +485,11 @@ func TestStableClaimAfterSessionDeletion(t *testing.T) {
 func TestStartNewDiscardsStoppedClaimAndCreatesFreshSession(t *testing.T) {
 	root, _ := lifecycleProject(t, "project")
 	writeLifecycleRecord(t, root, "fledge-old-00000001")
-	records, err := Load(root)
+	records, err := record.Load(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Claim(records[0]); err != nil {
+	if err := record.Claim(records[0]); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(records[0].Path, "pending.json"), []byte(`{"schema_version":1,"harness":"claude","model":"opus"}`+"\n"), 0o644); err != nil {
@@ -493,10 +497,10 @@ func TestStartNewDiscardsStoppedClaimAndCreatesFreshSession(t *testing.T) {
 	}
 	client := &fakeHerder{sessions: []herdr.Session{{Name: "fledge-old-00000001", Running: false}}}
 	chooser := &fakeChooser{choice: AgentChoice{Harness: "claude", Model: "opus"}}
-	server := startedBootstrapper()
+	server := sessiontest.StartedBootstrapper()
 	released := make(chan struct{})
 	release := closeOnCleanup(t, released)
-	server.onStart = func(context.Context, int) { release() }
+	server.OnStart = func(context.Context, int) { release() }
 	client.launchWait = released
 	var diagnostics bytes.Buffer
 
@@ -508,7 +512,7 @@ func TestStartNewDiscardsStoppedClaimAndCreatesFreshSession(t *testing.T) {
 	if chooser.calls != 1 {
 		t.Fatalf("Choose() calls = %d, want one", chooser.calls)
 	}
-	newRecords, err := Load(root)
+	newRecords, err := record.Load(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -547,18 +551,18 @@ func TestStartNewRejectsRunningRegisteredSession(t *testing.T) {
 			root, _ := lifecycleProject(t, "project")
 			writeLifecycleRecord(t, root, "registered")
 			if test.claim {
-				records, err := Load(root)
+				records, err := record.Load(root)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := Claim(records[0]); err != nil {
+				if err := record.Claim(records[0]); err != nil {
 					t.Fatal(err)
 				}
 			}
 			client := &fakeHerder{sessions: []herdr.Session{{Name: "registered", Running: true}}}
 			chooser := &fakeChooser{}
 
-			deps, _ := freshStartDeps(client, chooser, startedBootstrapper(), &bytes.Buffer{})
+			deps, _ := freshStartDeps(client, chooser, sessiontest.StartedBootstrapper(), &bytes.Buffer{})
 			deps.New = true
 			var released bool
 			deps.acquireLock = func(context.Context, string) (func() error, error) {
@@ -582,7 +586,7 @@ func TestStartNewRejectsRunningRegisteredSession(t *testing.T) {
 				t.Fatalf("launches = %#v, want none", client.Launches())
 			}
 			if test.claim {
-				records, err := Load(root)
+				records, err := record.Load(root)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -602,10 +606,10 @@ func TestStartNewWithoutClaimUsesPickerPath(t *testing.T) {
 	writeLifecycleRecord(t, root, "fledge-old-00000001")
 	client := &fakeHerder{sessions: []herdr.Session{{Name: "fledge-old-00000001", Running: false}}}
 	chooser := &fakeChooser{choice: AgentChoice{Harness: "claude", Model: "opus"}}
-	server := startedBootstrapper()
+	server := sessiontest.StartedBootstrapper()
 	released := make(chan struct{})
 	release := closeOnCleanup(t, released)
-	server.onStart = func(context.Context, int) { release() }
+	server.OnStart = func(context.Context, int) { release() }
 	client.launchWait = released
 	var diagnostics bytes.Buffer
 
@@ -617,7 +621,7 @@ func TestStartNewWithoutClaimUsesPickerPath(t *testing.T) {
 	if chooser.calls != 1 {
 		t.Fatalf("Choose() calls = %d, want one", chooser.calls)
 	}
-	records, err := Load(root)
+	records, err := record.Load(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -632,7 +636,7 @@ func TestStartNewWithoutClaimUsesPickerPath(t *testing.T) {
 
 func TestStartRejectsMalformedRecordsBeforeListing(t *testing.T) {
 	root, _ := lifecycleProject(t, "project")
-	writeRecord(t, root, "bad", `{}`)
+	sessiontest.WriteRecord(t, root, "bad", `{}`)
 	client := &fakeHerder{}
 
 	err := Start(context.Background(), root, startDeps(client))
@@ -647,12 +651,12 @@ func TestStartRejectsMalformedRecordsBeforeListing(t *testing.T) {
 func TestStartRejectsInvalidStopIntentBeforeClaimOrLaunch(t *testing.T) {
 	root, _ := lifecycleProject(t, "project")
 	writeLifecycleRecord(t, root, "managed")
-	records, err := Load(root)
+	records, err := record.Load(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	record := recordByName(records, "managed")
-	if err := os.WriteFile(filepath.Join(record.Path, stopIntentFileName), []byte(`{"schema_version":1,"intent_id":"invalid"}`), 0o644); err != nil {
+	rec := recordByName(records, "managed")
+	if err := os.WriteFile(filepath.Join(rec.Path, record.StopIntentFileName), []byte(`{"schema_version":1,"intent_id":"invalid"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	client := &fakeHerder{sessions: []herdr.Session{{Name: "managed", Running: true}}}
@@ -663,7 +667,7 @@ func TestStartRejectsInvalidStopIntentBeforeClaimOrLaunch(t *testing.T) {
 	if len(client.launches) != 0 {
 		t.Fatalf("Start() launches = %q, want none", client.launches)
 	}
-	if _, err := os.Lstat(filepath.Join(record.Path, "claim.json")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(filepath.Join(rec.Path, "claim.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("claim after rejected intent = %v, want absent", err)
 	}
 }
@@ -792,11 +796,11 @@ func TestStopRejectsManagedCrossProjectIdentityBeforeConfirmation(t *testing.T) 
 func TestStopRejectsInvalidIntentBeforeStopping(t *testing.T) {
 	root, _ := lifecycleProject(t, "project")
 	writeLifecycleRecord(t, root, "managed")
-	records, err := Load(root)
+	records, err := record.Load(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(recordByName(records, "managed").Path, stopIntentFileName), []byte(`{"schema_version":1,"intent_id":"bad"}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(recordByName(records, "managed").Path, record.StopIntentFileName), []byte(`{"schema_version":1,"intent_id":"bad"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	client := &fakeHerder{sessions: []herdr.Session{{Name: "managed", Running: true}}}
@@ -859,11 +863,11 @@ func TestOverlappingStopsSerializeMarkerAndHerderMutation(t *testing.T) {
 	if err := <-secondDone; err != nil {
 		t.Fatalf("second Stop() error = %v", err)
 	}
-	records, err := Load(root)
+	records, err := record.Load(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	intent, err := readStopIntent(recordByName(records, "managed"))
+	intent, err := record.ReadStopIntent(recordByName(records, "managed"))
 	want := strings.Repeat("02", 16)
 	if err != nil || !intent.Exists || intent.ID != want {
 		t.Fatalf("final stop intent = %#v, %v; want %q", intent, err, want)
@@ -885,12 +889,12 @@ func TestStopContinuesAndAggregatesFailuresByName(t *testing.T) {
 		},
 		stopErrors: map[string]error{"alpha": first, "gamma": second},
 	}
-	records, err := Load(root)
+	records, err := record.Load(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	oldAlpha := strings.Repeat("a", 32)
-	if err := writeStopIntent(recordByName(records, "alpha"), oldAlpha); err != nil {
+	if err := record.WriteStopIntent(recordByName(records, "alpha"), oldAlpha); err != nil {
 		t.Fatal(err)
 	}
 
@@ -910,15 +914,15 @@ func TestStopContinuesAndAggregatesFailuresByName(t *testing.T) {
 	if want := []string{"alpha", "beta", "gamma"}; !reflect.DeepEqual(client.stops, want) {
 		t.Fatalf("Stop() calls = %#v, want %#v", client.stops, want)
 	}
-	alpha, err := readStopIntent(recordByName(records, "alpha"))
+	alpha, err := record.ReadStopIntent(recordByName(records, "alpha"))
 	if err != nil || !alpha.Exists || alpha.ID != oldAlpha {
 		t.Fatalf("alpha stop intent = %#v, %v; want restored %q", alpha, err, oldAlpha)
 	}
-	beta, err := readStopIntent(recordByName(records, "beta"))
+	beta, err := record.ReadStopIntent(recordByName(records, "beta"))
 	if err != nil || !beta.Exists || beta.ID != strings.Repeat("0", 32) {
 		t.Fatalf("beta stop intent = %#v, %v; want invocation intent", beta, err)
 	}
-	gamma, err := readStopIntent(recordByName(records, "gamma"))
+	gamma, err := record.ReadStopIntent(recordByName(records, "gamma"))
 	if err != nil || gamma.Exists {
 		t.Fatalf("gamma stop intent = %#v, %v; want restored absence", gamma, err)
 	}
@@ -947,13 +951,13 @@ func TestStartClassifiesOnlyExplicitIntentTransitionsAsCleanShutdown(t *testing.
 		t.Run(test.name, func(t *testing.T) {
 			root, _ := lifecycleProject(t, "project")
 			writeLifecycleRecord(t, root, "managed")
-			records, err := Load(root)
+			records, err := record.Load(root)
 			if err != nil {
 				t.Fatal(err)
 			}
-			record := recordByName(records, "managed")
+			rec := recordByName(records, "managed")
 			if test.before != "" {
-				if err := writeStopIntent(record, test.before); err != nil {
+				if err := record.WriteStopIntent(rec, test.before); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -968,7 +972,7 @@ func TestStartClassifiesOnlyExplicitIntentTransitionsAsCleanShutdown(t *testing.
 			defer cancel()
 			client.onLaunch = func(launchCall) {
 				if test.after != "" && test.after != test.before {
-					if err := writeStopIntent(record, test.after); err != nil {
+					if err := record.WriteStopIntent(rec, test.after); err != nil {
 						t.Error(err)
 					}
 				}
@@ -999,11 +1003,11 @@ func TestStartClassifiesOnlyExplicitIntentTransitionsAsCleanShutdown(t *testing.
 func TestExplicitStopMakesForegroundStartExitCleanly(t *testing.T) {
 	root, _ := lifecycleProject(t, "project")
 	writeLifecycleRecord(t, root, "managed")
-	records, err := Load(root)
+	records, err := record.Load(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	record := recordByName(records, "managed")
+	rec := recordByName(records, "managed")
 	launchStarted := make(chan struct{})
 	serverStopped := make(chan struct{})
 	client := &fakeHerder{
@@ -1013,7 +1017,7 @@ func TestExplicitStopMakesForegroundStartExitCleanly(t *testing.T) {
 		onLaunchStart: func(launchCall) { close(launchStarted) },
 	}
 	client.onStop = func(name string) {
-		intent, markerErr := readStopIntent(record)
+		intent, markerErr := record.ReadStopIntent(rec)
 		if markerErr != nil || !intent.Exists || intent.ID != strings.Repeat("06", 16) {
 			t.Errorf("intent at Herder stop = %#v, %v", intent, markerErr)
 		}
@@ -1050,12 +1054,12 @@ func TestStartClaimedReleasesOriginalLockBeforeIntentInspection(t *testing.T) {
 	if err := os.MkdirAll(recordPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	record := Record{HerdrSessionName: "managed", Path: recordPath}
+	rec := record.Record{HerdrSessionName: "managed", Path: recordPath}
 	launchFailure := errors.New("exit status 1")
 	client := &fakeHerder{sessions: []herdr.Session{{Name: "managed", Running: true}}, launchErr: launchFailure}
 	originalReleased := false
 	client.onLaunch = func(launchCall) {
-		if err := writeStopIntent(record, strings.Repeat("5", 32)); err != nil {
+		if err := record.WriteStopIntent(rec, strings.Repeat("5", 32)); err != nil {
 			t.Error(err)
 		}
 		client.mu.Lock()
@@ -1071,7 +1075,7 @@ func TestStartClaimedReleasesOriginalLockBeforeIntentInspection(t *testing.T) {
 			return func() error { return nil }, nil
 		},
 	}
-	err := startClaimed(context.Background(), root, record, deps, cachedRelease(func() error {
+	err := startClaimed(context.Background(), root, rec, deps, cachedRelease(func() error {
 		originalReleased = true
 		return nil
 	}))
@@ -1434,10 +1438,10 @@ func startDeps(client Herder) StartDependencies {
 func lifecycleProject(t *testing.T, base string) (string, string) {
 	t.Helper()
 	t.Cleanup(func() {
-		if _, err := os.Stat(bootstrapLogName); err == nil {
-			t.Errorf("test created repository-relative %s", bootstrapLogName)
+		if _, err := os.Stat(bootstrap.LogName); err == nil {
+			t.Errorf("test created repository-relative %s", bootstrap.LogName)
 		} else if !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("stat repository-relative %s: %v", bootstrapLogName, err)
+			t.Errorf("stat repository-relative %s: %v", bootstrap.LogName, err)
 		}
 	})
 	parent := t.TempDir()
@@ -1458,14 +1462,14 @@ func lifecycleProject(t *testing.T, base string) (string, string) {
 
 func writeLifecycleRecord(t *testing.T, root, name string) {
 	t.Helper()
-	writeRecord(t, root, name, `{"schema_version":1,"herdr_session_name":"`+name+`","created_at":"2026-08-24T14:15:16Z"}`)
+	sessiontest.WriteRecord(t, root, name, `{"schema_version":1,"herdr_session_name":"`+name+`","created_at":"2026-08-24T14:15:16Z"}`)
 }
 
 func emptyEnv(string) string { return "" }
 
-func recordNamesContain(records []Record, name string) bool {
-	for _, record := range records {
-		if record.HerdrSessionName == name {
+func recordNamesContain(records []record.Record, name string) bool {
+	for _, rec := range records {
+		if rec.HerdrSessionName == name {
 			return true
 		}
 	}
@@ -1479,7 +1483,7 @@ func TestStartAttachSkipsAgentChoiceAndBootstrap(t *testing.T) {
 	chooser := &fakeChooser{}
 	var diagnostics bytes.Buffer
 
-	deps, scoped := freshStartDeps(client, chooser, startedBootstrapper(), &diagnostics)
+	deps, scoped := freshStartDeps(client, chooser, sessiontest.StartedBootstrapper(), &diagnostics)
 	if err := Start(context.Background(), root, deps); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -1500,7 +1504,7 @@ func TestStartWritesNoRecordWhenAgentChoiceFails(t *testing.T) {
 	client := &fakeHerder{}
 	chooser := &fakeChooser{err: want}
 
-	deps, scoped := freshStartDeps(client, chooser, startedBootstrapper(), &bytes.Buffer{})
+	deps, scoped := freshStartDeps(client, chooser, sessiontest.StartedBootstrapper(), &bytes.Buffer{})
 	err := Start(context.Background(), root, deps)
 	if !errors.Is(err, want) {
 		t.Fatalf("Start() error = %v, want wrapped %v", err, want)
@@ -1511,7 +1515,7 @@ func TestStartWritesNoRecordWhenAgentChoiceFails(t *testing.T) {
 	if len(*scoped) != 0 {
 		t.Fatalf("bootstrapped sessions = %#v, want none", *scoped)
 	}
-	records, err := Load(root)
+	records, err := record.Load(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1523,10 +1527,10 @@ func TestStartWritesNoRecordWhenAgentChoiceFails(t *testing.T) {
 func TestStartBootstrapsFreshSessionWhileHerderRuns(t *testing.T) {
 	root, _ := lifecycleProject(t, "project")
 	ctx := testContext(t)
-	server := startedBootstrapper()
+	server := sessiontest.StartedBootstrapper()
 	released := make(chan struct{})
 	release := closeOnCleanup(t, released)
-	server.onStart = func(context.Context, int) { release() }
+	server.OnStart = func(context.Context, int) { release() }
 	client := &fakeHerder{launchWait: released}
 	chooser := &fakeChooser{choice: AgentChoice{Harness: "claude", Model: "opus"}}
 	var diagnostics bytes.Buffer
@@ -1542,14 +1546,14 @@ func TestStartBootstrapsFreshSessionWhileHerderRuns(t *testing.T) {
 	if want := []string{name}; !reflect.DeepEqual(*scoped, want) {
 		t.Fatalf("bootstrapped sessions = %#v, want %#v", *scoped, want)
 	}
-	if want := []herdr.StartAgentOptions{{Name: "orchestrator", Kind: "claude", PaneID: "w1:p2", Args: []string{"--model", "opus"}}}; !reflect.DeepEqual(server.started, want) {
-		t.Fatalf("StartAgent options = %#v, want %#v", server.started, want)
+	if want := []herdr.StartAgentOptions{{Name: "orchestrator", Kind: "claude", PaneID: "w1:p2", Args: []string{"--model", "opus"}}}; !reflect.DeepEqual(server.Started, want) {
+		t.Fatalf("StartAgent options = %#v, want %#v", server.Started, want)
 	}
 	if diagnostics.Len() != 0 {
 		t.Fatalf("diagnostics = %q, want empty", diagnostics.String())
 	}
 
-	log, err := os.ReadFile(filepath.Join(root, ".fledge", "sessions", name, bootstrapLogName))
+	log, err := os.ReadFile(filepath.Join(root, ".fledge", "sessions", name, bootstrap.LogName))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1562,13 +1566,13 @@ func TestStartReportsBootstrapFailure(t *testing.T) {
 	root, _ := lifecycleProject(t, "project")
 	ctx := testContext(t)
 	want := errors.New("agent start refused")
-	server := startedBootstrapper()
-	server.startErrs = []error{want}
+	server := sessiontest.StartedBootstrapper()
+	server.StartErrs = []error{want}
 	released := make(chan struct{})
 	release := closeOnCleanup(t, released)
 	// StartAgent notifies Herder before returning its substantive response. The
 	// launch return therefore cancels bootstrap while this call is still ending.
-	server.onStart = func(ctx context.Context, _ int) {
+	server.OnStart = func(ctx context.Context, _ int) {
 		release()
 		<-ctx.Done()
 	}
@@ -1581,7 +1585,7 @@ func TestStartReportsBootstrapFailure(t *testing.T) {
 		t.Fatalf("Start() error = %v, want wrapped %v", err, want)
 	}
 	report := diagnostics.String()
-	if !strings.Contains(report, "bootstrap failed") || !strings.Contains(report, bootstrapLogName) {
+	if !strings.Contains(report, "bootstrap failed") || !strings.Contains(report, bootstrap.LogName) {
 		t.Fatalf("diagnostics = %q, want a bootstrap failure naming the log", report)
 	}
 	if len(client.launches) != 1 {
@@ -1591,7 +1595,7 @@ func TestStartReportsBootstrapFailure(t *testing.T) {
 
 func TestStartIgnoresBootstrapCancelledByHerderExit(t *testing.T) {
 	root, _ := lifecycleProject(t, "project")
-	server := &fakeBootstrapper{statuses: []statusResult{{running: false}}}
+	server := &sessiontest.FakeBootstrapper{Statuses: []sessiontest.StatusResult{{Running: false}}}
 	client := &fakeHerder{}
 	var diagnostics bytes.Buffer
 
@@ -1602,17 +1606,17 @@ func TestStartIgnoresBootstrapCancelledByHerderExit(t *testing.T) {
 	if diagnostics.Len() != 0 {
 		t.Fatalf("diagnostics = %q, want empty", diagnostics.String())
 	}
-	if len(server.started) != 0 {
-		t.Fatalf("StartAgent calls = %#v, want none", server.started)
+	if len(server.Started) != 0 {
+		t.Fatalf("StartAgent calls = %#v, want none", server.Started)
 	}
 }
 
 func TestStartIgnoresBootstrapSubprocessKilledByHerderExit(t *testing.T) {
 	root, _ := lifecycleProject(t, "project")
-	server := startedBootstrapper()
+	server := sessiontest.StartedBootstrapper()
 	// Cancelling the bootstrap kills the herdr child, which reports the signal
 	// rather than the cancellation.
-	server.onRenameWorkspace = func(ctx context.Context) error {
+	server.OnRenameWorkspace = func(ctx context.Context) error {
 		<-ctx.Done()
 		return contextKilledError{err: errors.New("signal: killed")}
 	}
@@ -1658,7 +1662,7 @@ func TestStartClaimedWatcherCachesEarlyReleaseFailure(t *testing.T) {
 		return releaseErr
 	}
 
-	err := startClaimed(ctx, t.TempDir(), Record{HerdrSessionName: "claimed", Path: t.TempDir()}, StartDependencies{Herder: client}, cachedRelease(release))
+	err := startClaimed(ctx, t.TempDir(), record.Record{HerdrSessionName: "claimed", Path: t.TempDir()}, StartDependencies{Herder: client}, cachedRelease(release))
 	if !errors.Is(err, launchErr) || !errors.Is(err, releaseErr) {
 		t.Fatalf("startClaimed() error = %v, want launch and release failures", err)
 	}
@@ -1713,7 +1717,7 @@ func TestStartClaimedWatcherReleasesLockAfterPublicationWhileLaunchRemainsActive
 	})
 	pendingStart++
 	go func() {
-		err := startClaimed(ctx, root, Record{HerdrSessionName: "claimed", Path: recordPath}, StartDependencies{Herder: client}, release)
+		err := startClaimed(ctx, root, record.Record{HerdrSessionName: "claimed", Path: recordPath}, StartDependencies{Herder: client}, release)
 		startWorkerErr <- err
 		errDone <- err
 	}()
@@ -1752,12 +1756,12 @@ func TestStartClaimedDrainsWorkersBeforeReturn(t *testing.T) {
 	bootstrapDone := make(chan struct{})
 	signalWatcherDone := closeOnCleanup(t, watcherDone)
 	signalBootstrapDone := closeOnCleanup(t, bootstrapDone)
-	server := startedBootstrapper()
-	server.onStart = func(ctx context.Context, _ int) {
+	server := sessiontest.StartedBootstrapper()
+	server.OnStart = func(ctx context.Context, _ int) {
 		<-ctx.Done()
 		signalBootstrapDone()
 	}
-	err := startClaimed(ctx, t.TempDir(), Record{
+	err := startClaimed(ctx, t.TempDir(), record.Record{
 		HerdrSessionName: "claimed",
 		Path:             t.TempDir(),
 		PendingChoice:    &AgentChoice{Harness: "pi"},
@@ -1765,7 +1769,7 @@ func TestStartClaimedDrainsWorkersBeforeReturn(t *testing.T) {
 		Herder:          &drainingHerder{done: signalWatcherDone},
 		Scoped:          func(string) Bootstrapper { return server },
 		Diagnostics:     &bytes.Buffer{},
-		bootstrapTiming: fastTiming(),
+		bootstrapTiming: sessiontest.FastTiming(),
 	}, func() error { return nil })
 	if err != nil {
 		t.Fatalf("startClaimed() error = %v, want cancellation-only workers to be silent", err)
@@ -1801,9 +1805,9 @@ func TestStartClaimedErrorOrder(t *testing.T) {
 			signalStateReady()
 		},
 	}
-	server := startedBootstrapper()
-	server.startErrs = []error{bootstrapErr}
-	server.onStart = func(context.Context, int) { signalBootReady() }
+	server := sessiontest.StartedBootstrapper()
+	server.StartErrs = []error{bootstrapErr}
+	server.OnStart = func(context.Context, int) { signalBootReady() }
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -1829,7 +1833,7 @@ func TestStartClaimedErrorOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	var diagnostics bytes.Buffer
-	err := startClaimed(ctx, t.TempDir(), Record{
+	err := startClaimed(ctx, t.TempDir(), record.Record{
 		HerdrSessionName: "claimed",
 		Path:             badPath,
 		PendingChoice:    &AgentChoice{Harness: "pi"},
@@ -1837,7 +1841,7 @@ func TestStartClaimedErrorOrder(t *testing.T) {
 		Herder:          client,
 		Scoped:          func(string) Bootstrapper { return server },
 		Diagnostics:     &diagnostics,
-		bootstrapTiming: fastTiming(),
+		bootstrapTiming: sessiontest.FastTiming(),
 	}, cachedRelease(func() error { return releaseErr }))
 	if !errors.Is(err, launchErr) || !errors.Is(err, bootstrapErr) || !errors.Is(err, releaseErr) {
 		t.Fatalf("startClaimed() error = %v, want launch, bootstrap, and release failures", err)
@@ -1877,8 +1881,8 @@ func TestStartClaimedReportsCallerCancellationFromBootstrap(t *testing.T) {
 	releaseLaunch := closeOnCleanup(t, launchMayReturn)
 	signalBootstrapStarted := closeOnCleanup(t, bootstrapStarted)
 	client := &fakeHerder{launchWait: launchMayReturn}
-	server := &fakeBootstrapper{statuses: []statusResult{{running: false}}}
-	server.onStatus = func(int) {
+	server := &sessiontest.FakeBootstrapper{Statuses: []sessiontest.StatusResult{{Running: false}}}
+	server.OnStatus = func(int) {
 		signalBootstrapStarted()
 	}
 	ctx, cancel := context.WithCancel(testCtx)
@@ -1895,7 +1899,7 @@ func TestStartClaimedReportsCallerCancellationFromBootstrap(t *testing.T) {
 	})
 	pendingResult++
 	go func() {
-		err := startClaimed(ctx, root, Record{
+		err := startClaimed(ctx, root, record.Record{
 			HerdrSessionName: "claimed",
 			Path:             recordPath,
 			PendingChoice:    &AgentChoice{Harness: "pi"},
@@ -1903,7 +1907,7 @@ func TestStartClaimedReportsCallerCancellationFromBootstrap(t *testing.T) {
 			Herder:          client,
 			Scoped:          func(string) Bootstrapper { return server },
 			Diagnostics:     &diagnostics,
-			bootstrapTiming: fastTiming(),
+			bootstrapTiming: sessiontest.FastTiming(),
 		}, func() error { return nil })
 		workerErr <- err
 		errDone <- err
@@ -1930,7 +1934,7 @@ func TestStartClaimedReportsBootstrapDeadline(t *testing.T) {
 	server := &deadlineBootstrapper{deadlineReached: signalDeadlineReached}
 	var diagnostics bytes.Buffer
 
-	err := startClaimed(ctx, t.TempDir(), Record{
+	err := startClaimed(ctx, t.TempDir(), record.Record{
 		HerdrSessionName: "claimed",
 		Path:             t.TempDir(),
 		PendingChoice:    &AgentChoice{Harness: "pi"},
@@ -1938,7 +1942,7 @@ func TestStartClaimedReportsBootstrapDeadline(t *testing.T) {
 		Herder:      client,
 		Scoped:      func(string) Bootstrapper { return server },
 		Diagnostics: &diagnostics,
-		bootstrapTiming: bootstrapTiming{
+		bootstrapTiming: bootstrap.Timing{
 			Poll:         time.Millisecond,
 			Deadline:     10 * time.Millisecond,
 			StartRetries: 1,

@@ -31,7 +31,8 @@ internal/<name>/<name>_test.go
 
 - `cmd/<name>/` is the thin Cobra adapter package for the command or flag.
 - `internal/<name>/` contains that capability's implementation and supporting
-  files. Keep additional files in this package when the capability grows.
+  files. Keep additional files in this package when the capability grows; see
+  Package Organization for when a subpackage is warranted.
 - Export a direct operation named after the capability when that name reads
   clearly at the call site; for example, `cmd/version/version.go` calls
   `version.Version()` from `internal/version`.
@@ -57,6 +58,51 @@ internal/<name>/<name>_test.go
   require moving reusable business logic.
 - When mirrored packages have the same name, use role-based import aliases at
   the wiring site, such as `versioncmd` and `internalversion`.
+
+## Package Organization
+
+`internal/<capability>/` is flat by default. Grow it with files, not
+subpackages, until a group of files serves one distinct sub-responsibility
+and the rest of the package needs only a narrow API from it (roughly 1–3
+exported entry points). File count is a smell, not a trigger.
+
+- Subpackages are short singular nouns naming the responsibility, with no
+  parent prefix: `internal/session/record`, not `sessionrecord`.
+- `<pkg>/types` is allowed when two or more sibling packages share data types
+  or interfaces. It holds contracts only: no logic, no sibling imports.
+- `<pkg>/utils` is allowed for stateless helpers with no domain meaning used
+  by two or more siblings. It imports no sibling. Prefer a package named for
+  what it does (`internal/subprocess`) when one name fits.
+- The parent package stays the facade. `cmd/` imports
+  `internal/<capability>`, never its subpackages. A sibling capability may
+  import a subpackage only for leaf contracts (`types`).
+- When a subpackage type must remain visible through the parent, re-export
+  it with a type alias (`type AgentChoice = types.AgentChoice`).
+- Import a subpackage unaliased. If a local variable would shadow the package
+  name, rename the variable (`rec`, not `sessionrecord`).
+
+### Files
+
+- One concern per file, named as a noun for that concern (`registry.go`,
+  `naming.go`). Small related contracts may share a file named for their
+  role. There is no size limit; size is a smell that triggers a split by
+  concern.
+- `constants.go` holds a package's shared `const`, `var`, and sentinel
+  `Err*` values once more than one file uses them. A value used by one file
+  stays beside its use.
+- Every package with more than one non-test file has a `doc.go` containing
+  only the package comment: a one-paragraph summary followed by a one-line
+  map of each file. Adding, renaming, or removing a file updates `doc.go`
+  in the same change.
+
+### Tests
+
+- Test files move with the code they exercise. Tests that cross a subpackage
+  boundary are rewritten against the exported API; internals are never
+  exported to keep a test alive.
+- Fixtures shared by two or more packages' tests live in `<pkg>/<pkg>test`
+  (for example `internal/session/sessiontest`). It must not import a package
+  whose own tests import it; duplicate a trivial helper instead.
 
 ## Version Invariant
 

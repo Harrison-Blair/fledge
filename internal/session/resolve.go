@@ -7,6 +7,7 @@ import (
 
 	"fledge/internal/herdr"
 	"fledge/internal/project"
+	"fledge/internal/session/record"
 )
 
 // RunningSession returns the sole running Herder session registered by the
@@ -16,7 +17,7 @@ func RunningSession(ctx context.Context, path string, list func(context.Context)
 	if err != nil {
 		return "", fmt.Errorf("resolve Fledge session: %w", err)
 	}
-	records, err := Load(root)
+	records, err := record.Load(root)
 	if err != nil {
 		return "", fmt.Errorf("resolve Fledge session: %w", err)
 	}
