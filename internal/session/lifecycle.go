@@ -19,6 +19,7 @@ import (
 	"fledge/internal/session/lock"
 	"fledge/internal/session/record"
 	"fledge/internal/session/types"
+	"fledge/internal/session/utils"
 )
 
 // Herder is the Herder CLI surface needed to manage Fledge sessions.
@@ -400,7 +401,7 @@ func watchClaimedRunning(ctx context.Context, h Herder, rec record.Record, relea
 				}
 			}
 		}
-		if err := sleep(ctx, 200*time.Millisecond); err != nil {
+		if err := utils.Sleep(ctx, 200*time.Millisecond); err != nil {
 			return err
 		}
 	}
@@ -603,16 +604,4 @@ func moveLast(names []string, target string) []string {
 		break
 	}
 	return names
-}
-
-// sleep waits for d, reporting why the context ended when it ends first.
-func sleep(ctx context.Context, d time.Duration) error {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
 }

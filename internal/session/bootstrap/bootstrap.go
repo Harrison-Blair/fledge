@@ -10,6 +10,7 @@ import (
 
 	"fledge/internal/herdr"
 	"fledge/internal/session/types"
+	"fledge/internal/session/utils"
 )
 
 // LogName is the bootstrap report file written inside a session record.
@@ -145,7 +146,7 @@ func startAgent(ctx context.Context, h Server, in Input, t Timing, paneID string
 			return logFail(in.Log, halted(ctx, fmt.Errorf("start %s: %w", in.Choice.Harness, err)))
 		}
 		logStep(in.Log, "start %s attempt %d failed: %v", in.Choice.Harness, attempt, err)
-		if err := sleep(ctx, t.RetryDelay); err != nil {
+		if err := utils.Sleep(ctx, t.RetryDelay); err != nil {
 			return logFail(in.Log, fmt.Errorf("start %s: %w", in.Choice.Harness, err))
 		}
 	}
@@ -166,20 +167,9 @@ func poll(ctx context.Context, interval time.Duration, ready func(context.Contex
 		if ready(ctx) {
 			return nil
 		}
-		if err := sleep(ctx, interval); err != nil {
+		if err := utils.Sleep(ctx, interval); err != nil {
 			return err
 		}
-	}
-}
-
-func sleep(ctx context.Context, d time.Duration) error {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
 	}
 }
 
