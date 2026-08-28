@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -233,16 +234,6 @@ func initialNameLimit(sessions []herdr.Session) (int, error) {
 		return 0, fmt.Errorf("default Herder session directory leaves no usable session-name capacity")
 	}
 	return limit, nil
-}
-
-func min(values ...int) int {
-	result := values[0]
-	for _, value := range values[1:] {
-		if value < result {
-			result = value
-		}
-	}
-	return result
 }
 
 func startClaimed(ctx context.Context, root string, rec record.Record, deps StartDependencies, release func() error) error {
@@ -599,15 +590,7 @@ func registeredRunningNames(records []record.Record, sessions []herdr.Session) [
 }
 
 func contains(names []string, target string) bool {
-	if target == "" {
-		return false
-	}
-	for _, name := range names {
-		if name == target {
-			return true
-		}
-	}
-	return false
+	return target != "" && slices.Contains(names, target)
 }
 
 func moveLast(names []string, target string) []string {
