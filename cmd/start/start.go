@@ -4,12 +4,14 @@ package start
 import (
 	"context"
 	"crypto/rand"
+	"fmt"
 	"os"
 	"time"
 
 	"fledge/internal/catalog"
 	"fledge/internal/herdr"
 	"fledge/internal/picker"
+	"fledge/internal/profile"
 	"fledge/internal/session"
 
 	"github.com/spf13/cobra"
@@ -29,31 +31,64 @@ func New() *cobra.Command {
 
 func newCommand(start startOperation, isTerminal terminalDetector) *cobra.Command {
 	var newSession bool
+	var harness string
+	var model string
+	var profileName string
+	var noProfile bool
 	command := &cobra.Command{
-		Use:   "start [path]",
+		Use:   "start [path] [-- harness arguments]",
 		Short: "Start or attach to this project's Herder session",
-		Args:  cobra.MaximumNArgs(1),
+		Args: func(cmd *cobra.Command, args []string) error {
+			named := len(args)
+			if dash := cmd.ArgsLenAtDash(); dash != -1 {
+				named = dash
+			}
+			return cobra.MaximumNArgs(1)(cmd, args[:named])
+		},
+		PreRunE: func(cmd *cobra.Command, _ []string) error {
+			if cmd.Flags().Changed("profile") && cmd.Flags().Changed("no-profile") {
+				return fmt.Errorf("--profile and --no-profile cannot be used together")
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := "."
-			if len(args) == 1 {
+			named := len(args)
+			var harnessArgs []string
+			if dash := cmd.ArgsLenAtDash(); dash != -1 {
+				named = dash
+				harnessArgs = append([]string(nil), args[dash:]...)
+			}
+			if named == 1 {
 				path = args[0]
 			}
 
 			input := cmd.InOrStdin()
 			output := cmd.OutOrStdout()
+			interactive := streamIsTerminal(input, isTerminal) && streamIsTerminal(output, isTerminal)
 			client := herdr.New(input, output, cmd.ErrOrStderr())
 			return start(cmd.Context(), path, session.StartDependencies{
 				Herder:  client,
 				Entropy: rand.Reader,
 				Now:     time.Now,
 				Getenv:  os.Getenv,
-				Chooser: picker.AgentChooser{
-					Input:            input,
-					Output:           output,
-					InputIsTerminal:  streamIsTerminal(input, isTerminal),
-					OutputIsTerminal: streamIsTerminal(output, isTerminal),
-					Models: func(ctx context.Context, harness catalog.Harness) []string {
-						return catalog.Models(ctx, harness, modelTimeout)
+				Chooser: picker.SessionChooser{
+					Resolver: picker.Resolver{
+						Input:  input,
+						Output: output,
+						Models: func(ctx context.Context, harness catalog.Harness) []string {
+							return catalog.Models(ctx, harness, modelTimeout)
+						},
+					},
+					Request: picker.LaunchRequest{
+						Harness:        harness,
+						Model:          model,
+						Profile:        profileName,
+						NoProfile:      noProfile,
+						DefaultProfile: profile.OrchestratorName,
+						Args:           harnessArgs,
+						AllowShellOnly: true,
+						Interactive:    interactive,
 					},
 				},
 				Scoped: func(sessionName string) session.Bootstrapper {
@@ -65,7 +100,12 @@ func newCommand(start startOperation, isTerminal terminalDetector) *cobra.Comman
 		},
 	}
 
-	command.Flags().BoolVar(&newSession, "new", false, "Discard this project's session claim and start a fresh session (stop running sessions first)")
+	flags := command.Flags()
+	flags.BoolVar(&newSession, "new", false, "Discard this project's session claim and start a fresh session (stop running sessions first)")
+	flags.StringVar(&harness, "harness", "", "agent harness to start")
+	flags.StringVar(&model, "model", "", "model passed to the harness")
+	flags.StringVar(&profileName, "profile", "", "managed agent profile to apply")
+	flags.BoolVar(&noProfile, "no-profile", false, "start without an agent profile")
 
 	return command
 }

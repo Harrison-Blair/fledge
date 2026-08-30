@@ -7,7 +7,9 @@ import (
 	"regexp"
 	"time"
 
+	"fledge/internal/catalog"
 	"fledge/internal/herdr"
+	"fledge/internal/profile"
 )
 
 const defaultSplitDirection = "right"
@@ -18,12 +20,13 @@ var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 
 // SpawnOptions describes an agent launch. At most one of Workspace, Tab, and
 // Pane selects where the agent lands; Workspace is "new" or a workspace ID.
-// Ratio applies to the split placements only, Label defaults to Name, and Args
-// are extra harness arguments appended after the model selection.
+// Ratio applies to the split placements only, Label defaults to Name, Profile
+// is an immutable managed snapshot, and Args follow model and profile delivery.
 type SpawnOptions struct {
 	Name      string
-	Kind      string
+	Harness   string
 	Model     string
+	Profile   *profile.Profile
 	Workspace string
 	Tab       string
 	Pane      string
@@ -36,19 +39,35 @@ type SpawnOptions struct {
 // SpawnResult describes the agent that was started and where it landed.
 type SpawnResult struct {
 	Name        string `json:"name"`
-	Kind        string `json:"kind"`
+	Harness     string `json:"harness"`
 	Model       string `json:"model"`
+	Profile     string `json:"profile"`
 	WorkspaceID string `json:"workspace_id"`
 	TabID       string `json:"tab_id"`
 	PaneID      string `json:"pane_id"`
 }
 
-// Spawn creates a pane for the agent and starts the harness inside it. The
-// pane is closed again when the harness fails to start.
-func Spawn(ctx context.Context, h Herder, caller Caller, opts SpawnOptions) (SpawnResult, error) {
+// Spawn creates a pane for the agent and starts the harness inside it. A failed
+// launch closes the pane and removes any file-backed profile artifact.
+func Spawn(ctx context.Context, h Herder, caller Caller, opts SpawnOptions) (result SpawnResult, err error) {
 	label, err := validateSpawn(opts)
 	if err != nil {
 		return SpawnResult{}, fmt.Errorf("spawn agent: %w", err)
+	}
+	args, cleanupArtifact, err := spawnArgs(caller, opts)
+	if err != nil {
+		return SpawnResult{}, fmt.Errorf("spawn agent %q: %w", opts.Name, err)
+	}
+	retainArtifact := false
+	if cleanupArtifact != nil {
+		defer func() {
+			if retainArtifact {
+				return
+			}
+			if cleanupErr := cleanupArtifact(); cleanupErr != nil {
+				err = errors.Join(err, cleanupErr)
+			}
+		}()
 	}
 
 	pane, err := placePane(ctx, h, caller, opts, label)
@@ -56,13 +75,9 @@ func Spawn(ctx context.Context, h Herder, caller Caller, opts SpawnOptions) (Spa
 		return SpawnResult{}, fmt.Errorf("spawn agent %q: %w", opts.Name, err)
 	}
 
-	args := opts.Args
-	if opts.Model != "" {
-		args = append([]string{"--model", opts.Model}, opts.Args...)
-	}
 	if _, startErr := h.StartAgent(ctx, herdr.StartAgentOptions{
 		Name:   opts.Name,
-		Kind:   opts.Kind,
+		Kind:   opts.Harness,
 		PaneID: pane.ID,
 		Args:   args,
 	}); startErr != nil {
@@ -80,15 +95,53 @@ func Spawn(ctx context.Context, h Herder, caller Caller, opts SpawnOptions) (Spa
 		}
 		return SpawnResult{}, fmt.Errorf("spawn agent %q: %w", opts.Name, errors.Join(failures...))
 	}
+	retainArtifact = true
 
-	return SpawnResult{
+	result = SpawnResult{
 		Name:        opts.Name,
-		Kind:        opts.Kind,
+		Harness:     opts.Harness,
 		Model:       opts.Model,
 		WorkspaceID: pane.WorkspaceID,
 		TabID:       pane.TabID,
 		PaneID:      pane.ID,
-	}, nil
+	}
+	if opts.Profile != nil {
+		result.Profile = opts.Profile.Name
+	}
+	return result, nil
+}
+
+func spawnArgs(caller Caller, opts SpawnOptions) ([]string, func() error, error) {
+	args := append([]string(nil), opts.Args...)
+	var cleanup func() error
+	if opts.Profile != nil {
+		// Validate the selected harness and every reserved instruction argument
+		// before writing an artifact or creating a pane.
+		if _, err := profile.LaunchArgs(*opts.Profile, opts.Harness, "/fledge/profile/instructions.md", args); err != nil {
+			return nil, nil, fmt.Errorf("prepare profile %q: %w", opts.Profile.Name, err)
+		}
+
+		instructionPath := ""
+		if opts.Harness == string(catalog.Pi) || opts.Harness == string(catalog.Claude) {
+			var err error
+			instructionPath, cleanup, err = createProfileArtifact(caller.RecordPath, opts.Name, opts.Profile.Instructions)
+			if err != nil {
+				return nil, nil, fmt.Errorf("materialize profile %q: %w", opts.Profile.Name, err)
+			}
+		}
+		var err error
+		args, err = profile.LaunchArgs(*opts.Profile, opts.Harness, instructionPath, args)
+		if err != nil {
+			if cleanup != nil {
+				err = errors.Join(err, cleanup())
+			}
+			return nil, nil, fmt.Errorf("prepare profile %q: %w", opts.Profile.Name, err)
+		}
+	}
+	if opts.Model != "" {
+		args = append([]string{"--model", opts.Model}, args...)
+	}
+	return args, cleanup, nil
 }
 
 // validateSpawn checks the options in isolation and returns the pane label.
@@ -96,8 +149,8 @@ func validateSpawn(opts SpawnOptions) (string, error) {
 	if !namePattern.MatchString(opts.Name) {
 		return "", fmt.Errorf("name %q must match %s", opts.Name, namePattern)
 	}
-	if opts.Kind == "" {
-		return "", fmt.Errorf("agent kind is required")
+	if _, err := catalog.ParseHarness(opts.Harness); err != nil {
+		return "", err
 	}
 
 	placements := 0

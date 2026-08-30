@@ -16,7 +16,9 @@ agents.
 Fledge currently supports Linux on `amd64` and `arm64`. Install
 [herdr](https://herdr.dev/docs/install/) first and make sure `herdr` is on your
 `PATH`. To run an agent, its CLI must also be installed and authenticated;
-Fledge's startup picker offers Pi, Claude Code, Codex, OpenCode, and Cursor.
+Fledge supports Pi, Claude Code, Codex, and Cursor as agent harnesses. OpenCode
+is not a supported harness. Pi may still expose provider-qualified OpenCode API
+models in its model picker; those models run through the Pi harness.
 
 ### User
 
@@ -59,11 +61,23 @@ fledge start
 ```
 
 The first start asks which agent harness and model to run in the orchestrator
-pane; choose `none — shell only` if you do not want an agent. Later starts
-reattach to the same running session. Run `fledge start --new` to discard that
-attachment and choose a fresh agent and session; it refuses while a session is
-running. To stop the project's sessions and their panes, return to a shell and
-run:
+pane; choose `none — shell only` if you do not want an agent. The root agent
+silently receives the managed `fledge-orchestrator` profile before its first
+turn. Use `--no-profile` to opt out explicitly.
+
+Pi, Claude Code, and Codex receive profiles through their native instruction
+channels. Cursor cannot load profiles yet. Selecting Cursor interactively asks
+for confirmation before continuing without the profile; non-interactive Cursor
+starts must pass `--no-profile`.
+
+Later starts reattach to the same running session. Harness, model, and profile
+flags on `fledge start` apply only when creating a fresh session; they do not
+change an existing session on reattach. Each fresh session stores an immutable
+snapshot of its selected profile, so an existing session retains the exact
+instructions it started with after Fledge is upgraded. Run `fledge start --new`
+to discard a stopped session's claim and choose a fresh agent and session; it
+refuses while a session is running. To stop the project's sessions and their
+panes, return to a shell and run:
 
 ```sh
 fledge stop
@@ -74,12 +88,33 @@ project:
 
 ```sh
 fledge agent list
-fledge agent spawn reviewer --kind codex
+fledge agent spawn reviewer --harness codex
 fledge agent message reviewer "Review the current changes." --wait
 fledge agent stop reviewer
 ```
 
+`fledge start` and `fledge agent spawn` share the same launch resolution: an
+explicit harness or model overrides a profile default, and any remaining choice
+opens a picker when both input and output are terminals. Non-interactive use
+must provide both `--harness` and `--model`. Interactive `agent spawn` also
+offers a profile picker with `None` and the available managed profiles;
+non-interactive spawning uses no profile unless `--profile` is passed. The
+`--profile` and `--no-profile` flags are mutually exclusive.
+
+Inspect the profiles shipped with Fledge and the exact instructions they inject:
+
+```sh
+fledge profile list
+fledge profile show fledge-orchestrator
+```
+
 Use `fledge --help` or `fledge <command> --help` for all commands and flags.
+
+## Compatibility
+
+Until Fledge 1.0, CLI flags, commands, configuration schemas, and persisted
+internal state may change without compatibility aliases or migrations. Breaking
+changes are still documented in release notes.
 
 ## References
 

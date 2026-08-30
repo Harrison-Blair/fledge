@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"fledge/internal/herdr"
+	"fledge/internal/profile"
 	"fledge/internal/session/types"
 	"fledge/internal/session/utils"
 )
@@ -33,9 +34,10 @@ type Server interface {
 
 // Input describes the session being prepared.
 type Input struct {
-	Root   string
-	Choice types.AgentChoice
-	Log    io.Writer
+	Root                    string
+	Choice                  types.AgentChoice
+	ProfileInstructionsPath string
+	Log                     io.Writer
 }
 
 // Timing bounds the polling a fresh Herder server requires.
@@ -62,6 +64,10 @@ func Run(ctx context.Context, h Server, in Input, t Timing) error {
 	defer cancel()
 
 	logStep(in.Log, "bootstrap started")
+	args, err := launchArgs(in)
+	if err != nil {
+		return logFail(in.Log, err)
+	}
 
 	// Herder reports failure until its socket exists, so errors here mean the
 	// server is not up yet.
@@ -120,19 +126,36 @@ func Run(ctx context.Context, h Server, in Input, t Timing) error {
 		logStep(in.Log, "no agent requested")
 		return nil
 	}
-	return startAgent(ctx, h, in, t, pane.ID)
+	return startAgent(ctx, h, in, t, pane.ID, args)
+}
+
+func launchArgs(in Input) ([]string, error) {
+	if in.Choice.Harness == "" {
+		return nil, nil
+	}
+
+	args := append([]string(nil), in.Choice.Args...)
+	if in.Choice.Profile != nil {
+		var err error
+		args, err = profile.LaunchArgs(*in.Choice.Profile, in.Choice.Harness, in.ProfileInstructionsPath, args)
+		if err != nil {
+			return nil, fmt.Errorf("deliver pinned profile: %w", err)
+		}
+	}
+	if in.Choice.Model != "" {
+		args = append([]string{"--model", in.Choice.Model}, args...)
+	}
+	return args, nil
 }
 
 // startAgent launches the chosen harness, retrying while Herder rejects the
 // request because the fresh pane has not reached its shell prompt.
-func startAgent(ctx context.Context, h Server, in Input, t Timing, paneID string) error {
+func startAgent(ctx context.Context, h Server, in Input, t Timing, paneID string, args []string) error {
 	options := herdr.StartAgentOptions{
 		Name:   orchestratorName,
 		Kind:   in.Choice.Harness,
 		PaneID: paneID,
-	}
-	if in.Choice.Model != "" {
-		options.Args = []string{"--model", in.Choice.Model}
+		Args:   args,
 	}
 
 	for attempt := 1; ; attempt++ {

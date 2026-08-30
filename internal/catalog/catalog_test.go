@@ -30,12 +30,6 @@ test "$#" -eq 1
 test "$1" = --list-models
 printf '%s' "$PI_FAKE_OUTPUT"
 `
-	openCodeFake = `
-test "$#" -eq 1
-test "$1" = models
-printf 'stderr/noise\n' >&2
-printf '%s' "$OPENCODE_FAKE_OUTPUT"
-`
 	cursorFake = `
 test "$#" -eq 1
 test "$1" = --list-models
@@ -59,9 +53,43 @@ func fakeHarnesses(t *testing.T, bins map[string]string) {
 }
 
 func TestHarnesses(t *testing.T) {
-	want := []Harness{Pi, Claude, Codex, OpenCode, Cursor}
+	want := []Harness{Pi, Claude, Codex, Cursor}
 	if got := Harnesses(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Harnesses = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseHarness(t *testing.T) {
+	tests := []struct {
+		value   string
+		want    Harness
+		wantErr string
+	}{
+		{value: "pi", want: Pi},
+		{value: "claude", want: Claude},
+		{value: "codex", want: Codex},
+		{value: "cursor", want: Cursor},
+		{value: "", wantErr: "harness is required (supported: pi, claude, codex, cursor)"},
+		{value: "opencode", wantErr: `unsupported harness "opencode" (supported: pi, claude, codex, cursor)`},
+		{value: "gemini", wantErr: `unsupported harness "gemini" (supported: pi, claude, codex, cursor)`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.value, func(t *testing.T) {
+			got, err := ParseHarness(tc.value)
+			if got != tc.want {
+				t.Fatalf("ParseHarness(%q) = %q, want %q", tc.value, got, tc.want)
+			}
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("ParseHarness(%q) error = %v", tc.value, err)
+				}
+				return
+			}
+			if err == nil || err.Error() != tc.wantErr {
+				t.Fatalf("ParseHarness(%q) error = %v, want %q", tc.value, err, tc.wantErr)
+			}
+		})
 	}
 }
 
@@ -79,22 +107,11 @@ func TestModels(t *testing.T) {
 			want: []string{
 				"opencode/claude-fable-5",
 				"opencode/claude-opus-4-8",
+				"opencode-go/glm-5",
 				"opencode/big-pickle",
 				"openai-codex/gpt-5.5",
 				"openai-codex/gpt-5.4",
 				"openai-codex/gpt-5.3-codex-spark",
-			},
-		},
-		{
-			name:    "opencode reports whole lines",
-			harness: OpenCode,
-			bins:    map[string]string{"opencode": openCodeFake},
-			want: []string{
-				"opencode/claude-fable-5",
-				"opencode/claude-opus-4-8",
-				"opencode/deepseek-v4-flash",
-				"opencode/big-pickle",
-				"ollama/llama3",
 			},
 		},
 		{
@@ -104,9 +121,9 @@ func TestModels(t *testing.T) {
 			want:    []string{"gpt-5.5", "gpt-5.4", "gpt-5.3-codex-spark"},
 		},
 		{
-			name:    "claude merges both catalogs",
+			name:    "claude keeps claude models from pi providers",
 			harness: Claude,
-			bins:    map[string]string{"pi": piFake, "opencode": openCodeFake},
+			bins:    map[string]string{"pi": piFake},
 			want:    []string{"claude-fable-5", "claude-opus-4-8"},
 		},
 		{
@@ -127,7 +144,6 @@ func TestModels(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fakeHarnesses(t, tc.bins)
 			t.Setenv("PI_FAKE_OUTPUT", piSample)
-			t.Setenv("OPENCODE_FAKE_OUTPUT", openCodeSample)
 			t.Setenv("CURSOR_FAKE_OUTPUT", cursorSample)
 
 			got := Models(context.Background(), tc.harness, time.Minute)
@@ -138,34 +154,27 @@ func TestModels(t *testing.T) {
 	}
 }
 
-func TestModelsClaudeUnionsAvailableSources(t *testing.T) {
+func TestModelsClaudeUsesPiCatalog(t *testing.T) {
 	tests := []struct {
 		name string
 		bins map[string]string
 		want []string
 	}{
 		{
-			name: "both sources",
-			bins: map[string]string{"pi": piFake, "opencode": openCodeFake},
-			want: []string{"claude-opus-4-8", "claude-pi-only", "claude-opencode-only"},
-		},
-		{
-			name: "opencode missing",
+			name: "pi available",
 			bins: map[string]string{"pi": piFake},
 			want: []string{"claude-opus-4-8", "claude-pi-only"},
 		},
 		{
 			name: "pi missing",
-			bins: map[string]string{"opencode": openCodeFake},
-			want: []string{"claude-opus-4-8", "claude-opencode-only"},
+			bins: map[string]string{},
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			fakeHarnesses(t, tc.bins)
-			t.Setenv("PI_FAKE_OUTPUT", "provider  model  context\nopencode  claude-opus-4-8  1M\nopencode  claude-pi-only  1M\nopencode  big-pickle  200K\n")
-			t.Setenv("OPENCODE_FAKE_OUTPUT", "opencode/claude-opus-4-8\nopencode/claude-opencode-only\nollama/llama3\n")
+			t.Setenv("PI_FAKE_OUTPUT", "provider  model  context\nopencode-go  claude-opus-4-8  1M\nopencode-go  claude-pi-only  1M\nopencode-go  big-pickle  200K\n")
 
 			got := Models(context.Background(), Claude, time.Minute)
 			if !reflect.DeepEqual(got, tc.want) {
@@ -197,11 +206,10 @@ exit 1
 		},
 		{name: "codex source exits non-zero", harness: Codex, bins: map[string]string{"pi": `exit 1`}},
 		{
-			name:    "both claude sources exit non-zero",
+			name:    "claude source exits non-zero",
 			harness: Claude,
-			bins:    map[string]string{"pi": `exit 1`, "opencode": `exit 1`},
+			bins:    map[string]string{"pi": `exit 1`},
 		},
-		{name: "opencode exits non-zero", harness: OpenCode, bins: map[string]string{"opencode": `exit 1`}},
 	}
 
 	for _, tc := range tests {
@@ -258,26 +266,16 @@ func TestModelsRejectsUnknownHarness(t *testing.T) {
 	}
 }
 
-func TestModelsClaudeQueriesSourcesConcurrently(t *testing.T) {
-	sleepBin, err := exec.LookPath("sleep")
-	if err != nil {
-		t.Fatal(err)
-	}
-	stall := sleepBin + " 0.3\n"
-	fakeHarnesses(t, map[string]string{"pi": stall + piFake, "opencode": stall + openCodeFake})
-	t.Setenv("PI_FAKE_OUTPUT", piSample)
-	t.Setenv("OPENCODE_FAKE_OUTPUT", openCodeSample)
+func TestModelsNeverInvokesOpenCode(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "invoked")
+	fakeHarnesses(t, map[string]string{"opencode": `: > "$OPENCODE_MARKER"`})
+	t.Setenv("OPENCODE_MARKER", marker)
 
-	start := time.Now()
-	got := Models(context.Background(), Claude, time.Minute)
-	elapsed := time.Since(start)
-
-	want := []string{"claude-fable-5", "claude-opus-4-8"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Models(claude) = %#v, want %#v", got, want)
+	for _, harness := range Harnesses() {
+		Models(context.Background(), harness, time.Minute)
 	}
-	if elapsed >= 500*time.Millisecond {
-		t.Fatalf("Models(claude) took %v, want the sources queried concurrently", elapsed)
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("opencode executable invocation marker error = %v, want not exist", err)
 	}
 }
 

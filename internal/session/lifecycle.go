@@ -130,6 +130,9 @@ func Start(ctx context.Context, path string, deps StartDependencies) error {
 			if err != nil {
 				return finish(fmt.Errorf("start Fledge session: %w", err))
 			}
+			if err := reportActiveProfile(deps.Diagnostics, *claimed); err != nil {
+				return finish(fmt.Errorf("start Fledge session: %w", err))
+			}
 			if claimed.PendingChoice != nil {
 				if err := record.ClearPending(*claimed); err != nil {
 					return finish(fmt.Errorf("start Fledge session: %w", err))
@@ -178,6 +181,9 @@ func Start(ctx context.Context, path string, deps StartDependencies) error {
 		rec := recordByName(records, running[0])
 		before, err := record.ReadStopIntent(rec)
 		if err != nil {
+			return finish(fmt.Errorf("start Fledge session: %w", err))
+		}
+		if err := reportActiveProfile(deps.Diagnostics, rec); err != nil {
 			return finish(fmt.Errorf("start Fledge session: %w", err))
 		}
 		if err := record.Claim(rec); err != nil {
@@ -241,6 +247,17 @@ func startClaimed(ctx context.Context, root string, rec record.Record, deps Star
 	if rec.PendingChoice != nil && (deps.Scoped == nil || deps.Diagnostics == nil) {
 		return joinStartRelease(fmt.Errorf("start Fledge session: claimed pending session requires bootstrap dependencies"), release)
 	}
+	if err := reportActiveProfile(deps.Diagnostics, rec); err != nil {
+		return joinStartRelease(fmt.Errorf("start Fledge session: %w", err), release)
+	}
+	var profileInstructionsPath string
+	if rec.PendingChoice != nil {
+		var err error
+		profileInstructionsPath, err = record.ProfileInstructionsPath(rec)
+		if err != nil {
+			return joinStartRelease(fmt.Errorf("start Fledge session: load pinned profile: %w", err), release)
+		}
+	}
 	before, err := record.ReadStopIntent(rec)
 	if err != nil {
 		return joinStartRelease(fmt.Errorf("start Fledge session: %w", err), release)
@@ -274,7 +291,12 @@ func startClaimed(ctx context.Context, root string, rec record.Record, deps Star
 			timing = bootstrap.DefaultTiming
 		}
 		go func() {
-			bootDone <- bootstrap.Run(bootCtx, deps.Scoped(rec.HerdrSessionName), bootstrap.Input{Root: root, Choice: choice, Log: log}, timing)
+			bootDone <- bootstrap.Run(bootCtx, deps.Scoped(rec.HerdrSessionName), bootstrap.Input{
+				Root:                    root,
+				Choice:                  choice,
+				ProfileInstructionsPath: profileInstructionsPath,
+				Log:                     log,
+			}, timing)
 		}()
 	}
 	launchErr := deps.Herder.Launch(ctx, root, rec.HerdrSessionName)
@@ -326,6 +348,20 @@ func startClaimed(ctx context.Context, root string, rec record.Record, deps Star
 		result = errors.Join(result, fmt.Errorf("start Fledge session: release project lock: %w", releaseErr))
 	}
 	return result
+}
+
+func reportActiveProfile(output io.Writer, rec record.Record) error {
+	if output == nil {
+		return nil
+	}
+	name := "none"
+	if rec.Profile != nil {
+		name = rec.Profile.Name
+	}
+	if _, err := fmt.Fprintf(output, "fledge: profile %s\n", name); err != nil {
+		return fmt.Errorf("report active profile: %w", err)
+	}
+	return nil
 }
 
 func finishAttachedLaunch(ctx context.Context, root string, rec record.Record, deps StartDependencies, before record.StopIntent, launchErr error) error {

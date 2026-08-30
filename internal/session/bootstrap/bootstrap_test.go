@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"fledge/internal/herdr"
+	"fledge/internal/profile"
 	"fledge/internal/session/bootstrap"
 	"fledge/internal/session/sessiontest"
 	"fledge/internal/session/types"
@@ -66,6 +67,98 @@ func TestBootstrapOmitsModelArgumentWhenUnset(t *testing.T) {
 	}
 	if args := server.Started[0].Args; len(args) != 0 {
 		t.Fatalf("StartAgent args = %#v, want none", args)
+	}
+}
+
+func TestBootstrapUsesPinnedProfileThroughNativeHarnessArguments(t *testing.T) {
+	configured := profile.Profile{Name: profile.OrchestratorName, Instructions: "line one\nline \"two\""}
+	tests := []struct {
+		name    string
+		harness string
+		path    string
+		want    []string
+	}{
+		{
+			name:    "pi",
+			harness: "pi",
+			path:    "/sessions/pi/profile.md",
+			want:    []string{"--model", "selected", "--append-system-prompt", "/sessions/pi/profile.md", "--thinking", "high"},
+		},
+		{
+			name:    "claude",
+			harness: "claude",
+			path:    "/sessions/claude/profile.md",
+			want:    []string{"--model", "selected", "--append-system-prompt-file", "/sessions/claude/profile.md", "--thinking", "high"},
+		},
+		{
+			name:    "codex",
+			harness: "codex",
+			path:    "/sessions/codex/profile.md",
+			want:    []string{"--model", "selected", "-c", `developer_instructions="line one\nline \"two\""`, "--thinking", "high"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := sessiontest.ReadyBootstrapper()
+			choice := types.AgentChoice{
+				Harness: test.harness,
+				Model:   "selected",
+				Args:    []string{"--thinking", "high"},
+				Profile: &configured,
+			}
+			in := bootstrapArgs(choice, &bytes.Buffer{})
+			in.ProfileInstructionsPath = test.path
+
+			if err := bootstrap.Run(context.Background(), server, in, sessiontest.FastTiming()); err != nil {
+				t.Fatalf("bootstrap.Run() error = %v", err)
+			}
+			if len(server.Started) != 1 || !reflect.DeepEqual(server.Started[0].Args, test.want) {
+				t.Fatalf("StartAgent calls = %#v, want args %#v", server.Started, test.want)
+			}
+		})
+	}
+}
+
+func TestBootstrapProfileDeliveryFailureIsFatalBeforeServerMutation(t *testing.T) {
+	tests := []struct {
+		name    string
+		choice  types.AgentChoice
+		path    string
+		wantErr string
+	}{
+		{
+			name: "missing instruction artifact",
+			choice: types.AgentChoice{
+				Harness: "pi",
+				Profile: &profile.Profile{Name: profile.OrchestratorName},
+			},
+			wantErr: "instruction file path is empty",
+		},
+		{
+			name: "unsupported harness",
+			choice: types.AgentChoice{
+				Harness: "cursor",
+				Profile: &profile.Profile{Name: profile.OrchestratorName},
+			},
+			path:    "/sessions/cursor/profile.md",
+			wantErr: "does not support native profile delivery",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := sessiontest.ReadyBootstrapper()
+			in := bootstrapArgs(test.choice, &bytes.Buffer{})
+			in.ProfileInstructionsPath = test.path
+			err := bootstrap.Run(context.Background(), server, in, sessiontest.FastTiming())
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("bootstrap.Run() error = %v, want containing %q", err, test.wantErr)
+			}
+			if server.StatusCalls != 0 || len(server.RenamedWorkspace) != 0 || len(server.Started) != 0 {
+				t.Fatalf("server mutated after delivery error: %#v", server)
+			}
+		})
 	}
 }
 

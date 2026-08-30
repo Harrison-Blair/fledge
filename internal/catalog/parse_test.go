@@ -13,14 +13,7 @@ openai-codex  gpt-5.5                 272K     128K     yes       yes
 opencode      big-pickle              200K     32K      yes       no    
 opencode      claude-fable-5          1M       128K     yes       yes   
 opencode      claude-opus-4-8         1M       128K     yes       yes   
-`
-
-// openCodeSample is real opencode models output.
-const openCodeSample = `opencode/big-pickle
-opencode/claude-fable-5
-opencode/claude-opus-4-8
-opencode/deepseek-v4-flash
-ollama/llama3
+opencode-go   glm-5                   128K     64K      yes       yes
 `
 
 func TestParsePiTable(t *testing.T) {
@@ -32,6 +25,7 @@ func TestParsePiTable(t *testing.T) {
 		{provider: "opencode", model: "big-pickle"},
 		{provider: "opencode", model: "claude-fable-5"},
 		{provider: "opencode", model: "claude-opus-4-8"},
+		{provider: "opencode-go", model: "glm-5"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("parsePiTable = %#v, want %#v", got, want)
@@ -77,13 +71,11 @@ func TestParsePiTableSkipsUnusableLines(t *testing.T) {
 }
 
 func TestParseLines(t *testing.T) {
-	got := parseLines(openCodeSample)
+	got := parseLines("Available models\n\nauto - Auto (default)\ngpt-5.3-codex-low - Codex 5.3 Low\n")
 	want := []string{
-		"opencode/big-pickle",
-		"opencode/claude-fable-5",
-		"opencode/claude-opus-4-8",
-		"opencode/deepseek-v4-flash",
-		"ollama/llama3",
+		"Available models",
+		"auto - Auto (default)",
+		"gpt-5.3-codex-low - Codex 5.3 Low",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("parseLines = %#v, want %#v", got, want)
@@ -98,8 +90,8 @@ func TestParseLinesTrimsAndSkipsBlanks(t *testing.T) {
 	}{
 		{name: "empty", out: ""},
 		{name: "blank only", out: "\n  \n\t\n"},
-		{name: "trims padding", out: "  opencode/big-pickle  \n", want: []string{"opencode/big-pickle"}},
-		{name: "no trailing newline", out: "ollama/llama3", want: []string{"ollama/llama3"}},
+		{name: "trims padding", out: "  auto - Auto (default)  \n", want: []string{"auto - Auto (default)"}},
+		{name: "no trailing newline", out: "composer-2.5 - Composer 2.5", want: []string{"composer-2.5 - Composer 2.5"}},
 	}
 
 	for _, tc := range tests {

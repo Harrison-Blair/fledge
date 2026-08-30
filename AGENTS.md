@@ -113,6 +113,12 @@ exported entry points). File count is a smell, not a trigger.
 - Cobra exposes the value through `fledge --version` and `fledge -V`; there is
   no `version` subcommand or lowercase `-v` alias.
 
+## Compatibility Invariant
+
+Until Fledge 1.0, CLI flags, commands, configuration schemas, and persisted
+internal state may change without compatibility aliases or migrations. Breaking
+changes are still documented in release notes.
+
 ## Design Discipline
 
 - Review `reference/go-design-patterns.md` before introducing a design pattern.

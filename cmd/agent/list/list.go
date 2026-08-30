@@ -74,7 +74,7 @@ func newCommand(list listOperation, rawList rawListOperation) *cobra.Command {
 
 func writeTable(output io.Writer, agents []herdr.Agent) error {
 	writer := tabwriter.NewWriter(output, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(writer, "NAME\tKIND\tSTATUS\tWORKSPACE\tTAB\tPANE"); err != nil {
+	if _, err := fmt.Fprintln(writer, "NAME\tHARNESS\tSTATUS\tWORKSPACE\tTAB\tPANE"); err != nil {
 		return err
 	}
 	for _, agent := range agents {

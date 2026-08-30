@@ -3,7 +3,7 @@
 // models installed on this machine.
 //
 // Files:
-//   - catalog.go   Harness identifiers and the Harnesses/Models entry points
+//   - catalog.go   Harness identifiers, validation, and model discovery
 //   - families.go  model family ranking used for ordering
 //   - order.go     model identifier comparison and sorting
 //   - parse.go     parsing of harness CLI output

@@ -5,6 +5,7 @@ import (
 
 	agentcmd "fledge/cmd/agent"
 	initcmd "fledge/cmd/init"
+	profilecmd "fledge/cmd/profile"
 	startcmd "fledge/cmd/start"
 	stopcmd "fledge/cmd/stop"
 	versioncmd "fledge/cmd/version"
@@ -27,6 +28,7 @@ func New() *cobra.Command {
 	versioncmd.Configure(command)
 	command.AddCommand(agentcmd.New())
 	command.AddCommand(initcmd.New())
+	command.AddCommand(profilecmd.New())
 	command.AddCommand(startcmd.New())
 	command.AddCommand(stopcmd.New())
 

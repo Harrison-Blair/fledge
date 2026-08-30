@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"fledge/internal/herdr"
+	"fledge/internal/profile"
 	"fledge/internal/project"
 	"fledge/internal/session/bootstrap"
 	"fledge/internal/session/lock"
@@ -534,8 +535,8 @@ func TestStartNewDiscardsStoppedClaimAndCreatesFreshSession(t *testing.T) {
 	if want := []string{name}; !reflect.DeepEqual(*scoped, want) {
 		t.Fatalf("bootstrapped sessions = %#v, want %#v", *scoped, want)
 	}
-	if diagnostics.Len() != 0 {
-		t.Fatalf("diagnostics = %q, want empty", diagnostics.String())
+	if diagnostics.String() != "fledge: profile none\n" {
+		t.Fatalf("diagnostics = %q, want no-profile launch diagnostic", diagnostics.String())
 	}
 }
 
@@ -1493,8 +1494,8 @@ func TestStartAttachSkipsAgentChoiceAndBootstrap(t *testing.T) {
 	if len(*scoped) != 0 {
 		t.Fatalf("bootstrapped sessions = %#v, want none when re-attaching", *scoped)
 	}
-	if diagnostics.Len() != 0 {
-		t.Fatalf("diagnostics = %q, want empty", diagnostics.String())
+	if diagnostics.String() != "fledge: profile none\n" {
+		t.Fatalf("diagnostics = %q, want pinned no-profile attach diagnostic", diagnostics.String())
 	}
 }
 
@@ -1549,8 +1550,8 @@ func TestStartBootstrapsFreshSessionWhileHerderRuns(t *testing.T) {
 	if want := []herdr.StartAgentOptions{{Name: "orchestrator", Kind: "claude", PaneID: "w1:p2", Args: []string{"--model", "opus"}}}; !reflect.DeepEqual(server.Started, want) {
 		t.Fatalf("StartAgent options = %#v, want %#v", server.Started, want)
 	}
-	if diagnostics.Len() != 0 {
-		t.Fatalf("diagnostics = %q, want empty", diagnostics.String())
+	if diagnostics.String() != "fledge: profile none\n" {
+		t.Fatalf("diagnostics = %q, want no-profile launch diagnostic", diagnostics.String())
 	}
 
 	log, err := os.ReadFile(filepath.Join(root, ".fledge", "sessions", name, bootstrap.LogName))
@@ -1559,6 +1560,136 @@ func TestStartBootstrapsFreshSessionWhileHerderRuns(t *testing.T) {
 	}
 	if !strings.Contains(string(log), "started claude") {
 		t.Fatalf("bootstrap log = %q, want the agent recorded", log)
+	}
+}
+
+func TestStartPinsProfileDeliversItAndRetainsItAfterPendingClears(t *testing.T) {
+	root, _ := lifecycleProject(t, "project")
+	ctx := testContext(t)
+	name := "fledge-project-01020304"
+	agentStarted := make(chan struct{})
+	releaseLaunch := closeOnCleanup(t, agentStarted)
+	server := sessiontest.StartedBootstrapper()
+	server.OnStart = func(context.Context, int) { releaseLaunch() }
+	client := &fakeHerder{
+		listResults: []listResult{
+			{},
+			{sessions: []herdr.Session{{Name: name, Running: true}}},
+		},
+		launchWait: agentStarted,
+	}
+	configured := profile.Profile{
+		Name:         profile.OrchestratorName,
+		Description:  "Pinned orchestrator",
+		Instructions: "pinned instructions",
+	}
+	chooser := &fakeChooser{choice: AgentChoice{
+		Harness: "claude",
+		Model:   "opus",
+		Args:    []string{"--effort", "high"},
+		Profile: &configured,
+	}}
+	var diagnostics bytes.Buffer
+	deps, _ := freshStartDeps(client, chooser, server, &diagnostics)
+
+	if err := Start(ctx, root, deps); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	records, err := record.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].PendingChoice != nil {
+		t.Fatalf("records = %#v, want one record with consumed pending metadata", records)
+	}
+	if records[0].Profile == nil || records[0].Profile.Instructions != configured.Instructions {
+		t.Fatalf("record profile = %#v, want pinned profile retained", records[0].Profile)
+	}
+	profilePath, err := record.ProfileInstructionsPath(records[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(profilePath); err != nil || string(data) != configured.Instructions {
+		t.Fatalf("profile artifact = %q, %v; want pinned instructions", data, err)
+	}
+	wantArgs := []string{"--model", "opus", "--append-system-prompt-file", profilePath, "--effort", "high"}
+	if len(server.Started) != 1 || !reflect.DeepEqual(server.Started[0].Args, wantArgs) {
+		t.Fatalf("StartAgent calls = %#v, want args %#v", server.Started, wantArgs)
+	}
+	if diagnostics.String() != "fledge: profile "+profile.OrchestratorName+"\n" {
+		t.Fatalf("diagnostics = %q, want active profile", diagnostics.String())
+	}
+
+	attachChooser := &fakeChooser{err: errors.New("reattach must not choose")}
+	attachClient := &fakeHerder{sessions: []herdr.Session{{Name: name, Running: true}}}
+	var attachDiagnostics bytes.Buffer
+	attachDeps, _ := freshStartDeps(attachClient, attachChooser, sessiontest.StartedBootstrapper(), &attachDiagnostics)
+	if err := Start(context.Background(), root, attachDeps); err != nil {
+		t.Fatalf("reattach Start() error = %v", err)
+	}
+	if attachChooser.calls != 0 {
+		t.Fatalf("reattach Choose() calls = %d, want none", attachChooser.calls)
+	}
+	if attachDiagnostics.String() != "fledge: profile "+profile.OrchestratorName+"\n" {
+		t.Fatalf("reattach diagnostics = %q, want pinned active profile", attachDiagnostics.String())
+	}
+}
+
+func TestStartRetryUsesPinnedProfileWithoutChoosingAgain(t *testing.T) {
+	root, _ := lifecycleProject(t, "project")
+	configured := profile.Profile{
+		Name:         profile.OrchestratorName,
+		Description:  "Pinned orchestrator",
+		Instructions: "pinned instructions",
+	}
+	chooser := &fakeChooser{choice: AgentChoice{
+		Harness: "codex",
+		Model:   "gpt",
+		Args:    []string{"--search"},
+		Profile: &configured,
+	}}
+	firstClient := &fakeHerder{launchErr: errors.New("first launch failed")}
+	var diagnostics bytes.Buffer
+	firstDeps, _ := freshStartDeps(firstClient, chooser, sessiontest.StartedBootstrapper(), &diagnostics)
+
+	if err := Start(context.Background(), root, firstDeps); err == nil || !strings.Contains(err.Error(), "first launch failed") {
+		t.Fatalf("first Start() error = %v, want launch failure", err)
+	}
+	configured.Instructions = "replacement instructions that must not be used"
+
+	name := "fledge-project-01020304"
+	agentStarted := make(chan struct{})
+	releaseLaunch := closeOnCleanup(t, agentStarted)
+	server := sessiontest.StartedBootstrapper()
+	server.OnStart = func(context.Context, int) { releaseLaunch() }
+	secondClient := &fakeHerder{
+		listResults: []listResult{
+			{},
+			{sessions: []herdr.Session{{Name: name, Running: true}}},
+		},
+		launchWait: agentStarted,
+	}
+	secondDeps, _ := freshStartDeps(secondClient, chooser, server, &diagnostics)
+	if err := Start(testContext(t), root, secondDeps); err != nil {
+		t.Fatalf("retry Start() error = %v", err)
+	}
+	if chooser.calls != 1 {
+		t.Fatalf("Choose() calls = %d, want only the original fresh choice", chooser.calls)
+	}
+	wantArgs := []string{
+		"--model", "gpt",
+		"-c", `developer_instructions="pinned instructions"`,
+		"--search",
+	}
+	if len(server.Started) != 1 || !reflect.DeepEqual(server.Started[0].Args, wantArgs) {
+		t.Fatalf("retry StartAgent calls = %#v, want pinned args %#v", server.Started, wantArgs)
+	}
+	records, err := record.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].PendingChoice != nil || records[0].Profile == nil || records[0].Profile.Instructions != "pinned instructions" {
+		t.Fatalf("records after retry = %#v, want retained pinned profile and cleared pending", records)
 	}
 }
 
@@ -1603,8 +1734,8 @@ func TestStartIgnoresBootstrapCancelledByHerderExit(t *testing.T) {
 	if err := Start(context.Background(), root, deps); err != nil {
 		t.Fatalf("Start() error = %v, want a cancelled bootstrap to be silent", err)
 	}
-	if diagnostics.Len() != 0 {
-		t.Fatalf("diagnostics = %q, want empty", diagnostics.String())
+	if diagnostics.String() != "fledge: profile none\n" {
+		t.Fatalf("diagnostics = %q, want no-profile launch diagnostic", diagnostics.String())
 	}
 	if len(server.Started) != 0 {
 		t.Fatalf("StartAgent calls = %#v, want none", server.Started)
@@ -1627,8 +1758,8 @@ func TestStartIgnoresBootstrapSubprocessKilledByHerderExit(t *testing.T) {
 	if err := Start(context.Background(), root, deps); err != nil {
 		t.Fatalf("Start() error = %v, want a killed subprocess to be silent", err)
 	}
-	if diagnostics.Len() != 0 {
-		t.Fatalf("diagnostics = %q, want empty", diagnostics.String())
+	if diagnostics.String() != "fledge: profile none\n" {
+		t.Fatalf("diagnostics = %q, want no-profile launch diagnostic", diagnostics.String())
 	}
 }
 

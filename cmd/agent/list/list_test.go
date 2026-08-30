@@ -32,9 +32,9 @@ func TestListPrintsAlignedTable(t *testing.T) {
 	if err := command.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	want := "NAME      KIND    STATUS  WORKSPACE  TAB       PANE\n" +
-		"reviewer  claude  idle    ws1        ws1:tab2  ws1:tab2:pane3\n" +
-		"-         codex   busy    ws1        ws1:tab4  ws1:tab4:pane1\n"
+	want := "NAME      HARNESS  STATUS  WORKSPACE  TAB       PANE\n" +
+		"reviewer  claude   idle    ws1        ws1:tab2  ws1:tab2:pane3\n" +
+		"-         codex    busy    ws1        ws1:tab4  ws1:tab4:pane1\n"
 	if output.String() != want {
 		t.Fatalf("output =\n%q\nwant\n%q", output.String(), want)
 	}
@@ -51,7 +51,7 @@ func TestListPrintsHeaderWhenNoAgentsExist(t *testing.T) {
 	if err := command.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if output.String() != "NAME  KIND  STATUS  WORKSPACE  TAB  PANE\n" {
+	if output.String() != "NAME  HARNESS  STATUS  WORKSPACE  TAB  PANE\n" {
 		t.Fatalf("output = %q, want the header alone", output.String())
 	}
 }

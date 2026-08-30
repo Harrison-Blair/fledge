@@ -136,7 +136,12 @@ func TestConnectInsideHerderPaneValidatesProjectSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
-	want := Caller{Session: "fledge-demo-00000001", WorkspaceID: "wsMoved", PaneID: "wsE:tab1:pane4"}
+	want := Caller{
+		Session:     "fledge-demo-00000001",
+		RecordPath:  filepath.Join(root, ".fledge", "sessions", "fledge-demo-00000001"),
+		WorkspaceID: "wsMoved",
+		PaneID:      "wsE:tab1:pane4",
+	}
 	if caller != want {
 		t.Fatalf("caller = %#v, want %#v", caller, want)
 	}
@@ -183,7 +188,7 @@ func TestConnectOutsideHerderResolvesProjectSession(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Connect() error = %v", err)
 			}
-			if caller != (Caller{Session: test.want}) {
+			if caller != (Caller{Session: test.want, RecordPath: filepath.Join(root, ".fledge", "sessions", test.want)}) {
 				t.Fatalf("caller = %#v, want session %q", caller, test.want)
 			}
 			if !reflect.DeepEqual(client, herdr.New(nil, nil, nil).WithSession(test.want)) {
@@ -230,7 +235,7 @@ func TestConnectKeepsSimultaneousProjectSessionsIsolated(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Connect(%q) error = %v", test.root, err)
 		}
-		if caller.Session != test.want || !reflect.DeepEqual(client, herdr.New(nil, nil, nil).WithSession(test.want)) {
+		if caller.Session != test.want || caller.RecordPath != filepath.Join(test.root, ".fledge", "sessions", test.want) || !reflect.DeepEqual(client, herdr.New(nil, nil, nil).WithSession(test.want)) {
 			t.Fatalf("Connect(%q) = %#v, %#v; want session %q", test.root, caller, client, test.want)
 		}
 	}

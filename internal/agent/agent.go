@@ -6,7 +6,9 @@ import (
 	"fmt"
 
 	"fledge/internal/herdr"
+	"fledge/internal/project"
 	"fledge/internal/session"
+	"fledge/internal/session/record"
 )
 
 // Herder is the Herder CLI surface needed to manage agents.
@@ -26,6 +28,7 @@ type Herder interface {
 // Caller is the validated Herder context the command was invoked from.
 type Caller struct {
 	Session     string
+	RecordPath  string
 	WorkspaceID string
 	PaneID      string
 }
@@ -37,8 +40,26 @@ func Connect(ctx context.Context, path string, getenv func(string) string, list 
 	if err != nil {
 		return Caller{}, nil, err
 	}
+	root, err := project.Find(path)
+	if err != nil {
+		return Caller{}, nil, fmt.Errorf("connect to Fledge session: %w", err)
+	}
+	records, err := record.Load(root)
+	if err != nil {
+		return Caller{}, nil, fmt.Errorf("connect to Fledge session: %w", err)
+	}
+	var recordPath string
+	for _, rec := range records {
+		if rec.HerdrSessionName == name {
+			recordPath = rec.Path
+			break
+		}
+	}
+	if recordPath == "" {
+		return Caller{}, nil, fmt.Errorf("connect to Fledge session: record for %q disappeared", name)
+	}
 	client := herdr.New(nil, nil, nil).WithSession(name)
-	caller := Caller{Session: name}
+	caller := Caller{Session: name, RecordPath: recordPath}
 	if getenv("HERDR_ENV") == "1" {
 		_, pane, err := session.ValidateAmbientPane(ctx, getenv, []string{name}, scoped)
 		if err != nil {

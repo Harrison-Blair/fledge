@@ -1,6 +1,0 @@
-interface:
-  display_name: "Fledge Orchestrate"
-  short_description: "Delegate all agent work exclusively through Fledge"
-  default_prompt: "Use $fledge-orchestrate to enter Fledge-only orchestrator mode for this session."
-policy:
-  allow_implicit_invocation: false

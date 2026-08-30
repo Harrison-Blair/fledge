@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"fledge/internal/profile"
 	"fledge/internal/session/sessiontest"
 	"fledge/internal/session/types"
 )
@@ -200,7 +201,7 @@ func TestCreatePublishesExactRecordAndRetainsExistingRecords(t *testing.T) {
 	}
 	for path, want := range map[string]string{
 		"claim.json":   "{\"schema_version\":1}\n",
-		"pending.json": "{\"schema_version\":1,\"harness\":\"\",\"model\":\"\"}\n",
+		"pending.json": "{\"schema_version\":1,\"harness\":\"\",\"model\":\"\",\"args\":[]}\n",
 	} {
 		data, err := os.ReadFile(filepath.Join(record.Path, path))
 		if err != nil {
@@ -227,15 +228,19 @@ func TestLoadClaimAndPendingMetadata(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "claim.json"), []byte(`{"schema_version":1}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "pending.json"), []byte(`{"schema_version":1,"harness":"claude","model":"opus"}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "pending.json"), []byte(`{"schema_version":1,"harness":"claude","model":"opus","args":["--effort","high"]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	records, err := Load(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 1 || !records[0].Claimed || records[0].PendingChoice == nil || *records[0].PendingChoice != (types.AgentChoice{Harness: "claude", Model: "opus"}) {
+	if len(records) != 1 || !records[0].Claimed || records[0].PendingChoice == nil {
 		t.Fatalf("Load() records = %#v", records)
+	}
+	choice := records[0].PendingChoice
+	if choice.Harness != "claude" || choice.Model != "opus" || len(choice.Args) != 2 || choice.Args[0] != "--effort" || choice.Args[1] != "high" || choice.Profile != nil {
+		t.Fatalf("Load() pending choice = %#v", choice)
 	}
 	if err := ClearPending(records[0]); err != nil {
 		t.Fatal(err)
@@ -245,11 +250,29 @@ func TestLoadClaimAndPendingMetadata(t *testing.T) {
 	}
 }
 
+func TestLoadLegacyPendingMetadataWithoutArgs(t *testing.T) {
+	root := sessiontest.NewProject(t)
+	dir := sessiontest.WriteRecord(t, root, "claimed", `{"schema_version":1,"herdr_session_name":"claimed","created_at":"2026-08-24T14:15:16Z"}`)
+	if err := os.WriteFile(filepath.Join(dir, "claim.json"), []byte(`{"schema_version":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pending.json"), []byte(`{"schema_version":1,"harness":"claude","model":"opus"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	records, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(records) != 1 || records[0].PendingChoice == nil || len(records[0].PendingChoice.Args) != 0 {
+		t.Fatalf("Load() records = %#v", records)
+	}
+}
+
 func TestLoadRejectsOrphanAndNullSidecars(t *testing.T) {
 	for _, test := range []struct{ name, claim, pending, want string }{
-		{name: "orphan", pending: `{"schema_version":1,"harness":"","model":""}`, want: "without a claim"},
+		{name: "orphan", pending: `{"schema_version":1,"harness":"","model":"","args":[]}`, want: "without a claim"},
 		{name: "null", claim: `{"schema_version":null}`, want: "must not be null"},
-		{name: "model only", claim: `{"schema_version":1}`, pending: `{"schema_version":1,"harness":"","model":"opus"}`, want: "requires harness"},
+		{name: "model only", claim: `{"schema_version":1}`, pending: `{"schema_version":1,"harness":"","model":"opus","args":[]}`, want: "requires harness"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			root := sessiontest.NewProject(t)
@@ -282,10 +305,12 @@ func TestLoadRejectsInvalidSidecars(t *testing.T) {
 		{name: "claim unknown field", file: "claim.json", data: `{"schema_version":1,"extra":true}`, want: `unknown field "extra"`},
 		{name: "claim duplicate field", file: "claim.json", data: `{"schema_version":1,"schema_version":1}`, want: `duplicate field "schema_version"`},
 		{name: "claim missing field", file: "claim.json", data: `{}`, want: "must contain schema_version"},
-		{name: "pending unknown field", file: "pending.json", data: `{"schema_version":1,"harness":"","model":"","extra":true}`, want: `unknown field "extra"`},
-		{name: "pending duplicate field", file: "pending.json", data: `{"schema_version":1,"harness":"","harness":"","model":""}`, want: `duplicate field "harness"`},
+		{name: "pending unknown field", file: "pending.json", data: `{"schema_version":1,"harness":"","model":"","args":[],"extra":true}`, want: `unknown field "extra"`},
+		{name: "pending duplicate field", file: "pending.json", data: `{"schema_version":1,"harness":"","harness":"","model":"","args":[]}`, want: `duplicate field "harness"`},
 		{name: "pending missing field", file: "pending.json", data: `{"schema_version":1,"harness":""}`, want: "must contain schema_version, harness, and model"},
-		{name: "pending null field", file: "pending.json", data: `{"schema_version":1,"harness":null,"model":""}`, want: "must not be null"},
+		{name: "pending null field", file: "pending.json", data: `{"schema_version":1,"harness":null,"model":"","args":[]}`, want: "must not be null"},
+		{name: "pending null args", file: "pending.json", data: `{"schema_version":1,"harness":"","model":"","args":null}`, want: "pending args must not be null"},
+		{name: "pending null argument", file: "pending.json", data: `{"schema_version":1,"harness":"","model":"","args":[null]}`, want: "args[0] must not be null"},
 	}
 
 	for _, test := range tests {
@@ -458,8 +483,9 @@ func TestCreateRetriesGlobalAndLocalCollisions(t *testing.T) {
 func TestCreateCleansTemporaryDirectoryAfterPublishFailure(t *testing.T) {
 	root := sessiontest.NewProject(t)
 	want := errors.New("rename failed")
+	configured := profile.Profile{Name: "fledge-test", Instructions: "pinned\n"}
 
-	_, err := create(root, types.AgentChoice{}, MaxSessionLength, nil, bytes.NewReader([]byte{1, 2, 3, 4}), time.Now(), func(string, string) error {
+	_, err := create(root, types.AgentChoice{Profile: &configured}, MaxSessionLength, nil, bytes.NewReader([]byte{1, 2, 3, 4}), time.Now(), func(string, string) error {
 		return want
 	})
 	if !errors.Is(err, want) {

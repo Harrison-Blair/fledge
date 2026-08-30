@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"fledge/internal/profile"
 	"fledge/internal/session/types"
 )
 
@@ -24,6 +25,7 @@ type Record struct {
 	Path             string
 	Claimed          bool
 	PendingChoice    *types.AgentChoice
+	Profile          *profile.Profile
 }
 
 type diskRecord struct {
@@ -37,9 +39,10 @@ type diskClaim struct {
 }
 
 type diskPending struct {
-	SchemaVersion int    `json:"schema_version"`
-	Harness       string `json:"harness"`
-	Model         string `json:"model"`
+	SchemaVersion int      `json:"schema_version"`
+	Harness       string   `json:"harness"`
+	Model         string   `json:"model"`
+	Args          []string `json:"args"`
 }
 
 // Load reads and strictly validates every checkout-local session record. A
@@ -107,6 +110,9 @@ func create(projectRoot string, choice types.AgentChoice, maxNameLength int, una
 	if choice.Model != "" && choice.Harness == "" {
 		return Record{}, fmt.Errorf("create session record: model requires harness")
 	}
+	if choice.Profile != nil && choice.Profile.Defaults.Model != "" && choice.Profile.Defaults.Harness == "" {
+		return Record{}, fmt.Errorf("create session record: profile default model requires harness")
+	}
 	if maxNameLength < MinSessionLength {
 		return Record{}, fmt.Errorf("create session record: maximum length %d is too short", maxNameLength)
 	}
@@ -162,13 +168,22 @@ func create(projectRoot string, choice types.AgentChoice, maxNameLength int, una
 		data = append(data, '\n')
 
 		claimData := []byte(`{"schema_version":1}` + "\n")
-		pendingData, err := json.Marshal(diskPending{SchemaVersion: schemaVersion, Harness: choice.Harness, Model: choice.Model})
+		pendingData, err := json.Marshal(diskPending{
+			SchemaVersion: schemaVersion,
+			Harness:       choice.Harness,
+			Model:         choice.Model,
+			Args:          append([]string{}, choice.Args...),
+		})
 		if err != nil {
 			return Record{}, fmt.Errorf("create session record: encode pending: %w", err)
 		}
 		pendingData = append(pendingData, '\n')
+		profileData, instructions, err := encodeProfileSnapshot(choice.Profile)
+		if err != nil {
+			return Record{}, fmt.Errorf("create session record: encode profile: %w", err)
+		}
 
-		if err := publishRecord(fledgeDir, finalDir, data, claimData, pendingData, rename); err != nil {
+		if err := publishRecord(fledgeDir, finalDir, data, claimData, pendingData, profileData, instructions, rename); err != nil {
 			if _, statErr := os.Lstat(finalDir); statErr == nil {
 				if _, loadErr := loadRecord(finalDir, name); loadErr != nil {
 					return Record{}, fmt.Errorf("create session record: %w", loadErr)
@@ -179,6 +194,7 @@ func create(projectRoot string, choice types.AgentChoice, maxNameLength int, una
 			return Record{}, fmt.Errorf("create session record: publish %q: %w", finalDir, err)
 		}
 
+		choice = cloneChoice(choice)
 		return Record{
 			SchemaVersion:    schemaVersion,
 			HerdrSessionName: name,
@@ -186,11 +202,12 @@ func create(projectRoot string, choice types.AgentChoice, maxNameLength int, una
 			Path:             finalDir,
 			Claimed:          true,
 			PendingChoice:    &choice,
+			Profile:          cloneProfile(choice.Profile),
 		}, nil
 	}
 }
 
-func publishRecord(fledgeDir, finalDir string, config, claim, pending []byte, rename func(string, string) error) (err error) {
+func publishRecord(fledgeDir, finalDir string, config, claim, pending, profileData, instructions []byte, rename func(string, string) error) (err error) {
 	temporaryDir, err := os.MkdirTemp(fledgeDir, ".session-")
 	if err != nil {
 		return fmt.Errorf("create temporary directory: %w", err)
@@ -201,7 +218,12 @@ func publishRecord(fledgeDir, finalDir string, config, claim, pending []byte, re
 		}
 	}()
 
-	for name, data := range map[string][]byte{"config.json": config, "claim.json": claim, "pending.json": pending} {
+	files := map[string][]byte{"config.json": config, "claim.json": claim, "pending.json": pending}
+	if profileData != nil {
+		files[profileFileName] = profileData
+		files[instructionsFileName] = instructions
+	}
+	for name, data := range files {
 		if err := os.WriteFile(filepath.Join(temporaryDir, name), data, 0o644); err != nil {
 			return fmt.Errorf("write temporary %s: %w", name, err)
 		}
@@ -286,8 +308,20 @@ func loadRecord(recordDir, directoryName string) (Record, error) {
 		if !record.Claimed {
 			return Record{}, fmt.Errorf("record %q has pending metadata without a claim", recordDir)
 		}
-		choice := types.AgentChoice{Harness: pending.(diskPending).Harness, Model: pending.(diskPending).Model}
+		choice := types.AgentChoice{
+			Harness: pending.(diskPending).Harness,
+			Model:   pending.(diskPending).Model,
+			Args:    append([]string(nil), pending.(diskPending).Args...),
+		}
 		record.PendingChoice = &choice
+	}
+	configured, _, err := loadProfileSnapshot(recordDir)
+	if err != nil {
+		return Record{}, fmt.Errorf("load record profile %q: %w", recordDir, err)
+	}
+	record.Profile = configured
+	if record.PendingChoice != nil {
+		record.PendingChoice.Profile = cloneProfile(configured)
 	}
 	return record, nil
 }
@@ -457,7 +491,12 @@ func decodeDiskClaim(data []byte) (any, error) {
 }
 
 func decodeDiskPending(data []byte) (any, error) {
-	fields, err := decodeObject(data, "pending", []string{"schema_version", "harness", "model"})
+	fields, err := decodeObjectFields(
+		data,
+		"pending",
+		[]string{"schema_version", "harness", "model", "args"},
+		[]string{"schema_version", "harness", "model"},
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -465,6 +504,9 @@ func decodeDiskPending(data []byte) (any, error) {
 		if isJSONNull(fields[name]) {
 			return nil, fmt.Errorf("pending %s must not be null", name)
 		}
+	}
+	if args, exists := fields["args"]; exists && isJSONNull(args) {
+		return nil, fmt.Errorf("pending args must not be null")
 	}
 	var pending diskPending
 	if err := json.Unmarshal(fields["schema_version"], &pending.SchemaVersion); err != nil {
@@ -476,6 +518,13 @@ func decodeDiskPending(data []byte) (any, error) {
 	if err := json.Unmarshal(fields["model"], &pending.Model); err != nil {
 		return nil, fmt.Errorf("model: %w", err)
 	}
+	pending.Args = []string{}
+	if args, exists := fields["args"]; exists {
+		pending.Args, err = decodeStringArray(args, "args")
+		if err != nil {
+			return nil, err
+		}
+	}
 	if pending.SchemaVersion != schemaVersion {
 		return nil, fmt.Errorf("unsupported schema_version %d", pending.SchemaVersion)
 	}
@@ -485,7 +534,17 @@ func decodeDiskPending(data []byte) (any, error) {
 	return pending, nil
 }
 
+func cloneChoice(choice types.AgentChoice) types.AgentChoice {
+	choice.Args = append([]string(nil), choice.Args...)
+	choice.Profile = cloneProfile(choice.Profile)
+	return choice
+}
+
 func decodeObject(data []byte, kind string, allowed []string) (map[string]json.RawMessage, error) {
+	return decodeObjectFields(data, kind, allowed, allowed)
+}
+
+func decodeObjectFields(data []byte, kind string, allowed, required []string) (map[string]json.RawMessage, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	opening, err := decoder.Token()
 	if err != nil {
@@ -523,8 +582,10 @@ func decodeObject(data []byte, kind string, allowed []string) (map[string]json.R
 	if _, err := decoder.Token(); err != nil {
 		return nil, err
 	}
-	if len(fields) != len(allowed) {
-		return nil, fmt.Errorf("%s must contain %s", kind, joinFields(allowed))
+	for _, name := range required {
+		if _, exists := fields[name]; !exists {
+			return nil, fmt.Errorf("%s must contain %s", kind, joinFields(required))
+		}
 	}
 	if err := ensureJSONEOF(decoder); err != nil {
 		return nil, err

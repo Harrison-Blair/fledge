@@ -3,6 +3,7 @@
 // Files:
 //   - agent.go  Herder client interface, caller resolution, and messaging,
 //     listing, and stopping agents
-//   - spawn.go  agent placement and Spawn, which creates a pane and starts
-//     the harness inside it
+//   - spawn.go             agent placement and Spawn, which creates a pane and
+//     starts the harness inside it
+//   - profile_artifact.go file-backed profile snapshots for spawned agents
 package agent

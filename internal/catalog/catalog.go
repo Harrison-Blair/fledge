@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fledge/internal/subprocess"
+	"fmt"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -14,11 +14,10 @@ import (
 type Harness string
 
 const (
-	Pi       Harness = "pi"
-	Claude   Harness = "claude"
-	Codex    Harness = "codex"
-	OpenCode Harness = "opencode"
-	Cursor   Harness = "cursor"
+	Pi     Harness = "pi"
+	Claude Harness = "claude"
+	Codex  Harness = "codex"
+	Cursor Harness = "cursor"
 )
 
 // codexProvider is the pi provider whose rows list the models Codex accepts.
@@ -33,7 +32,19 @@ const cursorSeparator = " - "
 
 // Harnesses returns every supported harness in presentation order.
 func Harnesses() []Harness {
-	return []Harness{Pi, Claude, Codex, OpenCode, Cursor}
+	return []Harness{Pi, Claude, Codex, Cursor}
+}
+
+// ParseHarness returns the supported harness named value.
+func ParseHarness(value string) (Harness, error) {
+	switch Harness(value) {
+	case Pi, Claude, Codex, Cursor:
+		return Harness(value), nil
+	}
+	if value == "" {
+		return "", fmt.Errorf("harness is required (supported: pi, claude, codex, cursor)")
+	}
+	return "", fmt.Errorf("unsupported harness %q (supported: pi, claude, codex, cursor)", value)
 }
 
 // Models returns the model IDs harness accepts via --model, de-duplicated
@@ -50,8 +61,6 @@ func Models(ctx context.Context, harness Harness, timeout time.Duration) []strin
 		return claudeModels(ctx, timeout)
 	case Codex:
 		return codexModels(ctx, timeout)
-	case OpenCode:
-		return normalize(openCodeLines(ctx, timeout))
 	case Cursor:
 		return cursorModels(ctx, timeout)
 	}
@@ -81,33 +90,12 @@ func codexModels(ctx context.Context, timeout time.Duration) []string {
 	return normalize(ids)
 }
 
-// claudeModels unions the Claude models advertised by pi and by opencode. The
-// two catalogs overlap, so the sources are queried concurrently and merged.
+// claudeModels reports the Claude models advertised by pi. Claude selects
+// models by bare name, so any provider prefix is dropped.
 func claudeModels(ctx context.Context, timeout time.Duration) []string {
-	var (
-		wg    sync.WaitGroup
-		rows  []piRow
-		lines []string
-	)
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		rows = piRows(ctx, timeout)
-	}()
-	go func() {
-		defer wg.Done()
-		lines = openCodeLines(ctx, timeout)
-	}()
-	wg.Wait()
-
 	var ids []string
-	for _, row := range rows {
+	for _, row := range piRows(ctx, timeout) {
 		if name := claudeName(row.model); name != "" {
-			ids = append(ids, name)
-		}
-	}
-	for _, line := range lines {
-		if name := claudeName(line); name != "" {
 			ids = append(ids, name)
 		}
 	}
@@ -140,14 +128,6 @@ func piRows(ctx context.Context, timeout time.Duration) []piRow {
 		return nil
 	}
 	return parsePiTable(out)
-}
-
-func openCodeLines(ctx context.Context, timeout time.Duration) []string {
-	out, ok := run(ctx, timeout, "opencode", "models")
-	if !ok {
-		return nil
-	}
-	return parseLines(out)
 }
 
 // claudeName strips any "provider/" prefix from model and returns the result
