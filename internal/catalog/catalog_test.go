@@ -10,32 +10,11 @@ import (
 	"time"
 )
 
-// cursorSample is a trimmed excerpt of real cursor-agent --list-models output:
-// the heading, five model rows, and the usage tip that closes the listing. The
-// tip quotes a model ID, so it also guards against the prose being parsed.
-const cursorSample = `Available models
-
-auto - Auto (default)
-gpt-5.3-codex-low - Codex 5.3 Low
-composer-2.5 - Composer 2.5 (current)
-claude-opus-5-thinking-high - Claude Opus 5 1M Thinking
-gemini-3.7-flash-high - Gemini 3.7 Flash
-
-Tip: use --model <id> (or /model <id> in interactive mode) to switch. Parameterized models also accept quoted overrides, e.g. --model 'claude-opus-4-8[context=1m,effort=high,fast=false]'.
-`
-
-const (
-	piFake = `
+const piFake = `
 test "$#" -eq 1
 test "$1" = --list-models
 printf '%s' "$PI_FAKE_OUTPUT"
 `
-	cursorFake = `
-test "$#" -eq 1
-test "$1" = --list-models
-printf '%s' "$CURSOR_FAKE_OUTPUT"
-`
-)
 
 // fakeHarnesses replaces PATH with a directory holding only these stand-ins,
 // so a harness the case leaves out is genuinely missing instead of resolving
@@ -53,7 +32,7 @@ func fakeHarnesses(t *testing.T, bins map[string]string) {
 }
 
 func TestHarnesses(t *testing.T) {
-	want := []Harness{Pi, Claude, Codex, Cursor}
+	want := []Harness{Pi, Claude, Codex}
 	if got := Harnesses(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Harnesses = %#v, want %#v", got, want)
 	}
@@ -68,10 +47,10 @@ func TestParseHarness(t *testing.T) {
 		{value: "pi", want: Pi},
 		{value: "claude", want: Claude},
 		{value: "codex", want: Codex},
-		{value: "cursor", want: Cursor},
-		{value: "", wantErr: "harness is required (supported: pi, claude, codex, cursor)"},
-		{value: "opencode", wantErr: `unsupported harness "opencode" (supported: pi, claude, codex, cursor)`},
-		{value: "gemini", wantErr: `unsupported harness "gemini" (supported: pi, claude, codex, cursor)`},
+		{value: "cursor", wantErr: `unsupported harness "cursor" (supported: pi, claude, codex)`},
+		{value: "", wantErr: "harness is required (supported: pi, claude, codex)"},
+		{value: "opencode", wantErr: `unsupported harness "opencode" (supported: pi, claude, codex)`},
+		{value: "gemini", wantErr: `unsupported harness "gemini" (supported: pi, claude, codex)`},
 	}
 
 	for _, tc := range tests {
@@ -126,25 +105,12 @@ func TestModels(t *testing.T) {
 			bins:    map[string]string{"pi": piFake},
 			want:    []string{"claude-fable-5", "claude-opus-4-8"},
 		},
-		{
-			name:    "cursor takes the ID before the separator and skips prose",
-			harness: Cursor,
-			bins:    map[string]string{"cursor-agent": cursorFake},
-			want: []string{
-				"claude-opus-5-thinking-high",
-				"gpt-5.3-codex-low",
-				"gemini-3.7-flash-high",
-				"composer-2.5",
-				"auto",
-			},
-		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			fakeHarnesses(t, tc.bins)
 			t.Setenv("PI_FAKE_OUTPUT", piSample)
-			t.Setenv("CURSOR_FAKE_OUTPUT", cursorSample)
 
 			got := Models(context.Background(), tc.harness, time.Minute)
 			if !reflect.DeepEqual(got, tc.want) {
@@ -190,14 +156,6 @@ func TestModelsIgnoresCommandFailure(t *testing.T) {
 		harness Harness
 		bins    map[string]string
 	}{
-		{
-			name:    "cursor is unauthenticated",
-			harness: Cursor,
-			bins: map[string]string{"cursor-agent": `
-printf "Error: Authentication required. Run 'agent login', pass --api-key/--auth-token, or set CURSOR_API_KEY/CURSOR_AUTH_TOKEN.\n" >&2
-exit 1
-`},
-		},
 		{name: "pi exits non-zero", harness: Pi, bins: map[string]string{"pi": `exit 1`}},
 		{
 			name:    "pi prints a partial table then fails",

@@ -17,7 +17,6 @@ const (
 	Pi     Harness = "pi"
 	Claude Harness = "claude"
 	Codex  Harness = "codex"
-	Cursor Harness = "cursor"
 )
 
 // codexProvider is the pi provider whose rows list the models Codex accepts.
@@ -26,25 +25,21 @@ const codexProvider = "openai-codex"
 // claudePrefix marks the models Claude Code accepts.
 const claudePrefix = "claude-"
 
-// cursorSeparator divides a model ID from its description in cursor-agent
-// --list-models output.
-const cursorSeparator = " - "
-
 // Harnesses returns every supported harness in presentation order.
 func Harnesses() []Harness {
-	return []Harness{Pi, Claude, Codex, Cursor}
+	return []Harness{Pi, Claude, Codex}
 }
 
 // ParseHarness returns the supported harness named value.
 func ParseHarness(value string) (Harness, error) {
 	switch Harness(value) {
-	case Pi, Claude, Codex, Cursor:
+	case Pi, Claude, Codex:
 		return Harness(value), nil
 	}
 	if value == "" {
-		return "", fmt.Errorf("harness is required (supported: pi, claude, codex, cursor)")
+		return "", fmt.Errorf("harness is required (supported: pi, claude, codex)")
 	}
-	return "", fmt.Errorf("unsupported harness %q (supported: pi, claude, codex, cursor)", value)
+	return "", fmt.Errorf("unsupported harness %q (supported: pi, claude, codex)", value)
 }
 
 // Models returns the model IDs harness accepts via --model, de-duplicated
@@ -61,8 +56,6 @@ func Models(ctx context.Context, harness Harness, timeout time.Duration) []strin
 		return claudeModels(ctx, timeout)
 	case Codex:
 		return codexModels(ctx, timeout)
-	case Cursor:
-		return cursorModels(ctx, timeout)
 	}
 	return nil
 }
@@ -98,26 +91,6 @@ func claudeModels(ctx context.Context, timeout time.Duration) []string {
 		if name := claudeName(row.model); name != "" {
 			ids = append(ids, name)
 		}
-	}
-	return normalize(ids)
-}
-
-// cursorModels reports the models cursor-agent lists, which the command prints
-// as "id - description" rows framed by a heading and a usage tip. Only the
-// rows carry the separator, so it also skips the surrounding prose. The
-// command fails while unauthenticated.
-func cursorModels(ctx context.Context, timeout time.Duration) []string {
-	out, ok := run(ctx, timeout, "cursor-agent", "--list-models")
-	if !ok {
-		return nil
-	}
-	var ids []string
-	for _, line := range parseLines(out) {
-		id, _, found := strings.Cut(line, cursorSeparator)
-		if !found {
-			continue
-		}
-		ids = append(ids, strings.TrimSpace(id))
 	}
 	return normalize(ids)
 }

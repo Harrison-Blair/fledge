@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"fledge/internal/catalog"
 	"fledge/internal/herdr"
@@ -16,24 +18,31 @@ const defaultSplitDirection = "right"
 
 const cleanupTimeout = 5 * time.Second
 
+// maxInitialPromptBytes bounds an initial prompt at 100 KiB, measured in UTF-8
+// bytes rather than runes.
+const maxInitialPromptBytes = 100 * 1024
+
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 
 // SpawnOptions describes an agent launch. At most one of Workspace, Tab, and
 // Pane selects where the agent lands; Workspace is "new" or a workspace ID.
 // Ratio applies to the split placements only, Label defaults to Name, Profile
 // is an immutable managed snapshot, and Args follow model and profile delivery.
+// InitialPrompt is absent when nil; a non-nil value is fully validated and
+// delivered once after the agent starts.
 type SpawnOptions struct {
-	Name      string
-	Harness   string
-	Model     string
-	Profile   *profile.Profile
-	Workspace string
-	Tab       string
-	Pane      string
-	Split     string
-	Ratio     *float64
-	Label     string
-	Args      []string
+	Name          string
+	Harness       string
+	Model         string
+	Profile       *profile.Profile
+	Workspace     string
+	Tab           string
+	Pane          string
+	Split         string
+	Ratio         *float64
+	Label         string
+	Args          []string
+	InitialPrompt *string
 }
 
 // SpawnResult describes the agent that was started and where it landed.
@@ -45,6 +54,149 @@ type SpawnResult struct {
 	WorkspaceID string `json:"workspace_id"`
 	TabID       string `json:"tab_id"`
 	PaneID      string `json:"pane_id"`
+}
+
+// InitialPromptError reports that an agent started successfully but its initial
+// prompt was not acknowledged. The agent, its pane, and any profile artifact
+// are intentionally left in place; only Cause records why delivery failed, and
+// it is never rendered into the error string.
+type InitialPromptError struct {
+	Cause error
+}
+
+// Error is a fixed, redacted message. It never renders the prompt text, the
+// cause, or any Herder operation, message, or code.
+func (e *InitialPromptError) Error() string {
+	return "agent started but initial prompt delivery was not confirmed"
+}
+
+// Unwrap exposes the cause so errors.Is and errors.As traverse the chain while
+// Error stays constant.
+func (e *InitialPromptError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+// maxUnwrapDepth bounds SafeCode's unwrap traversal so a pathological self- or
+// mutually-unwrapping cause cannot spin forever.
+const maxUnwrapDepth = 100
+
+// maxUnwrapWork caps the total nodes SafeCode's traversal may visit across the
+// whole walk. Depth alone leaves a branching Unwrap() []error cycle free to
+// revisit ~2^maxUnwrapDepth nodes; this budget makes total work linear. 256 is
+// generous for real causes — fmt wrappers, errors.Join fanout, and Herder
+// chains stay under a dozen nodes, and even a maximally deep legitimate chain
+// of maxUnwrapDepth wrappers fits — while an adversarial graph burns out in
+// microseconds.
+const maxUnwrapWork = 256
+
+// SafeCode classifies the delivery failure using only the whitelisted
+// structured Herder codes. Any nil, wait-only, timeout, context, transport, or
+// otherwise unrecognized cause reports "unknown"; the Herder operation,
+// message, and raw cause are never exposed.
+//
+// Recognition deliberately avoids errors.As: its As(any) hook lets a hostile
+// cause forge a whitelisted code or hand back a typed-nil pointer that would
+// panic on dereference. Instead firstStructuredError walks the standard unwrap
+// tree with direct type assertions, and only an actual non-nil *herdr.Error
+// whose Code is whitelisted is ever surfaced. The walk is bounded by both
+// maxUnwrapDepth and maxUnwrapWork; a walk cut short by either bound reports
+// "unknown", because the unexplored region could hide the true first
+// structured error.
+func (e *InitialPromptError) SafeCode() string {
+	if e == nil {
+		return "unknown"
+	}
+	budget := maxUnwrapWork
+	structured, status := firstStructuredError(e.Cause, 0, &budget)
+	if status != walkFound || structured == nil {
+		return "unknown"
+	}
+	switch structured.Code {
+	case "agent_blocked", "agent_pane_not_found":
+		return structured.Code
+	}
+	return "unknown"
+}
+
+// walkStatus reports how the traversal of one subtree ended: it located an
+// actual *herdr.Error value, it searched the subtree exhaustively and proved
+// none is present, or the depth or work bound cut it short before it could
+// tell.
+type walkStatus int
+
+const (
+	walkAbsent walkStatus = iota
+	walkFound
+	walkTruncated
+)
+
+// firstStructuredError returns the first value whose dynamic type is
+// *herdr.Error reached from err through the standard Unwrap() error and
+// Unwrap() []error chains, in ordinary depth-first left-to-right order. It
+// uses direct type assertions so no custom As hook is consulted; on walkFound
+// the returned pointer may itself be nil when that value is a typed nil.
+//
+// depth bounds recursion against unwrap cycles, and budget is a shared count
+// of remaining node visits: every call spends exactly one unit (nil and
+// depth-refused nodes included), so a branching cycle or a wide child slice
+// does at most maxUnwrapWork constant-time visits. The child slice is ranged
+// in place, never copied.
+//
+// Exhausting either bound returns walkTruncated immediately — a cut-short
+// branch could hide the true first structured error, so traversal must never
+// continue to a later sibling past it. Only a subtree proven empty returns
+// walkAbsent and lets the walk move on.
+func firstStructuredError(err error, depth int, budget *int) (structured *herdr.Error, status walkStatus) {
+	if *budget <= 0 {
+		return nil, walkTruncated
+	}
+	*budget--
+	if err == nil {
+		return nil, walkAbsent
+	}
+	if depth > maxUnwrapDepth {
+		return nil, walkTruncated
+	}
+	if here, ok := err.(*herdr.Error); ok {
+		return here, walkFound
+	}
+	switch node := err.(type) {
+	case interface{ Unwrap() error }:
+		return firstStructuredError(node.Unwrap(), depth+1, budget)
+	case interface{ Unwrap() []error }:
+		for _, child := range node.Unwrap() {
+			if *budget <= 0 {
+				return nil, walkTruncated
+			}
+			if here, childStatus := firstStructuredError(child, depth+1, budget); childStatus != walkAbsent {
+				return here, childStatus
+			}
+		}
+	}
+	return nil, walkAbsent
+}
+
+// ValidateInitialPrompt reports why text cannot serve as an agent's initial
+// prompt. Checks run in a fixed order so the reason is deterministic: empty,
+// then oversize, then invalid UTF-8, then an embedded NUL. Valid content is
+// neither trimmed nor normalized.
+func ValidateInitialPrompt(text string) error {
+	if text == "" {
+		return errors.New("initial prompt must not be empty")
+	}
+	if len(text) > maxInitialPromptBytes {
+		return fmt.Errorf("initial prompt must not exceed %d bytes", maxInitialPromptBytes)
+	}
+	if !utf8.ValidString(text) {
+		return errors.New("initial prompt must be valid UTF-8")
+	}
+	if strings.ContainsRune(text, 0) {
+		return errors.New("initial prompt must not contain a NUL byte")
+	}
+	return nil
 }
 
 // Spawn creates a pane for the agent and starts the harness inside it. A failed
@@ -108,6 +260,17 @@ func Spawn(ctx context.Context, h Herder, caller Caller, opts SpawnOptions) (res
 	if opts.Profile != nil {
 		result.Profile = opts.Profile.Name
 	}
+
+	if opts.InitialPrompt != nil {
+		// The agent is live and its pane and profile artifact are committed.
+		// Deliver the initial prompt exactly once, fire-and-forget: a delivery
+		// failure leaves the running agent in place and is reported as a
+		// partial, unconfirmed launch rather than triggering any teardown,
+		// retry, poll, or wait. The opaque acknowledgement is ignored.
+		if _, promptErr := Message(ctx, h, MessageOptions{Target: opts.Name, Text: *opts.InitialPrompt}); promptErr != nil {
+			return result, fmt.Errorf("spawn agent %q: %w", opts.Name, &InitialPromptError{Cause: promptErr})
+		}
+	}
 	return result, nil
 }
 
@@ -151,6 +314,11 @@ func validateSpawn(opts SpawnOptions) (string, error) {
 	}
 	if _, err := catalog.ParseHarness(opts.Harness); err != nil {
 		return "", err
+	}
+	if opts.InitialPrompt != nil {
+		if err := ValidateInitialPrompt(*opts.InitialPrompt); err != nil {
+			return "", err
+		}
 	}
 
 	placements := 0

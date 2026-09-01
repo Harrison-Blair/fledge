@@ -5,6 +5,9 @@ import _ "embed"
 // OrchestratorName is the reserved name of Fledge's root orchestrator profile.
 const OrchestratorName = "fledge-orchestrator"
 
+// GeneralName is the name of Fledge's general managed-worker profile.
+const GeneralName = "fledge-general"
+
 // Defaults are optional launch choices supplied by a profile. Explicit launch
 // choices take precedence over these values.
 type Defaults struct {
@@ -21,13 +24,20 @@ type Profile struct {
 	Defaults     Defaults
 }
 
+// orchestratorRoleRules is the manager role section of the orchestrator
+// profile; the full instructions are composed with the canonical fragments.
+//
 //go:embed fledge-orchestrator.md
-var orchestratorInstructions string
+var orchestratorRoleRules string
 
 var managed = []Profile{{
+	Name:         GeneralName,
+	Description:  "Executes one dispatched work unit as a Fledge-managed worker and reports through the canonical callback protocol.",
+	Instructions: managedWorker(),
+}, {
 	Name:         OrchestratorName,
 	Description:  "Delegates project work through Fledge agents and independently verifies every material result.",
-	Instructions: orchestratorInstructions,
+	Instructions: managedManager(orchestratorRoleRules),
 }}
 
 // List returns independent snapshots of every managed profile in presentation

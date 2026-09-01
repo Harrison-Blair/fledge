@@ -69,36 +69,3 @@ func TestParsePiTableSkipsUnusableLines(t *testing.T) {
 		})
 	}
 }
-
-func TestParseLines(t *testing.T) {
-	got := parseLines("Available models\n\nauto - Auto (default)\ngpt-5.3-codex-low - Codex 5.3 Low\n")
-	want := []string{
-		"Available models",
-		"auto - Auto (default)",
-		"gpt-5.3-codex-low - Codex 5.3 Low",
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("parseLines = %#v, want %#v", got, want)
-	}
-}
-
-func TestParseLinesTrimsAndSkipsBlanks(t *testing.T) {
-	tests := []struct {
-		name string
-		out  string
-		want []string
-	}{
-		{name: "empty", out: ""},
-		{name: "blank only", out: "\n  \n\t\n"},
-		{name: "trims padding", out: "  auto - Auto (default)  \n", want: []string{"auto - Auto (default)"}},
-		{name: "no trailing newline", out: "composer-2.5 - Composer 2.5", want: []string{"composer-2.5 - Composer 2.5"}},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := parseLines(tc.out); !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("parseLines = %#v, want %#v", got, tc.want)
-			}
-		})
-	}
-}

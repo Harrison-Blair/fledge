@@ -105,6 +105,16 @@ func TestLaunchArgsRejectsInstructionConflicts(t *testing.T) {
 			if conflict.Harness != test.harness {
 				t.Fatalf("conflict harness = %q, want %q", conflict.Harness, test.harness)
 			}
+			if conflict.Argument != test.args[0] {
+				t.Fatalf("conflict argument = %q, want %q", conflict.Argument, test.args[0])
+			}
+			rendered := err.Error()
+			if !strings.Contains(rendered, "--no-profile") {
+				t.Fatalf("conflict error = %q, want --no-profile guidance", rendered)
+			}
+			if strings.Contains(rendered, "merge") || strings.Contains(rendered, "combined") {
+				t.Fatalf("conflict error = %q, must not claim instructions can be merged", rendered)
+			}
 		})
 	}
 }
@@ -144,14 +154,14 @@ func TestLaunchArgsRequiresFileForFileBackedHarness(t *testing.T) {
 	}
 }
 
-func TestLaunchArgsReportsCursorUnsupported(t *testing.T) {
-	_, err := LaunchArgs(Profile{Name: OrchestratorName}, "cursor", "/profile.md", nil)
+func TestLaunchArgsReportsUnknownHarnessUnsupported(t *testing.T) {
+	_, err := LaunchArgs(Profile{Name: OrchestratorName}, "gemini", "/profile.md", nil)
 	var unsupported *UnsupportedHarnessError
 	if !errors.As(err, &unsupported) {
 		t.Fatalf("LaunchArgs() error = %v, want UnsupportedHarnessError", err)
 	}
-	if unsupported.Harness != "cursor" {
-		t.Fatalf("unsupported harness = %q, want cursor", unsupported.Harness)
+	if unsupported.Harness != "gemini" {
+		t.Fatalf("unsupported harness = %q, want gemini", unsupported.Harness)
 	}
 }
 

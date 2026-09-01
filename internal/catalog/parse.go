@@ -27,16 +27,3 @@ func parsePiTable(out string) []piRow {
 	}
 	return rows
 }
-
-// parseLines returns the trimmed, non-empty lines of out.
-func parseLines(out string) []string {
-	var lines []string
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		lines = append(lines, line)
-	}
-	return lines
-}

@@ -49,9 +49,6 @@ type LaunchChoice struct {
 // SelectFunc presents one terminal selection.
 type SelectFunc func(io.Reader, io.Writer, string, []Option) (Option, error)
 
-// ConfirmFunc presents one terminal confirmation.
-type ConfirmFunc func(io.Reader, io.Writer, string) (bool, error)
-
 // Resolver applies launch precedence and prompts for choices that remain
 // unresolved. Prompt functions are injectable so callers and tests do not
 // depend on a particular terminal implementation.
@@ -60,9 +57,8 @@ type Resolver struct {
 	Output io.Writer
 
 	// Models reports the model IDs a harness accepts.
-	Models  func(context.Context, catalog.Harness) []string
-	Select  SelectFunc
-	Confirm ConfirmFunc
+	Models func(context.Context, catalog.Harness) []string
+	Select SelectFunc
 
 	// Profile registry seams used by package tests.
 	profilesFn func() []profile.Profile
@@ -99,13 +95,6 @@ func (r Resolver) Resolve(ctx context.Context, request LaunchRequest) (LaunchCho
 		}
 		if harness == "" {
 			return LaunchChoice{}, nil
-		}
-	}
-
-	if configured != nil && harness == catalog.Cursor {
-		configured, err = r.confirmCursorWithoutProfile(request.Interactive, *configured)
-		if err != nil {
-			return LaunchChoice{}, err
 		}
 	}
 
@@ -252,28 +241,6 @@ func (r Resolver) promptModel(ctx context.Context, harness catalog.Harness) (str
 	return chosen.ID, nil
 }
 
-func (r Resolver) confirmCursorWithoutProfile(interactive bool, configured profile.Profile) (*profile.Profile, error) {
-	if !interactive {
-		return nil, fmt.Errorf("resolve launch: harness %q cannot load profile %q non-interactively; pass --no-profile", catalog.Cursor, configured.Name)
-	}
-	confirm := r.Confirm
-	if confirm == nil {
-		confirm = confirmSelection
-	}
-	if r.Input == nil || r.Output == nil {
-		return nil, fmt.Errorf("resolve launch: terminal input and output are required to confirm Cursor profile removal")
-	}
-	question := fmt.Sprintf("Cursor cannot load profile %q. Continue without a profile?", configured.Name)
-	accepted, err := confirm(r.Input, r.Output, question)
-	if err != nil {
-		return nil, fmt.Errorf("resolve launch: confirm Cursor without profile: %w", err)
-	}
-	if !accepted {
-		return nil, fmt.Errorf("resolve launch: declined to continue with Cursor without profile %q", configured.Name)
-	}
-	return nil, nil
-}
-
 func (r Resolver) selectOne(title string, options []Option) (Option, error) {
 	if r.Input == nil {
 		return Option{}, fmt.Errorf("terminal input is nil")
@@ -286,17 +253,6 @@ func (r Resolver) selectOne(title string, options []Option) (Option, error) {
 		choose = Select
 	}
 	return choose(r.Input, r.Output, title, options)
-}
-
-func confirmSelection(in io.Reader, out io.Writer, question string) (bool, error) {
-	chosen, err := Select(in, out, question, []Option{
-		{ID: "continue", Title: "Continue without profile"},
-		{Title: "Cancel"},
-	})
-	if err != nil {
-		return false, err
-	}
-	return chosen.ID == "continue", nil
 }
 
 // SessionChooser adapts one launch request to the session lifecycle's Chooser

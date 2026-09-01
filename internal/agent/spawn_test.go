@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -68,9 +70,9 @@ func TestSpawnPlacements(t *testing.T) {
 		},
 		{
 			name:      "pane splits directly",
-			opts:      SpawnOptions{Name: "rev", Harness: "cursor", Pane: "ws1:tab3:pane2", Ratio: &ratio},
-			wantCalls: []string{"SplitPane(ws1:tab3:pane2,right,0.35)", "StartAgent(rev,cursor,ws1:tab3:pane7)"},
-			want:      SpawnResult{Name: "rev", Harness: "cursor", WorkspaceID: "ws1", TabID: "ws1:tab3", PaneID: "ws1:tab3:pane7"},
+			opts:      SpawnOptions{Name: "rev", Harness: "claude", Pane: "ws1:tab3:pane2", Ratio: &ratio},
+			wantCalls: []string{"SplitPane(ws1:tab3:pane2,right,0.35)", "StartAgent(rev,claude,ws1:tab3:pane7)"},
+			want:      SpawnResult{Name: "rev", Harness: "claude", WorkspaceID: "ws1", TabID: "ws1:tab3", PaneID: "ws1:tab3:pane7"},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -235,7 +237,7 @@ func TestSpawnCleansProfileArtifactWhenPlacementFails(t *testing.T) {
 	}
 }
 
-func TestSpawnRejectsProfileConflictsAndUnsupportedDeliveryBeforePaneMutation(t *testing.T) {
+func TestSpawnRejectsProfileConflictsBeforePaneMutation(t *testing.T) {
 	configured := profile.Profile{Name: "fledge-test", Instructions: "instructions"}
 	for _, test := range []struct {
 		name    string
@@ -246,7 +248,6 @@ func TestSpawnRejectsProfileConflictsAndUnsupportedDeliveryBeforePaneMutation(t 
 		{name: "Pi conflict", harness: "pi", args: []string{"--append-system-prompt=mine"}, want: "conflicts"},
 		{name: "Claude conflict", harness: "claude", args: []string{"--system-prompt-file", "mine"}, want: "conflicts"},
 		{name: "Codex conflict", harness: "codex", args: []string{"-c", `developer_instructions="mine"`}, want: "conflicts"},
-		{name: "Cursor profile", harness: "cursor", want: "does not support native profile delivery"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			client := newFakeHerder()
@@ -264,17 +265,6 @@ func TestSpawnRejectsProfileConflictsAndUnsupportedDeliveryBeforePaneMutation(t 
 				t.Fatalf("profile artifact directory changed before rejection: %v", err)
 			}
 		})
-	}
-}
-
-func TestSpawnCursorWithoutProfile(t *testing.T) {
-	client := newFakeHerder()
-	result, err := Spawn(context.Background(), client, Caller{WorkspaceID: "wsC"}, SpawnOptions{Name: "rev", Harness: "cursor", Model: "auto"})
-	if err != nil {
-		t.Fatalf("Spawn() error = %v", err)
-	}
-	if result.Harness != "cursor" || result.Profile != "" {
-		t.Fatalf("result = %#v, want unprofiled Cursor", result)
 	}
 }
 
@@ -506,4 +496,626 @@ func TestSpawnPropagatesPlacementFailures(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestValidateInitialPrompt(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		text    string
+		wantErr string // empty means the prompt is valid
+		notErr  string // when set, the error must not mention this
+	}{
+		{name: "empty", text: "", wantErr: "empty"},
+		{name: "whitespace only is not empty", text: "   \n\t  ", wantErr: ""},
+		{name: "exact limit ASCII", text: strings.Repeat("a", maxInitialPromptBytes), wantErr: ""},
+		{name: "exact limit multibyte UTF-8", text: strings.Repeat("é", maxInitialPromptBytes/2), wantErr: ""},
+		{name: "one byte over limit", text: strings.Repeat("a", maxInitialPromptBytes+1), wantErr: "exceed"},
+		{name: "invalid UTF-8", text: "ok\xffbad", wantErr: "UTF-8"},
+		{name: "in-bound NUL", text: "before\x00after", wantErr: "NUL"},
+		{name: "oversize outranks invalid UTF-8", text: strings.Repeat("a", maxInitialPromptBytes) + "\xff\xff", wantErr: "exceed", notErr: "UTF-8"},
+		{name: "invalid UTF-8 outranks NUL", text: "\xff\x00", wantErr: "UTF-8", notErr: "NUL"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			// Guard the multibyte fixture: the boundary must be bytes, not runes.
+			if strings.Contains(test.name, "multibyte") && len(test.text) != maxInitialPromptBytes {
+				t.Fatalf("multibyte fixture is %d bytes, want exactly %d", len(test.text), maxInitialPromptBytes)
+			}
+			err := ValidateInitialPrompt(test.text)
+			if test.wantErr == "" {
+				if err != nil {
+					t.Fatalf("ValidateInitialPrompt() error = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("ValidateInitialPrompt() error = %v, want containing %q", err, test.wantErr)
+			}
+			if test.notErr != "" && strings.Contains(err.Error(), test.notErr) {
+				t.Fatalf("ValidateInitialPrompt() error = %v, must not mention %q (wrong precedence)", err, test.notErr)
+			}
+		})
+	}
+}
+
+func TestSpawnRejectsInvalidInitialPromptBeforeHerderCallOrArtifact(t *testing.T) {
+	configured := profile.Profile{Name: "fledge-test", Instructions: "instructions"}
+	for _, test := range []struct {
+		name   string
+		prompt string
+	}{
+		{name: "empty", prompt: ""},
+		{name: "oversize", prompt: strings.Repeat("a", maxInitialPromptBytes+1)},
+		{name: "invalid UTF-8", prompt: "bad\xff"},
+		{name: "in-bound NUL", prompt: "has\x00nul"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := newFakeHerder()
+			recordPath := t.TempDir()
+			prompt := test.prompt
+			result, err := Spawn(context.Background(), client, Caller{RecordPath: recordPath, WorkspaceID: "wsC"}, SpawnOptions{
+				Name: "rev", Harness: "claude", Profile: &configured, InitialPrompt: &prompt,
+			})
+			if err == nil {
+				t.Fatalf("Spawn() error = nil, want an initial prompt rejection")
+			}
+			if result != (SpawnResult{}) {
+				t.Fatalf("result = %#v, want the zero result", result)
+			}
+			if len(client.calls) != 0 {
+				t.Fatalf("Herder calls = %#v, want none before the validation failure", client.calls)
+			}
+			if _, err := os.Lstat(filepath.Join(recordPath, agentProfilesDirectory)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("profile artifact directory changed before rejection: %v", err)
+			}
+		})
+	}
+}
+
+func TestSpawnWithoutInitialPromptDoesNotPrompt(t *testing.T) {
+	client := newFakeHerder()
+
+	result, err := Spawn(context.Background(), client, Caller{WorkspaceID: "wsC"}, SpawnOptions{Name: "rev", Harness: "claude"})
+	if err != nil {
+		t.Fatalf("Spawn() error = %v", err)
+	}
+	for _, call := range client.calls {
+		if strings.HasPrefix(call, "PromptAgent(") {
+			t.Fatalf("Spawn() prompted without an initial prompt: %#v", client.calls)
+		}
+	}
+	if !reflect.DeepEqual(client.promptOpts, herdr.PromptOptions{}) {
+		t.Fatalf("prompt options = %#v, want none", client.promptOpts)
+	}
+	want := SpawnResult{Name: "rev", Harness: "claude", WorkspaceID: "ws1", TabID: "ws1:tab9", PaneID: "ws1:tab9:pane1"}
+	if result != want {
+		t.Fatalf("result = %#v, want %#v", result, want)
+	}
+}
+
+func TestSpawnDeliversInitialPromptAfterStartAgent(t *testing.T) {
+	client := newFakeHerder()
+	// A non-nil, non-trivial response must be discarded, not surfaced.
+	client.prompted = json.RawMessage(`{"type":"agent_prompted","id":"cli:agent:prompt"}`)
+	prompt := "line one\nline two\twith \"quotes\", a trailing space \nand unicode 世界 ✅"
+
+	result, err := Spawn(context.Background(), client, Caller{WorkspaceID: "wsC"}, SpawnOptions{
+		Name: "rev", Harness: "claude", InitialPrompt: &prompt,
+	})
+	if err != nil {
+		t.Fatalf("Spawn() error = %v", err)
+	}
+
+	// PromptAgent runs exactly once, strictly after the agent starts.
+	wantCalls := []string{"CreateTab(wsC,rev)", "StartAgent(rev,claude,ws1:tab9:pane1)", "PromptAgent(rev)"}
+	if !reflect.DeepEqual(client.calls, wantCalls) {
+		t.Fatalf("calls = %#v, want %#v", client.calls, wantCalls)
+	}
+
+	// Delivery is fire-and-forget with the exact prompt bytes preserved.
+	wantOpts := herdr.PromptOptions{Target: "rev", Text: prompt, Wait: false, Until: nil, TimeoutMS: 0}
+	if !reflect.DeepEqual(client.promptOpts, wantOpts) {
+		t.Fatalf("prompt options = %#v, want %#v", client.promptOpts, wantOpts)
+	}
+	if client.promptOpts.Text != prompt {
+		t.Fatalf("prompt text = %q, want the exact bytes %q", client.promptOpts.Text, prompt)
+	}
+
+	want := SpawnResult{Name: "rev", Harness: "claude", WorkspaceID: "ws1", TabID: "ws1:tab9", PaneID: "ws1:tab9:pane1"}
+	if result != want {
+		t.Fatalf("result = %#v, want %#v (raw response must be ignored)", result, want)
+	}
+}
+
+func TestSpawnDoesNotPromptWhenLaunchFailsBeforeDelivery(t *testing.T) {
+	configured := profile.Profile{Name: "fledge-test", Instructions: "pinned instructions"}
+	prompt := "deliver me once launched"
+	for _, test := range []struct {
+		name    string
+		caller  Caller
+		opts    SpawnOptions
+		errs    map[string]error
+		wantErr string
+	}{
+		{
+			name:    "validation failure",
+			caller:  Caller{WorkspaceID: "wsC"},
+			opts:    SpawnOptions{Name: "Rev", Harness: "claude", InitialPrompt: &prompt},
+			wantErr: "must match",
+		},
+		{
+			name:    "profile preparation conflict",
+			caller:  Caller{WorkspaceID: "wsC"},
+			opts:    SpawnOptions{Name: "rev", Harness: "claude", Profile: &configured, Args: []string{"--system-prompt-file", "mine"}, InitialPrompt: &prompt},
+			wantErr: "conflicts",
+		},
+		{
+			name:    "placement failure",
+			caller:  Caller{WorkspaceID: "wsC"},
+			opts:    SpawnOptions{Name: "rev", Harness: "claude", InitialPrompt: &prompt},
+			errs:    map[string]error{"CreateTab": errors.New("placement failed")},
+			wantErr: "placement failed",
+		},
+		{
+			name:    "start failure",
+			caller:  Caller{},
+			opts:    SpawnOptions{Name: "rev", Harness: "claude", Pane: "ws1:tab3:pane2", InitialPrompt: &prompt},
+			errs:    map[string]error{"StartAgent": errors.New("start failed")},
+			wantErr: "start failed",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := newFakeHerder()
+			if test.errs != nil {
+				client.errs = test.errs
+			}
+			result, err := Spawn(context.Background(), client, test.caller, test.opts)
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("Spawn() error = %v, want %q", err, test.wantErr)
+			}
+			if result != (SpawnResult{}) {
+				t.Fatalf("result = %#v, want the zero result", result)
+			}
+			for _, call := range client.calls {
+				if strings.HasPrefix(call, "PromptAgent(") {
+					t.Fatalf("Spawn() prompted after a pre-delivery failure: %#v", client.calls)
+				}
+			}
+		})
+	}
+}
+
+func TestSpawnInitialPromptDeliveryFailureIsSafeAndPreservesLaunch(t *testing.T) {
+	recordPath := t.TempDir()
+	configured := profile.Profile{Name: "fledge-test", Instructions: "pinned instructions\n"}
+	prompt := "PROMPT_SECRET_PAYLOAD then a second line"
+	cause := &herdr.Error{
+		Operation: "cli:agent:prompt OPERATION_SECRET",
+		Code:      "agent_blocked",
+		Message:   "MESSAGE_SECRET the target is busy",
+	}
+	client := newFakeHerder()
+	client.errs["PromptAgent"] = cause
+
+	result, err := Spawn(context.Background(), client, Caller{RecordPath: recordPath, WorkspaceID: "wsC"}, SpawnOptions{
+		Name: "rev", Harness: "claude", Model: "opus", Profile: &configured, InitialPrompt: &prompt,
+	})
+
+	// The launched agent and its placement coordinates survive delivery failure.
+	if result.Name != "rev" || result.Harness != "claude" || result.Profile != configured.Name {
+		t.Fatalf("result = %#v, want the launched agent", result)
+	}
+	if result.WorkspaceID == "" || result.TabID == "" || result.PaneID == "" {
+		t.Fatalf("result = %#v, want retained placement coordinates", result)
+	}
+
+	// The error chain carries the typed marker and the original cause.
+	var promptErr *InitialPromptError
+	if !errors.As(err, &promptErr) {
+		t.Fatalf("Spawn() error = %v, want a *InitialPromptError in the chain", err)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatalf("Spawn() error = %v, want the original cause in the chain", err)
+	}
+	if got := promptErr.SafeCode(); got != "agent_blocked" {
+		t.Fatalf("SafeCode() = %q, want agent_blocked", got)
+	}
+
+	// The rendered string leaks neither the prompt, the cause, nor Herder detail.
+	for _, secret := range []string{"PROMPT_SECRET_PAYLOAD", "OPERATION_SECRET", "MESSAGE_SECRET", "agent_blocked", cause.Error()} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("Spawn() error string %q leaks %q", err.Error(), secret)
+		}
+	}
+
+	// The pane is never closed and the profile artifact remains byte-for-byte.
+	for _, call := range client.calls {
+		if strings.HasPrefix(call, "ClosePane(") {
+			t.Fatalf("Spawn() closed the pane after a delivery failure: %#v", client.calls)
+		}
+	}
+	if len(client.startArgs) < 4 || client.startArgs[2] != "--append-system-prompt-file" {
+		t.Fatalf("start args = %#v, want the profile file flag and path", client.startArgs)
+	}
+	contents, readErr := os.ReadFile(client.startArgs[3])
+	if readErr != nil {
+		t.Fatalf("profile artifact missing after delivery failure: %v", readErr)
+	}
+	if string(contents) != configured.Instructions {
+		t.Fatalf("profile artifact = %q, want the exact snapshot %q", contents, configured.Instructions)
+	}
+}
+
+func TestInitialPromptErrorSafeCode(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		cause error
+		want  string
+	}{
+		{name: "nil cause", cause: nil, want: "unknown"},
+		{name: "whitelisted blocked", cause: &herdr.Error{Operation: "op", Code: "agent_blocked", Message: "busy"}, want: "agent_blocked"},
+		{name: "whitelisted pane not found", cause: &herdr.Error{Operation: "op", Code: "agent_pane_not_found", Message: "gone"}, want: "agent_pane_not_found"},
+		{name: "wrapped whitelisted code", cause: fmt.Errorf("prompt agent: %w", &herdr.Error{Code: "agent_blocked"}), want: "agent_blocked"},
+		{name: "non-agent structured code", cause: &herdr.Error{Code: "pane_not_found"}, want: "unknown"},
+		{name: "arbitrary malicious code", cause: &herdr.Error{Code: "'; DROP TABLE agents; --"}, want: "unknown"},
+		{name: "plain transport error", cause: errors.New("connection reset by peer"), want: "unknown"},
+		{name: "context cancellation", cause: context.Canceled, want: "unknown"},
+		{name: "context deadline", cause: context.DeadlineExceeded, want: "unknown"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := (&InitialPromptError{Cause: test.cause}).SafeCode(); got != test.want {
+				t.Fatalf("SafeCode() = %q, want %q", got, test.want)
+			}
+		})
+	}
+
+	t.Run("nil receiver", func(t *testing.T) {
+		var e *InitialPromptError
+		if got := e.SafeCode(); got != "unknown" {
+			t.Fatalf("SafeCode() = %q, want unknown", got)
+		}
+	})
+}
+
+func TestSpawnInitialPromptContextCancellationLeavesAgentRunning(t *testing.T) {
+	prompt := "deliver under cancellation"
+	client := newFakeHerder()
+	// PromptAgent surfaces a cancellation observed during delivery.
+	client.errs["PromptAgent"] = context.Canceled
+
+	result, err := Spawn(context.Background(), client, Caller{WorkspaceID: "wsC"}, SpawnOptions{
+		Name: "rev", Harness: "claude", InitialPrompt: &prompt,
+	})
+
+	if result == (SpawnResult{}) {
+		t.Fatalf("result = %#v, want the launched agent retained", result)
+	}
+	var promptErr *InitialPromptError
+	if !errors.As(err, &promptErr) {
+		t.Fatalf("Spawn() error = %v, want *InitialPromptError", err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Spawn() error = %v, want context.Canceled in the chain", err)
+	}
+	if got := promptErr.SafeCode(); got != "unknown" {
+		t.Fatalf("SafeCode() = %q, want unknown for context cancellation", got)
+	}
+
+	promptCalls := 0
+	for _, call := range client.calls {
+		if strings.HasPrefix(call, "PromptAgent(") {
+			promptCalls++
+		}
+		if strings.HasPrefix(call, "ClosePane(") {
+			t.Fatalf("Spawn() cleaned up after cancellation: %#v", client.calls)
+		}
+	}
+	if promptCalls != 1 {
+		t.Fatalf("PromptAgent called %d times, want exactly one (no retry, no poll)", promptCalls)
+	}
+}
+
+// forgingAsError spoofs errors.As: its As sets the target to a forged
+// whitelisted *herdr.Error and reports a match. A correct SafeCode must never
+// consult this hook.
+type forgingAsError struct{}
+
+func (forgingAsError) Error() string { return "totally legitimate" }
+
+func (forgingAsError) As(target any) bool {
+	if p, ok := target.(**herdr.Error); ok {
+		*p = &herdr.Error{Operation: "forged", Code: "agent_blocked", Message: "forged"}
+		return true
+	}
+	return false
+}
+
+// blindAsError reports an errors.As match without ever setting the target,
+// which would leave a naive errors.As classifier holding a nil *herdr.Error to
+// dereference.
+type blindAsError struct{}
+
+func (blindAsError) Error() string { return "blind match" }
+
+func (blindAsError) As(any) bool { return true }
+
+// unwrapValue wraps one error through a plain Unwrap() error without touching
+// it, so a typed-nil inner value can be reached without calling its Error.
+type unwrapValue struct{ inner error }
+
+func (unwrapValue) Error() string { return "wrapper" }
+
+func (w unwrapValue) Unwrap() error { return w.inner }
+
+// selfUnwrap unwraps to itself, forming a cycle a bounded traversal must
+// survive.
+type selfUnwrap struct{}
+
+func (selfUnwrap) Error() string { return "cycle" }
+
+func (s selfUnwrap) Unwrap() error { return s }
+
+func TestInitialPromptErrorSafeCodeAdversarial(t *testing.T) {
+	typedNil := (*herdr.Error)(nil)
+
+	t.Run("direct typed-nil structured cause", func(t *testing.T) {
+		if got := (&InitialPromptError{Cause: typedNil}).SafeCode(); got != "unknown" {
+			t.Fatalf("SafeCode() = %q, want unknown", got)
+		}
+	})
+
+	t.Run("wrapped typed-nil structured cause", func(t *testing.T) {
+		if got := (&InitialPromptError{Cause: unwrapValue{inner: typedNil}}).SafeCode(); got != "unknown" {
+			t.Fatalf("SafeCode() = %q, want unknown", got)
+		}
+	})
+
+	t.Run("custom As forging a whitelisted code is ignored", func(t *testing.T) {
+		// Guard: the naive errors.As path is genuinely fooled by this cause, so
+		// SafeCode diverging to unknown proves it never took the hook.
+		var viaAs *herdr.Error
+		if !errors.As(error(forgingAsError{}), &viaAs) || viaAs == nil || viaAs.Code != "agent_blocked" {
+			t.Fatalf("guard: errors.As did not take the forged bait; the test is no longer meaningful")
+		}
+		if got := (&InitialPromptError{Cause: forgingAsError{}}).SafeCode(); got != "unknown" {
+			t.Fatalf("SafeCode() = %q, want unknown (must not consult the As hook)", got)
+		}
+	})
+
+	t.Run("custom As returning true without a target is ignored", func(t *testing.T) {
+		if got := (&InitialPromptError{Cause: blindAsError{}}).SafeCode(); got != "unknown" {
+			t.Fatalf("SafeCode() = %q, want unknown (no panic, no match)", got)
+		}
+	})
+
+	t.Run("joined structured errors classify by depth-first first match", func(t *testing.T) {
+		blocked := &herdr.Error{Code: "agent_blocked"}
+		paneGone := &herdr.Error{Code: "agent_pane_not_found"}
+		if got := (&InitialPromptError{Cause: errors.Join(blocked, paneGone)}).SafeCode(); got != "agent_blocked" {
+			t.Fatalf("SafeCode() = %q, want agent_blocked (first join child)", got)
+		}
+		if got := (&InitialPromptError{Cause: errors.Join(paneGone, blocked)}).SafeCode(); got != "agent_pane_not_found" {
+			t.Fatalf("SafeCode() = %q, want agent_pane_not_found (first join child)", got)
+		}
+	})
+
+	t.Run("earlier unknown structured error shadows a later whitelisted one", func(t *testing.T) {
+		unknown := &herdr.Error{Code: "pane_not_found"}
+		blocked := &herdr.Error{Code: "agent_blocked"}
+		if got := (&InitialPromptError{Cause: errors.Join(unknown, blocked)}).SafeCode(); got != "unknown" {
+			t.Fatalf("SafeCode() = %q, want unknown (must not skip past an earlier structured error)", got)
+		}
+	})
+
+	t.Run("earlier typed-nil structured error shadows a later whitelisted one", func(t *testing.T) {
+		blocked := &herdr.Error{Code: "agent_blocked"}
+		if got := (&InitialPromptError{Cause: errors.Join(typedNil, blocked)}).SafeCode(); got != "unknown" {
+			t.Fatalf("SafeCode() = %q, want unknown (typed-nil first child shadows)", got)
+		}
+	})
+
+	t.Run("real wrapped whitelisted code still classifies", func(t *testing.T) {
+		cause := fmt.Errorf("prompt agent: %w", &herdr.Error{Code: "agent_pane_not_found"})
+		if got := (&InitialPromptError{Cause: cause}).SafeCode(); got != "agent_pane_not_found" {
+			t.Fatalf("SafeCode() = %q, want agent_pane_not_found", got)
+		}
+	})
+
+	t.Run("self-unwrapping cycle terminates as unknown", func(t *testing.T) {
+		done := make(chan string, 1)
+		go func() { done <- (&InitialPromptError{Cause: selfUnwrap{}}).SafeCode() }()
+		select {
+		case got := <-done:
+			if got != "unknown" {
+				t.Fatalf("SafeCode() = %q, want unknown", got)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("SafeCode() hung on a self-unwrapping cycle")
+		}
+	})
+}
+
+// branchNode is a multi-child unwrap node that counts how many times traversal
+// calls its Unwrap. Cyclic children turn depth-only traversal into ~2^101
+// visits, so these tests prove the work budget, not the clock, is what stops
+// the walk.
+type branchNode struct {
+	children []error
+	unwraps  *int
+}
+
+func (*branchNode) Error() string { return "branching node" }
+
+func (n *branchNode) Unwrap() []error {
+	*n.unwraps++
+	return n.children
+}
+
+// safeCodeOrHang classifies cause under a watchdog: the deterministic
+// assertions live in the callers, and the timeout only converts an unbounded
+// traversal into a prompt failure instead of a stuck test run.
+func safeCodeOrHang(t *testing.T, cause error) string {
+	t.Helper()
+	done := make(chan string, 1)
+	go func() { done <- (&InitialPromptError{Cause: cause}).SafeCode() }()
+	select {
+	case got := <-done:
+		return got
+	case <-time.After(2 * time.Second):
+		t.Fatal("SafeCode() did not terminate promptly")
+		return ""
+	}
+}
+
+func TestInitialPromptErrorSafeCodeWorkBudget(t *testing.T) {
+	t.Run("branching self-cycle stays within the work budget", func(t *testing.T) {
+		unwraps := 0
+		self := &branchNode{unwraps: &unwraps}
+		self.children = []error{self, self}
+
+		if got := safeCodeOrHang(t, self); got != "unknown" {
+			t.Fatalf("SafeCode() = %q, want unknown", got)
+		}
+		if unwraps > maxUnwrapWork {
+			t.Fatalf("Unwrap called %d times, want at most the work budget %d", unwraps, maxUnwrapWork)
+		}
+		if unwraps <= maxUnwrapDepth {
+			t.Fatalf("Unwrap called %d times, want more than %d (the budget, not the depth bound, must be what stopped a branching cycle)", unwraps, maxUnwrapDepth)
+		}
+	})
+
+	t.Run("branching mutual cycle stays within the work budget", func(t *testing.T) {
+		unwraps := 0
+		a := &branchNode{unwraps: &unwraps}
+		b := &branchNode{unwraps: &unwraps}
+		a.children = []error{b, b}
+		b.children = []error{a, a}
+
+		if got := safeCodeOrHang(t, a); got != "unknown" {
+			t.Fatalf("SafeCode() = %q, want unknown", got)
+		}
+		if unwraps > maxUnwrapWork {
+			t.Fatalf("Unwrap called %d times, want at most the work budget %d", unwraps, maxUnwrapWork)
+		}
+		if unwraps <= maxUnwrapDepth {
+			t.Fatalf("Unwrap called %d times, want more than %d (the budget, not the depth bound, must be what stopped a branching cycle)", unwraps, maxUnwrapDepth)
+		}
+	})
+
+	t.Run("wide fanout stops at the work budget without scanning every child", func(t *testing.T) {
+		unwraps := 0
+		root := &branchNode{unwraps: &unwraps}
+		for range 10_000 {
+			root.children = append(root.children, &branchNode{unwraps: &unwraps})
+		}
+
+		if got := safeCodeOrHang(t, root); got != "unknown" {
+			t.Fatalf("SafeCode() = %q, want unknown", got)
+		}
+		// Every visit of a branchNode spends one budget unit and calls Unwrap
+		// exactly once: the root plus maxUnwrapWork-1 leaves, never all 10000.
+		if unwraps != maxUnwrapWork {
+			t.Fatalf("Unwrap called %d times, want exactly %d visits", unwraps, maxUnwrapWork)
+		}
+	})
+
+	t.Run("whitelisted code on the last budgeted visit classifies", func(t *testing.T) {
+		// The join costs one visit and each child one more, so the structured
+		// error is exactly the maxUnwrapWork-th (final affordable) visit.
+		children := make([]error, 0, maxUnwrapWork-1)
+		for range maxUnwrapWork - 2 {
+			children = append(children, errors.New("noise"))
+		}
+		children = append(children, &herdr.Error{Code: "agent_blocked"})
+		if got := (&InitialPromptError{Cause: errors.Join(children...)}).SafeCode(); got != "agent_blocked" {
+			t.Fatalf("SafeCode() = %q, want agent_blocked on the final budgeted visit", got)
+		}
+	})
+
+	t.Run("whitelisted code one visit past the budget reports unknown", func(t *testing.T) {
+		children := make([]error, 0, maxUnwrapWork)
+		for range maxUnwrapWork - 1 {
+			children = append(children, errors.New("noise"))
+		}
+		children = append(children, &herdr.Error{Code: "agent_blocked"})
+		if got := (&InitialPromptError{Cause: errors.Join(children...)}).SafeCode(); got != "unknown" {
+			t.Fatalf("SafeCode() = %q, want unknown once the budget is exhausted", got)
+		}
+	})
+
+	t.Run("whitelisted code at the exact depth bound classifies", func(t *testing.T) {
+		var cause error = &herdr.Error{Code: "agent_pane_not_found"}
+		for range maxUnwrapDepth {
+			cause = unwrapValue{inner: cause}
+		}
+		if got := (&InitialPromptError{Cause: cause}).SafeCode(); got != "agent_pane_not_found" {
+			t.Fatalf("SafeCode() = %q, want agent_pane_not_found at depth %d", got, maxUnwrapDepth)
+		}
+	})
+
+	t.Run("whitelisted code one past the depth bound reports unknown", func(t *testing.T) {
+		var cause error = &herdr.Error{Code: "agent_pane_not_found"}
+		for range maxUnwrapDepth + 1 {
+			cause = unwrapValue{inner: cause}
+		}
+		if got := (&InitialPromptError{Cause: cause}).SafeCode(); got != "unknown" {
+			t.Fatalf("SafeCode() = %q, want unknown past depth %d", got, maxUnwrapDepth)
+		}
+	})
+}
+
+// wrapDepth buries leaf under n plain Unwrap() error layers, so traversal must
+// descend n levels before it can see the leaf.
+func wrapDepth(n int, leaf error) error {
+	wrapped := leaf
+	for range n {
+		wrapped = unwrapValue{inner: wrapped}
+	}
+	return wrapped
+}
+
+// TestInitialPromptErrorSafeCodeTruncationShadowsLaterSiblings pins the
+// conservative ordering contract: a branch the depth or work bound cut short
+// could have hidden the true first structured error, so traversal must report
+// unknown rather than move on to a later sibling — while a branch that was
+// fully searched and simply held nothing lets later siblings classify.
+func TestInitialPromptErrorSafeCodeTruncationShadowsLaterSiblings(t *testing.T) {
+	blocked := &herdr.Error{Code: "agent_blocked"}
+
+	t.Run("depth-truncated earlier branch shadows a later whitelisted sibling", func(t *testing.T) {
+		deep := wrapDepth(maxUnwrapDepth+1, errors.New("leaf"))
+		if got := safeCodeOrHang(t, errors.Join(deep, blocked)); got != "unknown" {
+			t.Fatalf("SafeCode() = %q, want unknown (the truncated branch could hide the first structured error)", got)
+		}
+	})
+
+	t.Run("work-truncated earlier branch shadows a later whitelisted sibling", func(t *testing.T) {
+		// The wide branch stays at depth 2 but holds more nodes than the whole
+		// work budget, so truncation here is purely budget exhaustion.
+		unwraps := 0
+		wide := &branchNode{unwraps: &unwraps}
+		for range maxUnwrapWork + 50 {
+			wide.children = append(wide.children, errors.New("noise"))
+		}
+		if got := safeCodeOrHang(t, errors.Join(wide, blocked)); got != "unknown" {
+			t.Fatalf("SafeCode() = %q, want unknown (the budget-exhausted branch could hide the first structured error)", got)
+		}
+		if unwraps != 1 {
+			t.Fatalf("Unwrap called %d times, want exactly once for the single wide node", unwraps)
+		}
+	})
+
+	t.Run("fully searched absent earlier branch lets a later whitelisted sibling classify", func(t *testing.T) {
+		absent := errors.Join(errors.New("noise"), unwrapValue{inner: errors.New("leaf")})
+		if got := (&InitialPromptError{Cause: errors.Join(absent, &herdr.Error{Code: "agent_pane_not_found"})}).SafeCode(); got != "agent_pane_not_found" {
+			t.Fatalf("SafeCode() = %q, want agent_pane_not_found (an exhaustively absent branch must not shadow)", got)
+		}
+	})
+
+	t.Run("truncation nested inside wrappers and joins propagates unknown", func(t *testing.T) {
+		deep := fmt.Errorf("inner: %w", wrapDepth(maxUnwrapDepth+1, errors.New("leaf")))
+		cause := fmt.Errorf("outer: %w", errors.Join(deep, blocked))
+		if got := safeCodeOrHang(t, cause); got != "unknown" {
+			t.Fatalf("SafeCode() = %q, want unknown (nested truncation must reach the top)", got)
+		}
+	})
 }

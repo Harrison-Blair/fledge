@@ -196,43 +196,6 @@ func TestStartNonInteractiveResolutionRequiresHarnessAndModel(t *testing.T) {
 	}
 }
 
-func TestStartCursorNeedsExplicitNoProfileNonInteractively(t *testing.T) {
-	for _, test := range []struct {
-		name      string
-		noProfile bool
-		wantErr   string
-	}{
-		{name: "default profile", wantErr: "cannot load profile"},
-		{name: "explicit bypass", noProfile: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			command := newCommand(func(ctx context.Context, _ string, deps session.StartDependencies) error {
-				choice, err := deps.Chooser.Choose(ctx)
-				if err == nil && (choice.Harness != "cursor" || choice.Profile != nil) {
-					t.Fatalf("choice = %#v, want Cursor without profile", choice)
-				}
-				return err
-			}, func(int) bool { return false })
-			args := []string{"--harness", "cursor", "--model", "cursor-model"}
-			if test.noProfile {
-				args = append(args, "--no-profile")
-			}
-			command.SetArgs(args)
-
-			err := command.Execute()
-			if test.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
-					t.Fatalf("Execute() error = %v, want containing %q", err, test.wantErr)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("Execute() error = %v", err)
-			}
-		})
-	}
-}
-
 func TestStartProfileAndNoProfileConflictBeforeOperationContinues(t *testing.T) {
 	command := newCommand(func(ctx context.Context, _ string, deps session.StartDependencies) error {
 		_, err := deps.Chooser.Choose(ctx)
@@ -247,7 +210,7 @@ func TestStartProfileAndNoProfileConflictBeforeOperationContinues(t *testing.T) 
 }
 
 func TestStartRejectsUnsupportedHarnessesThroughSharedResolver(t *testing.T) {
-	for _, harness := range []string{"opencode", "unknown"} {
+	for _, harness := range []string{"cursor", "opencode", "unknown"} {
 		t.Run(harness, func(t *testing.T) {
 			command := newCommand(func(ctx context.Context, _ string, deps session.StartDependencies) error {
 				_, err := deps.Chooser.Choose(ctx)

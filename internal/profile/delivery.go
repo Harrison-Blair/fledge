@@ -29,7 +29,7 @@ type InstructionArgumentConflictError struct {
 }
 
 func (e *InstructionArgumentConflictError) Error() string {
-	return fmt.Sprintf("harness %q argument %q conflicts with profile instruction delivery", e.Harness, e.Argument)
+	return fmt.Sprintf("harness %q argument %q conflicts with profile instruction delivery; use --no-profile to pass harness-native instruction arguments without a managed profile", e.Harness, e.Argument)
 }
 
 // LaunchArgs returns a copy of args with the profile delivered through the

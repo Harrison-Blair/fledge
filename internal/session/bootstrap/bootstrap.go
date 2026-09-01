@@ -18,8 +18,9 @@ import (
 const LogName = "bootstrap.log"
 
 const (
-	orchestratorName = "orchestrator"
-	workspacePrefix  = "fledge:"
+	orchestratorName     = "orchestrator"
+	orchestratorTabLabel = "fledge-orchestrator"
+	workspacePrefix      = "fledge:"
 )
 
 // Server is the Herder surface needed to prepare a fresh session.
@@ -117,10 +118,10 @@ func Run(ctx context.Context, h Server, in Input, t Timing) error {
 	}
 	logStep(in.Log, "renamed workspace to %s", label)
 
-	if err := h.RenameTab(ctx, tabID, orchestratorName); err != nil {
+	if err := h.RenameTab(ctx, tabID, orchestratorTabLabel); err != nil {
 		return logFail(in.Log, halted(ctx, fmt.Errorf("rename tab %s: %w", tabID, err)))
 	}
-	logStep(in.Log, "renamed tab to %s", orchestratorName)
+	logStep(in.Log, "renamed tab to %s", orchestratorTabLabel)
 
 	if in.Choice.Harness == "" {
 		logStep(in.Log, "no agent requested")

@@ -34,7 +34,7 @@ func TestBootstrapPreparesSessionAndStartsAgentWithModel(t *testing.T) {
 	if want := []sessiontest.RenameCall{{ID: "w1", Label: "fledge:my-project"}}; !reflect.DeepEqual(server.RenamedWorkspace, want) {
 		t.Fatalf("workspace renames = %#v, want %#v", server.RenamedWorkspace, want)
 	}
-	if want := []sessiontest.RenameCall{{ID: "w1:t2", Label: "orchestrator"}}; !reflect.DeepEqual(server.RenamedTab, want) {
+	if want := []sessiontest.RenameCall{{ID: "w1:t2", Label: "fledge-orchestrator"}}; !reflect.DeepEqual(server.RenamedTab, want) {
 		t.Fatalf("tab renames = %#v, want %#v", server.RenamedTab, want)
 	}
 	want := []herdr.StartAgentOptions{{
@@ -48,7 +48,7 @@ func TestBootstrapPreparesSessionAndStartsAgentWithModel(t *testing.T) {
 	}
 
 	report := log.String()
-	for _, step := range []string{"Herder server running", "w1:p2", "fledge:my-project", "orchestrator", "started claude"} {
+	for _, step := range []string{"Herder server running", "w1:p2", "fledge:my-project", "fledge-orchestrator", "started claude"} {
 		if !strings.Contains(report, step) {
 			t.Fatalf("log = %q, want a line about %q", report, step)
 		}
@@ -138,10 +138,10 @@ func TestBootstrapProfileDeliveryFailureIsFatalBeforeServerMutation(t *testing.T
 		{
 			name: "unsupported harness",
 			choice: types.AgentChoice{
-				Harness: "cursor",
+				Harness: "gemini",
 				Profile: &profile.Profile{Name: profile.OrchestratorName},
 			},
-			path:    "/sessions/cursor/profile.md",
+			path:    "/sessions/gemini/profile.md",
 			wantErr: "does not support native profile delivery",
 		},
 	}

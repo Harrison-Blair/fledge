@@ -18,12 +18,9 @@ type selectCall struct {
 }
 
 type scriptedPrompts struct {
-	answers    []Option
-	selectErr  error
-	calls      []selectCall
-	confirmed  bool
-	confirmErr error
-	questions  []string
+	answers   []Option
+	selectErr error
+	calls     []selectCall
 }
 
 func (s *scriptedPrompts) selectFn(_ io.Reader, _ io.Writer, title string, options []Option) (Option, error) {
@@ -35,11 +32,6 @@ func (s *scriptedPrompts) selectFn(_ io.Reader, _ io.Writer, title string, optio
 		return Option{}, errors.New("unscripted selection")
 	}
 	return s.answers[len(s.calls)-1], nil
-}
-
-func (s *scriptedPrompts) confirmFn(_ io.Reader, _ io.Writer, question string) (bool, error) {
-	s.questions = append(s.questions, question)
-	return s.confirmed, s.confirmErr
 }
 
 type modelLookup struct {
@@ -67,11 +59,10 @@ func testProfile() profile.Profile {
 
 func testResolver(prompts *scriptedPrompts, lookup *modelLookup, configured ...profile.Profile) Resolver {
 	resolver := Resolver{
-		Input:   strings.NewReader(""),
-		Output:  io.Discard,
-		Models:  lookup.fn,
-		Select:  prompts.selectFn,
-		Confirm: prompts.confirmFn,
+		Input:  strings.NewReader(""),
+		Output: io.Discard,
+		Models: lookup.fn,
+		Select: prompts.selectFn,
 	}
 	if len(configured) == 0 {
 		return resolver
@@ -211,7 +202,7 @@ func TestResolveRejectsInvalidProfileSelectionsBeforeModelDiscovery(t *testing.T
 }
 
 func TestResolveRejectsUnsupportedHarnessesBeforeModelDiscovery(t *testing.T) {
-	for _, harness := range []string{"opencode", "gemini"} {
+	for _, harness := range []string{"cursor", "opencode", "gemini"} {
 		t.Run(harness, func(t *testing.T) {
 			lookup := &modelLookup{}
 			_, err := testResolver(&scriptedPrompts{}, lookup).Resolve(context.Background(), LaunchRequest{
@@ -295,7 +286,7 @@ func TestResolveInteractiveSpawnPromptsProfileHarnessAndModel(t *testing.T) {
 	if prompts.calls[1].title != harnessPrompt {
 		t.Fatalf("harness prompt = %q, want %q", prompts.calls[1].title, harnessPrompt)
 	}
-	if got, want := optionTitles(prompts.calls[1].options), []string{"pi", "claude", "codex", "cursor"}; !reflect.DeepEqual(got, want) {
+	if got, want := optionTitles(prompts.calls[1].options), []string{"pi", "claude", "codex"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("harness options = %#v, want %#v", got, want)
 	}
 	if got, want := lookup.calls, []catalog.Harness{catalog.Claude}; !reflect.DeepEqual(got, want) {
@@ -348,8 +339,8 @@ func TestResolveHarnessPickerIncludesShellOnlyOnlyWhenAllowed(t *testing.T) {
 		allowed bool
 		want    []string
 	}{
-		{name: "allowed", allowed: true, want: []string{"pi", "claude", "codex", "cursor", shellOnlyTitle}},
-		{name: "not allowed", want: []string{"pi", "claude", "codex", "cursor"}},
+		{name: "allowed", allowed: true, want: []string{"pi", "claude", "codex", shellOnlyTitle}},
+		{name: "not allowed", want: []string{"pi", "claude", "codex"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			prompts := &scriptedPrompts{answers: []Option{{ID: "pi", Title: "pi"}}}
@@ -426,72 +417,6 @@ func TestResolveModelPickerKeepsHarnessDefaultChoice(t *testing.T) {
 	}
 	if prompts.calls[0].options[0].ID != "" || !prompts.calls[0].options[1].FreeText {
 		t.Fatalf("default/free-text options = %#v, want explicit default then free text", prompts.calls[0].options[:2])
-	}
-}
-
-func TestResolveCursorProfileCompatibility(t *testing.T) {
-	tests := []struct {
-		name        string
-		interactive bool
-		confirmed   bool
-		confirmErr  error
-		wantErr     string
-		wantCancel  bool
-		wantOK      bool
-	}{
-		{name: "non-interactive", wantErr: "cannot load profile", interactive: false},
-		{name: "accepted", interactive: true, confirmed: true, wantOK: true},
-		{name: "declined", interactive: true, wantErr: "declined to continue"},
-		{name: "cancelled", interactive: true, confirmErr: ErrCancelled, wantErr: "selection cancelled", wantCancel: true},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			prompts := &scriptedPrompts{confirmed: test.confirmed, confirmErr: test.confirmErr}
-			choice, err := testResolver(prompts, &modelLookup{}).Resolve(context.Background(), LaunchRequest{
-				Harness:        "cursor",
-				Model:          "cursor-model",
-				DefaultProfile: profile.OrchestratorName,
-				Args:           []string{"--raw"},
-				Interactive:    test.interactive,
-			})
-			if test.wantOK {
-				if err != nil {
-					t.Fatalf("Resolve() error = %v", err)
-				}
-				if choice.Profile != nil || !reflect.DeepEqual(choice.Args, []string{"--raw"}) {
-					t.Fatalf("choice = %#v, want Cursor without profile and raw args", choice)
-				}
-				if len(prompts.questions) != 1 || !strings.Contains(prompts.questions[0], profile.OrchestratorName) {
-					t.Fatalf("confirmation questions = %#v, want profile named", prompts.questions)
-				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
-				t.Fatalf("Resolve() error = %v, want containing %q", err, test.wantErr)
-			}
-			if test.wantCancel && !errors.Is(err, ErrCancelled) {
-				t.Fatalf("Resolve() error = %v, want ErrCancelled", err)
-			}
-			if !test.interactive && !strings.Contains(err.Error(), "--no-profile") {
-				t.Fatalf("Resolve() error = %v, want --no-profile guidance", err)
-			}
-		})
-	}
-}
-
-func TestResolveCursorWithNoProfileNeedsNoConfirmation(t *testing.T) {
-	prompts := &scriptedPrompts{}
-	choice, err := testResolver(prompts, &modelLookup{}).Resolve(context.Background(), LaunchRequest{
-		Harness:   "cursor",
-		Model:     "cursor-model",
-		NoProfile: true,
-	})
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
-	if choice.Harness != catalog.Cursor || len(prompts.questions) != 0 {
-		t.Fatalf("choice = %#v, questions = %#v, want Cursor without confirmation", choice, prompts.questions)
 	}
 }
 
