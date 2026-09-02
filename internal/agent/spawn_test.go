@@ -14,6 +14,8 @@ import (
 
 	"fledge/internal/herdr"
 	"fledge/internal/profile"
+	"fledge/internal/session"
+	"fledge/internal/session/record"
 )
 
 func TestSpawnPlacements(t *testing.T) {
@@ -26,20 +28,6 @@ func TestSpawnPlacements(t *testing.T) {
 		wantCalls []string
 		want      SpawnResult
 	}{
-		{
-			name:      "default placement uses the caller workspace",
-			caller:    Caller{WorkspaceID: "wsC", PaneID: "wsC:tab1:pane1"},
-			opts:      SpawnOptions{Name: "rev", Harness: "claude"},
-			wantCalls: []string{"CreateTab(wsC,rev)", "StartAgent(rev,claude,ws1:tab9:pane1)"},
-			want:      SpawnResult{Name: "rev", Harness: "claude", WorkspaceID: "ws1", TabID: "ws1:tab9", PaneID: "ws1:tab9:pane1"},
-		},
-		{
-			name:      "default placement falls back to the focused workspace",
-			caller:    Caller{Session: "fledge-demo-00000001"},
-			opts:      SpawnOptions{Name: "rev", Harness: "claude", Label: "review pass"},
-			wantCalls: []string{"Workspaces()", "CreateTab(wsF,review pass)", "StartAgent(rev,claude,ws1:tab9:pane1)"},
-			want:      SpawnResult{Name: "rev", Harness: "claude", WorkspaceID: "ws1", TabID: "ws1:tab9", PaneID: "ws1:tab9:pane1"},
-		},
 		{
 			name:      "new workspace",
 			opts:      SpawnOptions{Name: "rev", Harness: "codex", Workspace: "new"},
@@ -78,6 +66,10 @@ func TestSpawnPlacements(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			client := newFakeHerder()
 			client.panes = test.panes
+			// Every case is an explicit placement. Invalid managed-workspace
+			// paths prove these branches do not touch the sidecar or project lock.
+			test.caller.Root = "relative-unused-root"
+			test.caller.RecordPath = "relative-unused-record"
 
 			result, err := Spawn(context.Background(), client, test.caller, test.opts)
 			if err != nil {
@@ -90,6 +82,197 @@ func TestSpawnPlacements(t *testing.T) {
 				t.Fatalf("result = %#v, want %#v", result, test.want)
 			}
 		})
+	}
+}
+
+func TestSpawnDefaultPlacementReusesManagedAgentsWorkspace(t *testing.T) {
+	for _, harness := range []string{"pi", "claude", "codex"} {
+		t.Run(harness, func(t *testing.T) {
+			caller := managedSpawnCaller(t, map[string]string{"orchestrator": "ws-orchestrator", "agents": "ws-agents"})
+			client := newFakeHerder()
+			client.workspaces = []herdr.Workspace{{ID: "ws-orchestrator"}, {ID: "ws-agents"}, {ID: "ws-focused", Focused: true}}
+
+			result, err := Spawn(context.Background(), client, caller, SpawnOptions{Name: "rev", Harness: harness})
+			if err != nil {
+				t.Fatalf("Spawn() error = %v", err)
+			}
+			wantCalls := []string{"Workspaces()", "CreateTab(ws-agents,rev)", "StartAgent(rev," + harness + ",ws1:tab9:pane1)"}
+			if !reflect.DeepEqual(client.calls, wantCalls) {
+				t.Fatalf("calls = %#v, want %#v", client.calls, wantCalls)
+			}
+			want := SpawnResult{Name: "rev", Harness: harness, WorkspaceID: "ws1", TabID: "ws1:tab9", PaneID: "ws1:tab9:pane1"}
+			if result != want {
+				t.Fatalf("result = %#v, want %#v", result, want)
+			}
+		})
+	}
+}
+
+func TestSpawnDefaultPlacementRecreatesDestroyedAgentsWorkspaceOnce(t *testing.T) {
+	caller := managedSpawnCaller(t, map[string]string{"orchestrator": "ws-orchestrator", "agents": "ws-destroyed"})
+	client := newFakeHerder()
+	client.workspaces = []herdr.Workspace{{ID: "ws-orchestrator", Label: "renamed orchestrator"}}
+	client.newWorkspace = herdr.WorkspaceCreated{
+		Workspace: herdr.Workspace{ID: "ws-agents-new"},
+		Tab:       herdr.Tab{ID: "ws-agents-new:root", WorkspaceID: "ws-agents-new"},
+		RootPane:  herdr.Pane{ID: "ws-agents-new:root:pane", WorkspaceID: "ws-agents-new", TabID: "ws-agents-new:root"},
+	}
+
+	for range 2 {
+		if _, err := Spawn(context.Background(), client, caller, SpawnOptions{Name: "rev", Harness: "claude"}); err != nil {
+			t.Fatalf("Spawn() error = %v", err)
+		}
+	}
+	wantCalls := []string{
+		"Workspaces()",
+		"CreateWorkspace(f-agents:" + filepath.Base(caller.Root) + ")",
+		"CreateTab(ws-agents-new,rev)",
+		"StartAgent(rev,claude,ws1:tab9:pane1)",
+		"Workspaces()",
+		"CreateTab(ws-agents-new,rev)",
+		"StartAgent(rev,claude,ws1:tab9:pane1)",
+	}
+	if !reflect.DeepEqual(client.calls, wantCalls) {
+		t.Fatalf("calls = %#v, want %#v", client.calls, wantCalls)
+	}
+	ids, err := record.ReadWorkspaces(caller.RecordPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids["orchestrator"] != "ws-orchestrator" || ids["agents"] != "ws-agents-new" {
+		t.Fatalf("persisted workspaces = %#v", ids)
+	}
+}
+
+func TestSpawnDefaultPlacementChecksBothManagedRolesForIdentityConflicts(t *testing.T) {
+	caller := managedSpawnCaller(t, map[string]string{"orchestrator": "ws-shared", "agents": "ws-shared"})
+	client := newFakeHerder()
+	client.workspaces = []herdr.Workspace{{ID: "ws-shared", Label: "renamed"}}
+
+	_, err := Spawn(context.Background(), client, caller, SpawnOptions{Name: "rev", Harness: "claude"})
+	var conflict *session.RoleConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("Spawn() error = %v, want RoleConflictError", err)
+	}
+	if conflict.FirstRole != session.OrchestratorWorkspaceRole || conflict.ConflictingRole != session.AgentsWorkspaceRole {
+		t.Fatalf("conflict = %#v", conflict)
+	}
+	if !reflect.DeepEqual(client.calls, []string{"Workspaces()"}) {
+		t.Fatalf("calls = %#v, want one workspace list and no placement/start", client.calls)
+	}
+}
+
+func TestSpawnDefaultPlacementPropagatesManagedWorkspaceErrorsBeforeStart(t *testing.T) {
+	t.Run("missing orchestrator", func(t *testing.T) {
+		caller := managedSpawnCaller(t, nil)
+		client := newFakeHerder()
+		client.workspaces = nil
+		_, err := Spawn(context.Background(), client, caller, SpawnOptions{Name: "rev", Harness: "claude"})
+		var missing *session.MissingError
+		if !errors.As(err, &missing) || !reflect.DeepEqual(client.calls, []string{"Workspaces()"}) {
+			t.Fatalf("Spawn() error/calls = %v/%#v, want missing orchestrator before placement", err, client.calls)
+		}
+	})
+
+	t.Run("ambiguous agents", func(t *testing.T) {
+		caller := managedSpawnCaller(t, map[string]string{"orchestrator": "ws-orchestrator"})
+		label := "f-agents:" + filepath.Base(caller.Root)
+		client := newFakeHerder()
+		client.workspaces = []herdr.Workspace{{ID: "ws-orchestrator"}, {ID: "ws-a", Label: label}, {ID: "ws-b", Label: label}}
+		_, err := Spawn(context.Background(), client, caller, SpawnOptions{Name: "rev", Harness: "claude"})
+		var ambiguous *session.AmbiguousError
+		if !errors.As(err, &ambiguous) || !reflect.DeepEqual(client.calls, []string{"Workspaces()"}) {
+			t.Fatalf("Spawn() error/calls = %v/%#v, want ambiguity before placement", err, client.calls)
+		}
+	})
+
+	t.Run("workspace list", func(t *testing.T) {
+		caller := managedSpawnCaller(t, map[string]string{"orchestrator": "ws-orchestrator", "agents": "ws-agents"})
+		client := newFakeHerder()
+		want := errors.New("list failed")
+		client.errs["Workspaces"] = want
+		_, err := Spawn(context.Background(), client, caller, SpawnOptions{Name: "rev", Harness: "claude"})
+		if !errors.Is(err, want) || !reflect.DeepEqual(client.calls, []string{"Workspaces()"}) {
+			t.Fatalf("Spawn() error/calls = %v/%#v", err, client.calls)
+		}
+	})
+
+	t.Run("workspace create", func(t *testing.T) {
+		caller := managedSpawnCaller(t, map[string]string{"orchestrator": "ws-orchestrator", "agents": "ws-destroyed"})
+		client := newFakeHerder()
+		client.workspaces = []herdr.Workspace{{ID: "ws-orchestrator"}}
+		want := errors.New("create failed")
+		client.errs["CreateWorkspace"] = want
+		_, err := Spawn(context.Background(), client, caller, SpawnOptions{Name: "rev", Harness: "claude"})
+		if !errors.Is(err, want) || len(client.calls) != 2 || strings.HasPrefix(client.calls[len(client.calls)-1], "StartAgent(") {
+			t.Fatalf("Spawn() error/calls = %v/%#v", err, client.calls)
+		}
+	})
+
+	t.Run("record read", func(t *testing.T) {
+		caller := managedSpawnCaller(t, nil)
+		if err := os.WriteFile(filepath.Join(caller.RecordPath, record.WorkspacesFileName), []byte("not json\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		client := newFakeHerder()
+		_, err := Spawn(context.Background(), client, caller, SpawnOptions{Name: "rev", Harness: "claude"})
+		if err == nil || !strings.Contains(err.Error(), "read managed workspaces") || len(client.calls) != 0 {
+			t.Fatalf("Spawn() error/calls = %v/%#v", err, client.calls)
+		}
+	})
+
+	t.Run("project lock", func(t *testing.T) {
+		root := t.TempDir()
+		caller := Caller{Root: root, RecordPath: filepath.Join(root, ".fledge", "sessions", "missing")}
+		client := newFakeHerder()
+		_, err := Spawn(context.Background(), client, caller, SpawnOptions{Name: "rev", Harness: "claude"})
+		if err == nil || !strings.Contains(err.Error(), "lock project") || len(client.calls) != 0 {
+			t.Fatalf("Spawn() error/calls = %v/%#v", err, client.calls)
+		}
+	})
+
+	t.Run("record write", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root can write a read-only record directory")
+		}
+		caller := managedSpawnCaller(t, map[string]string{"orchestrator": "ws-orchestrator", "agents": "ws-destroyed"})
+		client := newFakeHerder()
+		client.workspaces = []herdr.Workspace{{ID: "ws-orchestrator"}, {ID: "ws-agents", Label: "f-agents:" + filepath.Base(caller.Root)}}
+		if err := os.Chmod(caller.RecordPath, 0o555); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(caller.RecordPath, 0o755) })
+		_, err := Spawn(context.Background(), client, caller, SpawnOptions{Name: "rev", Harness: "claude"})
+		if err == nil || !strings.Contains(err.Error(), "write managed workspaces") || !reflect.DeepEqual(client.calls, []string{"Workspaces()"}) {
+			t.Fatalf("Spawn() error/calls = %v/%#v", err, client.calls)
+		}
+	})
+}
+
+func TestSpawnCleansProfileArtifactWhenManagedWorkspaceEnsureFails(t *testing.T) {
+	caller := managedSpawnCaller(t, map[string]string{"orchestrator": "ws-orchestrator", "agents": "ws-agents"})
+	configured := profile.Profile{Name: "fledge-test", Instructions: "pinned instructions"}
+	client := newFakeHerder()
+	client.errs["Workspaces"] = errors.New("workspace lookup failed")
+
+	_, err := Spawn(context.Background(), client, caller, SpawnOptions{Name: "rev", Harness: "pi", Profile: &configured})
+	if err == nil || !strings.Contains(err.Error(), "workspace lookup failed") {
+		t.Fatalf("Spawn() error = %v", err)
+	}
+	entries, readErr := os.ReadDir(filepath.Join(caller.RecordPath, agentProfilesDirectory))
+	if readErr != nil || len(entries) != 0 {
+		t.Fatalf("profile artifact cleanup entries/error = %#v/%v", entries, readErr)
+	}
+}
+
+func TestSpawnDefaultPlacementRejectsMissingRootBeforeEffects(t *testing.T) {
+	client := newFakeHerder()
+	_, err := Spawn(context.Background(), client, Caller{RecordPath: t.TempDir()}, SpawnOptions{Name: "rev", Harness: "claude"})
+	if err == nil || !strings.Contains(err.Error(), "project root") {
+		t.Fatalf("Spawn() error = %v, want missing project root", err)
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("Herder calls = %#v, want none", client.calls)
 	}
 }
 
@@ -107,9 +290,9 @@ func TestSpawnPassesModelBeforeHarnessArguments(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			client := newFakeHerder()
 			opts := test.opts
-			opts.Name, opts.Harness = "rev", "claude"
+			opts.Name, opts.Harness, opts.Workspace = "rev", "claude", "wsC"
 
-			result, err := Spawn(context.Background(), client, Caller{WorkspaceID: "wsC"}, opts)
+			result, err := Spawn(context.Background(), client, Caller{}, opts)
 			if err != nil {
 				t.Fatalf("Spawn() error = %v", err)
 			}
@@ -157,11 +340,12 @@ func TestSpawnDeliversProfilesThroughNativeHarnessArguments(t *testing.T) {
 			recordPath := t.TempDir()
 			client := newFakeHerder()
 			result, err := Spawn(context.Background(), client, Caller{RecordPath: recordPath, WorkspaceID: "wsC"}, SpawnOptions{
-				Name:    "rev",
-				Harness: test.harness,
-				Model:   test.model,
-				Profile: &configured,
-				Args:    []string{"--default", "one", "--explicit", "two"},
+				Name:      "rev",
+				Harness:   test.harness,
+				Model:     test.model,
+				Profile:   &configured,
+				Workspace: "wsC",
+				Args:      []string{"--default", "one", "--explicit", "two"},
 			})
 			if err != nil {
 				t.Fatalf("Spawn() error = %v", err)
@@ -202,8 +386,8 @@ func TestSpawnCleansProfileArtifactWhenAgentStartFails(t *testing.T) {
 	client := newFakeHerder()
 	client.errs["StartAgent"] = errors.New("start failed")
 
-	_, err := Spawn(context.Background(), client, Caller{RecordPath: recordPath, WorkspaceID: "wsC"}, SpawnOptions{
-		Name: "rev", Harness: "claude", Model: "opus", Profile: &configured,
+	_, err := Spawn(context.Background(), client, Caller{RecordPath: recordPath}, SpawnOptions{
+		Name: "rev", Harness: "claude", Model: "opus", Profile: &configured, Workspace: "wsC",
 	})
 	if err == nil || !strings.Contains(err.Error(), "start failed") {
 		t.Fatalf("Spawn() error = %v, want start failure", err)
@@ -222,8 +406,8 @@ func TestSpawnCleansProfileArtifactWhenPlacementFails(t *testing.T) {
 	client := newFakeHerder()
 	client.errs["CreateTab"] = errors.New("placement failed")
 
-	_, err := Spawn(context.Background(), client, Caller{RecordPath: recordPath, WorkspaceID: "wsC"}, SpawnOptions{
-		Name: "rev", Harness: "pi", Model: "provider/model", Profile: &configured,
+	_, err := Spawn(context.Background(), client, Caller{RecordPath: recordPath}, SpawnOptions{
+		Name: "rev", Harness: "pi", Model: "provider/model", Profile: &configured, Workspace: "wsC",
 	})
 	if err == nil || !strings.Contains(err.Error(), "placement failed") {
 		t.Fatalf("Spawn() error = %v, want placement failure", err)
@@ -330,13 +514,13 @@ func TestSpawnAcceptsBoundaryNamesAndSplits(t *testing.T) {
 		name string
 		opts SpawnOptions
 	}{
-		{name: "single character name", opts: SpawnOptions{Name: "a", Harness: "claude"}},
-		{name: "longest name", opts: SpawnOptions{Name: "a" + strings.Repeat("b", 31), Harness: "claude"}},
-		{name: "punctuated name", opts: SpawnOptions{Name: "rev-2_b", Harness: "claude"}},
+		{name: "single character name", opts: SpawnOptions{Name: "a", Harness: "claude", Workspace: "wsC"}},
+		{name: "longest name", opts: SpawnOptions{Name: "a" + strings.Repeat("b", 31), Harness: "claude", Workspace: "wsC"}},
+		{name: "punctuated name", opts: SpawnOptions{Name: "rev-2_b", Harness: "claude", Workspace: "wsC"}},
 		{name: "down split", opts: SpawnOptions{Name: "rev", Harness: "claude", Pane: "ws1:tab3:pane1", Split: "down"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := Spawn(context.Background(), newFakeHerder(), Caller{WorkspaceID: "wsC"}, test.opts); err != nil {
+			if _, err := Spawn(context.Background(), newFakeHerder(), Caller{}, test.opts); err != nil {
 				t.Fatalf("Spawn() error = %v", err)
 			}
 		})
@@ -459,12 +643,6 @@ func TestSpawnPropagatesPlacementFailures(t *testing.T) {
 		wantCalls []string
 	}{
 		{
-			name:      "no focused workspace",
-			opts:      SpawnOptions{Name: "rev", Harness: "claude"},
-			wantErr:   "no focused workspace",
-			wantCalls: []string{"Workspaces()"},
-		},
-		{
 			name:      "empty tab",
 			opts:      SpawnOptions{Name: "rev", Harness: "claude", Tab: "ws1:tab3"},
 			panes:     []herdr.Pane{{ID: "ws1:tab4:pane1", TabID: "ws1:tab4"}},
@@ -574,7 +752,7 @@ func TestSpawnRejectsInvalidInitialPromptBeforeHerderCallOrArtifact(t *testing.T
 func TestSpawnWithoutInitialPromptDoesNotPrompt(t *testing.T) {
 	client := newFakeHerder()
 
-	result, err := Spawn(context.Background(), client, Caller{WorkspaceID: "wsC"}, SpawnOptions{Name: "rev", Harness: "claude"})
+	result, err := Spawn(context.Background(), client, Caller{}, SpawnOptions{Name: "rev", Harness: "claude", Workspace: "wsC"})
 	if err != nil {
 		t.Fatalf("Spawn() error = %v", err)
 	}
@@ -598,8 +776,8 @@ func TestSpawnDeliversInitialPromptAfterStartAgent(t *testing.T) {
 	client.prompted = json.RawMessage(`{"type":"agent_prompted","id":"cli:agent:prompt"}`)
 	prompt := "line one\nline two\twith \"quotes\", a trailing space \nand unicode 世界 ✅"
 
-	result, err := Spawn(context.Background(), client, Caller{WorkspaceID: "wsC"}, SpawnOptions{
-		Name: "rev", Harness: "claude", InitialPrompt: &prompt,
+	result, err := Spawn(context.Background(), client, Caller{}, SpawnOptions{
+		Name: "rev", Harness: "claude", Workspace: "wsC", InitialPrompt: &prompt,
 	})
 	if err != nil {
 		t.Fatalf("Spawn() error = %v", err)
@@ -650,8 +828,8 @@ func TestSpawnDoesNotPromptWhenLaunchFailsBeforeDelivery(t *testing.T) {
 		},
 		{
 			name:    "placement failure",
-			caller:  Caller{WorkspaceID: "wsC"},
-			opts:    SpawnOptions{Name: "rev", Harness: "claude", InitialPrompt: &prompt},
+			caller:  Caller{},
+			opts:    SpawnOptions{Name: "rev", Harness: "claude", Workspace: "wsC", InitialPrompt: &prompt},
 			errs:    map[string]error{"CreateTab": errors.New("placement failed")},
 			wantErr: "placement failed",
 		},
@@ -696,8 +874,8 @@ func TestSpawnInitialPromptDeliveryFailureIsSafeAndPreservesLaunch(t *testing.T)
 	client := newFakeHerder()
 	client.errs["PromptAgent"] = cause
 
-	result, err := Spawn(context.Background(), client, Caller{RecordPath: recordPath, WorkspaceID: "wsC"}, SpawnOptions{
-		Name: "rev", Harness: "claude", Model: "opus", Profile: &configured, InitialPrompt: &prompt,
+	result, err := Spawn(context.Background(), client, Caller{RecordPath: recordPath}, SpawnOptions{
+		Name: "rev", Harness: "claude", Model: "opus", Profile: &configured, Workspace: "wsC", InitialPrompt: &prompt,
 	})
 
 	// The launched agent and its placement coordinates survive delivery failure.
@@ -745,6 +923,19 @@ func TestSpawnInitialPromptDeliveryFailureIsSafeAndPreservesLaunch(t *testing.T)
 	}
 }
 
+func managedSpawnCaller(t *testing.T, ids map[string]string) Caller {
+	t.Helper()
+	const sessionName = "fledge-spawn-00000001"
+	root := agentProject(t, sessionName)
+	recordPath := filepath.Join(root, ".fledge", "sessions", sessionName)
+	if ids != nil {
+		if err := record.WriteWorkspaces(recordPath, ids); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return Caller{Session: sessionName, Root: root, RecordPath: recordPath, WorkspaceID: "caller-workspace", PaneID: "caller-pane"}
+}
+
 func TestInitialPromptErrorSafeCode(t *testing.T) {
 	for _, test := range []struct {
 		name  string
@@ -782,8 +973,8 @@ func TestSpawnInitialPromptContextCancellationLeavesAgentRunning(t *testing.T) {
 	// PromptAgent surfaces a cancellation observed during delivery.
 	client.errs["PromptAgent"] = context.Canceled
 
-	result, err := Spawn(context.Background(), client, Caller{WorkspaceID: "wsC"}, SpawnOptions{
-		Name: "rev", Harness: "claude", InitialPrompt: &prompt,
+	result, err := Spawn(context.Background(), client, Caller{}, SpawnOptions{
+		Name: "rev", Harness: "claude", Workspace: "wsC", InitialPrompt: &prompt,
 	})
 
 	if result == (SpawnResult{}) {

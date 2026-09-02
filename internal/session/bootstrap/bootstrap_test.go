@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -14,10 +15,22 @@ import (
 	"fledge/internal/session/bootstrap"
 	"fledge/internal/session/sessiontest"
 	"fledge/internal/session/types"
+	"fledge/internal/session/workspace"
 )
 
 func bootstrapArgs(choice types.AgentChoice, log *bytes.Buffer) bootstrap.Input {
-	return bootstrap.Input{Root: "/projects/my-project", Choice: choice, Log: log}
+	return bootstrap.Input{
+		Root:   "/projects/my-project",
+		Choice: choice,
+		Log:    log,
+		EnsureWorkspaces: func(_ context.Context, roles ...workspace.Role) (map[workspace.Role]herdr.Workspace, error) {
+			ensured := make(map[workspace.Role]herdr.Workspace, len(roles))
+			for i, role := range roles {
+				ensured[role] = herdr.Workspace{ID: fmt.Sprintf("managed-%d", i+1)}
+			}
+			return ensured, nil
+		},
+	}
 }
 
 func TestBootstrapPreparesSessionAndStartsAgentWithModel(t *testing.T) {
@@ -31,7 +44,7 @@ func TestBootstrapPreparesSessionAndStartsAgentWithModel(t *testing.T) {
 	if server.StatusCalls != 3 {
 		t.Fatalf("Status calls = %d, want polling until running", server.StatusCalls)
 	}
-	if want := []sessiontest.RenameCall{{ID: "w1", Label: "fledge:my-project"}}; !reflect.DeepEqual(server.RenamedWorkspace, want) {
+	if want := []sessiontest.RenameCall{{ID: "w1", Label: "f:my-project"}}; !reflect.DeepEqual(server.RenamedWorkspace, want) {
 		t.Fatalf("workspace renames = %#v, want %#v", server.RenamedWorkspace, want)
 	}
 	if want := []sessiontest.RenameCall{{ID: "w1:t2", Label: "fledge-orchestrator"}}; !reflect.DeepEqual(server.RenamedTab, want) {
@@ -48,7 +61,7 @@ func TestBootstrapPreparesSessionAndStartsAgentWithModel(t *testing.T) {
 	}
 
 	report := log.String()
-	for _, step := range []string{"Herder server running", "w1:p2", "fledge:my-project", "fledge-orchestrator", "started claude"} {
+	for _, step := range []string{"Herder server running", "w1:p2", "f:my-project", "fledge-orchestrator", "managed workspace orchestrator is managed-1", "managed workspace agents is managed-2", "started claude"} {
 		if !strings.Contains(report, step) {
 			t.Fatalf("log = %q, want a line about %q", report, step)
 		}
@@ -162,19 +175,59 @@ func TestBootstrapProfileDeliveryFailureIsFatalBeforeServerMutation(t *testing.T
 	}
 }
 
-func TestBootstrapShellOnlyStartsNoAgent(t *testing.T) {
+func TestBootstrapEnsureFailureStopsBeforeAgentLaunch(t *testing.T) {
+	server := sessiontest.ReadyBootstrapper()
+	want := errors.New("workspace reconciliation failed")
+	in := bootstrapArgs(types.AgentChoice{Harness: "pi"}, &bytes.Buffer{})
+	calls := 0
+	in.EnsureWorkspaces = func(_ context.Context, roles ...workspace.Role) (map[workspace.Role]herdr.Workspace, error) {
+		calls++
+		if wantRoles := []workspace.Role{workspace.Orchestrator, workspace.Agents}; !reflect.DeepEqual(roles, wantRoles) {
+			t.Fatalf("EnsureWorkspaces roles = %#v, want %#v", roles, wantRoles)
+		}
+		if len(server.RenamedWorkspace) != 1 || len(server.RenamedTab) != 1 {
+			t.Fatalf("EnsureWorkspaces ran before both renames")
+		}
+		return nil, want
+	}
+
+	err := bootstrap.Run(context.Background(), server, in, sessiontest.FastTiming())
+	if !errors.Is(err, want) {
+		t.Fatalf("bootstrap.Run() error = %v, want %v", err, want)
+	}
+	if calls != 1 || len(server.Started) != 0 {
+		t.Fatalf("ensure/start calls = %d/%d, want 1/0", calls, len(server.Started))
+	}
+}
+
+func TestBootstrapShellOnlyEnsuresBothRolesAfterRenamesAndStartsNoAgent(t *testing.T) {
 	server := sessiontest.ReadyBootstrapper()
 	var log bytes.Buffer
+	in := bootstrapArgs(types.AgentChoice{}, &log)
+	var calls int
+	in.EnsureWorkspaces = func(_ context.Context, roles ...workspace.Role) (map[workspace.Role]herdr.Workspace, error) {
+		calls++
+		if want := []workspace.Role{workspace.Orchestrator, workspace.Agents}; !reflect.DeepEqual(roles, want) {
+			t.Fatalf("EnsureWorkspaces roles = %#v, want %#v", roles, want)
+		}
+		if len(server.RenamedWorkspace) != 1 || len(server.RenamedTab) != 1 {
+			t.Fatalf("EnsureWorkspaces ran before renames: workspace=%#v tab=%#v", server.RenamedWorkspace, server.RenamedTab)
+		}
+		return map[workspace.Role]herdr.Workspace{
+			workspace.Orchestrator: {ID: "w1"},
+			workspace.Agents:       {ID: "w2"},
+		}, nil
+	}
 
-	err := bootstrap.Run(context.Background(), server, bootstrapArgs(types.AgentChoice{}, &log), sessiontest.FastTiming())
+	err := bootstrap.Run(context.Background(), server, in, sessiontest.FastTiming())
 	if err != nil {
 		t.Fatalf("bootstrap.Run() error = %v", err)
 	}
+	if calls != 1 {
+		t.Fatalf("EnsureWorkspaces calls = %d, want one", calls)
+	}
 	if len(server.Started) != 0 {
 		t.Fatalf("StartAgent calls = %#v, want none", server.Started)
-	}
-	if len(server.RenamedTab) != 1 {
-		t.Fatalf("tab renames = %#v, want the orchestrator rename", server.RenamedTab)
 	}
 }
 
@@ -215,61 +268,21 @@ func TestBootstrapStopsWhenCancelled(t *testing.T) {
 	}
 }
 
-func TestBootstrapRetriesHerderRejections(t *testing.T) {
-	rejected := &herdr.Error{Operation: "agent start", Code: "agent_pane_busy", Message: "wording does not control retries"}
+func TestBootstrapCallsStartAgentOnceOnFailure(t *testing.T) {
+	rejected := &herdr.Error{Operation: "agent start", Code: "agent_pane_busy", Message: "readiness is owned by StartAgent"}
 	server := sessiontest.ReadyBootstrapper()
-	server.StartErrs = []error{rejected, rejected, nil}
-
-	err := bootstrap.Run(context.Background(), server, bootstrapArgs(types.AgentChoice{Harness: "codex"}, &bytes.Buffer{}), sessiontest.FastTiming())
-	if err != nil {
-		t.Fatalf("bootstrap.Run() error = %v", err)
-	}
-	if len(server.Started) != 3 {
-		t.Fatalf("StartAgent calls = %d, want two retries", len(server.Started))
-	}
-}
-
-func TestBootstrapStopsRetryingAtTheLimit(t *testing.T) {
-	rejected := &herdr.Error{Operation: "agent start", Code: "agent_pane_busy", Message: "no shell prompt"}
-	server := sessiontest.ReadyBootstrapper()
-	server.StartErrs = []error{rejected}
+	server.StartErrs = []error{rejected, nil}
 	var log bytes.Buffer
 
 	err := bootstrap.Run(context.Background(), server, bootstrapArgs(types.AgentChoice{Harness: "codex"}, &log), sessiontest.FastTiming())
 	if !errors.Is(err, rejected) {
 		t.Fatalf("bootstrap.Run() error = %v, want %v", err, rejected)
 	}
-	if len(server.Started) != 3 {
-		t.Fatalf("StartAgent calls = %d, want the retry limit", len(server.Started))
+	if len(server.Started) != 1 {
+		t.Fatalf("StartAgent calls = %d, want exactly one", len(server.Started))
 	}
 	if !strings.Contains(log.String(), "failed") {
 		t.Fatalf("log = %q, want the failure recorded", log.String())
-	}
-}
-
-func TestBootstrapDoesNotRetryOtherFailures(t *testing.T) {
-	for _, test := range []struct {
-		name string
-		err  error
-	}{
-		{name: "transport error", err: errors.New("connection refused")},
-		{name: "not ready", err: &herdr.Error{Operation: "agent start", Code: "agent_not_ready", Message: "busy"}},
-		{name: "pane unavailable", err: &herdr.Error{Operation: "agent start", Code: "agent_pane_unavailable", Message: "busy"}},
-		{name: "old similar code", err: &herdr.Error{Operation: "agent start", Code: "pane_busy", Message: "no shell prompt"}},
-		{name: "unknown code", err: &herdr.Error{Operation: "agent start", Code: "future_failure", Message: "busy"}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			server := sessiontest.ReadyBootstrapper()
-			server.StartErrs = []error{test.err}
-
-			err := bootstrap.Run(context.Background(), server, bootstrapArgs(types.AgentChoice{Harness: "codex"}, &bytes.Buffer{}), sessiontest.FastTiming())
-			if !errors.Is(err, test.err) {
-				t.Fatalf("bootstrap.Run() error = %v, want %v", err, test.err)
-			}
-			if len(server.Started) != 1 {
-				t.Fatalf("StartAgent calls = %d, want no retry", len(server.Started))
-			}
-		})
 	}
 }
 

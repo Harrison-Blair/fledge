@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"strings"
 )
 
 // Error is a structured failure reported by the Herder CLI on stderr.
@@ -138,8 +137,19 @@ type PromptOptions struct {
 	TimeoutMS int
 }
 
+// ProcessInfo is a pane's shell process and terminal ownership as reported by
+// pane.process_info. Nil fields were null on the wire. Foreground command
+// lines are not retained.
+type ProcessInfo struct {
+	PaneID         string
+	ShellPID       *uint32
+	TTY            *string
+	ForegroundPGID *uint32
+}
+
 // WithSession returns a copy of the client that addresses the named session. An
 // empty name relies on $HERDR_SOCKET_PATH, which Herder injects into its panes.
+// The copy keeps the receiver's readiness settings.
 func (c *Client) WithSession(name string) *Client {
 	session := *c
 	session.session = name
@@ -205,6 +215,12 @@ func (c *Client) CreateWorkspace(ctx context.Context, label string) (WorkspaceCr
 // RenameWorkspace changes a workspace's display label.
 func (c *Client) RenameWorkspace(ctx context.Context, id, label string) error {
 	return c.invoke(ctx, "workspace_info", nil, "workspace", "rename", id, label)
+}
+
+// CloseWorkspace closes a workspace together with its tabs, panes, and
+// terminals.
+func (c *Client) CloseWorkspace(ctx context.Context, id string) error {
+	return c.invoke(ctx, "ok", nil, "workspace", "close", id)
 }
 
 // Tabs returns the tabs of one workspace, or of every workspace when
@@ -310,8 +326,40 @@ func (c *Client) ClosePane(ctx context.Context, id string) error {
 	return c.invoke(ctx, "ok", nil, "pane", "close", id)
 }
 
-// StartAgent starts an agent in a pane already sitting at a shell prompt.
+// ProcessInfo reports the shell and terminal ownership of one pane. The
+// result must describe the requested pane.
+func (c *Client) ProcessInfo(ctx context.Context, paneID string) (ProcessInfo, error) {
+	var payload struct {
+		Info struct {
+			PaneID         string  `json:"pane_id"`
+			ShellPID       *uint32 `json:"shell_pid"`
+			TTY            *string `json:"tty"`
+			ForegroundPGID *uint32 `json:"foreground_process_group_id"`
+		} `json:"process_info"`
+	}
+	if err := c.invoke(ctx, "pane_process_info", &payload, "pane", "process-info", "--pane", paneID); err != nil {
+		return ProcessInfo{}, err
+	}
+	if payload.Info.PaneID != paneID {
+		return ProcessInfo{}, fmt.Errorf("herdr pane process-info: result describes pane %s, want %s",
+			renderArg(payload.Info.PaneID), renderArg(paneID))
+	}
+	return ProcessInfo{
+		PaneID:         payload.Info.PaneID,
+		ShellPID:       payload.Info.ShellPID,
+		TTY:            payload.Info.TTY,
+		ForegroundPGID: payload.Info.ForegroundPGID,
+	}, nil
+}
+
+// StartAgent starts an agent in a pane. It first waits for the pane's shell
+// to reach an interactive prompt, whatever the agent kind or arguments,
+// because Herder types the launch line into the shell and a terminal still
+// in canonical mode truncates long lines.
 func (c *Client) StartAgent(ctx context.Context, options StartAgentOptions) (Agent, error) {
+	if err := c.awaitPaneReady(ctx, options.PaneID); err != nil {
+		return Agent{}, err
+	}
 	args := []string{"agent", "start", options.Name, "--kind", options.Kind, "--pane", options.PaneID}
 	if options.TimeoutMS != 0 {
 		args = append(args, "--timeout", strconv.Itoa(options.TimeoutMS))
@@ -444,7 +492,7 @@ func (c *Client) run(ctx context.Context, args ...string) ([]byte, string, error
 	if c.session != "" {
 		argv = append([]string{"--session", c.session}, args...)
 	}
-	operation := "herdr " + strings.Join(argv, " ")
+	operation := renderOperation(argv)
 
 	executable := "herdr"
 	if c.session == "" && os.Getenv("HERDR_ENV") == "1" {
@@ -467,7 +515,8 @@ func (c *Client) run(ctx context.Context, args ...string) ([]byte, string, error
 }
 
 // decodeError reads Herder's JSON error envelope, returning nil when stderr
-// carries something else.
+// carries something else. The code and message are bounded for error text;
+// ordinary codes are far below the bound and stay comparable.
 func decodeError(operation string, stderr []byte) *Error {
 	var payload struct {
 		Error *struct {
@@ -478,7 +527,11 @@ func decodeError(operation string, stderr []byte) *Error {
 	if err := json.Unmarshal(bytes.TrimSpace(stderr), &payload); err != nil || payload.Error == nil {
 		return nil
 	}
-	return &Error{Operation: operation, Code: payload.Error.Code, Message: payload.Error.Message}
+	return &Error{
+		Operation: operation,
+		Code:      renderText(payload.Error.Code, maxCodeBytes),
+		Message:   renderOutput(payload.Error.Message),
+	}
 }
 
 func validateWorkspace(workspace Workspace) error {

@@ -20,6 +20,7 @@ import (
 	"fledge/internal/session/record"
 	"fledge/internal/session/types"
 	"fledge/internal/session/utils"
+	"fledge/internal/session/workspace"
 )
 
 // Herder is the Herder CLI surface needed to manage Fledge sessions.
@@ -133,9 +134,9 @@ func Start(ctx context.Context, path string, deps StartDependencies) error {
 			if err := reportActiveProfile(deps.Diagnostics, *claimed); err != nil {
 				return finish(fmt.Errorf("start Fledge session: %w", err))
 			}
-			if claimed.PendingChoice != nil {
-				if err := record.ClearPending(*claimed); err != nil {
-					return finish(fmt.Errorf("start Fledge session: %w", err))
+			if claimed.PendingChoice != nil && deps.Diagnostics != nil {
+				if _, err := fmt.Fprintf(deps.Diagnostics, "fledge: session %q still has pending bootstrap; run \"fledge stop\", then \"fledge start\" to retry it\n", claimed.HerdrSessionName); err != nil {
+					return finish(fmt.Errorf("start Fledge session: report pending bootstrap: %w", err))
 				}
 			}
 			if err := release(); err != nil {
@@ -262,15 +263,13 @@ func startClaimed(ctx context.Context, root string, rec record.Record, deps Star
 	if err != nil {
 		return joinStartRelease(fmt.Errorf("start Fledge session: %w", err), release)
 	}
+
 	watchCtx, cancelWatch := context.WithCancelCause(ctx)
 	bootCtx, cancelBoot := context.WithCancelCause(ctx)
-	var watcher sync.WaitGroup
-	watcher.Add(1)
+	launchCtx, cancelLaunch := context.WithCancelCause(ctx)
+	defer cancelLaunch(errLaunchReturned)
 	watchErr := make(chan error, 1)
-	go func() {
-		defer watcher.Done()
-		watchErr <- watchClaimedRunning(watchCtx, deps.Herder, rec, release)
-	}()
+	go func() { watchErr <- watchClaimedRunning(watchCtx, deps.Herder, rec, release) }()
 
 	var bootDone chan error
 	var logPath string
@@ -284,56 +283,83 @@ func startClaimed(ctx context.Context, root string, rec record.Record, deps Star
 			defer file.Close()
 			log = file
 		}
-		bootDone = make(chan error, 1)
+		server := deps.Scoped(rec.HerdrSessionName)
+		acquire := deps.acquireLock
+		if acquire == nil {
+			acquire = lock.Acquire
+		}
+		ensure := func(ctx context.Context, roles ...workspace.Role) (map[workspace.Role]herdr.Workspace, error) {
+			return ensureWorkspaces(ctx, root, rec.Path, server, acquire, roles...)
+		}
 		choice := *rec.PendingChoice
 		timing := deps.bootstrapTiming
 		if timing == (bootstrap.Timing{}) {
 			timing = bootstrap.DefaultTiming
 		}
+		bootDone = make(chan error, 1)
 		go func() {
-			bootDone <- bootstrap.Run(bootCtx, deps.Scoped(rec.HerdrSessionName), bootstrap.Input{
+			bootDone <- bootstrap.Run(bootCtx, server, bootstrap.Input{
 				Root:                    root,
 				Choice:                  choice,
 				ProfileInstructionsPath: profileInstructionsPath,
 				Log:                     log,
+				EnsureWorkspaces:        ensure,
 			}, timing)
 		}()
 	}
-	launchErr := deps.Herder.Launch(ctx, root, rec.HerdrSessionName)
-	var stateErr error
-	stateDoneBeforeLaunchReturn := false
-	select {
-	case stateErr = <-watchErr:
-		stateDoneBeforeLaunchReturn = true
-	default:
-	}
-	var bootErr error
-	bootDoneBeforeLaunchReturn := false
-	if bootDone != nil {
+
+	launchDone := make(chan error, 1)
+	go func() { launchDone <- deps.Herder.Launch(launchCtx, root, rec.HerdrSessionName) }()
+
+	var launchErr, bootErr, cleanupErr error
+	launchCollected := false
+	teardown := false
+	if bootDone == nil {
+		launchErr = <-launchDone
+		launchCollected = true
+	} else {
 		select {
+		case launchErr = <-launchDone:
+			launchCollected = true
+			cancelBoot(errLaunchReturned)
+			bootErr = <-bootDone
+			if canceledByCause(bootErr, bootCtx, errLaunchReturned) {
+				bootErr = nil
+			}
 		case bootErr = <-bootDone:
-			bootDoneBeforeLaunchReturn = true
-		default:
+			if bootErr == nil {
+				bootErr = commitBootstrap(ctx, root, rec, deps)
+			}
+			if bootErr != nil && ctx.Err() == nil {
+				select {
+				case launchErr = <-launchDone:
+					launchCollected = true
+				default:
+					teardown = true
+					cleanupErr = stopFailedBootstrap(ctx, deps.Herder, rec.HerdrSessionName)
+					cancelLaunch(errBootstrapTeardown)
+				}
+			}
 		}
+	}
+	if !launchCollected {
+		launchErr = <-launchDone
 	}
 	cancelWatch(errLaunchReturned)
 	cancelBoot(errLaunchReturned)
-	watcher.Wait()
-	if !stateDoneBeforeLaunchReturn {
-		stateErr = <-watchErr
-	}
-	if bootDone != nil && !bootDoneBeforeLaunchReturn {
-		bootErr = <-bootDone
-	}
-	if canceledByLaunchReturn(stateErr, watchCtx) {
+	stateErr := <-watchErr
+	if canceledByCause(stateErr, watchCtx, errLaunchReturned) {
 		stateErr = nil
 	}
-	if !bootDoneBeforeLaunchReturn && canceledByLaunchReturn(bootErr, bootCtx) {
-		bootErr = nil
+	if teardown {
+		// Launch returns because teardown stopped the server or canceled the
+		// foreground client. Bootstrap and cleanup are the actionable failures.
+		launchErr = nil
 	}
 	if bootErr != nil {
 		fmt.Fprintf(deps.Diagnostics, "fledge: session bootstrap failed (see %s): %v\n", logPath, bootErr)
 	}
+
 	releaseErr := release()
 	var classifyErr error
 	if launchErr != nil && releaseErr == nil {
@@ -343,11 +369,45 @@ func startClaimed(ctx context.Context, root string, rec record.Record, deps Star
 			launchErr = nil
 		}
 	}
-	result := errors.Join(wrapLaunch(rec.HerdrSessionName, launchErr), wrapBootstrap(bootErr), wrapState(stateErr), classifyErr)
+	result := errors.Join(wrapLaunch(rec.HerdrSessionName, launchErr), wrapBootstrap(bootErr), wrapState(stateErr), cleanupErr, classifyErr)
 	if releaseErr != nil {
 		result = errors.Join(result, fmt.Errorf("start Fledge session: release project lock: %w", releaseErr))
 	}
 	return result
+}
+
+const bootstrapCleanupTimeout = 5 * time.Second
+
+var errBootstrapTeardown = errors.New("bootstrap teardown")
+
+func stopFailedBootstrap(ctx context.Context, h Herder, name string) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bootstrapCleanupTimeout)
+	defer cancel()
+	if err := h.Stop(cleanupCtx, name); err != nil {
+		return fmt.Errorf("start Fledge session: stop failed bootstrap session %q: %w", name, err)
+	}
+	return nil
+}
+
+func commitBootstrap(ctx context.Context, root string, rec record.Record, deps StartDependencies) error {
+	acquire := deps.acquireLock
+	if acquire == nil {
+		acquire = lock.Acquire
+	}
+	release, err := acquire(ctx, filepath.Join(root, ".fledge"))
+	if err != nil {
+		return fmt.Errorf("commit bootstrap: lock project: %w", err)
+	}
+	if err := record.ClearPending(rec); err != nil {
+		if releaseErr := release(); releaseErr != nil {
+			return errors.Join(fmt.Errorf("commit bootstrap: %w", err), fmt.Errorf("commit bootstrap: release project lock: %w", releaseErr))
+		}
+		return fmt.Errorf("commit bootstrap: %w", err)
+	}
+	if err := release(); err != nil {
+		return fmt.Errorf("commit bootstrap: release project lock: %w", err)
+	}
+	return nil
 }
 
 func reportActiveProfile(output io.Writer, rec record.Record) error {
@@ -424,14 +484,9 @@ func watchClaimedRunning(ctx context.Context, h Herder, rec record.Record, relea
 		if err == nil {
 			for _, listed := range sessions {
 				if listed.Name == rec.HerdrSessionName && listed.Running {
-					if rec.PendingChoice != nil {
-						if err := record.ClearPending(rec); err != nil {
-							return err
-						}
-					}
-					// The lock is no longer needed once Herder has published the
-					// exact claimed session. Its result is collected in Start's
-					// final release slot so it is reported exactly once.
+					// Bootstrap reacquires this lock to reconcile workspaces. It
+					// must be released as soon as Herder publishes the exact claim,
+					// before StartAgent performs its potentially long readiness wait.
 					release()
 					return nil
 				}
@@ -445,12 +500,8 @@ func watchClaimedRunning(ctx context.Context, h Herder, rec record.Record, relea
 
 var errLaunchReturned = errors.New("Herder launch returned")
 
-func canceledByLaunchReturn(err error, ctx context.Context) bool {
-	return errors.Is(err, context.Canceled) && abortedByLaunchReturn(ctx)
-}
-
-func abortedByLaunchReturn(ctx context.Context) bool {
-	return errors.Is(context.Cause(ctx), errLaunchReturned)
+func canceledByCause(err error, ctx context.Context, cause error) bool {
+	return errors.Is(err, context.Canceled) && errors.Is(context.Cause(ctx), cause)
 }
 
 func cachedRelease(release func() error) func() error {

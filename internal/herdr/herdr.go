@@ -23,19 +23,21 @@ type Session struct {
 // Client invokes the Herder CLI. The configured streams are connected to an
 // interactive Herder process launched by Launch.
 type Client struct {
-	stdin   io.Reader
-	stdout  io.Writer
-	stderr  io.Writer
-	session string
+	stdin     io.Reader
+	stdout    io.Writer
+	stderr    io.Writer
+	session   string
+	readiness readiness
 }
 
 // New returns a Herder client whose interactive child uses the supplied
 // terminal streams.
 func New(stdin io.Reader, stdout, stderr io.Writer) *Client {
 	return &Client{
-		stdin:  stdin,
-		stdout: stdout,
-		stderr: stderr,
+		stdin:     stdin,
+		stdout:    stdout,
+		stderr:    stderr,
+		readiness: defaultReadiness(),
 	}
 }
 
@@ -104,7 +106,7 @@ func (c *Client) Launch(ctx context.Context, projectRoot, name string) error {
 	cmd.Stdout = c.stdout
 	cmd.Stderr = c.stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("herdr --session %s: %w", name, err)
+		return fmt.Errorf("%s: %w", renderOperation([]string{"--session", name}), err)
 	}
 	return nil
 }
@@ -140,13 +142,15 @@ func (c *Client) Stop(ctx context.Context, name string) error {
 		if output == "" {
 			output = stdout.String()
 		}
-		return commandError("herdr session stop "+name+" --json", err, output)
+		return commandError(renderOperation([]string{"session", "stop", name, "--json"}), err, output)
 	}
 	return nil
 }
 
+// commandError describes a failed Herder command, bounding any captured
+// output before it lands in the error text.
 func commandError(operation string, err error, output string) error {
-	output = strings.TrimSpace(output)
+	output = renderOutput(strings.TrimSpace(output))
 	if output == "" {
 		return fmt.Errorf("%s: %w", operation, err)
 	}

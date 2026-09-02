@@ -17,7 +17,6 @@ import (
 	"fledge/internal/profile"
 	"fledge/internal/project"
 	"fledge/internal/session/bootstrap"
-	"fledge/internal/session/lock"
 	"fledge/internal/session/record"
 	"fledge/internal/session/sessiontest"
 )
@@ -82,18 +81,18 @@ func TestInitialNameLimitPreservesRawSessionDirectoryAndSocketCapacity(t *testin
 	}
 }
 
-func TestInitialNameLimitRejectsSixteenAndAcceptsSeventeen(t *testing.T) {
-	tooLong := "/" + strings.Repeat("a", 59-1)
+func TestInitialNameLimitRejects37AndAccepts38(t *testing.T) {
+	tooLong := "/" + strings.Repeat("a", 38-1)
 	if _, err := initialNameLimit([]herdr.Session{{Default: true, SessionDir: tooLong}}); err == nil || !strings.Contains(err.Error(), "no usable") {
-		t.Fatalf("initialNameLimit() for 16-byte capacity error = %v, want rejection", err)
+		t.Fatalf("initialNameLimit() for 37-byte capacity error = %v, want rejection", err)
 	}
-	accepted := "/" + strings.Repeat("a", 58-1)
+	accepted := "/" + strings.Repeat("a", 37-1)
 	limit, err := initialNameLimit([]herdr.Session{{Default: true, SessionDir: accepted}})
 	if err != nil {
-		t.Fatalf("initialNameLimit() for 17-byte capacity error = %v", err)
+		t.Fatalf("initialNameLimit() for 38-byte capacity error = %v", err)
 	}
 	if limit != record.MinSessionLength {
-		t.Fatalf("initialNameLimit() for 17-byte capacity = %d, want %d", limit, record.MinSessionLength)
+		t.Fatalf("initialNameLimit() for 38-byte capacity = %d, want %d", limit, record.MinSessionLength)
 	}
 }
 
@@ -129,7 +128,7 @@ func TestStartCreatesFreshSessionFromNestedPath(t *testing.T) {
 	writeLifecycleRecord(t, root, "fledge-old-00000001")
 	client := &fakeHerder{sessions: []herdr.Session{
 		{Name: "fledge-old-00000001", Running: false},
-		{Name: "fledge-My-Project-00000002", Running: false},
+		{Name: freshName("My-Project", "00000002"), Running: false},
 		{Name: "unrelated", Running: true},
 	}}
 	now := time.Date(2026, 8, 24, 12, 13, 14, 0, time.UTC)
@@ -141,7 +140,7 @@ func TestStartCreatesFreshSessionFromNestedPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	wantLaunches := []launchCall{{root: root, name: "fledge-My-Project-00000003"}}
+	wantLaunches := []launchCall{{root: root, name: freshName("My-Project", "00000003")}}
 	if !reflect.DeepEqual(client.launches, wantLaunches) {
 		t.Fatalf("launches = %#v, want %#v", client.launches, wantLaunches)
 	}
@@ -149,7 +148,7 @@ func TestStartCreatesFreshSessionFromNestedPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 2 || !recordNamesContain(records, "fledge-old-00000001") || !recordNamesContain(records, "fledge-My-Project-00000003") {
+	if len(records) != 2 || !recordNamesContain(records, "fledge-old-00000001") || !recordNamesContain(records, freshName("My-Project", "00000003")) {
 		t.Fatalf("records = %#v, want old and fresh records", records)
 	}
 }
@@ -275,7 +274,7 @@ func TestStartRetainsFreshRecordAfterLaunchFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 1 || records[0].HerdrSessionName != "fledge-project-01020304" {
+	if len(records) != 1 || records[0].HerdrSessionName != freshName("project", "01020304") {
 		t.Fatalf("records after launch failure = %#v", records)
 	}
 }
@@ -287,37 +286,34 @@ func TestConcurrentStartsSerializeChooserClaimAndName(t *testing.T) {
 	releaseChooser := closeOnCleanup(t, chooser.allow)
 	launchRelease := make(chan struct{})
 	releaseLaunch := closeOnCleanup(t, launchRelease)
+	publishRunning := make(chan struct{})
+	releasePublication := closeOnCleanup(t, publishRunning)
 	launchStarted := make(chan launchCall, 2)
 	launchErr := errors.New("launch failed")
 	client := &fakeHerder{
-		launchWait: launchRelease,
-		launchErr:  launchErr,
+		listWait:        publishRunning,
+		waitForListCall: 2,
+		launchWait:      launchRelease,
+		launchErr:       launchErr,
 		onLaunchStart: func(call launchCall) {
 			launchStarted <- call
 		},
 	}
-	deps, _ := freshStartDeps(client, chooser, sessiontest.StartedBootstrapper(), &bytes.Buffer{})
+	// Keep bootstrap pending so only running publication, not bootstrap commit,
+	// controls the first lock release and the final pending-state assertion.
+	server := &sessiontest.FakeBootstrapper{Statuses: []sessiontest.StatusResult{{Running: false}}}
+	deps, _ := freshStartDeps(client, chooser, server, io.Discard)
 	entropy := &countedReader{Reader: bytes.NewReader([]byte{1, 2, 3, 4})}
 	deps.Entropy = entropy
-	secondAcquire := make(chan struct{})
-	var acquireMu sync.Mutex
-	acquireCalls := 0
-	deps.acquireLock = func(ctx context.Context, fledgeDir string) (func() error, error) {
-		acquireMu.Lock()
-		acquireCalls++
-		call := acquireCalls
-		acquireMu.Unlock()
-		if call == 2 {
-			close(secondAcquire)
-		}
-		return lock.Acquire(ctx, fledgeDir)
-	}
+	projectLock := newSerialTestLock()
+	deps.acquireLock = projectLock.acquire
 
 	errs := make(chan error, 2)
 	workerErrs := make(chan error, 2)
 	pendingResults := 0
 	t.Cleanup(func() {
 		releaseChooser()
+		releasePublication()
 		releaseLaunch()
 		cancel()
 		drainTestWorkers(t, errs, &pendingResults)
@@ -327,21 +323,44 @@ func TestConcurrentStartsSerializeChooserClaimAndName(t *testing.T) {
 		workerErrs <- err
 		errs <- err
 	}
+
 	pendingResults++
 	go runStart()
 	awaitTestEvent(t, ctx, chooser.entered, workerErrs)
 	pendingResults++
 	go runStart()
+	// The second Start has reached the same project lock while the first is
+	// still inside protected chooser/claim/name work.
+	awaitTestEvent(t, ctx, projectLock.secondAttempt, workerErrs)
+	if chooser.Calls() != 1 || entropy.Reads() != 0 {
+		t.Fatalf("protected work before first chooser release = chooser %d entropy %d, want 1/0", chooser.Calls(), entropy.Reads())
+	}
+
 	releaseChooser()
 	first := awaitTestEvent(t, ctx, launchStarted, workerErrs)
-	awaitTestEvent(t, ctx, secondAcquire, workerErrs)
+	select {
+	case <-projectLock.firstRelease:
+		t.Fatal("project lock released before Herder published the claimed session running")
+	default:
+	}
 	select {
 	case call := <-launchStarted:
-		t.Fatalf("second Launch(%q) began before the first released the project lock", call.name)
+		t.Fatalf("second Launch(%q) began before running publication released the project lock", call.name)
+	default:
+	}
+
+	// Publication is the legitimate release point. The second Start may now
+	// acquire, observe the one claimed running session, and attach while the
+	// first foreground Launch remains active.
+	releasePublication()
+	awaitTestEvent(t, ctx, projectLock.firstRelease, workerErrs)
+	second := awaitTestEvent(t, ctx, launchStarted, workerErrs)
+	select {
+	case err := <-errs:
+		t.Fatalf("Start() returned before foreground launches were released: %v", err)
 	default:
 	}
 	releaseLaunch()
-	second := awaitTestEvent(t, ctx, launchStarted, nil)
 	for range 2 {
 		if err := awaitTestEvent(t, ctx, errs, nil); !errors.Is(err, launchErr) {
 			t.Fatalf("Start() error = %v, want %v", err, launchErr)
@@ -524,7 +543,7 @@ func TestStartNewDiscardsStoppedClaimAndCreatesFreshSession(t *testing.T) {
 	if old.Claimed || old.PendingChoice != nil {
 		t.Fatalf("old record = %#v, want unclaimed with no pending choice", old)
 	}
-	name := "fledge-project-01020304"
+	name := freshName("project", "01020304")
 	fresh := recordByName(newRecords, name)
 	if !fresh.Claimed {
 		t.Fatalf("fresh record = %#v, want claimed", fresh)
@@ -629,7 +648,7 @@ func TestStartNewWithoutClaimUsesPickerPath(t *testing.T) {
 	if len(records) != 2 {
 		t.Fatalf("records = %#v, want 2", records)
 	}
-	name := "fledge-project-01020304"
+	name := freshName("project", "01020304")
 	if want := []string{name}; !reflect.DeepEqual(*scoped, want) {
 		t.Fatalf("bootstrapped sessions = %#v, want %#v", *scoped, want)
 	}
@@ -1134,6 +1153,7 @@ type fakeHerder struct {
 	onLaunchStart   func(launchCall)
 	onLaunch        func(launchCall)
 	onStop          func(string)
+	onStopContext   func(context.Context, string)
 	listCalls       int
 	launches        []launchCall
 	stops           []string
@@ -1252,6 +1272,16 @@ func (f *fakeHerder) List(ctx context.Context) ([]herdr.Session, error) {
 func (f *fakeHerder) Launch(ctx context.Context, root, name string) error {
 	call := launchCall{root: root, name: name}
 	f.mu.Lock()
+	found := false
+	for i := range f.sessions {
+		if f.sessions[i].Name == name {
+			f.sessions[i].Running = true
+			found = true
+		}
+	}
+	if !found {
+		f.sessions = append(f.sessions, herdr.Session{Name: name, Running: true})
+	}
 	started := f.onLaunchStart
 	f.mu.Unlock()
 	if started != nil {
@@ -1344,13 +1374,18 @@ func (r *countedReader) Reads() int {
 
 type serialTestLock struct {
 	permit        chan struct{}
+	firstRelease  chan struct{}
 	secondAttempt chan struct{}
 	mu            sync.Mutex
 	calls         int
 }
 
 func newSerialTestLock() *serialTestLock {
-	lock := &serialTestLock{permit: make(chan struct{}, 1), secondAttempt: make(chan struct{})}
+	lock := &serialTestLock{
+		permit:        make(chan struct{}, 1),
+		firstRelease:  make(chan struct{}),
+		secondAttempt: make(chan struct{}),
+	}
 	lock.permit <- struct{}{}
 	return lock
 }
@@ -1370,9 +1405,56 @@ func (l *serialTestLock) acquire(ctx context.Context, _ string) (func() error, e
 	}
 	var once sync.Once
 	return func() error {
-		once.Do(func() { l.permit <- struct{}{} })
+		once.Do(func() {
+			if call == 1 {
+				close(l.firstRelease)
+			}
+			l.permit <- struct{}{}
+		})
 		return nil
 	}, nil
+}
+
+func startAndExitAfterBootstrapCommit(t *testing.T, ctx context.Context, root string, deps StartDependencies, releaseLaunch func()) error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- Start(ctx, root, deps) }()
+	timer := time.NewTimer(testAsyncTimeout)
+	defer timer.Stop()
+	for {
+		select {
+		case err := <-done:
+			return err
+		case <-timer.C:
+			releaseLaunch()
+			<-done
+			t.Fatal("bootstrap did not commit pending state")
+		default:
+		}
+		records, err := record.Load(root)
+		if err != nil {
+			releaseLaunch()
+			<-done
+			t.Fatalf("load records while waiting for bootstrap commit: %v", err)
+		}
+		if len(records) == 1 && records[0].PendingChoice == nil {
+			releaseLaunch()
+			return <-done
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// lifecycleNow is the fixed clock fresh-start tests run under; lifecycleStamp is
+// how it renders inside a generated session name.
+var lifecycleNow = time.Date(2026, 8, 24, 12, 13, 14, 0, time.UTC)
+
+const lifecycleStamp = "2026-08-24T12.13.14Z"
+
+// freshName is the timestamp-first session name Create produces for a slug and
+// hex suffix under lifecycleNow.
+func freshName(slug, hexSuffix string) string {
+	return "fledge-" + lifecycleStamp + "-" + slug + "-" + hexSuffix
 }
 
 // freshStartDeps drives case 0 with a scripted chooser and Herder server.
@@ -1381,7 +1463,7 @@ func freshStartDeps(client Herder, chooser Chooser, server Bootstrapper, diagnos
 	return StartDependencies{
 		Herder:  client,
 		Entropy: bytes.NewReader([]byte{1, 2, 3, 4}),
-		Now:     time.Now,
+		Now:     func() time.Time { return lifecycleNow },
 		Getenv:  emptyEnv,
 		Chooser: chooser,
 		Scoped: func(name string) Bootstrapper {
@@ -1392,12 +1474,16 @@ func freshStartDeps(client Herder, chooser Chooser, server Bootstrapper, diagnos
 	}, scoped
 }
 
-func (f *fakeHerder) Stop(_ context.Context, name string) error {
+func (f *fakeHerder) Stop(ctx context.Context, name string) error {
 	f.mu.Lock()
 	f.stops = append(f.stops, name)
 	err := f.stopErrors[name]
 	notify := f.onStop
+	notifyContext := f.onStopContext
 	f.mu.Unlock()
+	if notifyContext != nil {
+		notifyContext(ctx, name)
+	}
 	if notify != nil {
 		notify(name)
 	}
@@ -1531,19 +1617,18 @@ func TestStartBootstrapsFreshSessionWhileHerderRuns(t *testing.T) {
 	server := sessiontest.StartedBootstrapper()
 	released := make(chan struct{})
 	release := closeOnCleanup(t, released)
-	server.OnStart = func(context.Context, int) { release() }
 	client := &fakeHerder{launchWait: released}
 	chooser := &fakeChooser{choice: AgentChoice{Harness: "claude", Model: "opus"}}
 	var diagnostics bytes.Buffer
 
 	deps, scoped := freshStartDeps(client, chooser, server, &diagnostics)
-	if err := Start(ctx, root, deps); err != nil {
+	if err := startAndExitAfterBootstrapCommit(t, ctx, root, deps, release); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
 	if chooser.calls != 1 {
 		t.Fatalf("Choose() calls = %d, want one", chooser.calls)
 	}
-	name := "fledge-project-01020304"
+	name := freshName("project", "01020304")
 	if want := []string{name}; !reflect.DeepEqual(*scoped, want) {
 		t.Fatalf("bootstrapped sessions = %#v, want %#v", *scoped, want)
 	}
@@ -1563,14 +1648,40 @@ func TestStartBootstrapsFreshSessionWhileHerderRuns(t *testing.T) {
 	}
 }
 
+func TestStartShellOnlyEnsuresWorkspacesAndCommitsPending(t *testing.T) {
+	root, _ := lifecycleProject(t, "project")
+	server := sessiontest.StartedBootstrapper()
+	launchExit := make(chan struct{})
+	releaseLaunch := closeOnCleanup(t, launchExit)
+	client := &fakeHerder{launchWait: launchExit}
+	deps, _ := freshStartDeps(client, &fakeChooser{choice: AgentChoice{}}, server, &bytes.Buffer{})
+
+	if err := startAndExitAfterBootstrapCommit(t, testContext(t), root, deps, releaseLaunch); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if len(server.Started) != 0 {
+		t.Fatalf("shell-only StartAgent calls = %#v, want none", server.Started)
+	}
+	if len(server.Created) != 1 || server.Created[0].Workspace.Label != "f-agents:project" {
+		t.Fatalf("shell-only created workspaces = %#v, want unfocused managed agents workspace", server.Created)
+	}
+	records, err := record.Load(root)
+	if err != nil || len(records) != 1 || records[0].PendingChoice != nil {
+		t.Fatalf("shell-only records = %#v, %v; want committed pending state", records, err)
+	}
+	ids, err := record.ReadWorkspaces(records[0].Path)
+	if err != nil || ids["orchestrator"] != "w1" || ids["agents"] != "w2" {
+		t.Fatalf("shell-only workspace IDs = %#v, %v", ids, err)
+	}
+}
+
 func TestStartPinsProfileDeliversItAndRetainsItAfterPendingClears(t *testing.T) {
 	root, _ := lifecycleProject(t, "project")
 	ctx := testContext(t)
-	name := "fledge-project-01020304"
+	name := freshName("project", "01020304")
 	agentStarted := make(chan struct{})
 	releaseLaunch := closeOnCleanup(t, agentStarted)
 	server := sessiontest.StartedBootstrapper()
-	server.OnStart = func(context.Context, int) { releaseLaunch() }
 	client := &fakeHerder{
 		listResults: []listResult{
 			{},
@@ -1592,7 +1703,7 @@ func TestStartPinsProfileDeliversItAndRetainsItAfterPendingClears(t *testing.T) 
 	var diagnostics bytes.Buffer
 	deps, _ := freshStartDeps(client, chooser, server, &diagnostics)
 
-	if err := Start(ctx, root, deps); err != nil {
+	if err := startAndExitAfterBootstrapCommit(t, ctx, root, deps, releaseLaunch); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
 	records, err := record.Load(root)
@@ -1657,11 +1768,10 @@ func TestStartRetryUsesPinnedProfileWithoutChoosingAgain(t *testing.T) {
 	}
 	configured.Instructions = "replacement instructions that must not be used"
 
-	name := "fledge-project-01020304"
+	name := freshName("project", "01020304")
 	agentStarted := make(chan struct{})
 	releaseLaunch := closeOnCleanup(t, agentStarted)
 	server := sessiontest.StartedBootstrapper()
-	server.OnStart = func(context.Context, int) { releaseLaunch() }
 	secondClient := &fakeHerder{
 		listResults: []listResult{
 			{},
@@ -1670,7 +1780,7 @@ func TestStartRetryUsesPinnedProfileWithoutChoosingAgain(t *testing.T) {
 		launchWait: agentStarted,
 	}
 	secondDeps, _ := freshStartDeps(secondClient, chooser, server, &diagnostics)
-	if err := Start(testContext(t), root, secondDeps); err != nil {
+	if err := startAndExitAfterBootstrapCommit(t, testContext(t), root, secondDeps, releaseLaunch); err != nil {
 		t.Fatalf("retry Start() error = %v", err)
 	}
 	if chooser.calls != 1 {
@@ -1693,34 +1803,147 @@ func TestStartRetryUsesPinnedProfileWithoutChoosingAgain(t *testing.T) {
 	}
 }
 
-func TestStartReportsBootstrapFailure(t *testing.T) {
+func TestStartBootstrapFailureStopsAndRetainsRetryState(t *testing.T) {
 	root, _ := lifecycleProject(t, "project")
-	ctx := testContext(t)
 	want := errors.New("agent start refused")
 	server := sessiontest.StartedBootstrapper()
 	server.StartErrs = []error{want}
-	released := make(chan struct{})
-	release := closeOnCleanup(t, released)
-	// StartAgent notifies Herder before returning its substantive response. The
-	// launch return therefore cancels bootstrap while this call is still ending.
-	server.OnStart = func(ctx context.Context, _ int) {
-		release()
-		<-ctx.Done()
-	}
-	client := &fakeHerder{launchWait: released}
+	client := &fakeHerder{launchWait: make(chan struct{})}
+	configured := profile.Profile{Name: profile.OrchestratorName, Instructions: "pinned"}
+	chooser := &fakeChooser{choice: AgentChoice{Harness: "pi", Profile: &configured}}
 	var diagnostics bytes.Buffer
 
-	deps, _ := freshStartDeps(client, &fakeChooser{choice: AgentChoice{Harness: "pi"}}, server, &diagnostics)
-	err := Start(ctx, root, deps)
+	deps, _ := freshStartDeps(client, chooser, server, &diagnostics)
+	err := Start(testContext(t), root, deps)
 	if !errors.Is(err, want) {
 		t.Fatalf("Start() error = %v, want wrapped %v", err, want)
+	}
+	if wantStops := []string{freshName("project", "01020304")}; !reflect.DeepEqual(client.stops, wantStops) {
+		t.Fatalf("bootstrap cleanup stops = %#v, want %#v", client.stops, wantStops)
+	}
+	records, loadErr := record.Load(root)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(records) != 1 || !records[0].Claimed || records[0].PendingChoice == nil || records[0].Profile == nil {
+		t.Fatalf("records after bootstrap failure = %#v, want claimed pending pinned retry state", records)
+	}
+	ids, readErr := record.ReadWorkspaces(records[0].Path)
+	if readErr != nil || ids["orchestrator"] != "w1" || ids["agents"] != "w2" {
+		t.Fatalf("workspace retry state = %#v, %v; want both managed IDs", ids, readErr)
 	}
 	report := diagnostics.String()
 	if !strings.Contains(report, "bootstrap failed") || !strings.Contains(report, bootstrap.LogName) {
 		t.Fatalf("diagnostics = %q, want a bootstrap failure naming the log", report)
 	}
-	if len(client.launches) != 1 {
-		t.Fatalf("launches = %#v, want the session to have been launched", client.launches)
+
+	// Retry the same claim and server state. Reconciliation must reuse both
+	// durable workspace IDs and the pinned choice without invoking the picker.
+	server.StartErrs = nil
+	retryExit := make(chan struct{})
+	releaseRetry := closeOnCleanup(t, retryExit)
+	retryClient := &fakeHerder{launchWait: retryExit}
+	retryDeps, _ := freshStartDeps(retryClient, chooser, server, &diagnostics)
+	retryCtx := testContext(t)
+	retryDone := make(chan error, 1)
+	go func() { retryDone <- Start(retryCtx, root, retryDeps) }()
+	pendingPath := filepath.Join(records[0].Path, "pending.json")
+	deadline := time.Now().Add(testAsyncTimeout)
+	for {
+		_, statErr := os.Stat(pendingPath)
+		if errors.Is(statErr, os.ErrNotExist) {
+			break
+		}
+		if statErr != nil {
+			t.Fatalf("stat retry pending state: %v", statErr)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("retry did not commit pending state")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	releaseRetry()
+	if err := <-retryDone; err != nil {
+		t.Fatalf("retry Start() error = %v", err)
+	}
+	if chooser.calls != 1 {
+		t.Fatalf("Choose() calls = %d, want pinned retry without picker", chooser.calls)
+	}
+	if len(server.Created) != 1 {
+		t.Fatalf("created workspaces after retry = %#v, want original agents workspace only", server.Created)
+	}
+	if len(server.RenamedWorkspace) != 2 || len(server.RenamedTab) != 2 {
+		t.Fatalf("retry renames = workspace %#v tab %#v, want both repeated", server.RenamedWorkspace, server.RenamedTab)
+	}
+	records, loadErr = record.Load(root)
+	if loadErr != nil || len(records) != 1 || records[0].PendingChoice != nil || records[0].Profile == nil {
+		t.Fatalf("records after successful retry = %#v, %v; want committed pinned profile", records, loadErr)
+	}
+}
+
+func TestStartBootstrapFailureJoinsBoundedFreshCleanupFailure(t *testing.T) {
+	root, _ := lifecycleProject(t, "project")
+	bootstrapErr := errors.New("agent start failed")
+	stopErr := errors.New("stop failed")
+	server := sessiontest.StartedBootstrapper()
+	server.StartErrs = []error{bootstrapErr}
+	name := freshName("project", "01020304")
+	ctx, cancel := context.WithCancel(testContext(t))
+	defer cancel()
+	var cleanupDeadline time.Time
+	client := &fakeHerder{
+		launchWait: make(chan struct{}),
+		stopErrors: map[string]error{name: stopErr},
+		onStopContext: func(cleanupCtx context.Context, gotName string) {
+			if gotName != name {
+				t.Errorf("cleanup name = %q, want %q", gotName, name)
+			}
+			var ok bool
+			cleanupDeadline, ok = cleanupCtx.Deadline()
+			if !ok {
+				t.Error("cleanup context has no deadline")
+			}
+			// Cancellation after cleanup starts must not propagate through the
+			// context derived with WithoutCancel.
+			cancel()
+			if cleanupCtx.Err() != nil {
+				t.Errorf("cleanup context after parent cancellation = %v, want active", cleanupCtx.Err())
+			}
+		},
+	}
+	deps, _ := freshStartDeps(client, &fakeChooser{choice: AgentChoice{Harness: "pi"}}, server, &bytes.Buffer{})
+	err := Start(ctx, root, deps)
+	if !errors.Is(err, bootstrapErr) || !errors.Is(err, stopErr) {
+		t.Fatalf("Start() error = %v, want bootstrap and cleanup failures", err)
+	}
+	if remaining := time.Until(cleanupDeadline); remaining <= 0 || remaining > bootstrapCleanupTimeout {
+		t.Fatalf("cleanup deadline remaining = %v, want bounded by %v", remaining, bootstrapCleanupTimeout)
+	}
+}
+
+func TestStartAttachToRunningPendingClaimRetainsRetryAndReportsAction(t *testing.T) {
+	root, _ := lifecycleProject(t, "project")
+	server := &sessiontest.FakeBootstrapper{Statuses: []sessiontest.StatusResult{{Running: false}}}
+	firstDeps, _ := freshStartDeps(&fakeHerder{}, &fakeChooser{choice: AgentChoice{Harness: "pi"}}, server, &bytes.Buffer{})
+	if err := Start(context.Background(), root, firstDeps); err != nil {
+		t.Fatalf("initial interrupted Start() error = %v", err)
+	}
+	name := freshName("project", "01020304")
+	client := &fakeHerder{sessions: []herdr.Session{{Name: name, Running: true}}}
+	var diagnostics bytes.Buffer
+	deps, scoped := freshStartDeps(client, &fakeChooser{err: errors.New("must not choose")}, sessiontest.StartedBootstrapper(), &diagnostics)
+	if err := Start(context.Background(), root, deps); err != nil {
+		t.Fatalf("attach Start() error = %v", err)
+	}
+	if len(*scoped) != 0 {
+		t.Fatalf("attach bootstrapped sessions = %#v, want none", *scoped)
+	}
+	if report := diagnostics.String(); !strings.Contains(report, "fledge stop") || !strings.Contains(report, "fledge start") || !strings.Contains(report, "pending bootstrap") {
+		t.Fatalf("attach diagnostics = %q, want actionable stop/start retry", report)
+	}
+	records, err := record.Load(root)
+	if err != nil || len(records) != 1 || records[0].PendingChoice == nil || !records[0].Claimed {
+		t.Fatalf("records after pending attach = %#v, %v; want pending claim retained", records, err)
 	}
 }
 
@@ -1739,6 +1962,13 @@ func TestStartIgnoresBootstrapCancelledByHerderExit(t *testing.T) {
 	}
 	if len(server.Started) != 0 {
 		t.Fatalf("StartAgent calls = %#v, want none", server.Started)
+	}
+	if len(client.stops) != 0 {
+		t.Fatalf("cleanup stops = %#v, want none after Launch returned first", client.stops)
+	}
+	records, err := record.Load(root)
+	if err != nil || len(records) != 1 || records[0].PendingChoice == nil {
+		t.Fatalf("records after Launch exit = %#v, %v; want pending retry retained", records, err)
 	}
 }
 
@@ -1892,9 +2122,14 @@ func TestStartClaimedDrainsWorkersBeforeReturn(t *testing.T) {
 		<-ctx.Done()
 		signalBootstrapDone()
 	}
-	err := startClaimed(ctx, t.TempDir(), record.Record{
+	root := t.TempDir()
+	recordPath := filepath.Join(root, ".fledge", "sessions", "claimed")
+	if err := os.MkdirAll(recordPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := startClaimed(ctx, root, record.Record{
 		HerdrSessionName: "claimed",
-		Path:             t.TempDir(),
+		Path:             recordPath,
 		PendingChoice:    &AgentChoice{Harness: "pi"},
 	}, StartDependencies{
 		Herder:          &drainingHerder{done: signalWatcherDone},
@@ -1917,77 +2152,56 @@ func TestStartClaimedDrainsWorkersBeforeReturn(t *testing.T) {
 	}
 }
 
-func TestStartClaimedErrorOrder(t *testing.T) {
-	ctx := testContext(t)
-	launchErr := errors.New("launch failed")
-	bootstrapErr := errors.New("bootstrap failed")
-	releaseErr := errors.New("release failed")
-	stateReady := make(chan struct{})
-	bootReady := make(chan struct{})
-	launchMayReturn := make(chan struct{})
-	signalStateReady := closeOnCleanup(t, stateReady)
-	signalBootReady := closeOnCleanup(t, bootReady)
-	releaseLaunch := closeOnCleanup(t, launchMayReturn)
-	client := &fakeHerder{
-		listResults: []listResult{{sessions: []herdr.Session{{Name: "claimed", Running: true}}}},
-		launchWait:  launchMayReturn,
-		launchErr:   launchErr,
-		onList: func(int) {
-			signalStateReady()
-		},
-	}
-	server := sessiontest.StartedBootstrapper()
-	server.StartErrs = []error{bootstrapErr}
-	server.OnStart = func(context.Context, int) { signalBootReady() }
-	go func() {
-		select {
-		case <-ctx.Done():
-			return
-		case <-stateReady:
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-bootReady:
-		}
-		releaseLaunch()
-	}()
-	badPath := filepath.Join(t.TempDir(), "record")
-	if err := os.Mkdir(badPath, 0o700); err != nil {
+func TestStartClaimedPendingClearFailureStopsAndRetainsTransaction(t *testing.T) {
+	root, _ := lifecycleProject(t, "project")
+	writeLifecycleRecord(t, root, "claimed")
+	records, err := record.Load(root)
+	if err != nil {
 		t.Fatal(err)
 	}
-	pendingPath := filepath.Join(badPath, "pending.json")
-	if err := os.Mkdir(pendingPath, 0o700); err != nil {
+	rec := records[0]
+	if err := record.Claim(rec); err != nil {
+		t.Fatal(err)
+	}
+	pendingPath := filepath.Join(rec.Path, "pending.json")
+	if err := os.WriteFile(pendingPath, []byte(`{"schema_version":1,"harness":"pi","model":""}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	records, err = record.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec = records[0]
+	if err := os.Remove(pendingPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(pendingPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(pendingPath, "keep"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
+
+	client := &fakeHerder{launchWait: make(chan struct{})}
+	server := sessiontest.StartedBootstrapper()
 	var diagnostics bytes.Buffer
-	err := startClaimed(ctx, t.TempDir(), record.Record{
-		HerdrSessionName: "claimed",
-		Path:             badPath,
-		PendingChoice:    &AgentChoice{Harness: "pi"},
-	}, StartDependencies{
+	err = startClaimed(testContext(t), root, rec, StartDependencies{
 		Herder:          client,
 		Scoped:          func(string) Bootstrapper { return server },
 		Diagnostics:     &diagnostics,
 		bootstrapTiming: sessiontest.FastTiming(),
-	}, cachedRelease(func() error { return releaseErr }))
-	if !errors.Is(err, launchErr) || !errors.Is(err, bootstrapErr) || !errors.Is(err, releaseErr) {
-		t.Fatalf("startClaimed() error = %v, want launch, bootstrap, and release failures", err)
+	}, func() error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "commit bootstrap") {
+		t.Fatalf("startClaimed() error = %v, want pending commit failure", err)
 	}
-	parts := []string{"launch \"claimed\"", "bootstrap: start pi", "watcher: clear pending", "release project lock"}
-	previous := -1
-	for _, part := range parts {
-		if got := strings.Count(err.Error(), part); got != 1 {
-			t.Fatalf("startClaimed() error occurrence count for %q = %d, want one: %q", part, got, err)
-		}
-		position := strings.Index(err.Error(), part)
-		if position <= previous {
-			t.Fatalf("error order = %q, want launch, bootstrap, watcher, release", err)
-		}
-		previous = position
+	if want := []string{"claimed"}; !reflect.DeepEqual(client.stops, want) {
+		t.Fatalf("bootstrap cleanup stops = %#v, want %#v", client.stops, want)
+	}
+	if _, err := os.Stat(filepath.Join(rec.Path, "claim.json")); err != nil {
+		t.Fatalf("claim was not retained: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(pendingPath, "keep")); err != nil {
+		t.Fatalf("pending transaction state was not retained: %v", err)
 	}
 }
 
@@ -2074,10 +2288,8 @@ func TestStartClaimedReportsBootstrapDeadline(t *testing.T) {
 		Scoped:      func(string) Bootstrapper { return server },
 		Diagnostics: &diagnostics,
 		bootstrapTiming: bootstrap.Timing{
-			Poll:         time.Millisecond,
-			Deadline:     10 * time.Millisecond,
-			StartRetries: 1,
-			RetryDelay:   time.Millisecond,
+			Poll:     time.Millisecond,
+			Deadline: 10 * time.Millisecond,
 		},
 	}, func() error { return nil })
 	if !errors.Is(err, context.DeadlineExceeded) {
@@ -2105,6 +2317,12 @@ func (*deadlineBootstrapper) Panes(context.Context, string) ([]herdr.Pane, error
 func (*deadlineBootstrapper) RenameWorkspace(context.Context, string, string) error { return nil }
 
 func (*deadlineBootstrapper) RenameTab(context.Context, string, string) error { return nil }
+
+func (*deadlineBootstrapper) CreateWorkspace(context.Context, string) (herdr.WorkspaceCreated, error) {
+	return herdr.WorkspaceCreated{}, nil
+}
+
+func (*deadlineBootstrapper) CloseWorkspace(context.Context, string) error { return nil }
 
 func (*deadlineBootstrapper) StartAgent(context.Context, herdr.StartAgentOptions) (herdr.Agent, error) {
 	return herdr.Agent{}, nil

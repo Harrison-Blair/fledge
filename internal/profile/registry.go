@@ -27,7 +27,7 @@ type Profile struct {
 // orchestratorRoleRules is the manager role section of the orchestrator
 // profile; the full instructions are composed with the canonical fragments.
 //
-//go:embed fledge-orchestrator.md
+//go:embed profiles/fledge-orchestrator.md
 var orchestratorRoleRules string
 
 var managed = []Profile{{

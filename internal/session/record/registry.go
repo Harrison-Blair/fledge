@@ -138,8 +138,11 @@ func create(projectRoot string, choice types.AgentChoice, maxNameLength int, una
 		return Record{}, fmt.Errorf("create session record: %w", err)
 	}
 
+	// One time value backs both the name's timestamp and the config's CreatedAt,
+	// held stable across every collision retry.
+	createdAt := now.UTC().Truncate(time.Second)
 	for {
-		name, err := GenerateName(filepath.Base(filepath.Clean(projectRoot)), maxNameLength, taken, entropy)
+		name, err := GenerateName(filepath.Base(filepath.Clean(projectRoot)), createdAt, maxNameLength, taken, entropy)
 		if err != nil {
 			return Record{}, err
 		}
@@ -155,7 +158,6 @@ func create(projectRoot string, choice types.AgentChoice, maxNameLength int, una
 			return Record{}, fmt.Errorf("create session record: inspect %q: %w", finalDir, err)
 		}
 
-		createdAt := now.UTC().Truncate(time.Second)
 		disk := diskRecord{
 			SchemaVersion:    schemaVersion,
 			HerdrSessionName: name,

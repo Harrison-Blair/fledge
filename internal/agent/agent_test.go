@@ -63,7 +63,18 @@ func (f *fakeHerder) Workspaces(context.Context) ([]herdr.Workspace, error) {
 
 func (f *fakeHerder) CreateWorkspace(_ context.Context, label string) (herdr.WorkspaceCreated, error) {
 	f.record(fmt.Sprintf("CreateWorkspace(%s)", label))
-	return f.newWorkspace, f.errs["CreateWorkspace"]
+	if err := f.errs["CreateWorkspace"]; err != nil {
+		return herdr.WorkspaceCreated{}, err
+	}
+	created := f.newWorkspace
+	created.Workspace.Label = label
+	f.workspaces = append(f.workspaces, created.Workspace)
+	return created, nil
+}
+
+func (f *fakeHerder) CloseWorkspace(_ context.Context, id string) error {
+	f.record(fmt.Sprintf("CloseWorkspace(%s)", id))
+	return f.errs["CloseWorkspace"]
 }
 
 func (f *fakeHerder) CreateTab(_ context.Context, workspaceID, label string) (herdr.TabCreated, error) {
@@ -120,12 +131,16 @@ func (f *fakeHerder) GetAgent(_ context.Context, target string) (herdr.Agent, er
 
 func TestConnectInsideHerderPaneValidatesProjectSession(t *testing.T) {
 	root := agentProject(t, "fledge-demo-00000001")
+	nested := filepath.Join(root, "nested", "working-directory")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	env := map[string]string{
 		"HERDR_ENV":     "1",
 		"HERDR_SESSION": "fledge-demo-00000001",
 		"HERDR_PANE_ID": "wsE:tab1:pane4",
 	}
-	caller, client, err := Connect(context.Background(), root, func(name string) string { return env[name] }, func(context.Context) ([]herdr.Session, error) {
+	caller, client, err := Connect(context.Background(), nested, func(name string) string { return env[name] }, func(context.Context) ([]herdr.Session, error) {
 		return []herdr.Session{{Name: "fledge-demo-00000001", Running: true}}, nil
 	}, func(name string) session.PaneResolver {
 		if name != "fledge-demo-00000001" {
@@ -138,6 +153,7 @@ func TestConnectInsideHerderPaneValidatesProjectSession(t *testing.T) {
 	}
 	want := Caller{
 		Session:     "fledge-demo-00000001",
+		Root:        root,
 		RecordPath:  filepath.Join(root, ".fledge", "sessions", "fledge-demo-00000001"),
 		WorkspaceID: "wsMoved",
 		PaneID:      "wsE:tab1:pane4",
@@ -188,7 +204,7 @@ func TestConnectOutsideHerderResolvesProjectSession(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Connect() error = %v", err)
 			}
-			if caller != (Caller{Session: test.want, RecordPath: filepath.Join(root, ".fledge", "sessions", test.want)}) {
+			if caller != (Caller{Session: test.want, Root: root, RecordPath: filepath.Join(root, ".fledge", "sessions", test.want)}) {
 				t.Fatalf("caller = %#v, want session %q", caller, test.want)
 			}
 			if !reflect.DeepEqual(client, herdr.New(nil, nil, nil).WithSession(test.want)) {
@@ -235,7 +251,7 @@ func TestConnectKeepsSimultaneousProjectSessionsIsolated(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Connect(%q) error = %v", test.root, err)
 		}
-		if caller.Session != test.want || caller.RecordPath != filepath.Join(test.root, ".fledge", "sessions", test.want) || !reflect.DeepEqual(client, herdr.New(nil, nil, nil).WithSession(test.want)) {
+		if caller.Session != test.want || caller.Root != test.root || caller.RecordPath != filepath.Join(test.root, ".fledge", "sessions", test.want) || !reflect.DeepEqual(client, herdr.New(nil, nil, nil).WithSession(test.want)) {
 			t.Fatalf("Connect(%q) = %#v, %#v; want session %q", test.root, caller, client, test.want)
 		}
 	}

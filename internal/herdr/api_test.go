@@ -187,28 +187,30 @@ func TestAPIRequests(t *testing.T) {
 			wantArgv: []string{"pane", "close", "w1:p2"},
 		},
 		{
-			name:   "start agent with args and timeout",
-			output: envelope(`{"type":"agent_started","agent":` + agentJSON + `,"argv":["claude"]}`),
+			name:   "process info",
+			output: envelope(`{"type":"pane_process_info","process_info":{"pane_id":"w1:p1","shell_pid":129736,"tty":"/dev/pts/4","foreground_process_group_id":130012,"foreground_processes":[{"pid":130012,"name":"claude","argv":["claude","--secret"],"cmdline":"claude --secret"}]}}`),
 			call: func(ctx context.Context, c *Client) (any, error) {
-				return c.StartAgent(ctx, StartAgentOptions{
-					Name:      "reviewer",
-					Kind:      "claude",
-					PaneID:    "w1:p1",
-					Args:      []string{"--model", "opus"},
-					TimeoutMS: 60000,
-				})
+				return c.ProcessInfo(ctx, "w1:p1")
 			},
-			wantArgv: []string{"agent", "start", "reviewer", "--kind", "claude", "--pane", "w1:p1", "--timeout", "60000", "--", "--model", "opus"},
-			want:     wantAgent,
+			wantArgv: []string{"pane", "process-info", "--pane", "w1:p1"},
+			want:     ProcessInfo{PaneID: "w1:p1", ShellPID: ptr[uint32](129736), TTY: ptr("/dev/pts/4"), ForegroundPGID: ptr[uint32](130012)},
 		},
 		{
-			name:   "start agent bare",
-			output: envelope(`{"type":"agent_started","agent":` + agentJSON + `,"argv":["claude"]}`),
+			name:   "process info with nulls",
+			output: envelope(`{"type":"pane_process_info","process_info":{"pane_id":"w1:p1","shell_pid":null,"tty":null,"foreground_process_group_id":null,"foreground_processes":[]}}`),
 			call: func(ctx context.Context, c *Client) (any, error) {
-				return c.StartAgent(ctx, StartAgentOptions{Name: "reviewer", Kind: "claude", PaneID: "w1:p1"})
+				return c.ProcessInfo(ctx, "w1:p1")
 			},
-			wantArgv: []string{"agent", "start", "reviewer", "--kind", "claude", "--pane", "w1:p1"},
-			want:     wantAgent,
+			wantArgv: []string{"pane", "process-info", "--pane", "w1:p1"},
+			want:     ProcessInfo{PaneID: "w1:p1"},
+		},
+		{
+			name:   "close workspace",
+			output: envelope(`{"type":"ok"}`),
+			call: func(ctx context.Context, c *Client) (any, error) {
+				return nil, c.CloseWorkspace(ctx, "w2")
+			},
+			wantArgv: []string{"workspace", "close", "w2"},
 		},
 		{
 			name:   "prompt agent waiting",
@@ -276,6 +278,30 @@ func TestAPIRequests(t *testing.T) {
 			}
 			if tc.want != nil && !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("result = %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
+
+func TestProcessInfoRejectsMalformedResult(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		want   string
+	}{
+		{name: "wrong type", output: envelope(`{"type":"ok"}`), want: `result type "ok", want "pane_process_info"`},
+		{name: "other pane", output: envelope(`{"type":"pane_process_info","process_info":{"pane_id":"w1:p2","shell_pid":1}}`), want: "result describes pane w1:p2, want w1:p1"},
+		{name: "missing pane", output: envelope(`{"type":"pane_process_info","process_info":{"shell_pid":1}}`), want: `result describes pane "", want w1:p1`},
+		{name: "negative shell pid", output: envelope(`{"type":"pane_process_info","process_info":{"pane_id":"w1:p1","shell_pid":-1}}`), want: "decode result"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			recordingHerdr(t, tc.output)
+			_, err := New(nil, nil, nil).ProcessInfo(context.Background(), "w1:p1")
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("ProcessInfo error = %v, want containing %q", err, tc.want)
 			}
 		})
 	}

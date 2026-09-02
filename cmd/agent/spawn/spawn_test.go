@@ -513,6 +513,25 @@ func TestSpawnPropagatesError(t *testing.T) {
 	}
 }
 
+func TestSpawnWorkspaceHelpDescribesManagedDefaultAndExplicitOverride(t *testing.T) {
+	command := newCommand(func(context.Context, internalagent.SpawnOptions) (internalagent.SpawnResult, error) {
+		t.Fatal("spawn operation called")
+		return internalagent.SpawnResult{}, nil
+	}, func(int) bool { return false }, testResolver(nil))
+	var output bytes.Buffer
+	command.SetOut(&output)
+	command.SetArgs([]string{"--help"})
+
+	if err := command.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	for _, want := range []string{"f-agents:<project>", `"new"`, "existing workspace ID"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("help = %q, want %q", output.String(), want)
+		}
+	}
+}
+
 func TestSpawnHelpDoesNotRunOperation(t *testing.T) {
 	command := newCommand(func(context.Context, internalagent.SpawnOptions) (internalagent.SpawnResult, error) {
 		t.Fatal("spawn operation called")

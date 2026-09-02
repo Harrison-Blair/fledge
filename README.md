@@ -80,12 +80,50 @@ change an existing session on reattach. Each fresh session stores an immutable
 snapshot of its selected profile, so an existing session retains the exact
 instructions it started with after Fledge is upgraded. Run `fledge start --new`
 to discard a stopped session's claim and choose a fresh agent and session; it
-refuses while a session is running. A fresh root session's tab is always
-labeled `fledge-orchestrator`; the agent's callback identity for
-`fledge agent message` is the separate, fixed name `orchestrator` regardless of
-the tab label. Reattaching to an existing session, or a tab renamed after
-startup, is left untouched. To stop the project's sessions and their panes,
-return to a shell and run:
+refuses while a session is running. A fresh root session's workspace is
+labeled `f:<project>`, where `<project>` is the project directory's basename.
+Its tab is always labeled
+`fledge-orchestrator`; the agent's callback identity for `fledge agent message`
+is the separate, fixed name `orchestrator` regardless of the tab label.
+Reattaching to an existing session, or a tab renamed after startup, is left
+untouched.
+
+On every fresh start, Fledge eagerly creates or reuses the managed
+`f-agents:<project>` workspace. Its root shell tab and pane are intentionally
+kept idle, so the workspace remains available for worker placement. By
+default, each worker gets one tab in this workspace; if that workspace is
+destroyed, Fledge recreates it on the next start or spawn. Use `--workspace`
+to select `new` or an existing workspace ID, or use `--tab` or `--pane` to
+override the placement explicitly. The workspace label uses the project
+basename, while the internal Herder session name is
+`fledge-<UTC timestamp>-<project>-<random hex>` — a `fledge-` prefix, the UTC
+creation time formatted `2006-01-02T15.04.05Z` (dotted so it stays filesystem-
+and Herder-safe), the project slug, and eight random hex digits, for example
+`fledge-2026-09-02T14.35.12Z-my-project-a1b2c3d4`. The timestamp comes first so
+listing sessions by name orders them chronologically, and the random suffix
+keeps concurrent sessions collision-safe. This name is also the session's
+directory under `.fledge/sessions/`. Sessions created before this format keep
+their original names and are never renamed.
+
+Managed workspace identities are saved per session in
+`.fledge/sessions/<name>/workspaces.json`. If this file is missing, Fledge
+adopts exactly one live workspace with the expected label. If duplicate
+workspaces have that label, Fledge cannot choose safely: close or rename the
+extras and retry.
+
+Before every Pi, Claude Code, or Codex agent starts, Fledge waits for the pane
+shell to be ready for interactive line editing. This readiness check is
+bounded to about five seconds, is supported on Linux, and fails closed when
+the shell never reaches that mode. Waiting first prevents long launch lines
+typed into the shell from being truncated.
+
+Bootstrap is transactional: the pending choice and pinned profile remain until
+bootstrap completes. A substantive bootstrap failure stops the fresh partial
+session, and the next `fledge start` retries it without asking you to choose
+again. If a running session still has incomplete pending bootstrap, diagnostics
+require `fledge stop` followed by `fledge start` to retry.
+
+To stop the project's sessions and their panes, return to a shell and run:
 
 ```sh
 fledge stop

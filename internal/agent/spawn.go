@@ -12,6 +12,7 @@ import (
 	"fledge/internal/catalog"
 	"fledge/internal/herdr"
 	"fledge/internal/profile"
+	"fledge/internal/session"
 )
 
 const defaultSplitDirection = "right"
@@ -221,6 +222,9 @@ func Spawn(ctx context.Context, h Herder, caller Caller, opts SpawnOptions) (res
 			}
 		}()
 	}
+	if isDefaultPlacement(opts) && caller.Root == "" {
+		return SpawnResult{}, fmt.Errorf("spawn agent %q: default placement requires the project root", opts.Name)
+	}
 
 	pane, err := placePane(ctx, h, caller, opts, label)
 	if err != nil {
@@ -366,16 +370,23 @@ func placePane(ctx context.Context, h Herder, caller Caller, opts SpawnOptions, 
 	case opts.Workspace != "":
 		return rootPaneOfNewTab(ctx, h, opts.Workspace, label)
 	default:
-		workspace := caller.WorkspaceID
-		if workspace == "" {
-			focused, err := focusedWorkspace(ctx, h)
-			if err != nil {
-				return herdr.Pane{}, err
-			}
-			workspace = focused
+		managed, err := session.EnsureWorkspaces(
+			ctx,
+			caller.Root,
+			caller.RecordPath,
+			h,
+			session.OrchestratorWorkspaceRole,
+			session.AgentsWorkspaceRole,
+		)
+		if err != nil {
+			return herdr.Pane{}, err
 		}
-		return rootPaneOfNewTab(ctx, h, workspace, label)
+		return rootPaneOfNewTab(ctx, h, managed[session.AgentsWorkspaceRole].ID, label)
 	}
+}
+
+func isDefaultPlacement(opts SpawnOptions) bool {
+	return opts.Workspace == "" && opts.Tab == "" && opts.Pane == ""
 }
 
 func splitOptions(opts SpawnOptions, paneID string) herdr.SplitOptions {
@@ -417,17 +428,4 @@ func tabHostPane(ctx context.Context, h Herder, tabID string) (herdr.Pane, error
 		return herdr.Pane{}, fmt.Errorf("tab %q has no panes", tabID)
 	}
 	return *first, nil
-}
-
-func focusedWorkspace(ctx context.Context, h Herder) (string, error) {
-	workspaces, err := h.Workspaces(ctx)
-	if err != nil {
-		return "", err
-	}
-	for _, workspace := range workspaces {
-		if workspace.Focused {
-			return workspace.ID, nil
-		}
-	}
-	return "", fmt.Errorf("no focused workspace")
 }

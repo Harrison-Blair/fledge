@@ -48,6 +48,29 @@ func TestLoadValidRecord(t *testing.T) {
 	}
 }
 
+func TestLoadOldFormatRecordRemainsLoadableAndUnrenamed(t *testing.T) {
+	root := sessiontest.NewProject(t)
+	// A pre-timestamp session name (no embedded UTC timestamp) predates the
+	// chronological format. It must still load unchanged: existing sessions are
+	// never renamed.
+	name := "fledge-legacy-0123abcd"
+	dir := sessiontest.WriteRecord(t, root, name, `{"schema_version":1,"herdr_session_name":"`+name+`","created_at":"2026-08-24T14:15:16Z"}`)
+
+	records, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("Load() returned %d records, want 1", len(records))
+	}
+	if records[0].HerdrSessionName != name || records[0].Path != dir {
+		t.Fatalf("Load() record = %#v, want unchanged legacy name and path", records[0])
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("legacy record directory changed after load: %v", err)
+	}
+}
+
 func TestLoadRejectsInvalidRecords(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -184,7 +207,10 @@ func TestCreatePublishesExactRecordAndRetainsExistingRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	if record.HerdrSessionName != "fledge-My-Project-abcdef12" {
+	// The EDT input is converted to UTC and truncated to whole seconds; the
+	// name's dotted timestamp and the config's RFC3339 CreatedAt encode that one
+	// value.
+	if record.HerdrSessionName != "fledge-2026-08-24T18.15.16Z-My-Project-abcdef12" {
 		t.Fatalf("Create() name = %q", record.HerdrSessionName)
 	}
 	wantTime := time.Date(2026, 8, 24, 18, 15, 16, 0, time.UTC)
@@ -195,7 +221,7 @@ func TestCreatePublishesExactRecordAndRetainsExistingRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantJSON := `{"schema_version":1,"herdr_session_name":"fledge-My-Project-abcdef12","created_at":"2026-08-24T18:15:16Z"}` + "\n"
+	wantJSON := `{"schema_version":1,"herdr_session_name":"fledge-2026-08-24T18.15.16Z-My-Project-abcdef12","created_at":"2026-08-24T18:15:16Z"}` + "\n"
 	if string(data) != wantJSON {
 		t.Fatalf("config.json = %q, want %q", data, wantJSON)
 	}
@@ -454,9 +480,12 @@ func TestCreateRetriesGlobalAndLocalCollisions(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, ".fledge"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	sessiontest.WriteRecord(t, root, "fledge-project-00000001", `{"schema_version":1,"herdr_session_name":"fledge-project-00000001","created_at":"2026-08-24T14:15:16Z"}`)
+	// A fixed clock keeps the timestamp stable through every retry, so the
+	// seeded collisions share it with the freshly generated candidates.
+	now := time.Date(2026, 9, 2, 14, 35, 12, 0, time.UTC)
+	sessiontest.WriteRecord(t, root, "fledge-2026-09-02T14.35.12Z-project-00000001", `{"schema_version":1,"herdr_session_name":"fledge-2026-09-02T14.35.12Z-project-00000001","created_at":"2026-09-02T14:35:12Z"}`)
 	unavailable := map[string]struct{}{
-		"fledge-project-00000002": {},
+		"fledge-2026-09-02T14.35.12Z-project-00000002": {},
 	}
 	entropy := bytes.NewReader([]byte{
 		0, 0, 0, 1,
@@ -464,11 +493,11 @@ func TestCreateRetriesGlobalAndLocalCollisions(t *testing.T) {
 		0, 0, 0, 3,
 	})
 
-	record, err := Create(root, types.AgentChoice{}, MaxSessionLength, unavailable, entropy, time.Now())
+	record, err := Create(root, types.AgentChoice{}, MaxSessionLength, unavailable, entropy, now)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	if record.HerdrSessionName != "fledge-project-00000003" {
+	if record.HerdrSessionName != "fledge-2026-09-02T14.35.12Z-project-00000003" {
 		t.Fatalf("Create() name = %q, want final collision-free name", record.HerdrSessionName)
 	}
 	records, err := Load(root)

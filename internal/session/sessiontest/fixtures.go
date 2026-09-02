@@ -3,6 +3,7 @@ package sessiontest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -34,6 +35,8 @@ type FakeBootstrapper struct {
 	workspaces []herdr.Workspace
 	panes      []herdr.Pane
 	StartErrs  []error
+	CreateErr  error
+	CloseErr   error
 
 	OnStatus          func(int)
 	OnStart           func(context.Context, int)
@@ -44,6 +47,8 @@ type FakeBootstrapper struct {
 	paneCalls        int
 	RenamedWorkspace []RenameCall
 	RenamedTab       []RenameCall
+	Created          []herdr.WorkspaceCreated
+	Closed           []string
 	Started          []herdr.StartAgentOptions
 }
 
@@ -65,19 +70,24 @@ func (f *FakeBootstrapper) Workspaces(context.Context) ([]herdr.Workspace, error
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.WorkspaceCalls++
-	return f.workspaces, nil
+	return append([]herdr.Workspace(nil), f.workspaces...), nil
 }
 
 func (f *FakeBootstrapper) Panes(context.Context, string) ([]herdr.Pane, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.paneCalls++
-	return f.panes, nil
+	return append([]herdr.Pane(nil), f.panes...), nil
 }
 
 func (f *FakeBootstrapper) RenameWorkspace(ctx context.Context, id, label string) error {
 	f.mu.Lock()
 	f.RenamedWorkspace = append(f.RenamedWorkspace, RenameCall{ID: id, Label: label})
+	for i := range f.workspaces {
+		if f.workspaces[i].ID == id {
+			f.workspaces[i].Label = label
+		}
+	}
 	blocked := f.OnRenameWorkspace
 	f.mu.Unlock()
 
@@ -91,6 +101,39 @@ func (f *FakeBootstrapper) RenameTab(_ context.Context, id, label string) error 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.RenamedTab = append(f.RenamedTab, RenameCall{ID: id, Label: label})
+	return nil
+}
+
+func (f *FakeBootstrapper) CreateWorkspace(_ context.Context, label string) (herdr.WorkspaceCreated, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.CreateErr != nil {
+		return herdr.WorkspaceCreated{}, f.CreateErr
+	}
+	id := fmt.Sprintf("w%d", len(f.workspaces)+1)
+	created := herdr.WorkspaceCreated{
+		Workspace: herdr.Workspace{ID: id, Label: label},
+		Tab:       herdr.Tab{ID: id + ":t1", WorkspaceID: id},
+		RootPane:  herdr.Pane{ID: id + ":p1", WorkspaceID: id, TabID: id + ":t1"},
+	}
+	f.Created = append(f.Created, created)
+	f.workspaces = append(f.workspaces, created.Workspace)
+	return created, nil
+}
+
+func (f *FakeBootstrapper) CloseWorkspace(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Closed = append(f.Closed, id)
+	if f.CloseErr != nil {
+		return f.CloseErr
+	}
+	for i := range f.workspaces {
+		if f.workspaces[i].ID == id {
+			f.workspaces = append(f.workspaces[:i], f.workspaces[i+1:]...)
+			break
+		}
+	}
 	return nil
 }
 
@@ -122,7 +165,6 @@ func ReadyBootstrapper() *FakeBootstrapper {
 		},
 		workspaces: []herdr.Workspace{
 			{ID: "w1", ActiveTabID: "w1:t2"},
-			{ID: "w2", ActiveTabID: "w2:t1"},
 		},
 		panes: []herdr.Pane{
 			{ID: "w1:p1", WorkspaceID: "w1", TabID: "w1:t1"},
@@ -141,10 +183,8 @@ func StartedBootstrapper() *FakeBootstrapper {
 // FastTiming polls quickly enough for tests to finish promptly.
 func FastTiming() bootstrap.Timing {
 	return bootstrap.Timing{
-		Poll:         time.Millisecond,
-		Deadline:     2 * time.Second,
-		StartRetries: 3,
-		RetryDelay:   time.Millisecond,
+		Poll:     time.Millisecond,
+		Deadline: 2 * time.Second,
 	}
 }
 

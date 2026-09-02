@@ -7,13 +7,13 @@ import (
 
 // Canonical instruction fragments shared by composed managed profiles.
 var (
-	//go:embed fledge-core.md
+	//go:embed profiles/fledge-core.md
 	coreFragment string
 
-	//go:embed fledge-general.md
+	//go:embed profiles/fledge-general.md
 	generalWorkerFragment string
 
-	//go:embed fledge-worker-report.md
+	//go:embed profiles/fledge-worker-report.md
 	workerReportFragment string
 )
 

@@ -15,6 +15,7 @@ import (
 type Herder interface {
 	Workspaces(context.Context) ([]herdr.Workspace, error)
 	CreateWorkspace(context.Context, string) (herdr.WorkspaceCreated, error)
+	CloseWorkspace(context.Context, string) error
 	CreateTab(context.Context, string, string) (herdr.TabCreated, error)
 	Panes(context.Context, string) ([]herdr.Pane, error)
 	SplitPane(context.Context, herdr.SplitOptions) (herdr.Pane, error)
@@ -28,6 +29,7 @@ type Herder interface {
 // Caller is the validated Herder context the command was invoked from.
 type Caller struct {
 	Session     string
+	Root        string
 	RecordPath  string
 	WorkspaceID string
 	PaneID      string
@@ -59,7 +61,7 @@ func Connect(ctx context.Context, path string, getenv func(string) string, list 
 		return Caller{}, nil, fmt.Errorf("connect to Fledge session: record for %q disappeared", name)
 	}
 	client := herdr.New(nil, nil, nil).WithSession(name)
-	caller := Caller{Session: name, RecordPath: recordPath}
+	caller := Caller{Session: name, Root: root, RecordPath: recordPath}
 	if getenv("HERDR_ENV") == "1" {
 		_, pane, err := session.ValidateAmbientPane(ctx, getenv, []string{name}, scoped)
 		if err != nil {

@@ -12,6 +12,7 @@ import (
 	"fledge/internal/profile"
 	"fledge/internal/session/types"
 	"fledge/internal/session/utils"
+	"fledge/internal/session/workspace"
 )
 
 // LogName is the bootstrap report file written inside a session record.
@@ -20,7 +21,6 @@ const LogName = "bootstrap.log"
 const (
 	orchestratorName     = "orchestrator"
 	orchestratorTabLabel = "fledge-orchestrator"
-	workspacePrefix      = "fledge:"
 )
 
 // Server is the Herder surface needed to prepare a fresh session.
@@ -30,8 +30,13 @@ type Server interface {
 	Panes(context.Context, string) ([]herdr.Pane, error)
 	RenameWorkspace(context.Context, string, string) error
 	RenameTab(context.Context, string, string) error
+	CreateWorkspace(context.Context, string) (herdr.WorkspaceCreated, error)
+	CloseWorkspace(context.Context, string) error
 	StartAgent(context.Context, herdr.StartAgentOptions) (herdr.Agent, error)
 }
+
+// EnsureWorkspaces reconciles the requested managed-workspace roles.
+type EnsureWorkspaces func(context.Context, ...workspace.Role) (map[workspace.Role]herdr.Workspace, error)
 
 // Input describes the session being prepared.
 type Input struct {
@@ -39,29 +44,26 @@ type Input struct {
 	Choice                  types.AgentChoice
 	ProfileInstructionsPath string
 	Log                     io.Writer
+	EnsureWorkspaces        EnsureWorkspaces
 }
 
 // Timing bounds the polling a fresh Herder server requires.
 type Timing struct {
-	Poll         time.Duration
-	Deadline     time.Duration
-	StartRetries int
-	RetryDelay   time.Duration
+	Poll     time.Duration
+	Deadline time.Duration
 }
 
 // DefaultTiming is the polling schedule used outside tests.
 var DefaultTiming = Timing{
-	Poll:         200 * time.Millisecond,
-	Deadline:     30 * time.Second,
-	StartRetries: 3,
-	RetryDelay:   time.Second,
+	Poll:     200 * time.Millisecond,
+	Deadline: 30 * time.Second,
 }
 
-// Run labels a fresh session's first workspace and tab, then starts the
-// chosen agent in its root pane. It runs while Herder owns the terminal, so
-// every step is reported to in.Log rather than to the user.
-func Run(ctx context.Context, h Server, in Input, t Timing) error {
-	ctx, cancel := context.WithTimeout(ctx, t.Deadline)
+// Run labels a fresh session's first workspace and tab, reconciles every
+// managed workspace, then starts the chosen agent in the root pane. It runs
+// while Herder owns the terminal, so every step is reported to in.Log.
+func Run(ctx context.Context, h Server, in Input, timing Timing) error {
+	ctx, cancel := context.WithTimeout(ctx, timing.Deadline)
 	defer cancel()
 
 	logStep(in.Log, "bootstrap started")
@@ -69,10 +71,21 @@ func Run(ctx context.Context, h Server, in Input, t Timing) error {
 	if err != nil {
 		return logFail(in.Log, err)
 	}
+	if in.EnsureWorkspaces == nil {
+		return logFail(in.Log, fmt.Errorf("ensure managed workspaces is nil"))
+	}
+	orchestrator, err := workspace.Lookup(workspace.Orchestrator)
+	if err != nil {
+		return logFail(in.Log, fmt.Errorf("load orchestrator workspace policy: %w", err))
+	}
+	rootLabel, err := orchestrator.Label(filepath.Base(in.Root))
+	if err != nil {
+		return logFail(in.Log, fmt.Errorf("label orchestrator workspace: %w", err))
+	}
 
 	// Herder reports failure until its socket exists, so errors here mean the
 	// server is not up yet.
-	if err := poll(ctx, t.Poll, func(ctx context.Context) bool {
+	if err := poll(ctx, timing.Poll, func(ctx context.Context) bool {
 		status, err := h.Status(ctx)
 		return err == nil && status.Running
 	}); err != nil {
@@ -80,22 +93,22 @@ func Run(ctx context.Context, h Server, in Input, t Timing) error {
 	}
 	logStep(in.Log, "Herder server running")
 
-	var workspace herdr.Workspace
-	if err := poll(ctx, t.Poll, func(ctx context.Context) bool {
+	var rootWorkspace herdr.Workspace
+	if err := poll(ctx, timing.Poll, func(ctx context.Context) bool {
 		workspaces, err := h.Workspaces(ctx)
 		if err != nil || len(workspaces) == 0 {
 			return false
 		}
-		workspace = workspaces[0]
+		rootWorkspace = workspaces[0]
 		return true
 	}); err != nil {
 		return logFail(in.Log, fmt.Errorf("list workspaces: %w", err))
 	}
-	tabID := workspace.ActiveTabID
+	tabID := rootWorkspace.ActiveTabID
 
 	var pane herdr.Pane
-	if err := poll(ctx, t.Poll, func(ctx context.Context) bool {
-		panes, err := h.Panes(ctx, workspace.ID)
+	if err := poll(ctx, timing.Poll, func(ctx context.Context) bool {
+		panes, err := h.Panes(ctx, rootWorkspace.ID)
 		if err != nil || len(panes) == 0 {
 			return false
 		}
@@ -110,24 +123,36 @@ func Run(ctx context.Context, h Server, in Input, t Timing) error {
 	}); err != nil {
 		return logFail(in.Log, fmt.Errorf("list panes: %w", err))
 	}
-	logStep(in.Log, "workspace %s tab %s pane %s", workspace.ID, tabID, pane.ID)
+	logStep(in.Log, "workspace %s tab %s pane %s", rootWorkspace.ID, tabID, pane.ID)
 
-	label := workspacePrefix + filepath.Base(in.Root)
-	if err := h.RenameWorkspace(ctx, workspace.ID, label); err != nil {
-		return logFail(in.Log, halted(ctx, fmt.Errorf("rename workspace %s: %w", workspace.ID, err)))
+	if err := h.RenameWorkspace(ctx, rootWorkspace.ID, rootLabel); err != nil {
+		return logFail(in.Log, halted(ctx, fmt.Errorf("rename workspace %s: %w", rootWorkspace.ID, err)))
 	}
-	logStep(in.Log, "renamed workspace to %s", label)
+	logStep(in.Log, "renamed workspace to %s", rootLabel)
 
 	if err := h.RenameTab(ctx, tabID, orchestratorTabLabel); err != nil {
 		return logFail(in.Log, halted(ctx, fmt.Errorf("rename tab %s: %w", tabID, err)))
 	}
 	logStep(in.Log, "renamed tab to %s", orchestratorTabLabel)
 
+	roles := workspace.Roles()
+	managed, err := in.EnsureWorkspaces(ctx, roles...)
+	if err != nil {
+		return logFail(in.Log, halted(ctx, fmt.Errorf("ensure managed workspaces: %w", err)))
+	}
+	for _, role := range roles {
+		ensured, ok := managed[role]
+		if !ok || ensured.ID == "" {
+			return logFail(in.Log, fmt.Errorf("ensure managed workspaces omitted role %q", role))
+		}
+		logStep(in.Log, "managed workspace %s is %s", role, ensured.ID)
+	}
+
 	if in.Choice.Harness == "" {
 		logStep(in.Log, "no agent requested")
 		return nil
 	}
-	return startAgent(ctx, h, in, t, pane.ID, args)
+	return startAgent(ctx, h, in, pane.ID, args)
 }
 
 func launchArgs(in Input) ([]string, error) {
@@ -149,31 +174,18 @@ func launchArgs(in Input) ([]string, error) {
 	return args, nil
 }
 
-// startAgent launches the chosen harness, retrying while Herder rejects the
-// request because the fresh pane has not reached its shell prompt.
-func startAgent(ctx context.Context, h Server, in Input, t Timing, paneID string, args []string) error {
+func startAgent(ctx context.Context, h Server, in Input, paneID string, args []string) error {
 	options := herdr.StartAgentOptions{
 		Name:   orchestratorName,
 		Kind:   in.Choice.Harness,
 		PaneID: paneID,
 		Args:   args,
 	}
-
-	for attempt := 1; ; attempt++ {
-		_, err := h.StartAgent(ctx, options)
-		if err == nil {
-			logStep(in.Log, "started %s in pane %s", in.Choice.Harness, paneID)
-			return nil
-		}
-		var reported *herdr.Error
-		if !errors.As(err, &reported) || reported.Code != "agent_pane_busy" || attempt >= t.StartRetries {
-			return logFail(in.Log, halted(ctx, fmt.Errorf("start %s: %w", in.Choice.Harness, err)))
-		}
-		logStep(in.Log, "start %s attempt %d failed: %v", in.Choice.Harness, attempt, err)
-		if err := utils.Sleep(ctx, t.RetryDelay); err != nil {
-			return logFail(in.Log, fmt.Errorf("start %s: %w", in.Choice.Harness, err))
-		}
+	if _, err := h.StartAgent(ctx, options); err != nil {
+		return logFail(in.Log, halted(ctx, fmt.Errorf("start %s: %w", in.Choice.Harness, err)))
 	}
+	logStep(in.Log, "started %s in pane %s", in.Choice.Harness, paneID)
+	return nil
 }
 
 // halted reports cancellation when the context ended, so a subprocess killed
