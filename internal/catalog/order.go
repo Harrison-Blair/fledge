@@ -97,11 +97,56 @@ func compareIDs(a, b string) int {
 	return strings.Compare(b, a)
 }
 
-// compareModels orders model IDs by family rank ascending (see familyRank),
-// falling back to compareIDs within a rank so results stay
-// highest-version-first. It returns 0 only when compareIDs does (byte-identical
-// IDs), keeping slices.Compact correct in normalize.
+// numericSegments returns the numeric runs in a model name, in their
+// left-to-right version order. A provider-qualified ID contributes only its
+// model name, so qualification does not change its version.
+func numericSegments(id string) []string {
+	if _, model, found := strings.Cut(id, "/"); found {
+		id = model
+	}
+
+	var versions []string
+	for _, segment := range segments(id) {
+		if segment[0] >= '0' && segment[0] <= '9' {
+			versions = append(versions, segment)
+		}
+	}
+	return versions
+}
+
+// compareVersions orders numeric model versions highest-first. A model with
+// no numeric version sorts below a versioned model; when all numeric runs are
+// equal, a longer version is considered newer.
+func compareVersions(a, b string) int {
+	av, bv := numericSegments(a), numericSegments(b)
+	if len(av) == 0 && len(bv) != 0 {
+		return 1
+	}
+	if len(av) != 0 && len(bv) == 0 {
+		return -1
+	}
+	for i := range max(len(av), len(bv)) {
+		if i >= len(av) {
+			return 1
+		}
+		if i >= len(bv) {
+			return -1
+		}
+		if c := compareDigits(av[i], bv[i]); c != 0 {
+			return -c
+		}
+	}
+	return 0
+}
+
+// compareModels orders model IDs by descending numeric version, then family
+// rank ascending (see familyRank), and finally compareIDs for a deterministic
+// tie-breaker. It returns 0 only when compareIDs does (byte-identical IDs),
+// keeping slices.Compact correct in normalize.
 func compareModels(a, b string) int {
+	if d := compareVersions(a, b); d != 0 {
+		return d
+	}
 	if d := familyRank(a) - familyRank(b); d != 0 {
 		return d
 	}

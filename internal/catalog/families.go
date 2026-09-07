@@ -8,7 +8,7 @@ import (
 // families lists model family names in priority order. A family's index in
 // this slice IS its rank: lower index = higher priority. Any ID that matches
 // no family ranks as len(families), i.e. below every listed family.
-var families = []string{"sol", "terra", "luna", "fable", "opus", "sonnet", "haiku"}
+var families = []string{"astra", "sol", "terra", "luna", "fable", "opus", "sonnet", "haiku"}
 
 // familySeparators are the byte separators used to split a model ID into the
 // tokens that family matching tests. Dropping '_' or ':' here would silently

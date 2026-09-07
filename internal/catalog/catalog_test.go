@@ -84,13 +84,13 @@ func TestModels(t *testing.T) {
 			harness: Pi,
 			bins:    map[string]string{"pi": piFake},
 			want: []string{
-				"opencode/claude-fable-5",
-				"opencode/claude-opus-4-8",
-				"opencode-go/glm-5",
-				"opencode/big-pickle",
 				"openai-codex/gpt-5.5",
 				"openai-codex/gpt-5.4",
 				"openai-codex/gpt-5.3-codex-spark",
+				"opencode/claude-fable-5",
+				"opencode-go/glm-5",
+				"opencode/claude-opus-4-8",
+				"opencode/big-pickle",
 			},
 		},
 		{
