@@ -78,7 +78,9 @@ Later starts reattach to the same running session. Harness, model, and profile
 flags on `fledge start` apply only when creating a fresh session; they do not
 change an existing session on reattach. Each fresh session stores an immutable
 snapshot of its selected profile, so an existing session retains the exact
-instructions it started with after Fledge is upgraded. Run `fledge start --new`
+instructions it started with after Fledge is upgraded. Existing pinned sessions
+therefore keep their prior behavior; fresh sessions receive the current bundled
+instructions. Run `fledge start --new`
 to discard a stopped session's claim and choose a fresh agent and session; it
 refuses while a session is running. A fresh root session's workspace is
 labeled `f:<project>`, where `<project>` is the project directory's basename.
@@ -187,18 +189,29 @@ fledge profile show fledge-orchestrator
 ```
 
 `fledge-general` is role-neutral guidance for any Fledge-managed worker, and
-`fledge-orchestrator` is guidance for the root session that delegates to them;
-these are the only two selectable profiles. Both are behavioral guidance
-delivered to the agent's instructions — not a security, sandbox, or
-authentication boundary.
+`fledge-orchestrator` is guidance for the root session that coordinates them.
+The root reads and runs read-only investigations directly, handles simple
+lookups, and delegates every file edit and substantial independent unit through
+Fledge workers. It raises substantive decisions as they arise, proceeds with
+clear authorized work, and tracks blocked or unfinished work until the current
+result is independently verified. `fledge-general` and
+`fledge-orchestrator` are the only two selectable profiles; the orchestrator's
+decision workflow is an embedded component, not another profile or installed
+skill dependency. All profile instructions are behavioral guidance delivered
+to the agent — not a security, sandbox, or authentication boundary.
 
 The `fledge-orchestrator` profile documents an automatic model-routing scheme
 for the workers it dispatches: a Codex/GPT family and a Claude family, each
 with cheap, mid-tier, decent, and strongest tiers, spawned with
 `--profile fledge-general`, an explicit reasoning effort, and — for Claude —
-`--permission-mode auto`. Other models a harness exposes, including Fable 5
-and Haiku, remain available through the ordinary model picker; they are simply
-not part of that automatic routing. Run
+`--permission-mode auto`. It chooses tiers by task difficulty, keeps one
+producer family through a unit's repair rounds, and gives every revised result
+to a fresh strongest-tier read-only verifier from the opposite family. Valid
+findings return to the same implementer without a fixed retry cap while the
+work is still progressing; any same-family verification bypass requires the
+user's explicit approval. Other models a harness exposes, including legacy
+Fable and Haiku models, remain available through the ordinary model picker;
+they are simply not part of that automatic routing. Run
 `fledge profile show fledge-orchestrator` for the exact, current model map.
 
 Use `fledge --help` or `fledge <command> --help` for all commands and flags.

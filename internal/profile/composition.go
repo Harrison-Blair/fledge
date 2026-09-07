@@ -13,6 +13,9 @@ var (
 	//go:embed profiles/fledge-general.md
 	generalWorkerFragment string
 
+	//go:embed profiles/fledge-interrogate.md
+	interrogateFragment string
+
 	//go:embed profiles/fledge-worker-report.md
 	workerReportFragment string
 )

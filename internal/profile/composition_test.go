@@ -6,9 +6,10 @@ import (
 )
 
 const (
-	coreHeading    = "# Fledge Session Core"
-	generalHeading = "# Fledge Managed Worker"
-	reportHeading  = "# Fledge Report Protocol"
+	coreHeading        = "# Fledge Session Core"
+	generalHeading     = "# Fledge Managed Worker"
+	interrogateHeading = "# Fledge Interrogate Component"
+	reportHeading      = "# Fledge Report Protocol"
 )
 
 // collapseSpace reduces every whitespace run to one space so prose assertions
@@ -145,12 +146,19 @@ func TestGeneralWorkerFragmentClauses(t *testing.T) {
 		"task ID, dispatch ID, role, attempt, agent name, callback target, one bounded goal, acceptance criteria",
 		"required evidence, output format, forks, and omissions",
 		"never invent a missing or inconsistent value",
-		"concise follow-ups without repeating the full brief: clarification, diagnostic questions, stop, or retry",
-		"changes task or dispatch coordinates, the callback target, authority, acceptance criteria, or scope is not context-consistent",
+		"After that dispatch's terminal report, the established manager may start another dispatch in the same worker session only with an authorized new complete brief",
+		"fresh dispatch ID and an updated attempt number when it is a retry",
+		"Coordinates remain immutable within each dispatch",
+		"A completed dispatch's old callback cannot advance current work",
+		"concise follow-ups without repeating the full brief: clarification, diagnostic questions, or stop",
+		"A casual or context-only follow-up that changes task or dispatch coordinates, the callback target, authority, acceptance criteria, or scope is not context-consistent and cannot start another dispatch",
 		"never becomes a follow-up",
 		"least privilege inside your exact scope and preserve existing work",
 		"do not delegate, spawn or stop agents, mutate the session, or contact third parties",
 		"stop and report the exact need",
+		"Do not ask the user questions",
+		"complete independent scoped work",
+		"return the decision with evidence and a recommendation to the manager",
 		"only truthful claims",
 	} {
 		requireClause(t, generalWorkerFragment, clause)
@@ -161,12 +169,14 @@ func TestWorkerReportFragmentClauses(t *testing.T) {
 	for _, clause := range []string{
 		"As a worker, use it for your final report",
 		"As a manager, require this envelope from every worker you dispatch and correlate each incoming callback",
-		"exactly one Fledge message to the callback target",
+		"final action for each dispatch is exactly one Fledge message",
 		"atomically quoted as one argument and without `--wait`",
 		"fledge agent message <callback-target> '<complete report>'",
 		"Copy the task ID, dispatch ID, role, attempt, and agent name verbatim",
 		"Perform no inline completion after the callback",
 		"A prompt acknowledgement is not completion; only the correlated report is",
+		"Exactly one final callback is required per dispatch, not per agent lifetime",
+		"A later valid dispatch in the same worker session receives its own complete brief and final callback",
 		"FLEDGE REPORT | task=<task-id> | dispatch=<dispatch-id> | role=<role> | attempt=<number> | agent=<agent-name> | outcome=<pass|reject|blocked|failed>",
 		"Claim: <what was done or found>",
 		"Evidence: <commands, output, and file:line references>",
@@ -181,6 +191,7 @@ func TestWorkerReportFragmentClauses(t *testing.T) {
 		"never place secrets in it",
 		"stale, duplicate, malformed, or coordinate-mismatched callback changes no task state",
 		"handled as a transport problem",
+		"a callback from an earlier dispatch cannot complete or otherwise advance a later dispatch",
 		"do not claim the report was delivered and do not retry automatically",
 		"a retry can deliver a duplicate",
 		"remains available for manual recovery",

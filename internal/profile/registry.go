@@ -36,8 +36,8 @@ var managed = []Profile{{
 	Instructions: managedWorker(),
 }, {
 	Name:         OrchestratorName,
-	Description:  "Delegates project work through Fledge agents and independently verifies every material result.",
-	Instructions: managedManager(orchestratorRoleRules),
+	Description:  "Investigates directly, delegates edits and substantial work through Fledge agents, and independently verifies revised results.",
+	Instructions: managedManager(orchestratorRoleRules, interrogateFragment),
 }}
 
 // List returns independent snapshots of every managed profile in presentation

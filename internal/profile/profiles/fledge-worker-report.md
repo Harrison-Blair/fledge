@@ -7,17 +7,20 @@ does not replace your own report to the user.
 
 ## Final callback
 
-A worker's final action is exactly one Fledge message to the callback target
-from the brief, with the complete report atomically quoted as one argument
-and without `--wait`:
+A worker's final action for each dispatch is exactly one Fledge message to the
+callback target from that dispatch's brief, with the complete report atomically
+quoted as one argument and without `--wait`:
 
 ```sh
 fledge agent message <callback-target> '<complete report>'
 ```
 
-Copy the task ID, dispatch ID, role, attempt, and agent name verbatim from
-the initial brief. Perform no inline completion after the callback. A prompt
-acknowledgement is not completion; only the correlated report is.
+Copy the task ID, dispatch ID, role, attempt, and agent name verbatim from the
+dispatch brief. Perform no inline completion after the callback. A prompt
+acknowledgement is not completion; only the correlated report is. Exactly one
+final callback is required per dispatch, not per agent lifetime. A later valid
+dispatch in the same worker session receives its own complete brief and final
+callback.
 
 ## Envelope
 
@@ -36,7 +39,8 @@ reviewer's rejecting verdict. `blocked` means required scope, authority, or
 input is missing. `failed` means the attempt did not achieve the goal. A
 report is not confidential; never place secrets in it. A stale, duplicate,
 malformed, or coordinate-mismatched callback changes no task state and is
-handled as a transport problem.
+handled as a transport problem. In particular, a callback from an earlier
+dispatch cannot complete or otherwise advance a later dispatch.
 
 ## Delivery failure
 

@@ -98,7 +98,7 @@ func TestProfileShowGeneralPrintsCompiledInstructions(t *testing.T) {
 			t.Errorf("general instructions contain %q %d times, want once", marker, got)
 		}
 	}
-	for _, marker := range []string{"# Fledge Orchestrator", "## Root boundary"} {
+	for _, marker := range []string{"# Fledge Orchestrator", "# Fledge Interrogate Component", "## Root boundary"} {
 		if strings.Contains(normalized, marker) {
 			t.Errorf("general instructions contain manager-only marker %q", marker)
 		}
@@ -112,11 +112,13 @@ func TestProfileShowOrchestratorPrintsCompiledInstructions(t *testing.T) {
 	assertMarkersInOrder(t, normalized,
 		"# Fledge Session Core",
 		"# Fledge Orchestrator",
+		"# Fledge Interrogate Component",
 		"# Fledge Report Protocol",
 	)
 	for _, marker := range []string{
 		"# Fledge Session Core",
 		"# Fledge Orchestrator",
+		"# Fledge Interrogate Component",
 		"# Fledge Report Protocol",
 	} {
 		if got := strings.Count(normalized, marker); got != 1 {
@@ -134,7 +136,7 @@ func TestProfileShowOrchestratorPrintsCompiledInstructions(t *testing.T) {
 }
 
 func TestProfileShowRejectsNonSelectableFragments(t *testing.T) {
-	for _, name := range []string{"fledge-core", "fledge-worker-report", "fledge-general-worker"} {
+	for _, name := range []string{"fledge-core", "fledge-interrogate", "fledge-worker-report", "fledge-general-worker"} {
 		t.Run(name, func(t *testing.T) {
 			command := New()
 			var stdout, stderr bytes.Buffer

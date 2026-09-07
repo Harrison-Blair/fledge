@@ -14,6 +14,7 @@ func TestEmbeddedFragmentsMatchSources(t *testing.T) {
 	}{
 		{"core", coreFragment, "fledge-core.md"},
 		{"general", generalWorkerFragment, "fledge-general.md"},
+		{"interrogate", interrogateFragment, "fledge-interrogate.md"},
 		{"orchestrator", orchestratorRoleRules, "fledge-orchestrator.md"},
 		{"worker-report", workerReportFragment, "fledge-worker-report.md"},
 	}
