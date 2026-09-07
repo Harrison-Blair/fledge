@@ -61,7 +61,7 @@ func TestBootstrapPreparesSessionAndStartsAgentWithModel(t *testing.T) {
 	}
 
 	report := log.String()
-	for _, step := range []string{"Herder server running", "w1:p2", "f:my-project", "fledge-orchestrator", "managed workspace orchestrator is managed-1", "managed workspace agents is managed-2", "started claude"} {
+	for _, step := range []string{"Herder server running", "w1:p2", "f:my-project", "fledge-orchestrator", "managed workspace orchestrator is managed-1", "started claude"} {
 		if !strings.Contains(report, step) {
 			t.Fatalf("log = %q, want a line about %q", report, step)
 		}
@@ -182,7 +182,7 @@ func TestBootstrapEnsureFailureStopsBeforeAgentLaunch(t *testing.T) {
 	calls := 0
 	in.EnsureWorkspaces = func(_ context.Context, roles ...workspace.Role) (map[workspace.Role]herdr.Workspace, error) {
 		calls++
-		if wantRoles := []workspace.Role{workspace.Orchestrator, workspace.Agents}; !reflect.DeepEqual(roles, wantRoles) {
+		if wantRoles := []workspace.Role{workspace.Orchestrator}; !reflect.DeepEqual(roles, wantRoles) {
 			t.Fatalf("EnsureWorkspaces roles = %#v, want %#v", roles, wantRoles)
 		}
 		if len(server.RenamedWorkspace) != 1 || len(server.RenamedTab) != 1 {
@@ -200,14 +200,14 @@ func TestBootstrapEnsureFailureStopsBeforeAgentLaunch(t *testing.T) {
 	}
 }
 
-func TestBootstrapShellOnlyEnsuresBothRolesAfterRenamesAndStartsNoAgent(t *testing.T) {
+func TestBootstrapShellOnlyEnsuresOrchestratorAfterRenamesAndStartsNoAgent(t *testing.T) {
 	server := sessiontest.ReadyBootstrapper()
 	var log bytes.Buffer
 	in := bootstrapArgs(types.AgentChoice{}, &log)
 	var calls int
 	in.EnsureWorkspaces = func(_ context.Context, roles ...workspace.Role) (map[workspace.Role]herdr.Workspace, error) {
 		calls++
-		if want := []workspace.Role{workspace.Orchestrator, workspace.Agents}; !reflect.DeepEqual(roles, want) {
+		if want := []workspace.Role{workspace.Orchestrator}; !reflect.DeepEqual(roles, want) {
 			t.Fatalf("EnsureWorkspaces roles = %#v, want %#v", roles, want)
 		}
 		if len(server.RenamedWorkspace) != 1 || len(server.RenamedTab) != 1 {
@@ -215,7 +215,6 @@ func TestBootstrapShellOnlyEnsuresBothRolesAfterRenamesAndStartsNoAgent(t *testi
 		}
 		return map[workspace.Role]herdr.Workspace{
 			workspace.Orchestrator: {ID: "w1"},
-			workspace.Agents:       {ID: "w2"},
 		}, nil
 	}
 

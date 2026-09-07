@@ -90,14 +90,14 @@ is the separate, fixed name `orchestrator` regardless of the tab label.
 Reattaching to an existing session, or a tab renamed after startup, is left
 untouched.
 
-On every fresh start, Fledge eagerly creates or reuses the managed
-`f-agents:<project>` workspace. Its root shell tab and pane are intentionally
-kept idle, so the workspace remains available for worker placement. By
-default, each worker gets one tab in this workspace; if that workspace is
-destroyed, Fledge recreates it on the next start or spawn. Use `--workspace`
-to select `new` or an existing workspace ID, or use `--tab` or `--pane` to
-override the placement explicitly. The workspace label uses the project
-basename, while the internal Herder session name is
+On every fresh start, Fledge leaves the managed `f-agents:<project>` workspace
+uncreated until the first default-placement `fledge agent spawn`, which creates
+or reuses it. Its root shell tab and pane are intentionally kept idle, so the
+workspace remains available for worker placement. By default, each worker gets
+one tab in this workspace; if that workspace is destroyed, Fledge recreates it
+on a later spawn. Use `--workspace` to select `new` or an existing workspace
+ID, or use `--tab` or `--pane` to override the placement explicitly. The
+workspace label uses the project basename, while the internal Herder session name is
 `fledge-<UTC timestamp>-<project>-<random hex>` — a `fledge-` prefix, the UTC
 creation time formatted `2006-01-02T15.04.05Z` (dotted so it stays filesystem-
 and Herder-safe), the project slug, and eight random hex digits, for example

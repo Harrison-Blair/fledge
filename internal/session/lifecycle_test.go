@@ -1662,16 +1662,19 @@ func TestStartShellOnlyEnsuresWorkspacesAndCommitsPending(t *testing.T) {
 	if len(server.Started) != 0 {
 		t.Fatalf("shell-only StartAgent calls = %#v, want none", server.Started)
 	}
-	if len(server.Created) != 1 || server.Created[0].Workspace.Label != "f-agents:project" {
-		t.Fatalf("shell-only created workspaces = %#v, want unfocused managed agents workspace", server.Created)
+	if len(server.Created) != 0 {
+		t.Fatalf("shell-only created workspaces = %#v, want none", server.Created)
 	}
 	records, err := record.Load(root)
 	if err != nil || len(records) != 1 || records[0].PendingChoice != nil {
 		t.Fatalf("shell-only records = %#v, %v; want committed pending state", records, err)
 	}
 	ids, err := record.ReadWorkspaces(records[0].Path)
-	if err != nil || ids["orchestrator"] != "w1" || ids["agents"] != "w2" {
+	if err != nil || ids["orchestrator"] != "w1" {
 		t.Fatalf("shell-only workspace IDs = %#v, %v", ids, err)
+	}
+	if _, ok := ids["agents"]; ok {
+		t.Fatalf("shell-only workspace IDs = %#v, want no agents ID", ids)
 	}
 }
 
@@ -1829,16 +1832,19 @@ func TestStartBootstrapFailureStopsAndRetainsRetryState(t *testing.T) {
 		t.Fatalf("records after bootstrap failure = %#v, want claimed pending pinned retry state", records)
 	}
 	ids, readErr := record.ReadWorkspaces(records[0].Path)
-	if readErr != nil || ids["orchestrator"] != "w1" || ids["agents"] != "w2" {
-		t.Fatalf("workspace retry state = %#v, %v; want both managed IDs", ids, readErr)
+	if readErr != nil || ids["orchestrator"] != "w1" {
+		t.Fatalf("workspace retry state = %#v, %v; want orchestrator ID", ids, readErr)
+	}
+	if _, ok := ids["agents"]; ok {
+		t.Fatalf("workspace retry state = %#v, want no agents ID", ids)
 	}
 	report := diagnostics.String()
 	if !strings.Contains(report, "bootstrap failed") || !strings.Contains(report, bootstrap.LogName) {
 		t.Fatalf("diagnostics = %q, want a bootstrap failure naming the log", report)
 	}
 
-	// Retry the same claim and server state. Reconciliation must reuse both
-	// durable workspace IDs and the pinned choice without invoking the picker.
+	// Retry the same claim and server state. Reconciliation must reuse the
+	// durable orchestrator workspace ID and the pinned choice without invoking the picker.
 	server.StartErrs = nil
 	retryExit := make(chan struct{})
 	releaseRetry := closeOnCleanup(t, retryExit)
@@ -1869,8 +1875,8 @@ func TestStartBootstrapFailureStopsAndRetainsRetryState(t *testing.T) {
 	if chooser.calls != 1 {
 		t.Fatalf("Choose() calls = %d, want pinned retry without picker", chooser.calls)
 	}
-	if len(server.Created) != 1 {
-		t.Fatalf("created workspaces after retry = %#v, want original agents workspace only", server.Created)
+	if len(server.Created) != 0 {
+		t.Fatalf("created workspaces after retry = %#v, want none", server.Created)
 	}
 	if len(server.RenamedWorkspace) != 2 || len(server.RenamedTab) != 2 {
 		t.Fatalf("retry renames = workspace %#v tab %#v, want both repeated", server.RenamedWorkspace, server.RenamedTab)

@@ -59,8 +59,8 @@ var DefaultTiming = Timing{
 	Deadline: 30 * time.Second,
 }
 
-// Run labels a fresh session's first workspace and tab, reconciles every
-// managed workspace, then starts the chosen agent in the root pane. It runs
+// Run labels a fresh session's first workspace and tab, reconciles the
+// orchestrator workspace, then starts the chosen agent in the root pane. It runs
 // while Herder owns the terminal, so every step is reported to in.Log.
 func Run(ctx context.Context, h Server, in Input, timing Timing) error {
 	ctx, cancel := context.WithTimeout(ctx, timing.Deadline)
@@ -135,7 +135,7 @@ func Run(ctx context.Context, h Server, in Input, timing Timing) error {
 	}
 	logStep(in.Log, "renamed tab to %s", orchestratorTabLabel)
 
-	roles := workspace.Roles()
+	roles := []workspace.Role{workspace.Orchestrator}
 	managed, err := in.EnsureWorkspaces(ctx, roles...)
 	if err != nil {
 		return logFail(in.Log, halted(ctx, fmt.Errorf("ensure managed workspaces: %w", err)))
