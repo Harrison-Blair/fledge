@@ -226,30 +226,25 @@ func Spawn(ctx context.Context, h Herder, caller Caller, opts SpawnOptions) (res
 		return SpawnResult{}, fmt.Errorf("spawn agent %q: default placement requires the project root", opts.Name)
 	}
 
-	pane, err := placePane(ctx, h, caller, opts, label)
+	placement, err := placePane(ctx, h, caller, opts, label)
 	if err != nil {
 		return SpawnResult{}, fmt.Errorf("spawn agent %q: %w", opts.Name, err)
+	}
+	if placement.renameTabID != "" {
+		if renameErr := h.RenameTab(ctx, placement.renameTabID, label); renameErr != nil {
+			return SpawnResult{}, fmt.Errorf("spawn agent %q: %w", opts.Name,
+				cleanupPlacedPane(ctx, h, placement.pane.ID, fmt.Errorf("rename tab %q: %w", placement.renameTabID, renameErr)))
+		}
 	}
 
 	if _, startErr := h.StartAgent(ctx, herdr.StartAgentOptions{
 		Name:   opts.Name,
 		Kind:   opts.Harness,
-		PaneID: pane.ID,
+		PaneID: placement.pane.ID,
 		Args:   args,
 	}); startErr != nil {
-		callerErr := ctx.Err()
-		cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
-		cleanupErr := h.ClosePane(cleanupCtx, pane.ID)
-		cancelCleanup()
-
-		failures := []error{fmt.Errorf("start in pane %q: %w", pane.ID, startErr)}
-		if callerErr != nil && !errors.Is(startErr, callerErr) {
-			failures = append(failures, callerErr)
-		}
-		if cleanupErr != nil {
-			failures = append(failures, fmt.Errorf("close pane %q: %w", pane.ID, cleanupErr))
-		}
-		return SpawnResult{}, fmt.Errorf("spawn agent %q: %w", opts.Name, errors.Join(failures...))
+		return SpawnResult{}, fmt.Errorf("spawn agent %q: %w", opts.Name,
+			cleanupPlacedPane(ctx, h, placement.pane.ID, fmt.Errorf("start in pane %q: %w", placement.pane.ID, startErr)))
 	}
 	retainArtifact = true
 
@@ -257,9 +252,9 @@ func Spawn(ctx context.Context, h Herder, caller Caller, opts SpawnOptions) (res
 		Name:        opts.Name,
 		Harness:     opts.Harness,
 		Model:       opts.Model,
-		WorkspaceID: pane.WorkspaceID,
-		TabID:       pane.TabID,
-		PaneID:      pane.ID,
+		WorkspaceID: placement.pane.WorkspaceID,
+		TabID:       placement.pane.TabID,
+		PaneID:      placement.pane.ID,
 	}
 	if opts.Profile != nil {
 		result.Profile = opts.Profile.Name
@@ -350,27 +345,37 @@ func validateSpawn(opts SpawnOptions) (string, error) {
 	return opts.Name, nil
 }
 
-// placePane creates or splits the pane the agent will run in.
-func placePane(ctx context.Context, h Herder, caller Caller, opts SpawnOptions, label string) (herdr.Pane, error) {
+type panePlacement struct {
+	pane        herdr.Pane
+	renameTabID string
+}
+
+// placePane creates or splits the pane the agent will run in. renameTabID is
+// set only for a newly-created workspace root tab that must be claimed by the
+// agent before its harness starts.
+func placePane(ctx context.Context, h Herder, caller Caller, opts SpawnOptions, label string) (panePlacement, error) {
 	switch {
 	case opts.Pane != "":
-		return h.SplitPane(ctx, splitOptions(opts, opts.Pane))
+		pane, err := h.SplitPane(ctx, splitOptions(opts, opts.Pane))
+		return panePlacement{pane: pane}, err
 	case opts.Tab != "":
 		host, err := tabHostPane(ctx, h, opts.Tab)
 		if err != nil {
-			return herdr.Pane{}, err
+			return panePlacement{}, err
 		}
-		return h.SplitPane(ctx, splitOptions(opts, host.ID))
+		pane, err := h.SplitPane(ctx, splitOptions(opts, host.ID))
+		return panePlacement{pane: pane}, err
 	case opts.Workspace == "new":
 		created, err := h.CreateWorkspace(ctx, label)
 		if err != nil {
-			return herdr.Pane{}, err
+			return panePlacement{}, err
 		}
-		return created.RootPane, nil
+		return panePlacement{pane: created.RootPane, renameTabID: created.Tab.ID}, nil
 	case opts.Workspace != "":
-		return rootPaneOfNewTab(ctx, h, opts.Workspace, label)
+		pane, err := rootPaneOfNewTab(ctx, h, opts.Workspace, label)
+		return panePlacement{pane: pane}, err
 	default:
-		managed, err := session.EnsureWorkspaces(
+		managed, err := session.EnsureWorkspacesDetailed(
 			ctx,
 			caller.Root,
 			caller.RecordPath,
@@ -379,10 +384,31 @@ func placePane(ctx context.Context, h Herder, caller Caller, opts SpawnOptions, 
 			session.AgentsWorkspaceRole,
 		)
 		if err != nil {
-			return herdr.Pane{}, err
+			return panePlacement{}, err
 		}
-		return rootPaneOfNewTab(ctx, h, managed[session.AgentsWorkspaceRole].ID, label)
+		entry := managed[session.AgentsWorkspaceRole]
+		if entry.Created != nil {
+			return panePlacement{pane: entry.Created.RootPane, renameTabID: entry.Created.Tab.ID}, nil
+		}
+		pane, err := rootPaneOfNewTab(ctx, h, entry.Workspace.ID, label)
+		return panePlacement{pane: pane}, err
 	}
+}
+
+func cleanupPlacedPane(ctx context.Context, h Herder, paneID string, cause error) error {
+	callerErr := ctx.Err()
+	cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	cleanupErr := h.ClosePane(cleanupCtx, paneID)
+	cancelCleanup()
+
+	failures := []error{cause}
+	if callerErr != nil && !errors.Is(cause, callerErr) {
+		failures = append(failures, callerErr)
+	}
+	if cleanupErr != nil {
+		failures = append(failures, fmt.Errorf("close pane %q: %w", paneID, cleanupErr))
+	}
+	return errors.Join(failures...)
 }
 
 func isDefaultPlacement(opts SpawnOptions) bool {

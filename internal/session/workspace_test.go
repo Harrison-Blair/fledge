@@ -164,6 +164,49 @@ func TestEnsureWorkspacesCreatesCreatableRoleAndPreservesRoot(t *testing.T) {
 	}
 }
 
+func TestEnsureWorkspacesDetailedReportsCreatedRootOnlyForThisCall(t *testing.T) {
+	t.Run("created", func(t *testing.T) {
+		root, recordPath := managedWorkspaceRecordNamed(t, "project")
+		created := herdr.WorkspaceCreated{
+			Workspace: herdr.Workspace{ID: "w-new", Label: "f-agents:project"},
+			Tab:       herdr.Tab{ID: "t-root", WorkspaceID: "w-new"},
+			RootPane:  herdr.Pane{ID: "p-root", WorkspaceID: "w-new", TabID: "t-root"},
+		}
+		server := &fakeWorkspaceServer{created: []herdr.WorkspaceCreated{created}}
+		got, err := EnsureWorkspacesDetailed(context.Background(), root, recordPath, server, AgentsWorkspaceRole)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entry := got[AgentsWorkspaceRole]
+		if entry.Created == nil || !reflect.DeepEqual(*entry.Created, created) {
+			t.Fatalf("created entry = %#v, want %#v", entry.Created, created)
+		}
+		if !reflect.DeepEqual(entry.Workspace, created.Workspace) {
+			t.Fatalf("workspace = %#v, want %#v", entry.Workspace, created.Workspace)
+		}
+		again, err := EnsureWorkspacesDetailed(context.Background(), root, recordPath, server, AgentsWorkspaceRole)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if again[AgentsWorkspaceRole].Created != nil {
+			t.Fatalf("subsequent entry = %#v, want no creation details", again[AgentsWorkspaceRole])
+		}
+	})
+
+	t.Run("adopted", func(t *testing.T) {
+		root, recordPath := managedWorkspaceRecordNamed(t, "project")
+		server := &fakeWorkspaceServer{live: []herdr.Workspace{{ID: "w-existing", Label: "f-agents:project"}}}
+		got, err := EnsureWorkspacesDetailed(context.Background(), root, recordPath, server, AgentsWorkspaceRole)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entry := got[AgentsWorkspaceRole]
+		if entry.Workspace.ID != "w-existing" || entry.Created != nil {
+			t.Fatalf("adopted entry = %#v, want workspace without creation details", entry)
+		}
+	})
+}
+
 func TestEnsureWorkspacesMultiRoleDeterministicAndPreservesUnknownRoles(t *testing.T) {
 	root, recordPath := managedWorkspaceRecordNamed(t, "project")
 	if err := record.WriteWorkspaces(recordPath, map[string]string{"future-role": "w-future"}); err != nil {
@@ -385,7 +428,7 @@ func TestEnsureWorkspacesWriteFailureCleansOnlyCreatedAndJoinsErrors(t *testing.
 	var cleanupContextErr error
 	server.onClose = func(ctx context.Context, _ string) { cleanupContextErr = ctx.Err() }
 
-	_, err := ensureWorkspaces(ctx, root, recordPath, server,
+	detailed, err := ensureWorkspacesDetailed(ctx, root, recordPath, server,
 		func(context.Context, string) (func() error, error) {
 			return func() error { return releaseErr }, nil
 		}, OrchestratorWorkspaceRole, AgentsWorkspaceRole)
@@ -397,6 +440,26 @@ func TestEnsureWorkspacesWriteFailureCleansOnlyCreatedAndJoinsErrors(t *testing.
 	}
 	if cleanupContextErr != nil {
 		t.Fatalf("cleanup context error = %v, want cancellation detached", cleanupContextErr)
+	}
+	if detailed != nil {
+		t.Fatalf("detailed result = %#v, want no usable creation metadata after publication failure", detailed)
+	}
+}
+
+func TestEnsureWorkspacesDetailedClearsCreationMetadataOnReleaseFailureAfterPublish(t *testing.T) {
+	root, recordPath := managedWorkspaceRecordNamed(t, "project")
+	want := errors.New("release failed")
+	server := &fakeWorkspaceServer{}
+	got, err := ensureWorkspacesDetailed(context.Background(), root, recordPath, server,
+		func(context.Context, string) (func() error, error) {
+			return func() error { return want }, nil
+		}, AgentsWorkspaceRole)
+	if !errors.Is(err, want) {
+		t.Fatalf("error = %v, want release failure", err)
+	}
+	entry := got[AgentsWorkspaceRole]
+	if entry.Workspace.ID != "w-created-1" || entry.Created != nil {
+		t.Fatalf("result entry = %#v, want published workspace without usable creation details", entry)
 	}
 }
 

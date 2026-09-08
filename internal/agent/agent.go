@@ -16,6 +16,7 @@ type Herder interface {
 	Workspaces(context.Context) ([]herdr.Workspace, error)
 	CreateWorkspace(context.Context, string) (herdr.WorkspaceCreated, error)
 	CloseWorkspace(context.Context, string) error
+	RenameTab(context.Context, string, string) error
 	CreateTab(context.Context, string, string) (herdr.TabCreated, error)
 	Panes(context.Context, string) ([]herdr.Pane, error)
 	SplitPane(context.Context, herdr.SplitOptions) (herdr.Pane, error)

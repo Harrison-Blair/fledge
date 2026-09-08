@@ -34,6 +34,14 @@ type WorkspaceServer interface {
 	CloseWorkspace(context.Context, string) error
 }
 
+// EnsuredWorkspace is the reconciled workspace and, when this call created it,
+// the root tab and pane returned by Herder. Created is nil for stored or
+// adopted workspaces.
+type EnsuredWorkspace struct {
+	Workspace herdr.Workspace
+	Created   *herdr.WorkspaceCreated
+}
+
 // AmbiguousError reports that label-based upgrade adoption cannot choose one
 // durable workspace identity. WorkspaceIDs are sorted for actionable output.
 type AmbiguousError struct {
@@ -79,12 +87,25 @@ const workspaceCleanupTimeout = 5 * time.Second
 // adopting or creating missing identities and atomically publishing changes to
 // the session record. All reconciliation is serialized by the project lock.
 func EnsureWorkspaces(ctx context.Context, projectRoot, recordPath string, server WorkspaceServer, roles ...WorkspaceRole) (map[WorkspaceRole]herdr.Workspace, error) {
-	return ensureWorkspaces(ctx, projectRoot, recordPath, server, lock.Acquire, roles...)
+	ensured, err := EnsureWorkspacesDetailed(ctx, projectRoot, recordPath, server, roles...)
+	return workspaceMap(ensured), err
+}
+
+// EnsureWorkspacesDetailed returns live Herder workspaces and creation details
+// for roles created during this call. Creation details are absent for stored
+// identities and label-adopted workspaces.
+func EnsureWorkspacesDetailed(ctx context.Context, projectRoot, recordPath string, server WorkspaceServer, roles ...WorkspaceRole) (map[WorkspaceRole]EnsuredWorkspace, error) {
+	return ensureWorkspacesDetailed(ctx, projectRoot, recordPath, server, lock.Acquire, roles...)
 }
 
 // ensureWorkspaces is the same-package dependency seam used by lifecycle tests
 // that already substitute project-lock acquisition.
 func ensureWorkspaces(ctx context.Context, projectRoot, recordPath string, server WorkspaceServer, acquire acquireWorkspaceLock, roles ...WorkspaceRole) (ensured map[WorkspaceRole]herdr.Workspace, err error) {
+	detailed, err := ensureWorkspacesDetailed(ctx, projectRoot, recordPath, server, acquire, roles...)
+	return workspaceMap(detailed), err
+}
+
+func ensureWorkspacesDetailed(ctx context.Context, projectRoot, recordPath string, server WorkspaceServer, acquire acquireWorkspaceLock, roles ...WorkspaceRole) (ensured map[WorkspaceRole]EnsuredWorkspace, err error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("ensure managed workspaces: context is nil")
 	}
@@ -99,7 +120,7 @@ func ensureWorkspaces(ctx context.Context, projectRoot, recordPath string, serve
 		return nil, fmt.Errorf("ensure managed workspaces: %w", err)
 	}
 	if len(ordered) == 0 {
-		return map[WorkspaceRole]herdr.Workspace{}, nil
+		return map[WorkspaceRole]EnsuredWorkspace{}, nil
 	}
 	if acquire == nil {
 		return nil, fmt.Errorf("ensure managed workspaces: project lock acquisition is nil")
@@ -122,6 +143,11 @@ func ensureWorkspaces(ctx context.Context, projectRoot, recordPath string, serve
 				releaseFailure = cleanupCreatedWorkspaces(ctx, server, created, releaseFailure)
 				created = nil
 				ensured = nil
+			} else if len(created) != 0 {
+				for role, entry := range ensured {
+					entry.Created = nil
+					ensured[role] = entry
+				}
 			}
 			err = errors.Join(err, releaseFailure)
 		}
@@ -146,10 +172,10 @@ func ensureWorkspaces(ctx context.Context, projectRoot, recordPath string, serve
 		byID[listed.ID] = listed
 	}
 
-	result := make(map[WorkspaceRole]herdr.Workspace, len(ordered))
+	result := make(map[WorkspaceRole]EnsuredWorkspace, len(ordered))
 	created = make([]herdr.Workspace, 0, len(ordered))
 	changed := false
-	fail := func(cause error) (map[WorkspaceRole]herdr.Workspace, error) {
+	fail := func(cause error) (map[WorkspaceRole]EnsuredWorkspace, error) {
 		if len(created) == 0 {
 			return nil, cause
 		}
@@ -163,7 +189,7 @@ func ensureWorkspaces(ctx context.Context, projectRoot, recordPath string, serve
 			return &RoleConflictError{WorkspaceID: selected.ID, FirstRole: first, ConflictingRole: role}
 		}
 		assigned[selected.ID] = role
-		result[role] = selected
+		result[role] = EnsuredWorkspace{Workspace: selected}
 		return nil
 	}
 
@@ -202,6 +228,7 @@ func ensureWorkspaces(ctx context.Context, projectRoot, recordPath string, serve
 				return fail(assignErr)
 			}
 			ids[string(role)] = selected.ID
+			result[role] = EnsuredWorkspace{Workspace: selected, Created: &createdWorkspace}
 			changed = true
 		case 1:
 			if assignErr := assign(role, matches[0]); assignErr != nil {
@@ -225,6 +252,17 @@ func ensureWorkspaces(ctx context.Context, projectRoot, recordPath string, serve
 		createdPublished = true
 	}
 	return result, nil
+}
+
+func workspaceMap(detailed map[WorkspaceRole]EnsuredWorkspace) map[WorkspaceRole]herdr.Workspace {
+	if detailed == nil {
+		return nil
+	}
+	result := make(map[WorkspaceRole]herdr.Workspace, len(detailed))
+	for role, entry := range detailed {
+		result[role] = entry.Workspace
+	}
+	return result
 }
 
 func cleanupCreatedWorkspaces(ctx context.Context, server WorkspaceServer, created []herdr.Workspace, cause error) error {

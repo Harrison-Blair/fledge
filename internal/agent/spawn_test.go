@@ -31,7 +31,13 @@ func TestSpawnPlacements(t *testing.T) {
 		{
 			name:      "new workspace",
 			opts:      SpawnOptions{Name: "rev", Harness: "codex", Workspace: "new"},
-			wantCalls: []string{"CreateWorkspace(rev)", "StartAgent(rev,codex,ws2:tab1:pane1)"},
+			wantCalls: []string{"CreateWorkspace(rev)", "RenameTab(ws2:tab1,rev)", "StartAgent(rev,codex,ws2:tab1:pane1)"},
+			want:      SpawnResult{Name: "rev", Harness: "codex", WorkspaceID: "ws2", TabID: "ws2:tab1", PaneID: "ws2:tab1:pane1"},
+		},
+		{
+			name:      "new workspace label override",
+			opts:      SpawnOptions{Name: "rev", Harness: "codex", Workspace: "new", Label: "worker-label"},
+			wantCalls: []string{"CreateWorkspace(worker-label)", "RenameTab(ws2:tab1,worker-label)", "StartAgent(rev,codex,ws2:tab1:pane1)"},
 			want:      SpawnResult{Name: "rev", Harness: "codex", WorkspaceID: "ws2", TabID: "ws2:tab1", PaneID: "ws2:tab1:pane1"},
 		},
 		{
@@ -108,6 +114,29 @@ func TestSpawnDefaultPlacementReusesManagedAgentsWorkspace(t *testing.T) {
 	}
 }
 
+func TestSpawnDefaultPlacementAdoptsManagedAgentsWorkspace(t *testing.T) {
+	caller := managedSpawnCaller(t, nil)
+	label := "f-agents:" + filepath.Base(caller.Root)
+	client := newFakeHerder()
+	client.workspaces = []herdr.Workspace{
+		{ID: "ws-orchestrator", Label: "f:" + filepath.Base(caller.Root)},
+		{ID: "ws-agents", Label: label},
+	}
+
+	result, err := Spawn(context.Background(), client, caller, SpawnOptions{Name: "rev", Harness: "claude"})
+	if err != nil {
+		t.Fatalf("Spawn() error = %v", err)
+	}
+	wantCalls := []string{"Workspaces()", "CreateTab(ws-agents,rev)", "StartAgent(rev,claude,ws1:tab9:pane1)"}
+	if !reflect.DeepEqual(client.calls, wantCalls) {
+		t.Fatalf("calls = %#v, want %#v", client.calls, wantCalls)
+	}
+	want := SpawnResult{Name: "rev", Harness: "claude", WorkspaceID: "ws1", TabID: "ws1:tab9", PaneID: "ws1:tab9:pane1"}
+	if result != want {
+		t.Fatalf("result = %#v, want %#v", result, want)
+	}
+}
+
 func TestSpawnDefaultPlacementRecreatesDestroyedAgentsWorkspaceOnce(t *testing.T) {
 	caller := managedSpawnCaller(t, map[string]string{"orchestrator": "ws-orchestrator", "agents": "ws-destroyed"})
 	client := newFakeHerder()
@@ -126,8 +155,8 @@ func TestSpawnDefaultPlacementRecreatesDestroyedAgentsWorkspaceOnce(t *testing.T
 	wantCalls := []string{
 		"Workspaces()",
 		"CreateWorkspace(f-agents:" + filepath.Base(caller.Root) + ")",
-		"CreateTab(ws-agents-new,rev)",
-		"StartAgent(rev,claude,ws1:tab9:pane1)",
+		"RenameTab(ws-agents-new:root,rev)",
+		"StartAgent(rev,claude,ws-agents-new:root:pane)",
 		"Workspaces()",
 		"CreateTab(ws-agents-new,rev)",
 		"StartAgent(rev,claude,ws1:tab9:pane1)",
@@ -141,6 +170,74 @@ func TestSpawnDefaultPlacementRecreatesDestroyedAgentsWorkspaceOnce(t *testing.T
 	}
 	if ids["orchestrator"] != "ws-orchestrator" || ids["agents"] != "ws-agents-new" {
 		t.Fatalf("persisted workspaces = %#v", ids)
+	}
+}
+
+func TestSpawnDefaultPlacementUsesLabelOverrideForCreatedRoot(t *testing.T) {
+	caller := managedSpawnCaller(t, map[string]string{"orchestrator": "ws-orchestrator", "agents": "ws-destroyed"})
+	client := newFakeHerder()
+	client.workspaces = []herdr.Workspace{{ID: "ws-orchestrator"}}
+
+	_, err := Spawn(context.Background(), client, caller, SpawnOptions{Name: "rev", Harness: "claude", Label: "worker-label"})
+	if err != nil {
+		t.Fatalf("Spawn() error = %v", err)
+	}
+	wantCalls := []string{
+		"Workspaces()",
+		"CreateWorkspace(f-agents:" + filepath.Base(caller.Root) + ")",
+		"RenameTab(ws2:tab1,worker-label)",
+		"StartAgent(rev,claude,ws2:tab1:pane1)",
+	}
+	if !reflect.DeepEqual(client.calls, wantCalls) {
+		t.Fatalf("calls = %#v, want %#v", client.calls, wantCalls)
+	}
+}
+
+func TestSpawnRejectsNewWorkspaceRenameFailureAndCleansRootPane(t *testing.T) {
+	renameErr := errors.New("rename failed")
+	closeErr := errors.New("close root failed")
+	client := newFakeHerder()
+	client.errs["RenameTab"] = renameErr
+	client.errs["ClosePane"] = closeErr
+
+	_, err := Spawn(context.Background(), client, Caller{}, SpawnOptions{
+		Name: "rev", Harness: "claude", Workspace: "new", Label: "worker-label",
+	})
+	if !errors.Is(err, renameErr) || !errors.Is(err, closeErr) {
+		t.Fatalf("Spawn() error = %v, want rename and cleanup failures", err)
+	}
+	if !strings.Contains(err.Error(), "rename tab \"ws2:tab1\"") || !strings.Contains(err.Error(), "close pane \"ws2:tab1:pane1\"") {
+		t.Fatalf("Spawn() error = %v, want root tab and pane evidence", err)
+	}
+	wantCalls := []string{"CreateWorkspace(worker-label)", "RenameTab(ws2:tab1,worker-label)", "ClosePane(ws2:tab1:pane1)"}
+	if !reflect.DeepEqual(client.calls, wantCalls) {
+		t.Fatalf("calls = %#v, want %#v", client.calls, wantCalls)
+	}
+}
+
+func TestSpawnRejectsCreatedManagedWorkspaceRenameFailureWithoutClosingWorkspace(t *testing.T) {
+	caller := managedSpawnCaller(t, map[string]string{"orchestrator": "ws-orchestrator", "agents": "ws-destroyed"})
+	client := newFakeHerder()
+	client.workspaces = []herdr.Workspace{{ID: "ws-orchestrator"}}
+	client.errs["RenameTab"] = errors.New("rename failed")
+
+	_, err := Spawn(context.Background(), client, caller, SpawnOptions{Name: "rev", Harness: "claude"})
+	if err == nil || !strings.Contains(err.Error(), "rename tab \"ws2:tab1\"") {
+		t.Fatalf("Spawn() error = %v, want managed root rename failure", err)
+	}
+	wantCalls := []string{
+		"Workspaces()",
+		"CreateWorkspace(f-agents:" + filepath.Base(caller.Root) + ")",
+		"RenameTab(ws2:tab1,rev)",
+		"ClosePane(ws2:tab1:pane1)",
+	}
+	if !reflect.DeepEqual(client.calls, wantCalls) {
+		t.Fatalf("calls = %#v, want %#v", client.calls, wantCalls)
+	}
+	for _, call := range client.calls {
+		if strings.HasPrefix(call, "CloseWorkspace(") || strings.HasPrefix(call, "StartAgent(") {
+			t.Fatalf("calls = %#v, must preserve published workspace and avoid start", client.calls)
+		}
 	}
 }
 

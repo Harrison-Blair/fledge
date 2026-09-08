@@ -92,12 +92,13 @@ untouched.
 
 On every fresh start, Fledge leaves the managed `f-agents:<project>` workspace
 uncreated until the first default-placement `fledge agent spawn`, which creates
-or reuses it. Its root shell tab and pane are intentionally kept idle, so the
-workspace remains available for worker placement. By default, each worker gets
-one tab in this workspace; if that workspace is destroyed, Fledge recreates it
-on a later spawn. Use `--workspace` to select `new` or an existing workspace
-ID, or use `--tab` or `--pane` to override the placement explicitly. The
-workspace label uses the project basename, while the internal Herder session name is
+or reuses it. If it creates the workspace, the first worker uses its new root
+tab and pane; an existing or adopted workspace gets a fresh tab. Later workers
+get one fresh tab in this workspace. If that workspace is destroyed, Fledge
+recreates it on a later spawn and uses its new root for that worker. Use
+`--workspace` to select `new` or an existing workspace ID, or use `--tab` or
+`--pane` to override the placement explicitly. The workspace label uses the
+project basename, while the internal Herder session name is
 `fledge-<UTC timestamp>-<project>-<random hex>` — a `fledge-` prefix, the UTC
 creation time formatted `2006-01-02T15.04.05Z` (dotted so it stays filesystem-
 and Herder-safe), the project slug, and eight random hex digits, for example

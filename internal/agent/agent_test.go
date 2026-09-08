@@ -77,6 +77,11 @@ func (f *fakeHerder) CloseWorkspace(_ context.Context, id string) error {
 	return f.errs["CloseWorkspace"]
 }
 
+func (f *fakeHerder) RenameTab(_ context.Context, id, label string) error {
+	f.record(fmt.Sprintf("RenameTab(%s,%s)", id, label))
+	return f.errs["RenameTab"]
+}
+
 func (f *fakeHerder) CreateTab(_ context.Context, workspaceID, label string) (herdr.TabCreated, error) {
 	f.record(fmt.Sprintf("CreateTab(%s,%s)", workspaceID, label))
 	return f.newTab, f.errs["CreateTab"]
