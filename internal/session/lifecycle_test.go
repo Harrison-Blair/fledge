@@ -428,10 +428,14 @@ func TestStableClaimAfterDelayedLaunch(t *testing.T) {
 	launchErr := errors.New("launch failed")
 	launchRelease := make(chan struct{})
 	releaseLaunch := closeOnCleanup(t, launchRelease)
+	publishRunning := make(chan struct{})
+	releasePublication := closeOnCleanup(t, publishRunning)
 	launchStarted := make(chan launchCall, 2)
 	client := &fakeHerder{
-		launchWait: launchRelease,
-		launchErr:  launchErr,
+		listWait:        publishRunning,
+		waitForListCall: 2,
+		launchWait:      launchRelease,
+		launchErr:       launchErr,
 		onLaunchStart: func(call launchCall) {
 			launchStarted <- call
 		},
@@ -464,6 +468,7 @@ func TestStableClaimAfterDelayedLaunch(t *testing.T) {
 		t.Fatalf("second Launch(%q) began before the first released the lock", call.name)
 	default:
 	}
+	releasePublication()
 	releaseLaunch()
 	second := awaitTestEvent(t, ctx, launchStarted, nil)
 	for range 2 {
