@@ -1,6 +1,6 @@
 # herdr API: events methods
 
-> herdr 0.8.2 · protocol 20 · schema_version 1 · captured 2026-08-19
+> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
 > Part of the fledge herdr reference. Index: [README.md](README.md). Wire format: [protocol.md](protocol.md).
 
 The `events` namespace turns the request/response socket into a push channel. `events.subscribe` registers a set of subscriptions on a connection and then leaves that connection open, streaming `{"event":…,"data":…}` lines as matching state changes occur; `events.wait` blocks a single connection until one event matching a predicate arrives (or a timeout elapses) and returns it as an ordinary response. Two distinct envelope families flow over this channel: plain **events** (`EventKind` / `EventData`, snake_case names — the 26 lifecycle notifications in the [event catalog](#event-catalog-eventkind--eventdata)) and **subscription events** (`SubscriptionEventKind` / `SubscriptionEventData`, dotted names — the three parameterized, computed notifications in [subscription events](#subscription-events-subscriptioneventkind--subscriptioneventdata)). A subscription's `type` selects which one you receive.
@@ -111,7 +111,7 @@ Note: there is no `pane.output_changed` subscription — output is observed thro
 
 **CLI**: API-only (no `herdr events` CLI group). Related one-shot waits are exposed as `herdr pane wait-output` and `herdr agent wait`.
 
-**Example** (Validated 2026-08-19 against herdr 0.8.2):
+**Example** (Validated 2026-09-17 against herdr 0.9.1):
 
 ```json
 {"id":"e1","method":"events.subscribe","params":{"subscriptions":[{"type":"tab.created"},{"type":"tab.closed"}]}}
@@ -126,7 +126,7 @@ The first line is the request, the second the ack; subsequent lines are pushed o
 
 Blocks the connection until a single event matching the `match_event` predicate is observed, then returns it as a normal response (`wait_matched`) and closes the connection like any other one-shot request. With `timeout_ms` set, the wait returns an error when the deadline passes before a match; with `timeout_ms` null/omitted the wait is indefinite. Unlike `events.subscribe`, exactly one event is returned and the connection does not stay open.
 
-**0.8.2 implementation gap (validated):** although the `EventMatch` schema admits 19 predicate variants (below), herdr 0.8.2 rejects every match except pane agent-status matches with `unsupported_event_wait_match` — message `events.wait currently supports pane agent status matches`. Treat the schema as the forward-looking surface and, on 0.8.2, only send a `pane_agent_status_changed` match. For the other kinds, subscribe with `events.subscribe` and read the first push instead.
+**Implementation gap (validated on 0.9.1):** although the `EventMatch` schema admits 19 predicate variants (below), herdr 0.9.1 still rejects every match except pane agent-status matches with `unsupported_event_wait_match` — message `events.wait currently supports pane agent status matches`. This gap is unchanged from 0.8.2. Treat the schema as the forward-looking surface and, for now, only send a `pane_agent_status_changed` match. For the other kinds, subscribe with `events.subscribe` and read the first push instead.
 
 **Params**: `EventsWaitParams`.
 
@@ -137,7 +137,7 @@ Blocks the connection until a single event matching the `match_event` predicate 
 
 ### EventMatch variants
 
-`EventMatch` is a `oneOf` discriminated by `event` (snake_case, matching `EventKind`). 19 variants. On 0.8.2 only `pane_agent_status_changed` is honored; the rest are schema-valid but return `unsupported_event_wait_match`. All variants have an optional `min_revision`/`workspace_id`/etc. only where listed; unlisted id fields are required filters.
+`EventMatch` is a `oneOf` discriminated by `event` (snake_case, matching `EventKind`). 19 variants. On 0.9.1 only `pane_agent_status_changed` is honored; the rest are schema-valid but return `unsupported_event_wait_match`. All variants have an optional `min_revision`/`workspace_id`/etc. only where listed; unlisted id fields are required filters.
 
 | `event` const | filter fields | required |
 | --- | --- | --- |
@@ -174,20 +174,26 @@ The `EventMatch` surface is narrower than the full `EventKind` list: it omits `w
 
 | code | when |
 | --- | --- |
-| `unsupported_event_wait_match` | The `match_event` variant is not `pane_agent_status_changed` on herdr 0.8.2. Message: `events.wait currently supports pane agent status matches`. |
+| `unsupported_event_wait_match` | The `match_event` variant is not `pane_agent_status_changed` on herdr 0.9.1. Message: `events.wait currently supports pane agent status matches`. |
+| `timeout` | `timeout_ms` elapsed before a matching event arrived. Message: `timed out waiting for event match`. |
 
-A timeout is also expected to surface as an error when `timeout_ms` elapses before a match (code not captured; likely a `timeout`-class code — verify against [errors.md](errors.md)). Other codes possible.
+Other codes possible.
 
 **CLI**: API-only (no `herdr events` CLI group). `herdr agent wait <TARGET>` covers the supported agent-status wait, and `herdr pane wait-output` covers output waiting.
 
-**Example** (Validated 2026-08-19 against herdr 0.8.2 — shows the 0.8.2 rejection of a non-agent-status match):
+**Example** (Validated 2026-09-17 against herdr 0.9.1 — shows the continued rejection of a non-agent-status match, and a supported match timing out):
 
 ```json
-{"id":"e3","method":"events.wait","params":{"match_event":{"event":"tab_created"},"timeout_ms":5000}}
-{"id":"e3","error":{"code":"unsupported_event_wait_match","message":"events.wait currently supports pane agent status matches"}}
+{"id":"e1","method":"events.wait","params":{"match_event":{"event":"tab_created"},"timeout_ms":500}}
+{"id":"e1","error":{"code":"unsupported_event_wait_match","message":"events.wait currently supports pane agent status matches"}}
 ```
 
-A supported call substitutes `"match_event":{"event":"pane_agent_status_changed","pane_id":"w1:p1","agent_status":"idle"}` and returns `{"id":"e3","result":{"type":"wait_matched","event":{"event":"pane_agent_status_changed","data":{…}}}}` (Constructed from schema; not live-validated).
+```json
+{"id":"e3","method":"events.wait","params":{"match_event":{"event":"pane_agent_status_changed","pane_id":"w1:p1","agent_status":"idle"},"timeout_ms":500}}
+{"id":"e3","error":{"code":"timeout","message":"timed out waiting for event match"}}
+```
+
+A match on the current status still returns `{"id":"e3","result":{"type":"wait_matched","event":{"event":"pane_agent_status_changed","data":{…}}}}` (Constructed from schema; not live-validated — no probe in the scratch session transitioned a pane's agent status).
 
 ## Event catalog (EventKind / EventData)
 
@@ -340,4 +346,4 @@ Three surfaces name the same domain differently; a client must map between them 
 
 Everything else lines up one-to-one: the 24 plain subscription types each map to a distinct catalog `EventKind`, and the `pane.agent_status_changed` subscription maps to both the plain `pane_agent_status_changed` `EventKind` (via `events.wait`/other emitters) and the dotted `pane.agent_status_changed` `SubscriptionEventKind` (via this subscription).
 
-**`EventMatch` (events.wait) coverage:** narrower still — only 19 of the 26 `EventKind` values are expressible as a match. Not matchable in schema: `workspace_metadata_updated`, `workspace_reordered`, `worktree_created`, `worktree_opened`, `worktree_removed`, `pane_updated`, `layout_updated`. And on herdr 0.8.2 only `pane_agent_status_changed` matches are actually honored (all others → `unsupported_event_wait_match`).
+**`EventMatch` (events.wait) coverage:** narrower still — only 19 of the 26 `EventKind` values are expressible as a match. Not matchable in schema: `workspace_metadata_updated`, `workspace_reordered`, `worktree_created`, `worktree_opened`, `worktree_removed`, `pane_updated`, `layout_updated`. And on herdr 0.9.1 only `pane_agent_status_changed` matches are actually honored (all others → `unsupported_event_wait_match`).

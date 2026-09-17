@@ -1,6 +1,6 @@
 # herdr API: wire protocol
 
-> herdr 0.8.2 · protocol 20 · schema_version 1 · captured 2026-08-19
+> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
 > Part of the fledge herdr reference. Index: [README.md](README.md). IDs: [addressing.md](addressing.md). Access model: [environment.md](environment.md).
 
 herdr exposes a running server through a Unix domain socket that speaks newline-delimited JSON. A client opens the socket, writes exactly one request line, reads one response line, and the server closes the connection — except for a connection that called `events.subscribe`, which stays open to receive pushed event lines. There is no HTTP, no framing header, and no multiplexing: each connection carries one request/response exchange (or one long-lived subscription). This file documents the transport, the three envelope shapes, connection semantics, the ping/pong handshake, protocol/version negotiation, and how subscription connections differ. Per-method params and results live in the `api/*.md` files.
@@ -68,7 +68,7 @@ A failed call returns one line with an `error` object in place of `result`:
 Parse/validation failures all use code `invalid_request`. Evidence:
 
 ```json
-{"request":{"method":"ping","params":{}},"response":{"id":"","error":{"code":"invalid_request","message":"invalid request: missing field `id` at line 1 column 32"}}}
+{"request":{"method":"ping","params":{}},"response":{"id":"","error":{"code":"invalid_request","message":"invalid request: missing field `id` at line 1 column 29"}}}
 ```
 
 ```json
@@ -76,10 +76,10 @@ Parse/validation failures all use code `invalid_request`. Evidence:
 ```
 
 ```json
-{"request":{"id":"r11","method":"workspace.get","params":{"nope":true}},"response":{"id":"","error":{"code":"invalid_request","message":"invalid request: missing field `workspace_id` at line 1 column 66"}}}
+{"request":{"id":"r11","method":"workspace.get","params":{"nope":true}},"response":{"id":"","error":{"code":"invalid_request","message":"invalid request: missing field `workspace_id` at line 1 column 60"}}}
 ```
 
-Validated 2026-08-19 against herdr 0.8.2 (`probes/raw/err-missing-id.json`, `err-unknown-method.json`, `err-bad-params.json`). Note that even a schema-valid `id` is discarded to `""` when any other part of the request fails to parse — a client cannot rely on `id` to correlate parse errors.
+Validated 2026-09-17 against herdr 0.9.1 (re-run on a scratch server). The unknown-variant message now enumerates 104 methods, still `ping`, `server.stop`, `server.live_handoff`, … first — one more than `raw/schema.json`'s 103-method request `oneOf`; the live binary additionally recognizes `pane.graphics.stream`, which `raw/schema.json` does not document. Note that even a schema-valid `id` is discarded to `""` when any other part of the request fails to parse — a client cannot rely on `id` to correlate parse errors.
 
 ## One request per connection
 
@@ -103,25 +103,25 @@ Validated 2026-08-19 against herdr 0.8.2 (`probes/raw/connection-semantics.json`
 | result field | type | required | meaning |
 | --- | --- | --- | --- |
 | `type` | const `"pong"` | yes | Result discriminant. |
-| `version` | string | yes | Server release version, e.g. `"0.8.2"`. |
-| `protocol` | integer (uint32) | yes | Wire protocol number, e.g. `20`. Compare against the protocol you were built for. |
-| `capabilities` | object \| null | no (default `null`) | `ServerCapabilities`. When present: `live_handoff` (boolean, required) — server can hand off a live session across an update/attach; `detached_server_daemon` (boolean, default `false`) — server runs as a detached daemon. |
+| `version` | string | yes | Server release version, e.g. `"0.9.1"`. |
+| `protocol` | integer (uint32) | yes | Wire protocol number, e.g. `22`. Compare against the protocol you were built for. |
+| `capabilities` | object \| null | no (default `null`) | `ServerCapabilities`. When present: `live_handoff` (boolean, required) — server can hand off a live session across an update/attach; `detached_server_daemon` (boolean, default `false`) — server runs as a detached daemon; `health_check` (boolean, default `false`) — server supports endpoint health probes; `surface_interest` (boolean, default `false`) — server supports explicit client-shell surface interest; `endpoint_protocol_generation` (integer (uint32) \| null, optional, no default) — stable client-owned endpoint generation supported by this server. |
 
 Canonical exchange — request then response:
 
 ```json
 {"id":"m1","method":"ping","params":{}}
-{"id":"m1","result":{"type":"pong","version":"0.8.2","protocol":20,"capabilities":{"live_handoff":true,"detached_server_daemon":false}}}
+{"id":"m1","result":{"type":"pong","version":"0.9.1","protocol":22,"capabilities":{"live_handoff":true,"detached_server_daemon":false,"endpoint_protocol_generation":1,"surface_interest":true,"health_check":true}}}
 ```
 
-Validated 2026-08-19 against herdr 0.8.2 (response captured in `probes/raw/connection-semantics.json`). Use `ping` as the first call of a client to confirm the server is reachable and to read `protocol`/`version`/`capabilities` before relying on version-specific behavior.
+Validated 2026-09-17 against herdr 0.9.1 (captured live on a scratch server). Use `ping` as the first call of a client to confirm the server is reachable and to read `protocol`/`version`/`capabilities` before relying on version-specific behavior.
 
 ## Protocol and version negotiation
 
 herdr does not negotiate the protocol mid-connection; a client instead **reads** the server's protocol number and version and decides for itself whether it is compatible.
 
-- The document header reports `protocol` and `schema_version` (this schema: protocol 20, schema_version 1). Every `pong`, and the `session.snapshot` result, echo `protocol` and `version`, so a client can check compatibility from either.
-- `herdr status` compares client and server: it prints `client.protocol`, `server.protocol`, and a `compatible: yes|no` verdict plus `restart_needed`. Client and server sharing protocol 20 report `compatible: yes`.
+- The document header reports `protocol` and `schema_version` (this schema: protocol 22, schema_version 1). Every `pong`, and the `session.snapshot` result, echo `protocol` and `version`, so a client can check compatibility from either.
+- `herdr status` (plain text) prints nested `client:`/`server:`/`update:` blocks with `private_protocol_compatible`/`endpoint_compatible` verdicts and `restart_needed` under `update:`; `herdr status --json` exposes `client.protocol`/`server.protocol` plus `server.compatible` and `server.restart_needed` (nested, not top-level). Client and server sharing protocol 22 report `private_protocol_compatible: yes` (`server.compatible: true` in `--json`).
 - The one place a client asserts an expected protocol/version is the live-handoff request. `server.live_handoff` takes `ServerLiveHandoffParams`:
 
   | field | type | required | meaning |

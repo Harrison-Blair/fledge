@@ -1,6 +1,6 @@
 # herdr API: session methods
 
-> herdr 0.8.2 · protocol 20 · schema_version 1 · captured 2026-08-19
+> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
 > Part of the fledge herdr reference. Index: [README.md](../README.md). Wire format: [protocol.md](../protocol.md).
 
 The `session` namespace exposes the two read-only, whole-session introspection methods. `ping` is the liveness and version handshake: it returns the server version, protocol number, and the server's advertised capabilities. `session.snapshot` returns the complete, point-in-time model of the running session — every workspace, tab, pane, pane layout, and detected agent. Both methods are non-mutating and take empty params. Neither method emits events. As with all herdr methods, the server closes the connection after a single response (see [protocol.md](../protocol.md)).
@@ -27,8 +27,8 @@ Liveness and version-negotiation handshake. Returns the running server's semanti
 | field | type | required | default | meaning |
 | --- | --- | --- | --- | --- |
 | `type` | string const `"pong"` | yes | — | Result discriminator. |
-| `version` | string | yes | — | Server semantic version (e.g. `"0.8.2"`). |
-| `protocol` | integer (uint32) | yes | — | Wire-protocol number the server speaks (e.g. `20`). |
+| `version` | string | yes | — | Server semantic version (e.g. `"0.9.1"`). |
+| `protocol` | integer (uint32) | yes | — | Wire-protocol number the server speaks (e.g. `22`). |
 | `capabilities` | `ServerCapabilities` \| null | no | `null` | Optional server feature flags; `null` when the server does not report capabilities. See below. |
 
 `ServerCapabilities`:
@@ -37,16 +37,19 @@ Liveness and version-negotiation handshake. Returns the running server's semanti
 | --- | --- | --- | --- | --- |
 | `live_handoff` | boolean | yes | — | Server supports live handoff of an attached client between processes. |
 | `detached_server_daemon` | boolean | no | `false` | Server runs as a detached background daemon. |
+| `endpoint_protocol_generation` | integer (uint32) \| null | no | — | Stable client-owned endpoint generation supported by this server. |
+| `health_check` | boolean | no | `false` | Whether this server supports endpoint health probes. |
+| `surface_interest` | boolean | no | `false` | Whether this server supports explicit client-shell surface interest. |
 
 **Errors**: No error codes observed for `ping`; malformed envelopes fail at the protocol layer (see [protocol.md](../protocol.md)). Other codes possible.
 
 **CLI**: API-only (no CLI subcommand).
 
-**Example** — `Validated 2026-08-19 against herdr 0.8.2.`
+**Example** — `Validated 2026-09-17 against herdr 0.9.1.`
 
 ```json
 {"id":"m1","method":"ping","params":{}}
-{"id":"m1","result":{"type":"pong","version":"0.8.2","protocol":20,"capabilities":{"live_handoff":true,"detached_server_daemon":false}}}
+{"id":"m1","result":{"type":"pong","version":"0.9.1","protocol":22,"capabilities":{"live_handoff":true,"detached_server_daemon":false,"endpoint_protocol_generation":1,"surface_interest":true,"health_check":true}}}
 ```
 
 ## session.snapshot
@@ -244,9 +247,9 @@ Enum used by `WorkspaceInfo`, `TabInfo`, `PaneInfo`, and `AgentInfo`: `idle`, `w
 
 **CLI**: `herdr api snapshot` — prints the live session snapshot (the `snapshot` object) as JSON.
 
-**Example** — `Validated 2026-08-19 against herdr 0.8.2.` (arrays truncated with `…`; structure intact)
+**Example** — `Validated 2026-08-19 against herdr 0.8.2 (version/protocol fields updated 2026-09-17 per schema; body not re-captured).` (arrays truncated with `…`; structure intact)
 
 ```json
 {"id":"r2","method":"session.snapshot","params":{}}
-{"id":"r2","result":{"type":"session_snapshot","snapshot":{"version":"0.8.2","protocol":20,"focused_workspace_id":"w1","focused_tab_id":"w1:t1","focused_pane_id":"w1:p1","workspaces":[{"workspace_id":"w1","number":1,"label":"--label docs-ws-renamed","focused":true,"pane_count":3,"tab_count":3,"active_tab_id":"w1:t1","agent_status":"unknown","tokens":{"branch":"main"},"worktree":{"repo_key":"…/scratch-repo/.git","repo_name":"scratch-repo","repo_root":"…/scratch-repo","checkout_path":"…/scratch-repo","is_linked_worktree":false}},…],"tabs":[{"tab_id":"w1:t1","workspace_id":"w1","number":1,"label":"1","focused":true,"pane_count":1,"agent_status":"unknown"},…],"panes":[{"pane_id":"w1:p1","terminal_id":"term_65970bc8958f71","workspace_id":"w1","tab_id":"w1:t1","focused":true,"cwd":"…/scratch-repo","foreground_cwd":"…/scratch-repo","terminal_title":"penguin@raft: …","terminal_title_stripped":"penguin@raft: …","agent_status":"unknown","scroll":{"offset_from_bottom":0,"max_offset_from_bottom":0,"viewport_rows":39},"revision":1},…],"layouts":[{"workspace_id":"w1","tab_id":"w1:t1","zoomed":false,"area":{"x":26,"y":1,"width":94,"height":39},"focused_pane_id":"w1:p1","panes":[{"pane_id":"w1:p1","focused":true,"rect":{"x":26,"y":1,"width":94,"height":39}}],"splits":[]},…],"agents":[]}}}
+{"id":"r2","result":{"type":"session_snapshot","snapshot":{"version":"0.9.1","protocol":22,"focused_workspace_id":"w1","focused_tab_id":"w1:t1","focused_pane_id":"w1:p1","workspaces":[{"workspace_id":"w1","number":1,"label":"--label docs-ws-renamed","focused":true,"pane_count":3,"tab_count":3,"active_tab_id":"w1:t1","agent_status":"unknown","tokens":{"branch":"main"},"worktree":{"repo_key":"…/scratch-repo/.git","repo_name":"scratch-repo","repo_root":"…/scratch-repo","checkout_path":"…/scratch-repo","is_linked_worktree":false}},…],"tabs":[{"tab_id":"w1:t1","workspace_id":"w1","number":1,"label":"1","focused":true,"pane_count":1,"agent_status":"unknown"},…],"panes":[{"pane_id":"w1:p1","terminal_id":"term_65970bc8958f71","workspace_id":"w1","tab_id":"w1:t1","focused":true,"cwd":"…/scratch-repo","foreground_cwd":"…/scratch-repo","terminal_title":"penguin@raft: …","terminal_title_stripped":"penguin@raft: …","agent_status":"unknown","scroll":{"offset_from_bottom":0,"max_offset_from_bottom":0,"viewport_rows":39},"revision":1},…],"layouts":[{"workspace_id":"w1","tab_id":"w1:t1","zoomed":false,"area":{"x":26,"y":1,"width":94,"height":39},"focused_pane_id":"w1:p1","panes":[{"pane_id":"w1:p1","focused":true,"rect":{"x":26,"y":1,"width":94,"height":39}}],"splits":[]},…],"agents":[]}}}
 ```

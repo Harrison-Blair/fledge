@@ -1,6 +1,6 @@
 # herdr API: server methods
 
-> herdr 0.8.2 · protocol 20 · schema_version 1 · captured 2026-08-19
+> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
 > Part of the fledge herdr reference. Index: [README.md](../README.md). Wire format: [protocol.md](../protocol.md).
 
 The `server` namespace controls the lifecycle and configuration of the running headless herdr server itself, rather than any workspace, pane, or agent it hosts. These methods stop the server, hot-reload `config.toml`, inspect and reload the agent-detection manifests that tell herdr how to recognize agent processes, and perform a live handoff to a replacement binary while preserving session state. All five methods are exposed through the `herdr server` CLI command group (plus `server.live_handoff`, which backs `herdr update --handoff`). Every method takes `params` (even when empty) and each request occupies its own socket connection.
@@ -53,10 +53,10 @@ Returns the set of agent-detection manifests the server currently has active, on
 
 ```json
 {"id":"r5","method":"server.agent_manifests","params":{}}
-{"id":"r5","result":{"type":"agent_manifest_status","last_check_unix":1787190524,"last_result":"checked","manifests":[{"agent":"pi","source":"remote:/home/penguin/.local/state/herdr/agent-detection/remote/pi.toml","source_kind":"remote","active_version":"2026.06.10.1","cached_remote_version":"2026.06.10.1","local_override_shadowing_remote":false,"remote_update_result":"current","remote_last_checked_unix":1787190524},{"agent":"grok","source":"bundled","source_kind":"bundled","active_version":"2026.07.16.2","cached_remote_version":"2026.07.16.1","local_override_shadowing_remote":false,"remote_update_result":"current","remote_last_checked_unix":1787190524,"warning":"ignored remote manifest /home/penguin/.local/state/herdr/agent-detection/remote/grok.toml because cached version 2026.07.16.1 is older than bundled 2026.07.16.2"}, …]}}
+{"id":"r5","result":{"type":"agent_manifest_status","last_check_unix":1789682177,"last_result":"checked","manifests":[{"agent":"pi","source":"remote:/home/penguin/.local/state/herdr/agent-detection/remote/pi.toml","source_kind":"remote","active_version":"2026.09.14.1","cached_remote_version":"2026.09.14.1","local_override_shadowing_remote":false,"remote_update_result":"current","remote_last_checked_unix":1789682177},{"agent":"grok","source":"bundled","source_kind":"bundled","active_version":"2026.07.16.2","cached_remote_version":"2026.07.16.1","local_override_shadowing_remote":false,"remote_update_result":"current","remote_last_checked_unix":1789682177,"warning":"ignored remote manifest /home/penguin/.local/state/herdr/agent-detection/remote/grok.toml because cached version 2026.07.16.1 is older than bundled 2026.07.16.2"}, …]}}
 ```
 
-Validated 2026-08-19 against herdr 0.8.2.
+Validated 2026-09-17 against herdr 0.9.1.
 
 ## server.live_handoff
 
@@ -110,10 +110,10 @@ Reloads the local agent-detection manifest overrides from disk and returns the r
 
 ```json
 {"id":"m1","method":"server.reload_agent_manifests","params":{}}
-{"id":"m1","result":{"type":"agent_manifest_reload","manifests":[{"agent":"pi","source":"remote:/home/penguin/.local/state/herdr/agent-detection/remote/pi.toml","source_kind":"remote","active_version":"2026.06.10.1","cached_remote_version":"2026.06.10.1","local_override_shadowing_remote":false,"remote_update_result":"current","remote_last_checked_unix":1787190524}, …]}}
+{"id":"m1","result":{"type":"agent_manifest_reload","manifests":[{"agent":"pi","source":"remote:/home/penguin/.local/state/herdr/agent-detection/remote/pi.toml","source_kind":"remote","active_version":"2026.09.14.1","cached_remote_version":"2026.09.14.1","local_override_shadowing_remote":false,"remote_update_result":"current","remote_last_checked_unix":1789682177}, …]}}
 ```
 
-Constructed from schema; not live-validated. (Manifest field shapes mirror the probed `server.agent_manifests` response.)
+Validated 2026-09-17 against herdr 0.9.1.
 
 ## server.reload_config
 
@@ -140,7 +140,7 @@ Re-reads `config.toml` from disk and applies it to the running server, returning
 {"id":"cli:server:reload-config","result":{"type":"config_reload","status":"applied","diagnostics":[]}}
 ```
 
-Validated 2026-08-19 against herdr 0.8.2.
+Validated 2026-09-17 against herdr 0.9.1.
 
 ## server.stop
 
@@ -165,4 +165,4 @@ Shuts down the running server via the socket API, terminating all its sessions. 
 {"id":"cli:server:stop","result":{"type":"ok"}}
 ```
 
-Validated 2026-08-19 against herdr 0.8.2. The mutating probe produced empty stdout on success; the `{"type":"ok"}` result is the schema's sole non-error variant for this method.
+Validated 2026-09-17 against herdr 0.9.1. The mutating probe produced empty stdout on success; the `{"type":"ok"}` result is the schema's sole non-error variant for this method.

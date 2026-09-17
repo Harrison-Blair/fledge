@@ -1,6 +1,6 @@
 # herdr API: addressing and IDs
 
-> herdr 0.8.2 · protocol 20 · schema_version 1 · captured 2026-08-19
+> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
 > Part of the fledge herdr reference. Index: [README.md](README.md). Wire format: [protocol.md](protocol.md). Access model: [environment.md](environment.md).
 
 herdr addresses topology with three kinds of opaque public ID — workspace, tab, and pane — plus live agent names that follow a pane's current occupant. This file defines the ID grammar, the opacity and stability guarantees, why closed IDs are never reused, how a moved pane is re-identified, the difference between a stable ID and the reorderable display `number`, how `--current` and injected caller context resolve a target, and the rules for targeting an agent by name. Every claim here is grounded in `raw/skill.md` (§"Use IDs and caller context") and corroborated by probe captures. Method-specific params/results are in the `api/*.md` files.
@@ -34,6 +34,11 @@ Treat IDs as opaque handles, not as structured data to compute over. The rules:
 
   Validated 2026-08-19 against herdr 0.8.2 (`probes/raw/workspace-move.json`).
 - **A tab ID is stable across reordering within its workspace.** Probe `tab.move` reindexed tabs; each kept its `tab_id` (`w1:t1`, `w1:t2`, `w1:t3`, …) while `number` reflected the new order (`probes/raw/tab-move.json`).
+- **IDs are scoped to one server.** New in 0.9.1: with saved SSH machines, two machines can
+  both have a `w1:p1` or an agent named `reviewer`. Without the global `--machine` prefix a
+  command keeps using the inherited session and socket context, and inherited local IDs and
+  `--current` never identify remote panes; discover IDs on the target machine. Source:
+  `raw/skill.md` (0.9.1), not live-validated.
 - **Labels are not identifiers.** `label` is display text set by rename and can collide (two workspaces both labeled `fledge` in `probes/workspace-list.json`). Never target by label.
 
 ## Display numbers vs stable IDs (public pane numbers)
@@ -88,7 +93,7 @@ Validated 2026-08-19 against herdr 0.8.2 (`probes/scratch/pane-move.json`). In t
 herdr injects the calling pane's identity into every managed pane as environment variables, and pane commands can target "the pane I am running in" without knowing its ID:
 
 - Injected context (see [environment.md](environment.md)): `$HERDR_WORKSPACE_ID`, `$HERDR_TAB_ID`, `$HERDR_PANE_ID`.
-- **Prefer `--current`** on a pane command to target the calling pane. skill.md: "Omitting a target may use the UI-focused pane, which can belong to the user or another client." So an omitted target is *not* a safe default — it can act on someone else's focused pane.
+- **Prefer `--current`** on a pane command to target the calling pane. skill.md: "An omitted `pane split` target uses the calling pane when `HERDR_PANE_ID` is available, otherwise the focused pane. Other commands may use the UI-focused pane, which can belong to the user or another client." So an omitted target is *not* a safe default for most pane commands — it can act on someone else's focused pane; `pane split` is the one documented exception, falling back to the calling pane via `$HERDR_PANE_ID` before the focused pane.
 - Equivalent explicit forms: pass `--pane "$HERDR_PANE_ID"`, or pass a concrete ID read from a prior response. Many pane subcommands accept `--pane <ID>` and `--current` interchangeably (`pane current`, `pane layout`, `pane split`, `pane neighbor`, `pane edges`, `pane focus`, `pane resize`, `pane zoom`, `pane input`, `pane swap`).
 - `pane current --current` resolves and returns the calling pane's full `PaneInfo`, the reliable way to learn your own `pane_id`, `tab_id`, `workspace_id`, and current agent occupant. Probe `probes/pane-current.json` returns `pane_id: "w2:p1"` with its `tab_id`/`workspace_id`.
 

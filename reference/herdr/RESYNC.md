@@ -1,6 +1,6 @@
 # Re-syncing these docs after a herdr update
 
-> Docs describe herdr 0.8.2 · protocol 20 · schema_version 1 · captured 2026-08-19
+> Docs describe herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
 
 herdr self-updates (`herdr update`, channel via `herdr channel set <stable|preview>`), so
 the installed binary will drift ahead of these docs. The raw artifacts in `raw/` are the

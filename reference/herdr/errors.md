@@ -1,11 +1,11 @@
 # herdr API: error handling
 
-> herdr 0.8.2 · protocol 20 · schema_version 1 · captured 2026-08-19
+> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
 > Part of the fledge herdr reference. Index: [README.md](README.md). Wire format: [protocol.md](protocol.md).
 
 Every herdr request either succeeds with a `result` or fails with a single `error` object
 on the same connection. This file documents the error envelope, how errors surface through
-the CLI, and every error `code` observed against a live herdr 0.8.2 server, with the trigger
+the CLI, and every error `code` observed against a live herdr 0.9.1 server, with the trigger
 and the probe capture that evidences it. All probe paths below are relative to
 `scratchpad/probes/`.
 
@@ -60,9 +60,15 @@ whose JSON `code` is one of the below.
 | `agent_pane_not_found` | An `agent.*` method targeted a pane that does not exist (`agent target pane w1:p99 not found`). Distinct from `pane_not_found`: raised on the agent-command path when resolving the agent's target pane. | `scratch/agent-start-err.err` |
 | `invalid_request` | The request envelope or `params` failed to deserialize. Covers several triggers (see variants below). | `raw/err-bad-params.json`, `raw/err-missing-id.json`, `raw/err-unknown-method.json` |
 | `popup_not_open` | `popup.close` (or another popup op) was called when no popup is open. | `raw/popup-close.json` |
-| `feature_disabled` | A method needs an experimental/optional feature that is off — here `pane.graphics.info` requires `experimental.kitty_graphics`. | `raw/pane-graphics-info.json` |
+| `feature_disabled` | A method needs an experimental/optional feature that is off. In 0.8.2, `pane.graphics.info` required `experimental.kitty_graphics`; in 0.9.1 `kitty_graphics` defaults to `true` and moved out of `[experimental]` into `[terminal]`, so that specific trigger no longer reproduces on a default config. The code was not re-probed against any feature still off by default in 0.9.1. | `raw/pane-graphics-info.json` (0.8.2 capture) |
 | `split_not_found` | `layout.set_split_ratio` was given a split `path` that does not resolve to an existing split. | `raw/layout-set-split-ratio.json` |
 | `unsupported_event_wait_match` | `events.wait` was given a `match_event` other than a pane agent-status match; in 0.8.2 only pane agent-status matches are supported, despite the schema allowing broader match shapes. | `raw/events-wait.json` |
+| `stale_content` | A method that takes a `content_revision` (optional on `pane.selection.read`, `pane.copy_motion`, `pane.link.activate`; required on `pane.copy_search`) was called with a revision that no longer matches the pane's current content revision. | `raw/pane-selection-stale-content.json` |
+| `cell_size_unavailable` | New in 0.9.1. `pane.graphics.info` on a headless server (or any outer terminal that hasn't reported cell size) — now reachable by default since `kitty_graphics` defaults on. | `raw/pane-graphics-info-091.json` |
+| `connection_local_only` | New in 0.9.1. `client_shell.surface.set` was called over a plain API connection; it is only available through a client-shell endpoint connection. | `raw/client-shell-surface-set.json` |
+| `command_not_found` | New in 0.9.1. `command.invoke` was given a `command_id` the client-shell command manifest does not recognize. | `raw/command-invoke-not-found.json` |
+| `stale_announcement` | New in 0.9.1. `product_announcement.dismiss` was given an `id`/`version` pair that is no longer the current announcement. | `raw/product-announcement-dismiss-stale.json` |
+| `stale_release_notes` | New in 0.9.1. `release_notes.dismiss` was given a `version` that is no longer the current release notes version. | `raw/release-notes-dismiss-stale.json` |
 
 ### `invalid_request` variants
 
@@ -91,6 +97,7 @@ a client bug to fix rather than a runtime condition to retry.
 | `agent_not_ready` | `agent.start` returns immediately with this code when the agent is blocked during startup; the name stays available for `agent read` / `agent send-keys`. Wait until the agent becomes idle before prompting. |
 | `agent_blocked` | `agent.prompt` rejects an agent already waiting at an approval or question dialog, before sending any input. Inspect the blocked UI and ask the user before answering. |
 | `agent_prompt_stalled` | A prompt sent from a non-working state produced no observed lifecycle change within five seconds, so Herdr returns this instead of waiting indefinitely. |
+| `timeout` | New in 0.9.1. `agent.prompt --wait` with a caller `--timeout`: if the caller's timeout expires before `agent_prompt_stalled`'s five-second activity check would fire, Herdr returns `timeout` instead. |
 
 ## Notes for implementers
 

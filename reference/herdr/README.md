@@ -1,6 +1,6 @@
 # herdr API Reference
 
-> herdr 0.8.2 · protocol 20 · schema_version 1 · captured 2026-08-19
+> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
 
 Exhaustive, agent-optimized documentation of the **herdr** socket API, written for
 implementing fledge's herdr client. herdr is a terminal workspace manager for AI coding
@@ -27,28 +27,28 @@ wins — and the docs have a bug.
 7. [cli-mapping.md](cli-mapping.md) — socket method ⇄ CLI command mapping, CLI-only
    commands, CLI conventions.
 
-## Method reference (91 methods)
+## Method reference (103 methods)
 
 | File | Namespace | Methods |
 |---|---|---|
 | [api/agent.md](api/agent.md) | `agent.*` | 12 |
-| [api/pane.md](api/pane.md) | `pane.*` | 30 |
+| [api/pane.md](api/pane.md) | `pane.*` | 37 |
 | [api/workspace.md](api/workspace.md) | `workspace.*` | 9 |
 | [api/tab.md](api/tab.md) | `tab.*` | 7 |
 | [api/worktree.md](api/worktree.md) | `worktree.*` | 4 |
 | [api/layout.md](api/layout.md) | `layout.*` (API-only, no CLI group) | 3 |
-| [api/plugin.md](api/plugin.md) | `plugin.*` (API-only, no CLI group) | 11 |
+| [api/plugin.md](api/plugin.md) | `plugin.*` (`herdr plugin` CLI group new in 0.9.1) | 11 |
 | [api/server.md](api/server.md) | `server.*` | 5 |
 | [api/session.md](api/session.md) | `session.snapshot`, `ping` | 2 |
-| [api/integration.md](api/integration.md) | `integration.*` | 2 |
-| [api/ui.md](api/ui.md) | `notification.show`, `popup.close`, `client.window_title.*` | 4 |
+| [api/integration.md](api/integration.md) | `integration.*` | 3 |
+| [api/ui.md](api/ui.md) | `notification.show`, `popup.close`, `client.window_title.*`, `client_shell.surface.set`, `command.invoke`, `product_announcement.dismiss`, `release_notes.dismiss` | 8 |
 | [events.md](events.md) | `events.*` | 2 |
 
 ## Raw artifacts (ground truth, `raw/`)
 
 | File | Origin |
 |---|---|
-| [raw/schema.json](raw/schema.json) | `herdr api schema --json` — the canonical machine-readable contract (~255 KB) |
+| [raw/schema.json](raw/schema.json) | `herdr api schema --json` — the canonical machine-readable contract (~275 KB) |
 | [raw/skill.md](raw/skill.md) | `herdr --skill` — the agent-integration guide bundled in the binary |
 | [raw/default-config.toml](raw/default-config.toml) | `herdr --default-config` |
 | [raw/agent-guide.md](raw/agent-guide.md) | fetched from https://herdr.dev/agent-guide.md |
@@ -56,11 +56,12 @@ wins — and the docs have a bug.
 
 ## Provenance and validation
 
-- Params, results, and types come from `raw/schema.json` (herdr 0.8.2).
-- Examples labeled **Validated 2026-08-19 against herdr 0.8.2** are real captured
-  exchanges: read-only methods against a live session, mutating methods against an
+- Params, results, and types come from `raw/schema.json` (herdr 0.9.1).
+- Examples labeled **Validated 2026-09-17 against herdr 0.9.1** (or the earlier
+  **Validated 2026-08-19 against herdr 0.8.2**, kept where the method is unchanged) are
+  real captured exchanges: read-only methods against a live session, mutating methods against an
   isolated scratch server (`herdr --session <name> server`). Examples labeled
   **Constructed from schema; not live-validated** were never executed
   (notably `integration.install/uninstall`, mutating `plugin.*`, `server.live_handoff`).
-- herdr self-updates (`herdr update`); these docs describe **0.8.2 / protocol 20** and
+- herdr self-updates (`herdr update`); these docs describe **0.9.1 / protocol 22** and
   will drift. See [RESYNC.md](RESYNC.md) for the refresh procedure.
