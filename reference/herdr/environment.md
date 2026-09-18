@@ -1,6 +1,6 @@
 # herdr API: environment and access model
 
-> herdr 0.8.2 · protocol 20 · schema_version 1 · captured 2026-08-19
+> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
 > Part of the fledge herdr reference. Index: [README.md](README.md). Wire format: [protocol.md](protocol.md). IDs: [addressing.md](addressing.md).
 
 herdr has no token, session-key, or API-key authentication. A client is authorized by two ambient facts: it can open the server's Unix socket (an OS filesystem-permission check), and — when it runs inside a managed pane — herdr has injected that pane's identity into its environment. This file documents the injected environment variables, the socket path and its permissions, the explicit absence of any credential auth, the on-disk session directory layout, and how named sessions provide isolation. Sources: environment variables observed in a live herdr pane, `raw/skill.md`, `raw/agent-guide.md`, `raw/default-config.toml`, and the top-level CLI help.
@@ -29,7 +29,7 @@ Usage notes:
 ## Socket path and permissions
 
 - The server listens on a Unix domain **stream** socket at `$HERDR_SOCKET_PATH`. For the `fledge-dev` session the observed path is `/home/penguin/.config/herdr/sessions/fledge-dev/herdr.sock`; `herdr status server` reports the same path under `socket:`.
-- The socket file is created with permission mode **`0600`** (owner read/write only, observed). Only the owning OS user can connect. There is no network listener — the socket is local to the host (remote control is tunneled over SSH via `herdr --remote`, not by exposing the socket).
+- The socket file is created with permission mode **`0600`** (owner read/write only, observed). Only the owning OS user can connect. There is no network listener — the socket is local to the host (remote control is tunneled over SSH via `herdr --remote`, or a saved profile added with `herdr machine add` and reached with `herdr --machine <label-or-id>`, not by exposing the socket).
 - A companion client socket `herdr-client.sock` sits alongside it in the session directory (used for client↔server coordination).
 
 ## No token or API-key authentication
@@ -41,6 +41,8 @@ herdr performs **no credential-based authorization**. There is explicitly:
 - **no** per-request signature or authorization header.
 
 Authorization is entirely: (1) **OS socket permissions** — you must be the owning user and able to open the `0600` socket path; plus (2) **injected context** — herdr trusts the workspace/tab/pane identity it placed in a managed pane's environment. Any process that can read `$HERDR_SOCKET_PATH` and open that socket is fully authorized to drive the server. Treat filesystem access to the session directory as equivalent to full control of the session, and rely on OS user isolation, not on herdr, for access control.
+
+A saved remote machine (`herdr machine add`, then `herdr --machine <label-or-id> <command>`) does not add a separate credential: it forwards the API command to the remote host's own socket over the existing SSH connection, so authorization there still reduces to OS-level access — local socket permissions on that host, gated by SSH auth to reach it (skill.md §"To control a saved SSH machine"). `--remote-keybindings <local|server>` only selects whose keybindings a `--remote` TUI attach uses and has no bearing on authorization.
 
 ## Session directory layout
 

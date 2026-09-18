@@ -1,10 +1,14 @@
-/*
-Copyright © 2026 NAME HERE <EMAIL ADDRESS>
-*/
+// Command fledge is the Fledge CLI.
 package main
 
-import "fledge/cmd"
+import (
+	"os"
+
+	"github.com/Harrison-Blair/fledge/cmd"
+)
 
 func main() {
-	cmd.Execute()
+	if err := cmd.Execute(); err != nil {
+		os.Exit(cmd.ExitCode(err))
+	}
 }

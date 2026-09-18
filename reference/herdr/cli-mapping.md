@@ -1,19 +1,19 @@
 # herdr API: CLI ↔ socket method mapping
 
-> herdr 0.8.2 · protocol 20 · schema_version 1 · captured 2026-08-19
+> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
 > Part of the fledge herdr reference. Index: [README.md](README.md). Wire format: [protocol.md](protocol.md).
 
 The `herdr` CLI is a thin client over the same Unix-domain-socket protocol this reference
 documents. Most subcommands parse their flags, issue exactly one socket request, and print
 the raw `result` object as JSON on stdout. This file is the complete cross-reference: a row
-for every one of the 91 socket methods (mapped to its CLI subcommand or marked `API-only`),
+for every one of the 103 socket methods (mapped to its CLI subcommand or marked `API-only`),
 a section for CLI subcommands that have no single backing method, and the CLI's I/O
 conventions. Sources: the 90-page `--help` sweep, live read-only probes, and mutating
 scratch-server probes (including `.err` usage strings). Where a CLI subcommand does not
 exist, invoking the reserved verb prints the group's usage list (e.g. `herdr tab move`) or,
 for an unknown top-level group, `unknown command: layout`.
 
-## Mapping table (all 91 socket methods)
+## Mapping table (all 103 socket methods)
 
 Methods are listed in the schema's method-name order. "API-only" means no CLI subcommand
 reaches the method — a client must speak the socket directly (see `raw/` probes). CLI flag
@@ -35,9 +35,12 @@ lists below are abbreviated; consult each subcommand's `--help` for the exhausti
 | `agent.wait` | `herdr agent wait <target> [--until STATE]… [--timeout MS]` | without `--until`, matches idle/done/blocked |
 | `client.window_title.clear` | API-only (no CLI subcommand) | |
 | `client.window_title.set` | API-only (no CLI subcommand) | raw socket only (`raw/client-window-title-set.json`) |
+| `client_shell.surface.set` | API-only (no CLI subcommand) | toggles whether the requesting client shell endpoint receives/controls pane presentation; returns `connection_local_only` outside a client-shell endpoint |
+| `command.invoke` | API-only (no CLI subcommand) | invokes an opaque `command_id` from the client-shell command projection; used by `herdr command`-less integrations, not the CLI |
 | `events.subscribe` | API-only (no CLI subcommand) | connection stays open and receives pushed `{"event":…,"data":…}` lines |
 | `events.wait` | API-only (no CLI subcommand) | raw socket only (`raw/events-wait.json`) |
-| `integration.install` | `herdr integration install <target>` | target ∈ pi, omp, claude, codex, copilot, devin, droid, kimi, opencode, kilo, hermes, qodercli, qwen, cursor, mastracode, antigravity-cli, grok |
+| `integration.install` | `herdr integration install <target>` | target ∈ pi, omp, claude, codex, copilot, devin, droid, kimi, opencode, kilo, hermes, qodercli, qwen, cursor, mastracode, antigravity-cli, grok, letta; note: `letta` is accepted by the CLI's usage text but is absent from the schema's `IntegrationTarget` enum and from a live `integration.list` response (0.9.1 drift) |
+| `integration.list` | API-only (no CLI subcommand) | returns one `IntegrationInfo`/`IntegrationState` entry per built-in integration (17 in 0.9.1, `letta` not among them); `herdr integration status` (CLI-only, see below) is a separate report |
 | `integration.uninstall` | `herdr integration uninstall <target>` | same target set |
 | `layout.apply` | API-only (no CLI subcommand) | `herdr layout …` → `unknown command: layout` |
 | `layout.export` | API-only (no CLI subcommand) | raw socket only (`raw/layout-export.json`) |
@@ -45,8 +48,11 @@ lists below are abbreviated; consult each subcommand's `--help` for the exhausti
 | `notification.show` | `herdr notification show <title> [--body TEXT] [--position POS] [--sound SOUND]` | POS ∈ top-left, top-right, bottom-left, bottom-right; SOUND ∈ none, done, request |
 | `pane.clear_agent_authority` | API-only (no CLI subcommand) | distinct from `pane release-agent`; raw socket only (`raw/pane-clear-agent-authority.json`) |
 | `pane.close` | `herdr pane close <pane_id>` | |
+| `pane.copy_motion` | API-only (no CLI subcommand) | moves a copy-mode cursor by a `PaneCopyMotion` (word/line/paragraph); no CLI copy-mode exists |
+| `pane.copy_search` | API-only (no CLI subcommand) | searches scrollback from a copy-mode cursor in a `PaneCopySearchDirection`; no CLI copy-mode exists |
 | `pane.current` | `herdr pane current [--pane ID \| --current]` | |
 | `pane.edges` | `herdr pane edges [--pane ID \| --current]` | |
+| `pane.edit_scrollback` | API-only (no CLI subcommand) | takes a bare `PaneTarget`; opens the pane's scrollback for external editing |
 | `pane.focus` | API-only (no CLI subcommand) | takes a PaneTarget (focus a specific pane); CLI `pane focus` is directional and maps to `pane.focus_direction` |
 | `pane.focus_direction` | `herdr pane focus --direction DIR [--pane ID \| --current]` | DIR ∈ left, right, up, down |
 | `pane.get` | `herdr pane get <pane_id>` | positional id (not `--pane`) |
@@ -55,6 +61,8 @@ lists below are abbreviated; consult each subcommand's `--help` for the exhausti
 | `pane.graphics.set` | API-only (no CLI subcommand) | |
 | `pane.input.set` | `herdr pane input --right-click TARGET [PANE_ID] [--pane ID \| --current]` | CLI subcommand is `pane input`; TARGET ∈ herdr, pane (right-click routing) |
 | `pane.layout` | `herdr pane layout [--pane ID \| --current]` | |
+| `pane.link.activate` | API-only (no CLI subcommand) | activates a detected link region at a viewport row/col; returns `{"handled":false}` when nothing is there |
+| `pane.link.resolve` | API-only (no CLI subcommand) | resolves detected `PaneLinkRegion`s at a viewport row/col without activating them |
 | `pane.list` | `herdr pane list [--workspace ID]` | |
 | `pane.move` | `herdr pane move <pane_id> [--tab ID\|--new-tab\|--workspace ID\|--new-workspace] [--split right\|down] [--target-pane ID] [--ratio F] [--label] [--tab-label] [--focus\|--no-focus]` | positional pane id, targeting via flags |
 | `pane.neighbor` | `herdr pane neighbor --direction DIR [--pane ID \| --current]` | DIR ∈ left, right, up, down |
@@ -66,6 +74,8 @@ lists below are abbreviated; consult each subcommand's `--help` for the exhausti
 | `pane.report_agent_session` | `herdr pane report-agent-session <pane_id> --source ID --agent LABEL [--seq N] [--agent-session-id ID] [--agent-session-path PATH] [--session-start-source SOURCE]` | |
 | `pane.report_metadata` | `herdr pane report-metadata <pane_id> --source ID [--agent] [--applies-to-source] [--title\|--clear-title] [--display-agent\|--clear-display-agent] [--state-label STATUS=TEXT\|--clear-state-labels] [--token NAME=VALUE\|--clear-token NAME] [--seq N] [--ttl-ms N]` | display-only overlay metadata |
 | `pane.resize` | `herdr pane resize --direction DIR [--amount F] [--pane ID \| --current]` | DIR ∈ left, right, up, down |
+| `pane.scroll` | API-only (no CLI subcommand) | sets absolute scrollback `offset_from_bottom`; no CLI scroll command exists |
+| `pane.selection.read` | API-only (no CLI subcommand) | reads text between an anchor and cursor `PaneTextPoint`; no CLI equivalent |
 | `pane.send_input` | API-only (no CLI subcommand) | raw socket only (`raw/pane-send-input.json`); `pane run` composes `send-text` rather than calling this |
 | `pane.send_keys` | `herdr pane send-keys <pane_id> <key>…` | `esc` canonical Escape |
 | `pane.send_text` | `herdr pane send-text <pane_id> <text>` | literal text, no trailing Enter |
@@ -74,18 +84,20 @@ lists below are abbreviated; consult each subcommand's `--help` for the exhausti
 | `pane.wait_for_output` | `herdr pane wait-output <pane_id> <--match TEXT\|--regex PATTERN> [--source SRC] [--lines N] [--timeout MS] [--raw]` | SRC ∈ visible, recent, recent-unwrapped; regex is Rust syntax |
 | `pane.zoom` | `herdr pane zoom [PANE_ID] [--pane ID\|--current] [--toggle\|--on\|--off]` | |
 | `ping` | API-only (no CLI subcommand) | `herdr status` performs the ping/pong handshake internally but exposes no `ping` verb |
-| `plugin.action.invoke` | API-only (no CLI subcommand) | |
-| `plugin.action.list` | API-only (no CLI subcommand) | raw socket only (`raw/plugin-action-list.json`) |
-| `plugin.disable` | API-only (no CLI subcommand) | |
-| `plugin.enable` | API-only (no CLI subcommand) | |
-| `plugin.link` | API-only (no CLI subcommand) | |
-| `plugin.list` | API-only (no CLI subcommand) | raw socket only (`raw/plugin-list.json`) |
-| `plugin.log.list` | API-only (no CLI subcommand) | |
-| `plugin.pane.close` | API-only (no CLI subcommand) | |
-| `plugin.pane.focus` | API-only (no CLI subcommand) | |
-| `plugin.pane.open` | API-only (no CLI subcommand) | |
-| `plugin.unlink` | API-only (no CLI subcommand) | |
+| `plugin.action.invoke` | `herdr plugin action invoke <ACTION_ID> [--plugin <ID>]` | new CLI group in 0.9.1 |
+| `plugin.action.list` | `herdr plugin action list [--plugin <ID>]` |  |
+| `plugin.disable` | `herdr plugin disable <PLUGIN_ID>` | new CLI group in 0.9.1 |
+| `plugin.enable` | `herdr plugin enable <PLUGIN_ID>` | new CLI group in 0.9.1 |
+| `plugin.link` | `herdr plugin link <PATH> [--enabled \| --disabled]` | new CLI group in 0.9.1 |
+| `plugin.list` | `herdr plugin list [--plugin <ID>] [--json]` |  |
+| `plugin.log.list` | `herdr plugin log list [--plugin <ID>] [--limit <N>]` | new CLI group in 0.9.1 |
+| `plugin.pane.close` | `herdr plugin pane close <PANE_ID>` | new CLI group in 0.9.1 |
+| `plugin.pane.focus` | `herdr plugin pane focus <PANE_ID>` | new CLI group in 0.9.1 |
+| `plugin.pane.open` | `herdr plugin pane open --plugin <ID> --entrypoint <ID> [--placement <overlay\|split\|tab\|zoomed>] [--workspace <ID>] [--target-pane <PANE>] [--direction <right\|down>] [--cwd <PATH>] [--env <KEY=VALUE>]... [--focus \| --no-focus]` | CLI `--placement` omits `popup`, which remains valid on the wire |
+| `plugin.unlink` | `herdr plugin unlink <PLUGIN_ID>` | new CLI group in 0.9.1 |
 | `popup.close` | API-only (no CLI subcommand) | raw socket only (`raw/popup-close.json`) |
+| `product_announcement.dismiss` | API-only (no CLI subcommand) | dismisses an in-app product announcement by `id`/`version`; errors `stale_announcement` once it is no longer current |
+| `release_notes.dismiss` | API-only (no CLI subcommand) | dismisses the in-app release-notes prompt for a given `version` |
 | `server.agent_manifests` | `herdr server agent-manifests [--json]` | thin 1:1 wrapper |
 | `server.live_handoff` | API-only (no CLI subcommand) | invoked indirectly by `herdr update --handoff` and `--remote`/`--handoff` attach; not a standalone verb |
 | `server.reload_agent_manifests` | `herdr server reload-agent-manifests` | reloads local manifest overrides only |
@@ -115,10 +127,13 @@ lists below are abbreviated; consult each subcommand's `--help` for the exhausti
 
 ### API-only method count
 
-32 of the 91 methods have no CLI subcommand: all 3 `layout.*`, all 11 `plugin.*`, all 3
-`pane.graphics.*`, both `agent.view.*`, both `client.window_title.*`, both `events.*`,
-`pane.focus`, `pane.send_input`, `pane.clear_agent_authority`, `popup.close`, `ping`,
-`server.live_handoff`, `tab.move`, `workspace.move`, and `workspace.move_block`.
+33 of the 103 methods have no CLI subcommand: all 3 `layout.*`, all 3
+`pane.graphics.*`, both `pane.link.*`, both `agent.view.*`, both `client.window_title.*`, both `events.*`,
+`pane.focus`, `pane.send_input`, `pane.clear_agent_authority`, `pane.copy_motion`,
+`pane.copy_search`, `pane.edit_scrollback`, `pane.scroll`, `pane.selection.read`,
+`popup.close`, `ping`, `client_shell.surface.set`, `command.invoke`, `integration.list`,
+`product_announcement.dismiss`, `release_notes.dismiss`, `server.live_handoff`,
+`tab.move`, `workspace.move`, and `workspace.move_block`.
 
 ## CLI-only commands
 
@@ -144,11 +159,13 @@ work (network fetch, binary download) outside the socket protocol entirely.
 | `herdr server reload-agent-manifests` | Reloads local manifest overrides. | Thin 1:1 wrapper over `server.reload_agent_manifests`. |
 | `herdr agent attach <target> [--takeover]` | Attaches the terminal directly to an agent pane. | Interactive attach loop, not a request/response method. |
 | `herdr pane run <pane_id> <command>…` | Sends text plus Enter in one call. | CLI convenience composite over `pane send-text` (documented in `send-text`'s help: "herdr pane run … sends text and Enter in one call"); no dedicated `pane.run` method. |
-| `herdr integration status [--outdated-only]` | Shows install status of built-in integrations. | No `integration.status` method exists; status is computed CLI-side (only `integration.install`/`.uninstall` are socket methods). |
+| `herdr integration status [--outdated-only]` | Shows install status of built-in integrations. | No `integration.status` method exists; status is computed CLI-side, distinct from the `integration.list` socket method. |
+| `herdr machine list [--json]` / `add --label LABEL [--remote-session NAME] <SSH_TARGET>` / `rename --label LABEL <PROFILE_ID>` / `remove\|enable\|disable <PROFILE_ID>` | Manages saved SSH machine profiles used by `--machine`/`--remote`. | Local config file operation; `machine add` also SSHes out to prepare the remote Herdr server. No socket method. |
 
-Top-level launch/attach invocations (`herdr`, `herdr --session <name>`, `herdr --remote
-<target>`, `herdr --no-session`, `herdr --default-config`, `herdr --skill`,
-`herdr --version`) are client entry points, not socket methods.
+Top-level launch/attach invocations (`herdr`, `herdr --session <name>`, `herdr --machine
+<label-or-id>`, `herdr --remote <target>`, `herdr --remote-keybindings <local\|server>`,
+`herdr --default-config`, `herdr --skill`, `herdr --version`) are client entry points, not
+socket methods.
 
 ## CLI conventions
 

@@ -1,17 +1,20 @@
-# Build output
-/bin/
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
+# Allowlist: ignore everything, then explicitly allow what should be tracked.
+*
+!*/
 
-# Test, coverage, and profiling output
-*.test
-*.out
-coverage.*
-*.prof
+# Code
+!*.go
+!go.mod
+!go.sum
+!internal/version/VERSION
 
-# Local Go workspaces
-go.work
-go.work.sum
+# Documentation
+!*.md
+!LICENSE
+
+# Repo config
+!.gitignore
+!.github/**
+
+# Test fixtures
+!**/testdata/**

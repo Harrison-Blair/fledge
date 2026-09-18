@@ -1,6 +1,6 @@
 # herdr API: layout methods
 
-> herdr 0.8.2 · protocol 20 · schema_version 1 · captured 2026-08-19
+> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
 > Part of the fledge herdr reference. Index: [README.md](../README.md). Wire format: [protocol.md](../protocol.md).
 
 The `layout.*` methods read and reshape the pane tree of a tab. `layout.export` serializes
@@ -133,7 +133,7 @@ has no side effects. Returns a `LayoutDescription` for the exported tab.
 
 **CLI**: API-only (no CLI subcommand).
 
-**Example** — Validated 2026-08-19 against herdr 0.8.2. (Request uses the undocumented
+**Example** — Validated 2026-09-17 against herdr 0.9.1. (Request uses the undocumented
 `workspace_id` field noted above; prefer `tab_id`.)
 
 ```json

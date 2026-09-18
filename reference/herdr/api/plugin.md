@@ -1,6 +1,6 @@
 # herdr API: plugin methods
 
-> herdr 0.8.2 · protocol 20 · schema_version 1 · captured 2026-08-19
+> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
 > Part of the fledge herdr reference. Index: [README.md](../README.md). Wire format: [protocol.md](../protocol.md).
 
 The `plugin.*` namespace manages herdr's plugin registry: linking a plugin directory into
@@ -8,13 +8,16 @@ the session, enabling/disabling installed plugins, enumerating plugins and their
 actions, invoking an action, reading plugin command logs, and driving plugin-owned terminal
 panes. Plugins are described by a manifest (parsed into `InstalledPluginInfo`) that declares
 actions, event hooks, link handlers, panes, build/startup commands, and target platforms.
-The entire namespace is **API-only**: there is no `herdr plugin` CLI group, so every method
-below is reached by sending the request envelope over `$HERDR_SOCKET_PATH` directly.
+As of 0.9.1 every method below also has a `herdr plugin` CLI equivalent (see each method's
+**CLI** row); `herdr plugin install`, `herdr plugin uninstall`, and `herdr plugin config-dir`
+are additional CLI subcommands with no direct `plugin.*` wire-method equivalent documented
+here.
 
-Only `plugin.list` and `plugin.action.list` were exercised against the live session (both
-returned empty collections). The mutating methods — `plugin.link`, `plugin.unlink`,
-`plugin.enable`, `plugin.disable`, `plugin.action.invoke`, and all `plugin.pane.*` — were
-**not** live-validated; their examples are constructed from the schema and labeled as such.
+Only `plugin.list` and `plugin.action.list` were exercised against a live session (both
+returned empty collections; `plugin.list` was re-confirmed against 0.9.1). The mutating
+methods — `plugin.link`, `plugin.unlink`, `plugin.enable`, `plugin.disable`,
+`plugin.action.invoke`, and all `plugin.pane.*` — were **not** live-validated; their examples
+are constructed from the schema and labeled as such.
 
 11 methods:
 
@@ -69,7 +72,7 @@ as a plugin subprocess and its execution is recorded as a `PluginCommandLogInfo`
 `action_id`), plus validation errors, are likely for bad input; herdr uses entity-specific
 `<entity>_not_found` codes. Not live-validated, so other codes possible.
 
-**CLI**: API-only (no CLI subcommand).
+**CLI**: `herdr plugin action invoke <ACTION_ID> [--plugin <ID>]`
 
 **Example** — Constructed from schema; not live-validated.
 
@@ -100,7 +103,7 @@ Read-only. Live-validated against the empty session (no plugins linked → empty
 
 **Errors**: none observed. Other codes possible on invalid `plugin_id` (not validated).
 
-**CLI**: API-only (no CLI subcommand).
+**CLI**: `herdr plugin action list [--plugin <ID>]`
 
 **Example** — Validated 2026-08-19 against herdr 0.8.2.
 
@@ -132,7 +135,7 @@ startup commands stop being active, but the registry entry is retained (contrast
 
 **Errors**: `plugin_not_found` likely for an unknown `plugin_id`; not live-validated, other codes possible.
 
-**CLI**: API-only (no CLI subcommand).
+**CLI**: `herdr plugin disable <PLUGIN_ID>`
 
 **Example** — Constructed from schema; not live-validated.
 
@@ -163,7 +166,7 @@ panes, and startup commands. Side-effecting. Not live-validated.
 
 **Errors**: `plugin_not_found` likely for an unknown `plugin_id`; not live-validated, other codes possible.
 
-**CLI**: API-only (no CLI subcommand).
+**CLI**: `herdr plugin enable <PLUGIN_ID>`
 
 **Example** — Constructed from schema; not live-validated.
 
@@ -199,7 +202,7 @@ the registry. Not live-validated.
 
 **Errors**: filesystem/manifest-parse errors likely for a bad `path`; not live-validated, other codes possible.
 
-**CLI**: API-only (no CLI subcommand).
+**CLI**: `herdr plugin link <PATH> [--enabled | --disabled]`
 
 **Example** — Constructed from schema; not live-validated.
 
@@ -230,9 +233,9 @@ Lists installed plugins and their parsed manifests, optionally filtered to a sin
 
 **Errors**: none observed. Other codes possible on invalid `plugin_id` (not validated).
 
-**CLI**: API-only (no CLI subcommand).
+**CLI**: `herdr plugin list [--plugin <ID>] [--json]`
 
-**Example** — Validated 2026-08-19 against herdr 0.8.2.
+**Example** — Validated 2026-09-17 against herdr 0.9.1.
 
 ```json
 {"id":"r3","method":"plugin.list","params":{}}
@@ -263,7 +266,7 @@ startup/build commands), newest-first, optionally filtered by `plugin_id` and ca
 
 **Errors**: none observed; not live-validated, other codes possible.
 
-**CLI**: API-only (no CLI subcommand).
+**CLI**: `herdr plugin log list [--plugin <ID>] [--limit <N>]`
 
 **Example** — Constructed from schema; not live-validated.
 
@@ -293,7 +296,7 @@ Closes a plugin-owned terminal pane by id. Side-effecting: destroys the pane. No
 
 **Errors**: `pane_not_found` likely for an unknown `pane_id`; not live-validated, other codes possible.
 
-**CLI**: API-only (no CLI subcommand).
+**CLI**: `herdr plugin pane close <PANE_ID>`
 
 **Example** — Constructed from schema; not live-validated.
 
@@ -324,7 +327,7 @@ changes UI focus. Not live-validated.
 
 **Errors**: `pane_not_found` likely for an unknown `pane_id`; not live-validated, other codes possible.
 
-**CLI**: API-only (no CLI subcommand).
+**CLI**: `herdr plugin pane focus <PANE_ID>`
 
 **Example** — Constructed from schema; not live-validated.
 
@@ -367,7 +370,7 @@ focuses the new pane. Side-effecting: spawns a process and creates a pane. Not l
 
 **Errors**: `plugin_not_found` (unknown `plugin_id`) or `pane_not_found` (unknown `target_pane_id`) likely; validation errors for an unknown `entrypoint` or a malformed `PopupSize`. Not live-validated, other codes possible.
 
-**CLI**: API-only (no CLI subcommand).
+**CLI**: `herdr plugin pane open --plugin <ID> --entrypoint <ID> [--placement <overlay|split|tab|zoomed>] [--workspace <ID>] [--target-pane <PANE>] [--direction <right|down>] [--cwd <PATH>] [--env <KEY=VALUE>]... [--focus | --no-focus]` (the CLI's `--placement` omits `popup`, which remains valid on the wire).
 
 **Example** — Constructed from schema; not live-validated.
 
@@ -400,7 +403,7 @@ live-validated.
 
 **Errors**: none observed; a missing plugin may return `removed: false` rather than an error. Not live-validated, other codes possible.
 
-**CLI**: API-only (no CLI subcommand).
+**CLI**: `herdr plugin unlink <PLUGIN_ID>`
 
 **Example** — Constructed from schema; not live-validated.
 

@@ -1,6 +1,6 @@
 # herdr data model
 
-> herdr 0.8.2 · protocol 20 · schema_version 1 · captured 2026-08-19
+> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
 > Part of the fledge herdr reference. Index: [README.md](README.md). Wire format: [protocol.md](protocol.md).
 
 This file catalogs the domain entities that herdr's socket API embeds inside method
@@ -36,10 +36,13 @@ workspace gets a new workspace-qualified pane ID.
 | [PaneScrollInfo](#panescrollinfo) | scrollback viewport position |
 | [PaneProcessInfo](#paneprocessinfo) / [PaneProcessInfoProcess](#paneprocessinfoprocess) | process introspection |
 | [PaneReadResult](#panereadresult) / [ReadSource](#readsource) / [ReadFormat](#readformat) | terminal read output + selectors |
+| [PaneTextPoint](#panetextpoint) / [PaneTextRange](#panetextrange) | row/col coordinate and span, used by copy-motion and copy-search results |
+| [PaneLinkRegion](#panelinkregion) | resolved link hit region on a pane's viewport |
 | [Pane operation result shapes](#pane-operation-result-shapes) | swap/move/zoom/resize/edges/neighbor/focus results |
 | [WorktreeInfo](#worktreeinfo) / [WorkspaceWorktreeInfo](#workspaceworktreeinfo) / [WorktreeSourceInfo](#worktreesourceinfo) | git worktree entities |
 | [ServerCapabilities](#servercapabilities) | server feature flags (in `pong`) |
 | [AgentManifestInfo](#agentmanifestinfo) | installed agent-detection manifest |
+| [IntegrationInfo](#integrationinfo) / [IntegrationState](#integrationstate) | an agent integration's install status |
 | [IntegrationTarget](#integrationtarget) | agent-integration install targets |
 | [ConfigReloadStatus](#configreloadstatus) | config-reload outcome enum |
 | [PopupSize](#popupsize) | popup dimension value |
@@ -207,8 +210,8 @@ Corroborated by `snapshot.json` (2 workspaces / 2 tabs / 2 panes / 2 layouts / 2
 
 | field | type | required | meaning |
 | --- | --- | --- | --- |
-| `version` | string | yes | herdr version that produced the snapshot, e.g. `0.8.2` |
-| `protocol` | integer (uint32) | yes | protocol number, e.g. `20` |
+| `version` | string | yes | herdr version that produced the snapshot, e.g. `0.9.1` |
+| `protocol` | integer (uint32) | yes | protocol number, e.g. `22` |
 | `workspaces` | array&lt;[WorkspaceInfo](#workspaceinfo)&gt; | yes | all workspaces |
 | `tabs` | array&lt;[TabInfo](#tabinfo)&gt; | yes | all tabs across all workspaces |
 | `panes` | array&lt;[PaneInfo](#paneinfo)&gt; | yes | all panes |
@@ -405,6 +408,40 @@ Enum. Output encoding for a read.
 | `text` | plain text, styling stripped |
 | `ansi` | includes ANSI color/style escapes (use when styling is evidence) |
 
+## PaneTextPoint
+
+A single row/column coordinate into a pane's text content. Used by the `pane.copy_motion`
+and `pane.copy_search` results (see `api/pane.md`). Corroborated by `scratch/pane-copy-motion.json`
+(`{"row":0,"col":1}`).
+
+| field | type | required | meaning |
+| --- | --- | --- | --- |
+| `row` | integer (uint32) | yes | row index |
+| `col` | integer (uint16) | yes | column index |
+
+## PaneTextRange
+
+A span between two [PaneTextPoint](#panetextpoint)s. Used by the `pane.copy_search` result's
+`matches` (see `api/pane.md`). Corroborated by `scratch/pane-copy-search.json`
+(`{"start":{"row":0,"col":1},"end":{"row":0,"col":7}}`).
+
+| field | type | required | meaning |
+| --- | --- | --- | --- |
+| `start` | [PaneTextPoint](#panetextpoint) | yes | start of the range |
+| `end` | [PaneTextPoint](#panetextpoint) | yes | end of the range |
+
+## PaneLinkRegion
+
+Inclusive display-cell columns on a pane's current viewport where a resolved link hit
+occurs. Returned by `pane.link.resolve` (see `api/pane.md`). Corroborated by
+`scratch/pane-link-resolve.json` (a pane with no links returned `regions: []`).
+
+| field | type | required | meaning |
+| --- | --- | --- | --- |
+| `row` | integer (uint16) | yes | viewport row |
+| `start_col` | integer (uint16) | yes | first column of the hit, inclusive |
+| `end_col` | integer (uint16) | yes | last column of the hit, inclusive |
+
 ## Pane operation result shapes
 
 These result wrappers are returned by individual `pane.*`/`layout.*` methods; each embeds a
@@ -559,13 +596,17 @@ Describes the repository/source that a `worktree.list` result was taken from
 
 ## ServerCapabilities
 
-Feature flags reported by the server in the `pong` result (`ping`). Corroborated by the
-`status` probe (server running, version 0.8.2, protocol 20).
+Feature flags reported by the server in the `pong` result (`ping`). Corroborated by
+`scratch/ping.json` (server running, version 0.9.1, protocol 22:
+`{"live_handoff":true,"detached_server_daemon":false,"endpoint_protocol_generation":1,"surface_interest":true,"health_check":true}`).
 
 | field | type | required | meaning |
 | --- | --- | --- | --- |
 | `live_handoff` | boolean | yes | server supports live handoff of the session to another client |
 | `detached_server_daemon` | boolean | no (default false) | server can run as a detached daemon |
+| `endpoint_protocol_generation` | integer (uint32) \| null | no | stable client-owned endpoint generation this server supports |
+| `health_check` | boolean | no (default false) | server supports endpoint health probes |
+| `surface_interest` | boolean | no (default false) | server supports explicit client-shell surface interest (`client_shell.surface.set`) |
 
 ## AgentManifestInfo
 
@@ -586,6 +627,30 @@ An installed agent-detection manifest and its remote-update state, returned by
 | `remote_update_error` | string \| null | no | error message from the last failed check |
 | `remote_last_checked_unix` | integer (uint64) \| null | no | unix time of the last remote check |
 | `warning` | string \| null | no | non-fatal load warning |
+
+## IntegrationInfo
+
+One agent's editor/CLI integration status, as listed by `integration.list` (result
+`integration_list`, see `api/integration.md`). Corroborated by `scratch/integration-list.json`
+(e.g. `{"target":"claude","label":"claude","command":"claude","available":true,"state":"outdated"}`).
+
+| field | type | required | meaning |
+| --- | --- | --- | --- |
+| `target` | [IntegrationTarget](#integrationtarget) | yes | the agent this entry describes |
+| `label` | string | yes | display label |
+| `command` | string | yes | the command herdr invokes for this integration |
+| `available` | boolean | yes | the agent's command is available on this machine |
+| `state` | [IntegrationState](#integrationstate) | yes | current install state of the integration |
+
+## IntegrationState
+
+Enum. `IntegrationInfo.state`.
+
+| value | meaning |
+| --- | --- |
+| `not_installed` | the integration has not been installed |
+| `current` | installed and up to date |
+| `outdated` | installed but older than what herdr would install now |
 
 ## IntegrationTarget
 

@@ -7,12 +7,14 @@ on:
         description: Version to draft, without the v prefix (for example, 0.0.3)
         required: true
         type: string
+  push:
+    branches: [main]
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-draft-${{ inputs.version }}
+  group: release-draft
   cancel-in-progress: false
 
 jobs:
@@ -20,6 +22,7 @@ jobs:
     name: Validate release request
     runs-on: ubuntu-latest
     outputs:
+      skip: ${{ steps.validate.outputs.skip }}
       tag: ${{ steps.validate.outputs.tag }}
       version: ${{ steps.validate.outputs.version }}
     steps:
@@ -37,25 +40,69 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
-            echo "Release drafts must be started from the main branch; got $GITHUB_REF." >&2
-            exit 1
-          fi
-
-          if [[ ! "$REQUESTED_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            echo "Invalid version '$REQUESTED_VERSION': expected MAJOR.MINOR.PATCH without a v prefix." >&2
-            exit 1
+          # workflow_dispatch is a deliberate manual release request: every
+          # check is fatal. A push (a merge into main) refreshes the draft
+          # opportunistically, so a state that is merely "not a new, unreleased
+          # version" skips silently (exit 0) instead of failing the run.
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            strict=true
+          else
+            strict=false
           fi
 
           file_version="$(< internal/version/VERSION)"
           file_version="${file_version#"${file_version%%[![:space:]]*}"}"
           file_version="${file_version%"${file_version##*[![:space:]]}"}"
-          if [[ "$REQUESTED_VERSION" != "$file_version" ]]; then
-            echo "Requested version $REQUESTED_VERSION does not match internal/version/VERSION ($file_version)." >&2
+
+          # On push the version comes from the file; on dispatch it comes from
+          # the input (still validated against the file below).
+          if [[ "$strict" == "true" ]]; then
+            requested_version="$REQUESTED_VERSION"
+          else
+            requested_version="$file_version"
+          fi
+
+          finish_skip() {
+            local reason="$1"
+            echo "Release draft skipped: $reason"
+            {
+              echo "skip=true"
+              echo "version=$requested_version"
+              echo "tag=v$requested_version"
+            } >> "$GITHUB_OUTPUT"
+            {
+              echo "## Release draft skipped"
+              echo
+              echo "$reason"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          }
+
+          # Fatal on workflow_dispatch; a silent skip on push.
+          guard() {
+            if [[ "$strict" == "true" ]]; then
+              echo "$1" >&2
+              exit 1
+            fi
+            finish_skip "$1"
+          }
+
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            guard "Release drafts must be started from the main branch; got $GITHUB_REF."
+          fi
+
+          if [[ ! "$requested_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            guard "Invalid version '$requested_version': expected MAJOR.MINOR.PATCH without a v prefix."
+          fi
+
+          # On push requested_version is the file version, so this only guards
+          # the manual path where the input can drift from the file.
+          if [[ "$strict" == "true" && "$requested_version" != "$file_version" ]]; then
+            echo "Requested version $requested_version does not match internal/version/VERSION ($file_version)." >&2
             exit 1
           fi
 
-          tag="v$REQUESTED_VERSION"
+          tag="v$requested_version"
           export TAG="$tag"
 
           while IFS= read -r existing_tag; do
@@ -63,8 +110,7 @@ jobs:
             [[ "$existing_tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || continue
             highest="$(printf '%s\n%s\n' "$existing_tag" "$tag" | sort -V | tail -n 1)"
             if [[ "$highest" != "$tag" ]]; then
-              echo "$tag is not newer than existing version $existing_tag." >&2
-              exit 1
+              guard "$tag is not newer than existing version $existing_tag."
             fi
           done < <(git tag --list)
 
@@ -74,32 +120,41 @@ jobs:
           )"
 
           if [[ "$release_info" == *$'\n'* ]]; then
-            echo "Multiple GitHub releases use $tag; resolve the conflict manually." >&2
-            exit 1
+            guard "Multiple GitHub releases use $tag; resolve the conflict manually."
           fi
 
           if [[ -n "$release_info" ]]; then
             IFS=$'\t' read -r _ is_draft release_url <<< "$release_info"
             if [[ "$is_draft" != "true" ]]; then
-              echo "$tag is already published: $release_url" >&2
-              exit 1
+              guard "$tag is already published: $release_url"
             fi
             echo "An existing draft for $tag will be refreshed after CI passes."
           elif git show-ref --verify --quiet "refs/tags/$tag"; then
             tag_sha="$(git rev-list -n 1 "$tag")"
             if [[ "$tag_sha" != "$TARGET_SHA" ]]; then
-              echo "$tag already marks commit $tag_sha instead of current main commit $TARGET_SHA." >&2
-              exit 1
+              # A bare tag on a different commit with no published release is
+              # still refreshable: the draft job re-points it. On dispatch this
+              # is treated as a strict consistency failure instead.
+              if [[ "$strict" == "true" ]]; then
+                echo "$tag already marks commit $tag_sha instead of current main commit $TARGET_SHA." >&2
+                exit 1
+              fi
+              echo "$tag currently marks $tag_sha; it will be re-pointed to $TARGET_SHA while drafting."
+            else
+              echo "$tag already marks the current main commit and will be used for the draft."
             fi
-            echo "$tag already marks the current main commit and will be used for the draft."
           fi
 
-          echo "version=$REQUESTED_VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          {
+            echo "skip=false"
+            echo "version=$requested_version"
+            echo "tag=$tag"
+          } >> "$GITHUB_OUTPUT"
 
   lint:
     name: Lint
     needs: preflight
+    if: needs.preflight.outputs.skip != 'true'
     uses: ./.github/workflows/lint.yml
     permissions:
       contents: read
@@ -107,6 +162,7 @@ jobs:
   test:
     name: Test
     needs: preflight
+    if: needs.preflight.outputs.skip != 'true'
     uses: ./.github/workflows/test.yml
     permissions:
       contents: read
@@ -114,6 +170,7 @@ jobs:
   build:
     name: Build
     needs: preflight
+    if: needs.preflight.outputs.skip != 'true'
     uses: ./.github/workflows/build.yml
     permissions:
       contents: read
@@ -121,6 +178,7 @@ jobs:
   draft:
     name: Create or refresh draft
     needs: [preflight, lint, test, build]
+    if: needs.preflight.outputs.skip != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -183,8 +241,14 @@ jobs:
             if git show-ref --verify --quiet "refs/tags/$TAG"; then
               tag_sha="$(git rev-list -n 1 "$TAG")"
               if [[ "$tag_sha" != "$TARGET_SHA" ]]; then
-                echo "$TAG changed while CI was running and no longer marks $TARGET_SHA." >&2
-                exit 1
+                # A moved tag mid-run is a race on the manual path (fail), but
+                # on push a pre-existing bare tag is simply re-pointed to head.
+                if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+                  echo "$TAG changed while CI was running and no longer marks $TARGET_SHA." >&2
+                  exit 1
+                fi
+                git tag --force "$TAG" "$TARGET_SHA"
+                git push --force origin "refs/tags/$TAG"
               fi
               release_url="$(gh release create "$TAG" --verify-tag --generate-notes --draft)"
             else

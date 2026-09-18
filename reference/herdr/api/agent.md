@@ -1,6 +1,6 @@
 # herdr API: agent methods
 
-> herdr 0.8.2 · protocol 20 · schema_version 1 · captured 2026-08-19
+> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
 > Part of the fledge herdr reference. Index: [README.md](../README.md). Wire format: [protocol.md](../protocol.md).
 
 The `agent` namespace inspects and controls the coding agent recognized inside a
@@ -95,7 +95,7 @@ and the matched evidence. Read-only; does not mark the pane seen.
 | `type` | const `"agent_explain"` | yes | Result discriminator. |
 | `explain` | any | yes | Free-form detection explanation (agent kind, state, manifest, rule, evidence). Schema allows any JSON value. |
 
-**Errors**: `agent_pane_not_found` (invalid/ambiguous target); other codes possible.
+**Errors**: `agent_not_found` (invalid/ambiguous target); other codes possible.
 
 **CLI**: `herdr agent explain [TARGET] [--file <PATH>] [--agent <LABEL>] [--json] [--format text|json] [-v]`
 
@@ -132,7 +132,7 @@ plain CLI reads do not.
 | `type` | const `"agent_info"` | yes | Result discriminator. |
 | `agent` | [AgentInfo](#agentinfo) | yes | The focused agent. |
 
-**Errors**: `agent_pane_not_found`; other codes possible.
+**Errors**: `agent_not_found`; other codes possible.
 
 **Events**: focusing the pane emits `pane_focused` (and, if it changes the active tab/workspace, `tab_focused`/`workspace_focused`) to subscribers.
 
@@ -165,7 +165,7 @@ pane seen.
 | `type` | const `"agent_info"` | yes | Result discriminator. |
 | `agent` | [AgentInfo](#agentinfo) | yes | The requested agent. |
 
-**Errors**: `agent_pane_not_found`; other codes possible.
+**Errors**: `agent_not_found`; other codes possible.
 
 **CLI**: `herdr agent get <target>`
 
@@ -203,7 +203,7 @@ no parameters. Read-only.
 {"id":"r8","result":{"type":"agent_list","agents":[]}}
 ```
 
-Validated 2026-08-19 against herdr 0.8.2. (A populated live capture: two agents
+Validated 2026-09-17 against herdr 0.9.1. (A populated live capture: two agents
 `codex` at `w1:p1` and `claude` at `w2:p1`.)
 
 ## agent.prompt
@@ -242,7 +242,7 @@ wait is indefinite.
 | `type` | const `"agent_prompted"` | yes | Result discriminator. |
 | `agent` | [AgentInfo](#agentinfo) | yes | The agent after submission (and after the wait, if requested). |
 
-**Errors**: `agent_blocked` (agent already at approval/question UI), `agent_prompt_stalled` (no lifecycle change within 5000 ms from a non-working start), `timeout` (wait exceeded a shorter `timeout_ms`), `agent_pane_not_found`; other codes possible.
+**Errors**: `agent_blocked` (agent already at approval/question UI), `agent_prompt_stalled` (no lifecycle change within 5000 ms from a non-working start), `timeout` (wait exceeded a shorter `timeout_ms`), `agent_not_found`; other codes possible.
 
 **CLI**: `herdr agent prompt <TARGET> <TEXT> [--wait] [--until <STATUS>]... [--timeout <MS>]`
 
@@ -287,7 +287,7 @@ rows that have left an alternate screen cannot be recovered by a larger count.
 | `read.revision` | uint64 | yes | Pane output revision at capture time. |
 | `read.truncated` | boolean | yes | Whether the snapshot was truncated. |
 
-**Errors**: `agent_pane_not_found`; other codes possible.
+**Errors**: `agent_not_found`; other codes possible.
 
 **CLI**: `herdr agent read <TARGET> [--source visible|recent|recent-unwrapped|detection] [--lines <N>] [--format text|ansi] [--ansi]`
 
@@ -324,7 +324,7 @@ replaced.
 | `type` | const `"agent_info"` | yes | Result discriminator. |
 | `agent` | [AgentInfo](#agentinfo) | yes | The renamed agent. |
 
-**Errors**: `agent_pane_not_found`; a duplicate-name error is likely when the requested name is already taken (inferred). Other codes possible.
+**Errors**: `agent_not_found`; a duplicate-name error is likely when the requested name is already taken (inferred). Other codes possible.
 
 **CLI**: `herdr agent rename <TARGET> <NAME>|--clear` (`--clear` sends `name: null`).
 
@@ -357,7 +357,7 @@ are supported.
 | --- | --- | --- | --- |
 | `type` | const `"ok"` | yes | Acknowledges the keys were written. |
 
-**Errors**: an invalid-key validation error rejects before writing (inferred); `agent_pane_not_found`. Other codes possible.
+**Errors**: an invalid-key validation error rejects before writing (inferred); `agent_not_found`. Other codes possible.
 
 **CLI**: `herdr agent send-keys <TARGET> <KEY>...`
 
@@ -385,7 +385,7 @@ for `agent.read`/`agent.send_keys`. Startup defaults to a 30-second timeout.
 | field | type | required | default | meaning |
 | --- | --- | --- | --- | --- |
 | `name` | string | yes | — | Unique name to assign (`[a-z][a-z0-9_-]{0,31}`). |
-| `kind` | string | yes | — | Agent kind. CLI-supported values: `pi`, `claude`, `codex`, `gemini`, `cursor`, `devin`, `agy`, `cline`, `omp`, `mastracode`, `opencode`, `copilot`, `kimi`, `kiro`, `droid`, `amp`, `grok`, `hermes`, `kilo`, `qodercli`, `qwen`, `maki`. |
+| `kind` | string | yes | — | Agent kind. CLI-supported values: `pi`, `claude`, `codex`, `gemini`, `cursor`, `devin`, `agy`, `cline`, `omp`, `mastracode`, `opencode`, `copilot`, `kimi`, `kiro`, `droid`, `amp`, `grok`, `hermes`, `kilo`, `qodercli`, `qwen`, `letta`, `maki`, `muse`. |
 | `pane_id` | string | yes | — | Existing pane at an interactive shell prompt. |
 | `args` | array<string> | no | `[]` | Native agent arguments (passed after `--` on the CLI). |
 | `timeout_ms` | uint64 \| null | no | null (server default 30000) | Startup timeout in ms; must be greater than 3000 and at most 300000. |
@@ -538,7 +538,7 @@ indefinitely. The result carries the matching event envelope.
 | `type` | const `"wait_matched"` | yes | Result discriminator. |
 | `event` | EventEnvelope | yes | The matched event: `{event: EventKind, data: EventData}`. For an agent state match, `event` is `pane_agent_status_changed` and `data` carries `pane_id`, `workspace_id`, and the new `agent_status`. See [../data-model.md](../data-model.md) and [../events.md](../events.md). |
 
-**Errors**: `timeout` (no matching state within `timeout_ms`), `agent_pane_not_found`; other codes possible.
+**Errors**: `timeout` (no matching state within `timeout_ms`), `agent_not_found`; other codes possible.
 
 **CLI**: `herdr agent wait <TARGET> [--until <STATUS>]... [--timeout <MS>]`
 

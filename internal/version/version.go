@@ -1,3 +1,4 @@
+// Package version reports the embedded Fledge release version.
 package version
 
 import (
@@ -6,9 +7,9 @@ import (
 )
 
 //go:embed VERSION
-var value string
+var version string
 
-// Version returns the application version embedded at build time.
+// Version returns the release version without surrounding whitespace.
 func Version() string {
-	return strings.TrimSpace(value)
+	return strings.TrimSpace(version)
 }

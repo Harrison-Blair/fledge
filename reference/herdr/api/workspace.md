@@ -1,6 +1,6 @@
 # herdr API: workspace methods
 
-> herdr 0.8.2 · protocol 20 · schema_version 1 · captured 2026-08-19
+> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
 > Part of the fledge herdr reference. Index: [README.md](../README.md). Wire format: [protocol.md](../protocol.md).
 
 The `workspace` namespace manages herdr's top-level containers. A workspace holds one or
@@ -36,11 +36,12 @@ Close a workspace, destroying all of its tabs, panes, and their terminals. Do no
 workspace you did not create unless the user explicitly asked. Closed workspace, tab, and
 pane IDs are never reused.
 
-**Params** (`WorkspaceTarget`):
+**Params** (`WorkspaceCloseParams`):
 
 | field | type | required | default | meaning |
 | --- | --- | --- | --- | --- |
 | `workspace_id` | string | yes | — | ID of the workspace to close (e.g. `w2`). |
+| `close_group` | boolean | no | `false` | If true, also close the target's linked worktree workspaces (its worktree group). |
 
 **Result** — `type: "ok"`:
 
@@ -60,11 +61,18 @@ Other codes possible.
 
 **CLI**: `herdr workspace close <workspace_id>`
 
-**Example** — Validated 2026-08-19 against herdr 0.8.2.
+**Example** — Validated 2026-09-17 against herdr 0.9.1.
 
 ```json
-{"id":"cli:workspace:close","method":"workspace.close","params":{"workspace_id":"w2"}}
-{"id":"cli:workspace:close","result":{"type":"ok"}}
+{"id":"c1","method":"workspace.close","params":{"workspace_id":"w2"}}
+{"id":"c1","result":{"type":"ok"}}
+```
+
+`close_group` also validated:
+
+```json
+{"id":"c2","method":"workspace.close","params":{"workspace_id":"w1","close_group":true}}
+{"id":"c2","result":{"type":"ok"}}
 ```
 
 ## workspace.create
@@ -82,6 +90,7 @@ process starts in `cwd` (or herdr's default when null) with any supplied `env` o
 | `env` | object (string→string) | no | `{}` | Environment variables set for the launched process. |
 | `focus` | boolean | no | `false` | If true, focus the new workspace in the UI; false creates it in the background. |
 | `label` | string \| null | no | null | Display label; null lets herdr auto-assign one. |
+| `source_workspace_id` | string \| null | no | null | Workspace whose focused pane supplies the `follow` cwd policy. |
 
 **Result** — `type: "workspace_created"`:
 
@@ -103,6 +112,13 @@ process starts in `cwd` (or herdr's default when null) with any supplied `env` o
 ```json
 {"id":"cli:workspace:create","method":"workspace.create","params":{"label":"docs-ws","focus":true}}
 {"id":"cli:workspace:create","result":{"type":"workspace_created","workspace":{"active_tab_id":"w1:t1","agent_status":"unknown","focused":true,"label":"docs-ws","number":1,"pane_count":1,"tab_count":1,"workspace_id":"w1"},"tab":{"agent_status":"unknown","focused":true,"label":"1","number":1,"pane_count":1,"tab_id":"w1:t1","workspace_id":"w1"},"root_pane":{"agent_status":"unknown","cwd":"/…/scratch-repo","focused":true,"foreground_cwd":"/…/scratch-repo","pane_id":"w1:p1","revision":0,"scroll":{"max_offset_from_bottom":0,"offset_from_bottom":0,"viewport_rows":40},"tab_id":"w1:t1","terminal_id":"term_65970bc8958f71","workspace_id":"w1"}}}
+```
+
+`source_workspace_id` also validated 2026-09-17 against herdr 0.9.1:
+
+```json
+{"id":"w2","method":"workspace.create","params":{"label":"child-ws","focus":false,"source_workspace_id":"w1"}}
+{"id":"w2","result":{"type":"workspace_created","workspace":{"active_tab_id":"w2:t1","agent_status":"unknown","focused":false,"label":"child-ws","number":2,"pane_count":1,"tab_count":1,"workspace_id":"w2"},"tab":{"agent_status":"unknown","focused":false,"label":"1","number":1,"pane_count":1,"tab_id":"w2:t1","workspace_id":"w2"},"root_pane":{"agent_status":"unknown","cwd":"/home/penguin","focused":false,"foreground_cwd":"/home/penguin","pane_id":"w2:p1","revision":0,"scroll":{"max_offset_from_bottom":0,"offset_from_bottom":0,"viewport_rows":40},"tab_id":"w2:t1","terminal_id":"term_65bb4d8e42c402","workspace_id":"w2"}}}
 ```
 
 ## workspace.focus

@@ -6,18 +6,20 @@ import (
 	"testing"
 )
 
-func TestVersionMatchesVersionFile(t *testing.T) {
-	raw, err := os.ReadFile("VERSION")
+func TestVersionMatchesFile(t *testing.T) {
+	data, err := os.ReadFile("VERSION")
 	if err != nil {
-		t.Fatalf("read VERSION: %v", err)
+		t.Fatal(err)
 	}
-
-	want := strings.TrimSpace(string(raw))
+	want := strings.TrimSpace(string(data))
 	if want == "" {
-		t.Fatal("VERSION must not be empty")
+		t.Fatal("VERSION is empty")
 	}
-
 	if got := Version(); got != want {
 		t.Fatalf("Version() = %q, want %q", got, want)
+	}
+	t.Chdir(t.TempDir())
+	if got := Version(); got != want {
+		t.Fatalf("Version() outside repository = %q, want %q", got, want)
 	}
 }

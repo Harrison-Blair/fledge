@@ -1,6 +1,6 @@
 # herdr API: pane methods
 
-> herdr 0.8.2 · protocol 20 · schema_version 1 · captured 2026-08-19
+> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
 > Part of the fledge herdr reference. Index: [README.md](../README.md). Wire format: [protocol.md](../protocol.md).
 
 The `pane.*` namespace controls individual terminal panes: the leaf terminals inside a
@@ -9,7 +9,9 @@ workspace/tab layout tree. Methods here inspect pane topology and geometry (`lis
 (`split`, `swap`, `move`, `resize`, `zoom`, `close`, `focus`, `focus_direction`), drive a
 pane's terminal (`read`, `wait_for_output`, `send_text`, `send_keys`, `send_input`,
 `rename`, `input.set`), render inline images (`graphics.set`, `graphics.clear`,
-`graphics.info`), and let an integration report/withdraw agent-lifecycle and display
+`graphics.info`), scroll and copy a pane's content and resolve/activate links in it
+(`scroll`, `edit_scrollback`, `copy_motion`, `copy_search`, `selection.read`,
+`link.resolve`, `link.activate`), and let an integration report/withdraw agent-lifecycle and display
 metadata for a pane (`report_agent`, `report_agent_session`, `report_metadata`,
 `release_agent`, `clear_agent_authority`). A pane exists whether or not it hosts a
 recognized agent; use `agent.*` methods when herdr must validate agent identity or
@@ -22,15 +24,18 @@ Domain entities (`PaneInfo`, `AgentInfo`, `PaneLayoutSnapshot`, `WorkspaceInfo`,
 `TabInfo`, …) are defined once in [data-model.md](../data-model.md); result tables below
 name every top-level field and link there rather than re-expanding embedded entities.
 
-30 methods:
+37 methods:
 
 | method | purpose |
 |---|---|
 | [pane.clear_agent_authority](#paneclear_agent_authority) | Withdraw a source's authority over a pane's agent lifecycle reporting |
 | [pane.close](#paneclose) | Close a pane and its terminal |
+| [pane.copy_motion](#panecopy_motion) | Move a copy-mode cursor by a text motion |
+| [pane.copy_search](#panecopy_search) | Search pane text for copy-mode match navigation |
 | [pane.current](#panecurrent) | Return the pane the caller/UI is currently in |
 | [pane.edges](#paneedges) | Report which of a pane's four edges border the tab boundary |
-| [pane.focus](#panefocus) | Focus a specific pane by ID and return its agent info |
+| [pane.edit_scrollback](#paneedit_scrollback) | Open a pane's scrollback in an external editor |
+| [pane.focus](#panefocus) | Focus a specific pane by ID and return its pane info |
 | [pane.focus_direction](#panefocus_direction) | Move focus to the neighboring pane in a direction |
 | [pane.get](#paneget) | Fetch a single pane's `PaneInfo` |
 | [pane.graphics.clear](#panegraphicsclear) | Clear graphics layer(s) from a pane |
@@ -38,6 +43,8 @@ name every top-level field and link there rather than re-expanding embedded enti
 | [pane.graphics.set](#panegraphicsset) | Draw/replace an image layer in a pane |
 | [pane.input.set](#paneinputset) | Set a pane's right-click input routing |
 | [pane.layout](#panelayout) | Return the layout snapshot of a pane's tab |
+| [pane.link.activate](#panelinkactivate) | Activate a detected link at a pane viewport position |
+| [pane.link.resolve](#panelinkresolve) | Resolve link region(s) at a pane viewport position |
 | [pane.list](#panelist) | List panes, optionally scoped to a workspace |
 | [pane.move](#panemove) | Move a pane to another tab/new tab/new workspace |
 | [pane.neighbor](#paneneighbor) | Resolve the neighboring pane ID in a direction |
@@ -49,6 +56,8 @@ name every top-level field and link there rather than re-expanding embedded enti
 | [pane.report_agent_session](#panereport_agent_session) | Report agent session identity for a pane |
 | [pane.report_metadata](#panereport_metadata) | Report display-only pane metadata (title, tokens, labels) |
 | [pane.resize](#paneresize) | Resize the split enclosing a pane |
+| [pane.scroll](#panescroll) | Set a pane's scrollback offset from the bottom |
+| [pane.selection.read](#paneselectionread) | Read the text spanned by a selection range in a pane |
 | [pane.send_input](#panesend_input) | Send text and/or logical keys to a pane in one call |
 | [pane.send_keys](#panesend_keys) | Send logical key presses to a pane |
 | [pane.send_text](#panesend_text) | Send literal text to a pane |
@@ -67,6 +76,10 @@ Enums used across this namespace:
 - **PaneZoomMode**: `toggle`, `on`, `off`.
 - **PaneAgentState**: `idle`, `working`, `blocked`, `unknown`.
 - **PaneGraphicsFormat**: `png`, `rgb`, `rgba`, `bgra`.
+- **PaneCopyMotion**: `line_end`, `first_non_blank`, `next_word_start`, `previous_word_start`,
+  `next_word_end`, `next_big_word_start`, `previous_big_word_start`, `next_big_word_end`,
+  `previous_paragraph`, `next_paragraph`.
+- **PaneCopySearchDirection**: `forward`, `backward`.
 
 Read-source semantics (from skill.md): `visible` is the currently rendered viewport;
 `recent` is recent rendered output including soft wraps; `recent_unwrapped` joins soft
@@ -135,6 +148,103 @@ create unless the user explicitly asked (skill.md). Closed pane IDs are not reus
 ```
 
 Validated 2026-08-19 against herdr 0.8.2.
+
+---
+
+## pane.copy_motion
+
+Move a copy-mode cursor from a given position by a text motion (word/line/paragraph
+stepping, vi-style) and return where it lands. Does not itself read or select text; pair
+with [pane.selection.read](#paneselectionread) to fetch a span.
+
+**Params** (`PaneCopyMotionParams`):
+
+| field | type | required | default | meaning |
+|---|---|---|---|---|
+| `pane_id` | string | yes | — | Target pane. |
+| `cursor` | PaneTextPoint (below) | yes | — | Copy-mode cursor position to move from. |
+| `motion` | PaneCopyMotion (`line_end`,`first_non_blank`,`next_word_start`,`previous_word_start`,`next_word_end`,`next_big_word_start`,`previous_big_word_start`,`next_big_word_end`,`previous_paragraph`,`next_paragraph`) | yes | — | Motion to apply. |
+| `content_revision` | integer (uint64) \| null | no | null | Content revision the cursor position is relative to; null skips the check (inferred). |
+
+`PaneTextPoint` (a zero-based row/column position in a pane's text content; also used by
+[pane.copy_search](#panecopy_search), [pane.selection.read](#paneselectionread), and
+[pane.link.resolve](#panelinkresolve)/[pane.link.activate](#panelinkactivate) results):
+
+| field | type | required | default | meaning |
+|---|---|---|---|---|
+| `row` | integer (uint32) | yes | — | Zero-based row. |
+| `col` | integer (uint16) | yes | — | Zero-based column. |
+
+**Result**: `type: "pane_copy_motion"`
+
+| field | type | meaning |
+|---|---|---|
+| `pane_id` | string | Pane targeted. |
+| `cursor` | PaneTextPoint | Cursor position after applying the motion. |
+| `content_revision` | integer (uint64) | Content revision the returned cursor is relative to. |
+
+**Errors**: `pane_not_found`; other codes possible.
+
+**CLI**: API-only (no CLI subcommand).
+
+**Example**
+
+```json
+{"id":"cm1","method":"pane.copy_motion","params":{"pane_id":"w1:p1","cursor":{"row":0,"col":0},"motion":"next_word_start"}}
+{"id":"cm1","result":{"type":"pane_copy_motion","pane_id":"w1:p1","cursor":{"row":0,"col":1},"content_revision":32}}
+```
+
+Validated 2026-09-17 against herdr 0.9.1.
+
+---
+
+## pane.copy_search
+
+Search a pane's text content for copy-mode match navigation (find-next/previous),
+starting from a cursor position and, for repeat searches, continuing past a `previous`
+match range.
+
+**Params** (`PaneCopySearchParams`):
+
+| field | type | required | default | meaning |
+|---|---|---|---|---|
+| `pane_id` | string | yes | — | Target pane. |
+| `query` | string | yes | — | Text to search for. |
+| `direction` | PaneCopySearchDirection (`forward`,`backward`) | yes | — | Search direction. |
+| `cursor` | PaneTextPoint (above) | yes | — | Position to search from. |
+| `content_revision` | integer (uint64) | yes | — | Content revision the search is relative to. |
+| `previous` | PaneTextRange \| null | no | null | Previously matched range, to continue searching past it (inferred). |
+
+`PaneTextRange` (also used in this method's result):
+
+| field | type | required | default | meaning |
+|---|---|---|---|---|
+| `start` | PaneTextPoint (above) | yes | — | Range start point. |
+| `end` | PaneTextPoint (above) | yes | — | Range end point. |
+
+**Result**: `type: "pane_copy_search"`
+
+| field | type | meaning |
+|---|---|---|
+| `pane_id` | string | Pane searched. |
+| `content_revision` | integer (uint64) | Content revision the results are relative to. |
+| `matches` | array&lt;PaneTextRange&gt; | All matching ranges found. |
+| `total` | integer (uint64) | Count of `matches`. |
+| `current` | integer (uint32) \| null | Index into `matches` of the current match, if any. |
+| `current_global` | integer (uint64) \| null | Global match index across the search history, if any (inferred). |
+
+**Errors**: `pane_not_found`; other codes possible.
+
+**CLI**: API-only (no CLI subcommand).
+
+**Example**
+
+```json
+{"id":"cs1","method":"pane.copy_search","params":{"pane_id":"w1:p1","query":"docprobe","direction":"forward","cursor":{"row":0,"col":0},"content_revision":32}}
+{"id":"cs1","result":{"type":"pane_copy_search","pane_id":"w1:p1","content_revision":32,"matches":[{"start":{"row":0,"col":26},"end":{"row":0,"col":33}},{"start":{"row":1,"col":0},"end":{"row":1,"col":7}},{"start":{"row":2,"col":26},"end":{"row":2,"col":33}},{"start":{"row":3,"col":0},"end":{"row":3,"col":7}}],"total":4,"current":0,"current_global":0}}
+```
+
+Validated 2026-09-17 against herdr 0.9.1.
 
 ---
 
@@ -208,9 +318,37 @@ Validated 2026-08-19 against herdr 0.8.2.
 
 ---
 
+## pane.edit_scrollback
+
+Open a pane's scrollback buffer in an external editor for browsing/copying.
+
+**Params** (`PaneTarget`):
+
+| field | type | required | default | meaning |
+|---|---|---|---|---|
+| `pane_id` | string | yes | — | Pane whose scrollback to edit. |
+
+**Result**: `type: "ok"` — no other fields.
+
+**Errors**: `pane_not_found`; other codes possible.
+
+**CLI**: API-only (no CLI subcommand).
+
+**Example**
+
+```json
+{"id":"e1","method":"pane.edit_scrollback","params":{"pane_id":"w1:p1"}}
+{"id":"e1","result":{"type":"ok"}}
+```
+
+Validated 2026-09-17 against herdr 0.9.1. (headless scratch server, no foreground client
+attached; the server acknowledged without an editor actually opening.)
+
+---
+
 ## pane.focus
 
-Focus a specific pane by ID and return the `AgentInfo` for its occupant. Focusing marks
+Focus a specific pane by ID and return its `PaneInfo`. Focusing marks
 the pane's agent (and its tab) as **seen**, which collapses a background `done` state
 back to observed `idle` (skill.md). Unlike [pane.focus_direction](#panefocus_direction),
 this targets an exact pane rather than a neighbor.
@@ -221,13 +359,11 @@ this targets an exact pane rather than a neighbor.
 |---|---|---|---|---|
 | `pane_id` | string | yes | — | Pane to focus. |
 
-**Result**: `type: "agent_info"` (inferred: `agent_info` is the sole result type in this
-slice not otherwise produced by a pane method, and skill.md describes focusing as
-returning/refreshing the pane occupant's agent state)
+**Result**: `type: "pane_info"` (live-validated).
 
 | field | type | meaning |
 |---|---|---|
-| `agent` | [AgentInfo](../data-model.md) | Agent occupying the now-focused pane (fields present even when no agent is recognized). |
+| `pane` | [PaneInfo](../data-model.md) | The now-focused pane, including its IDs, cwd, focus state, and agent status. |
 
 **Errors**: `pane_not_found`; other codes possible.
 
@@ -237,11 +373,14 @@ returning/refreshing the pane occupant's agent state)
 **Example**
 
 ```json
-{"id":"1","method":"pane.focus","params":{"pane_id":"w1:p1"}}
-{"id":"1","result":{"type":"agent_info","agent":{"agent":"claude","agent_status":"idle","focused":true,"interactive_ready":true,"launch_pending":false,"pane_id":"w1:p1","revision":7,"screen_detection_skipped":false,"state_change_seq":3,"tab_id":"w1:t1","terminal_id":"term_…","workspace_id":"w1"}}}
+{"id":"fledge-focus-probe","method":"pane.focus","params":{"pane_id":"wQ:p6"}}
+{"id":"fledge-focus-probe","result":{"type":"pane_info","pane":{"pane_id":"wQ:p6","terminal_id":"term_65bb7c91616a65","workspace_id":"wQ","tab_id":"wQ:t5","focused":true,"cwd":"/home/penguin/source/fledge","foreground_cwd":"/home/penguin/source/fledge","label":"Claude smoke test","terminal_title":"penguin@iceberg:~/source/fledge","terminal_title_stripped":"penguin@iceberg:~/source/fledge","agent_status":"unknown","scroll":{"offset_from_bottom":0,"max_offset_from_bottom":0,"viewport_rows":58},"revision":1}}}
 ```
 
-Constructed from schema; not live-validated.
+Observed on 2026-09-18 UTC by a direct socket probe against the existing test pane
+`wQ:p6`; a repeated focus call returned the same `pane_info`/`pane` shape. This
+replaces the earlier inferred `agent_info` response. The example preserves the
+observed response, including session-specific IDs and paths.
 
 ---
 
@@ -495,6 +634,82 @@ per-pane rectangles.
 ```
 
 Validated 2026-08-19 against herdr 0.8.2.
+
+---
+
+## pane.link.activate
+
+Activate (open) a link detected at a viewport position in a pane — e.g. a URL under the
+cursor — the same action a click would trigger. Use
+[pane.link.resolve](#panelinkresolve) first to find link regions without activating them.
+
+**Params** (`PaneLinkActivateParams`):
+
+| field | type | required | default | meaning |
+|---|---|---|---|---|
+| `pane_id` | string | yes | — | Target pane. |
+| `viewport_row` | integer (uint16) | yes | — | Zero-based viewport row. |
+| `col` | integer (uint16) | yes | — | Zero-based viewport column. |
+| `content_revision` | integer (uint64) \| null | no | null | Content revision the position is relative to; null skips the check (inferred). |
+| `offset_from_bottom` | integer (uint64) \| null | no | null | Scroll offset the viewport row is relative to; null uses the pane's current scroll position (inferred). |
+
+**Result**: `type: "pane_link_activated"`
+
+| field | type | meaning |
+|---|---|---|
+| `handled` | boolean | Whether a link was found and activated at that position. |
+| `url` | string \| null | The activated URL, when known. |
+
+**Errors**: `pane_not_found`; other codes possible.
+
+**CLI**: API-only (no CLI subcommand).
+
+**Example**
+
+```json
+{"id":"la1","method":"pane.link.activate","params":{"pane_id":"w1:p1","viewport_row":0,"col":0}}
+{"id":"la1","result":{"type":"pane_link_activated","handled":false}}
+```
+
+Validated 2026-09-17 against herdr 0.9.1. (no link at that position, so `handled` is
+false and `url` is omitted.)
+
+---
+
+## pane.link.resolve
+
+Resolve the link region(s) present at a viewport position in a pane, without activating
+them. Takes the same params shape as [pane.link.activate](#panelinkactivate).
+
+**Params** (`PaneLinkActivateParams`): same fields as
+[pane.link.activate](#panelinkactivate) above.
+
+**Result**: `type: "pane_link_resolved"`
+
+| field | type | meaning |
+|---|---|---|
+| `regions` | array&lt;PaneLinkRegion&gt; | Link regions found at the position (empty if none). |
+
+`PaneLinkRegion` (inclusive display-cell columns on the pane's current viewport):
+
+| field | type | required | default | meaning |
+|---|---|---|---|---|
+| `row` | integer (uint16) | yes | — | Viewport row of the region. |
+| `start_col` | integer (uint16) | yes | — | First column of the region (inclusive). |
+| `end_col` | integer (uint16) | yes | — | Last column of the region (inclusive). |
+
+**Errors**: `pane_not_found`; other codes possible.
+
+**CLI**: API-only (no CLI subcommand).
+
+**Example**
+
+```json
+{"id":"lr2","method":"pane.link.resolve","params":{"pane_id":"w1:p1","viewport_row":5,"col":5}}
+{"id":"lr2","result":{"type":"pane_link_resolved","regions":[{"row":5,"start_col":0,"end_col":27}]}}
+```
+
+Validated 2026-09-17 against herdr 0.9.1.
 
 ---
 
@@ -951,6 +1166,75 @@ effect, `changed` is false and `reason` is `unchanged`.
 ```
 
 Validated 2026-08-19 against herdr 0.8.2.
+
+---
+
+## pane.scroll
+
+Set a pane's scrollback offset from the bottom (0 returns to the live bottom of output).
+
+**Params** (`PaneScrollParams`):
+
+| field | type | required | default | meaning |
+|---|---|---|---|---|
+| `pane_id` | string | yes | — | Target pane. |
+| `offset_from_bottom` | integer (uint64) | yes | — | Rows to scroll back from the bottom; 0 returns to the live bottom. |
+
+**Result**: `type: "pane_info"`
+
+| field | type | meaning |
+|---|---|---|
+| `pane` | [PaneInfo](../data-model.md) | The pane after scrolling (its `scroll` field reflects the resulting offset). |
+
+**Errors**: `pane_not_found`; other codes possible.
+
+**CLI**: API-only (no CLI subcommand).
+
+**Example**
+
+```json
+{"id":"s1","method":"pane.scroll","params":{"pane_id":"w1:p1","offset_from_bottom":1}}
+{"id":"s1","result":{"type":"pane_info","pane":{"pane_id":"w1:p1","terminal_id":"term_65bb4da209a581","workspace_id":"w1","tab_id":"w1:t1","focused":true,"cwd":"/home/penguin","foreground_cwd":"/home/penguin","terminal_title":"penguin@iceberg:~","terminal_title_stripped":"penguin@iceberg:~","agent_status":"unknown","scroll":{"offset_from_bottom":0,"max_offset_from_bottom":0,"viewport_rows":40},"revision":1}}}
+```
+
+Validated 2026-09-17 against herdr 0.9.1. (Requested offset 1 was clamped to 0 because
+the pane's scrollback did not extend beyond the viewport.)
+
+---
+
+## pane.selection.read
+
+Read the plain text spanned by a selection range in a pane, given an anchor and cursor
+point (the two ends of a copy-mode selection).
+
+**Params** (`PaneSelectionReadParams`):
+
+| field | type | required | default | meaning |
+|---|---|---|---|---|
+| `pane_id` | string | yes | — | Target pane. |
+| `anchor` | PaneTextPoint ([above](#panecopy_motion)) | yes | — | One end of the selection. |
+| `cursor` | PaneTextPoint ([above](#panecopy_motion)) | yes | — | Other end of the selection. |
+| `content_revision` | integer (uint64) \| null | no | null | Content revision the points are relative to; null skips the check (inferred). |
+
+**Result**: `type: "pane_selection"`
+
+| field | type | meaning |
+|---|---|---|
+| `pane_id` | string | Pane read. |
+| `text` | string | Text spanned by the selection. |
+
+**Errors**: `pane_not_found`; other codes possible.
+
+**CLI**: API-only (no CLI subcommand).
+
+**Example**
+
+```json
+{"id":"sel1","method":"pane.selection.read","params":{"pane_id":"w1:p1","anchor":{"row":0,"col":0},"cursor":{"row":0,"col":10}}}
+{"id":"sel1","result":{"type":"pane_selection","pane_id":"w1:p1","text":"[penguin@ic"}}
+```
+
+Validated 2026-09-17 against herdr 0.9.1.
 
 ---
 
