@@ -39,8 +39,10 @@ or automatically bump the version.
 
 All Go changes are test-first. Write a failing test, run it and confirm it fails for
 the right reason, write the minimal code to pass, refactor, repeat. Before declaring
-a task done, run `gofmt -l .`, `go vet ./...`, and `go test -race ./...` and report the
-output. Never weaken or skip a test to get green.
+a task done, run the [Git-aware formatting check](README.md#development),
+`go vet ./...`, and `go test -race ./...` and report the output. The formatting
+check covers existing tracked and new nonignored Go files in this checkout; it
+must not descend into ignored managed worktrees. Never weaken or skip a test to get green.
 
 ## Layout
 
@@ -64,4 +66,6 @@ responsibility needs a narrow API. Packages with multiple non-test files have a
 
 ## Instructions
 
-<!-- Add agent instructions below. -->
+### Dogfooding
+
+When working in this repository, use Fledge itself for agent coordination: `fledge agent spawn` to launch agents, `fledge agent list` to discover them, and `fledge agent message` to delegate tasks and exchange messages. Treat this as dogfooding: exercise the project CLI in real work and surface bugs or missing capabilities instead of silently bypassing it with another coordination tool.

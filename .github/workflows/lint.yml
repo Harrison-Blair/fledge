@@ -37,11 +37,19 @@ jobs:
       - name: Check formatting
         shell: bash
         run: |
-          unformatted="$(gofmt -l .)"
-          if [[ -n "$unformatted" ]]; then
-            echo "The following files are not gofmt-formatted:" >&2
-            echo "$unformatted" >&2
-            exit 1
-          fi
+          set -euo pipefail
+          git ls-files --cached --others --exclude-standard --deduplicate -z -- '*.go' |
+            (
+              status=0
+              while IFS= read -r -d '' file; do
+                [[ -f "$file" ]] || continue
+                unformatted="$(gofmt -l -- "$file")" || exit "$?"
+                if [[ -n "$unformatted" ]]; then
+                  printf '%s\n' "$unformatted" >&2
+                  status=1
+                fi
+              done
+              exit "$status"
+            )
       - name: Vet
         run: go vet ./...

@@ -35,7 +35,7 @@ name every top-level field and link there rather than re-expanding embedded enti
 | [pane.current](#panecurrent) | Return the pane the caller/UI is currently in |
 | [pane.edges](#paneedges) | Report which of a pane's four edges border the tab boundary |
 | [pane.edit_scrollback](#paneedit_scrollback) | Open a pane's scrollback in an external editor |
-| [pane.focus](#panefocus) | Focus a specific pane by ID and return its agent info |
+| [pane.focus](#panefocus) | Focus a specific pane by ID and return its pane info |
 | [pane.focus_direction](#panefocus_direction) | Move focus to the neighboring pane in a direction |
 | [pane.get](#paneget) | Fetch a single pane's `PaneInfo` |
 | [pane.graphics.clear](#panegraphicsclear) | Clear graphics layer(s) from a pane |
@@ -348,7 +348,7 @@ attached; the server acknowledged without an editor actually opening.)
 
 ## pane.focus
 
-Focus a specific pane by ID and return the `AgentInfo` for its occupant. Focusing marks
+Focus a specific pane by ID and return its `PaneInfo`. Focusing marks
 the pane's agent (and its tab) as **seen**, which collapses a background `done` state
 back to observed `idle` (skill.md). Unlike [pane.focus_direction](#panefocus_direction),
 this targets an exact pane rather than a neighbor.
@@ -359,13 +359,11 @@ this targets an exact pane rather than a neighbor.
 |---|---|---|---|---|
 | `pane_id` | string | yes | — | Pane to focus. |
 
-**Result**: `type: "agent_info"` (inferred: `agent_info` is the sole result type in this
-slice not otherwise produced by a pane method, and skill.md describes focusing as
-returning/refreshing the pane occupant's agent state)
+**Result**: `type: "pane_info"` (live-validated).
 
 | field | type | meaning |
 |---|---|---|
-| `agent` | [AgentInfo](../data-model.md) | Agent occupying the now-focused pane (fields present even when no agent is recognized). |
+| `pane` | [PaneInfo](../data-model.md) | The now-focused pane, including its IDs, cwd, focus state, and agent status. |
 
 **Errors**: `pane_not_found`; other codes possible.
 
@@ -375,11 +373,14 @@ returning/refreshing the pane occupant's agent state)
 **Example**
 
 ```json
-{"id":"1","method":"pane.focus","params":{"pane_id":"w1:p1"}}
-{"id":"1","result":{"type":"agent_info","agent":{"agent":"claude","agent_status":"idle","focused":true,"interactive_ready":true,"launch_pending":false,"pane_id":"w1:p1","revision":7,"screen_detection_skipped":false,"state_change_seq":3,"tab_id":"w1:t1","terminal_id":"term_…","workspace_id":"w1"}}}
+{"id":"fledge-focus-probe","method":"pane.focus","params":{"pane_id":"wQ:p6"}}
+{"id":"fledge-focus-probe","result":{"type":"pane_info","pane":{"pane_id":"wQ:p6","terminal_id":"term_65bb7c91616a65","workspace_id":"wQ","tab_id":"wQ:t5","focused":true,"cwd":"/home/penguin/source/fledge","foreground_cwd":"/home/penguin/source/fledge","label":"Claude smoke test","terminal_title":"penguin@iceberg:~/source/fledge","terminal_title_stripped":"penguin@iceberg:~/source/fledge","agent_status":"unknown","scroll":{"offset_from_bottom":0,"max_offset_from_bottom":0,"viewport_rows":58},"revision":1}}}
 ```
 
-Constructed from schema; not live-validated.
+Observed on 2026-09-18 UTC by a direct socket probe against the existing test pane
+`wQ:p6`; a repeated focus call returned the same `pane_info`/`pane` shape. This
+replaces the earlier inferred `agent_info` response. The example preserves the
+observed response, including session-specific IDs and paths.
 
 ---
 
