@@ -45,9 +45,9 @@ type PaneResult struct {
 	Pane Pane   `json:"pane"`
 }
 type AgentResult struct {
-	Type  string   `json:"type"`
-	Agent Pane     `json:"agent"`
-	Argv  []string `json:"argv"`
+	Type  string       `json:"type"`
+	Agent AgentDetails `json:"agent"`
+	Argv  []string     `json:"argv"`
 }
 type AgentListResult struct {
 	Type   string `json:"type"`
@@ -73,11 +73,7 @@ type WorktreeListResult struct {
 	Worktrees []Worktree `json:"worktrees"`
 }
 
-// AgentGetResult carries the details returned by read-only agent inspection.
-type AgentGetResult struct {
-	Type  string       `json:"type"`
-	Agent AgentDetails `json:"agent"`
-}
+// AgentDetails is the full AgentInfo carried by every agent_* result.
 type AgentDetails struct {
 	Pane
 	ForegroundCwd    *string       `json:"foreground_cwd"`

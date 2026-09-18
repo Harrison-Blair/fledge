@@ -69,7 +69,7 @@ func started(p herdr.Pane) herdr.AgentResult {
 	p.AgentStatus = "idle"
 	h := "claude"
 	p.Agent = &h
-	return herdr.AgentResult{Type: "agent_started", Agent: p, Argv: []string{"claude"}}
+	return herdr.AgentResult{Type: "agent_started", Agent: herdr.AgentDetails{Pane: p}, Argv: []string{"claude"}}
 }
 func TestDefaultSpawnUsesResolvedCallerAndPolicy(t *testing.T) {
 	p := pane("w1:p2", "w1", "w1:t2")
@@ -121,7 +121,7 @@ func TestExistingPaneStartupOutcomes(t *testing.T) {
 func TestMessagePreservesContentAndDoesNotWait(t *testing.T) {
 	p := pane("w1:p1", "w1", "w1:t1")
 	p.AgentStatus = "working"
-	s := fake(t, call{method: "agent.get", params: map[string]any{"target": "worker"}, result: herdr.AgentResult{Type: "agent_info", Agent: p}}, call{method: "agent.prompt", params: map[string]any{"target": "worker", "text": "hello\nworld\n"}, result: herdr.AgentResult{Type: "agent_prompted", Agent: p}})
+	s := fake(t, call{method: "agent.get", params: map[string]any{"target": "worker"}, result: info(p)}, call{method: "agent.prompt", params: map[string]any{"target": "worker", "text": "hello\nworld\n"}, result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
 	out := s.Message(context.Background(), MessageOptions{Name: "worker", File: "-", FileSet: true}, strings.NewReader("hello\nworld\n"))
 	if out.Status != "success" {
 		t.Fatal(out)
@@ -247,7 +247,7 @@ func TestMalformedMutationResultIsUnknown(t *testing.T) {
 func TestMessageBlockedIsRejectedWithoutMutation(t *testing.T) {
 	p := pane("w1:p1", "w1", "w1:t1")
 	p.AgentStatus = "blocked"
-	s := fake(t, call{method: "agent.get", result: herdr.AgentResult{Type: "agent_info", Agent: p}}, call{method: "agent.prompt", err: &herdr.Error{Code: "agent_blocked", Message: "approval"}})
+	s := fake(t, call{method: "agent.get", result: info(p)}, call{method: "agent.prompt", err: &herdr.Error{Code: "agent_blocked", Message: "approval"}})
 	out := s.Message(context.Background(), MessageOptions{Name: "worker", Body: "hello", BodySet: true}, strings.NewReader(""))
 	if out.Status != "rejected" || out.Error.Code != "agent_blocked" {
 		t.Fatal(out)
@@ -427,5 +427,40 @@ func TestSpawnWaitDefaultsToRealTimer(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("wait ignored cancellation")
+	}
+}
+
+func TestResolveTarget(t *testing.T) {
+	for _, c := range []struct {
+		name, pane, want string
+		ok               bool
+	}{{"worker", "", "worker", true}, {"", "w1:p3", "w1:p3", true}, {"", "", "", false}, {"worker", "w1:p3", "", false}} {
+		got, err := resolveTarget(c.name, c.pane)
+		if got != c.want || (err == nil) != c.ok {
+			t.Fatalf("%+v: got %q, %v", c, got, err)
+		}
+		if !c.ok && err.Error() != "exactly one of --name or --pane is required" {
+			t.Fatalf("%+v: %v", c, err)
+		}
+	}
+}
+
+func TestLookupReturnsValidatedAgentInfo(t *testing.T) {
+	focused := true
+	details := herdr.AgentDetails{Pane: liveAgent("working"), Focused: &focused}
+	out := Outcome{Status: "success", Effects: []Effect{}}
+	got, err := fake(t, call{method: "agent.get", params: map[string]any{"target": "worker"}, result: herdr.AgentResult{Type: "agent_info", Agent: details}}).lookup(context.Background(), "worker", &out)
+	if err != nil || !reflect.DeepEqual(got, details) || out.Status != "success" || out.Error != nil {
+		t.Fatalf("%+v %v %+v", got, err, out)
+	}
+	for _, c := range []call{
+		{method: "agent.get", err: &herdr.Error{Code: "agent_not_found", Message: "missing"}},
+		{method: "agent.get", result: herdr.AgentResult{Type: "wrong", Agent: details}},
+		{method: "agent.get", result: info(pane("", "w1", "w1:t2"))},
+	} {
+		out = Outcome{Status: "success", Effects: []Effect{}}
+		if _, err := fake(t, c).lookup(context.Background(), "worker", &out); err == nil || out.Status != "rejected" || out.Error == nil || out.Error.Phase != "agent.get" {
+			t.Fatalf("%+v: %v %+v", c, err, out)
+		}
 	}
 }
