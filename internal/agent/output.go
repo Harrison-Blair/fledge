@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"text/tabwriter"
 
 	"github.com/Harrison-Blair/fledge/internal/herdr"
@@ -54,6 +55,23 @@ type SpawnResult struct {
 }
 type ListResult struct {
 	Agents []AgentRow `json:"agents"`
+}
+
+// GetResult exposes inspection details, preserving unavailable values as null.
+type GetResult struct {
+	AgentRow
+	ForegroundCwd    *string          `json:"foreground_cwd"`
+	InteractiveReady *bool            `json:"interactive_ready"`
+	LaunchPending    *bool            `json:"launch_pending"`
+	Focused          *bool            `json:"focused"`
+	Title            *string          `json:"title"`
+	AgentSession     *SessionIdentity `json:"agent_session"`
+}
+type SessionIdentity struct {
+	Source  *string `json:"source"`
+	Harness *string `json:"harness"`
+	Kind    *string `json:"kind"`
+	Value   *string `json:"value"`
 }
 type MessageResult struct {
 	AgentRow
@@ -172,6 +190,13 @@ func (o Outcome) Write(w io.Writer, asJSON bool) error {
 			fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", display(a.Name), display(a.Harness), display(a.AgentStatus), display(a.WorkspaceID), display(a.TabID), display(a.PaneID), display(a.Cwd))
 		}
 		return table.Flush()
+	case GetResult:
+		session := r.AgentSession
+		if session == nil {
+			session = &SessionIdentity{}
+		}
+		_, err := fmt.Fprintf(w, "Name: %s\nHarness: %s\nStatus: %s\nWorkspace ID: %s\nTab ID: %s\nPane ID: %s\nWorking directory: %s\nForeground working directory: %s\nInteractive ready: %s\nLaunch pending: %s\nFocused: %s\nTitle: %s\nSession source: %s\nSession harness: %s\nSession reference kind: %s\nSession reference value: %s\n", display(r.Name), display(r.Harness), display(r.AgentStatus), display(r.WorkspaceID), display(r.TabID), display(r.PaneID), display(r.Cwd), display(r.ForegroundCwd), displayBool(r.InteractiveReady), displayBool(r.LaunchPending), displayBool(r.Focused), display(r.Title), display(session.Source), display(session.Harness), display(session.Kind), display(session.Value))
+		return err
 	case MessageResult:
 		_, err := fmt.Fprintf(w, "Message submitted to %s.\n", display(r.PaneID))
 		return err
@@ -191,6 +216,12 @@ func (o Outcome) Write(w io.Writer, asJSON bool) error {
 		return table.Flush()
 	}
 	return nil
+}
+func displayBool(b *bool) string {
+	if b == nil {
+		return "-"
+	}
+	return strconv.FormatBool(*b)
 }
 func display(s *string) string {
 	if s == nil || *s == "" {

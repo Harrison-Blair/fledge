@@ -19,6 +19,8 @@ fledge agent spawn --name builder --harness codex --workspace backend --tab buil
 fledge agent spawn --name task --harness codex --workspace backend --worktree new --branch feature/task
 fledge agent spawn --name existing --harness claude --pane w2:p3
 fledge agent list --json
+fledge agent get --name reviewer
+fledge agent get --pane w2:p3 --json
 fledge agent message --name reviewer --body 'Review the current diff'
 fledge agent message --pane w2:p3 --file task.md
 cat task.md | fledge agent message --name reviewer --file -
@@ -78,6 +80,18 @@ exactly one of `--name`/`--pane` and one of `--body`/`--file`; it preserves newl
 and rejects empty or invalid UTF-8 content. Success acknowledges **submission**,
 without waiting for the agent to begin or finish. Blocked agents require the
 user to handle their approval dialog.
+
+`fledge agent get` inspects one live agent with exactly one nonempty `--name` or
+`--pane` target and no positional arguments. It makes a single read request,
+without focusing the pane or marking output seen. Labeled text includes the list
+fields plus foreground working directory, interactive readiness, launch-pending
+status, focus state, resolved title, and native session source, harness, reference
+kind, and value. Unavailable values appear as `-`; known booleans appear as
+`true` or `false`. JSON returns a single result object with these details under
+`foreground_cwd`, `interactive_ready`, `launch_pending`, `focused`, `title`, and
+`agent_session` (with `source`, `harness`, `kind`, and `value`). Unavailable details
+are `null`, including absent booleans, and `effects` is empty. Failed reads use
+`rejected` with the error code and phase.
 
 `fledge agent stop` stops a live agent by closing its pane. It accepts exactly one
 of `--name`/`--pane`, resolves the agent first, and never closes a pane that does

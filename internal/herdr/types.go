@@ -72,3 +72,24 @@ type WorktreeListResult struct {
 	} `json:"source"`
 	Worktrees []Worktree `json:"worktrees"`
 }
+
+// AgentGetResult carries the details returned by read-only agent inspection.
+type AgentGetResult struct {
+	Type  string       `json:"type"`
+	Agent AgentDetails `json:"agent"`
+}
+type AgentDetails struct {
+	Pane
+	ForegroundCwd    *string       `json:"foreground_cwd"`
+	InteractiveReady *bool         `json:"interactive_ready"`
+	LaunchPending    *bool         `json:"launch_pending"`
+	Focused          *bool         `json:"focused"`
+	Title            *string       `json:"title"`
+	AgentSession     *AgentSession `json:"agent_session"`
+}
+type AgentSession struct {
+	Source *string `json:"source"`
+	Agent  *string `json:"agent"`
+	Kind   *string `json:"kind"`
+	Value  *string `json:"value"`
+}

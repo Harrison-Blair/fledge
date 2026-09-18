@@ -11,7 +11,7 @@ import (
 )
 
 func TestAgentHelp(t *testing.T) {
-	for _, args := range [][]string{{"agent", "--help"}, {"agent", "spawn", "--help"}, {"agent", "list", "--help"}, {"agent", "message", "--help"}, {"agent", "models", "--help"}, {"agent", "stop", "--help"}} {
+	for _, args := range [][]string{{"agent", "--help"}, {"agent", "spawn", "--help"}, {"agent", "list", "--help"}, {"agent", "message", "--help"}, {"agent", "models", "--help"}, {"agent", "stop", "--help"}, {"agent", "get", "--help"}} {
 		var out bytes.Buffer
 		if err := ExecuteWithArgs(args, &out); err != nil {
 			t.Fatal(err)
@@ -29,6 +29,11 @@ func TestAgentJSONValidation(t *testing.T) {
 		{"agent", "message", "--name", "a", "--body", "", "--json"},
 		{"agent", "models", "--harness", "nope", "--json"},
 		{"agent", "models", "extra", "--json"},
+		{"agent", "get", "--json"},
+		{"agent", "get", "--name=", "--json"},
+		{"agent", "get", "--pane=", "--json"},
+		{"agent", "get", "--name", "a", "--pane", "p", "--json"},
+		{"agent", "get", "extra", "--json"},
 		{"agent", "stop", "--json"},
 		{"agent", "stop", "--name", "a", "--pane", "p", "--json"},
 		{"agent", "stop", "extra", "--json"},
@@ -92,5 +97,15 @@ func TestAgentOutputFailureNotReclassified(t *testing.T) {
 	err := ExecuteWithArgs([]string{"agent", "spawn", "--json"}, w)
 	if ExitCode(err) != 1 || w.writes != 1 {
 		t.Fatalf("exit=%d writes=%d err=%v", ExitCode(err), w.writes, err)
+	}
+}
+
+func TestAgentGroupHelpListsGet(t *testing.T) {
+	var out bytes.Buffer
+	if err := ExecuteWithArgs([]string{"agent", "--help"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "\n  get ") {
+		t.Fatal(out.String())
 	}
 }
