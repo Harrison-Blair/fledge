@@ -18,7 +18,9 @@ func liveAgent(status string) herdr.Pane {
 	return p
 }
 func info(p herdr.Pane) herdr.AgentResult {
-	return herdr.AgentResult{Type: "agent_info", Agent: herdr.AgentDetails{Pane: p}}
+	f := false
+	var rev uint64
+	return herdr.AgentResult{Type: "agent_info", Agent: herdr.AgentDetails{Pane: p, TerminalID: "term_x", Focused: &f, Revision: &rev}}
 }
 func closed() map[string]any { return map[string]any{"type": "ok"} }
 

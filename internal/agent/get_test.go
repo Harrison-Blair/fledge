@@ -47,12 +47,15 @@ func TestGetFailures(t *testing.T) {
 			t.Fatalf("%+v", out)
 		}
 	}
-	for _, field := range []string{"type", "pane_id", "workspace_id", "tab_id", "agent_status"} {
-		p := map[string]any{"pane_id": "w1:p3", "workspace_id": "w1", "tab_id": "w1:t2", "agent_status": "idle"}
+	for _, field := range []string{"type", "pane_id", "workspace_id", "tab_id", "agent_status", "terminal_id", "focused", "revision"} {
+		p := map[string]any{"pane_id": "w1:p3", "workspace_id": "w1", "tab_id": "w1:t2", "agent_status": "idle", "terminal_id": "term_x", "focused": false, "revision": 0}
 		r := map[string]any{"type": "agent_info", "agent": p}
-		if field == "type" {
+		switch field {
+		case "type":
 			r[field] = "wrong"
-		} else {
+		case "focused", "revision":
+			delete(p, field)
+		default:
 			p[field] = ""
 		}
 		out := fake(t, call{method: "agent.get", result: r}).Get(context.Background(), GetOptions{Name: "worker"})
@@ -62,10 +65,143 @@ func TestGetFailures(t *testing.T) {
 	}
 }
 
+func TestGetRejectsMalformedSession(t *testing.T) {
+	base := func() map[string]any {
+		return map[string]any{"pane_id": "w1:p3", "workspace_id": "w1", "tab_id": "w1:t2", "agent_status": "idle", "terminal_id": "term_x", "focused": false, "revision": 0}
+	}
+	validSession := func() map[string]any {
+		return map[string]any{"source": "s", "agent": "a", "kind": "id", "value": "v"}
+	}
+	rejects := []struct {
+		name    string
+		session map[string]any
+	}{
+		{"empty object", map[string]any{}},
+		{"bad kind enum", map[string]any{"source": "s", "agent": "a", "kind": "url", "value": "v"}},
+	}
+	for _, field := range []string{"source", "agent", "kind", "value"} {
+		omitted := validSession()
+		delete(omitted, field)
+		rejects = append(rejects, struct {
+			name    string
+			session map[string]any
+		}{field + " omitted", omitted})
+		null := validSession()
+		null[field] = nil
+		rejects = append(rejects, struct {
+			name    string
+			session map[string]any
+		}{field + " null", null})
+	}
+	for _, tc := range rejects {
+		t.Run(tc.name, func(t *testing.T) {
+			p := base()
+			p["agent_session"] = tc.session
+			out := fake(t, call{method: "agent.get", result: map[string]any{"type": "agent_info", "agent": p}}).Get(context.Background(), GetOptions{Name: "worker"})
+			if out.ExitCode() != 1 || out.Status != "rejected" || out.Error.Code != "protocol_error" || out.Error.Phase != "agent.get" {
+				t.Fatalf("%+v", out)
+			}
+		})
+	}
+	accepts := []struct {
+		name    string
+		session map[string]any
+	}{
+		{"kind id", validSession()},
+		{"kind path", map[string]any{"source": "s", "agent": "a", "kind": "path", "value": "v"}},
+		{"empty strings", map[string]any{"source": "", "agent": "", "kind": "id", "value": ""}},
+	}
+	for _, tc := range accepts {
+		t.Run(tc.name, func(t *testing.T) {
+			p := base()
+			p["agent_session"] = tc.session
+			out := fake(t, call{method: "agent.get", result: map[string]any{"type": "agent_info", "agent": p}}).Get(context.Background(), GetOptions{Name: "worker"})
+			if out.ExitCode() != 0 || out.Status != "success" {
+				t.Fatalf("%+v", out)
+			}
+		})
+	}
+	t.Run("absent", func(t *testing.T) {
+		out := fake(t, call{method: "agent.get", result: map[string]any{"type": "agent_info", "agent": base()}}).Get(context.Background(), GetOptions{Name: "worker"})
+		if out.ExitCode() != 0 || out.Status != "success" {
+			t.Fatalf("%+v", out)
+		}
+	})
+	t.Run("explicit null", func(t *testing.T) {
+		p := base()
+		p["agent_session"] = nil
+		out := fake(t, call{method: "agent.get", result: map[string]any{"type": "agent_info", "agent": p}}).Get(context.Background(), GetOptions{Name: "worker"})
+		if out.ExitCode() != 0 || out.Status != "success" {
+			t.Fatalf("%+v", out)
+		}
+	})
+}
+
+func TestGetResolvesTitle(t *testing.T) {
+	base := func() map[string]any {
+		return map[string]any{"pane_id": "w1:p3", "workspace_id": "w1", "tab_id": "w1:t2", "agent_status": "idle", "terminal_id": "term_x", "focused": false, "revision": 0}
+	}
+	ptr := func(s string) *string { return &s }
+	for _, tc := range []struct {
+		name                                        string
+		title, terminalTitle, terminalTitleStripped *string
+		want                                        string
+	}{
+		{"stripped only", nil, nil, ptr("clean"), "clean"},
+		{"raw only", nil, ptr("◐ raw"), nil, "◐ raw"},
+		{"title wins", ptr("Review"), ptr("◐ raw"), ptr("clean"), "Review"},
+		{"none present", nil, nil, nil, ""},
+		{"stripped beats raw", nil, ptr("◐ raw"), ptr("clean"), "clean"},
+		{"empty title falls through to stripped", ptr(""), nil, ptr("clean"), "clean"},
+		{"empty stripped falls through to raw", nil, ptr("◐ raw"), ptr(""), "◐ raw"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := base()
+			if tc.title != nil {
+				p["title"] = *tc.title
+			}
+			if tc.terminalTitle != nil {
+				p["terminal_title"] = *tc.terminalTitle
+			}
+			if tc.terminalTitleStripped != nil {
+				p["terminal_title_stripped"] = *tc.terminalTitleStripped
+			}
+			out := fake(t, call{method: "agent.get", result: map[string]any{"type": "agent_info", "agent": p}}).Get(context.Background(), GetOptions{Name: "worker"})
+			if out.ExitCode() != 0 || out.Status != "success" {
+				t.Fatalf("%+v", out)
+			}
+			got := out.Result.(GetResult).Title
+			if tc.want == "" {
+				if got != nil {
+					t.Fatalf("title %q want nil", *got)
+				}
+			} else if got == nil || *got != tc.want {
+				t.Fatalf("title %v want %q", got, tc.want)
+			}
+			var b bytes.Buffer
+			if err := out.Write(&b, true); err != nil {
+				t.Fatal(err)
+			}
+			var envelope map[string]any
+			if err := json.Unmarshal(b.Bytes(), &envelope); err != nil {
+				t.Fatal(err)
+			}
+			result := envelope["result"].(map[string]any)
+			if tc.want == "" {
+				if result["title"] != nil {
+					t.Fatalf("json title %v want nil", result["title"])
+				}
+			} else if result["title"] != tc.want {
+				t.Fatalf("json title %v want %q", result["title"], tc.want)
+			}
+		})
+	}
+}
+
 func TestGetOutput(t *testing.T) {
 	for _, detailed := range []bool{false, true} {
-		p := map[string]any{"pane_id": "w1:p3", "workspace_id": "w1", "tab_id": "w1:t2", "agent_status": "idle"}
-		want := "Name: -\nHarness: -\nStatus: idle\nWorkspace ID: w1\nTab ID: w1:t2\nPane ID: w1:p3\nWorking directory: -\nForeground working directory: -\nInteractive ready: -\nLaunch pending: -\nFocused: -\nTitle: -\nSession source: -\nSession harness: -\nSession reference kind: -\nSession reference value: -\n"
+		p := map[string]any{"pane_id": "w1:p3", "workspace_id": "w1", "tab_id": "w1:t2", "agent_status": "idle", "terminal_id": "term_x", "focused": false, "revision": 0}
+		want := "Name: -\nHarness: -\nStatus: idle\nWorkspace ID: w1\nTab ID: w1:t2\nPane ID: w1:p3\nWorking directory: -\nForeground working directory: -\nInteractive ready: -\nLaunch pending: -\nFocused: false\nTitle: -\nSession source: -\nSession harness: -\nSession reference kind: -\nSession reference value: -\n"
 		if detailed {
 			p["foreground_cwd"], p["interactive_ready"], p["launch_pending"], p["focused"], p["title"] = "/repo/sub", true, false, false, "Review"
 			p["agent_session"] = map[string]any{"source": "herdr:claude", "agent": "claude", "kind": "id", "value": "session-1"}
@@ -91,13 +227,16 @@ func TestGetOutput(t *testing.T) {
 		if envelope["operation"] != "agent.get" || envelope["status"] != "success" || envelope["error"] != nil || len(envelope["effects"].([]any)) != 0 {
 			t.Fatal(b.String())
 		}
-		for _, key := range []string{"foreground_cwd", "interactive_ready", "launch_pending", "focused", "title", "agent_session"} {
+		for _, key := range []string{"foreground_cwd", "interactive_ready", "launch_pending", "title", "agent_session"} {
 			value, ok := result[key]
 			if !ok || (!detailed && value != nil) {
 				t.Fatalf("%s: %s", key, b.String())
 			}
 		}
-		if detailed && (result["launch_pending"] != false || result["focused"] != false || result["interactive_ready"] != true || result["agent_session"].(map[string]any)["harness"] != "claude") {
+		if result["focused"] != false {
+			t.Fatalf("focused: %s", b.String())
+		}
+		if detailed && (result["launch_pending"] != false || result["interactive_ready"] != true || result["agent_session"].(map[string]any)["harness"] != "claude") {
 			t.Fatal(b.String())
 		}
 	}

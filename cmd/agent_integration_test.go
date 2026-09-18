@@ -111,7 +111,7 @@ func TestGetForwardsTargetAndDecodesDetails(t *testing.T) {
 					done <- "incorrect request"
 					return
 				}
-				result := json.RawMessage(`{"type":"agent_info","agent":{"pane_id":"w2:p3","workspace_id":"w2","tab_id":"w2:t1","name":"reviewer","agent":"codex","agent_status":"working","cwd":"/repo","foreground_cwd":"/repo/sub","interactive_ready":false,"launch_pending":true,"focused":false,"title":"Review","agent_session":{"source":"herdr:codex","agent":"codex","kind":"path","value":"/sessions/123"}}}`)
+				result := json.RawMessage(`{"type":"agent_info","agent":{"pane_id":"w2:p3","workspace_id":"w2","tab_id":"w2:t1","name":"reviewer","agent":"codex","agent_status":"working","cwd":"/repo","terminal_id":"term_x","foreground_cwd":"/repo/sub","interactive_ready":false,"launch_pending":true,"focused":false,"revision":0,"title":"Review","agent_session":{"source":"herdr:codex","agent":"codex","kind":"path","value":"/sessions/123"}}}`)
 				if err := json.NewEncoder(conn).Encode(map[string]any{"id": req.ID, "result": result}); err != nil {
 					done <- err.Error()
 					return

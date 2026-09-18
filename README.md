@@ -85,13 +85,16 @@ user to handle their approval dialog.
 `--pane` target and no positional arguments. It makes a single read request,
 without focusing the pane or marking output seen. Labeled text includes the list
 fields plus foreground working directory, interactive readiness, launch-pending
-status, focus state, resolved title, and native session source, harness, reference
-kind, and value. Unavailable values appear as `-`; known booleans appear as
-`true` or `false`. JSON returns a single result object with these details under
+status, focus state, resolved title (the agent-reported title, else the stripped
+terminal title, else the raw terminal title), and native session source, harness,
+reference kind, and value. Unavailable values appear as `-`; known booleans appear
+as `true` or `false`. JSON returns a single result object with these details under
 `foreground_cwd`, `interactive_ready`, `launch_pending`, `focused`, `title`, and
-`agent_session` (with `source`, `harness`, `kind`, and `value`). Unavailable details
-are `null`, including absent booleans, and `effects` is empty. Failed reads use
-`rejected` with the error code and phase.
+`agent_session` (with `source`, `harness`, `kind`, and `value`). Unavailable
+details are `null`; `interactive_ready` and `launch_pending` are optional and
+appear as `null` when absent, while `focused` is always present on a successful
+read. `effects` is empty. Failed reads use `rejected` with the error code and
+phase.
 
 `fledge agent stop` stops a live agent by closing its pane. It accepts exactly one
 of `--name`/`--pane`, resolves the agent first, and never closes a pane that does

@@ -447,7 +447,8 @@ func TestResolveTarget(t *testing.T) {
 
 func TestLookupReturnsValidatedAgentInfo(t *testing.T) {
 	focused := true
-	details := herdr.AgentDetails{Pane: liveAgent("working"), Focused: &focused}
+	var revision uint64
+	details := herdr.AgentDetails{Pane: liveAgent("working"), TerminalID: "term_x", Focused: &focused, Revision: &revision}
 	out := Outcome{Status: "success", Effects: []Effect{}}
 	got, err := fake(t, call{method: "agent.get", params: map[string]any{"target": "worker"}, result: herdr.AgentResult{Type: "agent_info", Agent: details}}).lookup(context.Background(), "worker", &out)
 	if err != nil || !reflect.DeepEqual(got, details) || out.Status != "success" || out.Error != nil {

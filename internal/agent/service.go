@@ -71,6 +71,16 @@ func validAgent(p herdr.Pane) bool {
 	}
 	return false
 }
+func validAgentInfo(a herdr.AgentDetails) bool {
+	if !validAgent(a.Pane) || a.TerminalID == "" || a.Focused == nil || a.Revision == nil {
+		return false
+	}
+	if s := a.AgentSession; s != nil {
+		return s.Source != nil && s.Agent != nil && s.Kind != nil && s.Value != nil &&
+			(*s.Kind == "id" || *s.Kind == "path")
+	}
+	return true
+}
 
 // resolveTarget collapses the exactly-one-of --name/--pane choice into one agent.get target.
 func resolveTarget(name, pane string) (string, error) {
@@ -87,7 +97,7 @@ func resolveTarget(name, pane string) (string, error) {
 func (s *Service) lookup(ctx context.Context, target string, out *Outcome) (herdr.AgentDetails, error) {
 	var r herdr.AgentResult
 	err := s.call(ctx, "agent.get", map[string]any{"target": target}, &r)
-	if err == nil && (r.Type != "agent_info" || !validAgent(r.Agent.Pane)) {
+	if err == nil && (r.Type != "agent_info" || !validAgentInfo(r.Agent)) {
 		err = protocol("incomplete agent.get result")
 	}
 	if err != nil {
