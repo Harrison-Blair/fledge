@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"text/tabwriter"
 
 	"github.com/Harrison-Blair/fledge/internal/herdr"
@@ -54,6 +55,23 @@ type SpawnResult struct {
 }
 type ListResult struct {
 	Agents []AgentRow `json:"agents"`
+}
+
+// GetResult exposes inspection details, preserving unavailable values as null.
+type GetResult struct {
+	AgentRow
+	ForegroundCwd    *string          `json:"foreground_cwd"`
+	InteractiveReady *bool            `json:"interactive_ready"`
+	LaunchPending    *bool            `json:"launch_pending"`
+	Focused          *bool            `json:"focused"`
+	Title            *string          `json:"title"`
+	AgentSession     *SessionIdentity `json:"agent_session"`
+}
+type SessionIdentity struct {
+	Source  *string `json:"source"`
+	Harness *string `json:"harness"`
+	Kind    *string `json:"kind"`
+	Value   *string `json:"value"`
 }
 type MessageResult struct {
 	AgentRow
@@ -172,6 +190,8 @@ func (o Outcome) Write(w io.Writer, asJSON bool) error {
 			fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", display(a.Name), display(a.Harness), display(a.AgentStatus), display(a.WorkspaceID), display(a.TabID), display(a.PaneID), display(a.Cwd))
 		}
 		return table.Flush()
+	case GetResult:
+		return writeGetResult(w, r)
 	case MessageResult:
 		_, err := fmt.Fprintf(w, "Message submitted to %s.\n", display(r.PaneID))
 		return err
@@ -191,6 +211,32 @@ func (o Outcome) Write(w io.Writer, asJSON bool) error {
 		return table.Flush()
 	}
 	return nil
+}
+func writeGetResult(w io.Writer, r GetResult) error {
+	session := r.AgentSession
+	if session == nil {
+		session = &SessionIdentity{}
+	}
+	for _, f := range []struct{ label, value string }{
+		{"Name", display(r.Name)}, {"Harness", display(r.Harness)}, {"Status", display(r.AgentStatus)},
+		{"Workspace ID", display(r.WorkspaceID)}, {"Tab ID", display(r.TabID)}, {"Pane ID", display(r.PaneID)},
+		{"Working directory", display(r.Cwd)}, {"Foreground working directory", display(r.ForegroundCwd)},
+		{"Interactive ready", displayBool(r.InteractiveReady)}, {"Launch pending", displayBool(r.LaunchPending)},
+		{"Focused", displayBool(r.Focused)}, {"Title", display(r.Title)},
+		{"Session source", display(session.Source)}, {"Session harness", display(session.Harness)},
+		{"Session reference kind", display(session.Kind)}, {"Session reference value", display(session.Value)},
+	} {
+		if _, err := fmt.Fprintf(w, "%s: %s\n", f.label, f.value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func displayBool(b *bool) string {
+	if b == nil {
+		return "-"
+	}
+	return strconv.FormatBool(*b)
 }
 func display(s *string) string {
 	if s == nil || *s == "" {

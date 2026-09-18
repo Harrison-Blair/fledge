@@ -71,6 +71,40 @@ func validAgent(p herdr.Pane) bool {
 	}
 	return false
 }
+func validAgentInfo(a herdr.AgentDetails) bool {
+	if !validAgent(a.Pane) || a.TerminalID == "" || a.Focused == nil || a.Revision == nil {
+		return false
+	}
+	if s := a.AgentSession; s != nil {
+		return s.Source != nil && s.Agent != nil && s.Kind != nil && s.Value != nil &&
+			(*s.Kind == "id" || *s.Kind == "path")
+	}
+	return true
+}
+
+// resolveTarget collapses the exactly-one-of --name/--pane choice into one agent.get target.
+func resolveTarget(name, pane string) (string, error) {
+	if (name == "") == (pane == "") {
+		return "", invalid("exactly one of --name or --pane is required")
+	}
+	if name != "" {
+		return name, nil
+	}
+	return pane, nil
+}
+
+// lookup fetches one agent by target and fails out on transport, protocol, or validation errors.
+func (s *Service) lookup(ctx context.Context, target string, out *Outcome) (herdr.AgentDetails, error) {
+	var r herdr.AgentResult
+	err := s.call(ctx, "agent.get", map[string]any{"target": target}, &r)
+	if err == nil && (r.Type != "agent_info" || !validAgentInfo(r.Agent)) {
+		err = protocol("incomplete agent.get result")
+	}
+	if err != nil {
+		out.fail(err, "agent.get", false)
+	}
+	return r.Agent, err
+}
 func (s *Service) snapshot(ctx context.Context) (*herdr.Snapshot, error) {
 	var r herdr.SnapshotResult
 	if err := s.call(ctx, "session.snapshot", nil, &r); err != nil {
@@ -125,15 +159,12 @@ type MessageOptions struct {
 }
 
 func (o MessageOptions) read(in io.Reader) (string, string, error) {
-	if (o.Name == "") == (o.Pane == "") {
-		return "", "", invalid("exactly one of --name or --pane is required")
+	target, err := resolveTarget(o.Name, o.Pane)
+	if err != nil {
+		return "", "", err
 	}
 	if o.BodySet == o.FileSet {
 		return "", "", invalid("exactly one of --body or --file is required")
-	}
-	target := o.Name
-	if target == "" {
-		target = o.Pane
 	}
 	text := o.Body
 	if o.FileSet {
@@ -161,26 +192,21 @@ func (s *Service) Message(ctx context.Context, o MessageOptions, in io.Reader) O
 		out.fail(err, "validation", false)
 		return out
 	}
-	var r herdr.AgentResult
-	err = s.call(ctx, "agent.get", map[string]any{"target": target}, &r)
-	if err == nil && (r.Type != "agent_info" || !validAgent(r.Agent)) {
-		err = protocol("incomplete agent.get result")
-	}
+	a, err := s.lookup(ctx, target, &out)
 	if err != nil {
-		out.fail(err, "agent.get", false)
 		return out
 	}
-	out.Result = MessageResult{AgentRow: row(r.Agent)}
-	r = herdr.AgentResult{}
+	out.Result = MessageResult{AgentRow: row(a.Pane)}
+	var r herdr.AgentResult
 	err = s.call(ctx, "agent.prompt", map[string]any{"target": target, "text": text}, &r)
-	if err == nil && (r.Type != "agent_prompted" || !validAgent(r.Agent)) {
+	if err == nil && (r.Type != "agent_prompted" || !validAgent(r.Agent.Pane)) {
 		err = protocol("incomplete agent.prompt result")
 	}
 	if err != nil {
 		out.fail(err, "agent.prompt", true)
 		return out
 	}
-	out.Result = MessageResult{AgentRow: row(r.Agent), Submitted: true}
+	out.Result = MessageResult{AgentRow: row(r.Agent.Pane), Submitted: true}
 	out.Effects = append(out.Effects, Effect{Action: "submitted", Kind: "message", ID: r.Agent.PaneID})
 	return out
 }
@@ -192,32 +218,24 @@ type StopOptions struct {
 
 func (s *Service) Stop(ctx context.Context, o StopOptions) Outcome {
 	out := Outcome{Operation: "agent.stop", Status: "success", Effects: []Effect{}}
-	if (o.Name == "") == (o.Pane == "") {
-		out.fail(invalid("exactly one of --name or --pane is required"), "validation", false)
-		return out
-	}
-	target := o.Name
-	if target == "" {
-		target = o.Pane
-	}
-	var r herdr.AgentResult
-	err := s.call(ctx, "agent.get", map[string]any{"target": target}, &r)
-	if err == nil && (r.Type != "agent_info" || !validAgent(r.Agent)) {
-		err = protocol("incomplete agent.get result")
-	}
+	target, err := resolveTarget(o.Name, o.Pane)
 	if err != nil {
-		out.fail(err, "agent.get", false)
+		out.fail(err, "validation", false)
 		return out
 	}
-	out.Result = StopResult{AgentRow: row(r.Agent)}
-	if status := r.Agent.AgentStatus; status != "idle" && status != "done" && !o.Force {
+	a, err := s.lookup(ctx, target, &out)
+	if err != nil {
+		return out
+	}
+	out.Result = StopResult{AgentRow: row(a.Pane)}
+	if status := a.AgentStatus; status != "idle" && status != "done" && !o.Force {
 		out.fail(invalid("agent %s is %s; pass --force to stop it anyway", target, status), "guard", false)
 		return out
 	}
 	var closed struct {
 		Type string `json:"type"`
 	}
-	err = s.call(ctx, "pane.close", map[string]any{"pane_id": r.Agent.PaneID}, &closed)
+	err = s.call(ctx, "pane.close", map[string]any{"pane_id": a.PaneID}, &closed)
 	if err == nil && closed.Type != "ok" {
 		err = protocol("incomplete pane.close result")
 	}
@@ -225,8 +243,8 @@ func (s *Service) Stop(ctx context.Context, o StopOptions) Outcome {
 		out.fail(err, "pane.close", true)
 		return out
 	}
-	out.Result = StopResult{AgentRow: row(r.Agent), Stopped: true}
-	out.Effects = append(out.Effects, Effect{Action: "closed", Kind: "pane", ID: r.Agent.PaneID})
+	out.Result = StopResult{AgentRow: row(a.Pane), Stopped: true}
+	out.Effects = append(out.Effects, Effect{Action: "closed", Kind: "pane", ID: a.PaneID})
 	return out
 }
 func (s *Service) Spawn(ctx context.Context, o SpawnOptions) Outcome {
@@ -267,14 +285,14 @@ func (s *Service) Spawn(ctx context.Context, o SpawnOptions) Outcome {
 
 	var r herdr.AgentResult
 	err = s.start(ctx, map[string]any{"name": o.Name, "kind": o.Harness, "pane_id": p.PaneID, "args": args, "timeout_ms": o.Timeout.Milliseconds()}, &r)
-	if err == nil && (r.Type != "agent_started" || !validAgent(r.Agent) || !samePane(r.Agent, p) || r.Argv == nil) {
+	if err == nil && (r.Type != "agent_started" || !validAgent(r.Agent.Pane) || !samePane(r.Agent.Pane, p) || r.Argv == nil) {
 		err = protocol("incomplete agent.start result")
 	}
 	if err != nil {
 		out.fail(err, "agent.start", true)
 		return out
 	}
-	setPlacement(result, r.Agent)
+	setPlacement(result, r.Agent.Pane)
 	result.DetectedHarness = r.Agent.Agent
 	result.AgentStatus = pointer(r.Agent.AgentStatus)
 	result.Argv = r.Argv
