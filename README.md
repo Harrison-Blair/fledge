@@ -22,6 +22,8 @@ fledge agent list --json
 fledge agent message --name reviewer --body 'Review the current diff'
 fledge agent message --pane w2:p3 --file task.md
 cat task.md | fledge agent message --name reviewer --file -
+fledge agent stop --name reviewer
+fledge agent stop --pane w2:p3 --force --json
 fledge agent models --harness codex --json
 ```
 
@@ -76,6 +78,12 @@ exactly one of `--name`/`--pane` and one of `--body`/`--file`; it preserves newl
 and rejects empty or invalid UTF-8 content. Success acknowledges **submission**,
 without waiting for the agent to begin or finish. Blocked agents require the
 user to handle their approval dialog.
+
+`fledge agent stop` stops a live agent by closing its pane. It accepts exactly one
+of `--name`/`--pane`, resolves the agent first, and never closes a pane that does
+not host a known agent. Agents whose status is `working`, `blocked`, or `unknown`
+are refused with exit status 2 unless `--force` is passed; `idle` and `done` agents
+stop without it.
 
 `fledge agent models` lists coding-agent models discovered locally and does not
 need a Herdr session. It reads the `pi`, `codex`, and `claude` caches under the

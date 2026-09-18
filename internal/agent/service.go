@@ -184,6 +184,51 @@ func (s *Service) Message(ctx context.Context, o MessageOptions, in io.Reader) O
 	out.Effects = append(out.Effects, Effect{Action: "submitted", Kind: "message", ID: r.Agent.PaneID})
 	return out
 }
+
+type StopOptions struct {
+	Name, Pane string
+	Force      bool
+}
+
+func (s *Service) Stop(ctx context.Context, o StopOptions) Outcome {
+	out := Outcome{Operation: "agent.stop", Status: "success", Effects: []Effect{}}
+	if (o.Name == "") == (o.Pane == "") {
+		out.fail(invalid("exactly one of --name or --pane is required"), "validation", false)
+		return out
+	}
+	target := o.Name
+	if target == "" {
+		target = o.Pane
+	}
+	var r herdr.AgentResult
+	err := s.call(ctx, "agent.get", map[string]any{"target": target}, &r)
+	if err == nil && (r.Type != "agent_info" || !validAgent(r.Agent)) {
+		err = protocol("incomplete agent.get result")
+	}
+	if err != nil {
+		out.fail(err, "agent.get", false)
+		return out
+	}
+	out.Result = StopResult{AgentRow: row(r.Agent)}
+	if status := r.Agent.AgentStatus; status != "idle" && status != "done" && !o.Force {
+		out.fail(invalid("agent %s is %s; pass --force to stop it anyway", target, status), "guard", false)
+		return out
+	}
+	var closed struct {
+		Type string `json:"type"`
+	}
+	err = s.call(ctx, "pane.close", map[string]any{"pane_id": r.Agent.PaneID}, &closed)
+	if err == nil && closed.Type != "ok" {
+		err = protocol("incomplete pane.close result")
+	}
+	if err != nil {
+		out.fail(err, "pane.close", true)
+		return out
+	}
+	out.Result = StopResult{AgentRow: row(r.Agent), Stopped: true}
+	out.Effects = append(out.Effects, Effect{Action: "closed", Kind: "pane", ID: r.Agent.PaneID})
+	return out
+}
 func (s *Service) Spawn(ctx context.Context, o SpawnOptions) Outcome {
 	result := &SpawnResult{Name: o.Name, Harness: o.Harness}
 	out := Outcome{Operation: "agent.spawn", Status: "success", Result: result, Effects: []Effect{}}

@@ -11,7 +11,7 @@ import (
 )
 
 func TestAgentHelp(t *testing.T) {
-	for _, args := range [][]string{{"agent", "--help"}, {"agent", "spawn", "--help"}, {"agent", "list", "--help"}, {"agent", "message", "--help"}, {"agent", "models", "--help"}} {
+	for _, args := range [][]string{{"agent", "--help"}, {"agent", "spawn", "--help"}, {"agent", "list", "--help"}, {"agent", "message", "--help"}, {"agent", "models", "--help"}, {"agent", "stop", "--help"}} {
 		var out bytes.Buffer
 		if err := ExecuteWithArgs(args, &out); err != nil {
 			t.Fatal(err)
@@ -29,6 +29,9 @@ func TestAgentJSONValidation(t *testing.T) {
 		{"agent", "message", "--name", "a", "--body", "", "--json"},
 		{"agent", "models", "--harness", "nope", "--json"},
 		{"agent", "models", "extra", "--json"},
+		{"agent", "stop", "--json"},
+		{"agent", "stop", "--name", "a", "--pane", "p", "--json"},
+		{"agent", "stop", "extra", "--json"},
 		{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "p", "--cwd=", "--json"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
@@ -49,6 +52,15 @@ func TestAgentJSONValidation(t *testing.T) {
 				t.Fatal(out.String())
 			}
 		})
+	}
+}
+func TestAgentGroupHelpListsStop(t *testing.T) {
+	var out bytes.Buffer
+	if err := ExecuteWithArgs([]string{"agent", "--help"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "\n  stop ") {
+		t.Fatal(out.String())
 	}
 }
 func TestNativeJSONTokenDoesNotSelectOutput(t *testing.T) {

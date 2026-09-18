@@ -59,6 +59,10 @@ type MessageResult struct {
 	AgentRow
 	Submitted bool `json:"submitted"`
 }
+type StopResult struct {
+	AgentRow
+	Stopped bool `json:"stopped"`
+}
 type ModelRow struct {
 	Harness string  `json:"harness"`
 	Model   string  `json:"model"`
@@ -170,6 +174,9 @@ func (o Outcome) Write(w io.Writer, asJSON bool) error {
 		return table.Flush()
 	case MessageResult:
 		_, err := fmt.Fprintf(w, "Message submitted to %s.\n", display(r.PaneID))
+		return err
+	case StopResult:
+		_, err := fmt.Fprintf(w, "Stopped %s (%s) in %s.\n", display(r.Name), display(r.Harness), display(r.PaneID))
 		return err
 	case ModelsResult:
 		if len(r.Models) == 0 {
