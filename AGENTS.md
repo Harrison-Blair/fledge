@@ -76,11 +76,10 @@ Name the tab an agent runs in after the agent's own name or role so panes are id
 fledge agent spawn --name reviewer --harness claude --tab reviewer
 ```
 
-Stop agents when their task is finished instead of leaving idle agents and tabs behind. Fledge has no `agent stop` command yet, so close the pane reported by `fledge agent list`:
+Stop agents when their task is finished instead of leaving idle agents and tabs behind:
 
 ```sh
-fledge agent list
-herdr pane close <pane-id>
+fledge agent stop --name reviewer
 ```
 
-When acting as an orchestrator, stop only the workers you spawned, and only after their work and any verification or follow-up have been read. Surface the missing `agent stop` capability rather than working around it silently.
+Agents that are `working`, `blocked`, or `unknown` require `--force`. When acting as an orchestrator, stop only the workers you spawned, and only after their work and any verification or follow-up have been read.
