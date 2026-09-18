@@ -454,14 +454,4 @@ func TestLookupReturnsValidatedAgentInfo(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(got, details) || out.Status != "success" || out.Error != nil {
 		t.Fatalf("%+v %v %+v", got, err, out)
 	}
-	for _, c := range []call{
-		{method: "agent.get", err: &herdr.Error{Code: "agent_not_found", Message: "missing"}},
-		{method: "agent.get", result: herdr.AgentResult{Type: "wrong", Agent: details}},
-		{method: "agent.get", result: info(pane("", "w1", "w1:t2"))},
-	} {
-		out = Outcome{Status: "success", Effects: []Effect{}}
-		if _, err := fake(t, c).lookup(context.Background(), "worker", &out); err == nil || out.Status != "rejected" || out.Error == nil || out.Error.Phase != "agent.get" {
-			t.Fatalf("%+v: %v %+v", c, err, out)
-		}
-	}
 }

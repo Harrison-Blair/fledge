@@ -59,13 +59,15 @@ func TestAgentJSONValidation(t *testing.T) {
 		})
 	}
 }
-func TestAgentGroupHelpListsStop(t *testing.T) {
+func TestAgentGroupHelpListsSubcommands(t *testing.T) {
 	var out bytes.Buffer
 	if err := ExecuteWithArgs([]string{"agent", "--help"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "\n  stop ") {
-		t.Fatal(out.String())
+	for _, name := range []string{"stop", "get"} {
+		if !strings.Contains(out.String(), "\n  "+name+" ") {
+			t.Fatalf("%s: %s", name, out.String())
+		}
 	}
 }
 func TestNativeJSONTokenDoesNotSelectOutput(t *testing.T) {
@@ -97,15 +99,5 @@ func TestAgentOutputFailureNotReclassified(t *testing.T) {
 	err := ExecuteWithArgs([]string{"agent", "spawn", "--json"}, w)
 	if ExitCode(err) != 1 || w.writes != 1 {
 		t.Fatalf("exit=%d writes=%d err=%v", ExitCode(err), w.writes, err)
-	}
-}
-
-func TestAgentGroupHelpListsGet(t *testing.T) {
-	var out bytes.Buffer
-	if err := ExecuteWithArgs([]string{"agent", "--help"}, &out); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(out.String(), "\n  get ") {
-		t.Fatal(out.String())
 	}
 }
