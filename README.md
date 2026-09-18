@@ -104,9 +104,12 @@ cleans up after failure. Inspect the reported pane and resources in Herdr before
 retrying. For an unknown message outcome, inspect the conversation first to avoid
 submitting the same prompt twice. A launched process is not proof of readiness.
 
-A fresh split can briefly return `agent_pane_busy`. After inspecting the preserved
-pane and confirming it is an idle shell with no launched agent, retry into that
-specific pane instead of creating another one:
+A fresh split can briefly return `agent_pane_busy` while its shell reaches a
+prompt. Fledge retries only the launch step for that code, up to six more times
+with delays of 50ms doubling to a cap of 800ms (about 2.4 seconds in total),
+without recreating any resource; other errors are never retried. If it still
+fails, inspect the preserved pane, confirm it is an idle shell with no launched
+agent, and retry into that specific pane instead of creating another one:
 
 ```sh
 fledge agent spawn --name reviewer --harness claude --pane w2:p3

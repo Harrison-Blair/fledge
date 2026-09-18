@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/herdr"
 )
@@ -314,5 +315,117 @@ func TestFocusWrongDestinationStopsLaunch(t *testing.T) {
 	out := s.Spawn(context.Background(), o)
 	if out.Status != "unknown" || out.Error.Phase != "pane.focus" {
 		t.Fatal(out)
+	}
+}
+
+type recordedWaits struct {
+	delays []time.Duration
+	cancel context.CancelFunc
+}
+
+func (w *recordedWaits) wait(ctx context.Context, d time.Duration) error {
+	w.delays = append(w.delays, d)
+	if w.cancel != nil {
+		w.cancel()
+		return ctx.Err()
+	}
+	return nil
+}
+func busy() error { return &herdr.Error{Code: "agent_pane_busy", Message: "shell not ready"} }
+func splitCalls(t *testing.T, starts ...call) (*Service, *recordedWaits) {
+	t.Helper()
+	p := pane("w1:p2", "w1", "w1:t1")
+	calls := []call{{method: "session.snapshot", result: snapshot()}, {method: "pane.split", result: herdr.PaneResult{Type: "pane_info", Pane: p}}}
+	s := fake(t, append(calls, starts...)...)
+	w := &recordedWaits{}
+	s.Wait = w.wait
+	return s, w
+}
+func splitOptions() SpawnOptions {
+	o := validOptions()
+	o.Workspace = "main"
+	o.Tab = "build"
+	return o
+}
+func TestSpawnRetriesBusyPaneOnce(t *testing.T) {
+	p := pane("w1:p2", "w1", "w1:t1")
+	s, w := splitCalls(t, call{method: "agent.start", params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w1:p2", "args": []string{}, "timeout_ms": 30000}, err: busy()}, call{method: "agent.start", params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w1:p2", "args": []string{}, "timeout_ms": 30000}, result: started(p)})
+	out := s.Spawn(context.Background(), splitOptions())
+	if out.Status != "success" || out.Error != nil {
+		t.Fatalf("%+v", out)
+	}
+	if !reflect.DeepEqual(w.delays, []time.Duration{50 * time.Millisecond}) {
+		t.Fatalf("waits %v", w.delays)
+	}
+	if last := out.Effects[len(out.Effects)-1]; last.Action != "started" || last.ID != "w1:p2" {
+		t.Fatalf("%+v", out.Effects)
+	}
+}
+func TestSpawnBusyExhaustionIsPartial(t *testing.T) {
+	var starts []call
+	for i := 0; i < 7; i++ {
+		starts = append(starts, call{method: "agent.start", err: busy()})
+	}
+	s, w := splitCalls(t, starts...)
+	out := s.Spawn(context.Background(), splitOptions())
+	if out.Status != "partial" || out.Error == nil || out.Error.Phase != "agent.start" || out.Error.Code != "agent_pane_busy" {
+		t.Fatalf("%+v", out)
+	}
+	want := []time.Duration{50 * time.Millisecond, 100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond, 800 * time.Millisecond, 800 * time.Millisecond}
+	if !reflect.DeepEqual(w.delays, want) {
+		t.Fatalf("waits %v want %v", w.delays, want)
+	}
+	if !reflect.DeepEqual(out.Effects, []Effect{{Action: "created", Kind: "pane", ID: "w1:p2"}}) || *out.Result.(*SpawnResult).PaneID != "w1:p2" {
+		t.Fatalf("resources changed: %+v", out)
+	}
+}
+func TestSpawnDoesNotRetryOtherErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		call call
+	}{
+		{"agent_not_ready", call{method: "agent.start", err: &herdr.Error{Code: "agent_not_ready", Message: "slow"}}},
+		{"timeout", call{method: "agent.start", err: &herdr.Error{Code: "timeout", Message: "slow"}}},
+		{"transport_error", call{method: "agent.start", err: &herdr.Error{Code: "transport_error", Message: "lost", Uncertain: true}}},
+		{"protocol", call{method: "agent.start", result: herdr.AgentResult{Type: "wrong"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, w := splitCalls(t, tc.call)
+			out := s.Spawn(context.Background(), splitOptions())
+			if out.Error == nil || out.Error.Phase != "agent.start" || len(w.delays) != 0 {
+				t.Fatalf("%+v waits %v", out, w.delays)
+			}
+		})
+	}
+}
+func TestSpawnBusyRetryHonorsCancellation(t *testing.T) {
+	s, w := splitCalls(t, call{method: "agent.start", err: busy()})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w.cancel = cancel
+	out := s.Spawn(ctx, splitOptions())
+	if out.Status != "partial" || out.Error == nil || out.Error.Phase != "agent.start" || out.Error.Code != "agent_pane_busy" {
+		t.Fatalf("%+v", out)
+	}
+	if !reflect.DeepEqual(w.delays, []time.Duration{50 * time.Millisecond}) {
+		t.Fatalf("waits %v", w.delays)
+	}
+}
+func TestSpawnWaitDefaultsToRealTimer(t *testing.T) {
+	s := &Service{}
+	if err := s.wait(context.Background(), time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan error, 1)
+	go func() { done <- s.wait(ctx, time.Hour) }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("wait ignored cancellation")
 	}
 }

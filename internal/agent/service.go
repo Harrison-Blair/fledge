@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -18,7 +19,9 @@ type API interface {
 type Service struct {
 	API             API
 	CallerPane, Cwd string
-	initErr         error
+	// Wait pauses between agent.start retries; nil uses a real timer.
+	Wait    func(context.Context, time.Duration) error
+	initErr error
 }
 
 // FromEnvironment creates an operation-local service without contacting Herdr.
@@ -40,6 +43,19 @@ func (s *Service) call(ctx context.Context, method string, params any, result an
 		return &phaseError{phase: method, cause: err}
 	}
 	return nil
+}
+func (s *Service) wait(ctx context.Context, d time.Duration) error {
+	if s.Wait != nil {
+		return s.Wait(ctx, d)
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 func protocol(message string) error {
 	return &herdr.Error{Code: "protocol_error", Message: message, Uncertain: true}
@@ -205,7 +221,7 @@ func (s *Service) Spawn(ctx context.Context, o SpawnOptions) Outcome {
 	}
 
 	var r herdr.AgentResult
-	err = s.call(ctx, "agent.start", map[string]any{"name": o.Name, "kind": o.Harness, "pane_id": p.PaneID, "args": args, "timeout_ms": o.Timeout.Milliseconds()}, &r)
+	err = s.start(ctx, map[string]any{"name": o.Name, "kind": o.Harness, "pane_id": p.PaneID, "args": args, "timeout_ms": o.Timeout.Milliseconds()}, &r)
 	if err == nil && (r.Type != "agent_started" || !validAgent(r.Agent) || !samePane(r.Agent, p) || r.Argv == nil) {
 		err = protocol("incomplete agent.start result")
 	}
@@ -219,6 +235,24 @@ func (s *Service) Spawn(ctx context.Context, o SpawnOptions) Outcome {
 	result.Argv = r.Argv
 	out.Effects = append(out.Effects, Effect{Action: "started", Kind: "agent", ID: r.Agent.PaneID})
 	return out
+}
+
+// busyBackoff paces agent.start retries while a fresh shell reaches its prompt.
+var busyBackoff = []time.Duration{50 * time.Millisecond, 100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond, 800 * time.Millisecond, 800 * time.Millisecond}
+
+// start retries only agent_pane_busy, keeping the last busy error once attempts or the context run out.
+func (s *Service) start(ctx context.Context, params map[string]any, r *herdr.AgentResult) error {
+	for attempt := 0; ; attempt++ {
+		*r = herdr.AgentResult{}
+		err := s.call(ctx, "agent.start", params, r)
+		var remote *herdr.Error
+		if err == nil || attempt == len(busyBackoff) || !errors.As(err, &remote) || remote.Code != "agent_pane_busy" {
+			return err
+		}
+		if s.wait(ctx, busyBackoff[attempt]) != nil {
+			return err
+		}
+	}
 }
 func setPlacement(r *SpawnResult, p herdr.Pane) {
 	r.WorkspaceID = pointer(p.WorkspaceID)
