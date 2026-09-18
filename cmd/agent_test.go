@@ -11,7 +11,7 @@ import (
 )
 
 func TestAgentHelp(t *testing.T) {
-	for _, args := range [][]string{{"agent", "--help"}, {"agent", "spawn", "--help"}, {"agent", "list", "--help"}, {"agent", "message", "--help"}} {
+	for _, args := range [][]string{{"agent", "--help"}, {"agent", "spawn", "--help"}, {"agent", "list", "--help"}, {"agent", "message", "--help"}, {"agent", "models", "--help"}} {
 		var out bytes.Buffer
 		if err := ExecuteWithArgs(args, &out); err != nil {
 			t.Fatal(err)
@@ -27,6 +27,8 @@ func TestAgentJSONValidation(t *testing.T) {
 		{"agent", "spawn", "--bad", "--json"},
 		{"agent", "spawn", "positional", "--json"},
 		{"agent", "message", "--name", "a", "--body", "", "--json"},
+		{"agent", "models", "--harness", "nope", "--json"},
+		{"agent", "models", "extra", "--json"},
 		{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "p", "--cwd=", "--json"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {

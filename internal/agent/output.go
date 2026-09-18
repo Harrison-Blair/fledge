@@ -59,6 +59,14 @@ type MessageResult struct {
 	AgentRow
 	Submitted bool `json:"submitted"`
 }
+type ModelRow struct {
+	Harness string  `json:"harness"`
+	Model   string  `json:"model"`
+	Name    *string `json:"name"`
+}
+type ModelsResult struct {
+	Models []ModelRow `json:"models"`
+}
 
 func pointer(s string) *string {
 	if s == "" {
@@ -163,6 +171,17 @@ func (o Outcome) Write(w io.Writer, asJSON bool) error {
 	case MessageResult:
 		_, err := fmt.Fprintf(w, "Message submitted to %s.\n", display(r.PaneID))
 		return err
+	case ModelsResult:
+		if len(r.Models) == 0 {
+			_, err := fmt.Fprintln(w, "No models discovered.")
+			return err
+		}
+		table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(table, "HARNESS\tMODEL\tNAME")
+		for _, m := range r.Models {
+			fmt.Fprintf(table, "%s\t%s\t%s\n", m.Harness, m.Model, display(m.Name))
+		}
+		return table.Flush()
 	}
 	return nil
 }

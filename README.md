@@ -22,6 +22,7 @@ fledge agent list --json
 fledge agent message --name reviewer --body 'Review the current diff'
 fledge agent message --pane w2:p3 --file task.md
 cat task.md | fledge agent message --name reviewer --file -
+fledge agent models --harness codex --json
 ```
 
 Spawn requires a unique live `--name` and a `--harness`. By default it creates a
@@ -75,6 +76,14 @@ exactly one of `--name`/`--pane` and one of `--body`/`--file`; it preserves newl
 and rejects empty or invalid UTF-8 content. Success acknowledges **submission**,
 without waiting for the agent to begin or finish. Blocked agents require the
 user to handle their approval dialog.
+
+`fledge agent models` lists coding-agent models discovered locally and does not
+need a Herdr session. It reads the `pi`, `codex`, and `claude` caches under the
+home directory and runs `opencode models` and `cursor-agent --list-models`; other
+harness kinds are not yet supported. Rows are sorted by harness then model, and
+`MODEL` is the value to pass to `--model`. `--harness` limits output to one
+documented kind; an unsupported or uninstalled kind yields an empty list, and a
+missing file, unreadable cache, or failing command silently contributes no rows.
 
 ### Outcomes and recovery
 

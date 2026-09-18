@@ -31,9 +31,8 @@ func (o SpawnOptions) Validate() ([]string, error) {
 	if !regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`).MatchString(o.Name) {
 		return nil, invalid("--name must match [a-z][a-z0-9_-]{0,31}")
 	}
-	kinds := strings.Fields("pi claude codex gemini cursor devin agy cline omp mastracode opencode copilot kimi kiro droid amp grok hermes kilo qodercli qwen letta maki muse")
-	if !slices.Contains(kinds, o.Harness) {
-		return nil, invalid("--harness must be a documented Herdr harness kind")
+	if err := validateKind(o.Harness); err != nil {
+		return nil, err
 	}
 	if o.Timeout.Milliseconds() <= 3000 || o.Timeout.Milliseconds() > 300000 {
 		return nil, invalid("--timeout must convert to 3001 through 300000 milliseconds")
@@ -112,6 +111,16 @@ func modelArguments(kind, model string, args []string) ([]string, error) {
 		}
 	}
 	return append(prefix, result...), nil
+}
+
+// kinds lists the documented Herdr harness kinds accepted by --harness.
+var kinds = strings.Fields("pi claude codex gemini cursor devin agy cline omp mastracode opencode copilot kimi kiro droid amp grok hermes kilo qodercli qwen letta maki muse")
+
+func validateKind(kind string) error {
+	if !slices.Contains(kinds, kind) {
+		return invalid("--harness must be a documented Herdr harness kind")
+	}
+	return nil
 }
 func invalid(format string, args ...any) error {
 	return &InputError{Message: fmt.Sprintf(format, args...)}
