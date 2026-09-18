@@ -22,7 +22,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: build-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  group: build-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: true
 
 jobs:
