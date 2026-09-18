@@ -69,3 +69,18 @@ responsibility needs a narrow API. Packages with multiple non-test files have a
 ### Dogfooding
 
 When working in this repository, use Fledge itself for agent coordination: `fledge agent spawn` to launch agents, `fledge agent list` to discover them, and `fledge agent message` to delegate tasks and exchange messages. Treat this as dogfooding: exercise the project CLI in real work and surface bugs or missing capabilities instead of silently bypassing it with another coordination tool.
+
+Name the tab an agent runs in after the agent's own name or role so panes are identifiable at a glance:
+
+```sh
+fledge agent spawn --name reviewer --harness claude --tab reviewer
+```
+
+Stop agents when their task is finished instead of leaving idle agents and tabs behind. Fledge has no `agent stop` command yet, so close the pane reported by `fledge agent list`:
+
+```sh
+fledge agent list
+herdr pane close <pane-id>
+```
+
+When acting as an orchestrator, stop only the workers you spawned, and only after their work and any verification or follow-up have been read. Surface the missing `agent stop` capability rather than working around it silently.
