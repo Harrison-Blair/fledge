@@ -68,14 +68,14 @@ responsibility needs a narrow API. Packages with multiple non-test files have a
 
 ### Dogfooding
 
-When working in this repository, use Fledge itself for agent coordination: `fledge agent spawn` to launch agents, `fledge agent list` to discover them, and `fledge agent message` to delegate tasks and exchange messages. Treat this as dogfooding: exercise the project CLI in real work and surface bugs or missing capabilities instead of silently bypassing it with another coordination tool.
+When working in this repository, use Fledge itself for agent coordination: `fledge agent spawn` to launch agents, `fledge agent list` to discover them, `fledge agent get` to inspect one, and `fledge agent message` to delegate tasks and exchange messages. Treat this as dogfooding: exercise the project CLI in real work and surface bugs or missing capabilities instead of silently bypassing it with another coordination tool.
 
 Before launching agents, check `fledge agent --help` for the commands needed for
 both the task and cleanup. If the installed binary lacks commands present in this
 checkout, build the current source into a temporary directory and use that binary
 consistently for the task, including cleanup.
 
-Fledge's `agent spawn`, `list`, `message`, and `stop` commands connect to Herdr's
+Fledge's `agent spawn`, `get`, `list`, `message`, and `stop` commands connect to Herdr's
 local Unix socket. In Codex's restricted sandbox, request
 `sandbox_permissions: "require_escalated"` on the first invocation of these
 commands and of Herdr session-control commands, with a task-specific justification
