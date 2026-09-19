@@ -334,10 +334,7 @@ func (s *Service) Spawn(ctx context.Context, o SpawnOptions, in io.Reader) Outco
 		return out
 	}
 
-	var started time.Time
-	if !o.NoWait {
-		started = s.now()
-	}
+	started := s.now()
 	var r herdr.AgentResult
 	err = s.start(ctx, map[string]any{"name": o.Name, "kind": o.Harness, "pane_id": p.PaneID, "args": args, "timeout_ms": o.Timeout.Milliseconds()}, &r)
 	if err == nil && (r.Type != "agent_started" || !validAgent(r.Agent.Pane) || !samePane(r.Agent.Pane, p) || r.Argv == nil) {

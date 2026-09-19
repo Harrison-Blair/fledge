@@ -223,3 +223,31 @@ Herdr 0.9.1, binary `/tmp/fledge-dev`.
    still describing a blocking start) alongside a spawn that returns
    immediately with `launch_pending: true`, confirming the docs no longer
    matched measured behavior until corrected.
+
+---
+
+**Issue:** Short spawn timeout loses the agent name
+
+**Summary:** With `--timeout 3001ms`, `agent.wait` returned `agent_not_running`
+(not `timeout`) at ~3011 ms; Herdr dropped the agent's name and left the
+harness running unnamed in its pane. The printed partial-outcome hint
+(`herdr agent get <name>`) then fails with `agent_not_found`, and `fledge
+agent stop --name <name>` cannot reach the agent either (`--pane` still
+works). Also reproduced with `--no-wait --timeout 3001ms` (the name is gone
+~4 s later), so this predates spawn waiting for readiness; `agent.start`
+gets the full budget and `agent.wait` the remainder, so both deadlines fire
+together and Herdr's start-side teardown wins. Only measured at 3001 ms.
+Observed 2026-09-19, Fledge `dev` @ `180abb1`, Herdr 0.9.1.
+
+**Reproduction steps:**
+1. Run `fledge agent spawn --name vfy-f --harness claude --tab vfy-f --timeout 3001ms`.
+2. Observe a `partial` outcome with error code `agent_not_running`, phase
+   `agent.wait`, at ~3011 ms.
+3. Run `herdr agent get vfy-f` (or `fledge agent get --name vfy-f`) and
+   observe `agent_not_found`.
+4. Run `fledge agent stop --name vfy-f` and observe it cannot resolve the
+   agent; `fledge agent stop --pane <pane-id>` (from the outcome's effects)
+   still works.
+5. Repeat with `--no-wait --timeout 3001ms` and poll `agent get` a few
+   seconds later: the name still disappears (~4 s), confirming this
+   predates spawn waiting for readiness.

@@ -143,6 +143,18 @@ func TestInvalidMessageBeforeAPI(t *testing.T) {
 		t.Fatal(out)
 	}
 }
+func TestMessageRequiresExactlyOneOfBodyOrFile(t *testing.T) {
+	for _, o := range []MessageOptions{
+		{Name: "a"},
+		{Name: "a", Body: "hi", BodySet: true, File: "-", FileSet: true},
+	} {
+		s := fake(t)
+		out := s.Message(context.Background(), o, strings.NewReader(""))
+		if out.Status != "rejected" || out.ExitCode() != 2 || out.Error.Message != "exactly one of --body or --file is required" {
+			t.Fatalf("%+v", out)
+		}
+	}
+}
 func TestListIncludesUnnamed(t *testing.T) {
 	p := pane("w1:p1", "w1", "w1:t1")
 	p.AgentStatus = "idle"
@@ -470,18 +482,22 @@ func TestSpawnStatusAndPlacementComeFromWait(t *testing.T) {
 	o.Pane = "w1:p1"
 	sp := pane("w1:p1", "w1", "w1:t1")
 	sp.AgentStatus = "unknown"
-	h := "claude"
-	sp.Agent = &h
+	startHarness := "unknown-detected"
+	sp.Agent = &startHarness
 	startResult := herdr.AgentResult{Type: "agent_started", Agent: herdr.AgentDetails{Pane: sp}, Argv: []string{"claude"}}
 	wp := pane("w1:p1", "w1", "w1:t1")
 	cwd := "/repo"
 	wp.Cwd = &cwd
-	wp.Agent = &h
+	waitHarness := "claude"
+	wp.Agent = &waitHarness
 	s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "agent.start", result: startResult}, waitCall("worker", wp, "idle"))
 	out := s.Spawn(context.Background(), o, nil)
 	r, ok := out.Result.(*SpawnResult)
 	if out.Status != "success" || !ok || r.AgentStatus == nil || *r.AgentStatus != "idle" || r.Cwd == nil || *r.Cwd != "/repo" {
 		t.Fatalf("%+v", out)
+	}
+	if r.DetectedHarness == nil || *r.DetectedHarness != "claude" {
+		t.Fatalf("detected_harness not from wait result: %+v", out)
 	}
 }
 func TestSpawnNoWaitSkipsWait(t *testing.T) {
@@ -494,6 +510,43 @@ func TestSpawnNoWaitSkipsWait(t *testing.T) {
 	r, ok := out.Result.(*SpawnResult)
 	if out.Status != "success" || !ok || r.AgentStatus == nil || *r.AgentStatus != "idle" {
 		t.Fatalf("%+v", out)
+	}
+}
+
+// stepClock returns each of times in order, repeating the last for further calls.
+type stepClock struct {
+	times []time.Time
+	i     int
+}
+
+func (c *stepClock) now() time.Time {
+	t := c.times[c.i]
+	if c.i < len(c.times)-1 {
+		c.i++
+	}
+	return t
+}
+func TestSpawnWaitTimeoutIsRemainingBudget(t *testing.T) {
+	t0 := time.Unix(1700000000, 0)
+	for _, tc := range []struct {
+		name    string
+		elapsed time.Duration
+		wantMs  int64
+	}{
+		{"partial elapsed subtracts from budget", 12 * time.Second, 18000},
+		{"elapsed past budget clamps to zero", 40 * time.Second, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := validOptions()
+			o.Pane = "w1:p1"
+			p := pane("w1:p1", "w1", "w1:t1")
+			s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "agent.start", result: started(p)}, call{method: "agent.wait", params: map[string]any{"target": "worker", "timeout_ms": tc.wantMs}, result: waited(p, "idle")})
+			s.Now = (&stepClock{times: []time.Time{t0, t0.Add(tc.elapsed)}}).now
+			out := s.Spawn(context.Background(), o, nil)
+			if out.Status != "success" {
+				t.Fatalf("%+v", out)
+			}
+		})
 	}
 }
 func TestSpawnBlockedAfterWaitIsPartialWithoutClosingPane(t *testing.T) {
@@ -524,21 +577,69 @@ func TestSpawnWaitTimeoutIsPartial(t *testing.T) {
 		t.Fatalf("%+v", out)
 	}
 }
+
+// Each case mutates exactly one field of an otherwise-fully-valid agent.wait
+// result, so each of the three checks (type, AgentInfo completeness, same
+// pane) is proven independently rather than masked by the others.
 func TestSpawnMalformedWaitResultIsUnknown(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		result any
+		result func() herdr.AgentResult
 	}{
-		{"wrong type", map[string]any{"type": "wrong"}},
-		{"different pane", waited(pane("w1:p9", "w1", "w1:t1"), "idle")},
+		{"wrong type", func() herdr.AgentResult {
+			r := waited(pane("w1:p1", "w1", "w1:t1"), "idle")
+			r.Type = "wrong"
+			return r
+		}},
+		{"incomplete agent info", func() herdr.AgentResult {
+			r := waited(pane("w1:p1", "w1", "w1:t1"), "idle")
+			r.Agent.TerminalID = ""
+			return r
+		}},
+		{"different pane", func() herdr.AgentResult {
+			return waited(pane("w1:p9", "w1", "w1:t1"), "idle")
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			o := validOptions()
 			o.Pane = "w1:p1"
 			p := pane("w1:p1", "w1", "w1:t1")
-			s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "agent.start", result: started(p)}, call{method: "agent.wait", result: tc.result})
+			s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "agent.start", result: started(p)}, call{method: "agent.wait", result: tc.result()})
 			out := s.Spawn(context.Background(), o, nil)
 			if out.Status != "unknown" || out.Error == nil || out.Error.Phase != "agent.wait" {
+				t.Fatalf("%+v", out)
+			}
+		})
+	}
+}
+
+// Each case mutates exactly one field of an otherwise-fully-valid agent.prompt
+// result, so the type check and the pane validity check are proven
+// independently, and the failure phase is asserted for a locally-detected
+// (not remote-error) malformed result.
+func TestSpawnMalformedPromptResultIsUnknown(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		result func(p herdr.Pane) herdr.AgentResult
+	}{
+		{"wrong type", func(p herdr.Pane) herdr.AgentResult {
+			return herdr.AgentResult{Type: "wrong", Agent: herdr.AgentDetails{Pane: p}}
+		}},
+		{"invalid pane", func(p herdr.Pane) herdr.AgentResult {
+			p.AgentStatus = ""
+			return herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := validOptions()
+			o.Pane = "w1:p1"
+			o.Prompt = "hi"
+			o.PromptSet = true
+			p := pane("w1:p1", "w1", "w1:t1")
+			p.AgentStatus = "idle"
+			s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "agent.start", result: started(p)}, waitCall("worker", p, "idle"), call{method: "agent.prompt", result: tc.result(p)})
+			out := s.Spawn(context.Background(), o, nil)
+			if out.Status != "unknown" || out.Error == nil || out.Error.Phase != "agent.prompt" {
 				t.Fatalf("%+v", out)
 			}
 		})
@@ -593,7 +694,7 @@ func TestSpawnBothPromptAndFileRejectedBeforeMutation(t *testing.T) {
 	o.FileSet = true
 	s := fake(t)
 	out := s.Spawn(context.Background(), o, nil)
-	if out.Status != "rejected" || out.ExitCode() != 2 || len(out.Effects) != 0 {
+	if out.Status != "rejected" || out.ExitCode() != 2 || len(out.Effects) != 0 || out.Error.Message != "at most one of --prompt or --file is allowed" {
 		t.Fatalf("%+v", out)
 	}
 }
@@ -603,7 +704,17 @@ func TestSpawnUnreadablePromptFileFailsBeforeMutation(t *testing.T) {
 	o.FileSet = true
 	s := fake(t)
 	out := s.Spawn(context.Background(), o, nil)
-	if out.ExitCode() != 1 || out.Error.Phase != "validation" || len(out.Effects) != 0 {
+	if out.ExitCode() != 1 || out.Error.Phase != "validation" || len(out.Effects) != 0 || !strings.HasPrefix(out.Error.Message, "read prompt: ") {
+		t.Fatalf("%+v", out)
+	}
+}
+func TestSpawnEmptyPromptRejected(t *testing.T) {
+	o := validOptions()
+	o.Prompt = ""
+	o.PromptSet = true
+	s := fake(t)
+	out := s.Spawn(context.Background(), o, nil)
+	if out.Status != "rejected" || out.ExitCode() != 2 || len(out.Effects) != 0 || out.Error.Message != "prompt must be nonempty UTF-8" {
 		t.Fatalf("%+v", out)
 	}
 }

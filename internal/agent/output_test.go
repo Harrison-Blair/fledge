@@ -64,22 +64,36 @@ func TestHumanModelsTable(t *testing.T) {
 		t.Fatal(b.String())
 	}
 }
-func TestPartialHintDistinguishesBlockedFromTimeout(t *testing.T) {
+
+// The startup hints are keyed on the failing phase, not the error code: a
+// failure in phase agent.prompt means startup WAS confirmed, so neither hint
+// applies there even for an agent_blocked code (the agent is blocked on the
+// prompt's own approval dialog, not a startup dialog).
+func TestPartialHintKeyedOnPhaseNotCode(t *testing.T) {
 	for _, tc := range []struct {
-		name, code, status, want string
+		name, code, status, phase, want, mustNotContain string
 	}{
-		{"blocked", "agent_blocked", "partial", "Agent is waiting on a startup prompt"},
-		{"timeout", "timeout", "partial", "Startup was not confirmed"},
-		{"unknown", "transport_error", "unknown", "Startup was not confirmed"},
+		{"wait blocked", "agent_blocked", "partial", "agent.wait", "Agent is waiting on a startup prompt", "Startup was not confirmed"},
+		{"wait timeout", "timeout", "partial", "agent.wait", "Startup was not confirmed", "Agent is waiting on a startup prompt"},
+		{"wait malformed result", "transport_error", "unknown", "agent.wait", "Startup was not confirmed", "Agent is waiting on a startup prompt"},
+		{"start timeout", "timeout", "partial", "agent.start", "Startup was not confirmed", "Agent is waiting on a startup prompt"},
+		{"prompt blocked hides both hints", "agent_blocked", "partial", "agent.prompt", "", "Startup was not confirmed"},
+		{"prompt malformed result hides both hints", "transport_error", "unknown", "agent.prompt", "", "Startup was not confirmed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			out := Outcome{Status: tc.status, Result: &SpawnResult{Name: "worker"}, Error: &Failure{Code: tc.code, Message: "failure", Phase: "agent.wait"}}
+			out := Outcome{Status: tc.status, Result: &SpawnResult{Name: "worker"}, Error: &Failure{Code: tc.code, Message: "failure", Phase: tc.phase}}
 			var b bytes.Buffer
 			if err := out.Write(&b, false); err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(b.String(), tc.want) {
+			if tc.want != "" && !strings.Contains(b.String(), tc.want) {
 				t.Fatalf("%q missing %q", b.String(), tc.want)
+			}
+			if strings.Contains(b.String(), tc.mustNotContain) {
+				t.Fatalf("%q should not contain %q", b.String(), tc.mustNotContain)
+			}
+			if tc.phase == "agent.prompt" && strings.Contains(b.String(), "Agent is waiting on a startup prompt") {
+				t.Fatalf("%q should not contain the startup-prompt hint for phase agent.prompt", b.String())
 			}
 		})
 	}
