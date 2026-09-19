@@ -242,7 +242,7 @@ wait is indefinite.
 | `type` | const `"agent_prompted"` | yes | Result discriminator. |
 | `agent` | [AgentInfo](#agentinfo) | yes | The agent after submission (and after the wait, if requested). |
 
-**Errors**: `agent_blocked` (agent already at approval/question UI), `agent_prompt_stalled` (no lifecycle change within 5000 ms from a non-working start), `timeout` (wait exceeded a shorter `timeout_ms`), `agent_not_found`; other codes possible.
+**Errors**: `agent_blocked` (agent already at approval/question UI), `agent_prompt_stalled` (no lifecycle change within 5000 ms from a non-working start), `agent_not_ready` (target's `agent.start` launch is still pending), `timeout` (wait exceeded a shorter `timeout_ms`), `agent_not_found`; other codes possible.
 
 **CLI**: `herdr agent prompt <TARGET> <TEXT> [--wait] [--until <STATUS>]... [--timeout <MS>]`
 
@@ -375,10 +375,27 @@ Constructed from schema; not live-validated.
 Starts a supported interactive agent of `kind` in an existing pane identified by
 `pane_id`, assigning it `name`. The pane must already be at its interactive shell
 prompt with no foreground command; `agent.start` never creates, splits, or moves
-layout. It returns only after Herdr detects the expected agent in that same pane
-and considers it ready for interactive input. If the agent is blocked during
-startup it returns `agent_not_ready` immediately, but the name stays available
-for `agent.read`/`agent.send_keys`. Startup defaults to a 30-second timeout.
+layout. On herdr 0.9.1 it returns almost immediately after the launch begins
+(~6 ms in measured trials), not once the agent is ready for interactive input:
+the returned [AgentInfo](#agentinfo) commonly reports `agent_status: "unknown"`
+and `launch_pending: true`, with the `agent` kind (detected within roughly a
+second) and `interactive_ready` still unset. The launch settles several seconds
+later — the target either reaches `idle` with `interactive_ready: true` and
+`launch_pending` cleared, or, if it blocks on its own startup UI (e.g. an update
+dialog), reaches `agent_status: "blocked"` with `launch_pending` still `true`;
+`agent.start` itself was never observed returning `agent_not_ready` in either
+case, though the name stays available for `agent.read`/`agent.send_keys`.
+Callers that need to wait for readiness before calling `agent.prompt` must
+settle the launch themselves: either call `agent.wait` (measured on 0.9.1:
+called immediately after `agent.start` it blocks and returns at ~3.9 s with
+`agent_status: "idle"`, after which `agent.prompt` is accepted on the first
+try) or poll `agent.get` until `agent_status` leaves `unknown`. `agent.wait`
+matches `agent_status`, not `launch_pending`, so callers must check the
+returned status: `blocked` means the agent is at a startup dialog,
+`launch_pending` may still be `true`, and `agent.prompt` will return
+`agent_blocked` (the blocked-via-`agent.wait` case is inferred from
+`agent.wait`'s documented default match set plus the `agent.get` observations
+above, not measured directly). Startup defaults to a 30-second timeout.
 
 **Params** (`AgentStartParams`):
 
@@ -411,7 +428,7 @@ for `agent.read`/`agent.send_keys`. Startup defaults to a 30-second timeout.
 {"id":"cli:agent:start","error":{"code":"agent_pane_not_found","message":"agent target pane w1:p99 not found"}}
 ```
 
-Validated 2026-08-19 against herdr 0.8.2.
+Validated 2026-09-18 against herdr 0.9.1.
 
 ## agent.view.clear
 
@@ -521,7 +538,13 @@ Blocks until the target agent reaches one of the requested lifecycle states.
 Without `until`, it matches the first settled `idle`, `done`, or `blocked` state
 (the same default set as `agent.prompt`'s wait); pass `until` to match specific
 states (use `unknown` explicitly when needed). Without `timeout_ms`, it waits
-indefinitely. The result carries the matching event envelope.
+indefinitely. The wait is level-triggered: if the agent is already in a
+matching state when the call is made, it returns immediately (0.2 ms measured
+on an already-idle agent). On herdr 0.9.1 the result carries a full
+[AgentInfo](#agentinfo) snapshot, the same shape as `agent.get`'s result, not
+an event envelope — the schema names the result type `wait_matched` with an
+`event` field, but the measured 0.9.1 response is `type: "agent_info"` with an
+`agent` field.
 
 **Params** (`AgentWaitParams`):
 
@@ -531,12 +554,13 @@ indefinitely. The result carries the matching event envelope.
 | `until` | array<AgentStatus> | no | `[]` | States to match; empty means default settled set (`idle`, `done`, `blocked`). Values: `idle`, `working`, `blocked`, `done`, `unknown`. |
 | `timeout_ms` | uint64 \| null | no | null | Fail after this many ms; null waits indefinitely. |
 
-**Result** — `type: "wait_matched"`:
+**Result** — `type: "agent_info"` (measured; the schema names this result
+`wait_matched` with an `event: EventEnvelope` field instead — see note above):
 
 | field | type | required | meaning |
 | --- | --- | --- | --- |
-| `type` | const `"wait_matched"` | yes | Result discriminator. |
-| `event` | EventEnvelope | yes | The matched event: `{event: EventKind, data: EventData}`. For an agent state match, `event` is `pane_agent_status_changed` and `data` carries `pane_id`, `workspace_id`, and the new `agent_status`. See [../data-model.md](../data-model.md) and [../events.md](../events.md). |
+| `type` | const `"agent_info"` | yes | Result discriminator. |
+| `agent` | [AgentInfo](#agentinfo) | yes | The agent in its matched state. |
 
 **Errors**: `timeout` (no matching state within `timeout_ms`), `agent_not_found`; other codes possible.
 
@@ -545,8 +569,9 @@ indefinitely. The result carries the matching event envelope.
 **Example**:
 
 ```json
-{"id":"1","method":"agent.wait","params":{"target":"reviewer","until":["blocked"],"timeout_ms":120000}}
-{"id":"1","result":{"type":"wait_matched","event":{"event":"pane_agent_status_changed","data":{"type":"pane_agent_status_changed","pane_id":"w1:p1","workspace_id":"w1","agent_status":"blocked"}}}}
+{"id":"1","method":"agent.wait","params":{"target":"reviewer","timeout_ms":15000}}
+{"id":"1","result":{"agent":{"agent":"claude","agent_session":{"agent":"claude","kind":"id","source":"herdr:claude","value":"0187e81f-…"},"agent_status":"idle","cwd":"/home/penguin/source/fledge","focused":false,"foreground_cwd":"/home/penguin/source/fledge","interactive_ready":true,"name":"reviewer","pane_id":"w1:p1","revision":2,"state_change_seq":169,"tab_id":"w1:t1","terminal_id":"term_65bcdef99050e20","terminal_title":"✳ Claude Code","terminal_title_stripped":"Claude Code","workspace_id":"w1"},"type":"agent_info"}}
 ```
 
-Constructed from schema; not live-validated.
+Validated 2026-09-18 against herdr 0.9.1 (success path, `idle`; `timeout` and
+`blocked` paths not exercised).

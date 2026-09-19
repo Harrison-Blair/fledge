@@ -94,7 +94,7 @@ a client bug to fix rather than a runtime condition to retry.
 
 | code | trigger (per skill.md) |
 | --- | --- |
-| `agent_not_ready` | `agent.start` returns immediately with this code when the agent is blocked during startup; the name stays available for `agent read` / `agent send-keys`. Wait until the agent becomes idle before prompting. |
+| `agent_not_ready` | `agent.start` returns immediately with this code when the agent is blocked during startup; the name stays available for `agent read` / `agent send-keys`. Wait until the agent becomes idle before prompting. This `agent.start` behavior is per skill.md and was not observed on 0.9.1 — measured trials, including blocked-startup cases, never saw `agent.start` itself return it. On 0.9.1, `agent.prompt` also returns `agent_not_ready` (message `agent <name> is not an active named agent`) for a target whose `agent.start` launch is still pending (`launch_pending: true`). |
 | `agent_blocked` | `agent.prompt` rejects an agent already waiting at an approval or question dialog, before sending any input. Inspect the blocked UI and ask the user before answering. |
 | `agent_prompt_stalled` | A prompt sent from a non-working state produced no observed lifecycle change within five seconds, so Herdr returns this instead of waiting indefinitely. |
 | `timeout` | New in 0.9.1. `agent.prompt --wait` with a caller `--timeout`: if the caller's timeout expires before `agent_prompt_stalled`'s five-second activity check would fire, Herdr returns `timeout` instead. |
