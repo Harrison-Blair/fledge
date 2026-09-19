@@ -15,7 +15,7 @@ type SpawnOptions struct {
 	Provided                                                                                                      []string
 	Name, Harness, Model, Workspace, WorkspaceID, Tab, TabID, Pane, Worktree, Branch, Base, Cwd, Label, Direction string
 	Env, Args                                                                                                     []string
-	Focus, DirectionSet                                                                                           bool
+	Focus, DirectionSet, NoWait                                                                                   bool
 	Ratio                                                                                                         *float64
 	Timeout                                                                                                       time.Duration
 }

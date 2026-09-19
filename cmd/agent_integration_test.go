@@ -27,7 +27,7 @@ func TestSpawnForwardsExactNativeTokens(t *testing.T) {
 	done := make(chan []string, 1)
 	go func() {
 		var argv []string
-		for i := 0; i < 2; i++ {
+		for i := 0; i < 3; i++ {
 			conn, err := l.Accept()
 			if err != nil {
 				done <- nil
@@ -42,11 +42,14 @@ func TestSpawnForwardsExactNativeTokens(t *testing.T) {
 			}
 			json.NewDecoder(conn).Decode(&req)
 			var result any
-			if i == 0 {
+			switch i {
+			case 0:
 				result = map[string]any{"type": "session_snapshot", "snapshot": map[string]any{"protocol": 999, "version": "future", "workspaces": []any{}, "tabs": []any{}, "layouts": []any{}, "agents": []any{}, "panes": []any{map[string]any{"pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1"}}}}
-			} else {
+			case 1:
 				argv = req.Params.Args
-				result = map[string]any{"type": "agent_started", "agent": map[string]any{"pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1", "agent": "claude", "agent_status": "idle"}, "argv": append([]string{"claude"}, argv...)}
+				result = map[string]any{"type": "agent_started", "agent": map[string]any{"pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1", "agent": "claude", "agent_status": "unknown"}, "argv": append([]string{"claude"}, argv...)}
+			default:
+				result = map[string]any{"type": "agent_info", "agent": map[string]any{"pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1", "agent": "claude", "agent_status": "idle", "terminal_id": "term_x", "focused": false, "revision": 0}}
 			}
 			json.NewEncoder(conn).Encode(map[string]any{"id": req.ID, "result": result})
 			conn.Close()

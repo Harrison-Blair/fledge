@@ -59,7 +59,7 @@ func fake(t *testing.T, calls ...call) *Service {
 			t.Errorf("used %d of %d calls", s.index, len(s.calls))
 		}
 	})
-	return &Service{API: s, CallerPane: "old:p1", Cwd: t.TempDir()}
+	return &Service{API: s, CallerPane: "old:p1", Cwd: t.TempDir(), Now: func() time.Time { return time.Unix(0, 0) }}
 }
 func pane(id, ws, tab string) herdr.Pane { return herdr.Pane{PaneID: id, WorkspaceID: ws, TabID: tab} }
 func snapshot() herdr.SnapshotResult {
@@ -71,9 +71,18 @@ func started(p herdr.Pane) herdr.AgentResult {
 	p.Agent = &h
 	return herdr.AgentResult{Type: "agent_started", Agent: herdr.AgentDetails{Pane: p}, Argv: []string{"claude"}}
 }
+
+// waited builds the agent.wait settled-state result for a pane already hosting an agent.
+func waited(p herdr.Pane, status string) herdr.AgentResult {
+	p.AgentStatus = status
+	return info(p)
+}
+func waitCall(target string, p herdr.Pane, status string) call {
+	return call{method: "agent.wait", params: map[string]any{"target": target, "timeout_ms": 30000}, result: waited(p, status)}
+}
 func TestDefaultSpawnUsesResolvedCallerAndPolicy(t *testing.T) {
 	p := pane("w1:p2", "w1", "w1:t2")
-	s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "pane.current", params: map[string]any{"caller_pane_id": "old:p1"}, result: herdr.PaneResult{Type: "pane_current", Pane: pane("w1:p1", "w1", "w1:t1")}}, call{method: "tab.create", params: map[string]any{"workspace_id": "w1", "focus": false}, result: herdr.CreatedResult{Type: "tab_created", Tab: herdr.Tab{ID: "w1:t2", WorkspaceID: "w1"}, RootPane: p}}, call{method: "agent.start", params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w1:p2", "args": []string{}, "timeout_ms": 30000}, result: started(p)})
+	s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "pane.current", params: map[string]any{"caller_pane_id": "old:p1"}, result: herdr.PaneResult{Type: "pane_current", Pane: pane("w1:p1", "w1", "w1:t1")}}, call{method: "tab.create", params: map[string]any{"workspace_id": "w1", "focus": false}, result: herdr.CreatedResult{Type: "tab_created", Tab: herdr.Tab{ID: "w1:t2", WorkspaceID: "w1"}, RootPane: p}}, call{method: "agent.start", params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w1:p2", "args": []string{}, "timeout_ms": 30000}, result: started(p)}, waitCall("worker", p, "idle"))
 	out := s.Spawn(context.Background(), validOptions())
 	if out.Status != "success" {
 		t.Fatalf("%+v", out)
@@ -86,7 +95,7 @@ func TestExistingTabSplitsItsOwnFocusedPane(t *testing.T) {
 	o.Tab = "build"
 	o.Label = "worker pane"
 	o.Focus = true
-	s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "pane.split", params: map[string]any{"workspace_id": "w1", "target_pane_id": "w1:p1", "direction": "right", "focus": false}, result: herdr.PaneResult{Type: "pane_info", Pane: p}}, call{method: "pane.rename", params: map[string]any{"pane_id": "w1:p2", "label": "worker pane"}, result: herdr.PaneResult{Type: "pane_info", Pane: p}}, call{method: "pane.focus", params: map[string]any{"pane_id": "w1:p2"}, result: herdr.PaneResult{Type: "pane_info", Pane: p}}, call{method: "agent.start", result: started(p)})
+	s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "pane.split", params: map[string]any{"workspace_id": "w1", "target_pane_id": "w1:p1", "direction": "right", "focus": false}, result: herdr.PaneResult{Type: "pane_info", Pane: p}}, call{method: "pane.rename", params: map[string]any{"pane_id": "w1:p2", "label": "worker pane"}, result: herdr.PaneResult{Type: "pane_info", Pane: p}}, call{method: "pane.focus", params: map[string]any{"pane_id": "w1:p2"}, result: herdr.PaneResult{Type: "pane_info", Pane: p}}, call{method: "agent.start", result: started(p)}, waitCall("worker", p, "idle"))
 	out := s.Spawn(context.Background(), o)
 	if out.Status != "success" || !out.Result.(*SpawnResult).Split {
 		t.Fatalf("%+v", out)
@@ -155,7 +164,7 @@ func TestEmptyWorkspaceLabelDoesNotSelectDestination(t *testing.T) {
 	snap := snapshot()
 	snap.Snapshot.Workspaces = append(snap.Snapshot.Workspaces, herdr.Workspace{ID: "unrelated", Label: ""})
 	p := pane("w1:p2", "w1", "w1:t2")
-	s := fake(t, call{method: "session.snapshot", result: snap}, call{method: "pane.current", result: herdr.PaneResult{Type: "pane_current", Pane: pane("w1:p1", "w1", "w1:t1")}}, call{method: "tab.create", params: map[string]any{"workspace_id": "w1", "focus": false}, result: herdr.CreatedResult{Type: "tab_created", Tab: herdr.Tab{ID: "w1:t2", WorkspaceID: "w1"}, RootPane: p}}, call{method: "agent.start", result: started(p)})
+	s := fake(t, call{method: "session.snapshot", result: snap}, call{method: "pane.current", result: herdr.PaneResult{Type: "pane_current", Pane: pane("w1:p1", "w1", "w1:t1")}}, call{method: "tab.create", params: map[string]any{"workspace_id": "w1", "focus": false}, result: herdr.CreatedResult{Type: "tab_created", Tab: herdr.Tab{ID: "w1:t2", WorkspaceID: "w1"}, RootPane: p}}, call{method: "agent.start", result: started(p)}, waitCall("worker", p, "idle"))
 	if out := s.Spawn(context.Background(), validOptions()); out.Status != "success" {
 		t.Fatal(out)
 	}
@@ -199,7 +208,7 @@ func TestNewWorkspaceReusesInitialTabAndPane(t *testing.T) {
 	o.Cwd = "/chosen"
 	o.Env = []string{"K=a=b"}
 	p := pane("w2:p1", "w2", "w2:t1")
-	s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "pane.current", result: herdr.PaneResult{Type: "pane_current", Pane: pane("w1:p1", "w1", "w1:t1")}}, call{method: "workspace.create", params: map[string]any{"focus": false, "label": "new workspace", "cwd": "/chosen", "env": map[string]string{"K": "a=b"}, "source_workspace_id": "w1"}, result: herdr.CreatedResult{Type: "workspace_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2", Label: "1"}, RootPane: p}}, call{method: "tab.rename", params: map[string]any{"tab_id": "w2:t1", "label": "tasks"}, result: herdr.TabResult{Type: "tab_info", Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2", Label: "tasks"}}}, call{method: "agent.start", result: started(p)})
+	s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "pane.current", result: herdr.PaneResult{Type: "pane_current", Pane: pane("w1:p1", "w1", "w1:t1")}}, call{method: "workspace.create", params: map[string]any{"focus": false, "label": "new workspace", "cwd": "/chosen", "env": map[string]string{"K": "a=b"}, "source_workspace_id": "w1"}, result: herdr.CreatedResult{Type: "workspace_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2", Label: "1"}, RootPane: p}}, call{method: "tab.rename", params: map[string]any{"tab_id": "w2:t1", "label": "tasks"}, result: herdr.TabResult{Type: "tab_info", Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2", Label: "tasks"}}}, call{method: "agent.start", result: started(p)}, waitCall("worker", p, "idle"))
 	out := s.Spawn(context.Background(), o)
 	if out.Status != "success" {
 		t.Fatalf("%+v", out)
@@ -272,7 +281,7 @@ func TestNewWorkspaceDoesNotRequireResolvableCaller(t *testing.T) {
 	o := validOptions()
 	o.Workspace = "new workspace"
 	p := pane("w2:p1", "w2", "w2:t1")
-	s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "pane.current", err: &herdr.Error{Code: "pane_not_found", Message: "stale caller"}}, call{method: "workspace.create", params: map[string]any{"label": "new workspace", "focus": false}, result: herdr.CreatedResult{Type: "workspace_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p}}, call{method: "agent.start", result: started(p)})
+	s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "pane.current", err: &herdr.Error{Code: "pane_not_found", Message: "stale caller"}}, call{method: "workspace.create", params: map[string]any{"label": "new workspace", "focus": false}, result: herdr.CreatedResult{Type: "workspace_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p}}, call{method: "agent.start", result: started(p)}, waitCall("worker", p, "idle"))
 	if out := s.Spawn(context.Background(), o); out.Status != "success" {
 		t.Fatal(out)
 	}
@@ -283,7 +292,7 @@ func TestExplicitPaneCustomizationOrder(t *testing.T) {
 	o.Label = "reviewer"
 	o.Focus = true
 	p := pane("w1:p1", "w1", "w1:t1")
-	s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "pane.rename", params: map[string]any{"pane_id": "w1:p1", "label": "reviewer"}, result: herdr.PaneResult{Type: "pane_info", Pane: p}}, call{method: "pane.focus", params: map[string]any{"pane_id": "w1:p1"}, result: herdr.PaneResult{Type: "pane_info", Pane: p}}, call{method: "agent.start", result: started(p)})
+	s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "pane.rename", params: map[string]any{"pane_id": "w1:p1", "label": "reviewer"}, result: herdr.PaneResult{Type: "pane_info", Pane: p}}, call{method: "pane.focus", params: map[string]any{"pane_id": "w1:p1"}, result: herdr.PaneResult{Type: "pane_info", Pane: p}}, call{method: "agent.start", result: started(p)}, waitCall("worker", p, "idle"))
 	out := s.Spawn(context.Background(), o)
 	if out.Status != "success" {
 		t.Fatal(out)
@@ -349,7 +358,7 @@ func splitOptions() SpawnOptions {
 }
 func TestSpawnRetriesBusyPaneOnce(t *testing.T) {
 	p := pane("w1:p2", "w1", "w1:t1")
-	s, w := splitCalls(t, call{method: "agent.start", params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w1:p2", "args": []string{}, "timeout_ms": 30000}, err: busy()}, call{method: "agent.start", params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w1:p2", "args": []string{}, "timeout_ms": 30000}, result: started(p)})
+	s, w := splitCalls(t, call{method: "agent.start", params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w1:p2", "args": []string{}, "timeout_ms": 30000}, err: busy()}, call{method: "agent.start", params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w1:p2", "args": []string{}, "timeout_ms": 30000}, result: started(p)}, waitCall("worker", p, "idle"))
 	out := s.Spawn(context.Background(), splitOptions())
 	if out.Status != "success" || out.Error != nil {
 		t.Fatalf("%+v", out)
@@ -453,5 +462,85 @@ func TestLookupReturnsValidatedAgentInfo(t *testing.T) {
 	got, err := fake(t, call{method: "agent.get", params: map[string]any{"target": "worker"}, result: herdr.AgentResult{Type: "agent_info", Agent: details}}).lookup(context.Background(), "worker", &out)
 	if err != nil || !reflect.DeepEqual(got, details) || out.Status != "success" || out.Error != nil {
 		t.Fatalf("%+v %v %+v", got, err, out)
+	}
+}
+
+func TestSpawnStatusAndPlacementComeFromWait(t *testing.T) {
+	o := validOptions()
+	o.Pane = "w1:p1"
+	sp := pane("w1:p1", "w1", "w1:t1")
+	sp.AgentStatus = "unknown"
+	h := "claude"
+	sp.Agent = &h
+	startResult := herdr.AgentResult{Type: "agent_started", Agent: herdr.AgentDetails{Pane: sp}, Argv: []string{"claude"}}
+	wp := pane("w1:p1", "w1", "w1:t1")
+	cwd := "/repo"
+	wp.Cwd = &cwd
+	wp.Agent = &h
+	s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "agent.start", result: startResult}, waitCall("worker", wp, "idle"))
+	out := s.Spawn(context.Background(), o)
+	r, ok := out.Result.(*SpawnResult)
+	if out.Status != "success" || !ok || r.AgentStatus == nil || *r.AgentStatus != "idle" || r.Cwd == nil || *r.Cwd != "/repo" {
+		t.Fatalf("%+v", out)
+	}
+}
+func TestSpawnNoWaitSkipsWait(t *testing.T) {
+	o := validOptions()
+	o.Pane = "w1:p1"
+	o.NoWait = true
+	p := pane("w1:p1", "w1", "w1:t1")
+	s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "agent.start", result: started(p)})
+	out := s.Spawn(context.Background(), o)
+	r, ok := out.Result.(*SpawnResult)
+	if out.Status != "success" || !ok || r.AgentStatus == nil || *r.AgentStatus != "idle" {
+		t.Fatalf("%+v", out)
+	}
+}
+func TestSpawnBlockedAfterWaitIsPartialWithoutClosingPane(t *testing.T) {
+	o := validOptions()
+	o.Pane = "w1:p1"
+	p := pane("w1:p1", "w1", "w1:t1")
+	s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "agent.start", result: started(p)}, waitCall("worker", p, "blocked"))
+	out := s.Spawn(context.Background(), o)
+	if out.Status != "partial" || out.ExitCode() != 1 || out.Error == nil || out.Error.Code != "agent_blocked" || out.Error.Phase != "agent.wait" {
+		t.Fatalf("%+v", out)
+	}
+	if len(out.Effects) == 0 {
+		t.Fatalf("expected retained effects: %+v", out)
+	}
+	for _, e := range out.Effects {
+		if e.Kind == "pane" && e.Action == "closed" {
+			t.Fatalf("pane closed on blocked wait: %+v", out.Effects)
+		}
+	}
+}
+func TestSpawnWaitTimeoutIsPartial(t *testing.T) {
+	o := validOptions()
+	o.Pane = "w1:p1"
+	p := pane("w1:p1", "w1", "w1:t1")
+	s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "agent.start", result: started(p)}, call{method: "agent.wait", err: &herdr.Error{Code: "timeout", Message: "no settled state"}})
+	out := s.Spawn(context.Background(), o)
+	if out.Status != "partial" || out.Error == nil || out.Error.Code != "timeout" || out.Error.Phase != "agent.wait" {
+		t.Fatalf("%+v", out)
+	}
+}
+func TestSpawnMalformedWaitResultIsUnknown(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		result any
+	}{
+		{"wrong type", map[string]any{"type": "wrong"}},
+		{"different pane", waited(pane("w1:p9", "w1", "w1:t1"), "idle")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := validOptions()
+			o.Pane = "w1:p1"
+			p := pane("w1:p1", "w1", "w1:t1")
+			s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "agent.start", result: started(p)}, call{method: "agent.wait", result: tc.result})
+			out := s.Spawn(context.Background(), o)
+			if out.Status != "unknown" || out.Error == nil || out.Error.Phase != "agent.wait" {
+				t.Fatalf("%+v", out)
+			}
+		})
 	}
 }

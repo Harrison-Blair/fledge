@@ -20,7 +20,9 @@ type Service struct {
 	API             API
 	CallerPane, Cwd string
 	// Wait pauses between agent.start retries; nil uses a real timer.
-	Wait    func(context.Context, time.Duration) error
+	Wait func(context.Context, time.Duration) error
+	// Now reports the current time for the spawn timeout budget; nil uses time.Now.
+	Now     func() time.Time
 	initErr error
 }
 
@@ -43,6 +45,12 @@ func (s *Service) call(ctx context.Context, method string, params any, result an
 		return &phaseError{phase: method, cause: err}
 	}
 	return nil
+}
+func (s *Service) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
 }
 func (s *Service) wait(ctx context.Context, d time.Duration) error {
 	if s.Wait != nil {
@@ -283,6 +291,10 @@ func (s *Service) Spawn(ctx context.Context, o SpawnOptions) Outcome {
 		return out
 	}
 
+	var started time.Time
+	if !o.NoWait {
+		started = s.now()
+	}
 	var r herdr.AgentResult
 	err = s.start(ctx, map[string]any{"name": o.Name, "kind": o.Harness, "pane_id": p.PaneID, "args": args, "timeout_ms": o.Timeout.Milliseconds()}, &r)
 	if err == nil && (r.Type != "agent_started" || !validAgent(r.Agent.Pane) || !samePane(r.Agent.Pane, p) || r.Argv == nil) {
@@ -297,6 +309,26 @@ func (s *Service) Spawn(ctx context.Context, o SpawnOptions) Outcome {
 	result.AgentStatus = pointer(r.Agent.AgentStatus)
 	result.Argv = r.Argv
 	out.Effects = append(out.Effects, Effect{Action: "started", Kind: "agent", ID: r.Agent.PaneID})
+	if o.NoWait {
+		return out
+	}
+
+	remaining := max(o.Timeout-s.now().Sub(started), 0)
+	var w herdr.AgentResult
+	err = s.call(ctx, "agent.wait", map[string]any{"target": o.Name, "timeout_ms": remaining.Milliseconds()}, &w)
+	if err == nil && (w.Type != "agent_info" || !validAgentInfo(w.Agent) || !samePane(w.Agent.Pane, r.Agent.Pane)) {
+		err = protocol("incomplete agent.wait result")
+	}
+	if err != nil {
+		out.fail(err, "agent.wait", true)
+		return out
+	}
+	setPlacement(result, w.Agent.Pane)
+	result.DetectedHarness = w.Agent.Agent
+	result.AgentStatus = pointer(w.Agent.AgentStatus)
+	if w.Agent.AgentStatus == "blocked" {
+		out.fail(&herdr.Error{Code: "agent_blocked", Message: fmt.Sprintf("agent %s is waiting on a startup prompt", o.Name)}, "agent.wait", true)
+	}
 	return out
 }
 

@@ -32,6 +32,26 @@ func TestHumanModelsTable(t *testing.T) {
 		t.Fatal(b.String())
 	}
 }
+func TestPartialHintDistinguishesBlockedFromTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name, code, status, want string
+	}{
+		{"blocked", "agent_blocked", "partial", "Agent is waiting on a startup prompt"},
+		{"timeout", "timeout", "partial", "Startup was not confirmed"},
+		{"unknown", "transport_error", "unknown", "Startup was not confirmed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := Outcome{Status: tc.status, Result: &SpawnResult{Name: "worker"}, Error: &Failure{Code: tc.code, Message: "failure", Phase: "agent.wait"}}
+			var b bytes.Buffer
+			if err := out.Write(&b, false); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(b.String(), tc.want) {
+				t.Fatalf("%q missing %q", b.String(), tc.want)
+			}
+		})
+	}
+}
 func TestHumanModelsEmpty(t *testing.T) {
 	out := Outcome{Status: "success", Result: ModelsResult{Models: []ModelRow{}}}
 	var b bytes.Buffer

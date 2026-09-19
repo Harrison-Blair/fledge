@@ -170,6 +170,10 @@ func (o Outcome) Write(w io.Writer, asJSON bool) error {
 			}
 		}
 		if r, ok := o.Result.(*SpawnResult); ok && (o.Status == "partial" || o.Status == "unknown") {
+			if o.Error.Code == "agent_blocked" {
+				_, err := fmt.Fprintf(w, "Agent is waiting on a startup prompt. Inspect with: herdr agent get %s; herdr agent read %s\n", r.Name, r.Name)
+				return err
+			}
 			_, err := fmt.Fprintf(w, "Startup was not confirmed; a process may still be running. Inspect with: herdr agent get %s; herdr agent read %s\n", r.Name, r.Name)
 			return err
 		}

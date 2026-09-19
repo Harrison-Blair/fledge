@@ -88,7 +88,7 @@ func TestWorktreeOpenUsesPathSourceAndCreatesTabWhenAlreadyOpen(t *testing.T) {
 	o.Worktree = path
 	s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "worktree.list", params: map[string]any{"cwd": path}, result: herdr.WorktreeListResult{Type: "worktree_list", Source: struct {
 		RepoRoot string `json:"repo_root"`
-	}{RepoRoot: path}, Worktrees: []herdr.Worktree{}}}, call{method: "worktree.open", params: map[string]any{"cwd": path, "path": path, "focus": false}, result: herdr.CreatedResult{Type: "worktree_opened", Workspace: herdr.Workspace{ID: "w1"}, Tab: herdr.Tab{ID: "w1:t1", WorkspaceID: "w1"}, RootPane: old, Worktree: herdr.Worktree{Path: path}, AlreadyOpen: &open}}, call{method: "tab.create", params: map[string]any{"workspace_id": "w1", "cwd": path, "focus": false}, result: herdr.CreatedResult{Type: "tab_created", Tab: herdr.Tab{ID: "w1:t2", WorkspaceID: "w1"}, RootPane: p}}, call{method: "agent.start", result: started(p)})
+	}{RepoRoot: path}, Worktrees: []herdr.Worktree{}}}, call{method: "worktree.open", params: map[string]any{"cwd": path, "path": path, "focus": false}, result: herdr.CreatedResult{Type: "worktree_opened", Workspace: herdr.Workspace{ID: "w1"}, Tab: herdr.Tab{ID: "w1:t1", WorkspaceID: "w1"}, RootPane: old, Worktree: herdr.Worktree{Path: path}, AlreadyOpen: &open}}, call{method: "tab.create", params: map[string]any{"workspace_id": "w1", "cwd": path, "focus": false}, result: herdr.CreatedResult{Type: "tab_created", Tab: herdr.Tab{ID: "w1:t2", WorkspaceID: "w1"}, RootPane: p}}, call{method: "agent.start", result: started(p)}, waitCall("worker", p, "idle"))
 	out := s.Spawn(context.Background(), o)
 	if out.Status != "success" {
 		t.Fatalf("%+v", out)
@@ -136,7 +136,7 @@ func TestWorktreeCreateExplicitSourceAndManagedPrimary(t *testing.T) {
 	o.Cwd = "/must-not-be-used"
 	o.Branch = "feature/topic"
 	o.Base = "HEAD"
-	s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "worktree.list", params: map[string]any{"workspace_id": "w1"}, result: listing}, call{method: "worktree.create", params: map[string]any{"workspace_id": "w1", "branch": "feature/topic", "base": "HEAD", "path": path, "focus": false}, result: herdr.CreatedResult{Type: "worktree_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p, Worktree: herdr.Worktree{Path: path}}}, call{method: "agent.start", result: started(p)})
+	s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "worktree.list", params: map[string]any{"workspace_id": "w1"}, result: listing}, call{method: "worktree.create", params: map[string]any{"workspace_id": "w1", "branch": "feature/topic", "base": "HEAD", "path": path, "focus": false}, result: herdr.CreatedResult{Type: "worktree_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p, Worktree: herdr.Worktree{Path: path}}}, call{method: "agent.start", result: started(p)}, waitCall("worker", p, "idle"))
 	s.Cwd = filepath.Join(root, "linked-checkout")
 	out := s.Spawn(context.Background(), o)
 	if out.Status != "success" {
@@ -196,7 +196,7 @@ func TestNewWorktreeFromLinkedCheckoutUsesPrimaryRoot(t *testing.T) {
 	o.Worktree = "new"
 	s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "worktree.list", params: map[string]any{"cwd": linked}, result: herdr.WorktreeListResult{Type: "worktree_list", Source: struct {
 		RepoRoot string `json:"repo_root"`
-	}{RepoRoot: root}, Worktrees: []herdr.Worktree{}}}, call{method: "worktree.create", params: map[string]any{"cwd": linked, "branch": "worker", "path": path, "focus": false}, result: herdr.CreatedResult{Type: "worktree_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p, Worktree: herdr.Worktree{Path: path}}}, call{method: "agent.start", result: started(p)})
+	}{RepoRoot: root}, Worktrees: []herdr.Worktree{}}}, call{method: "worktree.create", params: map[string]any{"cwd": linked, "branch": "worker", "path": path, "focus": false}, result: herdr.CreatedResult{Type: "worktree_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p, Worktree: herdr.Worktree{Path: path}}}, call{method: "agent.start", result: started(p)}, waitCall("worker", p, "idle"))
 	s.Cwd = linked
 	out := s.Spawn(context.Background(), o)
 	if out.Status != "success" {
@@ -237,7 +237,7 @@ func TestNewlyOpenedWorktreeRenamesOnlyInitialTab(t *testing.T) {
 	o.Tab = "tasks"
 	s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "worktree.list", params: map[string]any{"cwd": path}, result: herdr.WorktreeListResult{Type: "worktree_list", Source: struct {
 		RepoRoot string `json:"repo_root"`
-	}{RepoRoot: path}, Worktrees: []herdr.Worktree{}}}, call{method: "worktree.open", params: map[string]any{"cwd": path, "path": path, "focus": false}, result: herdr.CreatedResult{Type: "worktree_opened", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2", Label: "1"}, RootPane: p, Worktree: herdr.Worktree{Path: path}, AlreadyOpen: &opened}}, call{method: "tab.rename", params: map[string]any{"tab_id": "w2:t1", "label": "tasks"}, result: herdr.TabResult{Type: "tab_info", Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2", Label: "tasks"}}}, call{method: "agent.start", result: started(p)})
+	}{RepoRoot: path}, Worktrees: []herdr.Worktree{}}}, call{method: "worktree.open", params: map[string]any{"cwd": path, "path": path, "focus": false}, result: herdr.CreatedResult{Type: "worktree_opened", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2", Label: "1"}, RootPane: p, Worktree: herdr.Worktree{Path: path}, AlreadyOpen: &opened}}, call{method: "tab.rename", params: map[string]any{"tab_id": "w2:t1", "label": "tasks"}, result: herdr.TabResult{Type: "tab_info", Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2", Label: "tasks"}}}, call{method: "agent.start", result: started(p)}, waitCall("worker", p, "idle"))
 	if out := s.Spawn(context.Background(), o); out.Status != "success" {
 		t.Fatal(out)
 	}
