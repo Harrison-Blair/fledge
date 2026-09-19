@@ -17,6 +17,10 @@ type call struct {
 	params map[string]any
 	result any
 	err    error
+	// before, if set, runs as this call is served, so a test can simulate a
+	// side effect (e.g. time passing) tied to the RPC itself rather than to
+	// how many times something else was called.
+	before func()
 }
 type scripted struct {
 	t     *testing.T
@@ -33,6 +37,9 @@ func (s *scripted) Call(_ context.Context, method string, params any, result any
 	s.index++
 	if method != want.method {
 		s.t.Fatalf("call %d: got %s want %s", s.index, method, want.method)
+	}
+	if want.before != nil {
+		want.before()
 	}
 	data, _ := json.Marshal(params)
 	var got map[string]any
@@ -128,18 +135,22 @@ func TestExistingPaneStartupOutcomes(t *testing.T) {
 	}
 }
 func TestMessagePreservesContentAndDoesNotWait(t *testing.T) {
-	p := pane("w1:p1", "w1", "w1:t1")
-	p.AgentStatus = "working"
-	s := fake(t, call{method: "agent.get", params: map[string]any{"target": "worker"}, result: info(p)}, call{method: "agent.prompt", params: map[string]any{"target": "worker", "text": "hello\nworld\n"}, result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
+	lookupCwd, promptCwd := "/before-prompt", "/after-prompt"
+	lookupPane := pane("w1:p1", "w1", "w1:t1")
+	lookupPane.AgentStatus, lookupPane.Cwd = "working", &lookupCwd
+	promptPane := pane("w1:p1", "w1", "w1:t1")
+	promptPane.AgentStatus, promptPane.Cwd = "working", &promptCwd
+	s := fake(t, call{method: "agent.get", params: map[string]any{"target": "worker"}, result: info(lookupPane)}, call{method: "agent.prompt", params: map[string]any{"target": "worker", "text": "hello\nworld\n"}, result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: promptPane}}})
 	out := s.Message(context.Background(), MessageOptions{Name: "worker", File: "-", FileSet: true}, strings.NewReader("hello\nworld\n"))
-	if out.Status != "success" {
-		t.Fatal(out)
+	result, ok := out.Result.(MessageResult)
+	if out.Status != "success" || !ok || !result.Submitted || result.Cwd == nil || *result.Cwd != promptCwd {
+		t.Fatalf("%+v", out)
 	}
 }
 func TestInvalidMessageBeforeAPI(t *testing.T) {
 	s := fake(t)
 	out := s.Message(context.Background(), MessageOptions{Name: "a", BodySet: true}, strings.NewReader(""))
-	if out.Status != "rejected" || out.ExitCode() != 2 {
+	if out.Status != "rejected" || out.ExitCode() != 2 || out.Error.Message != "message must be nonempty UTF-8" {
 		t.Fatal(out)
 	}
 }
@@ -184,7 +195,7 @@ func TestEmptyWorkspaceLabelDoesNotSelectDestination(t *testing.T) {
 func TestUnreadableMessageIsRuntimeFailure(t *testing.T) {
 	s := fake(t)
 	out := s.Message(context.Background(), MessageOptions{Name: "worker", File: "/does/not/exist", FileSet: true}, strings.NewReader(""))
-	if out.ExitCode() != 1 {
+	if out.ExitCode() != 1 || !strings.HasPrefix(out.Error.Message, "read message: ") {
 		t.Fatalf("%+v", out)
 	}
 }
@@ -513,19 +524,14 @@ func TestSpawnNoWaitSkipsWait(t *testing.T) {
 	}
 }
 
-// stepClock returns each of times in order, repeating the last for further calls.
-type stepClock struct {
-	times []time.Time
-	i     int
-}
+// movableClock holds steady at t until advance moves it forward. Tying the
+// advance to the agent.start call itself (rather than counting Now() calls)
+// lets the test tell whether `started` was captured before or after
+// agent.start ran.
+type movableClock struct{ t time.Time }
 
-func (c *stepClock) now() time.Time {
-	t := c.times[c.i]
-	if c.i < len(c.times)-1 {
-		c.i++
-	}
-	return t
-}
+func (c *movableClock) now() time.Time          { return c.t }
+func (c *movableClock) advance(d time.Duration) { c.t = c.t.Add(d) }
 func TestSpawnWaitTimeoutIsRemainingBudget(t *testing.T) {
 	t0 := time.Unix(1700000000, 0)
 	for _, tc := range []struct {
@@ -540,8 +546,9 @@ func TestSpawnWaitTimeoutIsRemainingBudget(t *testing.T) {
 			o := validOptions()
 			o.Pane = "w1:p1"
 			p := pane("w1:p1", "w1", "w1:t1")
-			s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "agent.start", result: started(p)}, call{method: "agent.wait", params: map[string]any{"target": "worker", "timeout_ms": tc.wantMs}, result: waited(p, "idle")})
-			s.Now = (&stepClock{times: []time.Time{t0, t0.Add(tc.elapsed)}}).now
+			clock := &movableClock{t: t0}
+			s := fake(t, call{method: "session.snapshot", result: snapshot()}, call{method: "agent.start", result: started(p), before: func() { clock.advance(tc.elapsed) }}, call{method: "agent.wait", params: map[string]any{"target": "worker", "timeout_ms": tc.wantMs}, result: waited(p, "idle")})
+			s.Now = clock.now
 			out := s.Spawn(context.Background(), o, nil)
 			if out.Status != "success" {
 				t.Fatalf("%+v", out)

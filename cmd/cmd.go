@@ -18,11 +18,6 @@ func Execute() error { return execute(os.Args[1:], nil, os.Stdout, os.Stderr) }
 // ExecuteWithArgs runs a fresh command tree with supplied arguments and output.
 func ExecuteWithArgs(args []string, out io.Writer) error { return execute(args, nil, out, out) }
 
-// ExecuteWithIn runs a fresh command tree with supplied stdin, arguments, and
-// output, so tests can inject stdin (e.g. for --file -) without touching os.Stdin.
-func ExecuteWithIn(args []string, in io.Reader, out io.Writer) error {
-	return execute(args, in, out, out)
-}
 func execute(args []string, in io.Reader, out, errOut io.Writer) error {
 	root := NewRootCmd()
 	root.SetArgs(args)

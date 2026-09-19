@@ -13,7 +13,7 @@ import (
 )
 
 // newSocket starts a fake Herdr Unix socket listener and points the
-// environment at it, so ExecuteWithArgs/ExecuteWithIn talk to it.
+// environment at it, so ExecuteWithArgs/execute talk to it.
 func newSocket(t *testing.T) net.Listener {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "fc-")
@@ -66,18 +66,20 @@ func serveRPCs(l net.Listener, results ...any) <-chan []rpcCall {
 	return done
 }
 
-// waitCalls reads from done with a bound, failing fast with a clear message
-// instead of hanging when the command under test makes fewer RPCs than the
-// fake server expects.
-func waitCalls(t *testing.T, done <-chan []rpcCall, want int) []rpcCall {
+// waitCalls closes l first, so a serveRPCs goroutine blocked in Accept on an
+// RPC the command under test never made unblocks immediately instead of
+// waiting out the full bound, then reads from done with a bound as a
+// backstop, failing fast with a clear message.
+func waitCalls(t *testing.T, l net.Listener, done <-chan []rpcCall, want int) []rpcCall {
 	t.Helper()
+	l.Close()
 	select {
 	case calls := <-done:
 		if len(calls) != want {
 			t.Fatalf("got %d calls, want %d: %+v", len(calls), want, calls)
 		}
 		return calls
-	case <-time.After(10 * time.Second):
+	case <-time.After(time.Second):
 		t.Fatal("fake server: timed out waiting for RPCs")
 		return nil
 	}
@@ -112,7 +114,7 @@ func TestSpawnForwardsExactNativeTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err, out.String())
 	}
-	calls := waitCalls(t, done, 3)
+	calls := waitCalls(t, l, done, 3)
 	var args struct {
 		Args []string `json:"args"`
 	}
@@ -139,7 +141,7 @@ func TestSpawnPromptFlagReachesAgentPromptWithExactText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err, out.String())
 	}
-	calls := waitCalls(t, done, 4)
+	calls := waitCalls(t, l, done, 4)
 	if calls[3].Method != "agent.prompt" || paramsField(t, calls[3], "text") != "review this" {
 		t.Fatalf("%+v", calls)
 	}
@@ -165,7 +167,7 @@ func TestSpawnNoWaitFlagSkipsAgentWaitOnSocket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err, out.String())
 	}
-	calls := waitCalls(t, done, 2)
+	calls := waitCalls(t, l, done, 2)
 	if calls[1].Method != "agent.start" {
 		t.Fatalf("%+v", calls)
 	}
@@ -186,7 +188,7 @@ func TestSpawnFileFlagPathReachesAgentPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err, out.String())
 	}
-	calls := waitCalls(t, done, 4)
+	calls := waitCalls(t, l, done, 4)
 	if calls[3].Method != "agent.prompt" || paramsField(t, calls[3], "text") != "from a file on disk" {
 		t.Fatalf("%+v", calls)
 	}
@@ -198,11 +200,11 @@ func TestSpawnFileDashReadsCommandStdin(t *testing.T) {
 	l := newSocket(t)
 	done := serveRPCs(l, snapshotResult(), startedResult("claude"), waitedResult(), promptedResult())
 	var out bytes.Buffer
-	err := ExecuteWithIn([]string{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "w1:p1", "--file", "-", "--json"}, strings.NewReader("from stdin"), &out)
+	err := execute([]string{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "w1:p1", "--file", "-", "--json"}, strings.NewReader("from stdin"), &out, &out)
 	if err != nil {
 		t.Fatal(err, out.String())
 	}
-	calls := waitCalls(t, done, 4)
+	calls := waitCalls(t, l, done, 4)
 	if calls[3].Method != "agent.prompt" || paramsField(t, calls[3], "text") != "from stdin" {
 		t.Fatalf("%+v", calls)
 	}
