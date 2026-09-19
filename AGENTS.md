@@ -70,6 +70,11 @@ responsibility needs a narrow API. Packages with multiple non-test files have a
 
 When working in this repository, use Fledge itself for agent coordination: `fledge agent spawn` to launch agents, `fledge agent list` to discover them, `fledge agent get` to inspect one, and `fledge agent message` to delegate tasks and exchange messages. Treat this as dogfooding: exercise the project CLI in real work and surface bugs or missing capabilities instead of silently bypassing it with another coordination tool.
 
+Maintain `docs/dogfood/` as the record of dogfooding information for this repository.
+Whenever an agent or one of its subagents hits a Fledge bug, missing capability, or
+workaround, append an entry to `docs/dogfood/friction.md` using its Issue / Summary /
+Reproduction steps format.
+
 Before launching agents, check `fledge agent --help` for the commands needed for
 both the task and cleanup. If the installed binary lacks commands present in this
 checkout, build the current source into a temporary directory and use that binary
