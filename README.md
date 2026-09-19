@@ -44,6 +44,21 @@ splits. `--focus` defaults to false and focuses the destination before launch.
 `--timeout` is a duration, default `30s`; its millisecond value must be greater
 than 3000 and at most 300000.
 
+By default, spawn waits for the launch to settle before returning, so a
+successful spawn reports the settled status (e.g. `idle`) rather than `unknown`.
+`--timeout` covers launch and this wait together. `--no-wait` restores the old
+behavior: return once the launch begins, without waiting for readiness. If the
+agent settles on `blocked` (its own startup dialog, e.g. an update prompt),
+spawn fails with `agent_blocked` and a `partial` outcome; the agent is left
+running. A wait timeout is also `partial`, like a startup timeout.
+
+Pass `--prompt TEXT` or `--file PATH|-` (mutually exclusive; unlike `message`,
+inline text on spawn is `--prompt`, not `--body`) to deliver a first prompt once
+the agent is ready. The prompt is read and validated before any Herdr mutation,
+so a missing file never leaves a tab or agent behind. Spawn does not wait for
+the prompted turn to finish. `--no-wait` cannot be combined with `--prompt` or
+`--file`, since there would be no settled agent to prompt.
+
 With `--worktree new`, workspace selectors identify an **existing source**
 repository workspace. That source takes precedence over `--cwd`; without either,
 the source is Fledge's working directory. `--branch` defaults to the agent name,

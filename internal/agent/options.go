@@ -14,8 +14,9 @@ import (
 type SpawnOptions struct {
 	Provided                                                                                                      []string
 	Name, Harness, Model, Workspace, WorkspaceID, Tab, TabID, Pane, Worktree, Branch, Base, Cwd, Label, Direction string
+	Prompt, File                                                                                                  string
 	Env, Args                                                                                                     []string
-	Focus, DirectionSet, NoWait                                                                                   bool
+	Focus, DirectionSet, NoWait, PromptSet, FileSet                                                               bool
 	Ratio                                                                                                         *float64
 	Timeout                                                                                                       time.Duration
 }
@@ -45,6 +46,9 @@ func (o SpawnOptions) Validate() ([]string, error) {
 	}
 	if o.Worktree != "" && (len(o.Env) > 0 || o.TabID != "") {
 		return nil, invalid("--worktree cannot be combined with --env or --tab-id")
+	}
+	if o.NoWait && (o.PromptSet || o.FileSet) {
+		return nil, invalid("--no-wait cannot be combined with --prompt or --file")
 	}
 	if o.Worktree != "new" && (o.Branch != "" || o.Base != "") {
 		return nil, invalid("--branch and --base require --worktree new")

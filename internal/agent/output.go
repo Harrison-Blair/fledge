@@ -52,6 +52,7 @@ type SpawnResult struct {
 	Argv            []string `json:"argv"`
 	WorktreePath    *string  `json:"worktree_path"`
 	Split           bool     `json:"split"`
+	Prompted        bool     `json:"prompted"`
 }
 type ListResult struct {
 	Agents []AgentRow `json:"agents"`
@@ -181,8 +182,14 @@ func (o Outcome) Write(w io.Writer, asJSON bool) error {
 	}
 	switch r := o.Result.(type) {
 	case *SpawnResult:
-		_, err := fmt.Fprintf(w, "Spawned %s (%s) in %s / %s / %s\n  cwd: %s\n  worktree: %s\n", r.Name, r.Harness, display(r.WorkspaceID), display(r.TabID), display(r.PaneID), display(r.Cwd), display(r.WorktreePath))
-		return err
+		if _, err := fmt.Fprintf(w, "Spawned %s (%s) in %s / %s / %s\n  cwd: %s\n  worktree: %s\n", r.Name, r.Harness, display(r.WorkspaceID), display(r.TabID), display(r.PaneID), display(r.Cwd), display(r.WorktreePath)); err != nil {
+			return err
+		}
+		if r.Prompted {
+			_, err := fmt.Fprintf(w, "Message submitted to %s.\n", display(r.PaneID))
+			return err
+		}
+		return nil
 	case ListResult:
 		if len(r.Agents) == 0 {
 			_, err := fmt.Fprintln(w, "No live agents.")

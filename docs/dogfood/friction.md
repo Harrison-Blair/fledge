@@ -32,7 +32,11 @@ in the 30 s window (see the startup-dialog entry below). Herdr's reference
 doc for `agent.start` (`reference/herdr/api/agent.md`) says it returns
 only once the agent is ready; on 0.9.1 it does not. Observed 2026-09-18,
 Fledge 0.0.3 built from `dev` (`fc4538b`), Herdr 0.9.1, binary
-`/tmp/fledge-dev`.
+`/tmp/fledge-dev`. Resolved 2026-09-19: `agent spawn` now waits on
+`agent.wait` before returning, so a successful spawn reports the settled
+status and an immediate `agent message`/`--prompt` no longer races
+`agent_not_ready`; `--no-wait` restores the old return-immediately
+behavior.
 
 **Reproduction steps:**
 1. Run `fledge agent spawn --name w --harness claude --tab w`.

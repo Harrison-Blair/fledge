@@ -166,30 +166,47 @@ type MessageOptions struct {
 	BodySet, FileSet       bool
 }
 
+// readText resolves inline/file text input shared by message and spawn's prompt.
+// required demands exactly one of bodyFlag/fileFlag; otherwise at most one is allowed,
+// and neither set returns an empty, error-free result.
+func readText(in io.Reader, body string, bodySet bool, file string, fileSet bool, required bool, bodyFlag, fileFlag string) (string, error) {
+	if required {
+		if bodySet == fileSet {
+			return "", invalid("exactly one of --%s or --%s is required", bodyFlag, fileFlag)
+		}
+	} else if bodySet && fileSet {
+		return "", invalid("at most one of --%s or --%s is allowed", bodyFlag, fileFlag)
+	}
+	if !bodySet && !fileSet {
+		return "", nil
+	}
+	text := body
+	if fileSet {
+		var b []byte
+		var err error
+		if file == "-" {
+			b, err = io.ReadAll(in)
+		} else {
+			b, err = os.ReadFile(file)
+		}
+		if err != nil {
+			return "", fmt.Errorf("read message: %w", err)
+		}
+		text = string(b)
+	}
+	if text == "" || !utf8.ValidString(text) {
+		return "", invalid("message must be nonempty UTF-8")
+	}
+	return text, nil
+}
 func (o MessageOptions) read(in io.Reader) (string, string, error) {
 	target, err := resolveTarget(o.Name, o.Pane)
 	if err != nil {
 		return "", "", err
 	}
-	if o.BodySet == o.FileSet {
-		return "", "", invalid("exactly one of --body or --file is required")
-	}
-	text := o.Body
-	if o.FileSet {
-		var b []byte
-		var err error
-		if o.File == "-" {
-			b, err = io.ReadAll(in)
-		} else {
-			b, err = os.ReadFile(o.File)
-		}
-		if err != nil {
-			return "", "", fmt.Errorf("read message: %w", err)
-		}
-		text = string(b)
-	}
-	if text == "" || !utf8.ValidString(text) {
-		return "", "", invalid("message must be nonempty UTF-8")
+	text, err := readText(in, o.Body, o.BodySet, o.File, o.FileSet, true, "body", "file")
+	if err != nil {
+		return "", "", err
 	}
 	return target, text, nil
 }
@@ -255,10 +272,15 @@ func (s *Service) Stop(ctx context.Context, o StopOptions) Outcome {
 	out.Effects = append(out.Effects, Effect{Action: "closed", Kind: "pane", ID: a.PaneID})
 	return out
 }
-func (s *Service) Spawn(ctx context.Context, o SpawnOptions) Outcome {
+func (s *Service) Spawn(ctx context.Context, o SpawnOptions, in io.Reader) Outcome {
 	result := &SpawnResult{Name: o.Name, Harness: o.Harness}
 	out := Outcome{Operation: "agent.spawn", Status: "success", Result: result, Effects: []Effect{}}
 	args, err := o.Validate()
+	if err != nil {
+		out.fail(err, "validation", false)
+		return out
+	}
+	prompt, err := readText(in, o.Prompt, o.PromptSet, o.File, o.FileSet, false, "prompt", "file")
 	if err != nil {
 		out.fail(err, "validation", false)
 		return out
@@ -328,7 +350,23 @@ func (s *Service) Spawn(ctx context.Context, o SpawnOptions) Outcome {
 	result.AgentStatus = pointer(w.Agent.AgentStatus)
 	if w.Agent.AgentStatus == "blocked" {
 		out.fail(&herdr.Error{Code: "agent_blocked", Message: fmt.Sprintf("agent %s is waiting on a startup prompt", o.Name)}, "agent.wait", true)
+		return out
 	}
+	if !o.PromptSet && !o.FileSet {
+		return out
+	}
+
+	var pr herdr.AgentResult
+	err = s.call(ctx, "agent.prompt", map[string]any{"target": o.Name, "text": prompt}, &pr)
+	if err == nil && (pr.Type != "agent_prompted" || !validAgent(pr.Agent.Pane)) {
+		err = protocol("incomplete agent.prompt result")
+	}
+	if err != nil {
+		out.fail(err, "agent.prompt", true)
+		return out
+	}
+	result.Prompted = true
+	out.Effects = append(out.Effects, Effect{Action: "submitted", Kind: "message", ID: pr.Agent.PaneID})
 	return out
 }
 

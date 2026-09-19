@@ -17,6 +17,38 @@ func TestHumanSpawnIncludesDirectories(t *testing.T) {
 		t.Fatal(b.String())
 	}
 }
+func TestHumanSpawnIncludesPromptSubmission(t *testing.T) {
+	pid := "w1:p1"
+	out := Outcome{Status: "success", Result: &SpawnResult{Name: "worker", Harness: "claude", PaneID: &pid, Prompted: true}}
+	var b bytes.Buffer
+	if err := out.Write(&b, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.String(), "Message submitted to w1:p1.") {
+		t.Fatal(b.String())
+	}
+}
+func TestHumanSpawnOmitsPromptLineWithoutSubmission(t *testing.T) {
+	out := Outcome{Status: "success", Result: &SpawnResult{Name: "worker", Harness: "claude"}}
+	var b bytes.Buffer
+	if err := out.Write(&b, false); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(b.String(), "Message submitted") {
+		t.Fatal(b.String())
+	}
+}
+func TestSpawnJSONIncludesPromptedField(t *testing.T) {
+	pid := "w1:p1"
+	out := Outcome{Operation: "agent.spawn", Status: "success", Effects: []Effect{}, Result: &SpawnResult{Name: "worker", Harness: "claude", PaneID: &pid, Prompted: true}}
+	var b bytes.Buffer
+	if err := out.Write(&b, true); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.String(), `"prompted":true`) {
+		t.Fatalf("%q", b.String())
+	}
+}
 func TestHumanModelsTable(t *testing.T) {
 	label := "Opus 5"
 	out := Outcome{Status: "success", Result: ModelsResult{Models: []ModelRow{{Harness: "claude", Model: "claude-opus-5", Name: &label}, {Harness: "opencode", Model: "opencode/big-pickle"}}}}

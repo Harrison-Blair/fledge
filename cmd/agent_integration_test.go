@@ -73,6 +73,71 @@ func TestSpawnForwardsExactNativeTokens(t *testing.T) {
 	}
 }
 
+func TestSpawnPromptFlagReachesAgentPromptWithExactText(t *testing.T) {
+	dir, err := os.MkdirTemp("", "fp-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	path := filepath.Join(dir, "s")
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_SOCKET_PATH", path)
+	done := make(chan string, 1)
+	go func() {
+		var promptText string
+		for i := 0; i < 4; i++ {
+			conn, err := l.Accept()
+			if err != nil {
+				done <- ""
+				return
+			}
+			var req struct {
+				ID     string `json:"id"`
+				Method string `json:"method"`
+				Params struct {
+					Text string `json:"text"`
+				} `json:"params"`
+			}
+			json.NewDecoder(conn).Decode(&req)
+			var result any
+			switch i {
+			case 0:
+				result = map[string]any{"type": "session_snapshot", "snapshot": map[string]any{"protocol": 999, "version": "future", "workspaces": []any{}, "tabs": []any{}, "layouts": []any{}, "agents": []any{}, "panes": []any{map[string]any{"pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1"}}}}
+			case 1:
+				result = map[string]any{"type": "agent_started", "agent": map[string]any{"pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1", "agent": "claude", "agent_status": "unknown"}, "argv": []string{"claude"}}
+			case 2:
+				result = map[string]any{"type": "agent_info", "agent": map[string]any{"pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1", "agent": "claude", "agent_status": "idle", "terminal_id": "term_x", "focused": false, "revision": 0}}
+			default:
+				promptText = req.Params.Text
+				result = map[string]any{"type": "agent_prompted", "agent": map[string]any{"pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1", "agent": "claude", "agent_status": "working"}}
+			}
+			json.NewEncoder(conn).Encode(map[string]any{"id": req.ID, "result": result})
+			conn.Close()
+		}
+		done <- promptText
+	}()
+	var out bytes.Buffer
+	err = ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "w1:p1", "--prompt", "review this", "--json"}, &out)
+	if err != nil {
+		t.Fatal(err, out.String())
+	}
+	if got := <-done; got != "review this" {
+		t.Fatalf("%q", got)
+	}
+	var envelope map[string]any
+	if err = json.Unmarshal(out.Bytes(), &envelope); err != nil {
+		t.Fatal(err, out.String())
+	}
+	result, _ := envelope["result"].(map[string]any)
+	if envelope["status"] != "success" || result == nil || result["prompted"] != true {
+		t.Fatal(out.String())
+	}
+}
 func TestGetForwardsTargetAndDecodesDetails(t *testing.T) {
 	for _, flag := range []string{"--name", "--pane"} {
 		t.Run(flag, func(t *testing.T) {
