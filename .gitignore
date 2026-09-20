@@ -6,7 +6,6 @@
 !*.go
 !go.mod
 !go.sum
-!internal/version/VERSION
 
 # Documentation
 !*.md

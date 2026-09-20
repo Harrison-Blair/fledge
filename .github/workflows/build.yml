@@ -7,16 +7,16 @@ on:
       - '**.go'
       - 'go.mod'
       - 'go.sum'
-      - 'internal/version/VERSION'
-      - '.github/workflows/build.yml'
+      - '.github/workflows/**'
+      - '.github/scripts/**'
   push:
     branches: [main]
     paths:
       - '**.go'
       - 'go.mod'
       - 'go.sum'
-      - 'internal/version/VERSION'
-      - '.github/workflows/build.yml'
+      - '.github/workflows/**'
+      - '.github/scripts/**'
 
 permissions:
   contents: read
@@ -45,3 +45,8 @@ jobs:
           cache: true
       - name: Build
         run: go build -trimpath -buildvcs=true -o "$RUNNER_TEMP/fledge-linux-$GOARCH" .
+      - name: Smoke test release packaging
+        if: matrix.goarch == 'amd64'
+        env:
+          PACKAGE_TEST_TAG: v0.0.0
+        run: bash .github/scripts/package.sh "$PACKAGE_TEST_TAG" "$RUNNER_TEMP/package-smoke"

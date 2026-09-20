@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump from the latest stable tag
+        required: true
+        default: patch
+        type: choice
+        options: [patch, minor, major]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Select release version
+    runs-on: ubuntu-latest
+    outputs:
+      request: ${{ steps.plan.outputs.request }}
+      skip: ${{ steps.plan.outputs.skip }}
+      tag: ${{ steps.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Validate release request
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BUMP: ${{ inputs.bump }}
+        run: |
+          request=$(python3 -B .github/scripts/release.py plan --bump "$BUMP")
+          echo "request=$request" >> "$GITHUB_OUTPUT"
+          echo "skip=$(jq -r .skip <<< "$request")" >> "$GITHUB_OUTPUT"
+          echo "tag=$(jq -r .tag <<< "$request")" >> "$GITHUB_OUTPUT"
+          echo "$request" >> "$GITHUB_STEP_SUMMARY"
+
+  lint:
+    needs: preflight
+    if: needs.preflight.outputs.skip != 'true'
+    uses: ./.github/workflows/lint.yml
+  test:
+    needs: preflight
+    if: needs.preflight.outputs.skip != 'true'
+    uses: ./.github/workflows/test.yml
+  build:
+    needs: preflight
+    if: needs.preflight.outputs.skip != 'true'
+    uses: ./.github/workflows/build.yml
+
+  publish:
+    name: Build archives and publish
+    needs: [preflight, lint, test, build]
+    if: needs.preflight.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.preflight.outputs.tag }}
+      REQUEST: ${{ needs.preflight.outputs.request }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Package release
+        run: bash .github/scripts/package.sh "$TAG" "$RUNNER_TEMP/dist"
+      - name: Publish complete release
+        run: |
+          git fetch origin --tags
+          python3 -B .github/scripts/release.py publish --request "$REQUEST" --dist "$RUNNER_TEMP/dist"
+          echo "Published [$TAG](https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG)" >> "$GITHUB_STEP_SUMMARY"
