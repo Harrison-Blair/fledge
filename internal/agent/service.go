@@ -20,7 +20,9 @@ type Service struct {
 	API             API
 	CallerPane, Cwd string
 	// Wait pauses between agent.start retries; nil uses a real timer.
-	Wait    func(context.Context, time.Duration) error
+	Wait func(context.Context, time.Duration) error
+	// Now reports the current time for the spawn timeout budget; nil uses time.Now.
+	Now     func() time.Time
 	initErr error
 }
 
@@ -43,6 +45,12 @@ func (s *Service) call(ctx context.Context, method string, params any, result an
 		return &phaseError{phase: method, cause: err}
 	}
 	return nil
+}
+func (s *Service) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
 }
 func (s *Service) wait(ctx context.Context, d time.Duration) error {
 	if s.Wait != nil {
@@ -70,6 +78,40 @@ func validAgent(p herdr.Pane) bool {
 		return true
 	}
 	return false
+}
+func validAgentInfo(a herdr.AgentDetails) bool {
+	if !validAgent(a.Pane) || a.TerminalID == "" || a.Focused == nil || a.Revision == nil {
+		return false
+	}
+	if s := a.AgentSession; s != nil {
+		return s.Source != nil && s.Agent != nil && s.Kind != nil && s.Value != nil &&
+			(*s.Kind == "id" || *s.Kind == "path")
+	}
+	return true
+}
+
+// resolveTarget collapses the exactly-one-of --name/--pane choice into one agent.get target.
+func resolveTarget(name, pane string) (string, error) {
+	if (name == "") == (pane == "") {
+		return "", invalid("exactly one of --name or --pane is required")
+	}
+	if name != "" {
+		return name, nil
+	}
+	return pane, nil
+}
+
+// lookup fetches one agent by target and fails out on transport, protocol, or validation errors.
+func (s *Service) lookup(ctx context.Context, target string, out *Outcome) (herdr.AgentDetails, error) {
+	var r herdr.AgentResult
+	err := s.call(ctx, "agent.get", map[string]any{"target": target}, &r)
+	if err == nil && (r.Type != "agent_info" || !validAgentInfo(r.Agent)) {
+		err = protocol("incomplete agent.get result")
+	}
+	if err != nil {
+		out.fail(err, "agent.get", false)
+	}
+	return r.Agent, err
 }
 func (s *Service) snapshot(ctx context.Context) (*herdr.Snapshot, error) {
 	var r herdr.SnapshotResult
@@ -124,35 +166,76 @@ type MessageOptions struct {
 	BodySet, FileSet       bool
 }
 
-func (o MessageOptions) read(in io.Reader) (string, string, error) {
-	if (o.Name == "") == (o.Pane == "") {
-		return "", "", invalid("exactly one of --name or --pane is required")
+// textInput configures readText's inline/file resolution and its error wording.
+// required demands exactly one of bodyFlag/fileFlag; otherwise at most one is
+// allowed, and neither set returns an empty, error-free result. noun names the
+// text being read (e.g. "message" or "prompt") in error messages.
+type textInput struct {
+	body, bodyFlag string
+	bodySet        bool
+	file, fileFlag string
+	fileSet        bool
+	required       bool
+	noun           string
+}
+
+// readText resolves inline/file text input shared by message and spawn's prompt.
+func readText(in io.Reader, t textInput) (string, error) {
+	if t.required {
+		if t.bodySet == t.fileSet {
+			return "", invalid("exactly one of --%s or --%s is required", t.bodyFlag, t.fileFlag)
+		}
+	} else if t.bodySet && t.fileSet {
+		return "", invalid("at most one of --%s or --%s is allowed", t.bodyFlag, t.fileFlag)
 	}
-	if o.BodySet == o.FileSet {
-		return "", "", invalid("exactly one of --body or --file is required")
+	if !t.bodySet && !t.fileSet {
+		return "", nil
 	}
-	target := o.Name
-	if target == "" {
-		target = o.Pane
-	}
-	text := o.Body
-	if o.FileSet {
+	text := t.body
+	if t.fileSet {
 		var b []byte
 		var err error
-		if o.File == "-" {
+		if t.file == "-" {
 			b, err = io.ReadAll(in)
 		} else {
-			b, err = os.ReadFile(o.File)
+			b, err = os.ReadFile(t.file)
 		}
 		if err != nil {
-			return "", "", fmt.Errorf("read message: %w", err)
+			return "", fmt.Errorf("read %s: %w", t.noun, err)
 		}
 		text = string(b)
 	}
 	if text == "" || !utf8.ValidString(text) {
-		return "", "", invalid("message must be nonempty UTF-8")
+		return "", invalid("%s must be nonempty UTF-8", t.noun)
+	}
+	return text, nil
+}
+func (o MessageOptions) read(in io.Reader) (string, string, error) {
+	target, err := resolveTarget(o.Name, o.Pane)
+	if err != nil {
+		return "", "", err
+	}
+	text, err := readText(in, textInput{body: o.Body, bodyFlag: "body", bodySet: o.BodySet, file: o.File, fileFlag: "file", fileSet: o.FileSet, required: true, noun: "message"})
+	if err != nil {
+		return "", "", err
 	}
 	return target, text, nil
+}
+
+// prompt submits text to target via agent.prompt, validating the result and
+// recording the submission effect; shared by message and spawn's first prompt.
+func (s *Service) prompt(ctx context.Context, target, text string, out *Outcome) (herdr.AgentDetails, error) {
+	var r herdr.AgentResult
+	err := s.call(ctx, "agent.prompt", map[string]any{"target": target, "text": text}, &r)
+	if err == nil && (r.Type != "agent_prompted" || !validAgent(r.Agent.Pane)) {
+		err = protocol("incomplete agent.prompt result")
+	}
+	if err != nil {
+		out.fail(err, "agent.prompt", true)
+		return herdr.AgentDetails{}, err
+	}
+	out.Effects = append(out.Effects, Effect{Action: "submitted", Kind: "message", ID: r.Agent.PaneID})
+	return r.Agent, nil
 }
 func (s *Service) Message(ctx context.Context, o MessageOptions, in io.Reader) Outcome {
 	out := Outcome{Operation: "agent.message", Status: "success", Effects: []Effect{}}
@@ -161,27 +244,16 @@ func (s *Service) Message(ctx context.Context, o MessageOptions, in io.Reader) O
 		out.fail(err, "validation", false)
 		return out
 	}
-	var r herdr.AgentResult
-	err = s.call(ctx, "agent.get", map[string]any{"target": target}, &r)
-	if err == nil && (r.Type != "agent_info" || !validAgent(r.Agent)) {
-		err = protocol("incomplete agent.get result")
-	}
+	a, err := s.lookup(ctx, target, &out)
 	if err != nil {
-		out.fail(err, "agent.get", false)
 		return out
 	}
-	out.Result = MessageResult{AgentRow: row(r.Agent)}
-	r = herdr.AgentResult{}
-	err = s.call(ctx, "agent.prompt", map[string]any{"target": target, "text": text}, &r)
-	if err == nil && (r.Type != "agent_prompted" || !validAgent(r.Agent)) {
-		err = protocol("incomplete agent.prompt result")
-	}
+	out.Result = MessageResult{AgentRow: row(a.Pane)}
+	agent, err := s.prompt(ctx, target, text, &out)
 	if err != nil {
-		out.fail(err, "agent.prompt", true)
 		return out
 	}
-	out.Result = MessageResult{AgentRow: row(r.Agent), Submitted: true}
-	out.Effects = append(out.Effects, Effect{Action: "submitted", Kind: "message", ID: r.Agent.PaneID})
+	out.Result = MessageResult{AgentRow: row(agent.Pane), Submitted: true}
 	return out
 }
 
@@ -192,32 +264,24 @@ type StopOptions struct {
 
 func (s *Service) Stop(ctx context.Context, o StopOptions) Outcome {
 	out := Outcome{Operation: "agent.stop", Status: "success", Effects: []Effect{}}
-	if (o.Name == "") == (o.Pane == "") {
-		out.fail(invalid("exactly one of --name or --pane is required"), "validation", false)
-		return out
-	}
-	target := o.Name
-	if target == "" {
-		target = o.Pane
-	}
-	var r herdr.AgentResult
-	err := s.call(ctx, "agent.get", map[string]any{"target": target}, &r)
-	if err == nil && (r.Type != "agent_info" || !validAgent(r.Agent)) {
-		err = protocol("incomplete agent.get result")
-	}
+	target, err := resolveTarget(o.Name, o.Pane)
 	if err != nil {
-		out.fail(err, "agent.get", false)
+		out.fail(err, "validation", false)
 		return out
 	}
-	out.Result = StopResult{AgentRow: row(r.Agent)}
-	if status := r.Agent.AgentStatus; status != "idle" && status != "done" && !o.Force {
+	a, err := s.lookup(ctx, target, &out)
+	if err != nil {
+		return out
+	}
+	out.Result = StopResult{AgentRow: row(a.Pane)}
+	if status := a.AgentStatus; status != "idle" && status != "done" && !o.Force {
 		out.fail(invalid("agent %s is %s; pass --force to stop it anyway", target, status), "guard", false)
 		return out
 	}
 	var closed struct {
 		Type string `json:"type"`
 	}
-	err = s.call(ctx, "pane.close", map[string]any{"pane_id": r.Agent.PaneID}, &closed)
+	err = s.call(ctx, "pane.close", map[string]any{"pane_id": a.PaneID}, &closed)
 	if err == nil && closed.Type != "ok" {
 		err = protocol("incomplete pane.close result")
 	}
@@ -225,14 +289,19 @@ func (s *Service) Stop(ctx context.Context, o StopOptions) Outcome {
 		out.fail(err, "pane.close", true)
 		return out
 	}
-	out.Result = StopResult{AgentRow: row(r.Agent), Stopped: true}
-	out.Effects = append(out.Effects, Effect{Action: "closed", Kind: "pane", ID: r.Agent.PaneID})
+	out.Result = StopResult{AgentRow: row(a.Pane), Stopped: true}
+	out.Effects = append(out.Effects, Effect{Action: "closed", Kind: "pane", ID: a.PaneID})
 	return out
 }
-func (s *Service) Spawn(ctx context.Context, o SpawnOptions) Outcome {
+func (s *Service) Spawn(ctx context.Context, o SpawnOptions, in io.Reader) Outcome {
 	result := &SpawnResult{Name: o.Name, Harness: o.Harness}
 	out := Outcome{Operation: "agent.spawn", Status: "success", Result: result, Effects: []Effect{}}
 	args, err := o.Validate()
+	if err != nil {
+		out.fail(err, "validation", false)
+		return out
+	}
+	prompt, err := readText(in, textInput{body: o.Prompt, bodyFlag: "prompt", bodySet: o.PromptSet, file: o.File, fileFlag: "file", fileSet: o.FileSet, required: false, noun: "prompt"})
 	if err != nil {
 		out.fail(err, "validation", false)
 		return out
@@ -265,20 +334,49 @@ func (s *Service) Spawn(ctx context.Context, o SpawnOptions) Outcome {
 		return out
 	}
 
+	started := s.now()
 	var r herdr.AgentResult
 	err = s.start(ctx, map[string]any{"name": o.Name, "kind": o.Harness, "pane_id": p.PaneID, "args": args, "timeout_ms": o.Timeout.Milliseconds()}, &r)
-	if err == nil && (r.Type != "agent_started" || !validAgent(r.Agent) || !samePane(r.Agent, p) || r.Argv == nil) {
+	if err == nil && (r.Type != "agent_started" || !validAgent(r.Agent.Pane) || !samePane(r.Agent.Pane, p) || r.Argv == nil) {
 		err = protocol("incomplete agent.start result")
 	}
 	if err != nil {
 		out.fail(err, "agent.start", true)
 		return out
 	}
-	setPlacement(result, r.Agent)
+	setPlacement(result, r.Agent.Pane)
 	result.DetectedHarness = r.Agent.Agent
 	result.AgentStatus = pointer(r.Agent.AgentStatus)
 	result.Argv = r.Argv
 	out.Effects = append(out.Effects, Effect{Action: "started", Kind: "agent", ID: r.Agent.PaneID})
+	if o.NoWait {
+		return out
+	}
+
+	remaining := max(o.Timeout-s.now().Sub(started), 0)
+	var w herdr.AgentResult
+	err = s.call(ctx, "agent.wait", map[string]any{"target": o.Name, "timeout_ms": remaining.Milliseconds()}, &w)
+	if err == nil && (w.Type != "agent_info" || !validAgentInfo(w.Agent) || !samePane(w.Agent.Pane, r.Agent.Pane)) {
+		err = protocol("incomplete agent.wait result")
+	}
+	if err != nil {
+		out.fail(err, "agent.wait", true)
+		return out
+	}
+	setPlacement(result, w.Agent.Pane)
+	result.DetectedHarness = w.Agent.Agent
+	result.AgentStatus = pointer(w.Agent.AgentStatus)
+	if w.Agent.AgentStatus == "blocked" {
+		out.fail(&herdr.Error{Code: "agent_blocked", Message: fmt.Sprintf("agent %s is waiting on a startup prompt", o.Name)}, "agent.wait", true)
+		return out
+	}
+	if !o.PromptSet && !o.FileSet {
+		return out
+	}
+	if _, err := s.prompt(ctx, o.Name, prompt, &out); err != nil {
+		return out
+	}
+	result.Prompted = true
 	return out
 }
 

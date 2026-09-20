@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"text/tabwriter"
 
 	"github.com/Harrison-Blair/fledge/internal/herdr"
@@ -51,9 +52,27 @@ type SpawnResult struct {
 	Argv            []string `json:"argv"`
 	WorktreePath    *string  `json:"worktree_path"`
 	Split           bool     `json:"split"`
+	Prompted        bool     `json:"prompted"`
 }
 type ListResult struct {
 	Agents []AgentRow `json:"agents"`
+}
+
+// GetResult exposes inspection details, preserving unavailable values as null.
+type GetResult struct {
+	AgentRow
+	ForegroundCwd    *string          `json:"foreground_cwd"`
+	InteractiveReady *bool            `json:"interactive_ready"`
+	LaunchPending    *bool            `json:"launch_pending"`
+	Focused          *bool            `json:"focused"`
+	Title            *string          `json:"title"`
+	AgentSession     *SessionIdentity `json:"agent_session"`
+}
+type SessionIdentity struct {
+	Source  *string `json:"source"`
+	Harness *string `json:"harness"`
+	Kind    *string `json:"kind"`
+	Value   *string `json:"value"`
 }
 type MessageResult struct {
 	AgentRow
@@ -152,15 +171,31 @@ func (o Outcome) Write(w io.Writer, asJSON bool) error {
 			}
 		}
 		if r, ok := o.Result.(*SpawnResult); ok && (o.Status == "partial" || o.Status == "unknown") {
-			_, err := fmt.Fprintf(w, "Startup was not confirmed; a process may still be running. Inspect with: herdr agent get %s; herdr agent read %s\n", r.Name, r.Name)
-			return err
+			switch o.Error.Phase {
+			case "agent.wait":
+				if o.Error.Code == "agent_blocked" {
+					_, err := fmt.Fprintf(w, "Agent is waiting on a startup prompt. Inspect with: herdr agent get %s; herdr agent read %s\n", r.Name, r.Name)
+					return err
+				}
+				fallthrough
+			case "agent.start":
+				_, err := fmt.Fprintf(w, "Startup was not confirmed; a process may still be running. Inspect with: herdr agent get %s; herdr agent read %s\n", r.Name, r.Name)
+				return err
+			}
+			return nil
 		}
 		return nil
 	}
 	switch r := o.Result.(type) {
 	case *SpawnResult:
-		_, err := fmt.Fprintf(w, "Spawned %s (%s) in %s / %s / %s\n  cwd: %s\n  worktree: %s\n", r.Name, r.Harness, display(r.WorkspaceID), display(r.TabID), display(r.PaneID), display(r.Cwd), display(r.WorktreePath))
-		return err
+		if _, err := fmt.Fprintf(w, "Spawned %s (%s) in %s / %s / %s\n  cwd: %s\n  worktree: %s\n", r.Name, r.Harness, display(r.WorkspaceID), display(r.TabID), display(r.PaneID), display(r.Cwd), display(r.WorktreePath)); err != nil {
+			return err
+		}
+		if r.Prompted {
+			_, err := fmt.Fprintf(w, "Message submitted to %s.\n", display(r.PaneID))
+			return err
+		}
+		return nil
 	case ListResult:
 		if len(r.Agents) == 0 {
 			_, err := fmt.Fprintln(w, "No live agents.")
@@ -172,6 +207,8 @@ func (o Outcome) Write(w io.Writer, asJSON bool) error {
 			fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", display(a.Name), display(a.Harness), display(a.AgentStatus), display(a.WorkspaceID), display(a.TabID), display(a.PaneID), display(a.Cwd))
 		}
 		return table.Flush()
+	case GetResult:
+		return writeGetResult(w, r)
 	case MessageResult:
 		_, err := fmt.Fprintf(w, "Message submitted to %s.\n", display(r.PaneID))
 		return err
@@ -191,6 +228,32 @@ func (o Outcome) Write(w io.Writer, asJSON bool) error {
 		return table.Flush()
 	}
 	return nil
+}
+func writeGetResult(w io.Writer, r GetResult) error {
+	session := r.AgentSession
+	if session == nil {
+		session = &SessionIdentity{}
+	}
+	for _, f := range []struct{ label, value string }{
+		{"Name", display(r.Name)}, {"Harness", display(r.Harness)}, {"Status", display(r.AgentStatus)},
+		{"Workspace ID", display(r.WorkspaceID)}, {"Tab ID", display(r.TabID)}, {"Pane ID", display(r.PaneID)},
+		{"Working directory", display(r.Cwd)}, {"Foreground working directory", display(r.ForegroundCwd)},
+		{"Interactive ready", displayBool(r.InteractiveReady)}, {"Launch pending", displayBool(r.LaunchPending)},
+		{"Focused", displayBool(r.Focused)}, {"Title", display(r.Title)},
+		{"Session source", display(session.Source)}, {"Session harness", display(session.Harness)},
+		{"Session reference kind", display(session.Kind)}, {"Session reference value", display(session.Value)},
+	} {
+		if _, err := fmt.Fprintf(w, "%s: %s\n", f.label, f.value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func displayBool(b *bool) string {
+	if b == nil {
+		return "-"
+	}
+	return strconv.FormatBool(*b)
 }
 func display(s *string) string {
 	if s == nil || *s == "" {

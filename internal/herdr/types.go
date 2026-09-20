@@ -45,9 +45,9 @@ type PaneResult struct {
 	Pane Pane   `json:"pane"`
 }
 type AgentResult struct {
-	Type  string   `json:"type"`
-	Agent Pane     `json:"agent"`
-	Argv  []string `json:"argv"`
+	Type  string       `json:"type"`
+	Agent AgentDetails `json:"agent"`
+	Argv  []string     `json:"argv"`
 }
 type AgentListResult struct {
 	Type   string `json:"type"`
@@ -71,4 +71,25 @@ type WorktreeListResult struct {
 		RepoRoot string `json:"repo_root"`
 	} `json:"source"`
 	Worktrees []Worktree `json:"worktrees"`
+}
+
+// AgentDetails is the full AgentInfo carried by every agent_* result.
+type AgentDetails struct {
+	Pane
+	TerminalID            string        `json:"terminal_id"`
+	ForegroundCwd         *string       `json:"foreground_cwd"`
+	InteractiveReady      *bool         `json:"interactive_ready"`
+	LaunchPending         *bool         `json:"launch_pending"`
+	Focused               *bool         `json:"focused"`
+	Revision              *uint64       `json:"revision"`
+	Title                 *string       `json:"title"`
+	TerminalTitle         *string       `json:"terminal_title"`
+	TerminalTitleStripped *string       `json:"terminal_title_stripped"`
+	AgentSession          *AgentSession `json:"agent_session"`
+}
+type AgentSession struct {
+	Source *string `json:"source"`
+	Agent  *string `json:"agent"`
+	Kind   *string `json:"kind"`
+	Value  *string `json:"value"`
 }

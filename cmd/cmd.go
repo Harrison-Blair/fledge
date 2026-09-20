@@ -13,13 +13,17 @@ import (
 )
 
 // Execute runs the command tree with the process arguments and streams.
-func Execute() error { return execute(os.Args[1:], os.Stdout, os.Stderr) }
+func Execute() error { return execute(os.Args[1:], nil, os.Stdout, os.Stderr) }
 
 // ExecuteWithArgs runs a fresh command tree with supplied arguments and output.
-func ExecuteWithArgs(args []string, out io.Writer) error { return execute(args, out, out) }
-func execute(args []string, out, errOut io.Writer) error {
+func ExecuteWithArgs(args []string, out io.Writer) error { return execute(args, nil, out, out) }
+
+func execute(args []string, in io.Reader, out, errOut io.Writer) error {
 	root := NewRootCmd()
 	root.SetArgs(args)
+	if in != nil {
+		root.SetIn(in)
+	}
 	root.SetOut(out)
 	root.SetErr(errOut)
 	cmd, err := root.ExecuteC()

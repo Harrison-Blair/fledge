@@ -24,6 +24,8 @@ func TestSpawnValidation(t *testing.T) {
 		{"branch ordinary", func(o *SpawnOptions) { o.Branch = "x" }},
 		{"bad env", func(o *SpawnOptions) { o.Env = []string{"bad"} }},
 		{"bad ratio", func(o *SpawnOptions) { r := 2.0; o.Ratio = &r }},
+		{"no-wait with prompt", func(o *SpawnOptions) { o.NoWait = true; o.PromptSet = true }},
+		{"no-wait with file", func(o *SpawnOptions) { o.NoWait = true; o.FileSet = true }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			o := validOptions()

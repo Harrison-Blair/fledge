@@ -17,8 +17,12 @@ func liveAgent(status string) herdr.Pane {
 	p.Name, p.Agent, p.Cwd = &name, &harness, &cwd
 	return p
 }
-func info(p herdr.Pane) herdr.AgentResult { return herdr.AgentResult{Type: "agent_info", Agent: p} }
-func closed() map[string]any              { return map[string]any{"type": "ok"} }
+func info(p herdr.Pane) herdr.AgentResult {
+	f := false
+	var rev uint64
+	return herdr.AgentResult{Type: "agent_info", Agent: herdr.AgentDetails{Pane: p, TerminalID: "term_x", Focused: &f, Revision: &rev}}
+}
+func closed() map[string]any { return map[string]any{"type": "ok"} }
 
 func TestStopIdleClosesResolvedPane(t *testing.T) {
 	p := liveAgent("idle")
@@ -72,7 +76,7 @@ func TestStopUnknownAgentDoesNotClose(t *testing.T) {
 	}
 }
 func TestStopMalformedAgentInfoDoesNotClose(t *testing.T) {
-	s := fake(t, call{method: "agent.get", result: herdr.AgentResult{Type: "agent_info", Agent: pane("", "w1", "w1:t2")}})
+	s := fake(t, call{method: "agent.get", result: info(pane("", "w1", "w1:t2"))})
 	out := s.Stop(context.Background(), StopOptions{Name: "worker"})
 	if out.Status != "rejected" || out.Error.Phase != "agent.get" {
 		t.Fatalf("%+v", out)

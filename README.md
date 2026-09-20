@@ -19,6 +19,8 @@ fledge agent spawn --name builder --harness codex --workspace backend --tab buil
 fledge agent spawn --name task --harness codex --workspace backend --worktree new --branch feature/task
 fledge agent spawn --name existing --harness claude --pane w2:p3
 fledge agent list --json
+fledge agent get --name reviewer
+fledge agent get --pane w2:p3 --json
 fledge agent message --name reviewer --body 'Review the current diff'
 fledge agent message --pane w2:p3 --file task.md
 cat task.md | fledge agent message --name reviewer --file -
@@ -41,6 +43,21 @@ to `right`; `--ratio` delegates to Herdr when omitted. These flags only affect
 splits. `--focus` defaults to false and focuses the destination before launch.
 `--timeout` is a duration, default `30s`; its millisecond value must be greater
 than 3000 and at most 300000.
+
+By default, spawn waits for the launch to settle before returning, so a
+successful spawn reports the settled status (e.g. `idle`) rather than `unknown`.
+`--timeout` covers launch and this wait together. `--no-wait` restores the old
+behavior: return once the launch begins, without waiting for readiness. If the
+agent settles on `blocked` (its own startup dialog, e.g. an update prompt),
+spawn fails with `agent_blocked` and a `partial` outcome; the agent is left
+running. A wait timeout is also `partial`, like a startup timeout.
+
+Pass `--prompt TEXT` or `--file PATH|-` (mutually exclusive; unlike `message`,
+inline text on spawn is `--prompt`, not `--body`) to deliver a first prompt once
+the agent is ready. The prompt is read and validated before any Herdr mutation,
+so a missing file never leaves a tab or agent behind. Spawn does not wait for
+the prompted turn to finish. `--no-wait` cannot be combined with `--prompt` or
+`--file`, since there would be no settled agent to prompt.
 
 With `--worktree new`, workspace selectors identify an **existing source**
 repository workspace. That source takes precedence over `--cwd`; without either,
@@ -78,6 +95,21 @@ exactly one of `--name`/`--pane` and one of `--body`/`--file`; it preserves newl
 and rejects empty or invalid UTF-8 content. Success acknowledges **submission**,
 without waiting for the agent to begin or finish. Blocked agents require the
 user to handle their approval dialog.
+
+`fledge agent get` inspects one live agent with exactly one nonempty `--name` or
+`--pane` target and no positional arguments. It makes a single read request,
+without focusing the pane or marking output seen. Labeled text includes the list
+fields plus foreground working directory, interactive readiness, launch-pending
+status, focus state, resolved title (the agent-reported title, else the stripped
+terminal title, else the raw terminal title), and native session source, harness,
+reference kind, and value. Unavailable values appear as `-`; known booleans appear
+as `true` or `false`. JSON returns a single result object with these details under
+`foreground_cwd`, `interactive_ready`, `launch_pending`, `focused`, `title`, and
+`agent_session` (with `source`, `harness`, `kind`, and `value`). Unavailable
+details are `null`; `interactive_ready` and `launch_pending` are optional and
+appear as `null` when absent, while `focused` is always present on a successful
+read. `effects` is empty. Failed reads use `rejected` with the error code and
+phase.
 
 `fledge agent stop` stops a live agent by closing its pane. It accepts exactly one
 of `--name`/`--pane`, resolves the agent first, and never closes a pane that does

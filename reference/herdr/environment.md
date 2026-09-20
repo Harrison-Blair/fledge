@@ -23,14 +23,20 @@ herdr injects the caller's context into each managed pane, so a process can disc
 Usage notes:
 
 - The three ID variables are the injected caller context. Prefer `--current` (or `--pane "$HERDR_PANE_ID"`) over omitting a target; an omitted target may act on another client's UI-focused pane. See [addressing.md](addressing.md).
-- A moved process keeps its inherited `HERDR_PANE_ID`, so *inside* that process the old pane ID still resolves even after a `pane move` re-identifies the pane for external callers.
+- A moved process keeps its inherited `HERDR_PANE_ID`, `HERDR_TAB_ID`, and `HERDR_WORKSPACE_ID` — all three still describe the pane's pre-move location *inside* that process even after a `pane.move` re-identifies the pane (new workspace/tab/pane IDs) for external callers.
 - `HERDR_ENV` is a presence/gate flag; the rest are data. Read them; do not assume them when unset.
+- Of the injected variables, only `HERDR_SESSION` can be overridden by whatever launched the pane: a `pane.split` `env` param (and, presumably, `tab.create`'s) setting `HERDR_SESSION` is honored inside the new pane. The same trick against `HERDR_PANE_ID`, `HERDR_ENV`, `HERDR_WORKSPACE_ID`, `HERDR_TAB_ID`, `HERDR_SOCKET_PATH`, or `HERDR_BIN_PATH` is silently overwritten with herdr's real value. Do not trust a child process's `$HERDR_SESSION` for anything security-sensitive.
+
+Validated 2026-09-19 against herdr 0.9.1.
 
 ## Socket path and permissions
 
 - The server listens on a Unix domain **stream** socket at `$HERDR_SOCKET_PATH`. For the `fledge-dev` session the observed path is `/home/penguin/.config/herdr/sessions/fledge-dev/herdr.sock`; `herdr status server` reports the same path under `socket:`.
 - The socket file is created with permission mode **`0600`** (owner read/write only, observed). Only the owning OS user can connect. There is no network listener — the socket is local to the host (remote control is tunneled over SSH via `herdr --remote`, or a saved profile added with `herdr machine add` and reached with `herdr --machine <label-or-id>`, not by exposing the socket).
-- A companion client socket `herdr-client.sock` sits alongside it in the session directory (used for client↔server coordination).
+- A companion client socket `herdr-client.sock` sits alongside it in the session directory (used for client↔server coordination). It does not speak the same NDJSON/JSON-RPC dialect as `herdr.sock`: a well-formed `{"id","method":"ping","params":{}}` line sent to it gets no pong and no error reply — the connection is simply reset by the peer. Treat it as an internal implementation detail, never as an alternate or fallback API endpoint.
+- Overly long socket paths hit the OS's `sockaddr_un` `sun_path` capacity: pointing `$HERDR_SOCKET_PATH` at a sufficiently long/nested path makes `herdr status server` fail outright with `Custom { kind: InvalidInput, error: "local socket name length exceeds capacity of sun_path of sockaddr_un" }` instead of a normal not-running status. Named/scratch session socket paths (`~/.config/herdr/sessions/<name>/herdr.sock`) have no length guard on `<name>` to prevent this.
+
+Validated 2026-09-19 against herdr 0.9.1.
 
 ## No token or API-key authentication
 
@@ -44,23 +50,32 @@ Authorization is entirely: (1) **OS socket permissions** — you must be the own
 
 A saved remote machine (`herdr machine add`, then `herdr --machine <label-or-id> <command>`) does not add a separate credential: it forwards the API command to the remote host's own socket over the existing SSH connection, so authorization there still reduces to OS-level access — local socket permissions on that host, gated by SSH auth to reach it (skill.md §"To control a saved SSH machine"). `--remote-keybindings <local|server>` only selects whose keybindings a `--remote` TUI attach uses and has no bearing on authorization.
 
+Validated 2026-09-19 against herdr 0.9.1 (the request-envelope, extra-field, and `env -i` socket-only-authorization claims were exercised directly; `herdr machine list`/`--help` confirmed the subsystem's existence and shape, but driving a real `--machine <label> <command>` forward and a live `--remote-keybindings` TUI attach were not exercised — both require touching resources outside an isolated scratch session).
+
 ## Session directory layout
 
-Each named session owns a directory under the herdr config root. On Linux/macOS the config root is `~/.config/herdr/` (`%APPDATA%\herdr\` on Windows; agent-guide.md §troubleshooting). The default session's files live directly in the config root; a **named** session gets its own subdirectory:
+Each named session owns a directory under the herdr config root. On Linux/macOS the config root is `~/.config/herdr/` (`%APPDATA%\herdr\` on Windows, unverified on this Linux host; agent-guide.md §troubleshooting). The default session's files live directly in the config root; a **named** session gets its own subdirectory:
 
 ```text
 ~/.config/herdr/
 ├── config.toml                     # user configuration (HERDR_CONFIG_PATH overrides)
+├── session.json                    # persisted workspace/tab/pane/layout snapshot (undocumented; reloaded on restart)
 └── sessions/
     └── <name>/                     # one directory per named session, e.g. fledge-dev/
         ├── herdr.sock              # server API socket  ($HERDR_SOCKET_PATH), mode 0600
         ├── herdr-client.sock       # client↔server coordination socket
-        ├── herdr.log               # combined session log
         ├── herdr-client.log        # client-side log
-        └── herdr-server.log        # server-side log
+        ├── herdr-server.log        # server-side log
+        └── session.json            # this session's persisted snapshot (absent until the session has done something)
 ```
 
-The `herdr --help` footer for the `fledge-dev` session confirms the log set: `Logs: /home/penguin/.config/herdr/sessions/fledge-dev/herdr.log (plus herdr-client.log, herdr-server.log)`, and agent-guide.md confirms "Named-session logs live under `sessions/<name>/`". `herdr status`, `herdr status server`, and `herdr status client` summarize the runtime and print the resolved socket path.
+The `herdr --help` footer for the `fledge-dev` session names a combined log: `Logs: /home/penguin/.config/herdr/sessions/fledge-dev/herdr.log (plus herdr-client.log, herdr-server.log)`. On the installed 0.9.1 binary, that `herdr.log` file is never actually written — not in the default config root, not in a freshly created named session directory, and not after generating both client and server activity against one. Only `herdr-client.log` and `herdr-server.log` are ever created; treat the `--help` footer's `herdr.log` path as aspirational text, not an observed file. agent-guide.md's "Named-session logs live under `sessions/<name>/`" holds for the two logs that do exist.
+
+`session.json` is undocumented elsewhere but present in the config root and in every named session directory once that session has done anything (a session created fresh has none yet). It persists the full workspace/tab/pane/layout snapshot, and that state survives a server restart: stopping a named session's server and starting a new one under the same name reloads the exact same workspaces, tabs, and panes (including custom labels) rather than starting from a clean slate.
+
+`herdr status`, `herdr status server`, and `herdr status client` summarize the runtime and print the resolved socket path.
+
+Validated 2026-09-19 against herdr 0.9.1 (the Windows config-root path is unverified from this Linux host).
 
 ## Named sessions as isolation
 
@@ -68,4 +83,6 @@ A session is the unit of isolation: one server process, one socket, one workspac
 
 - **Selecting a session:** `herdr --session <name>` uses or creates a named persistent session; `herdr session attach <name>` attaches to it. `herdr session list [--json]`, `herdr session stop <name>`, and `herdr session delete <name>` manage them. Inside a pane, `$HERDR_SESSION` names the current one.
 - **Isolation boundary:** each session has its own socket path and its own ID space, so `w1` in one session is unrelated to `w1` in another, and a client bound to one socket cannot see or affect another session's topology. Because authorization is just socket access, separate sessions are also separate access domains for anyone who can be restricted to one directory.
-- **Use for experiments:** skill.md is explicit — "Use named test sessions for experiments that need an isolated server," and "Never kill the main Herdr process." Run mutating or destructive probing against a scratch named session so a mistake cannot touch the primary session's panes and processes. `herdr server stop` and `--no-session` (monolithic, no server/client) are escape hatches to use deliberately, not in an active shared session.
+- **Use for experiments:** skill.md is explicit — "Use named test sessions for experiments that need an isolated server," and "Never kill the main Herdr process." Run mutating or destructive probing against a scratch named session so a mistake cannot touch the primary session's panes and processes. `herdr server stop` is a real escape hatch (listed in `herdr --help`'s usage) to use deliberately, not against an active shared session. A `--no-session` "monolithic, no server/client" mode is not present on the installed 0.9.1 CLI: `herdr --no-session status` fails with `unknown option: --no-session` (exit code 2), and no flag or mode named `--no-session` or "monolithic" appears anywhere in `herdr --help`'s usage or options text.
+
+Validated 2026-09-19 against herdr 0.9.1 (`herdr session attach` was confirmed to exist via `--help` only; its interactive TUI behaviour needs a real terminal and was not exercised).

@@ -32,10 +32,15 @@ func New() *cobra.Command {
 	f.StringVar(&options.Direction, "direction", "right", "Split direction: right or down")
 	f.Float64Var(&ratio, "ratio", 0, "Split ratio, strictly between zero and one")
 	f.DurationVar(&options.Timeout, "timeout", 30*time.Second, "Startup timeout (3001ms through 300000ms)")
+	f.BoolVar(&options.NoWait, "no-wait", false, "Return once launch begins, without waiting for readiness")
+	f.StringVar(&options.Prompt, "prompt", "", "First prompt text, sent once the agent is ready")
+	f.StringVar(&options.File, "file", "", "UTF-8 prompt file, or - for stdin")
 	f.StringArrayVar(&options.Args, "args", nil, "Exact native argument token (repeatable)")
 	f.BoolVar(&asJSON, "json", false, "Emit a structured outcome")
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		options.DirectionSet = f.Changed("direction")
+		options.PromptSet = f.Changed("prompt")
+		options.FileSet = f.Changed("file")
 		if f.Changed("ratio") {
 			options.Ratio = &ratio
 		}
@@ -44,7 +49,7 @@ func New() *cobra.Command {
 		if len(args) > 0 && cmd.ArgsLenAtDash() != 0 {
 			return agent.Finish(agent.InvalidOutcome("agent.spawn", agent.PositionalError()), cmd.OutOrStdout(), asJSON)
 		}
-		return agent.Finish(agent.FromEnvironment(options.Timeout).Spawn(cmd.Context(), options), cmd.OutOrStdout(), asJSON)
+		return agent.Finish(agent.FromEnvironment(options.Timeout).Spawn(cmd.Context(), options, cmd.InOrStdin()), cmd.OutOrStdout(), asJSON)
 	}
 	return cmd
 }
