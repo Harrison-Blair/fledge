@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -66,6 +67,11 @@ func TestCallErrors(t *testing.T) {
 		{"server", `{"id":"fledge","error":{"code":"agent_blocked","message":"approval"}}`, "agent_blocked", false},
 		{"bad json", `{`, "protocol_error", true},
 		{"mismatch", `{"id":"other","result":{"type":"ok"}}`, "protocol_error", true},
+		{"both result and error", `{"id":"fledge","result":{"type":"ok"},"error":{"code":"failed","message":"failed"}}`, "protocol_error", true},
+		{"missing error code", `{"id":"fledge","error":{"message":"failed"}}`, "protocol_error", true},
+		{"missing error message", `{"id":"fledge","error":{"code":"failed"}}`, "protocol_error", true},
+		{"missing type", `{"id":"fledge","result":{}}`, "protocol_error", true},
+		{"invalid type", `{"id":"fledge","result":{"type":123}}`, "protocol_error", true},
 		{"missing result", `{"id":"fledge"}`, "protocol_error", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -92,5 +98,37 @@ func TestCallCancellation(t *testing.T) {
 	}
 	if time.Since(start) > time.Second {
 		t.Fatal("cancellation did not interrupt read")
+	}
+}
+
+func TestCallIncompatibleResult(t *testing.T) {
+	path := socket(t, func(c net.Conn) {
+		bufio.NewReader(c).ReadString('\n')
+		c.Write([]byte("{\"id\":\"fledge\",\"result\":{\"type\":\"ok\",\"count\":\"invalid\"}}\n"))
+	})
+	var result struct{ Count int }
+	err := (Client{Socket: path}).Call(context.Background(), "test", nil, &result)
+	var remote *Error
+	if !errors.As(err, &remote) || remote.Code != "protocol_error" || !remote.Uncertain || !strings.Contains(remote.Message, "invalid test result") {
+		t.Fatalf("got %#v", err)
+	}
+}
+
+func TestCallConnectionFailures(t *testing.T) {
+	for _, connected := range []bool{false, true} {
+		t.Run(fmt.Sprint(connected), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "absent")
+			code := "connection_error"
+			if connected {
+				path = socket(t, func(c net.Conn) { bufio.NewReader(c).ReadString('\n') })
+				code = "transport_error"
+			}
+			var result any
+			err := (Client{Socket: path}).Call(context.Background(), "test", nil, &result)
+			var remote *Error
+			if !errors.As(err, &remote) || remote.Code != code || remote.Uncertain != connected {
+				t.Fatalf("got %#v", err)
+			}
+		})
 	}
 }

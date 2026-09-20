@@ -6,7 +6,9 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -315,4 +317,135 @@ func TestNullDeviceIsNotAnInteractiveTerminal(t *testing.T) {
 	if *downloads != 0 {
 		t.Fatal("downloaded without confirmation")
 	}
+}
+
+type failingIO struct{ err error }
+
+func (f failingIO) Read([]byte) (int, error)  { return 0, f.err }
+func (f failingIO) Write([]byte) (int, error) { return 0, f.err }
+
+func TestUpdateIOFailures(t *testing.T) {
+	for _, kind := range []string{"confirmation", "warning", "prompt", "check output", "up to date output", "canceled output", "success output"} {
+		t.Run(kind, func(t *testing.T) {
+			opts, _, _, downloads := fixture(t, archive(t, "fledge", "new binary", tar.TypeReg), "")
+			sentinel := errors.New("I/O failed")
+			switch kind {
+			case "confirmation":
+				opts.Stdin = failingIO{sentinel}
+			case "warning":
+				opts.Current, opts.Err = "dev", failingIO{sentinel}
+			case "prompt":
+				opts.Err = failingIO{sentinel}
+			case "check output":
+				opts.Check, opts.Out = true, failingIO{sentinel}
+			case "up to date output":
+				opts.Current, opts.Out = "v0.2.0", failingIO{sentinel}
+			case "canceled output":
+				opts.Stdin = strings.NewReader("n\n")
+				opts.Err = &writeFailureAfter{remaining: 1, err: sentinel}
+			case "success output":
+				opts.Yes, opts.Out = true, failingIO{sentinel}
+			}
+			if err := Run(context.Background(), opts); !errors.Is(err, sentinel) {
+				t.Fatalf("got %v, want %v", err, sentinel)
+			}
+			want := "old binary"
+			if kind == "success output" {
+				want = "new binary"
+			} else if *downloads != 0 {
+				t.Fatalf("unexpected downloads: %d", *downloads)
+			}
+			assertInstalledFile(t, opts.ExecPath, want)
+		})
+	}
+}
+
+type writeFailureAfter struct {
+	remaining int
+	err       error
+}
+
+func (w *writeFailureAfter) Write(p []byte) (int, error) {
+	if w.remaining == 0 {
+		return 0, w.err
+	}
+	w.remaining--
+	return len(p), nil
+}
+
+func assertInstalledFile(t *testing.T, path, want string) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != want {
+		t.Fatalf("installed file = %q, err = %v; want %q", got, err, want)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0751 {
+		t.Fatalf("permissions changed: %v", info.Mode())
+	}
+	files, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".fledge-update-*"))
+	if err != nil || len(files) != 0 {
+		t.Fatalf("leftover temporary files: %v, %v", files, err)
+	}
+}
+
+func TestMissingExecutableTarget(t *testing.T) {
+	for _, symlink := range []bool{false, true} {
+		t.Run(fmt.Sprint(symlink), func(t *testing.T) {
+			opts, _, _, downloads := fixture(t, nil, "")
+			original := opts.ExecPath
+			opts.ExecPath = filepath.Join(filepath.Dir(original), "missing")
+			if symlink {
+				link := filepath.Join(filepath.Dir(original), "link")
+				if err := os.Symlink(opts.ExecPath, link); err != nil {
+					t.Fatal(err)
+				}
+				opts.ExecPath = link
+			}
+			opts.Yes = true
+			if err := Run(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "resolve executable") {
+				t.Fatalf("got %v", err)
+			}
+			if *downloads != 0 {
+				t.Fatal("downloaded assets without an executable target")
+			}
+			assertInstalledFile(t, original, "old binary")
+		})
+	}
+}
+
+type cancelOnClose struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b cancelOnClose) Close() error { err := b.ReadCloser.Close(); b.cancel(); return err }
+
+type updateTransport func(*http.Request) (*http.Response, error)
+
+func (f updateTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestCancellationAfterDownloadPreservesExecutable(t *testing.T) {
+	opts, _, _, downloads := fixture(t, archive(t, "fledge", "new binary", tar.TypeReg), "")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	base := opts.Client.Transport
+	opts.Client.Transport = updateTransport(func(r *http.Request) (*http.Response, error) {
+		resp, err := base.RoundTrip(r)
+		if err == nil && strings.HasSuffix(r.URL.Path, ".tar.gz") {
+			resp.Body = cancelOnClose{resp.Body, cancel}
+		}
+		return resp, err
+	})
+	opts.Yes = true
+	if err := Run(ctx, opts); !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v", err)
+	}
+	if *downloads != 2 {
+		t.Fatalf("downloads = %d, want checksums and archive", *downloads)
+	}
+	assertInstalledFile(t, opts.ExecPath, "old binary")
 }

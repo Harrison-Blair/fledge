@@ -740,3 +740,40 @@ func TestSpawnPromptFailureRetainsEarlierEffects(t *testing.T) {
 		t.Fatalf("expected retained effects: %+v", out)
 	}
 }
+
+func TestWorkspaceRenameFailureRetainsResources(t *testing.T) {
+	for _, tc := range []struct {
+		name, status, code string
+		result             herdr.TabResult
+		err                error
+	}{
+		{name: "server rejection", status: "partial", code: "rename_failed", err: &herdr.Error{Code: "rename_failed", Message: "failed"}},
+		{name: "wrong type", status: "unknown", code: "protocol_error", result: herdr.TabResult{Type: "wrong", Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}}},
+		{name: "wrong tab", status: "unknown", code: "protocol_error", result: herdr.TabResult{Type: "tab_info", Tab: herdr.Tab{ID: "w2:t2", WorkspaceID: "w2"}}},
+		{name: "wrong workspace", status: "unknown", code: "protocol_error", result: herdr.TabResult{Type: "tab_info", Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w3"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := validOptions()
+			o.Workspace, o.Tab = "new workspace", "tasks"
+			p := pane("w2:p1", "w2", "w2:t1")
+			s := fake(t,
+				call{method: "session.snapshot", result: snapshot()},
+				call{method: "pane.current", result: herdr.PaneResult{Type: "pane_current", Pane: pane("w1:p1", "w1", "w1:t1")}},
+				call{method: "workspace.create", result: herdr.CreatedResult{Type: "workspace_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2", Label: "1"}, RootPane: p}},
+				call{method: "tab.rename", params: map[string]any{"tab_id": "w2:t1", "label": "tasks"}, result: tc.result, err: tc.err},
+			)
+			out := s.Spawn(context.Background(), o, nil)
+			if out.Status != tc.status || out.Error == nil || out.Error.Code != tc.code || out.Error.Phase != "tab.rename" {
+				t.Fatalf("%+v", out)
+			}
+			want := []Effect{{Action: "created", Kind: "workspace", ID: "w2"}, {Action: "created", Kind: "tab", ID: "w2:t1"}, {Action: "created", Kind: "pane", ID: "w2:p1"}}
+			if !reflect.DeepEqual(out.Effects, want) {
+				t.Fatalf("effects = %+v, want %+v", out.Effects, want)
+			}
+			result := out.Result.(*SpawnResult)
+			if result.PaneID == nil || *result.PaneID != p.PaneID || result.TabID == nil || *result.TabID != p.TabID || result.WorkspaceID == nil || *result.WorkspaceID != p.WorkspaceID {
+				t.Fatalf("lost placement: %+v", result)
+			}
+		})
+	}
+}
