@@ -89,7 +89,7 @@ lists below are abbreviated; consult each subcommand's `--help` for the exhausti
 | `plugin.disable` | `herdr plugin disable <PLUGIN_ID>` | new CLI group in 0.9.1 |
 | `plugin.enable` | `herdr plugin enable <PLUGIN_ID>` | new CLI group in 0.9.1 |
 | `plugin.link` | `herdr plugin link <PATH> [--enabled \| --disabled]` | new CLI group in 0.9.1 |
-| `plugin.list` | `herdr plugin list [--plugin <ID>] [--json]` |  |
+| `plugin.list` | `herdr plugin list [--plugin <ID>] [--json]` | default output (no `--json`) is human text (e.g. `No plugins installed.`), unlike sibling `plugin action list`/`plugin log list`, which return the JSON envelope with no flag needed |
 | `plugin.log.list` | `herdr plugin log list [--plugin <ID>] [--limit <N>]` | new CLI group in 0.9.1 |
 | `plugin.pane.close` | `herdr plugin pane close <PANE_ID>` | new CLI group in 0.9.1 |
 | `plugin.pane.focus` | `herdr plugin pane focus <PANE_ID>` | new CLI group in 0.9.1 |
@@ -98,7 +98,7 @@ lists below are abbreviated; consult each subcommand's `--help` for the exhausti
 | `popup.close` | API-only (no CLI subcommand) | raw socket only (`raw/popup-close.json`) |
 | `product_announcement.dismiss` | API-only (no CLI subcommand) | dismisses an in-app product announcement by `id`/`version`; errors `stale_announcement` once it is no longer current |
 | `release_notes.dismiss` | API-only (no CLI subcommand) | dismisses the in-app release-notes prompt for a given `version` |
-| `server.agent_manifests` | `herdr server agent-manifests [--json]` | thin 1:1 wrapper |
+| `server.agent_manifests` | `herdr server agent-manifests [--json]` | thin 1:1 wrapper; default output (no `--json`) is a human-readable table, not the JSON envelope |
 | `server.live_handoff` | API-only (no CLI subcommand) | invoked indirectly by `herdr update --handoff` and `--remote`/`--handoff` attach; not a standalone verb |
 | `server.reload_agent_manifests` | `herdr server reload-agent-manifests` | reloads local manifest overrides only |
 | `server.reload_config` | `herdr server reload-config` | |
@@ -111,7 +111,7 @@ lists below are abbreviated; consult each subcommand's `--help` for the exhausti
 | `tab.list` | `herdr tab list [--workspace ID]` | |
 | `tab.move` | API-only (no CLI subcommand) | `herdr tab move` prints the `tab` usage list, exit 2 |
 | `tab.rename` | `herdr tab rename <tab_id> <label>…` | LABEL is variadic (joined) |
-| `workspace.close` | `herdr workspace close <workspace_id>` | |
+| `workspace.close` | `herdr workspace close <workspace_id> [--group]` | `--group` is omitted from `herdr workspace close --help` but appears in the `workspace` group's usage listing and is accepted live |
 | `workspace.create` | `herdr workspace create [--cwd] [--label] [--env KEY=VALUE] [--focus\|--no-focus]` | |
 | `workspace.focus` | `herdr workspace focus <workspace_id>` | |
 | `workspace.get` | `herdr workspace get <workspace_id>` | |
@@ -125,6 +125,12 @@ lists below are abbreviated; consult each subcommand's `--help` for the exhausti
 | `worktree.open` | `herdr worktree open [--workspace ID] [--cwd] [--path] [--branch] [--label] [--focus\|--no-focus]` | |
 | `worktree.remove` | `herdr worktree remove [--workspace ID] [--force]` | note: `remove` accepts only `--workspace`/`--force`; passing `--path` fails with `unknown option: --path` (exit 2) even though `create`/`open` accept `--path` |
 
+Validated 2026-09-19 against herdr 0.9.1. (The method set matches `schema.json`'s 103
+request methods exactly; flag lists were cross-checked against a full `--help` sweep of
+every subcommand; a representative subset of rows — including `pane.move`,
+`pane.wait_for_output`, `plugin.pane.open`, `worktree.remove`, `session.snapshot`, and
+`server.agent_manifests` — was additionally exercised live against a scratch server.)
+
 ### API-only method count
 
 33 of the 103 methods have no CLI subcommand: all 3 `layout.*`, all 3
@@ -134,6 +140,10 @@ lists below are abbreviated; consult each subcommand's `--help` for the exhausti
 `popup.close`, `ping`, `client_shell.surface.set`, `command.invoke`, `integration.list`,
 `product_announcement.dismiss`, `release_notes.dismiss`, `server.live_handoff`,
 `tab.move`, `workspace.move`, and `workspace.move_block`.
+
+Validated 2026-09-19 against herdr 0.9.1. (The 33-method set was cross-checked against a
+full `--help` sweep of every command group; no hidden CLI subcommand was found for any of
+them.)
 
 ## CLI-only commands
 
@@ -157,6 +167,9 @@ work (network fetch, binary download) outside the socket protocol entirely.
 | `herdr server agent-manifests [--json]` | Shows active agent-detection manifests. | Thin 1:1 wrapper over `server.agent_manifests` (listed here only for the `server` group's completeness). |
 | `herdr server update-agent-manifests [--json]` | Fetches manifests from the network, then reloads them. | The network fetch has no socket method; the reload step reuses the manifest-reload path. Genuinely composite/CLI-only. |
 | `herdr server reload-agent-manifests` | Reloads local manifest overrides. | Thin 1:1 wrapper over `server.reload_agent_manifests`. |
+| `herdr plugin install [--ref REF] [-y\|--yes] <OWNER/REPO[/SUBDIR]>` | Installs a plugin from GitHub. | Network fetch into the local plugin registry; no socket method (absent from `raw/schema.json`'s method set). |
+| `herdr plugin uninstall <PLUGIN>` | Uninstalls a plugin. | Local plugin-registry operation; no socket method. |
+| `herdr plugin config-dir <PLUGIN_ID>` | Prints a plugin's config directory path. | Purely local path computation; no socket method. |
 | `herdr agent attach <target> [--takeover]` | Attaches the terminal directly to an agent pane. | Interactive attach loop, not a request/response method. |
 | `herdr pane run <pane_id> <command>…` | Sends text plus Enter in one call. | CLI convenience composite over `pane send-text` (documented in `send-text`'s help: "herdr pane run … sends text and Enter in one call"); no dedicated `pane.run` method. |
 | `herdr integration status [--outdated-only]` | Shows install status of built-in integrations. | No `integration.status` method exists; status is computed CLI-side, distinct from the `integration.list` socket method. |
@@ -167,6 +180,12 @@ Top-level launch/attach invocations (`herdr`, `herdr --session <name>`, `herdr -
 `herdr --default-config`, `herdr --skill`, `herdr --version`) are client entry points, not
 socket methods.
 
+Validated 2026-09-19 against herdr 0.9.1 (every row's `--help` text was checked directly,
+including confirming `plugin install`/`uninstall`/`config-dir` have no corresponding entry
+in `schema.json`'s method set; `session attach`, `agent attach`, and `herdr update` were
+not exercised live because each opens an interactive terminal takeover or replaces the
+running binary, so their descriptions remain constructed from `--help` text).
+
 ## CLI conventions
 
 Observed from the help sweep and probe captures (`probes/`, `probes/scratch/*.err`):
@@ -174,9 +193,12 @@ Observed from the help sweep and probe captures (`probes/`, `probes/scratch/*.er
 - **JSON result on stdout.** A method-backed subcommand prints the socket `result` object
   verbatim as one JSON line on stdout, with the envelope `id` set to
   `cli:<group>:<cmd>` — e.g. `cli:pane:get`, `cli:workspace:create`, `cli:agent:list`,
-  `cli:api:snapshot`. Some result objects carry a `type` discriminator (`{"type":"ok"}`,
-  `{"type":"tab_info"}`, `{"type":"workspace_info"}`, `{"type":"pane_zoom"}`), others are a
-  bare named object (`{"pane":{…}}`, `{"agents":[…]}`).
+  `cli:api:snapshot`. The `plugin` group is an exception: every `plugin` subcommand tested
+  (`action list`, `log list`, `list --json`) returns the flat envelope id `cli:plugin`
+  regardless of which subcommand ran, not a per-subcommand `cli:plugin:<cmd>` id — a caller
+  cannot use `id` to correlate concurrent `plugin` responses. Some result objects carry a
+  `type` discriminator (`{"type":"ok"}`, `{"type":"tab_info"}`, `{"type":"workspace_info"}`,
+  `{"type":"pane_zoom"}`), others are a bare named object (`{"pane":{…}}`, `{"agents":[…]}`).
 - **Server errors → JSON on stderr, exit 1.** A socket error is printed as the same
   `{"error":{"code":…,"message":…},"id":"cli:<group>:<cmd>"}` envelope on stderr with exit
   status 1. Example: `{"error":{"code":"pane_not_found","message":"pane w1:p99 not found"},"id":"cli:pane:read"}`;
@@ -188,9 +210,11 @@ Observed from the help sweep and probe captures (`probes/`, `probes/scratch/*.er
   --path` for `worktree remove --path`, or the group's usage list for `tab move` /
   `workspace move`. An unknown top-level group prints `unknown command: layout` plus
   `run 'herdr --help' for usage`.
-- **Non-JSON subcommands.** `status` (default), `channel show`, `config check`, and
-  `completion` emit human-readable text, not the JSON envelope. Most add `--json` for a
-  machine-readable form.
+- **Non-JSON subcommands.** `status` (default), `channel show`, `config check`,
+  `completion`, `plugin list` (default; sibling `plugin action list`/`plugin log list`
+  return JSON with no flag needed), and `server agent-manifests` (default) emit
+  human-readable text, not the JSON envelope. Most add `--json` for a machine-readable
+  form.
 - **Mixed positional-vs-flag targeting.** Read-by-id commands take the id positionally:
   `pane get <pane_id>`, `pane read <pane_id>`, `tab get <tab_id>`, `workspace get
   <workspace_id>`, `pane close/rename/move/send-text/send-keys/wait-output <pane_id>`.
@@ -208,3 +232,8 @@ Observed from the help sweep and probe captures (`probes/`, `probes/scratch/*.er
   the label.
 - **Key names.** `send-keys` uses `esc` as the canonical Escape name; `escape` is also
   accepted.
+
+Validated 2026-09-19 against herdr 0.9.1 (the JSON-envelope, server-error, syntax-error,
+key-name, and variadic-label bullets were each reproduced against a scratch server; the
+mixed positional-vs-flag and focus-flag bullets were checked against the `--help` sweep
+across the sampled commands rather than every subcommand individually).

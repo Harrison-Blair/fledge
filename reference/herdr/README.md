@@ -1,6 +1,6 @@
 # herdr API Reference
 
-> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
+> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-19
 
 Exhaustive, agent-optimized documentation of the **herdr** socket API, written for
 implementing fledge's herdr client. herdr is a terminal workspace manager for AI coding
@@ -57,11 +57,16 @@ wins — and the docs have a bug.
 ## Provenance and validation
 
 - Params, results, and types come from `raw/schema.json` (herdr 0.9.1).
-- Examples labeled **Validated 2026-09-17 against herdr 0.9.1** (or the earlier
-  **Validated 2026-08-19 against herdr 0.8.2**, kept where the method is unchanged) are
-  real captured exchanges: read-only methods against a live session, mutating methods against an
-  isolated scratch server (`herdr --session <name> server`). Examples labeled
-  **Constructed from schema; not live-validated** were never executed
-  (notably `integration.install/uninstall`, mutating `plugin.*`, `server.live_handoff`).
+- Two evidence stamps appear on individual claims and examples throughout these pages.
+  **Validated YYYY-MM-DD against herdr X.Y.Z** means the claim was actually exercised:
+  a real captured exchange, read-only methods against a live session and mutating
+  methods against an isolated scratch server (`herdr --session <name> server`).
+  **Constructed from schema; not live-validated** means the claim comes only from
+  `raw/schema.json`'s shapes and was never exercised, including methods a pass
+  deliberately skipped because probing them would write outside an isolated scratch
+  session (e.g. `integration.install`/`integration.uninstall`), noted inline with the
+  reason. A section carries the Validated stamp only for the parts of it actually
+  exercised in that pass, so dates can differ section-to-section within a page as it is
+  re-verified over time; see [RESYNC.md](RESYNC.md) for how a resync pass decides which.
 - herdr self-updates (`herdr update`); these docs describe **0.9.1 / protocol 22** and
   will drift. See [RESYNC.md](RESYNC.md) for the refresh procedure.

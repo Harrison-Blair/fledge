@@ -4,13 +4,23 @@
 > Part of the fledge herdr reference. Index: [README.md](../README.md). Wire format: [protocol.md](../protocol.md).
 
 The `tab` namespace manages tabs within a workspace. A tab is a container of one or
-more panes inside a workspace; it carries an ordinal `number`, a mutable `label`, a
+more panes inside a workspace; it carries an ordinal `number` (a per-workspace
+creation counter, not a position — see [TabInfo](#tabinfo)), a mutable `label`, a
 `focused` flag, a `pane_count`, and an aggregate `agent_status`. Every tab belongs to
 exactly one workspace. Tab public IDs are opaque, stable, workspace-qualified handles of
-the form `w1:t1` and are never reused after a tab closes. Creating a tab also creates its
-`root_pane`; closing a tab closes the panes it contains. Most methods operate on a single
-tab identified by its `tab_id`; `tab.list` enumerates tabs and `tab.move` reorders them
-within a workspace.
+the form `w1:t1` — the suffix is Crockford base32 (`w1:t9` is followed by `w1:tA`,
+`w1:tB`, …, skipping `I`, `L`, `O`, `U`), so a caller parsing it as decimal digits
+breaks on a workspace's 10th tab — and are never reused after a tab closes. Creating a
+tab also creates its `root_pane`; closing a tab closes the panes it contains. Most
+methods operate on a single tab identified by its `tab_id`; `tab.list` enumerates tabs
+and `tab.move` reorders them within a workspace. All seven methods require an explicit
+`params` object, even where every field is optional (e.g. `tab.list`, `tab.create`); a
+wrong field type is a hard `invalid_request`, and on any deserialization failure the
+response `id` comes back as `""` rather than echoing the request id. Unknown extra
+fields in `params` are ignored. The `herdr tab` CLI prints compact JSON with
+alphabetically sorted keys (unlike the declaration order shown in this page's
+examples), exits `1` with the error envelope on an API error, and exits `2` with a
+usage message for an unknown subcommand.
 
 7 methods:
 
@@ -35,22 +45,34 @@ Returned in every tab result except `tab.close` (which returns `ok`). Also linka
 | --- | --- | --- | --- | --- |
 | `tab_id` | string | yes | — | Opaque workspace-qualified tab ID (e.g. `w1:t1`). |
 | `workspace_id` | string | yes | — | ID of the workspace that owns the tab. |
-| `number` | integer (uint, ≥0) | yes | — | 1-based ordinal position of the tab within its workspace. |
-| `label` | string | yes | — | Human-visible tab label. |
+| `number` | integer (uint, ≥0) | yes | — | Per-workspace tab-creation counter, not a position; ≥1 in practice, stable, and never reassigned by a move or a close. |
+| `label` | string | yes | — | Human-visible tab label. Auto-assigned (null-initial) labels track the tab's live position and can change with no `tab_renamed` event; explicitly set labels are stored verbatim. |
 | `focused` | boolean | yes | — | Whether this tab is currently focused in the Herdr UI. |
 | `pane_count` | integer (uint, ≥0) | yes | — | Number of panes contained in the tab. |
 | `agent_status` | enum | yes | — | Aggregate agent status across the tab's panes. One of `idle`, `working`, `blocked`, `done`, `unknown`. |
+
+`number` is the decimal value of the tab id's base32 suffix (`w1:tA` → 10, `w1:tR` → 24).
+It is never recomputed: after moving `w1:t1` later in its workspace its `number` stays
+`1`, and numbers show gaps once a tab in between is closed (e.g. `1, 2, 3, 5` after a
+workspace's 4th tab closed). The schema types `number` only as `uint ≥ 0`, with no field
+description, so it does not state ordinal-vs-positional semantics either way.
 
 `agent_status` values (from skill.md): `idle` = agent ready for input and its tab has been
 seen in the focused UI; `working` = agent is running; `blocked` = Herdr recognized an
 approval or question UI; `done` = same underlying idle state after unseen background work
 finished; `unknown` = an agent is present but cannot be classified confidently (does not
-prove completion).
+prove completion). In practice `unknown` is also the status of a tab whose pane runs no
+agent at all (a plain shell), which this definition does not distinguish from an
+unclassifiable agent.
 
 ### PaneInfo (embedded in `tab.create` result)
 
 The `root_pane` of a newly created tab. Full domain entity — see
-[../data-model.md](../data-model.md). Top-level fields:
+[../data-model.md](../data-model.md). Nullable fields marked "no" below are omitted
+from the JSON entirely when absent — herdr does not serialize them as an explicit
+`null`. A fresh root pane typically has only `pane_id`, `terminal_id`, `workspace_id`,
+`tab_id`, `focused`, `agent_status`, `revision`, `cwd`, `foreground_cwd`, and `scroll`.
+Top-level fields:
 
 | field | type | required | default | meaning |
 | --- | --- | --- | --- | --- |
@@ -80,8 +102,14 @@ integer (uint64, ≥0), all required. `AgentSessionInfo`:
 
 ## tab.close
 
-Close a tab, closing the panes it contains. The tab ID is not reused afterward. Do not
-close tabs you did not create unless explicitly asked (skill.md safety guidance).
+Close a tab, closing the panes it contains — no `pane_closed` event is emitted for
+those panes, only `tab_closed` for the tab itself. The tab ID is not reused afterward.
+Closing the last tab in a workspace closes the workspace too (a `workspace_closed`
+event follows, and a later `tab.list`/`workspace.list` scoped to that workspace
+returns `workspace_not_found`). Closing the focused tab silently moves focus to an
+adjacent tab with no `tab_focused` event — a client tracking focus purely from events
+will go stale. Do not close tabs you did not create unless explicitly asked (skill.md
+safety guidance).
 
 **Params** — `TabTarget`:
 
@@ -101,7 +129,7 @@ close tabs you did not create unless explicitly asked (skill.md safety guidance)
 
 **CLI**: `herdr tab close <tab_id>`
 
-**Example** — `Validated 2026-08-19 against herdr 0.8.2.`
+**Example** — `Validated 2026-09-19 against herdr 0.9.1.`
 
 ```json
 {"id":"cli:tab:close","method":"tab.close","params":{"tab_id":"w1:t2"}}
@@ -113,7 +141,9 @@ close tabs you did not create unless explicitly asked (skill.md safety guidance)
 Create a new tab in a workspace, along with its root pane. Returns both the new `tab` and
 its `root_pane`; use `root_pane.pane_id` and `tab.tab_id` for subsequent operations
 (skill.md). When `workspace_id` is null the current/target workspace is used. When `focus`
-is true the new tab is focused on creation.
+is true the new tab is focused on creation, which also moves focus to that tab's
+workspace (see [tab.focus](#tabfocus)). A `cwd` that does not exist is not an error: the
+root pane's process silently falls back to the default working directory.
 
 **Params** — `TabCreateParams`:
 
@@ -121,7 +151,7 @@ is true the new tab is focused on creation.
 | --- | --- | --- | --- | --- |
 | `workspace_id` | string \| null | no | null | Workspace to create the tab in; null uses the default/current workspace. |
 | `cwd` | string \| null | no | null | Working directory for the root pane's launched process; null uses the default. |
-| `label` | string \| null | no | null | Initial tab label; null auto-assigns (e.g. the tab number). |
+| `label` | string \| null | no | null | Initial tab label; null auto-assigns a label that tracks the tab's live position in its workspace (not its `number`, and it can change with no `tab_renamed` event). Explicit labels are unvalidated free text — any length or content, including control characters, is stored and echoed back verbatim. |
 | `env` | object (string→string) | no | — | Environment variables to set for the launched process. |
 | `focus` | boolean | no | `false` | Whether to focus the new tab on creation. |
 
@@ -133,14 +163,18 @@ is true the new tab is focused on creation.
 | `tab` | TabInfo | yes | — | The newly created tab. See [TabInfo](#tabinfo). |
 | `root_pane` | PaneInfo | yes | — | The tab's root pane. See [PaneInfo](#paneinfo-embedded-in-tabcreate-result). |
 
-**Errors**: `workspace_not_found` (unknown `workspace_id`); other codes possible.
+**Errors**: `workspace_not_found` (unknown `workspace_id`; when no workspace exists at all
+in the session the message is "no active workspace" rather than naming the missing ID —
+do not match on message text); other codes possible.
 
 **Events**: emits a `tab_created` event to subscribers (subscription type `tab.created`);
 the event `data` mirrors the `tab` field.
 
 **CLI**: `herdr tab create [--workspace <workspace_id>] [--cwd PATH] [--label TEXT] [--env KEY=VALUE]... [--focus] [--no-focus]`
 
-**Example** — `Validated 2026-08-19 against herdr 0.8.2.`
+**Example** — `Validated 2026-09-19 against herdr 0.9.1.` (root_pane's optional agent,
+agent_session, display_agent, label, title, and state fields are schema-derived — not
+observed populated by any tab method)
 
 ```json
 {"id":"cli:tab:create","method":"tab.create","params":{"label":"second-tab","cwd":"…/scratch-repo"}}
@@ -151,7 +185,10 @@ the event `data` mirrors the `tab` field.
 
 Focus a tab in the Herdr UI and mark it seen. Focusing marks the tab's agent state seen,
 which transitions an unseen `done`/background-idle tab to `idle` (skill.md); CLI reads do
-not mark seen. Returns the updated tab metadata.
+not mark seen. Focusing a tab also focuses its workspace — exactly one tab across the
+whole session is focused at a time, so a workspace's `active_tab_id` can point at a tab
+whose `focused` is `false` when that workspace itself is not the focused one. Returns the
+updated tab metadata.
 
 **Params** — `TabTarget`:
 
@@ -168,9 +205,14 @@ not mark seen. Returns the updated tab metadata.
 
 **Errors**: `tab_not_found` (unknown `tab_id`); other codes possible.
 
+**Events**: emits a `tab_focused` event to subscribers (subscription type `tab.focused`)
+carrying `{tab_id, workspace_id}`. Re-focusing an already-focused tab is a no-op and
+emits no event.
+
 **CLI**: `herdr tab focus <tab_id>`
 
-**Example** — `Validated 2026-08-19 against herdr 0.8.2.`
+**Example** — `Validated 2026-09-19 against herdr 0.9.1.` (a race between this call and a
+human focusing another tab in a second UI client was not exercised)
 
 ```json
 {"id":"cli:tab:focus","method":"tab.focus","params":{"tab_id":"w1:t2"}}
@@ -198,7 +240,7 @@ Retrieve one tab's metadata by ID. This is a read; it does not mark the tab seen
 
 **CLI**: `herdr tab get <tab_id>`
 
-**Example** — `Validated 2026-08-19 against herdr 0.8.2.`
+**Example** — `Validated 2026-09-19 against herdr 0.9.1.`
 
 ```json
 {"id":"cli:tab:get","method":"tab.get","params":{"tab_id":"w2:t1"}}
@@ -227,7 +269,7 @@ scoped to that workspace. This is a read; it does not mark tabs seen.
 
 **CLI**: `herdr tab list [--workspace <workspace_id>]`
 
-**Example** — `Validated 2026-08-19 against herdr 0.8.2.`
+**Example** — `Validated 2026-09-19 against herdr 0.9.1.`
 
 ```json
 {"id":"cli:tab:list","method":"tab.list","params":{"workspace_id":"w2"}}
@@ -238,18 +280,28 @@ scoped to that workspace. This is a read; it does not mark tabs seen.
 
 Reorder a tab within its workspace by inserting it at a target index. Returns the full,
 reordered tab list for the affected workspace (result type `tab_list`, not `ok`).
+`number` values are never reassigned by a move — see [TabInfo](#tabinfo).
 
-`insert_index` is a 0-based position in the workspace's tab ordering. In the validated
-capture, moving `w1:t1` to `insert_index: 1` produced a list ordered `w1:t1, w1:t2, w1:t3,
-…` — the response reflects the post-move order and `number` fields are the reassigned
-ordinals.
+`insert_index` is resolved against the workspace's **pre-move** tab ordering: the tab is
+inserted before whatever currently occupies that index, and only then is its old slot
+removed. Moving a tab forward therefore lands it one slot earlier than a naive
+remove-then-insert would; moving the first tab (index 0) of a 9-tab workspace to
+`insert_index: 8` put it at index 7, and moving it to `insert_index: 1` was a no-op. The
+accepted range is the inclusive `0..=tab_count`; anything above that returns the
+undocumented error code `tab_move_failed` (see Errors) rather than reordering. A move
+that does not change the order emits no `tab_moved` event.
+
+If the moved tab (or another tab in the list) has an auto-assigned `label`, that label
+tracks live position and changes with the reorder even though nothing was renamed — see
+the example below, where `w1:t1` keeps `number: 1` but its label becomes `"3"` once three
+tabs sort ahead of it.
 
 **Params** — `TabMoveParams`:
 
 | field | type | required | default | meaning |
 | --- | --- | --- | --- | --- |
 | `tab_id` | string | yes | — | ID of the tab to move. |
-| `insert_index` | integer (uint, ≥0) | yes | — | 0-based target position within the workspace's tab ordering. |
+| `insert_index` | integer (uint, ≥0) | yes | — | 0-based target position, evaluated against the workspace's tab ordering **before** the move. Valid range: `0..=tab_count`. |
 
 **Result** — `type: "tab_list"`:
 
@@ -258,16 +310,21 @@ ordinals.
 | `type` | const `"tab_list"` | yes | — | Result discriminant. |
 | `tabs` | array of TabInfo | yes | — | The workspace's tabs in their new order. See [TabInfo](#tabinfo). |
 
-**Errors**: `tab_not_found` (unknown `tab_id`); other codes possible.
+**Errors**: `tab_not_found` (unknown `tab_id`); `tab_move_failed` (`insert_index` outside
+the valid `0..=tab_count` range — this code is not in the schema); other codes possible.
+
+**Events**: emits a `tab_moved` event to subscribers (subscription type `tab.moved`)
+carrying `{tab_id, workspace_id, insert_index, tabs}`, where `tabs` is the same
+post-move list as the RPC result. No event on a no-op move.
 
 **CLI**: API-only (no CLI subcommand). The `herdr tab` command exposes only `list`,
 `create`, `get`, `focus`, `rename`, and `close`.
 
-**Example** — `Validated 2026-08-19 against herdr 0.8.2.`
+**Example** — `Validated 2026-09-19 against herdr 0.9.1.`
 
 ```json
-{"id":"t1","method":"tab.move","params":{"tab_id":"w1:t1","insert_index":1}}
-{"id":"t1","result":{"type":"tab_list","tabs":[{"tab_id":"w1:t1","workspace_id":"w1","number":1,"label":"1","focused":true,"pane_count":1,"agent_status":"unknown"},{"tab_id":"w1:t2","workspace_id":"w1","number":2,"label":"--label renamed-tab","focused":false,"pane_count":1,"agent_status":"unknown"},{"tab_id":"w1:t3","workspace_id":"w1","number":3,"label":"moved-tab","focused":false,"pane_count":1,"agent_status":"unknown"},…]}}
+{"id":"t1","method":"tab.move","params":{"tab_id":"w1:t1","insert_index":3}}
+{"id":"t1","result":{"type":"tab_list","tabs":[{"tab_id":"w1:t2","workspace_id":"w1","number":2,"label":"1","focused":false,"pane_count":1,"agent_status":"unknown"},{"tab_id":"w1:t3","workspace_id":"w1","number":3,"label":"2","focused":false,"pane_count":1,"agent_status":"unknown"},{"tab_id":"w1:t1","workspace_id":"w1","number":1,"label":"3","focused":false,"pane_count":1,"agent_status":"unknown"},{"tab_id":"w1:t4","workspace_id":"w1","number":4,"label":"4","focused":false,"pane_count":1,"agent_status":"unknown"}]}}
 ```
 
 ## tab.rename
@@ -279,7 +336,7 @@ Change a tab's label. Returns the updated tab metadata.
 | field | type | required | default | meaning |
 | --- | --- | --- | --- | --- |
 | `tab_id` | string | yes | — | ID of the tab to rename. |
-| `label` | string | yes | — | New label for the tab. |
+| `label` | string | yes | — | New label for the tab; unvalidated — any length or content, including control characters, is stored and echoed back verbatim. |
 
 **Result** — `type: "tab_info"`:
 
@@ -290,10 +347,14 @@ Change a tab's label. Returns the updated tab metadata.
 
 **Errors**: `tab_not_found` (unknown `tab_id`); other codes possible.
 
+**Events**: emits a `tab_renamed` event to subscribers (subscription type `tab.renamed`)
+carrying `{tab_id, workspace_id, label}`. Unlike `tab.focus`/`tab.move`, renaming a tab
+to its existing label still emits the event.
+
 **CLI**: `herdr tab rename <tab_id> <label>...` (the CLI joins multiple `LABEL` words into
 the label string).
 
-**Example** — `Validated 2026-08-19 against herdr 0.8.2.`
+**Example** — `Validated 2026-09-19 against herdr 0.9.1.`
 
 ```json
 {"id":"cli:tab:rename","method":"tab.rename","params":{"tab_id":"w1:t2","label":"--label renamed-tab"}}
