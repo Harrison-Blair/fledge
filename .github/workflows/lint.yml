@@ -7,16 +7,16 @@ on:
       - '**.go'
       - 'go.mod'
       - 'go.sum'
-      - 'internal/version/VERSION'
-      - '.github/workflows/lint.yml'
+      - '.github/workflows/**'
+      - '.github/scripts/**'
   push:
     branches: [main]
     paths:
       - '**.go'
       - 'go.mod'
       - 'go.sum'
-      - 'internal/version/VERSION'
-      - '.github/workflows/lint.yml'
+      - '.github/workflows/**'
+      - '.github/scripts/**'
 
 permissions:
   contents: read

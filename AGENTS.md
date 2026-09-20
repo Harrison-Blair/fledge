@@ -12,10 +12,10 @@ Fledge is a Go CLI built with Cobra.
 ## .gitignore policy
 
 `.gitignore` is allowlist-style: it ignores everything (`*`) and then explicitly allows
-Go source, `go.mod`/`go.sum`, Markdown docs, `LICENSE`, `.github/`, test fixtures, and
-`internal/version/VERSION`. Keep it small. Only add a new `!` allow rule when a file
-the project genuinely needs is being ignored, and add the narrowest pattern that
-covers it. Never remove the leading `*`.
+Go source, `go.mod`/`go.sum`, Markdown docs, `LICENSE`, `.github/`, and test fixtures.
+Keep it small. Only add a new `!` allow rule when a file the project genuinely needs
+is being ignored, and add the narrowest pattern that covers it. Never remove the
+leading `*`.
 
 ## Branching
 
@@ -24,16 +24,28 @@ pull request, which the owner approves. Never commit directly to `main`.
 
 ## Releases
 
-`internal/version/VERSION` is the sole source of truth for the release version.
-`internal/version.Version()` embeds and returns that value, so binaries do not depend
-on their runtime working directory. Do not duplicate the version in Go code, tests,
-or build scripts. Cobra exposes it through `fledge --version` and `fledge -V`; there
-is no `version` subcommand or lowercase `-v` alias.
+Stable Git tags (`vMAJOR.MINOR.PATCH`) are the release version source. There is no
+maintained version file. `internal/version.Version()` uses the release value
+injected at build time, then Go's embedded module version, then `dev`. Development
+builds retain Go's revision and dirty metadata without runtime Git access. Cobra
+exposes the version through `--version` and `-V`; there is no `version` subcommand
+or lowercase `-v` alias.
 
-The preserved release-draft workflow runs on pushes to `main` and manual dispatch.
-It validates the version file and release state, runs lint, test, and build checks,
-then creates or refreshes a draft release when eligible. It does not publish releases
-or automatically bump the version.
+`.github/workflows/release.yml` runs only on manual dispatch from `main`. The owner
+chooses `patch`, `minor`, or `major`; that request authorizes publication after CI
+and packaging pass. Merges alone do not release. An agent explicitly asked to
+release may use `gh workflow run release.yml --ref main -f bump=patch` (substitute
+the requested bump), watch the run, and report its release URL. Do not trigger a
+release merely because release automation was implemented or changed.
+
+Release scripts calculate versions from existing tags, package Linux amd64/arm64
+binaries with SHA-256 checksums, and publish only after all assets are verified.
+Retries resume the same unfinished release or no-op for an already-published
+commit. Never force-move release tags or replace published assets. An unfinished
+draft for another commit must be resolved before starting a new release.
+Run `python3 -B -m unittest discover -s .github/scripts -p '*_test.py'` when changing
+release automation. `fledge update` performs explicit, verified binary updates;
+there are no background update checks.
 
 ## Test-driven development
 
@@ -70,9 +82,9 @@ responsibility needs a narrow API. Packages with multiple non-test files have a
 
 When working in this repository, use Fledge itself for agent coordination: `fledge agent spawn` to launch agents, `fledge agent list` to discover them, `fledge agent get` to inspect one, and `fledge agent message` to delegate tasks and exchange messages. Treat this as dogfooding: exercise the project CLI in real work and surface bugs or missing capabilities instead of silently bypassing it with another coordination tool.
 
-Maintain `docs/dogfood/` as the record of dogfooding information for this repository.
+Maintain `reference/dogfood/` as the record of dogfooding information for this repository.
 Whenever an agent or one of its subagents hits a Fledge bug, missing capability, or
-workaround, append an entry to `docs/dogfood/friction.md` using its Issue / Summary /
+workaround, append an entry to `reference/dogfood/friction.md` using its Issue / Summary /
 Reproduction steps format.
 
 Before launching agents, check `fledge agent --help` for the commands needed for

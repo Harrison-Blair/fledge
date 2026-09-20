@@ -50,3 +50,20 @@ func TestFreshCommands(t *testing.T) {
 		t.Fatal("help flag state leaked into a subsequent execution")
 	}
 }
+
+func TestUpdateCommand(t *testing.T) {
+	var out bytes.Buffer
+	if err := ExecuteWithArgs([]string{"update", "--help"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, flag := range []string{"--check", "--yes"} {
+		if !strings.Contains(out.String(), flag) {
+			t.Errorf("missing %s in %q", flag, out.String())
+		}
+	}
+	for _, args := range [][]string{{"update", "extra"}, {"update", "--unknown"}} {
+		if err := ExecuteWithArgs(args, &out); err == nil {
+			t.Fatalf("accepted %v", args)
+		}
+	}
+}
