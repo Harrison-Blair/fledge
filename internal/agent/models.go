@@ -6,6 +6,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -38,17 +39,61 @@ type ModelsOptions struct {
 }
 
 // modelSource discovers one harness's models; any error yields no rows for that harness.
+// readOnly marks sources that only read local cache files and never execute a command.
 type modelSource struct {
-	kind string
-	list func(context.Context, Discovery) ([]ModelRow, error)
+	kind     string
+	readOnly bool
+	list     func(context.Context, Discovery) ([]ModelRow, error)
 }
 
 var modelSources = []modelSource{
-	{"pi", piModels},
-	{"codex", codexModels},
-	{"claude", claudeModels},
-	{"opencode", opencodeModels},
-	{"cursor", cursorModels},
+	{"pi", true, piModels},
+	{"codex", true, codexModels},
+	{"claude", true, claudeModels},
+	{"opencode", false, opencodeModels},
+	{"cursor", false, cursorModels},
+}
+
+// ModelHarnesses lists the harness kinds that have a local model source, in
+// discovery order. The result is a fresh slice the caller may modify.
+func ModelHarnesses() []string {
+	kinds := make([]string, len(modelSources))
+	for i, s := range modelSources {
+		kinds[i] = s.kind
+	}
+	return kinds
+}
+
+// ReadOnlyModelHarnesses lists the harness kinds whose local model source only
+// reads cache files, executing no command. The result is a fresh slice.
+func ReadOnlyModelHarnesses() []string {
+	var kinds []string
+	for _, s := range modelSources {
+		if s.readOnly {
+			kinds = append(kinds, s.kind)
+		}
+	}
+	return kinds
+}
+
+// Discover returns one harness kind's locally discovered rows and its source
+// error. Unlike Models it surfaces the per-source error, letting callers tell a
+// missing harness apart from a broken cache. An unknown kind is an error.
+func (d Discovery) Discover(ctx context.Context, harness string) ([]ModelRow, error) {
+	for _, source := range modelSources {
+		if source.kind != harness {
+			continue
+		}
+		rows, err := source.list(ctx, d)
+		if err != nil {
+			return nil, err
+		}
+		for i := range rows {
+			rows[i].Harness = source.kind
+		}
+		return rows, nil
+	}
+	return nil, fmt.Errorf("harness %q has no local model source", harness)
 }
 
 // Models lists locally discoverable models, optionally limited to one harness kind.

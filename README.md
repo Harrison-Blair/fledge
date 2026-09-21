@@ -227,6 +227,64 @@ fledge agent spawn --name reviewer --harness claude --pane w2:p3
 Use the actual pane ID from the partial outcome and retain your intended harness,
 model, and native arguments. Fledge does not retry automatically.
 
+## Doctor
+
+`fledge doctor` diagnoses the local Fledge and Herdr environment with read-only
+checks and prints a per-check report. It never mutates Herdr state, writes files,
+or reaches the network.
+
+```sh
+fledge doctor
+fledge doctor --verbose
+fledge doctor --json
+```
+
+It runs five checks, each independently:
+
+- `herdr_connectivity` — `ping` reaches the Herdr socket (`fail` if not).
+- `herdr_compatibility` — the pong `protocol` matches the pinned protocol (`22`);
+  a mismatch is `warn`, not `fail`, and the detail reports `version`, `protocol`,
+  and capabilities.
+- `harness_installations` — the integration targets Herdr knows about with their
+  `command`, `available`, and `state`; `warn` when none are available.
+- `model_discovery` — local model discovery gated on availability, restricted to
+  the harness kinds whose models come from local cache files (`pi`, `codex`,
+  `claude`). To stay strictly read-only, doctor never executes a harness command,
+  so command-only kinds (`opencode`, `cursor`) are not checked here; use `fledge
+  agent models` for those. A missing harness is `warn` (nothing to diagnose); an
+  installed harness whose cache is unreadable is `fail`; an installed harness with
+  no models is `warn`.
+- `configuration` — `HERDR_ENV`, `HERDR_SOCKET_PATH` and its file mode,
+  `HERDR_PANE_ID`, `HERDR_SESSION`, and the working directory.
+
+Each check reports exactly one status: `ok`, `warn`, or `fail`. Human output is a
+grouped report: one block per check with the padded check name and its status on
+the first line, its detail indented beneath, a blank line between checks, and a
+`N ok · N warn · N fail` summary at the end. In human output only, a path under
+your home directory is shown with a leading `~` (for example
+`~/.config/herdr/herdr.sock`); `--json` keeps absolute paths.
+
+By default the long detail is hidden to keep the report scannable:
+
+- `herdr_compatibility` shows `version … · protocol … (expected …)`.
+- `harness_installations` shows `N targets, M available`.
+- `model_discovery` shows the short per-harness counts (`pi N · codex N · claude N`).
+- `configuration` always shows its labeled `HERDR_ENV` / `socket` / `pane` /
+  `session` / `cwd` block with an aligned key column.
+
+`--verbose` reveals the long detail: `herdr_compatibility` adds a `capabilities:`
+line (also shown on a compatibility `warn`/`fail` when the capabilities are
+known) and `harness_installations` adds an `available:` line listing the target
+names. These lists wrap at their `, ` separators to stay within 80 columns, with
+continuation lines indented and tokens never split. `warn` and `fail` checks
+always show their diagnostic detail, with or without `--verbose`, because it is
+actionable. `--verbose` never affects `--json`.
+
+`--json` emits one document with stable per-check names, per-check `data`, and a
+summary. The exit code is `1` if any check is `fail`, else `0`; warnings never
+fail. Running outside Herdr (no `HERDR_ENV=1` or no reachable socket) is reported
+as a `fail`, not a crash.
+
 ## Layout
 
 - `main.go` delegates to `cmd.Execute()` and handles the exit status.

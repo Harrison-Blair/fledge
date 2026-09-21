@@ -251,3 +251,41 @@ Observed 2026-09-19, Fledge `dev` @ `180abb1`, Herdr 0.9.1.
 5. Repeat with `--no-wait --timeout 3001ms` and poll `agent get` a few
    seconds later: the name still disappears (~4 s), confirming this
    predates spawn waiting for readiness.
+
+---
+
+**Issue:** Spawn-time prompt is lost when a harness shows a startup dialog
+
+**Summary:** `fledge agent spawn --harness cursor --file <brief>` reported
+`Message submitted`, but cursor-agent stopped on its "Workspace Trust Required"
+dialog and the brief never reached the model; the pane showed an empty prompt input
+after trust was granted. A follow-up `fledge agent message --file <brief>` to the same
+agent delivered it. Separately, cursor named models were plan-gated: the model
+`claude-opus-4-8-medium` started but immediately returned "Named models unavailable.
+Free plans can only use Auto," with no preflight warning from Fledge. Workaround: send
+the brief again after the agent settles, and use the `claude` harness instead.
+Observed 2026-09-20, Fledge `dev` @ `d81468d`, Herdr 0.9.1.
+
+**Reproduction steps:**
+1. `fledge agent spawn --name w --harness cursor --model claude-opus-4-8-medium --tab w --file brief.md`.
+2. Observe `Message submitted`, then cursor-agent's workspace-trust dialog.
+3. Grant trust and observe the prompt input is empty; the model never saw the brief.
+4. Re-send with `fledge agent message --name w --file brief.md`; it is delivered.
+
+---
+
+**Issue:** `fledge doctor` model discovery causes file writes and network activity
+
+**Summary:** A live `fledge doctor` run launches `opencode models` and
+`cursor-agent --list-models`. A syscall trace showed the child processes opening
+`~/.local/share/opencode/log/opencode.log`, `opencode.db` and its WAL files, and
+`.git/opencode` for writing. Cursor created a session log under
+`/tmp/cursor-agent-logs-1000` and a `.running` marker. The trace also showed
+Internet-address socket connections from cursor. This violates doctor's stated
+read-only, no-file-writes, no-network contract. Observed 2026-09-20 with the
+current `dev` working tree and Herdr protocol 22.
+
+**Reproduction steps:**
+1. Build the current checkout with `go build -o /tmp/fledge-verify .`.
+2. Run `strace -f -e trace=connect,openat,creat,rename,unlink,mkdir -o /tmp/fledge-doctor-strace.log /tmp/fledge-verify doctor` in a Herdr pane with opencode and cursor available.
+3. Search the trace for `O_WRONLY`, `O_RDWR`, `O_CREAT`, and `AF_INET`; observe the child process writes and network socket connections.

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Harrison-Blair/fledge/internal/agent"
+	"github.com/Harrison-Blair/fledge/internal/doctor"
 	"github.com/spf13/cobra"
 )
 
@@ -36,6 +37,14 @@ func execute(args []string, in io.Reader, out, errOut io.Writer) error {
 	}
 	var rendered *agent.ResultError
 	if errors.As(err, &rendered) {
+		return err
+	}
+	var doctorRendered *doctor.ReportError
+	if errors.As(err, &doctorRendered) {
+		return err
+	}
+	var doctorOutput *doctor.OutputError
+	if errors.As(err, &doctorOutput) {
 		return err
 	}
 	if cmd != nil && strings.HasPrefix(cmd.CommandPath(), "fledge agent ") {

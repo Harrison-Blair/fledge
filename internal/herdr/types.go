@@ -10,6 +10,39 @@ type Pane struct {
 	AgentStatus string  `json:"agent_status"`
 	Cwd         *string `json:"cwd"`
 }
+
+// Capabilities is the ServerCapabilities subset carried by a pong. Boolean flags
+// default to false when the pong omits the capabilities object or a member.
+type Capabilities struct {
+	LiveHandoff                bool    `json:"live_handoff"`
+	DetachedServerDaemon       bool    `json:"detached_server_daemon"`
+	HealthCheck                bool    `json:"health_check"`
+	SurfaceInterest            bool    `json:"surface_interest"`
+	EndpointProtocolGeneration *uint32 `json:"endpoint_protocol_generation"`
+}
+
+// PongResult is the ping liveness and capability probe reply.
+type PongResult struct {
+	Type         string        `json:"type"`
+	Version      string        `json:"version"`
+	Protocol     uint32        `json:"protocol"`
+	Capabilities *Capabilities `json:"capabilities"`
+}
+
+// IntegrationInfo describes one integration target's command and install state.
+type IntegrationInfo struct {
+	Target    string `json:"target"`
+	Label     string `json:"label"`
+	Command   string `json:"command"`
+	Available bool   `json:"available"`
+	State     string `json:"state"`
+}
+
+// IntegrationListResult lists every known integration target.
+type IntegrationListResult struct {
+	Type         string            `json:"type"`
+	Integrations []IntegrationInfo `json:"integrations"`
+}
 type Workspace struct {
 	ID    string `json:"workspace_id"`
 	Label string `json:"label"`
