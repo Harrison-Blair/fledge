@@ -93,6 +93,9 @@ fledge agent get --pane w2:p3 --json
 fledge agent message --name reviewer --body 'Review the current diff'
 fledge agent message --pane w2:p3 --file task.md
 cat task.md | fledge agent message --name reviewer --file -
+fledge agent pause --name reviewer
+fledge agent pause --pane w2:p3 --timeout 20s --json
+fledge agent pause --name reviewer --no-wait
 fledge agent stop --name reviewer
 fledge agent stop --pane w2:p3 --force --json
 fledge agent models --harness codex --json
@@ -179,6 +182,40 @@ details are `null`; `interactive_ready` and `launch_pending` are optional and
 appear as `null` when absent, while `focused` is always present on a successful
 read. `effects` is empty. Failed reads use `rejected` with the error code and
 phase.
+
+`fledge agent pause` interrupts the current foreground turn while preserving the
+pane and conversation. It accepts exactly one nonempty `--name` or `--pane`, no
+positionals, a positive `--timeout` (default `10s`), and `--no-wait`. It resolves
+the agent, then submits one key sequence to the resolved pane, without retries,
+escalation, focusing, closing, or submitting a prompt. Already `idle` or `done`
+agents succeed without keys; `blocked`, `unknown`, launch-pending agents, and
+missing or unknown harnesses are refused without keys.
+
+The bindings assume harness defaults: double Escape for `amp`, `copilot`,
+`opencode`, and `kilo`; single Ctrl+C for `droid`, `grok`, `hermes`, `mastracode`,
+and `qodercli`; single Escape for every other currently supported harness.
+Prior keybinding experiments covered Claude and Codex; live smoke tests of the
+implemented `fledge agent pause` command covered Codex and OpenCode. Codex interruption settled
+successfully and a subsequent message resumed the same session and pane.
+OpenCode 1.18.25 visibly interrupted active output with double Escape, but the
+immediate wait reported `blocked` (`partial`, `submitted=true`, `settled=false`,
+`agent_blocked`); a subsequent message resumed the same session and pane and
+reached `done`. See the [integration observations](reference/dogfood/friction.md).
+Other mappings remain best effort; custom keybindings can change their effect. Interruption does not freeze a
+process, undo completed work, drain queued prompts, or establish a persistent
+paused state. Queued work can start again. Resume or redirect the conversation
+with `fledge agent message`.
+
+By default, pause waits within the remaining timeout for `idle` or `done` on the
+same resolved terminal. These states indicate settlement, not successful task
+completion. Becoming blocked fails immediately. A changed terminal, disappearance,
+malformed response, or timeout also fails. `--no-wait` confirms only key delivery.
+Text reports `Pause requested`, `Paused`, or `Already idle or done`. JSON uses
+operation `agent.pause`, the standard agent fields plus `submitted` and `settled`,
+and a `submitted` interrupt effect after acknowledgement. Lost or malformed send
+acknowledgements produce `unknown`; failures after acknowledgement are `partial`.
+Inspect the agent before retrying an uncertain interruption. Resolving a pane
+cannot prevent its occupant changing before Herdr receives the keys.
 
 `fledge agent stop` stops a live agent by closing its pane. It accepts exactly one
 of `--name`/`--pane`, resolves the agent first, and never closes a pane that does

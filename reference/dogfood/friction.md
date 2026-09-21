@@ -289,3 +289,59 @@ current `dev` working tree and Herdr protocol 22.
 1. Build the current checkout with `go build -o /tmp/fledge-verify .`.
 2. Run `strace -f -e trace=connect,openat,creat,rename,unlink,mkdir -o /tmp/fledge-doctor-strace.log /tmp/fledge-verify doctor` in a Herdr pane with opencode and cursor available.
 3. Search the trace for `O_WRONLY`, `O_RDWR`, `O_CREAT`, and `AF_INET`; observe the child process writes and network socket connections.
+
+---
+
+**Issue:** Fake Herdr socket regression tests need sandbox approval
+
+**Summary:** While implementing `agent pause`, the restricted Codex sandbox refused
+Unix socket listeners used by CLI integration tests (`setsockopt: operation not
+permitted`). This is an environment restriction, not a pause defect. Workaround:
+run the Go test command with approved sandbox escalation. The approved run reached
+the expected pre-implementation missing-command failures. The full `go vet`
+check also needed escalation because the existing Go build cache was read-only
+in the sandbox.
+
+**Reproduction steps:**
+1. In the restricted Codex sandbox, run `go test ./internal/agent ./cmd`.
+2. Observe fake socket listener failures in the CLI integration tests.
+3. Re-run `go test ./cmd -run '^TestPause' -count=1` with sandbox escalation to exercise the fake Herdr protocol.
+
+---
+
+**Issue:** OpenCode interruption can report transient blocked settlement
+
+**Summary:** During live pause smoke testing on 2026-09-21, OpenCode 1.18.25
+interrupted active arithmetic output at item 62 after the double-Escape sequence;
+the terminal explicitly showed interruption. The immediate `agent.wait` returned
+`blocked`, so Fledge correctly reported `partial`, `submitted=true`,
+`settled=false`, and `agent_blocked`. A subsequent message produced the exact
+response `RESUMED_OPENCODE_9137` in the same session and pane, then reached `done`.
+The observed interruption worked, but immediate settlement was not confirmed.
+Inspect the terminal before deciding how to resume; do not treat this partial
+outcome as proof that the keys failed or automatically retry them.
+
+**Reproduction steps:**
+1. Start an OpenCode 1.18.25 agent and request a long arithmetic response.
+2. While output is active, run `fledge agent pause --name <agent> --json`.
+3. Observe interruption in the terminal (item 62 in this trial), while the pause outcome reports `agent_blocked` with acknowledged delivery and unconfirmed settlement.
+4. Send a follow-up using `fledge agent message --name <agent> --body 'Respond with exactly RESUMED_OPENCODE_9137'`.
+5. Verify the exact response, unchanged session and pane, and subsequent `done` state.
+
+---
+
+**Issue:** Initial Codex message acknowledged without visible prompt or session
+
+**Summary:** During live smoke testing on 2026-09-21, a message sent immediately
+after a fresh Codex spawn was acknowledged, but no prompt or session appeared
+in the terminal. A later message worked. A startup readiness race is a possible
+explanation, not an established cause. Subsequent active-turn pause testing
+succeeded with `submitted=true` and `settled=true`; a follow-up produced the exact
+response `RESUMED_CODEX_9137` in the same session and pane. This observation does
+not establish that pause caused or fixed the initial delivery issue.
+
+**Reproduction steps:**
+1. Spawn a fresh Codex agent, then immediately submit a message with `fledge agent message`.
+2. Compare the delivery acknowledgement with the terminal; in this trial no prompt or session appeared.
+3. Later submit another message and inspect the terminal; in this trial that message worked.
+4. Treat the timing and cause as unconfirmed until independently reproduced.

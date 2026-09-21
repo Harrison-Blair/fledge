@@ -78,6 +78,13 @@ type MessageResult struct {
 	AgentRow
 	Submitted bool `json:"submitted"`
 }
+
+// PauseResult distinguishes acknowledged interruption from observed settlement.
+type PauseResult struct {
+	AgentRow
+	Submitted bool `json:"submitted"`
+	Settled   bool `json:"settled"`
+}
 type StopResult struct {
 	AgentRow
 	Stopped bool `json:"stopped"`
@@ -211,6 +218,16 @@ func (o Outcome) Write(w io.Writer, asJSON bool) error {
 		return writeGetResult(w, r)
 	case MessageResult:
 		_, err := fmt.Fprintf(w, "Message submitted to %s.\n", display(r.PaneID))
+		return err
+	case PauseResult:
+		text := "Pause requested"
+		if r.Settled {
+			text = "Paused"
+			if !r.Submitted {
+				text = "Already idle or done"
+			}
+		}
+		_, err := fmt.Fprintf(w, "%s: %s (%s) in %s.\n", text, display(r.Name), display(r.Harness), display(r.PaneID))
 		return err
 	case StopResult:
 		_, err := fmt.Fprintf(w, "Stopped %s (%s) in %s.\n", display(r.Name), display(r.Harness), display(r.PaneID))
