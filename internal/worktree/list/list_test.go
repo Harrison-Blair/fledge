@@ -354,3 +354,40 @@ func TestListSkipsOwnerOfDifferentHarness(t *testing.T) {
 		t.Fatalf("%+v", row.Owner)
 	}
 }
+
+// Herdr repeats a cwd reached through a symlink as repo_root while git
+// reports each checkout's real path; the primary and managed checkouts are
+// still recognized, and rows show real paths whichever side names the symlink.
+func TestListThroughSymlinkedRepository(t *testing.T) {
+	for _, via := range []string{"repo root", "checkouts"} {
+		t.Run(via, func(t *testing.T) {
+			f := newFixture(t)
+			link := filepath.Join(t.TempDir(), "link")
+			if err := os.Symlink(f.root, link); err != nil {
+				t.Fatal(err)
+			}
+			l := f.listing()
+			if via == "repo root" {
+				l.Source.RepoRoot = link
+			} else {
+				l.Worktrees[0].Path = filepath.Join(link, ".fledge", "worktrees", "merged")
+				l.Worktrees[1].Path = link
+			}
+			c := herdrscript.Client(t, call{Method: "worktree.list", Params: map[string]any{"cwd": link}, Result: l})
+			out := Run(context.Background(), c, Options{Cwd: link})
+			if out.Status != "success" {
+				t.Fatalf("%+v", out)
+			}
+			r := out.Result.(Result)
+			if r.RepoRoot != f.root {
+				t.Errorf("repo root %s, want %s", r.RepoRoot, f.root)
+			}
+			if row := r.Worktrees[0]; row.Path != f.root || !row.Primary {
+				t.Errorf("primary row %+v", row)
+			}
+			if row := r.Worktrees[1]; row.Path != f.merged || !row.Managed || row.Primary {
+				t.Errorf("managed row %+v", row)
+			}
+		})
+	}
+}

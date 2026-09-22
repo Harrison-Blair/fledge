@@ -114,6 +114,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	return out
 }
 
+// target selects the checkout named by o, comparing canonical paths.
 func target(r worktree.Checkouts, o Options) (herdr.Worktree, error) {
 	path := o.Path
 	if path != "" {
@@ -121,7 +122,7 @@ func target(r worktree.Checkouts, o Options) (herdr.Worktree, error) {
 		if err != nil {
 			return herdr.Worktree{}, err
 		}
-		path = abs
+		path = worktree.Canonical(abs)
 	}
 	for _, row := range r.Worktrees {
 		if (path != "" && row.Path == path) || (o.Branch != "" && row.Branch != nil && *row.Branch == o.Branch) {

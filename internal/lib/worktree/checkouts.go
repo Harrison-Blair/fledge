@@ -10,7 +10,8 @@ import (
 )
 
 // Checkouts is a repository's checkouts as Herdr lists them, with Root (the
-// primary checkout) and every checkout path cleaned.
+// primary checkout) and every checkout path canonical, so paths compare equal
+// however the directory used to reach the repository was spelled.
 type Checkouts struct {
 	Root      string
 	Worktrees []herdr.Worktree
@@ -30,9 +31,9 @@ func ListCheckouts(ctx context.Context, c libagent.Client, cwd string) (Checkout
 	if err != nil {
 		return Checkouts{}, err
 	}
-	r := Checkouts{Root: filepath.Clean(listing.Source.RepoRoot), Worktrees: listing.Worktrees}
+	r := Checkouts{Root: Canonical(listing.Source.RepoRoot), Worktrees: listing.Worktrees}
 	for i := range r.Worktrees {
-		r.Worktrees[i].Path = filepath.Clean(r.Worktrees[i].Path)
+		r.Worktrees[i].Path = Canonical(r.Worktrees[i].Path)
 	}
 	return r, nil
 }

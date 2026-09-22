@@ -440,6 +440,56 @@ func TestRecordOfDifferentHarnessDoesNotBlockRemoval(t *testing.T) {
 	}
 }
 
+// symlinked returns r's listing as Herdr reports it for a cwd reached through
+// a symlink to the primary checkout: repo_root repeats the symlinked path
+// while checkout paths are real.
+func (r repo) symlinked(t *testing.T, open bool) (string, herdr.WorktreeListResult) {
+	t.Helper()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(r.root, link); err != nil {
+		t.Fatal(err)
+	}
+	l := r.listing(open)
+	l.Source.RepoRoot = link
+	return link, l
+}
+
+// Fledge's own guard refuses the primary checkout reached through a symlink.
+func TestRefusesPrimaryCheckoutThroughSymlink(t *testing.T) {
+	r := newRepo(t)
+	link, l := r.symlinked(t, false)
+	for _, o := range []Options{{Path: link, Force: true}, {Branch: "main", Force: true}} {
+		o.Cwd = link
+		out := Run(context.Background(), herdrscript.Client(t, call{Method: "worktree.list", Result: l}), o)
+		if out.ExitCode() != 2 || out.Error.Phase != "guard" || !strings.Contains(out.Error.Message, "primary") {
+			t.Fatalf("%+v: %+v", o, out)
+		}
+	}
+}
+
+// --path finds a checkout named through a symlink, absolute or relative to
+// the process working directory.
+func TestPathThroughSymlinkFindsCheckout(t *testing.T) {
+	for name, relative := range map[string]bool{"absolute": false, "relative": true} {
+		t.Run(name, func(t *testing.T) {
+			r := newRepo(t)
+			link, l := r.symlinked(t, false)
+			path := filepath.Join(link, ".fledge", "worktrees", "topic")
+			if relative {
+				t.Chdir(link)
+				path = filepath.Join(".fledge", "worktrees", "topic")
+			}
+			out := Run(context.Background(), herdrscript.Client(t, call{Method: "worktree.list", Result: l}, agentList(), agentList()), Options{Path: path, Cwd: link})
+			if out.Status != "success" || out.Result.(Result).Path != r.topic {
+				t.Fatalf("%+v", out)
+			}
+			if _, err := os.Stat(r.topic); !os.IsNotExist(err) {
+				t.Fatal("checkout kept")
+			}
+		})
+	}
+}
+
 // Removal inspects only its target: no git command runs in, or names, another
 // linked checkout of the repository.
 func TestInspectsOnlyTargetCheckout(t *testing.T) {
