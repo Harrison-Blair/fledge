@@ -46,7 +46,7 @@ A checked item means its main capability is implemented; accompanying notes reco
 
 7. [ ] **Verify task results.** Associate checks with a task and record their actual outcomes. Distinguish "worker reported complete" from "verification passed" and "review accepted."
 
-   **Existing support:** `task verify --id TASK [--summary TEXT]` requires a `completed` task and a registered caller other than the owner, moving it to `verified` and so distinguishing that from merely `completed`. There are no recorded checks, so associating specific checks with a task and recording their individual outcomes remains open.
+   **Existing support:** `task verify --id TASK [--summary TEXT]` requires a `completed` task and a registered caller other than the owner, moving it to `verified` and so distinguishing that from merely `completed`. `--force` overrides both checks and records `forced: true`. There are no recorded checks, so associating specific checks with a task and recording their individual outcomes remains open.
 
 8. [x] **Launch with an assignment.** One operation to start an agent and deliver its task, reporting which steps succeeded if launch or delivery fails.
 
@@ -64,7 +64,7 @@ A checked item means its main capability is implemented; accompanying notes reco
 
 11. [x] **Track who spawned whom.** Record parent agents, child workers, task ownership, and group membership. A coordinator should easily find every worker it owns.
 
-    **Implemented:** [ff7c96c](https://github.com/Harrison-Blair/fledge/commit/ff7c96c46f137256b38c1bd0032e36181c0fda6c) · **Author:** Harrison-Blair · **Author date:** 2026-09-22 (parent recording itself landed earlier, in [75ec269](https://github.com/Harrison-Blair/fledge/commit/75ec26936e8eb964f16dbe627db028d6f493cca3) "register agent identity on spawn and add agent adopt")
+    **Implemented:** [ff7c96c](https://github.com/Harrison-Blair/fledge/commit/ff7c96c46f137256b38c1bd0032e36181c0fda6c) (parent recording itself landed earlier, in [75ec269](https://github.com/Harrison-Blair/fledge/commit/75ec26936e8eb964f16dbe627db028d6f493cca3) "register agent identity on spawn and add agent adopt") · **Author:** Harrison-Blair · **Author date:** 2026-09-22
 
     **Implementation decisions and remaining gaps:** A record's `parent` is the caller's live record at spawn or adopt time, or null when the caller is unregistered. `agent list` adds `PARENT` and `--parent ID` (direct children of that ID) and `--mine` (the caller's own direct children; mutually exclusive with `--parent`, and `caller_unregistered` for an unregistered caller). Task ownership is tracked on tasks (`owner`), not as a lineage field; there is no group membership and no recursive subtree listing, and the parent name shown is the name recorded on the parent's record at spawn/adopt time, which can differ from its current live name. [Current behavior](../../README.md#identity)
 
@@ -120,7 +120,7 @@ A checked item means its main capability is implemented; accompanying notes reco
 
     **Implemented:** [75ec269](https://github.com/Harrison-Blair/fledge/commit/75ec26936e8eb964f16dbe627db028d6f493cca3) · **Author:** Harrison-Blair · **Author date:** 2026-09-22
 
-    **Implementation decisions and remaining gaps:** `agent adopt` registers an already-running agent, targeting the caller's own pane by default or `--pane`/`--name` otherwise; an unnamed agent needs `--name`, and a terminal that already has a live record is refused with `agent_already_registered`. Adoption gives the agent a Fledge identity but does not itself deliver an assignment; use `agent message` or `task assign` afterward. [Current behavior](../../README.md#identity)
+    **Implementation decisions and remaining gaps:** `agent adopt` registers an already-running agent in the caller's own pane, or in `--pane`; an unnamed agent needs `--name` (a named agent keeps its name, and a different `--name` is refused), and a terminal that already has a live record is refused with `agent_already_registered`. Adoption gives the agent a Fledge identity but does not itself deliver an assignment; use `agent message` or `task assign` afterward. [Current behavior](../../README.md#identity)
 
 31. [ ] **Resume native conversations.** Preserve harness session references and expose resume operations where supported, with clear capability reporting.
 
