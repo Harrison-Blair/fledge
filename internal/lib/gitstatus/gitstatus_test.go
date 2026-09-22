@@ -127,6 +127,9 @@ func TestDefaultBranch(t *testing.T) {
 	})
 	// Unreadable config is an error that carries git's explanation.
 	t.Run("config unreadable", func(t *testing.T) {
+		// Git's message is asserted below, so keep it untranslated.
+		t.Setenv("LC_ALL", "C")
+		t.Setenv("LANGUAGE", "")
 		root := repository(t)
 		f, err := os.OpenFile(filepath.Join(root, ".git", "config"), os.O_APPEND|os.O_WRONLY, 0)
 		if err != nil {

@@ -495,9 +495,11 @@ git config fledge.baseBranch dev
 The setting is ordinary git config, read like `git config fledge.baseBranch`
 from every scope: the repository value, shared by every linked checkout, wins,
 but a `git config --global fledge.baseBranch dev` applies to every repository
-that does not set its own. Unset it with `git config --unset fledge.baseBranch`
-(add `--global` for the global value). If git cannot read its config, merged is
-`unknown` with git's error as the reason. Give a local branch name
+that does not set its own, including one that lacks that branch, where it gives
+the `does not exist` unknown described below rather than a fallback. Unset it
+with `git config --unset fledge.baseBranch` (add `--global` for the global
+value). If git cannot read its config, merged is `unknown` with git's error as
+the reason. Give a local branch name
 (`dev`, not `origin/dev` or `refs/heads/dev`). If it names a branch that does not
 exist, Fledge does not fall back to `origin/HEAD` or `main`: every checkout is
 merged `unknown`, `worktree list` ends with a `MERGED is unknown: ...` line
