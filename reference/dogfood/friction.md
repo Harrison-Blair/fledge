@@ -415,3 +415,31 @@ entry; both stem from the same source handling in
 2. From the primary checkout, run `fledge agent spawn --worktree <that path> ...` with no `--cwd`/`--workspace`.
 3. Observe `linked_worktree_source` at phase `worktree.open`.
 4. Add `--cwd <primary checkout>` and observe that `worktree.open` succeeds and the failure, if any, moves to `agent.prompt`.
+
+---
+
+**Issue:** Stopping the last agent in a worktree workspace closes the workspace and orphans the checkout
+
+**Summary:** On 2026-09-22 (`dev` at `1aed95d` plus branch `wave1/worktree-lib`
+`a09f509`, Herdr 0.9.1), an independent verifier spawned a probe agent with
+`fledge agent spawn --name wt-probe2 --harness pi --worktree new --branch wt-probe2 --no-wait --json`,
+which created worktree `.fledge/worktrees/wt-probe2`, workspace `wN`, tab
+`wN:t1`, and pane `wN:p1`. `fledge agent stop --name wt-probe2 --force --json`
+succeeded and closed pane `wN:p1`. Because that was the workspace's only pane,
+Herdr closed workspace `wN`. The prescribed cleanup
+`herdr worktree remove --workspace wN --force` then failed with
+`workspace_not_found` ("workspace wN not found"), and Herdr's `worktree.remove`
+accepts only a workspace id, so the checkout directory and the `wt-probe2`
+branch were left behind with no Herdr handle to remove them. The orchestrator
+removed them with `git worktree remove --force` and `git branch -D`. Observed
+once, reliably explained by Herdr's documented behaviour
+(`reference/herdr/api/worktree.md`: remove requires `workspace_id`; a closed
+worktree has no `open_workspace_id`). This is why the planned
+`fledge worktree remove` ([coordination plan](../plan/coordination-plan.md))
+must handle closed checkouts through git.
+
+**Reproduction steps:**
+1. Spawn an agent with `--worktree new --branch probe` so it is the only pane in a new worktree workspace.
+2. Run `fledge agent stop --name probe --force`; observe the pane closes and the workspace disappears from `herdr workspace list`.
+3. Run `herdr worktree remove --workspace <that id> --force`; observe `workspace_not_found`.
+4. Observe `git worktree list` still shows the checkout and `git branch --list probe` still shows the branch.
