@@ -69,6 +69,10 @@ its work; orchestrators are left writing their own shell poll loops over
 `agent get`. Observed 2026-09-18, Fledge 0.0.3 built from `dev`
 (`fc4538b`), Herdr 0.9.1, binary `/tmp/fledge-dev`.
 
+Resolved 2026-09-22: `agent wait` blocks until agents reach a lifecycle
+state, with `--until`, `--timeout`, and repeatable `--name`/`--pane`
+targets combined with `--all`/`--any`.
+
 **Reproduction steps:**
 1. Spawn and message a worker agent.
 2. Try to block until it finishes using only the commands listed in
@@ -83,6 +87,9 @@ its work; orchestrators are left writing their own shell poll loops over
 `herdr pane read <pane> --source recent-unwrapped`; Fledge itself has no
 command for it. Observed 2026-09-18, Fledge 0.0.3 built from `dev`
 (`fc4538b`), Herdr 0.9.1, binary `/tmp/fledge-dev`.
+
+Resolved 2026-09-22: `agent read` prints a plain-text terminal snapshot of
+one live agent's pane, with `--source` and `--lines` options.
 
 **Reproduction steps:**
 1. Message a worker agent and wait for it to go idle.
@@ -150,6 +157,9 @@ as a possible mis-paste and stopped to ask whether to execute it. Observed
 2026-09-18, Fledge 0.0.3 built from `dev` (`fc4538b`), Herdr 0.9.1, binary
 `/tmp/fledge-dev`.
 
+Resolved 2026-09-22: every delivered prompt now starts with one header
+line naming the sender and a correlation ID.
+
 **Reproduction steps:**
 1. Write a brief file whose text opens "You are a worker...".
 2. Run `fledge agent message --name w --file brief.md`.
@@ -164,6 +174,10 @@ as a possible mis-paste and stopped to ask whether to execute it. Observed
 `0.0.3` as the current `dev` build, so a stale binary went unnoticed until
 a command was missing. Observed 2026-09-18, Fledge 0.0.3 built from `dev`
 (`fc4538b`), Herdr 0.9.1, binary `/tmp/fledge-dev`.
+
+Resolved 2026-09-22: release binaries report their exact tag, and local
+builds report Go's embedded tag or commit-derived version (`+dirty` when
+appropriate); metadata-free builds report `dev`.
 
 **Reproduction steps:**
 1. Build the binary at commit A.
@@ -194,6 +208,10 @@ the session list and sent its report to a sibling worker (`race-prober`)
 instead; the orchestrator had to read the pane with `herdr pane read`.
 Observed 2026-09-18, Fledge 0.0.3 built from `dev` (`fc4538b`), Herdr
 0.9.1, binary `/tmp/fledge-dev`.
+
+Resolved 2026-09-22: the sender header now includes a `reply:` command
+naming the sender for a named sender, so a worker can address its reply
+directly.
 
 **Reproduction steps:**
 1. Spawn workers `a` and `b` from an orchestrator.
@@ -284,6 +302,11 @@ Observed 2026-09-20, Fledge `dev` @ `d81468d`, Herdr 0.9.1.
 Internet-address socket connections from cursor. This violates doctor's stated
 read-only, no-file-writes, no-network contract. Observed 2026-09-20 with the
 current `dev` working tree and Herdr protocol 22.
+
+Resolved 2026-09-20: `model_discovery` now reads only local cache files, for
+the harness kinds whose models come from a cache (`pi`, `codex`, `claude`);
+doctor never executes a harness command, so `opencode` and `cursor` are no
+longer checked there (use `fledge agent models` for those).
 
 **Reproduction steps:**
 1. Build the current checkout with `go build -o /tmp/fledge-verify .`.
@@ -387,6 +410,12 @@ for that request, so it does not catch it. Suspected from code and docs on
 library extraction ([coordination plan](../plan/coordination-plan.md)).
 Confirmed live on 2026-09-22 for the `worktree.open` path; see the next entry.
 
+Resolved 2026-09-22: `worktree.Source.changeParams` (in
+`internal/lib/worktree/request.go`, landed in `b76bcd0` "refactor: extract
+worktree and .fledge handling into shared libraries") now addresses
+`worktree.create`/`worktree.open` to the listed primary checkout
+(`listing.Source.RepoRoot`) instead of the caller's linked `cwd`.
+
 **Reproduction steps:**
 1. From inside a linked worktree, run `fledge agent spawn --worktree new ...` without `--workspace`.
 2. Observe the `cwd` param of the `worktree.create` call: it is the linked checkout, not the primary root.
@@ -409,6 +438,9 @@ returned `partial` at `agent.prompt`, as recorded in the pi entry above. This co
 live, for the open path, the suspected create-path issue recorded in the previous
 entry; both stem from the same source handling in
 `internal/agent/spawn/worktree.go`.
+
+Resolved 2026-09-22: see the previous entry — the same `changeParams` fix
+addresses `worktree.open` to the primary checkout as well.
 
 **Reproduction steps:**
 1. Create a managed worktree with `--worktree new`.
@@ -437,6 +469,10 @@ once, reliably explained by Herdr's documented behaviour
 worktree has no `open_workspace_id`). This is why the planned
 `fledge worktree remove` ([coordination plan](../plan/coordination-plan.md))
 must handle closed checkouts through git.
+
+Resolved 2026-09-22: `fledge worktree remove` (`f116a62`, guarded against
+live-agent use in `d96e91c`) removes an open checkout through Herdr and a
+closed one through `git worktree remove`, keeping the branch.
 
 **Reproduction steps:**
 1. Spawn an agent with `fledge agent spawn --name probe --harness pi --worktree new --branch probe` so it is the only pane in a new worktree workspace.

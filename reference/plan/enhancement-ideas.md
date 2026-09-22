@@ -18,19 +18,35 @@ A checked item means its main capability is implemented; accompanying notes reco
 
    **Implementation decisions and remaining gaps:** `agent get` targets one live agent by `--name` or `--pane`, with text or JSON output. Inspection does not focus the pane or mark output seen. It reports harness, working directory, readiness, current state, and native session details; task, branch, and last-activity fields from the original idea remain unimplemented. [Current behavior](../../README.md#agents)
 
-2. [ ] **Read an agent's output.** An `agent read` command so a coordinator can inspect progress and answers without leaving Fledge. Distinguish terminal snapshots from complete conversation records.
+2. [x] **Read an agent's output.** An `agent read` command so a coordinator can inspect progress and answers without leaving Fledge. Distinguish terminal snapshots from complete conversation records.
 
-3. [ ] **Wait for agents.** An `agent wait` command with timeouts, specific states, and "any worker" or "all workers" options. This removes repeated manual polling.
+   **Implemented:** [f4eb51c](https://github.com/Harrison-Blair/fledge/commit/f4eb51c1151a12beaa061dc2a5ccb374b56d8a5e) · **Author:** Harrison-Blair · **Author date:** 2026-09-22
 
-   **Existing support:** Spawn waits for its own agent's readiness, but there is no standalone `agent wait` command or any/all-worker waiting. This broader idea remains open.
+   **Implementation decisions and remaining gaps:** `agent read` prints a plain-text terminal snapshot of one live agent's pane (`--source visible`, `recent`, `recent-unwrapped` default, or `detection`; `--lines N`), without focusing the pane or marking output seen. JSON adds `source`, `lines`, `text`, `revision`, and `truncated`. A snapshot is the terminal's current contents, not a conversation transcript, so the original idea's distinction from complete conversation records remains unimplemented. [Current behavior](../../README.md#agents)
+
+3. [x] **Wait for agents.** An `agent wait` command with timeouts, specific states, and "any worker" or "all workers" options. This removes repeated manual polling.
+
+   **Implemented:** [f4eb51c](https://github.com/Harrison-Blair/fledge/commit/f4eb51c1151a12beaa061dc2a5ccb374b56d8a5e) · **Author:** Harrison-Blair · **Author date:** 2026-09-22
+
+   **Implementation decisions and remaining gaps:** `agent wait` blocks until agents reach a lifecycle state. Repeatable `--until` chooses among `idle`, `working`, `blocked`, `done`, and `unknown` (default: `idle`/`done`/`blocked`); `--timeout` bounds the wait, otherwise it is indefinite. `--name`/`--pane` are repeatable and mixable; a single target waits directly, two or more require `--all` or `--any`. A settled state means the agent's turn ended, not that its assigned work succeeded. [Current behavior](../../README.md#agents)
 
 4. [ ] **Watch activity as it happens.** An event stream for agent starts, state changes, exits, and blockers, with readable output for people and streaming JSON for automation.
 
-5. [ ] **Create durable tasks.** Give each assignment an ID, description, owner, and status that survives the worker exiting or its pane closing.
+5. [x] **Create durable tasks.** Give each assignment an ID, description, owner, and status that survives the worker exiting or its pane closing.
 
-6. [ ] **Report task completion explicitly.** Let workers submit a result tied to a task: what changed, what remains unresolved, and where the deliverables are.
+   **Implemented:** [522bb32](https://github.com/Harrison-Blair/fledge/commit/522bb32ad76a377dd2fffb5cdf9982d8fe6fa798) · **Author:** Harrison-Blair · **Author date:** 2026-09-22
+
+   **Implementation decisions and remaining gaps:** `task create` stores a durable record (`id`, `title`, `brief`, `owner`, `status`, and timestamps) in `.fledge/state/tasks/`, alongside agent records, so it survives the owner's pane closing. Status moves `created` → `assigned` → `completed` → `verified`, with `task cancel` ending it early; other out-of-order transitions fail. There are no progress updates. [Current behavior](../../README.md#tasks)
+
+6. [x] **Report task completion explicitly.** Let workers submit a result tied to a task: what changed, what remains unresolved, and where the deliverables are.
+
+   **Implemented:** [522bb32](https://github.com/Harrison-Blair/fledge/commit/522bb32ad76a377dd2fffb5cdf9982d8fe6fa798) (creator notification added in [a61f7ae](https://github.com/Harrison-Blair/fledge/commit/a61f7ae8879b59adfab892c8ac62483ae75a530e)) · **Author:** Harrison-Blair · **Author date:** 2026-09-22
+
+   **Implementation decisions and remaining gaps:** `task complete --id TASK` (`--summary` or `--file`) requires the owning agent's live record (`--force` overrides) and stores a free-text result on the task. It then notifies the distinct registered creator with the task ID, title, result, and verification command, and records the delivery outcome; an unregistered or self-completing creator needs no notification. The result is one free-text field, not a structured breakdown of what changed, what remains unresolved, and where deliverables are. [Current behavior](../../README.md#tasks)
 
 7. [ ] **Verify task results.** Associate checks with a task and record their actual outcomes. Distinguish "worker reported complete" from "verification passed" and "review accepted."
+
+   **Existing support:** `task verify --id TASK [--summary TEXT]` requires a `completed` task and a registered caller other than the owner, moving it to `verified` and so distinguishing that from merely `completed`. There are no recorded checks, so associating specific checks with a task and recording their individual outcomes remains open.
 
 8. [x] **Launch with an assignment.** One operation to start an agent and deliver its task, reporting which steps succeeded if launch or delivery fails.
 
@@ -42,11 +58,15 @@ A checked item means its main capability is implemented; accompanying notes reco
 
 10. [x] **Interrupt without destroying the pane.** Stop the current turn where the harness supports it, preserve the conversation, and allow revised instructions. Today's `stop` closes the pane.
 
-    **Implemented:** working tree; implementation commit, author, and author date pending an actual commit.
+    **Implemented:** [0ab6108](https://github.com/Harrison-Blair/fledge/commit/0ab6108344446d1820375d8bcf6e44d7ca061f15) · **Author:** Harrison-Blair · **Author date:** 2026-09-21
 
     **Implementation decisions and remaining gaps:** `agent pause` sends one harness-specific default interrupt sequence to the resolved pane, optionally waits for idle/done on the same terminal, and reports delivery separately from settlement. It preserves the pane and conversation; revised instructions use `agent message`. It does not freeze processes, undo work, drain queued prompts, or provide a persistent pause. Unknown harnesses and blocked/unknown/launch-pending agents are refused. Untested mappings remain best effort. [Current behavior](../../README.md#agents)
 
-11. [ ] **Track who spawned whom.** Record parent agents, child workers, task ownership, and group membership. A coordinator should easily find every worker it owns.
+11. [x] **Track who spawned whom.** Record parent agents, child workers, task ownership, and group membership. A coordinator should easily find every worker it owns.
+
+    **Implemented:** [ff7c96c](https://github.com/Harrison-Blair/fledge/commit/ff7c96c46f137256b38c1bd0032e36181c0fda6c) · **Author:** Harrison-Blair · **Author date:** 2026-09-22 (parent recording itself landed earlier, in [75ec269](https://github.com/Harrison-Blair/fledge/commit/75ec26936e8eb964f16dbe627db028d6f493cca3) "register agent identity on spawn and add agent adopt")
+
+    **Implementation decisions and remaining gaps:** A record's `parent` is the caller's live record at spawn or adopt time, or null when the caller is unregistered. `agent list` adds `PARENT` and `--parent ID` (direct children of that ID) and `--mine` (the caller's own direct children; mutually exclusive with `--parent`, and `caller_unregistered` for an unregistered caller). Task ownership is tracked on tasks (`owner`), not as a lineage field; there is no group membership and no recursive subtree listing, and the parent name shown is the name recorded on the parent's record at spawn/adopt time, which can differ from its current live name. [Current behavior](../../README.md#identity)
 
 12. [ ] **Clean up completed work safely.** Retire owned agents and resources after results are collected, while identifying worktrees with uncommitted or unmerged changes.
 
@@ -88,11 +108,19 @@ A checked item means its main capability is implemented; accompanying notes reco
 
 ## Agent management
 
-28. [ ] **Discover the caller's identity.** An `agent current` command telling a worker its own identity, parent, assignment, and workspace.
+28. [x] **Discover the caller's identity.** An `agent current` command telling a worker its own identity, parent, assignment, and workspace.
+
+    **Implemented:** [ff7c96c](https://github.com/Harrison-Blair/fledge/commit/ff7c96c46f137256b38c1bd0032e36181c0fda6c) · **Author:** Harrison-Blair · **Author date:** 2026-09-22
+
+    **Implementation decisions and remaining gaps:** `agent current` shows the caller's own live record: ID, name, pane, workspace, harness, worktree path, parent ID and the parent's recorded name, plus the tasks it owns in the `assigned` state. It fails with `caller_unregistered` when the caller's pane hosts no registered agent. Workspace is reported as an id, not a resolved name, and there is no list of the caller's own children (use `agent list --mine`). [Current behavior](../../README.md#identity)
 
 29. [ ] **Filter and select agents.** Find workers by project, owner, role, harness, task, or state, and reuse those selections in other commands.
 
-30. [ ] **Adopt manually launched agents.** Give an existing agent a Fledge identity and assignment without requiring it to be restarted.
+30. [x] **Adopt manually launched agents.** Give an existing agent a Fledge identity and assignment without requiring it to be restarted.
+
+    **Implemented:** [75ec269](https://github.com/Harrison-Blair/fledge/commit/75ec26936e8eb964f16dbe627db028d6f493cca3) · **Author:** Harrison-Blair · **Author date:** 2026-09-22
+
+    **Implementation decisions and remaining gaps:** `agent adopt` registers an already-running agent, targeting the caller's own pane by default or `--pane`/`--name` otherwise; an unnamed agent needs `--name`, and a terminal that already has a live record is refused with `agent_already_registered`. Adoption gives the agent a Fledge identity but does not itself deliver an assignment; use `agent message` or `task assign` afterward. [Current behavior](../../README.md#identity)
 
 31. [ ] **Resume native conversations.** Preserve harness session references and expose resume operations where supported, with clear capability reporting.
 
@@ -140,7 +168,11 @@ A checked item means its main capability is implemented; accompanying notes reco
 
 ## Git, worktrees, and integration
 
-52. [ ] **A worktree inventory.** List managed checkouts with their branches, owning tasks, active agents, dirty state, and merge status.
+52. [x] **A worktree inventory.** List managed checkouts with their branches, owning tasks, active agents, dirty state, and merge status.
+
+    **Implemented:** [f116a62](https://github.com/Harrison-Blair/fledge/commit/f116a6245cf8897c5fe78e9b1c87022d364c6fd2) (owning agent added in [088c003](https://github.com/Harrison-Blair/fledge/commit/088c0033e56b3eb76c55fa5401fc0e65cabe5ea0)) · **Author:** Harrison-Blair · **Author date:** 2026-09-22
+
+    **Implementation decisions and remaining gaps:** `worktree list` shows every checkout, primary first, with its branch (or detached), the open Herdr workspace, whether it is dirty (including untracked files), whether it is merged into the repository's integration branch, and whether it is managed under `.fledge/worktrees`. `OWNER` names the earliest live registered agent whose spawn created or opened that checkout, with a `+N` count for others sharing it. There is no owning-tasks column; task-to-worktree association is not tracked. [Current behavior](../../README.md#worktrees)
 
 53. [ ] **Repeatable worktree setup.** Prepare dependencies and project configuration before a worker starts, using project-defined setup steps.
 
