@@ -289,3 +289,47 @@ func TestListUsesConfiguredBaseBranch(t *testing.T) {
 		t.Fatalf("merged into main but not dev: %+v", row)
 	}
 }
+
+// Checkouts are inspected concurrently: each git status waits for a second
+// one to start and records a timeout when none does, as when rows run serially.
+func TestListInspectsCheckoutsConcurrently(t *testing.T) {
+	f := newFixture(t)
+	real, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin, arrived := t.TempDir(), t.TempDir()
+	serial := filepath.Join(t.TempDir(), "serial")
+	script := `#!/bin/sh
+if [ "$3" = status ]; then
+	touch "` + arrived + `/$$"
+	i=0
+	while [ "$(ls "` + arrived + `" | wc -l)" -lt 2 ]; do
+		i=$((i+1))
+		if [ $i -ge 100 ]; then touch "` + serial + `"; break; fi
+		sleep 0.05
+	done
+fi
+exec "` + real + `" "$@"
+`
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()})
+	if out := Run(context.Background(), c, Options{Cwd: f.root}); out.Status != "success" || out.Result.(Result).Worktrees[2].Dirty != "yes" {
+		t.Fatalf("%+v", out)
+	}
+	if _, err := os.Stat(serial); err == nil {
+		t.Fatal("checkouts were inspected one at a time")
+	}
+}
+
+func TestListRespectsCancellation(t *testing.T) {
+	f := newFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing(), Before: cancel})
+	if out := Run(ctx, c, Options{Cwd: f.root}); out.Status == "success" || !strings.Contains(out.Error.Message, "canceled") {
+		t.Fatalf("%+v", out)
+	}
+}
