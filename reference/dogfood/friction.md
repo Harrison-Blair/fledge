@@ -103,7 +103,10 @@ one live agent's pane, with `--source` and `--lines` options.
 **Summary:** A worker waiting on a permission prompt or question can only
 be answered with `herdr pane send-text` / `herdr pane send-keys`, not with
 any Fledge command. Observed 2026-09-18, Fledge 0.0.3 built from `dev`
-(`fc4538b`), Herdr 0.9.1, binary `/tmp/fledge-dev`.
+(`fc4538b`), Herdr 0.9.1, binary `/tmp/fledge-dev`. Since 2026-09-22
+(`1bb9b98`), `fledge agent send --name w --key down --key enter` (or `--text`)
+is the Fledge workaround; it types raw input without detecting the dialog or
+its choices.
 
 **Reproduction steps:**
 1. Give a Claude worker a task that needs a command outside its allowlist.
@@ -137,7 +140,9 @@ at ~3.9 s with `launch_pending` still `true`, and stayed `agent_blocked`
 for the full 30 s observation. Workaround used: `herdr pane send-text
 <pane> 2` (Skip); `herdr pane send-keys <pane> Down` had no effect.
 Observed 2026-09-18, Fledge 0.0.3 built from `dev` (`fc4538b`), Herdr
-0.9.1, binary `/tmp/fledge-dev`.
+0.9.1, binary `/tmp/fledge-dev`. Since 2026-09-22 (`1bb9b98`), the Fledge
+workaround is `fledge agent send --name x --text 2`; spawn still reports
+success and gives no reason for the block.
 
 **Reproduction steps:**
 1. With a Codex update pending, run
@@ -558,7 +563,10 @@ again, which creates a new agent record ID. `agent message` cannot carry a
 harness slash command such as `/model claude-opus-5-5`, because every delivered
 message is prefixed with the sender header line, so the text no longer begins
 with `/`. Possible capabilities: a raw, unheaded send option, or
-`agent set-model`.
+`agent set-model`. Resolved 2026-09-22: `agent send` (`1bb9b98`) types raw
+text and keys with no header, so
+`fledge agent send --name worker --text "/model claude-haiku-4-5-20251001" --key enter`
+switched a live Claude worker from Sonnet 5 to Haiku 4.5 in place.
 
 **Reproduction steps:**
 1. Spawn a Claude worker with `fledge agent spawn --name worker --harness claude --model claude-sonnet-5`.
