@@ -35,6 +35,7 @@ waits are cancelled; targets that fail are recorded while others remain).`,
 	f := cmd.Flags()
 	f.StringArrayVar(&options.Names, "name", nil, "Live agent name (repeatable)")
 	f.StringArrayVar(&options.Panes, "pane", nil, "Hosting pane ID (repeatable)")
+	f.StringVar(&options.ID, "id", "", "Fledge agent record ID; a single target (fails if the pane now hosts another terminal)")
 	f.StringArrayVar(&options.Until, "until", nil, "State to match: idle, working, blocked, done, or unknown (repeatable)")
 	f.DurationVar(&options.Timeout, "timeout", 0, "Give up after this duration (default: wait indefinitely)")
 	f.BoolVar(&options.All, "all", false, "With several targets, wait for every target")

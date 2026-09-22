@@ -7,22 +7,26 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 )
 
-// Result reports the placement, launch, and first-prompt state of a spawn.
+// Result reports the placement, launch, registration, and first-prompt state
+// of a spawn. RegistrationError explains why a started agent has no record.
 type Result struct {
-	Name            string           `json:"name"`
-	Harness         string           `json:"harness"`
-	DetectedHarness *string          `json:"detected_harness"`
-	AgentStatus     *string          `json:"agent_status"`
-	WorkspaceID     *string          `json:"workspace_id"`
-	TabID           *string          `json:"tab_id"`
-	PaneID          *string          `json:"pane_id"`
-	Cwd             *string          `json:"cwd"`
-	Argv            []string         `json:"argv"`
-	WorktreePath    *string          `json:"worktree_path"`
-	Split           bool             `json:"split"`
-	Prompted        bool             `json:"prompted"`
-	MessageID       *string          `json:"message_id"`
-	Sender          *libagent.Sender `json:"sender"`
+	Name              string           `json:"name"`
+	Harness           string           `json:"harness"`
+	DetectedHarness   *string          `json:"detected_harness"`
+	AgentStatus       *string          `json:"agent_status"`
+	WorkspaceID       *string          `json:"workspace_id"`
+	TabID             *string          `json:"tab_id"`
+	PaneID            *string          `json:"pane_id"`
+	Cwd               *string          `json:"cwd"`
+	Argv              []string         `json:"argv"`
+	WorktreePath      *string          `json:"worktree_path"`
+	Split             bool             `json:"split"`
+	ID                *string          `json:"id"`
+	Registered        bool             `json:"registered"`
+	RegistrationError *string          `json:"registration_error"`
+	Prompted          bool             `json:"prompted"`
+	MessageID         *string          `json:"message_id"`
+	Sender            *libagent.Sender `json:"sender"`
 }
 
 func pointer(s string) *string {
@@ -56,7 +60,11 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		}
 		return nil
 	}
-	if _, err := fmt.Fprintf(w, "Spawned %s (%s) in %s / %s / %s\n  cwd: %s\n  worktree: %s\n", r.Name, r.Harness, display(r.WorkspaceID), display(r.TabID), display(r.PaneID), display(r.Cwd), display(r.WorktreePath)); err != nil {
+	id := display(r.ID)
+	if r.RegistrationError != nil {
+		id += " (not registered: " + *r.RegistrationError + ")"
+	}
+	if _, err := fmt.Fprintf(w, "Spawned %s (%s) in %s / %s / %s\n  cwd: %s\n  worktree: %s\n  id: %s\n", r.Name, r.Harness, display(r.WorkspaceID), display(r.TabID), display(r.PaneID), display(r.Cwd), display(r.WorktreePath), id); err != nil {
 		return err
 	}
 	if r.Prompted {

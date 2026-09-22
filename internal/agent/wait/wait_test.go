@@ -13,6 +13,7 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
 
 // reply scripts one target's agent.wait: after delay it returns err or a
@@ -285,4 +286,36 @@ func TestRender(t *testing.T) {
 	herdrscript.CheckOutputFailures(t, Render,
 		libagent.Outcome{Operation: "agent.wait", Status: "success", Result: row, Effects: []libagent.Effect{}},
 		libagent.Outcome{Operation: "agent.wait", Status: "success", Result: fan, Effects: []libagent.Effect{}})
+}
+
+func TestWaitByIDWaitsOnVerifiedPane(t *testing.T) {
+	live := herdrscript.Info(herdrscript.LiveAgent("working"))
+	c := herdrscript.Client(t, herdrscript.Call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live},
+		herdrscript.Call{Method: "agent.wait", Params: map[string]any{"target": "w1:p3"}, Result: herdrscript.Waited(live.Agent.Pane, "idle")})
+	c.Cwd = identitytest.Repository(t)
+	rec := identitytest.Register(t, c.Cwd, live.Agent)
+	out := Run(context.Background(), c, Options{ID: rec.ID})
+	if out.Error != nil || *out.Result.(libagent.AgentRow).AgentStatus != "idle" {
+		t.Fatalf("%+v", out)
+	}
+}
+
+func TestWaitByIDFailsClosedWhenTerminalChanges(t *testing.T) {
+	live := herdrscript.Info(herdrscript.LiveAgent("working"))
+	replaced := herdrscript.Waited(live.Agent.Pane, "idle")
+	replaced.Agent.TerminalID = "term_new"
+	c := herdrscript.Client(t, herdrscript.Call{Method: "agent.get", Result: live}, herdrscript.Call{Method: "agent.wait", Result: replaced})
+	c.Cwd = identitytest.Repository(t)
+	rec := identitytest.Register(t, c.Cwd, live.Agent)
+	if out := Run(context.Background(), c, Options{ID: rec.ID}); out.Error == nil || out.Error.Code != "agent_identity_stale" {
+		t.Fatalf("%+v", out)
+	}
+}
+
+func TestWaitIDIsSingleTarget(t *testing.T) {
+	for _, o := range []Options{{ID: "0000beef", Names: []string{"a"}}, {ID: "0000beef", Panes: []string{"p"}, All: true}} {
+		if out := Run(context.Background(), libagent.Client{}, o); out.ExitCode() != 2 {
+			t.Fatalf("%+v", out)
+		}
+	}
 }

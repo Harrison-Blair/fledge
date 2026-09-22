@@ -14,7 +14,8 @@ import (
 )
 
 // newSocket starts a fake Herdr Unix socket listener and points the
-// environment at it, so ExecuteWithArgs/execute talk to it.
+// environment at it, so ExecuteWithArgs/execute talk to it. The test runs
+// outside any Git repository so agent records never reach a real checkout.
 func newSocket(t *testing.T) net.Listener {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "fc-")
@@ -30,6 +31,7 @@ func newSocket(t *testing.T) net.Listener {
 	t.Cleanup(func() { l.Close() })
 	t.Setenv("HERDR_ENV", "1")
 	t.Setenv("HERDR_SOCKET_PATH", path)
+	t.Chdir(t.TempDir())
 	return l
 }
 
@@ -238,6 +240,7 @@ func TestGetForwardsTargetAndDecodesDetails(t *testing.T) {
 			defer l.Close()
 			t.Setenv("HERDR_ENV", "1")
 			t.Setenv("HERDR_SOCKET_PATH", path)
+			t.Chdir(t.TempDir())
 			target := "reviewer"
 			if flag == "--pane" {
 				target = "w2:p3"
@@ -282,7 +285,7 @@ func TestGetForwardsTargetAndDecodesDetails(t *testing.T) {
 			if err := json.Unmarshal(out.Bytes(), &envelope); err != nil {
 				t.Fatal(err)
 			}
-			want := map[string]any{"operation": "agent.get", "status": "success", "effects": []any{}, "error": nil, "result": map[string]any{"pane_id": "w2:p3", "workspace_id": "w2", "tab_id": "w2:t1", "name": "reviewer", "harness": "codex", "agent_status": "working", "cwd": "/repo", "foreground_cwd": "/repo/sub", "interactive_ready": false, "launch_pending": true, "focused": false, "title": "Review", "agent_session": map[string]any{"source": "herdr:codex", "harness": "codex", "kind": "path", "value": "/sessions/123"}}}
+			want := map[string]any{"operation": "agent.get", "status": "success", "effects": []any{}, "error": nil, "result": map[string]any{"pane_id": "w2:p3", "workspace_id": "w2", "tab_id": "w2:t1", "name": "reviewer", "harness": "codex", "agent_status": "working", "cwd": "/repo", "foreground_cwd": "/repo/sub", "interactive_ready": false, "launch_pending": true, "focused": false, "title": "Review", "agent_session": map[string]any{"source": "herdr:codex", "harness": "codex", "kind": "path", "value": "/sessions/123"}, "record": nil}}
 			if !reflect.DeepEqual(envelope, want) {
 				t.Fatalf("got %s", out.String())
 			}

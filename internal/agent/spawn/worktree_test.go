@@ -96,11 +96,15 @@ func TestNewWorktreeFromLinkedCheckoutUsesPrimaryRoot(t *testing.T) {
 	o.Worktree = "new"
 	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "worktree.list", Params: map[string]any{"cwd": linked}, Result: herdr.WorktreeListResult{Type: "worktree_list", Source: struct {
 		RepoRoot string `json:"repo_root"`
-	}{RepoRoot: root}, Worktrees: []herdr.Worktree{}}}, call{Method: "worktree.create", Params: map[string]any{"cwd": root, "branch": "worker", "path": path, "focus": false}, Result: herdr.CreatedResult{Type: "worktree_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p, Worktree: herdr.Worktree{Path: path}}}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"))
+	}{RepoRoot: root}, Worktrees: []herdr.Worktree{}}}, call{Method: "worktree.create", Params: map[string]any{"cwd": root, "branch": "worker", "path": path, "focus": false}, Result: herdr.CreatedResult{Type: "worktree_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p, Worktree: herdr.Worktree{Path: path}}}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), callerNotAgent())
 	s.Cwd = linked
 	out := s.run(context.Background(), o, nil)
 	if out.Status != "success" {
 		t.Fatal(out)
+	}
+	// The record lands in the primary checkout's store and names the checkout.
+	if rec := stored(t, root, *out.Result.(*Result).ID); rec.WorktreePath == nil || *rec.WorktreePath != path {
+		t.Fatalf("%+v", rec)
 	}
 	if _, err := os.Stat(filepath.Join(linked, ".fledge")); !os.IsNotExist(err) {
 		t.Fatal("created managed paths inside linked checkout")

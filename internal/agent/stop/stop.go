@@ -7,11 +7,12 @@ import (
 	"io"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 )
 
 type Options struct {
-	Name, Pane string
-	Force      bool
+	Name, Pane, ID string
+	Force          bool
 }
 type Result struct {
 	libagent.AgentRow
@@ -20,12 +21,12 @@ type Result struct {
 
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	out := libagent.Outcome{Operation: "agent.stop", Status: "success", Effects: []libagent.Effect{}}
-	target, err := libagent.ResolveTarget(o.Name, o.Pane)
-	if err != nil {
+	selected := identity.Target{Name: o.Name, Pane: o.Pane, ID: o.ID}
+	if err := selected.Validate(); err != nil {
 		out.Fail(err, "validation", false)
 		return out
 	}
-	a, err := c.Get(ctx, target)
+	a, target, _, err := selected.Get(ctx, c)
 	if err != nil {
 		out.Fail(err, "agent.get", false)
 		return out

@@ -9,6 +9,7 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
 
 type call = herdrscript.Call
@@ -200,5 +201,29 @@ func TestRender(t *testing.T) {
 				t.Fatalf("got %q, want %q", b.String(), tc.want)
 			}
 		})
+	}
+}
+
+func TestPauseByIDFailsClosedOnStaleTerminal(t *testing.T) {
+	live := herdrscript.Info(herdrscript.LiveAgent("working"))
+	s := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live})
+	s.Cwd = identitytest.Repository(t)
+	recorded := live.Agent
+	recorded.TerminalID = "term_old"
+	rec := identitytest.Register(t, s.Cwd, recorded)
+	out := s.run(context.Background(), Options{ID: rec.ID, Timeout: time.Second})
+	if out.Error == nil || out.Error.Code != "agent_identity_stale" || len(out.Effects) != 0 {
+		t.Fatalf("%+v", out)
+	}
+}
+
+func TestPauseByIDInterruptsVerifiedPane(t *testing.T) {
+	live := herdrscript.Info(herdrscript.LiveAgent("working"))
+	s := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live},
+		call{Method: "agent.send_keys", Params: map[string]any{"target": "w1:p3", "keys": []string{"esc"}}, Result: herdrscript.OK()})
+	s.Cwd = identitytest.Repository(t)
+	rec := identitytest.Register(t, s.Cwd, live.Agent)
+	if out := s.run(context.Background(), Options{ID: rec.ID, Timeout: time.Second, NoWait: true}); out.Error != nil {
+		t.Fatalf("%+v", out)
 	}
 }

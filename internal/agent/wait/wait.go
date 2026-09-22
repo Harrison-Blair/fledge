@@ -14,12 +14,15 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 )
 
-// Options selects targets by name and pane, the states to match, and a timeout
-// (zero waits indefinitely). Two or more targets need exactly one of All or Any.
+// Options selects targets by name and pane, or one agent by record ID, the
+// states to match, and a timeout (zero waits indefinitely). Two or more
+// targets need exactly one of All or Any.
 type Options struct {
 	Names, Panes, Until []string
+	ID                  string
 	Timeout             time.Duration
 	All, Any            bool
 }
@@ -54,7 +57,12 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		return out
 	}
 	if len(targets) == 1 {
-		a, err := c.Wait(ctx, targets[0], o.Until, o.Timeout)
+		var a herdr.AgentDetails
+		if o.ID != "" {
+			a, err = waitID(ctx, c, o.ID, o.Until, o.Timeout)
+		} else {
+			a, err = c.Wait(ctx, targets[0], o.Until, o.Timeout)
+		}
 		if err != nil && ctx.Err() != nil {
 			err = cancelled()
 		}
@@ -73,11 +81,31 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	return out
 }
 
+// waitID resolves record id to its verified pane, waits there, and fails
+// closed if a different terminal answers the wait.
+func waitID(ctx context.Context, c libagent.Client, id string, until []string, timeout time.Duration) (herdr.AgentDetails, error) {
+	_, target, rec, err := identity.Target{ID: id}.Get(ctx, c)
+	if err != nil {
+		return herdr.AgentDetails{}, err
+	}
+	a, err := c.Wait(ctx, target, until, timeout)
+	if err == nil {
+		err = identity.Verify(*rec, a)
+	}
+	return a, err
+}
+
 func validate(o Options) ([]string, error) {
 	targets := append(slices.Clone(o.Names), o.Panes...)
+	if o.ID != "" {
+		if len(targets) > 0 || o.All || o.Any {
+			return nil, libagent.Invalid("--id waits on a single target and excludes --name, --pane, --all, and --any")
+		}
+		targets = []string{o.ID}
+	}
 	switch {
 	case len(targets) == 0:
-		return nil, libagent.Invalid("at least one --name or --pane is required")
+		return nil, libagent.Invalid("at least one --name, --pane, or --id is required")
 	case o.All && o.Any:
 		return nil, libagent.Invalid("at most one of --all or --any is allowed")
 	case len(targets) > 1 && !o.All && !o.Any:

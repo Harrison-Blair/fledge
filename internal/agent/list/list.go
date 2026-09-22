@@ -9,26 +9,41 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 )
 
 type Result struct {
-	Agents []libagent.AgentRow `json:"agents"`
+	Agents []Row `json:"agents"`
+}
+
+// Row is a live agent with its Fledge record ID, null when unregistered.
+type Row struct {
+	ID *string `json:"id"`
+	libagent.AgentRow
 }
 
 func Run(ctx context.Context, c libagent.Client) libagent.Outcome {
 	out := libagent.Outcome{Operation: "agent.list", Status: "success", Effects: []libagent.Effect{}}
-	var r herdr.AgentListResult
+	var r struct {
+		Type   string               `json:"type"`
+		Agents []herdr.AgentDetails `json:"agents"`
+	}
 	err := c.Call(ctx, "agent.list", nil, &r)
 	if err == nil && (r.Type != "agent_list" || r.Agents == nil) {
 		err = libagent.Protocol("incomplete agent.list result")
 	}
-	rows := make([]libagent.AgentRow, 0, len(r.Agents))
-	for _, p := range r.Agents {
-		if !libagent.ValidAgent(p) {
+	records := liveRecords(ctx, c.Cwd)
+	rows := make([]Row, 0, len(r.Agents))
+	for _, a := range r.Agents {
+		if !libagent.ValidAgent(a.Pane) {
 			err = libagent.Protocol("incomplete agent info")
 			break
 		}
-		rows = append(rows, libagent.NewAgentRow(p))
+		row := Row{AgentRow: libagent.NewAgentRow(a.Pane)}
+		if rec, ok := records[a.TerminalID]; ok && a.TerminalID != "" {
+			row.ID = &rec.ID
+		}
+		rows = append(rows, row)
 	}
 	if err != nil {
 		out.Fail(err, "agent.list", false)
@@ -36,6 +51,17 @@ func Run(ctx context.Context, c libagent.Client) libagent.Outcome {
 	}
 	out.Result = Result{Agents: rows}
 	return out
+}
+
+// liveRecords loads records for the ID column; an unavailable store only
+// leaves the column empty.
+func liveRecords(ctx context.Context, cwd string) map[string]identity.Record {
+	s, err := identity.Existing(ctx, cwd)
+	if err != nil || s == nil {
+		return nil
+	}
+	records, _ := identity.LiveByTerminal(s)
+	return records
 }
 
 // Render writes a successful list outcome as a table.
@@ -49,9 +75,9 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		return err
 	}
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(table, "NAME\tHARNESS\tSTATUS\tWORKSPACE\tTAB\tPANE\tCWD")
+	fmt.Fprintln(table, "ID\tNAME\tHARNESS\tSTATUS\tWORKSPACE\tTAB\tPANE\tCWD")
 	for _, a := range r.Agents {
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", display(a.Name), display(a.Harness), display(a.AgentStatus), display(a.WorkspaceID), display(a.TabID), display(a.PaneID), display(a.Cwd))
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", display(a.ID), display(a.Name), display(a.Harness), display(a.AgentStatus), display(a.WorkspaceID), display(a.TabID), display(a.PaneID), display(a.Cwd))
 	}
 	return table.Flush()
 }

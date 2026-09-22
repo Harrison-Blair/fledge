@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
 
 type call = herdrscript.Call
@@ -250,4 +253,56 @@ func TestGetOutput(t *testing.T) {
 
 func TestOutputFailuresPropagate(t *testing.T) {
 	herdrscript.CheckOutputFailures(t, Render, libagent.Outcome{Result: Result{}})
+}
+
+func TestGetByIDShowsRecord(t *testing.T) {
+	live := herdrscript.Info(herdrscript.LiveAgent("idle"))
+	c := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live})
+	c.Cwd = identitytest.Repository(t)
+	rec := identitytest.Register(t, c.Cwd, live.Agent)
+	out := Run(context.Background(), c, Options{ID: rec.ID})
+	r, ok := out.Result.(Result)
+	if out.Error != nil || !ok || r.Record == nil || !reflect.DeepEqual(*r.Record, rec) {
+		t.Fatalf("%+v", out)
+	}
+	var b bytes.Buffer
+	if err := out.Write(&b, false, Render); err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("Fledge ID: %s\nParent: -\nRegistered at: %s\nRegistered by: spawn\n", rec.ID, rec.RegisteredAt)
+	if !strings.HasSuffix(b.String(), want) {
+		t.Fatalf("%q", b.String())
+	}
+}
+
+func TestGetByNameShowsLiveRecord(t *testing.T) {
+	live := herdrscript.Info(herdrscript.LiveAgent("idle"))
+	c := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "worker"}, Result: live})
+	c.Cwd = identitytest.Repository(t)
+	rec := identitytest.Register(t, c.Cwd, live.Agent)
+	out := Run(context.Background(), c, Options{Name: "worker"})
+	if r := out.Result.(Result); r.Record == nil || r.Record.ID != rec.ID {
+		t.Fatalf("%+v", out)
+	}
+}
+
+func TestGetByIDFailsClosedOnStaleTerminal(t *testing.T) {
+	live := herdrscript.Info(herdrscript.LiveAgent("idle"))
+	c := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live})
+	c.Cwd = identitytest.Repository(t)
+	recorded := live.Agent
+	recorded.TerminalID = "term_old"
+	rec := identitytest.Register(t, c.Cwd, recorded)
+	out := Run(context.Background(), c, Options{ID: rec.ID})
+	if out.Error == nil || out.Error.Code != "agent_identity_stale" || out.Error.Phase != "identity" || out.Result != nil {
+		t.Fatalf("%+v", out)
+	}
+}
+
+func TestGetIDExcludesOtherSelectors(t *testing.T) {
+	for _, o := range []Options{{Name: "worker", ID: "0000beef"}, {Pane: "w1:p3", ID: "0000beef"}} {
+		if out := Run(context.Background(), fake(t), o); out.ExitCode() != 2 || out.Error.Phase != "validation" {
+			t.Fatalf("%+v", out)
+		}
+	}
 }

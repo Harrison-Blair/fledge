@@ -7,11 +7,12 @@ import (
 	"io"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 )
 
 type Options struct {
-	Name, Pane, Body, File string
-	BodySet, FileSet       bool
+	Name, Pane, ID, Body, File string
+	BodySet, FileSet           bool
 }
 type Result struct {
 	libagent.AgentRow
@@ -20,14 +21,14 @@ type Result struct {
 	Sender    *libagent.Sender `json:"sender"`
 }
 
-func (o Options) read(in io.Reader) (string, string, error) {
-	target, err := libagent.ResolveTarget(o.Name, o.Pane)
-	if err != nil {
-		return "", "", err
+func (o Options) read(in io.Reader) (identity.Target, string, error) {
+	target := identity.Target{Name: o.Name, Pane: o.Pane, ID: o.ID}
+	if err := target.Validate(); err != nil {
+		return target, "", err
 	}
 	text, err := libagent.ReadText(in, libagent.TextInput{Body: o.Body, BodyFlag: "body", BodySet: o.BodySet, File: o.File, FileFlag: "file", FileSet: o.FileSet, Required: true, Noun: "message"})
 	if err != nil {
-		return "", "", err
+		return target, "", err
 	}
 	return target, text, nil
 }
@@ -39,12 +40,12 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 }
 func run(ctx context.Context, c libagent.Client, o Options, in io.Reader, id string) libagent.Outcome {
 	out := libagent.Outcome{Operation: "agent.message", Status: "success", Effects: []libagent.Effect{}}
-	target, text, err := o.read(in)
+	selected, text, err := o.read(in)
 	if err != nil {
 		out.Fail(err, "validation", false)
 		return out
 	}
-	a, err := c.Get(ctx, target)
+	a, target, _, err := selected.Get(ctx, c)
 	if err != nil {
 		out.Fail(err, "agent.get", false)
 		return out

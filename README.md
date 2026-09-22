@@ -87,8 +87,11 @@ fledge agent spawn --name reviewer --harness claude --model sonnet
 fledge agent spawn --name builder --harness codex --workspace backend --tab builds
 fledge agent spawn --name task --harness codex --workspace backend --worktree new --branch feature/task
 fledge agent spawn --name existing --harness claude --pane w2:p3
+fledge agent adopt --name helper
+fledge agent adopt --pane w2:p3 --name builder --json
 fledge agent list --json
 fledge agent get --name reviewer
+fledge agent get --id 3f9a0c2e
 fledge agent get --pane w2:p3 --json
 fledge agent read --name reviewer
 fledge agent read --pane w2:p3 --source visible --lines 40 --json
@@ -280,6 +283,42 @@ harness kinds are not yet supported. Rows are sorted by harness then model, and
 `MODEL` is the value to pass to `--model`. `--harness` limits output to one
 documented kind; an unsupported or uninstalled kind yields an empty list, and a
 missing file, unreadable cache, or failing command silently contributes no rows.
+
+### Identity
+
+Fledge keeps a durable record for each agent it launches or adopts, in
+`.fledge/state/agents/` under the repository's primary checkout (ignored by Git,
+shared by linked worktrees). A record holds an 8-hex `id`, the agent's name,
+pane, workspace, harness, Herdr session (`HERDR_SESSION`), Herdr `terminal_id`,
+`parent`, `registered_at`, `registered_by` (`spawn` or `adopt`),
+`worktree_path`, and `ended_at`. The parent is the caller's record when the
+caller's pane hosts a registered agent with the same terminal; otherwise it is
+null. Records are never deleted.
+
+Spawn registers the agent once startup settles (or once launch begins with
+`--no-wait`) and before any first prompt. Its result adds `id`, `registered`, and
+`registration_error`. Outside a Git repository, or if the store cannot be
+written, the agent still runs and spawn still succeeds: `registered` is false
+and the text output shows `id: - (not registered: <reason>)`.
+
+`fledge agent adopt` registers an agent that is already running. Without
+`--pane` it targets the caller's own pane. An unnamed agent needs `--name`,
+which adopt sets through Herdr (`agent_name_taken` and `agent_launch_pending`
+are reported as is). A named agent keeps its name; a different `--name` is
+refused. A terminal that already has a live record is refused with
+`agent_already_registered` and its existing ID. Success prints
+`Adopted <name> (<pane>) as <id>.`
+
+`get`, `message`, `read`, `wait` (single target only), `pause`, and `stop`
+accept `--id` in place of `--name` or `--pane`; exactly one of the three is
+required. An `--id` lookup fails closed with `agent_identity_stale` when the
+recorded pane no longer hosts the recorded terminal, the record belongs to
+another Herdr session, or the record has ended; an unknown ID fails with
+`agent_record_not_found`. `agent get` shows the record (Fledge ID, parent,
+registration time and source) whenever the live agent has one, and JSON adds
+`record`. `agent list` adds an `ID` column (`-` when unregistered) and an `id`
+field. Session names come from the environment, so these checks are a
+workflow guard, not a security boundary.
 
 ### Outcomes and recovery
 

@@ -11,7 +11,7 @@ import (
 )
 
 func TestAgentHelp(t *testing.T) {
-	for _, args := range [][]string{{"agent", "--help"}, {"agent", "spawn", "--help"}, {"agent", "list", "--help"}, {"agent", "message", "--help"}, {"agent", "models", "--help"}, {"agent", "stop", "--help"}, {"agent", "get", "--help"}, {"agent", "read", "--help"}, {"agent", "wait", "--help"}} {
+	for _, args := range [][]string{{"agent", "--help"}, {"agent", "spawn", "--help"}, {"agent", "list", "--help"}, {"agent", "message", "--help"}, {"agent", "models", "--help"}, {"agent", "stop", "--help"}, {"agent", "get", "--help"}, {"agent", "read", "--help"}, {"agent", "wait", "--help"}, {"agent", "adopt", "--help"}} {
 		var out bytes.Buffer
 		if err := ExecuteWithArgs(args, &out); err != nil {
 			t.Fatal(err)
@@ -49,6 +49,14 @@ func TestAgentJSONValidation(t *testing.T) {
 		{"agent", "wait", "--name", "a", "--timeout", "-1s", "--json"},
 		{"agent", "wait", "extra", "--json"},
 		{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "p", "--cwd=", "--json"},
+		{"agent", "adopt", "--pane", "p", "--name", "Bad", "--json"},
+		{"agent", "adopt", "extra", "--json"},
+		{"agent", "get", "--name", "a", "--id", "0000beef", "--json"},
+		{"agent", "message", "--pane", "p", "--id", "0000beef", "--body", "x", "--json"},
+		{"agent", "stop", "--name", "a", "--id", "0000beef", "--json"},
+		{"agent", "read", "--pane", "p", "--id", "0000beef", "--json"},
+		{"agent", "pause", "--name", "a", "--id", "0000beef", "--json"},
+		{"agent", "wait", "--name", "a", "--id", "0000beef", "--json"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			var out bytes.Buffer
@@ -75,7 +83,7 @@ func TestAgentGroupHelpListsSubcommands(t *testing.T) {
 	if err := ExecuteWithArgs([]string{"agent", "--help"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"stop", "get", "read", "wait"} {
+	for _, name := range []string{"stop", "get", "read", "wait", "adopt"} {
 		if !strings.Contains(out.String(), "\n  "+name+" ") {
 			t.Fatalf("%s: %s", name, out.String())
 		}

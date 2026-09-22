@@ -18,6 +18,7 @@ func New() *cobra.Command {
 	f := cmd.Flags()
 	f.StringVar(&options.Name, "name", "", "Live agent name")
 	f.StringVar(&options.Pane, "pane", "", "Hosting pane ID")
+	f.StringVar(&options.ID, "id", "", "Fledge agent record ID (fails if the pane now hosts another terminal)")
 	f.DurationVar(&options.Timeout, "timeout", 10*time.Second, "Positive timeout for interruption and settlement")
 	f.BoolVar(&options.NoWait, "no-wait", false, "Return after key delivery acknowledgement without waiting for settlement")
 	f.BoolVar(&asJSON, "json", false, "Emit a structured outcome")

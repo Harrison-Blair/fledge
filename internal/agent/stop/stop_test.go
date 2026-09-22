@@ -10,6 +10,7 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
 
 type call = herdrscript.Call
@@ -150,4 +151,33 @@ func TestHumanOperationResults(t *testing.T) {
 }
 func TestOutputFailuresPropagate(t *testing.T) {
 	herdrscript.CheckOutputFailures(t, Render, libagent.Outcome{Result: Result{}})
+}
+
+func TestStopByIDClosesVerifiedPane(t *testing.T) {
+	live := herdrscript.Info(herdrscript.LiveAgent("idle"))
+	s := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live}, call{Method: "pane.close", Params: map[string]any{"pane_id": "w1:p3"}, Result: herdrscript.OK()})
+	s.Cwd = identitytest.Repository(t)
+	rec := identitytest.Register(t, s.Cwd, live.Agent)
+	if out := Run(context.Background(), s, Options{ID: rec.ID}); out.Status != "success" || !out.Result.(Result).Stopped {
+		t.Fatalf("%+v", out)
+	}
+}
+
+func TestStopByStaleIDDoesNotClose(t *testing.T) {
+	for name, get := range map[string]call{
+		"other terminal": {Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: herdrscript.Info(herdrscript.LiveAgent("idle"))},
+		"no agent":       {Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Err: &herdr.Error{Code: "agent_not_found", Message: "gone"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := fake(t, get)
+			s.Cwd = identitytest.Repository(t)
+			recorded := herdrscript.Info(herdrscript.LiveAgent("idle")).Agent
+			recorded.TerminalID = "term_old"
+			rec := identitytest.Register(t, s.Cwd, recorded)
+			out := Run(context.Background(), s, Options{ID: rec.ID, Force: true})
+			if out.Error == nil || out.Error.Code != "agent_identity_stale" || out.Error.Phase != "identity" || len(out.Effects) != 0 {
+				t.Fatalf("%+v", out)
+			}
+		})
+	}
 }

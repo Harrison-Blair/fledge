@@ -10,6 +10,7 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
 
 type call = herdrscript.Call
@@ -129,5 +130,23 @@ func TestReadJSONPreservesSnapshotBytes(t *testing.T) {
 	var decoded struct{ Result struct{ Text string } }
 	if err := json.Unmarshal(b.Bytes(), &decoded); err != nil || decoded.Result.Text != "a\nb" {
 		t.Fatalf("%v %q", err, b.String())
+	}
+}
+
+func TestReadByIDReadsVerifiedPane(t *testing.T) {
+	live := herdrscript.Info(herdrscript.LiveAgent("working"))
+	c := fake(t, getCall("w1:p3"), call{Method: "agent.read", Params: map[string]any{"target": "w1:p3", "source": "recent_unwrapped", "format": "text"}, Result: readResult("recent_unwrapped", "x\n", false)})
+	c.Cwd = identitytest.Repository(t)
+	rec := identitytest.Register(t, c.Cwd, live.Agent)
+	if out := Run(context.Background(), c, Options{ID: rec.ID, Source: "recent-unwrapped"}); out.Status != "success" {
+		t.Fatalf("%+v", out)
+	}
+	stale := live.Agent
+	stale.TerminalID = "term_old"
+	c = fake(t, getCall("w1:p3"))
+	c.Cwd = identitytest.Repository(t)
+	rec = identitytest.Register(t, c.Cwd, stale)
+	if out := Run(context.Background(), c, Options{ID: rec.ID, Source: "recent-unwrapped"}); out.Error == nil || out.Error.Code != "agent_identity_stale" {
+		t.Fatalf("%+v", out)
 	}
 }

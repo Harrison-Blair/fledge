@@ -10,14 +10,15 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 )
 
 // Options selects a live agent and bounds interrupt delivery and settlement.
 // Callers supply a positive Timeout; the CLI defaults to ten seconds.
 type Options struct {
-	Name, Pane string
-	Timeout    time.Duration
-	NoWait     bool
+	Name, Pane, ID string
+	Timeout        time.Duration
+	NoWait         bool
 }
 
 // Result distinguishes acknowledged interruption from observed settlement.
@@ -38,8 +39,9 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 }
 func (s pauser) run(ctx context.Context, o Options) libagent.Outcome {
 	out := libagent.Outcome{Operation: "agent.pause", Status: "success", Effects: []libagent.Effect{}}
-	target, err := libagent.ResolveTarget(o.Name, o.Pane)
-	if err == nil && (strings.TrimSpace(target) == "" || o.Timeout <= 0) {
+	selected := identity.Target{Name: o.Name, Pane: o.Pane, ID: o.ID}
+	err := selected.Validate()
+	if err == nil && (strings.TrimSpace(o.Name+o.Pane+o.ID) == "" || o.Timeout <= 0) {
 		err = libagent.Invalid("target must be nonempty and --timeout must be positive")
 	}
 	if err != nil {
@@ -49,7 +51,7 @@ func (s pauser) run(ctx context.Context, o Options) libagent.Outcome {
 	deadline := s.Now().Add(o.Timeout)
 	ctx, cancel := context.WithTimeout(ctx, o.Timeout)
 	defer cancel()
-	a, err := s.Get(ctx, target)
+	a, _, _, err := selected.Get(ctx, s.Client)
 	if err != nil {
 		out.Fail(err, "agent.get", false)
 		return out

@@ -10,6 +10,7 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
 
 type call = herdrscript.Call
@@ -119,4 +120,37 @@ func TestHumanOperationResults(t *testing.T) {
 }
 func TestOutputFailuresPropagate(t *testing.T) {
 	herdrscript.CheckOutputFailures(t, Render, libagent.Outcome{Result: Result{}})
+}
+
+func TestMessageByIDPromptsVerifiedPane(t *testing.T) {
+	live := herdrscript.Info(herdrscript.LiveAgent("idle"))
+	prompted := herdr.AgentResult{Type: "agent_prompted", Agent: live.Agent}
+	s := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live}, senderCall(),
+		call{Method: "agent.prompt", Params: map[string]any{"target": "w1:p3", "text": header + "hi"}, Result: prompted})
+	s.Cwd = identitytest.Repository(t)
+	rec := identitytest.Register(t, s.Cwd, live.Agent)
+	out := run(context.Background(), s, Options{ID: rec.ID, Body: "hi", BodySet: true}, nil, "m-0a1b2c")
+	if out.Status != "success" || !out.Result.(Result).Submitted {
+		t.Fatalf("%+v", out)
+	}
+}
+
+func TestMessageByStaleIDDoesNotPrompt(t *testing.T) {
+	live := herdrscript.Info(herdrscript.LiveAgent("idle"))
+	s := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live})
+	s.Cwd = identitytest.Repository(t)
+	recorded := live.Agent
+	recorded.TerminalID = "term_old"
+	rec := identitytest.Register(t, s.Cwd, recorded)
+	out := run(context.Background(), s, Options{ID: rec.ID, Body: "hi", BodySet: true}, nil, "m-0a1b2c")
+	if out.Error == nil || out.Error.Code != "agent_identity_stale" || len(out.Effects) != 0 {
+		t.Fatalf("%+v", out)
+	}
+}
+
+func TestMessageIDExcludesName(t *testing.T) {
+	out := run(context.Background(), fake(t), Options{Name: "worker", ID: "0000beef", Body: "hi", BodySet: true}, nil, "m-0a1b2c")
+	if out.ExitCode() != 2 || out.Error.Phase != "validation" {
+		t.Fatalf("%+v", out)
+	}
 }

@@ -16,6 +16,7 @@ func New() *cobra.Command {
 	f := cmd.Flags()
 	f.StringVar(&options.Name, "name", "", "Live agent name")
 	f.StringVar(&options.Pane, "pane", "", "Hosting pane ID")
+	f.StringVar(&options.ID, "id", "", "Fledge agent record ID (fails if the pane now hosts another terminal)")
 	f.BoolVar(&options.Force, "force", false, "Stop even when the agent is working, blocked, or unknown")
 	f.BoolVar(&asJSON, "json", false, "Emit a structured outcome")
 	return cmd

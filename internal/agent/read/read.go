@@ -9,14 +9,15 @@ import (
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 )
 
 // Options selects one live agent and the snapshot to capture. Source uses the
 // CLI spelling; Lines applies only when LinesSet.
 type Options struct {
-	Name, Pane, Source string
-	Lines              int64
-	LinesSet           bool
+	Name, Pane, ID, Source string
+	Lines                  int64
+	LinesSet               bool
 }
 
 // Result is the agent row plus the captured snapshot. Lines counts returned rows.
@@ -36,7 +37,8 @@ var wireSources = map[string]string{"visible": "visible", "recent": "recent", "r
 // Run resolves the agent, then reads its pane without focusing it or marking output seen.
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	out := libagent.Outcome{Operation: "agent.read", Status: "success", Effects: []libagent.Effect{}}
-	target, err := libagent.ResolveTarget(o.Name, o.Pane)
+	selected := identity.Target{Name: o.Name, Pane: o.Pane, ID: o.ID}
+	err := selected.Validate()
 	source, known := wireSources[o.Source]
 	if err == nil && !known {
 		err = libagent.Invalid("--source must be visible, recent, recent-unwrapped, or detection")
@@ -48,7 +50,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Fail(err, "validation", false)
 		return out
 	}
-	a, err := c.Get(ctx, target)
+	a, _, _, err := selected.Get(ctx, c)
 	if err != nil {
 		out.Fail(err, "agent.get", false)
 		return out

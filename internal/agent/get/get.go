@@ -9,10 +9,11 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 )
 
-// Options selects one live agent by name or hosting pane.
-type Options struct{ Name, Pane string }
+// Options selects one live agent by name, hosting pane, or Fledge record ID.
+type Options struct{ Name, Pane, ID string }
 
 // Result exposes inspection details, preserving unavailable values as null.
 type Result struct {
@@ -23,6 +24,7 @@ type Result struct {
 	Focused          *bool            `json:"focused"`
 	Title            *string          `json:"title"`
 	AgentSession     *SessionIdentity `json:"agent_session"`
+	Record           *identity.Record `json:"record"`
 }
 type SessionIdentity struct {
 	Source  *string `json:"source"`
@@ -44,12 +46,12 @@ func resolveTitle(a herdr.AgentDetails) *string {
 // Run inspects an agent without focusing its pane or marking output seen.
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	out := libagent.Outcome{Operation: "agent.get", Status: "success", Effects: []libagent.Effect{}}
-	target, err := libagent.ResolveTarget(o.Name, o.Pane)
-	if err != nil {
+	target := identity.Target{Name: o.Name, Pane: o.Pane, ID: o.ID}
+	if err := target.Validate(); err != nil {
 		out.Fail(err, "validation", false)
 		return out
 	}
-	a, err := c.Get(ctx, target)
+	a, _, rec, err := target.Get(ctx, c)
 	if err != nil {
 		out.Fail(err, "agent.get", false)
 		return out
@@ -58,8 +60,23 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	if session := a.AgentSession; session != nil {
 		result.AgentSession = &SessionIdentity{Source: session.Source, Harness: session.Agent, Kind: session.Kind, Value: session.Value}
 	}
+	result.Record = rec
+	if rec == nil {
+		result.Record = liveRecord(ctx, c.Cwd, a.TerminalID)
+	}
 	out.Result = result
 	return out
+}
+
+// liveRecord finds the agent's record for display; an unavailable store only
+// means no record is shown.
+func liveRecord(ctx context.Context, cwd, terminal string) *identity.Record {
+	s, err := identity.Existing(ctx, cwd)
+	if err != nil || s == nil {
+		return nil
+	}
+	rec, _ := identity.Live(s, terminal)
+	return rec
 }
 
 // Render writes a successful get outcome as labeled lines.
@@ -84,6 +101,10 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		if _, err := fmt.Fprintf(w, "%s: %s\n", f.label, f.value); err != nil {
 			return err
 		}
+	}
+	if rec := r.Record; rec != nil {
+		_, err := fmt.Fprintf(w, "Fledge ID: %s\nParent: %s\nRegistered at: %s\nRegistered by: %s\n", rec.ID, display(rec.Parent), rec.RegisteredAt, rec.RegisteredBy)
+		return err
 	}
 	return nil
 }
