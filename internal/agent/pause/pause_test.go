@@ -1,8 +1,13 @@
 package pause
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
+	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -225,5 +230,89 @@ func TestPauseByIDInterruptsVerifiedPane(t *testing.T) {
 	rec := identitytest.Register(t, s.Cwd, live.Agent)
 	if out := s.run(context.Background(), Options{ID: rec.ID, Timeout: time.Second, NoWait: true}); out.Error != nil {
 		t.Fatalf("%+v", out)
+	}
+}
+
+// serve answers each socket request with reply(method, params), which
+// returns a result or a Herdr error object.
+func serve(t *testing.T, reply func(method string, params map[string]any) (result, err any)) {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "fp-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "s")
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close(); os.RemoveAll(dir) })
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				var req struct {
+					Method string         `json:"method"`
+					Params map[string]any `json:"params"`
+				}
+				line, _ := bufio.NewReader(c).ReadBytes('\n')
+				if json.Unmarshal(line, &req) != nil {
+					return
+				}
+				result, failure := reply(req.Method, req.Params)
+				json.NewEncoder(c).Encode(map[string]any{"id": "fledge", "result": result, "error": failure})
+			}()
+		}
+	}()
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_SOCKET_PATH", path)
+}
+
+// TestPauseReportsHerdrSettleTimeout answers agent.wait with Herdr's timeout
+// just after timeout_ms, so a local deadline equal to timeout_ms would surface
+// a transport error instead.
+func TestPauseReportsHerdrSettleTimeout(t *testing.T) {
+	serve(t, func(method string, params map[string]any) (any, any) {
+		switch method {
+		case "agent.get":
+			return herdrscript.Info(herdrscript.LiveAgent("working")), nil
+		case "agent.send_keys":
+			return herdrscript.OK(), nil
+		}
+		ms, _ := params["timeout_ms"].(float64)
+		time.Sleep(time.Duration(ms)*time.Millisecond + 2*time.Millisecond)
+		return nil, map[string]any{"code": "timeout", "message": "wait timed out"}
+	})
+	for range 5 {
+		out := Run(context.Background(), libagent.FromEnvironment(200*time.Millisecond), Options{Name: "worker", Timeout: 200 * time.Millisecond})
+		if out.Error == nil || out.Error.Code != "timeout" || out.Error.Phase != "agent.wait" || !out.Result.(Result).Submitted {
+			t.Fatalf("%+v %+v", out, out.Error)
+		}
+	}
+}
+
+// TestPauseTimeoutBoundsStalledRequests keeps --timeout as the wall-clock
+// bound before agent.wait, although the transport limit is longer.
+func TestPauseTimeoutBoundsStalledRequests(t *testing.T) {
+	for _, stall := range []string{"agent.get", "agent.send_keys"} {
+		t.Run(stall, func(t *testing.T) {
+			stalled := make(chan struct{})
+			t.Cleanup(func() { close(stalled) })
+			serve(t, func(method string, _ map[string]any) (any, any) {
+				if method == stall {
+					<-stalled
+				}
+				return herdrscript.Info(herdrscript.LiveAgent("working")), nil
+			})
+			start := time.Now()
+			out := Run(context.Background(), libagent.FromEnvironment(200*time.Millisecond), Options{Name: "worker", Timeout: 200 * time.Millisecond})
+			if elapsed := time.Since(start); elapsed > 5*time.Second || out.Error == nil || out.Error.Phase != stall {
+				t.Fatalf("%s %+v %+v", elapsed, out, out.Error)
+			}
+		})
 	}
 }

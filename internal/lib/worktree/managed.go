@@ -13,6 +13,25 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/fledgedir"
 )
 
+// CheckBranch rejects a name git would not accept as an exact new branch,
+// including shorthands that git expands. Other failures are runtime errors.
+func CheckBranch(ctx context.Context, branch string) error {
+	checked, err := exec.CommandContext(ctx, "git", "check-ref-format", "--branch", branch).Output()
+	if err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("check branch: %w", ctx.Err())
+		}
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() < 0 {
+			return fmt.Errorf("check branch: %w", err)
+		}
+	}
+	if err != nil || strings.TrimSpace(string(checked)) != branch || strings.Contains(branch, "@{") {
+		return libagent.Invalid("invalid exact branch name %q", branch)
+	}
+	return nil
+}
+
 // Prepare returns the managed checkout path root/.fledge/worktrees/<branch>.
 // It validates all known collisions before touching managed paths, then
 // ensures the ignored .fledge directory and the checkout's parent directories.
@@ -25,18 +44,8 @@ func Prepare(ctx context.Context, root, branch string, out *libagent.Outcome) (s
 	if err != nil {
 		return "", err
 	}
-	checked, err := exec.CommandContext(ctx, "git", "check-ref-format", "--branch", branch).Output()
-	if err != nil {
-		if ctx.Err() != nil {
-			return "", fmt.Errorf("check branch: %w", ctx.Err())
-		}
-		var exit *exec.ExitError
-		if !errors.As(err, &exit) || exit.ExitCode() < 0 {
-			return "", fmt.Errorf("check branch: %w", err)
-		}
-	}
-	if err != nil || strings.TrimSpace(string(checked)) != branch || strings.Contains(branch, "@{") {
-		return "", libagent.Invalid("invalid exact branch name %q", branch)
+	if err := CheckBranch(ctx, branch); err != nil {
+		return "", err
 	}
 	refs, err := exec.CommandContext(ctx, "git", "-C", root, "for-each-ref", "--format=%(refname)", "refs/heads/").Output()
 	if err != nil {

@@ -49,6 +49,7 @@ func (s pauser) run(ctx context.Context, o Options) libagent.Outcome {
 		return out
 	}
 	deadline := s.Now().Add(o.Timeout)
+	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, o.Timeout)
 	defer cancel()
 	a, _, _, err := selected.Get(ctx, s.Client)
@@ -105,8 +106,11 @@ func (s pauser) run(ctx context.Context, o Options) libagent.Outcome {
 		return out
 	}
 	// Herdr's default settled set includes blocked so approval dialogs fail promptly.
+	// The margin lets Herdr's own agent.wait timeout reach the caller.
+	waitCtx, cancelWait := context.WithTimeout(parent, remaining+libagent.TransportMargin)
+	defer cancelWait()
 	var settled herdr.AgentResult
-	err = s.Call(ctx, "agent.wait", map[string]any{"target": a.PaneID, "timeout_ms": remaining.Milliseconds()}, &settled)
+	err = s.Call(waitCtx, "agent.wait", map[string]any{"target": a.PaneID, "timeout_ms": remaining.Milliseconds()}, &settled)
 	if err == nil && (settled.Type != "agent_info" || !libagent.ValidAgentInfo(settled.Agent) || settled.Agent.TerminalID != a.TerminalID || settled.Agent.PaneID != a.PaneID) {
 		err = libagent.Protocol("agent.wait did not return the resolved terminal")
 	}

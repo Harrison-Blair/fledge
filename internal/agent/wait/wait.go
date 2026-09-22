@@ -27,9 +27,9 @@ type Options struct {
 	All, Any            bool
 }
 
-// maxTimeout is the largest finite timeout whose 15 s transport margin, added
-// by libagent.WaitFromEnvironment, cannot overflow a Duration.
-const maxTimeout = time.Duration(math.MaxInt64) - 15*time.Second
+// maxTimeout is the largest finite timeout whose transport margin, added by
+// libagent.WaitFromEnvironment, cannot overflow a Duration.
+const maxTimeout = time.Duration(math.MaxInt64) - libagent.TransportMargin
 
 // FanOut reports a multi-target wait: one row per target, in target order.
 // Winner names the first --any match.
@@ -131,9 +131,10 @@ func validate(o Options) ([]string, error) {
 	return targets, nil
 }
 
-// fanOut runs one wait per target. --any cancels the rest on its first match;
-// errors that end a call after that cancellation, or after ctx ends, are
-// reported as cancelled rather than as target failures.
+// fanOut runs one wait per target. --any cancels the rest on its first match
+// and --all on its first failure; errors that end a call after that
+// cancellation, or after ctx ends, are reported as cancelled rather than as
+// target failures.
 func fanOut(ctx context.Context, c libagent.Client, targets []string, o Options) (FanOut, error) {
 	waits, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -173,6 +174,9 @@ func fanOut(ctx context.Context, c libagent.Client, targets []string, o Options)
 			var failed libagent.Outcome
 			failed.Fail(r.err, "agent.wait", false)
 			row.Outcome, row.Error = "errored", failed.Error
+			if o.All {
+				cancel()
+			}
 		}
 	}
 	if result.Winner != nil {

@@ -3,6 +3,7 @@ package spawn
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/worktree"
 )
 
 // Picker interactively chooses spawn options on a terminal.
@@ -153,6 +155,15 @@ func (p Picker) Pick(ctx context.Context, base Options) (Options, error) {
 			if _, err := o.Validate(); err != nil {
 				fmt.Fprintln(p.Out, err)
 				continue
+			}
+			var invalid *libagent.InputError
+			if err := worktree.CheckBranch(ctx, o.Branch); errors.As(err, &invalid) {
+				fmt.Fprintln(p.Out, err)
+				continue
+			} else if ctx.Err() != nil {
+				return base, errCanceled
+			} else if err != nil {
+				return base, err
 			}
 			break
 		}

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -27,6 +29,39 @@ func TestRuntimeErrorExit(t *testing.T) {
 	out := Run(context.Background(), herdrscript.Client(t, call{Method: "agent.list", Err: errors.New("offline")}))
 	if out.ExitCode() != 1 {
 		t.Fatal(out)
+	}
+}
+
+// TestFailedListSkipsRecords uses a git on PATH that leaves a marker, so a
+// record lookup after a failed agent.list is observable.
+func TestFailedListSkipsRecords(t *testing.T) {
+	bin := t.TempDir()
+	marker := filepath.Join(bin, "called")
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\n: >"+marker+"\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	for _, tc := range []struct {
+		name   string
+		result any
+		err    error
+		looked bool
+	}{
+		{"success", map[string]any{"type": "agent_list", "agents": []herdr.Pane{}}, nil, true},
+		{"runtime", nil, errors.New("offline"), false},
+		{"protocol", map[string]any{"type": "wrong"}, nil, false},
+		{"incomplete agent", map[string]any{"type": "agent_list", "agents": []herdr.Pane{{PaneID: "w1:p1"}}}, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			os.Remove(marker)
+			c := herdrscript.Client(t, call{Method: "agent.list", Result: tc.result, Err: tc.err})
+			c.Cwd = t.TempDir()
+			out := Run(context.Background(), c)
+			_, err := os.Stat(marker)
+			if (out.Error == nil) != tc.looked || (err == nil) != tc.looked {
+				t.Fatalf("%+v looked=%v", out, err == nil)
+			}
+		})
 	}
 }
 func TestHumanOperationResults(t *testing.T) {

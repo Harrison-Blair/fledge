@@ -193,24 +193,38 @@ func rowsByTarget(t *testing.T, out libagent.Outcome) map[string]Row {
 
 // TestWaitFanOutErrorThenMatch covers one target exiting (agent_not_running)
 // before another matches: --any records the error and succeeds on the later
-// match; --all waits for both and fails.
+// match.
 func TestWaitFanOutErrorThenMatch(t *testing.T) {
-	for _, any := range []bool{true, false} {
-		_, c := newFake(t, map[string]reply{"a": {err: herr("agent_not_running")}, "w1:p9": {delay: 30 * time.Millisecond, status: "done"}})
-		out := Run(context.Background(), c, Options{Names: []string{"a"}, Panes: []string{"w1:p9"}, Any: any, All: !any})
-		rows := rowsByTarget(t, out)
-		if rows["a"].Outcome != "errored" || rows["a"].Error.Code != "agent_not_running" || rows["a"].Agent != nil ||
-			rows["w1:p9"].Outcome != "matched" || *rows["w1:p9"].Agent.AgentStatus != "done" || rows["w1:p9"].Error != nil {
-			t.Fatalf("%+v", rows)
-		}
-		f := out.Result.(FanOut)
-		if any {
-			if out.Status != "success" || out.ExitCode() != 0 || f.Mode != "any" || f.Winner == nil || *f.Winner != "w1:p9" {
-				t.Fatalf("%+v", out)
-			}
-		} else if out.ExitCode() != 1 || out.Status != "rejected" || out.Error.Code != "agent_not_running" || out.Error.Phase != "agent.wait" || f.Mode != "all" || f.Winner != nil {
-			t.Fatalf("%+v", out)
-		}
+	_, c := newFake(t, map[string]reply{"a": {err: herr("agent_not_running")}, "w1:p9": {delay: 30 * time.Millisecond, status: "done"}})
+	out := Run(context.Background(), c, Options{Names: []string{"a"}, Panes: []string{"w1:p9"}, Any: true})
+	rows := rowsByTarget(t, out)
+	if rows["a"].Outcome != "errored" || rows["a"].Error.Code != "agent_not_running" || rows["a"].Agent != nil ||
+		rows["w1:p9"].Outcome != "matched" || *rows["w1:p9"].Agent.AgentStatus != "done" || rows["w1:p9"].Error != nil {
+		t.Fatalf("%+v", rows)
+	}
+	f := out.Result.(FanOut)
+	if out.Status != "success" || out.ExitCode() != 0 || f.Mode != "any" || f.Winner == nil || *f.Winner != "w1:p9" {
+		t.Fatalf("%+v", out)
+	}
+}
+
+func TestWaitAllFailsFast(t *testing.T) {
+	_, c := newFake(t, map[string]reply{"ghost": {err: herr("agent_not_found")}, "busy": {block: true}, "w1:p9": {status: "idle"}})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	out := Run(ctx, c, Options{Names: []string{"ghost", "busy"}, Panes: []string{"w1:p9"}, All: true})
+	if ctx.Err() != nil {
+		t.Fatalf("remaining waits were not cancelled: %+v", out.Error)
+	}
+	rows := rowsByTarget(t, out)
+	f := out.Result.(FanOut)
+	if out.ExitCode() != 1 || out.Status != "rejected" || out.Error.Code != "agent_not_found" || out.Error.Phase != "agent.wait" || f.Mode != "all" || f.Winner != nil ||
+		rows["ghost"].Outcome != "errored" || rows["ghost"].Error.Code != "agent_not_found" ||
+		rows["busy"].Outcome != "cancelled" || rows["busy"].Error != nil || rows["busy"].Agent != nil {
+		t.Fatalf("%+v %+v", out, rows)
+	}
+	if got := f.Targets; got[0].Target != "ghost" || got[1].Target != "busy" || got[2].Target != "w1:p9" {
+		t.Fatalf("rows not in target order: %+v", got)
 	}
 }
 

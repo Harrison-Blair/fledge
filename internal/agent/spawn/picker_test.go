@@ -3,7 +3,11 @@ package spawn
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -177,6 +181,62 @@ func TestPickerRejectsInvalidBranch(t *testing.T) {
 	}
 	if _, err := o.Validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPickerRejectsBranchGitRejects(t *testing.T) {
+	o, out, err := pick(t, "amp\nworker\n4\na..b\nhas space\n@{-1}\ngood\n", nil, noTab)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.Branch != "good" {
+		t.Fatalf("got %+v", o)
+	}
+	for _, branch := range []string{"a..b", "has space", "@{-1}"} {
+		if !strings.Contains(out, fmt.Sprintf("invalid exact branch name %q", branch)) {
+			t.Fatalf("missing %q error: %s", branch, out)
+		}
+	}
+}
+
+func TestPickerBranchCheckRuntimeError(t *testing.T) {
+	t.Setenv("PATH", "")
+	_, _, err := pick(t, "amp\nworker\n4\ngood\n", nil, noTab)
+	var invalid *libagent.InputError
+	if err == nil || errors.As(err, &invalid) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+// TestPickerCancelDuringBranchCheck cancels while a stalled git checks the
+// branch, which must abort like any other cancellation.
+func TestPickerCancelDuringBranchCheck(t *testing.T) {
+	sleep, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skip(err)
+	}
+	bin := t.TempDir()
+	marker := filepath.Join(bin, "called")
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\n: >"+marker+"\nexec "+sleep+" 10\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		for ctx.Err() == nil {
+			if _, err := os.Stat(marker); err == nil {
+				cancel()
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	p := Picker{In: strings.NewReader("amp\nworker\n4\ngood\n"), Out: io.Discard, Models: func(context.Context, string) []string { return nil }, CallerTab: noTab}
+	_, err = p.Pick(ctx, pickerBase())
+	var invalid *libagent.InputError
+	if !errors.As(err, &invalid) || err.Error() != "spawn canceled" {
+		t.Fatalf("err=%v", err)
 	}
 }
 
