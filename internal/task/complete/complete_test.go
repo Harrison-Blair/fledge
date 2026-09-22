@@ -131,6 +131,40 @@ func TestStaleCreatorLeavesTaskCompletedWithPartialOutcome(t *testing.T) {
 	}
 }
 
+func TestCreatorLookupTransportFailureRendersNotNotified(t *testing.T) {
+	// A transport failure while resolving the creator relocates the error phase
+	// to the failing Herdr call; the stored completion must still render.
+	down := &herdr.Error{Code: "transport_error", Message: "connection reset"}
+	notFound := herdrscript.Call{Method: "agent.get", Params: map[string]any{"target": "w1:p1"}, Err: &herdr.Error{Code: "agent_not_found", Message: "gone"}}
+	noAgents := herdrscript.Call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": []any{}}}
+	for _, tc := range []struct {
+		phase  string
+		lookup []herdrscript.Call
+	}{
+		{"agent.get", []herdrscript.Call{{Method: "agent.get", Params: map[string]any{"target": "w1:p1"}, Err: down}}},
+		{"agent.list", []herdrscript.Call{notFound, {Method: "agent.list", Err: down}}},
+		{"pane.list", []herdrscript.Call{notFound, noAgents, {Method: "pane.list", Err: down}}},
+	} {
+		t.Run(tc.phase, func(t *testing.T) {
+			repo := identitytest.Repository(t)
+			creator := tasktest.Register(t, repo, boss)
+			owner := tasktest.Register(t, repo, worker)
+			id := tasktest.Seed(t, repo, task.Record{Title: "t", Status: task.Assigned, Owner: &owner.ID, CreatedBy: &creator.ID})
+			c := tasktest.Client(t, repo, "w1:p3", append([]herdrscript.Call{tasktest.Get("w1:p3", worker)}, tc.lookup...)...)
+			out := run(context.Background(), c, Options{ID: id, Summary: "done", SummarySet: true}, strings.NewReader(""), "m-0a1b2c")
+			r := tasktest.Load(t, repo, id)
+			if out.Status != "partial" || out.Error == nil || out.Error.Code != "transport_error" || out.Error.Phase != tc.phase || r.Status != task.Completed || r.CompletionNotification == nil || r.CompletionNotification.Error == nil {
+				t.Fatalf("out=%+v record=%+v", out, r)
+			}
+			var b bytes.Buffer
+			out.Write(&b, false, Render)
+			if !strings.Contains(b.String(), "Task "+id+" is completed; its creator was not notified and the notification will not be retried.") {
+				t.Fatalf("%q", b.String())
+			}
+		})
+	}
+}
+
 func TestCompletionNotificationFailuresAreRecorded(t *testing.T) {
 	for _, tc := range []struct {
 		name, status string
