@@ -439,7 +439,7 @@ worktree has no `open_workspace_id`). This is why the planned
 must handle closed checkouts through git.
 
 **Reproduction steps:**
-1. Spawn an agent with `--worktree new --branch probe` so it is the only pane in a new worktree workspace.
+1. Spawn an agent with `fledge agent spawn --name probe --harness pi --worktree new --branch probe` so it is the only pane in a new worktree workspace.
 2. Run `fledge agent stop --name probe --force`; observe the pane closes and the workspace disappears from `herdr workspace list`.
 3. Run `herdr worktree remove --workspace <that id> --force`; observe `workspace_not_found`.
 4. Observe `git worktree list` still shows the checkout and `git branch --list probe` still shows the branch.
