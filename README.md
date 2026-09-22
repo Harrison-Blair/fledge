@@ -355,6 +355,61 @@ fledge agent spawn --name reviewer --harness claude --pane w2:p3
 Use the actual pane ID from the partial outcome and retain your intended harness,
 model, and native arguments. Fledge does not retry automatically.
 
+## Tasks
+
+A task is a durable brief with an owner and an outcome. Records live in
+`.fledge/state/tasks/` beside the agent records, so they survive the owner's
+pane closing. Owners and verifiers are Fledge agent record IDs (see
+[Identity](#identity)). Task status changes only through these commands;
+completion is never derived from Herdr idle or done.
+
+```sh
+fledge task create --title "Fix the parser" --file brief.md   # prints the task ID
+fledge task assign --id 1a2b3c4d --name worker
+fledge task complete --id 1a2b3c4d --summary "Fixed in abc123"  # run by the owner
+fledge task verify --id 1a2b3c4d --summary "Tests pass"         # run by another agent
+fledge task list --status completed
+fledge task get --id 1a2b3c4d
+```
+
+A task moves `created` → `assigned` → `completed` → `verified`; `task cancel
+[--reason TEXT]` ends a `created`, `assigned`, or `completed` task as
+`cancelled`. Verified and cancelled tasks are final, and other out-of-order
+transitions fail with `task_invalid_state`. There are no progress updates and no
+recorded checks.
+
+- `create` requires a single-line `--title` and a brief (`--body`, or `--file`
+  with `-` for stdin). `created_by` is the caller's agent record, or null when
+  the caller is unregistered.
+- `assign --id TASK` takes exactly one of `--name`, `--pane`, or `--agent-id`.
+  The agent must be registered; otherwise it fails with `agent_unregistered` and
+  suggests `fledge agent adopt`. A `created` or `assigned` task is first stored
+  as assigned to that agent, then the brief is submitted exactly like
+  `agent message`: the sender header, then
+  `task: <id> · title: <title> · complete with: fledge task complete --id <id> --summary "..."`,
+  then the brief. The delivery (`message_id`, `pane`, `delivered_at`, `error`)
+  is recorded in a second step. A failed delivery leaves the task assigned with
+  `delivery.error` set and a `partial` outcome; it is never retried. If the task
+  changes between the lookup and the locked update, for example because another
+  caller assigned it first, assign fails with `task_state_changed`.
+- `complete --id TASK` (`--summary` or `--file`) requires an `assigned` task and
+  a caller whose live agent record is the owner (`task_not_owner` otherwise);
+  `--force` overrides the owner check.
+- `verify --id TASK [--summary TEXT]` requires a `completed` task and a
+  registered caller other than the owner. The owner is refused with
+  `task_self_verification` and an unregistered caller with
+  `caller_unregistered`; `--force` overrides both and records `forced: true`.
+  This is a workflow guard, not a security boundary.
+- `list [--status STATE] [--owner AGENT_ID]` prints ID, status, owner (the
+  agent's name while its record is live, otherwise its ID), and title, oldest
+  first. `get --id TASK` prints the full record.
+
+Each record holds `id`, `title`, `brief`, `owner`, `status`, `result`,
+`verifier`, `verification_note`, `forced`, `cancel_reason`, `created_at`,
+`created_by`, `assigned_at`, `completed_at`, `verified_at`, `cancelled_at`,
+and `delivery`. Every command supports `--json` with the same outcome envelope
+as the agent commands; `task list` and `task get` never contact Herdr.
+
 ## Worktrees
 
 Worktree commands run inside Herdr like agent commands, use the same `--json`

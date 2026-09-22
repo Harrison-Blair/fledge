@@ -77,7 +77,7 @@ func Register(ctx context.Context, s *state.Store, c libagent.Client, details he
 	if details.TerminalID == "" || details.PaneID == "" {
 		return Record{}, fmt.Errorf("cannot register an agent without a pane and terminal id")
 	}
-	parent, err := callerRecord(ctx, s, c)
+	parent, err := Caller(ctx, s, c)
 	if err != nil {
 		return Record{}, err
 	}
@@ -115,8 +115,9 @@ func Unregistered(s *state.Store, a herdr.AgentDetails) error {
 	return nil
 }
 
-// callerRecord finds the live record of the agent in the caller's pane, if any.
-func callerRecord(ctx context.Context, s *state.Store, c libagent.Client) (*Record, error) {
+// Caller finds the live record of the agent in the caller's pane, if any. A
+// caller outside Herdr, or whose pane cannot be resolved, has none.
+func Caller(ctx context.Context, s *state.Store, c libagent.Client) (*Record, error) {
 	if c.CallerPane == "" {
 		return nil, nil
 	}
