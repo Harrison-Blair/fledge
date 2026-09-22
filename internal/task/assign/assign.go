@@ -4,6 +4,7 @@ package assign
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -106,7 +107,8 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) li
 		}
 		if deliveryErr != nil {
 			msg := deliveryErr.Error()
-			r.Delivery.Error = &msg
+			var remote *herdr.Error
+			r.Delivery.Error, r.Delivery.Uncertain = &msg, errors.As(deliveryErr, &remote) && remote.Uncertain
 		} else {
 			r.Delivery.DeliveredAt = task.Now()
 		}
@@ -140,6 +142,8 @@ func Render(w io.Writer, o libagent.Outcome) error {
 	switch {
 	case o.Error == nil:
 		_, err = fmt.Fprintf(w, "Assigned task %s to %s; brief delivered to %s as message %s.\n", r.ID, owner, r.Delivery.Pane, r.Delivery.MessageID)
+	case o.Error.Phase == "agent.prompt" && o.Status == "unknown":
+		_, err = fmt.Fprintf(w, "Task %s remains assigned to %s; the delivery outcome is unknown and will not be retried.\n", r.ID, owner)
 	case o.Error.Phase == "agent.prompt":
 		_, err = fmt.Fprintf(w, "Task %s remains assigned to %s; the brief was not delivered and will not be retried.\n", r.ID, owner)
 	}

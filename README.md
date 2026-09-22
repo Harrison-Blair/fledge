@@ -387,9 +387,12 @@ recorded checks.
   as assigned to that agent, then the brief is submitted exactly like
   `agent message`: the sender header, then
   `task: <id> · title: <title> · complete with: fledge task complete --id <id> --summary "..."`,
-  then the brief. The delivery (`message_id`, `pane`, `delivered_at`, `error`)
-  is recorded in a second step. A failed delivery leaves the task assigned with
-  `delivery.error` set and a `partial` outcome; it is never retried. If the task
+  then the brief. The delivery (`message_id`, `pane`, `delivered_at`, `error`,
+  `uncertain`) is recorded in a second step. A failed delivery leaves the task
+  assigned with `delivery.error` set and a `partial` outcome. When Herdr cannot
+  confirm whether the brief arrived, `delivery.uncertain` is true, the outcome
+  is `unknown`, and the output says the delivery outcome is unknown. Deliveries
+  are never retried. If the task
   changes between the lookup and the locked update, for example because another
   caller assigned it first, assign fails with `task_state_changed`.
 - `complete --id TASK` (`--summary` or `--file`) requires an `assigned` task and

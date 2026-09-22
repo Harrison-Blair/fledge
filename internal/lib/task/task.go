@@ -56,12 +56,14 @@ type Record struct {
 }
 
 // Delivery is the outcome of sending the brief to the owner on assignment.
-// Exactly one of DeliveredAt and Error is set once the attempt has finished.
+// Exactly one of DeliveredAt and Error is set once the attempt has finished;
+// Uncertain marks an Error after which the brief may still have arrived.
 type Delivery struct {
 	MessageID   string  `json:"message_id"`
 	Pane        string  `json:"pane"`
 	DeliveredAt *string `json:"delivered_at"`
 	Error       *string `json:"error"`
+	Uncertain   bool    `json:"uncertain"`
 }
 
 // Now is the timestamp format of every task time field.

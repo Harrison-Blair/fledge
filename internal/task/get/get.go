@@ -59,6 +59,8 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		switch {
 		case d.DeliveredAt != nil:
 			state = "delivered " + *d.DeliveredAt
+		case d.Error != nil && d.Uncertain:
+			state = "outcome unknown: " + *d.Error
 		case d.Error != nil:
 			state = "failed: " + *d.Error
 		}

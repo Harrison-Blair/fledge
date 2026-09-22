@@ -13,6 +13,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/tasktest"
+	"github.com/Harrison-Blair/fledge/internal/task/get"
 )
 
 type call = herdrscript.Call
@@ -175,5 +176,36 @@ func TestConcurrentAssignExactlyOneSucceeds(t *testing.T) {
 	}
 	if r := tasktest.Load(t, repo, id); *r.Owner != first.ID || r.Delivery.DeliveredAt == nil {
 		t.Fatalf("%+v", r)
+	}
+}
+
+// An uncertain prompt failure may have delivered the brief, so neither the
+// outcome, the rendering, nor the record may claim it was not delivered.
+func TestAssignUncertainDeliveryIsReportedUnknown(t *testing.T) {
+	repo := identitytest.Repository(t)
+	owner := tasktest.Register(t, repo, worker)
+	id := seed(t, repo)
+	c := tasktest.Client(t, repo, "w1:p1",
+		tasktest.Get("worker", worker),
+		tasktest.Get("w1:p1", boss),
+		call{Method: "agent.prompt", Err: &herdr.Error{Code: "transport_error", Message: "connection reset", Uncertain: true}},
+	)
+	out := run(context.Background(), c, Options{ID: id, Name: "worker"}, "m-0a1b2c")
+	if out.Status != "unknown" || out.Error == nil || out.Error.Code != "transport_error" {
+		t.Fatalf("%s %+v", out.Status, out.Error)
+	}
+	var b bytes.Buffer
+	out.Write(&b, false, Render)
+	if want := "Task " + id + " remains assigned to worker (" + owner.ID + "); the delivery outcome is unknown and will not be retried.\n"; !strings.HasSuffix(b.String(), want) || strings.Contains(b.String(), "not delivered") {
+		t.Fatalf("%q", b.String())
+	}
+	r := tasktest.Load(t, repo, id)
+	if r.Status != task.Assigned || r.Delivery == nil || !r.Delivery.Uncertain || r.Delivery.Error == nil || r.Delivery.DeliveredAt != nil {
+		t.Fatalf("%+v %+v", r, r.Delivery)
+	}
+	b.Reset()
+	get.Render(&b, get.Run(context.Background(), tasktest.Client(t, repo, ""), get.Options{ID: id}))
+	if want := "delivery: message m-0a1b2c to w1:p3, outcome unknown: transport_error: connection reset\n"; !strings.Contains(b.String(), want) || strings.Contains(b.String(), "failed") {
+		t.Fatalf("%q", b.String())
 	}
 }
