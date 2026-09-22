@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
@@ -100,6 +101,9 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 	if err != nil {
 		out.Fail(err, "validation", false)
 		return out
+	}
+	if o.Cwd != "" && !filepath.IsAbs(o.Cwd) {
+		o.Cwd = filepath.Join(s.Cwd, o.Cwd)
 	}
 	snapshot, err := s.snapshot(ctx)
 	if err != nil {
