@@ -15,7 +15,7 @@ func New() *cobra.Command {
 	}}
 	cmd.Flags().StringVar(&o.Path, "path", "", "Checkout path to remove")
 	cmd.Flags().StringVar(&o.Branch, "branch", "", "Branch whose checkout to remove")
-	cmd.Flags().BoolVar(&o.Force, "force", false, "Remove even if dirty or unmerged (never while a live agent is in its workspace)")
+	cmd.Flags().BoolVar(&o.Force, "force", false, "Remove even if dirty or unmerged (never while a live agent uses the checkout)")
 	cmd.Flags().StringVar(&o.Cwd, "cwd", "", "Directory inside the repository (default: current directory)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Emit a structured outcome")
 	return cmd

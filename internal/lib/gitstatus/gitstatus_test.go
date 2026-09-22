@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -79,33 +80,66 @@ func TestDefaultBranch(t *testing.T) {
 		git(t, root, "update-ref", "refs/remotes/origin/trunk", "HEAD")
 		git(t, root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
 	}
-	t.Run("dev before origin HEAD", func(t *testing.T) {
+	check := func(t *testing.T, root, want string) {
+		t.Helper()
+		if got, err := DefaultBranch(ctx, root); got != want || err != nil {
+			t.Fatalf("got %q, %v want %q", got, err, want)
+		}
+	}
+	t.Run("configured before origin HEAD", func(t *testing.T) {
+		root := repository(t)
+		git(t, root, "branch", "integration")
+		originHEAD(t, root)
+		git(t, root, "config", "fledge.baseBranch", "integration")
+		check(t, root, "refs/heads/integration")
+	})
+	t.Run("dev is not preferred unconfigured", func(t *testing.T) {
 		root := repository(t)
 		git(t, root, "branch", "dev")
 		originHEAD(t, root)
-		if got := DefaultBranch(ctx, root); got != "refs/heads/dev" {
-			t.Fatal(got)
-		}
+		check(t, root, "refs/remotes/origin/trunk")
 	})
 	t.Run("origin HEAD before main", func(t *testing.T) {
 		root := repository(t)
 		originHEAD(t, root)
-		if got := DefaultBranch(ctx, root); got != "refs/remotes/origin/trunk" {
-			t.Fatal(got)
-		}
+		check(t, root, "refs/remotes/origin/trunk")
 	})
 	t.Run("main", func(t *testing.T) {
 		root := repository(t)
-		if got := DefaultBranch(ctx, root); got != "refs/heads/main" {
-			t.Fatal(got)
-		}
+		git(t, root, "branch", "dev")
+		check(t, root, "refs/heads/main")
 	})
 	t.Run("none", func(t *testing.T) {
 		root := t.TempDir()
 		git(t, root, "init", "-q", "-b", "trunk")
 		git(t, root, "commit", "-qm", "initial", "--allow-empty")
-		if got := DefaultBranch(ctx, root); got != "" {
-			t.Fatal(got)
+		check(t, root, "")
+	})
+	// A configured branch that does not exist is an error, not a fallback.
+	t.Run("configured missing", func(t *testing.T) {
+		root := repository(t)
+		originHEAD(t, root)
+		git(t, root, "config", "fledge.baseBranch", "missing")
+		got, err := DefaultBranch(ctx, root)
+		if got != "" || err == nil || !strings.Contains(err.Error(), "fledge.baseBranch") || !strings.Contains(err.Error(), "missing") {
+			t.Fatalf("got %q, %v", got, err)
+		}
+	})
+	// Unreadable config is an error that carries git's explanation.
+	t.Run("config unreadable", func(t *testing.T) {
+		// Git's message is asserted below, so keep it untranslated.
+		t.Setenv("LC_ALL", "C")
+		t.Setenv("LANGUAGE", "")
+		root := repository(t)
+		f, err := os.OpenFile(filepath.Join(root, ".git", "config"), os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.WriteString("[broken\n")
+		f.Close()
+		got, err := DefaultBranch(ctx, root)
+		if got != "" || err == nil || !strings.Contains(err.Error(), "fledge.baseBranch") || !strings.Contains(err.Error(), "bad config line") {
+			t.Fatalf("got %q, %v", got, err)
 		}
 	})
 }

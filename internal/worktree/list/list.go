@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"text/tabwriter"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
@@ -43,10 +44,14 @@ type Owner struct {
 	Name *string `json:"name"`
 	Pane string  `json:"pane"`
 }
+
+// Result names the integration branch that Merged is checked against, or why
+// it could not be chosen.
 type Result struct {
-	RepoRoot      string  `json:"repo_root"`
-	DefaultBranch *string `json:"default_branch"`
-	Worktrees     []Row   `json:"worktrees"`
+	RepoRoot           string  `json:"repo_root"`
+	DefaultBranch      *string `json:"default_branch"`
+	DefaultBranchError *string `json:"default_branch_error"`
+	Worktrees          []Row   `json:"worktrees"`
 }
 
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
@@ -77,24 +82,33 @@ func Inspect(ctx context.Context, c libagent.Client, cwd string) (Result, error)
 	}
 	root := filepath.Clean(listing.Source.RepoRoot)
 	r := Result{RepoRoot: root, Worktrees: make([]Row, 0, len(listing.Worktrees))}
-	target := gitstatus.DefaultBranch(ctx, root)
+	target, err := gitstatus.DefaultBranch(ctx, root)
+	if err != nil {
+		reason := err.Error()
+		r.DefaultBranchError = &reason
+	}
 	if target != "" {
 		short := strings.TrimPrefix(strings.TrimPrefix(target, "refs/heads/"), "refs/remotes/")
 		r.DefaultBranch = &short
 	}
 	managed := filepath.Join(root, ".fledge", "worktrees")
+	// Rows are independent, so their git checks run concurrently, a few at a time.
+	rows := make([]Row, len(listing.Worktrees))
+	limit := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	for i, w := range listing.Worktrees {
+		wg.Go(func() {
+			limit <- struct{}{}
+			defer func() { <-limit }()
+			rows[i] = inspect(ctx, root, managed, target, w)
+		})
+	}
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
 	var linked []Row
-	for _, w := range listing.Worktrees {
-		row := Row{Path: filepath.Clean(w.Path), Branch: w.Branch, WorkspaceID: w.OpenWorkspaceID}
-		row.Primary = row.Path == root
-		row.Dirty = gitstatus.Dirty(ctx, row.Path)
-		if row.Branch != nil {
-			row.Merged = gitstatus.Merged(ctx, root, "refs/heads/"+*row.Branch, target)
-		} else {
-			row.Merged = gitstatus.Merged(ctx, row.Path, "HEAD", target)
-		}
-		rel, err := filepath.Rel(managed, row.Path)
-		row.Managed = err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	for _, row := range rows {
 		if row.Primary {
 			r.Worktrees = append(r.Worktrees, row)
 		} else {
@@ -103,6 +117,21 @@ func Inspect(ctx context.Context, c libagent.Client, cwd string) (Result, error)
 	}
 	r.Worktrees = append(r.Worktrees, linked...)
 	return r, nil
+}
+
+// inspect computes the row for checkout w of the repository at root.
+func inspect(ctx context.Context, root, managed, target string, w herdr.Worktree) Row {
+	row := Row{Path: filepath.Clean(w.Path), Branch: w.Branch, WorkspaceID: w.OpenWorkspaceID}
+	row.Primary = row.Path == root
+	row.Dirty = gitstatus.Dirty(ctx, row.Path)
+	if row.Branch != nil {
+		row.Merged = gitstatus.Merged(ctx, root, "refs/heads/"+*row.Branch, target)
+	} else {
+		row.Merged = gitstatus.Merged(ctx, row.Path, "HEAD", target)
+	}
+	rel, err := filepath.Rel(managed, row.Path)
+	row.Managed = err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	return row
 }
 
 // addOwners fills each row's owner from live agent records. Owners are
@@ -128,12 +157,12 @@ func addOwners(ctx context.Context, c libagent.Client, r Result) {
 	for _, a := range live.Agents {
 		rec, ok := records[a.TerminalID]
 		if ok && a.TerminalID != "" && rec.WorktreePath != nil {
-			p := canonical(*rec.WorktreePath)
+			p := Canonical(*rec.WorktreePath)
 			byPath[p] = append(byPath[p], rec)
 		}
 	}
 	for i := range r.Worktrees {
-		owners := byPath[canonical(r.Worktrees[i].Path)]
+		owners := byPath[Canonical(r.Worktrees[i].Path)]
 		if len(owners) == 0 {
 			continue
 		}
@@ -144,8 +173,8 @@ func addOwners(ctx context.Context, c libagent.Client, r Result) {
 	}
 }
 
-// canonical cleans p and resolves its symlinks when it exists.
-func canonical(p string) string {
+// Canonical cleans p and resolves its symlinks when it exists.
+func Canonical(p string) string {
 	if resolved, err := filepath.EvalSymlinks(p); err == nil {
 		return resolved
 	}
@@ -185,5 +214,12 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		}
 		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", path, branch, workspace, row.Dirty, row.Merged, managed, owner)
 	}
-	return table.Flush()
+	if err := table.Flush(); err != nil {
+		return err
+	}
+	if r.DefaultBranchError != nil {
+		_, err := fmt.Fprintf(w, "MERGED is unknown: %s.\n", *r.DefaultBranchError)
+		return err
+	}
+	return nil
 }
