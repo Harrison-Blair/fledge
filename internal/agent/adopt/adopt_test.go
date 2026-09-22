@@ -17,6 +17,7 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 )
 
@@ -159,6 +160,9 @@ func TestAdoptRefusesRegisteredTerminal(t *testing.T) {
 		call{Method: "agent.get", Result: agent("w1:p3", named("worker"))},
 		call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Err: notFound()},
 		call{Method: "agent.get", Result: agent("w1:p3", named("worker"))},
+		// A named agent is not renamed, so Register, after its caller lookup,
+		// makes the refusal.
+		call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Err: notFound()},
 	)
 	first := Run(context.Background(), c, Options{Pane: "w1:p3"})
 	if first.Error != nil {
@@ -281,5 +285,65 @@ func TestAdoptAfterHarnessChange(t *testing.T) {
 	out := Run(context.Background(), c, Options{Pane: "w1:p3"})
 	if out.Error != nil || out.Result.(Result).ID == first.Result.(Result).ID || *out.Result.(Result).Harness != "claude" {
 		t.Fatalf("%+v", out)
+	}
+}
+
+// countPrechecks counts adopt's scans of the agent records outside Register,
+// which itself scans once.
+func countPrechecks(t *testing.T) *int {
+	t.Helper()
+	n, real := 0, unregistered
+	unregistered = func(s *state.Store, a herdr.AgentDetails) error { n++; return real(s, a) }
+	t.Cleanup(func() { unregistered = real })
+	return &n
+}
+
+// Adopting a named agent scans the agent records once, in Register. Renaming
+// an unnamed agent is a Herdr call that cannot run under the store lock, so
+// adopt scans once more beforehand to refuse a registered terminal without
+// renaming it: two scans, a deliberate exception to one scan per adopt.
+func TestAdoptScansOnceUnlessItMustRenameFirst(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	n := countPrechecks(t)
+	c := client(t,
+		call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: agent("w1:p3", named("worker"))},
+		call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Err: notFound()},
+	)
+	if out := Run(context.Background(), c, Options{Pane: "w1:p3"}); out.Error != nil {
+		t.Fatalf("%+v", out.Error)
+	}
+	if *n != 0 {
+		t.Fatalf("adopting a named agent scanned %d extra times, want 0", *n)
+	}
+	*n = 0
+	c = client(t,
+		call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: agent("old:p1", nil)},
+		call{Method: "agent.rename", Params: map[string]any{"target": "old:p1", "name": "helper"}, Result: agent("old:p1", named("helper"))},
+		call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: agent("old:p1", named("helper"))},
+	)
+	if out := Run(context.Background(), c, Options{Name: "helper"}); out.Error != nil {
+		t.Fatalf("%+v", out.Error)
+	}
+	if *n != 1 {
+		t.Fatalf("adopting with a rename scanned %d extra times, want 1", *n)
+	}
+}
+
+// A registered terminal whose agent lost its name is refused before adopt
+// renames it: the script allows no agent.rename call.
+func TestAdoptRefusesRegisteredTerminalWithoutRenaming(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t, call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: agent("w1:p3", nil)})
+	s, err := identity.OpenStore(context.Background(), c.Cwd, &libagent.Outcome{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	existing, err := identity.Register(context.Background(), s, libagent.Client{}, agent("w1:p3", named("worker")).Agent, "adopt", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := Run(context.Background(), c, Options{Pane: "w1:p3", Name: "helper"})
+	if out.Error == nil || out.Error.Code != "agent_already_registered" || !strings.Contains(out.Error.Message, existing.ID) {
+		t.Fatalf("%+v", out.Error)
 	}
 }
