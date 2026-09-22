@@ -529,7 +529,7 @@ func TestExclusiveBlocksOtherHolders(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	first := make(chan error, 1)
 	go func() {
-		first <- store.Exclusive(func() error {
+		first <- store.Exclusive(func(*Tx) error {
 			close(entered)
 			<-release
 			return nil
@@ -537,7 +537,7 @@ func TestExclusiveBlocksOtherHolders(t *testing.T) {
 	}()
 	<-entered
 	ran := make(chan error, 1)
-	go func() { ran <- other.Exclusive(func() error { return nil }) }()
+	go func() { ran <- other.Exclusive(func(*Tx) error { return nil }) }()
 	select {
 	case err := <-ran:
 		t.Fatalf("second Exclusive ran while the first held the lock: %v", err)
@@ -555,23 +555,79 @@ func TestExclusiveBlocksOtherHolders(t *testing.T) {
 func TestExclusiveReturnsFnErrorAndReleases(t *testing.T) {
 	store, _ := openStore(t)
 	sentinel := errors.New("refused")
-	if err := store.Exclusive(func() error { return sentinel }); !errors.Is(err, sentinel) {
+	if err := store.Exclusive(func(*Tx) error { return sentinel }); !errors.Is(err, sentinel) {
 		t.Fatalf("err = %v", err)
 	}
-	if err := store.Exclusive(func() error { return nil }); err != nil {
+	if err := store.Exclusive(func(*Tx) error { return nil }); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTxPutReplacesRecordsUnderTheLock(t *testing.T) {
+	store, _ := openStore(t)
+	id := createCounter(t, store)
+	err := store.Exclusive(func(tx *Tx) error {
+		var c counter
+		if err := tx.Get("counters", id, &c); err != nil {
+			return err
+		}
+		c.N = 7
+		return tx.Put("counters", id, c)
+	})
+	var c counter
+	if err != nil || store.Get("counters", id, &c) != nil || c.N != 7 {
+		t.Fatalf("n = %d, %v", c.N, err)
+	}
+	var notFound *NotFoundError
+	err = store.Exclusive(func(tx *Tx) error { return tx.Put("counters", "0123abcd", counter{}) })
+	if !errors.As(err, &notFound) {
+		t.Fatalf("Put of a missing record: %v, want *NotFoundError", err)
+	}
+	if _, err := os.Stat(filepath.Join(store.root, "counters", "0123abcd.json")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("Put created a missing record: %v", err)
+	}
+}
+
+func TestArchiveHidesRecordFromListButKeepsItReadable(t *testing.T) {
+	store, root := openStore(t)
+	kept, archived := createCounter(t, store), createCounter(t, store)
+	for range 2 { // archiving an archived record is a no-op
+		if err := store.Exclusive(func(tx *Tx) error { return tx.Archive("counters", archived) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "counters", archiveDir, archived+recordSuffix)); err != nil {
+		t.Fatal(err)
+	}
+	if ids, err := store.List("counters"); err != nil || !reflect.DeepEqual(ids, []string{kept}) {
+		t.Fatalf("List = %v, %v; want only %s", ids, err, kept)
+	}
+	// Archived records stay readable and updatable by id, in the archive.
+	if err := increment(store, archived); err != nil {
+		t.Fatal(err)
+	}
+	var c counter
+	if err := store.Get("counters", archived, &c); err != nil || c.N != 1 {
+		t.Fatalf("n = %d, %v", c.N, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "counters", archived+recordSuffix)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("Update republished the archived record: %v", err)
+	}
+	var notFound *NotFoundError
+	if err := store.Exclusive(func(tx *Tx) error { return tx.Archive("counters", "0123abcd") }); !errors.As(err, &notFound) {
+		t.Fatalf("Archive of a missing record: %v, want *NotFoundError", err)
 	}
 }
 
 // claimNext creates a "claims" record numbered by how many already exist,
 // inside one exclusive section, so overlapping sections would reuse a number.
 func claimNext(s *Store) error {
-	return s.Exclusive(func() error {
-		ids, err := s.List("claims")
+	return s.Exclusive(func(tx *Tx) error {
+		ids, err := tx.List("claims")
 		if err != nil {
 			return err
 		}
-		_, err = s.Create("claims", func(string) any { return counter{N: len(ids)} })
+		_, err = tx.Create("claims", func(string) any { return counter{N: len(ids)} })
 		return err
 	})
 }

@@ -89,7 +89,7 @@ func Register(ctx context.Context, s *state.Store, c libagent.Client, details he
 		return Record{}, err
 	}
 	var rec Record
-	err = s.Exclusive(func() error {
+	err = s.Exclusive(func(*state.Tx) error {
 		if err := Unregistered(s, details); err != nil {
 			return err
 		}
