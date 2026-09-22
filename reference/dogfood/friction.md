@@ -403,7 +403,9 @@ message "New and open worktree actions start from the repo parent workspace.",
 phase `worktree.open`. Fledge sent the linked checkout path as the `cwd` source
 because no `--cwd` or workspace selector was given (README: "Without an explicit
 source, the absolute checkout path determines its repository"). Adding
-`--cwd /home/penguin/source/fledge` made the same command succeed. This confirms
+`--cwd /home/penguin/source/fledge` let `worktree.open` succeed and cleared
+`linked_worktree_source` (the agent and tab were created), but the spawn then
+returned `partial` at `agent.prompt`, as recorded in the pi entry above. This confirms
 live, for the open path, the suspected create-path issue recorded in the previous
 entry; both stem from the same source handling in
 `internal/agent/spawn/worktree.go`.
@@ -412,4 +414,4 @@ entry; both stem from the same source handling in
 1. Create a managed worktree with `--worktree new`.
 2. From the primary checkout, run `fledge agent spawn --worktree <that path> ...` with no `--cwd`/`--workspace`.
 3. Observe `linked_worktree_source` at phase `worktree.open`.
-4. Add `--cwd <primary checkout>` and observe success.
+4. Add `--cwd <primary checkout>` and observe that `worktree.open` succeeds and the failure, if any, moves to `agent.prompt`.
