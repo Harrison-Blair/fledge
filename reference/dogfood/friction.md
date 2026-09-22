@@ -602,3 +602,22 @@ the terminal as unregistered; listings skip such records.
 2. Exit that harness, leaving the shell.
 3. Start a different harness in the same pane.
 4. Run `fledge agent current` there and observe the old name and harness.
+
+---
+
+**Issue:** A verified task cannot be reopened for re-verification after repairs
+
+**Summary:** On 2026-09-22, task `d1ba4881` (`agent send`) was verified by
+`send-verify` on the first pass while verification findings F1-F3 were still
+open. After the fix commit `48f5817`, the verifier's second
+`fledge task verify --id d1ba4881` was rejected with `task_invalid_state`,
+because `verified` is terminal and no command reopens or re-completes a task.
+The task record therefore reflects the earlier commit, not the re-verified one.
+Workaround: rely on the verifier's message for the final result.
+
+**Reproduction steps:**
+1. Assign a task, complete it, and run `fledge task verify --id <task>`.
+2. Commit follow-up repairs for findings from that verification.
+3. Run `fledge task verify --id <task>` again.
+4. Observe `task_invalid_state`, and that neither `task complete` nor any other
+   command can move the task back to a verifiable state.
