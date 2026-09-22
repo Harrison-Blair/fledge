@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -92,11 +91,9 @@ func Existing(ctx context.Context, cwd string) (*state.Store, error) {
 	return identity.Existing(ctx, cwd)
 }
 
-var idPattern = regexp.MustCompile(`^[0-9a-f]{8}$`)
-
 // ValidateID checks a --id value without touching the store.
 func ValidateID(id string) error {
-	if !idPattern.MatchString(id) {
+	if !state.ValidID(id) {
 		return libagent.Invalid("--id must be 8 lowercase hexadecimal characters")
 	}
 	return nil

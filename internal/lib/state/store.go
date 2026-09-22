@@ -141,7 +141,7 @@ func (s *Store) List(kind string) ([]string, error) {
 	ids := []string{}
 	for _, entry := range entries {
 		id, ok := strings.CutSuffix(entry.Name(), recordSuffix)
-		if ok && validID(id) && entry.Type().IsRegular() {
+		if ok && ValidID(id) && entry.Type().IsRegular() {
 			ids = append(ids, id)
 		}
 	}
@@ -201,7 +201,7 @@ func (s *Store) recordPath(kind, id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !validID(id) {
+	if !ValidID(id) {
 		return "", fmt.Errorf("state: invalid id %q", id)
 	}
 	return filepath.Join(dir, id+recordSuffix), nil
@@ -237,7 +237,9 @@ func randomID() (string, error) {
 	return hex.EncodeToString(b[:]), nil
 }
 
-func validID(id string) bool {
+// ValidID reports whether id is 8 lowercase hexadecimal characters, the form of
+// every record id.
+func ValidID(id string) bool {
 	if len(id) != 8 {
 		return false
 	}
