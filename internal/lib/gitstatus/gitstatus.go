@@ -36,19 +36,24 @@ func samePath(a, b string) bool {
 	return errA == nil && errB == nil && filepath.Clean(a) == filepath.Clean(b)
 }
 
-// DefaultBranch returns the full ref of the repository default branch: the
-// target of refs/remotes/origin/HEAD, else refs/heads/dev, else
+// DefaultBranch returns the full ref of the repository integration branch:
+// refs/heads/dev, else the target of refs/remotes/origin/HEAD, else
 // refs/heads/main, or "" when none of them exists.
 func DefaultBranch(ctx context.Context, repo string) string {
+	if exists(ctx, repo, "refs/heads/dev") {
+		return "refs/heads/dev"
+	}
 	if b, err := exec.CommandContext(ctx, "git", "-C", repo, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD").Output(); err == nil {
 		return strings.TrimSpace(string(b))
 	}
-	for _, ref := range []string{"refs/heads/dev", "refs/heads/main"} {
-		if exec.CommandContext(ctx, "git", "-C", repo, "show-ref", "--verify", "--quiet", ref).Run() == nil {
-			return ref
-		}
+	if exists(ctx, repo, "refs/heads/main") {
+		return "refs/heads/main"
 	}
 	return ""
+}
+
+func exists(ctx context.Context, repo, ref string) bool {
+	return exec.CommandContext(ctx, "git", "-C", repo, "show-ref", "--verify", "--quiet", ref).Run() == nil
 }
 
 // Merged reports whether rev, resolved in dir, is an ancestor of target.

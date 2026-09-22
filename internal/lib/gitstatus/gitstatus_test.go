@@ -75,19 +75,22 @@ func TestDirtyLinkedCheckout(t *testing.T) {
 
 func TestDefaultBranch(t *testing.T) {
 	ctx := context.Background()
-	t.Run("origin HEAD", func(t *testing.T) {
-		root := repository(t)
-		git(t, root, "branch", "dev")
+	originHEAD := func(t *testing.T, root string) {
 		git(t, root, "update-ref", "refs/remotes/origin/trunk", "HEAD")
 		git(t, root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
-		if got := DefaultBranch(ctx, root); got != "refs/remotes/origin/trunk" {
+	}
+	t.Run("dev before origin HEAD", func(t *testing.T) {
+		root := repository(t)
+		git(t, root, "branch", "dev")
+		originHEAD(t, root)
+		if got := DefaultBranch(ctx, root); got != "refs/heads/dev" {
 			t.Fatal(got)
 		}
 	})
-	t.Run("dev before main", func(t *testing.T) {
+	t.Run("origin HEAD before main", func(t *testing.T) {
 		root := repository(t)
-		git(t, root, "branch", "dev")
-		if got := DefaultBranch(ctx, root); got != "refs/heads/dev" {
+		originHEAD(t, root)
+		if got := DefaultBranch(ctx, root); got != "refs/remotes/origin/trunk" {
 			t.Fatal(got)
 		}
 	})

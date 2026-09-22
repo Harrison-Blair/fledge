@@ -323,8 +323,8 @@ fledge worktree remove --path .fledge/worktrees/feature/task --force --json
 `list` shows every checkout, primary first, with its branch (or detached), the
 open Herdr workspace, whether it is dirty (including untracked files), whether it
 is merged, and whether it is managed under `.fledge/worktrees`. Merged means the
-branch head (or detached HEAD) is an ancestor of the default branch: the target
-of `origin/HEAD`, else `dev`, else `main`. Squash-merged branches therefore count
+branch head (or detached HEAD) is an ancestor of the integration branch: `dev`,
+else the target of `origin/HEAD`, else `main`. Squash-merged branches therefore count
 as unmerged. Either check reports `unknown` when git cannot answer. JSON rows
 carry an `owner` field that is always null for now.
 
