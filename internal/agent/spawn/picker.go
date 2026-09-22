@@ -39,15 +39,14 @@ func (p Picker) Pick(ctx context.Context, base Options) (Options, error) {
 		defer close(lines)
 		r := bufio.NewReader(p.In)
 		for {
+			// A read ending in EOF cancels, even with a partial final answer.
 			line, err := r.ReadString('\n')
-			if line != "" || err == nil {
-				select {
-				case lines <- strings.TrimSpace(line):
-				case <-ctx.Done():
-					return
-				}
-			}
 			if err != nil {
+				return
+			}
+			select {
+			case lines <- strings.TrimSpace(line):
+			case <-ctx.Done():
 				return
 			}
 		}
@@ -143,13 +142,20 @@ func (p Picker) Pick(ctx context.Context, base Options) (Options, error) {
 		o.Direction, o.DirectionSet = strings.TrimPrefix(placements[i], "split "), true
 		flags = append(flags, "--tab-id", o.TabID, "--direction", o.Direction)
 	case 3:
-		if o.Branch, err = ask(fmt.Sprintf("Branch [%s]: ", o.Name)); err != nil {
-			return base, err
-		}
-		if o.Branch == "" {
-			o.Branch = o.Name
-		}
 		o.Worktree = "new"
+		for {
+			if o.Branch, err = ask(fmt.Sprintf("Branch [%s]: ", o.Name)); err != nil {
+				return base, err
+			}
+			if o.Branch == "" {
+				o.Branch = o.Name
+			}
+			if _, err := o.Validate(); err != nil {
+				fmt.Fprintln(p.Out, err)
+				continue
+			}
+			break
+		}
 		flags = append(flags, "--worktree", "new", "--branch", o.Branch)
 	}
 	for i, f := range flags {
@@ -158,6 +164,9 @@ func (p Picker) Pick(ctx context.Context, base Options) (Options, error) {
 		}) {
 			flags[i] = "'" + strings.ReplaceAll(f, "'", `'\''`) + "'"
 		}
+	}
+	if _, err := o.Validate(); err != nil {
+		return base, err
 	}
 	fmt.Fprintf(p.Out, "fledge agent spawn %s\n", strings.Join(flags, " "))
 	return o, nil

@@ -153,3 +153,37 @@ func TestPickerContextCancelAborts(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+func TestPickerPartialFinalAnswerAborts(t *testing.T) {
+	for _, input := range []string{"amp\nworker\n1", "amp\nworker\n4\nfeature"} {
+		_, _, err := pick(t, input, nil, noTab)
+		var invalid *libagent.InputError
+		if !errors.As(err, &invalid) || err.Error() != "spawn canceled" {
+			t.Fatalf("input %q: err=%v", input, err)
+		}
+	}
+}
+
+func TestPickerRejectsInvalidBranch(t *testing.T) {
+	o, out, err := pick(t, "amp\nworker\n4\nbad\x00branch\n\xff\ngood\n", nil, noTab)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.Worktree != "new" || o.Branch != "good" {
+		t.Fatalf("got %+v", o)
+	}
+	if strings.Count(out, "arguments must be valid UTF-8 without NUL") != 2 {
+		t.Fatalf("missing branch errors: %s", out)
+	}
+	if _, err := o.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPickerFinalValidationRejectsBadTab(t *testing.T) {
+	_, out, err := pick(t, "amp\nworker\n2\n", nil, func(context.Context) (string, error) { return "bad\x00tab", nil })
+	var invalid *libagent.InputError
+	if !errors.As(err, &invalid) || strings.Contains(out, "fledge agent spawn") {
+		t.Fatalf("err=%v out=%q", err, out)
+	}
+}
