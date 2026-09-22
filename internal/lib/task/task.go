@@ -5,6 +5,7 @@
 package task
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -109,6 +110,27 @@ func Get(s *state.Store, id string) (Record, error) {
 		return r, notFound(id)
 	}
 	return r, mapMissing(s.Get(Kind, id, &r), id)
+}
+
+// List returns every task, oldest first; a nil s has none.
+func List(s *state.Store) ([]Record, error) {
+	rs := []Record{}
+	if s == nil {
+		return rs, nil
+	}
+	ids, err := s.List(Kind)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range ids {
+		r, err := Get(s, id)
+		if err != nil {
+			return nil, err
+		}
+		rs = append(rs, r)
+	}
+	slices.SortStableFunc(rs, func(a, b Record) int { return cmp.Compare(a.CreatedAt, b.CreatedAt) })
+	return rs, nil
 }
 
 // Update runs mutate on task id under the store lock and stores the result.

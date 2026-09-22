@@ -141,6 +141,24 @@ func Caller(ctx context.Context, s *state.Store, c libagent.Client) (*Record, er
 	return &moved, nil
 }
 
+// RequireCaller is Caller for commands that act on the caller's own record:
+// a caller without a live record, including one in a repository with no
+// store yet (nil s), fails with caller_unregistered.
+func RequireCaller(ctx context.Context, s *state.Store, c libagent.Client) (Record, error) {
+	var rec *Record
+	var err error
+	if s != nil {
+		rec, err = Caller(ctx, s, c)
+	}
+	if err != nil {
+		return Record{}, err
+	}
+	if rec == nil {
+		return Record{}, &herdr.Error{Code: "caller_unregistered", Message: "the caller has no live Fledge record; register with fledge agent adopt"}
+	}
+	return *rec, nil
+}
+
 // Relocate points rec at the pane where a, rec's terminal, now runs, storing
 // the new pane and workspace under the same record id. Callers pass an a whose
 // terminal is rec's.

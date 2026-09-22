@@ -3,7 +3,6 @@
 package list
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -58,7 +57,7 @@ func load(ctx context.Context, cwd string, o Options) ([]Row, error) {
 	if err != nil || s == nil {
 		return rows, err
 	}
-	ids, err := s.List(task.Kind)
+	tasks, err := task.List(s)
 	if err != nil {
 		return nil, err
 	}
@@ -70,11 +69,7 @@ func load(ctx context.Context, cwd string, o Options) ([]Row, error) {
 	for _, rec := range live {
 		names[rec.ID] = rec.Name
 	}
-	for _, id := range ids {
-		r, err := task.Get(s, id)
-		if err != nil {
-			return nil, err
-		}
+	for _, r := range tasks {
 		if o.Status != "" && r.Status != o.Status || o.Owner != "" && (r.Owner == nil || *r.Owner != o.Owner) {
 			continue
 		}
@@ -84,7 +79,6 @@ func load(ctx context.Context, cwd string, o Options) ([]Row, error) {
 		}
 		rows = append(rows, row)
 	}
-	slices.SortStableFunc(rows, func(a, b Row) int { return cmp.Compare(a.CreatedAt, b.CreatedAt) })
 	return rows, nil
 }
 
