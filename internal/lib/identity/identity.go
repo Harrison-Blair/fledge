@@ -1,8 +1,8 @@
 // Package identity gives live Herdr agents a durable Fledge record: an id,
 // the terminal it names, and the agent that registered it. The terminal is the
 // record's identity; its pane is a locator that lookups refresh when Herdr
-// moves the terminal to a new pane. A lookup that finds the terminal gone from
-// Herdr ends the record and fails closed.
+// moves the terminal to a new pane. A lookup fails closed when the terminal
+// hosts no agent, and ends the record when the terminal is gone from Herdr.
 package identity
 
 import (
@@ -204,8 +204,9 @@ func LiveByTerminal(s *state.Store) (map[string]Record, error) {
 
 // Resolve loads record id and fetches its terminal's live agent. When the
 // recorded pane no longer hosts the terminal, Herdr's agent list locates it
-// and the record follows it to its new pane. A terminal found nowhere ends the
-// record and fails closed with agent_identity_stale.
+// and the record follows it to its new pane. A terminal hosting no agent fails
+// closed with agent_identity_stale; if it is gone from every pane, the record
+// also ends.
 func Resolve(ctx context.Context, s *state.Store, c libagent.Client, id string) (Record, herdr.AgentDetails, error) {
 	rec, err := load(s, id)
 	if err != nil {
@@ -217,15 +218,13 @@ func Resolve(ctx context.Context, s *state.Store, c libagent.Client, id string) 
 		return Record{}, herdr.AgentDetails{}, err
 	}
 	if err != nil || a.TerminalID != rec.TerminalID {
-		var found bool
-		if a, found, err = find(ctx, c, rec.TerminalID); err != nil {
+		agents, err := entries(ctx, c, "agent.list", "agent_list")
+		if err != nil {
 			return Record{}, herdr.AgentDetails{}, err
 		}
-		if !found {
-			if err := End(s, id); err != nil {
-				return Record{}, herdr.AgentDetails{}, err
-			}
-			return Record{}, herdr.AgentDetails{}, stale(id, "terminal %s no longer hosts an agent in Herdr", rec.TerminalID)
+		var found bool
+		if a, found = lookup(agents, rec.TerminalID); !found {
+			return Record{}, herdr.AgentDetails{}, gone(ctx, s, c, rec)
 		}
 	}
 	if rec, err = Relocate(s, rec, a); err != nil {
@@ -234,31 +233,54 @@ func Resolve(ctx context.Context, s *state.Store, c libagent.Client, id string) 
 	return rec, a, nil
 }
 
-// find returns the live agent running terminal in any pane, if there is one.
-func find(ctx context.Context, c libagent.Client, terminal string) (herdr.AgentDetails, bool, error) {
+// gone explains why rec's terminal hosts no agent. Only a terminal missing
+// from every pane ends the record; one still in a pane may host an agent again.
+func gone(ctx context.Context, s *state.Store, c libagent.Client, rec Record) error {
+	panes, err := entries(ctx, c, "pane.list", "pane_list")
+	if err != nil {
+		return err
+	}
+	if p, ok := lookup(panes, rec.TerminalID); ok {
+		return stale(rec.ID, "terminal %s in pane %s no longer hosts an agent", rec.TerminalID, p.PaneID)
+	}
+	if err := End(s, rec.ID); err != nil {
+		return err
+	}
+	return stale(rec.ID, "terminal %s is gone from Herdr", rec.TerminalID)
+}
+
+// entries calls method, whose kind result carries agents or panes, and
+// validates every entry: a malformed one could be the terminal sought, which
+// would make its absence unprovable.
+func entries(ctx context.Context, c libagent.Client, method, kind string) ([]herdr.AgentDetails, error) {
 	var r struct {
 		Type   string               `json:"type"`
 		Agents []herdr.AgentDetails `json:"agents"`
+		Panes  []herdr.AgentDetails `json:"panes"`
 	}
-	err := c.Call(ctx, "agent.list", nil, &r)
-	if err == nil && (r.Type != "agent_list" || r.Agents == nil) {
-		err = libagent.Protocol("incomplete agent.list result")
+	err := c.Call(ctx, method, nil, &r)
+	list := r.Agents
+	if kind == "pane_list" {
+		list = r.Panes
 	}
-	for _, a := range r.Agents {
-		// Any malformed entry could be the terminal, so absence is unprovable.
+	if err == nil && (r.Type != kind || list == nil) {
+		err = libagent.Protocol("incomplete " + method + " result")
+	}
+	for _, a := range list {
 		if err == nil && !libagent.ValidAgentInfo(a) {
-			err = libagent.Protocol("incomplete agent.list result")
+			err = libagent.Protocol("incomplete " + method + " result")
 		}
 	}
-	if err != nil {
-		return herdr.AgentDetails{}, false, err
-	}
-	for _, a := range r.Agents {
+	return list, err
+}
+
+func lookup(list []herdr.AgentDetails, terminal string) (herdr.AgentDetails, bool) {
+	for _, a := range list {
 		if a.TerminalID == terminal {
-			return a, true, nil
+			return a, true
 		}
 	}
-	return herdr.AgentDetails{}, false, nil
+	return herdr.AgentDetails{}, false
 }
 
 // Verify fails closed unless a is the terminal rec names, in whatever pane.

@@ -172,7 +172,7 @@ func TestStopByStaleIDDoesNotClose(t *testing.T) {
 		"no agent":       {Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Err: &herdr.Error{Code: "agent_not_found", Message: "gone"}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			s := fake(t, get, call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": []any{}}})
+			s := fake(t, get, call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": []any{}}}, call{Method: "pane.list", Result: map[string]any{"type": "pane_list", "panes": []any{}}})
 			s.Cwd = identitytest.Repository(t)
 			recorded := herdrscript.Info(herdrscript.LiveAgent("idle")).Agent
 			recorded.TerminalID = "term_old"

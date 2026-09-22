@@ -143,7 +143,7 @@ func TestReadByIDReadsVerifiedPane(t *testing.T) {
 	}
 	stale := live.Agent
 	stale.TerminalID = "term_old"
-	c = fake(t, getCall("w1:p3"), call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": []any{}}})
+	c = fake(t, getCall("w1:p3"), call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": []any{}}}, call{Method: "pane.list", Result: map[string]any{"type": "pane_list", "panes": []any{}}})
 	c.Cwd = identitytest.Repository(t)
 	rec = identitytest.Register(t, c.Cwd, stale)
 	if out := Run(context.Background(), c, Options{ID: rec.ID, Source: "recent-unwrapped"}); out.Error == nil || out.Error.Code != "agent_identity_stale" {

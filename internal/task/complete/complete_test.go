@@ -117,7 +117,7 @@ func TestStaleCreatorLeavesTaskCompletedWithPartialOutcome(t *testing.T) {
 	c := tasktest.Client(t, repo, "w1:p3",
 		tasktest.Get("w1:p3", worker),
 		herdrscript.Call{Method: "agent.get", Params: map[string]any{"target": "w1:p1"}, Err: &herdr.Error{Code: "agent_not_found", Message: "gone"}},
-		herdrscript.Call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": []any{}}},
+		herdrscript.Call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": []any{}}}, herdrscript.Call{Method: "pane.list", Result: map[string]any{"type": "pane_list", "panes": []any{}}},
 	)
 	out := run(context.Background(), c, Options{ID: id, Summary: "done", SummarySet: true}, strings.NewReader(""), "m-0a1b2c")
 	r := tasktest.Load(t, repo, id)

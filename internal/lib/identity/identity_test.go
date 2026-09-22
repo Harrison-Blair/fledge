@@ -178,6 +178,18 @@ func listed(agents ...herdr.AgentDetails) map[string]any {
 	return map[string]any{"type": "agent_list", "agents": append([]herdr.AgentDetails{}, agents...)}
 }
 
+// panes is a pane.list result of panes.
+func panes(panes ...herdr.AgentDetails) map[string]any {
+	return map[string]any{"type": "pane_list", "panes": append([]herdr.AgentDetails{}, panes...)}
+}
+
+// shell is terminal's pane after its agent exited, leaving no agent in it.
+func shell(pane, terminal string) herdr.AgentDetails {
+	d := details(pane, terminal)
+	d.Name, d.Agent, d.AgentStatus = nil, nil, "unknown"
+	return d
+}
+
 // moved is terminal's agent after Herdr moved its pane into workspace ws.
 func moved(pane, ws, terminal string) herdr.AgentDetails {
 	d := details(pane, terminal)
@@ -192,7 +204,8 @@ func TestResolveFailsClosedWhenTerminalIsGone(t *testing.T) {
 		"pane without agent": {Method: "agent.get", Err: notFound()},
 	} {
 		t.Run(name, func(t *testing.T) {
-			c := client(t, get, call{Method: "agent.list", Result: listed(details("w1:p3", "term_b"))})
+			c := client(t, get, call{Method: "agent.list", Result: listed(details("w1:p3", "term_b"))},
+				call{Method: "pane.list", Result: panes(details("w1:p3", "term_b"), shell("w1:p4", "term_c"))})
 			rec := registered(t, c, details("w1:p3", "term_a"))
 			s := store(t, c)
 			if _, _, err := Resolve(context.Background(), s, c, rec.ID); code(err) != "agent_identity_stale" {
@@ -212,6 +225,22 @@ func TestResolveFailsClosedWhenTerminalIsGone(t *testing.T) {
 	}
 }
 
+// A terminal that still exists but no longer hosts an agent is stale, not
+// ended: its harness may be restarted in place.
+func TestResolveTerminalWithoutAgentStaysLive(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t, call{Method: "agent.get", Err: notFound()}, call{Method: "agent.list", Result: listed()},
+		call{Method: "pane.list", Result: panes(shell("w2:p1", "term_a"))})
+	rec := registered(t, c, details("w1:p3", "term_a"))
+	s := store(t, c)
+	if _, _, err := Resolve(context.Background(), s, c, rec.ID); code(err) != "agent_identity_stale" {
+		t.Fatalf("%v", err)
+	}
+	if live, err := Live(s, "term_a"); err != nil || live == nil {
+		t.Fatalf("%+v %v", live, err)
+	}
+}
+
 func TestResolveLookupFailuresLeaveRecordLive(t *testing.T) {
 	t.Setenv("HERDR_SESSION", "dev")
 	down := &herdr.Error{Code: "connection_error", Message: "down"}
@@ -221,14 +250,20 @@ func TestResolveLookupFailuresLeaveRecordLive(t *testing.T) {
 		calls []call
 		want  string
 	}{
-		"agent.get transport":  {[]call{{Method: "agent.get", Err: down}}, "connection_error"},
-		"agent.list transport": {[]call{gone, {Method: "agent.list", Err: down}}, "connection_error"},
-		"agent.list type":      {list(map[string]any{"type": "pane_list"}), "protocol_error"},
-		"agents missing":       {list(map[string]any{"type": "agent_list"}), "protocol_error"},
-		"agents null":          {list(map[string]any{"type": "agent_list", "agents": nil}), "protocol_error"},
-		"invalid matching":     {list(listed(herdr.AgentDetails{TerminalID: "term_a"})), "protocol_error"},
-		"matching without id":  {list(listed(moved("w2:p1", "w2", ""))), "protocol_error"},
-		"invalid unrelated":    {list(listed(herdr.AgentDetails{TerminalID: "term_b"})), "protocol_error"},
+		"agent.get transport":   {[]call{{Method: "agent.get", Err: down}}, "connection_error"},
+		"agent.list transport":  {[]call{gone, {Method: "agent.list", Err: down}}, "connection_error"},
+		"agent.list type":       {list(map[string]any{"type": "pane_list"}), "protocol_error"},
+		"agents missing":        {list(map[string]any{"type": "agent_list"}), "protocol_error"},
+		"agents null":           {list(map[string]any{"type": "agent_list", "agents": nil}), "protocol_error"},
+		"invalid matching":      {list(listed(herdr.AgentDetails{TerminalID: "term_a"})), "protocol_error"},
+		"matching without id":   {list(listed(moved("w2:p1", "w2", ""))), "protocol_error"},
+		"invalid unrelated":     {list(listed(herdr.AgentDetails{TerminalID: "term_b"})), "protocol_error"},
+		"pane.list transport":   {append(list(listed()), call{Method: "pane.list", Err: down}), "connection_error"},
+		"pane.list type":        {append(list(listed()), call{Method: "pane.list", Result: map[string]any{"type": "agent_list"}}), "protocol_error"},
+		"panes missing":         {append(list(listed()), call{Method: "pane.list", Result: map[string]any{"type": "pane_list"}}), "protocol_error"},
+		"panes null":            {append(list(listed()), call{Method: "pane.list", Result: map[string]any{"type": "pane_list", "panes": nil}}), "protocol_error"},
+		"invalid pane":          {append(list(listed()), call{Method: "pane.list", Result: panes(shell("w1:p4", "term_c"), herdr.AgentDetails{TerminalID: "term_b"})}), "protocol_error"},
+		"pane without terminal": {append(list(listed()), call{Method: "pane.list", Result: panes(shell("w1:p4", ""))}), "protocol_error"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := client(t, tc.calls...)
