@@ -12,6 +12,7 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 )
 
@@ -133,15 +134,101 @@ func TestListFailure(t *testing.T) {
 func TestRender(t *testing.T) {
 	r := Result{RepoRoot: "/repo", DefaultBranch: s("main"), Worktrees: []Row{
 		{Path: "/repo", Branch: s("main"), Primary: true, WorkspaceID: s("w1"), Dirty: "no", Merged: "yes"},
-		{Path: "/repo/.fledge/worktrees/x", Dirty: "unknown", Merged: "unknown", Managed: true},
+		{Path: "/repo/.fledge/worktrees/x", Dirty: "unknown", Merged: "unknown", Managed: true, Owner: &Owner{ID: "0a1b2c3d", Name: s("alpha"), Pane: "w1:p2"}, OwnerCount: 2},
+		{Path: "/repo/.fledge/worktrees/y", Branch: s("y"), Dirty: "no", Merged: "no", Managed: true, Owner: &Owner{ID: "4e5f6a7b", Pane: "w1:p3"}, OwnerCount: 1},
 	}}
 	var b bytes.Buffer
 	if err := (libagent.Outcome{Status: "success", Result: r}).Write(&b, false, Render); err != nil {
 		t.Fatal(err)
 	}
-	want := "PATH BRANCH WORKSPACE DIRTY MERGED MANAGED /repo (primary) main w1 no yes no /repo/.fledge/worktrees/x (detached) - unknown unknown yes"
+	want := "PATH BRANCH WORKSPACE DIRTY MERGED MANAGED OWNER /repo (primary) main w1 no yes no - " +
+		"/repo/.fledge/worktrees/x (detached) - unknown unknown yes alpha (0a1b2c3d) +1 /repo/.fledge/worktrees/y y - no no yes 4e5f6a7b"
 	if got := strings.Join(strings.Fields(b.String()), " "); got != want {
 		t.Fatalf("got %q\nwant %q", got, want)
 	}
 	herdrscript.CheckOutputFailures(t, Render, libagent.Outcome{Result: r})
+}
+
+// record stores an agent record naming terminal with worktree path at when.
+func record(t *testing.T, root, terminal, name, worktree, at string) string {
+	t.Helper()
+	s, err := identity.OpenStore(context.Background(), root, &libagent.Outcome{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.Create(identity.Kind, func(id string) any {
+		return identity.Record{ID: id, Name: s2(name), Pane: "w1:" + terminal, WorkspaceID: "w1", TerminalID: terminal, RegisteredAt: at, RegisteredBy: "spawn", WorktreePath: &worktree}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+func s2(v string) *string {
+	if v == "" {
+		return nil
+	}
+	return &v
+}
+func liveAgents(terminals ...string) call {
+	agents := []herdr.AgentDetails{}
+	for _, term := range terminals {
+		agents = append(agents, herdr.AgentDetails{Pane: herdr.Pane{PaneID: "w1:" + term}, TerminalID: term})
+	}
+	return call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": agents}}
+}
+
+func TestListReportsLiveOwners(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "")
+	f := newFixture(t)
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(f.root, link); err != nil {
+		t.Fatal(err)
+	}
+	primary := record(t, f.root, "t1", "", link+"/", "2026-01-01T00:00:00Z")
+	merged := record(t, f.root, "t2", "alpha", f.merged, "2026-01-01T00:00:00Z")
+	record(t, f.root, "t9", "gone", f.unmerged, "2026-01-01T00:00:00Z")
+	record(t, f.root, "t3", "late", f.detached, "2026-03-01T00:00:00Z")
+	early := record(t, f.root, "t4", "early", f.detached, "2026-02-01T00:00:00Z")
+	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()}, liveAgents("t1", "t2", "t3", "t4"))
+	out := Run(context.Background(), c, Options{Cwd: f.root})
+	r := out.Result.(Result)
+	want := []struct {
+		id, name string
+		count    int
+	}{{primary, "", 1}, {merged, "alpha", 1}, {"", "", 0}, {early, "early", 2}}
+	for i, w := range want {
+		row := r.Worktrees[i]
+		if w.id == "" {
+			if row.Owner != nil || row.OwnerCount != 0 {
+				t.Errorf("row %d: stale owner %+v", i, row.Owner)
+			}
+			continue
+		}
+		if row.Owner == nil || row.Owner.ID != w.id || str(row.Owner.Name) != str(s2(w.name)) || row.Owner.Pane == "" || row.OwnerCount != w.count {
+			t.Errorf("row %d: got %+v %d want %+v", i, row.Owner, row.OwnerCount, w)
+		}
+	}
+}
+
+func TestListWithoutStoreCreatesNothing(t *testing.T) {
+	f := newFixture(t)
+	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()})
+	if out := Run(context.Background(), c, Options{Cwd: f.root}); out.Status != "success" || out.Result.(Result).Worktrees[0].Owner != nil {
+		t.Fatalf("%+v", out)
+	}
+	if _, err := os.Stat(filepath.Join(f.root, ".fledge", "state")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("state directory created: %v", err)
+	}
+}
+
+func TestListOwnersUnavailableWhenAgentListFails(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "")
+	f := newFixture(t)
+	record(t, f.root, "t1", "alpha", f.merged, "2026-01-01T00:00:00Z")
+	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()}, call{Method: "agent.list", Err: errors.New("offline")})
+	out := Run(context.Background(), c, Options{Cwd: f.root})
+	if out.Status != "success" || out.Result.(Result).Worktrees[1].Owner != nil {
+		t.Fatalf("%+v", out)
+	}
 }

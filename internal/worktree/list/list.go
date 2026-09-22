@@ -1,5 +1,5 @@
 // Package list implements worktree list: every checkout of a repository with
-// its Herdr workspace and git state.
+// its Herdr workspace, git state, and owning agent.
 package list
 
 import (
@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/tabwriter"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/gitstatus"
+	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/worktree"
 )
 
@@ -28,9 +31,17 @@ type Row struct {
 	Dirty       string  `json:"dirty"`
 	Merged      string  `json:"merged"`
 	Managed     bool    `json:"managed"`
-	// TODO(identity follow-up): report the owning agent from the state store
-	// once agent identity merges; until then Owner is always null.
-	Owner *string `json:"owner"`
+	// Owner is the earliest registered live agent whose recorded worktree is
+	// this checkout; OwnerCount counts every such agent.
+	Owner      *Owner `json:"owner"`
+	OwnerCount int    `json:"owner_count"`
+}
+
+// Owner identifies a registered agent by its record id, name, and pane.
+type Owner struct {
+	ID   string  `json:"id"`
+	Name *string `json:"name"`
+	Pane string  `json:"pane"`
 }
 type Result struct {
 	RepoRoot      string  `json:"repo_root"`
@@ -45,6 +56,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Fail(err, "worktree.list", false)
 		return out
 	}
+	addOwners(ctx, c, r)
 	out.Result = r
 	return out
 }
@@ -93,6 +105,53 @@ func Inspect(ctx context.Context, c libagent.Client, cwd string) (Result, error)
 	return r, nil
 }
 
+// addOwners fills each row's owner from live agent records. Owners are
+// best effort: a missing or unreadable store, or an unavailable agent.list,
+// leaves them null without creating anything.
+func addOwners(ctx context.Context, c libagent.Client, r Result) {
+	s, err := identity.Existing(ctx, r.RepoRoot)
+	if err != nil || s == nil {
+		return
+	}
+	records, err := identity.LiveByTerminal(s)
+	if err != nil || len(records) == 0 {
+		return
+	}
+	var live struct {
+		Type   string               `json:"type"`
+		Agents []herdr.AgentDetails `json:"agents"`
+	}
+	if err := c.Call(ctx, "agent.list", nil, &live); err != nil || live.Type != "agent_list" {
+		return
+	}
+	byPath := map[string][]identity.Record{}
+	for _, a := range live.Agents {
+		rec, ok := records[a.TerminalID]
+		if ok && a.TerminalID != "" && rec.WorktreePath != nil {
+			p := canonical(*rec.WorktreePath)
+			byPath[p] = append(byPath[p], rec)
+		}
+	}
+	for i := range r.Worktrees {
+		owners := byPath[canonical(r.Worktrees[i].Path)]
+		if len(owners) == 0 {
+			continue
+		}
+		sort.SliceStable(owners, func(a, b int) bool { return owners[a].RegisteredAt < owners[b].RegisteredAt })
+		first := owners[0]
+		r.Worktrees[i].Owner = &Owner{ID: first.ID, Name: first.Name, Pane: first.Pane}
+		r.Worktrees[i].OwnerCount = len(owners)
+	}
+}
+
+// canonical cleans p and resolves its symlinks when it exists.
+func canonical(p string) string {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved
+	}
+	return filepath.Clean(p)
+}
+
 // Render writes a successful list outcome as a table.
 func Render(w io.Writer, o libagent.Outcome) error {
 	r, ok := o.Result.(Result)
@@ -100,9 +159,9 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		return nil
 	}
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(table, "PATH\tBRANCH\tWORKSPACE\tDIRTY\tMERGED\tMANAGED")
+	fmt.Fprintln(table, "PATH\tBRANCH\tWORKSPACE\tDIRTY\tMERGED\tMANAGED\tOWNER")
 	for _, row := range r.Worktrees {
-		path, branch, workspace, managed := row.Path, "(detached)", "-", "no"
+		path, branch, workspace, managed, owner := row.Path, "(detached)", "-", "no", "-"
 		if row.Primary {
 			path += " (primary)"
 		}
@@ -115,7 +174,16 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		if row.Managed {
 			managed = "yes"
 		}
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\n", path, branch, workspace, row.Dirty, row.Merged, managed)
+		if row.Owner != nil {
+			owner = row.Owner.ID
+			if row.Owner.Name != nil && *row.Owner.Name != "" {
+				owner = *row.Owner.Name + " (" + row.Owner.ID + ")"
+			}
+			if row.OwnerCount > 1 {
+				owner += fmt.Sprintf(" +%d", row.OwnerCount-1)
+			}
+		}
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", path, branch, workspace, row.Dirty, row.Merged, managed, owner)
 	}
 	return table.Flush()
 }

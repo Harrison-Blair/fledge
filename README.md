@@ -374,8 +374,12 @@ open Herdr workspace, whether it is dirty (including untracked files), whether i
 is merged, and whether it is managed under `.fledge/worktrees`. Merged means the
 branch head (or detached HEAD) is an ancestor of the integration branch: `dev`,
 else the target of `origin/HEAD`, else `main`. Squash-merged branches therefore count
-as unmerged. Either check reports `unknown` when git cannot answer. JSON rows
-carry an `owner` field that is always null for now.
+as unmerged. Either check reports `unknown` when git cannot answer. The `OWNER`
+column names the live registered agent whose spawn created or opened that
+checkout as `name (id)`, with `+N` when N more live agents share it, or `-`.
+JSON rows carry `owner` (`{id, name, pane}` of the earliest registered such
+agent, or null) and `owner_count`. Records of agents no longer in Herdr do not
+count, and a repository without a state store shows no owners.
 
 `create` makes a managed checkout at `.fledge/worktrees/<branch>` on a new branch
 and opens it as a workspace without starting an agent. An existing branch is
