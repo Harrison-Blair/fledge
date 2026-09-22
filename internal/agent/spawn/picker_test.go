@@ -3,6 +3,7 @@ package spawn
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"strings"
@@ -177,6 +178,30 @@ func TestPickerRejectsInvalidBranch(t *testing.T) {
 	}
 	if _, err := o.Validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPickerRejectsBranchGitRejects(t *testing.T) {
+	o, out, err := pick(t, "amp\nworker\n4\na..b\nhas space\n@{-1}\ngood\n", nil, noTab)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.Branch != "good" {
+		t.Fatalf("got %+v", o)
+	}
+	for _, branch := range []string{"a..b", "has space", "@{-1}"} {
+		if !strings.Contains(out, fmt.Sprintf("invalid exact branch name %q", branch)) {
+			t.Fatalf("missing %q error: %s", branch, out)
+		}
+	}
+}
+
+func TestPickerBranchCheckRuntimeError(t *testing.T) {
+	t.Setenv("PATH", "")
+	_, _, err := pick(t, "amp\nworker\n4\ngood\n", nil, noTab)
+	var invalid *libagent.InputError
+	if err == nil || errors.As(err, &invalid) {
+		t.Fatalf("err=%v", err)
 	}
 }
 
