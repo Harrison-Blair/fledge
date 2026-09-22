@@ -3,10 +3,12 @@ package identity
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -650,5 +652,142 @@ func TestAttributedSkipsDifferentHarness(t *testing.T) {
 	}
 	if _, ok := Attributed(records, running(details("w1:p3", ""), "codex")); ok {
 		t.Fatal("attributed an agent without a terminal")
+	}
+}
+
+// countScans counts full scans of the agent records until the test ends.
+func countScans(t *testing.T) *int {
+	t.Helper()
+	n, real := 0, scan
+	scan = func(r reader) (map[string]Record, []string, error) { n++; return real(r) }
+	t.Cleanup(func() { scan = real })
+	return &n
+}
+
+func TestRegisterScansRecordsOnce(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	caller := details("old:p1", "term_parent")
+	// The caller has moved panes since registering, and the terminal being
+	// registered has a live record left by a different harness: the parent
+	// lookup, relocation, harness check, end, and create share one scan.
+	c := client(t, call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: info(moved("new:p1", "new", "term_parent"))})
+	s := store(t, c)
+	parent := registered(t, c, caller)
+	old := registered(t, c, running(details("w1:p3", "term_a"), "codex"))
+	n := countScans(t)
+	rec, err := Register(context.Background(), s, c, running(details("w1:p3", "term_a"), "claude"), "adopt", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *n != 1 {
+		t.Fatalf("Register scanned the agent records %d times, want 1", *n)
+	}
+	if rec.Parent == nil || *rec.Parent != parent.ID || !ended(t, s, old.ID) {
+		t.Fatalf("%+v; old ended %v", rec, ended(t, s, old.ID))
+	}
+	var moved Record
+	if err := s.Get(Kind, parent.ID, &moved); err != nil || moved.Pane != "new:p1" || moved.WorkspaceID != "new" {
+		t.Fatalf("%+v %v", moved, err)
+	}
+}
+
+func TestConcurrentRegistrationsAcrossHarnessesLeaveOneLiveRecord(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	s := store(t, client(t))
+	// Different harnesses replace each other's record, so without one lock
+	// over check, end, and create, a registration can miss a concurrent one's
+	// record and leave both live.
+	for round := range 20 {
+		terminal := fmt.Sprintf("term_%d", round)
+		var wg sync.WaitGroup
+		errs := make(chan error, 8)
+		for i := range 8 {
+			harness := []string{"claude", "codex"}[i%2]
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, err := Register(context.Background(), s, libagent.Client{}, running(details("w1:p3", terminal), harness), "adopt", nil)
+				if err != nil && code(err) != "agent_already_registered" {
+					errs <- err
+				}
+			}()
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			t.Fatal(err)
+		}
+		ids, err := s.List(Kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		live := 0
+		for _, id := range ids {
+			var rec Record
+			if err := s.Get(Kind, id, &rec); err != nil {
+				t.Fatal(err)
+			}
+			if rec.TerminalID == terminal && rec.EndedAt == nil {
+				live++
+			}
+		}
+		if live != 1 {
+			t.Fatalf("round %d: %d live records for %s, want 1", round, live, terminal)
+		}
+	}
+}
+
+func TestEndArchivesRecordKeepingItLoadable(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t)
+	s := store(t, c)
+	rec := registered(t, c, details("w1:p3", "term_a"))
+	if err := End(s, rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	agents := filepath.Join(c.Cwd, ".fledge", "state", Kind)
+	if _, err := os.Stat(filepath.Join(agents, "archive", rec.ID+".json")); err != nil {
+		t.Fatalf("ended record not archived: %v", err)
+	}
+	n := countScans(t)
+	if records, err := LiveByTerminal(s); err != nil || len(records) != 0 {
+		t.Fatalf("%+v %v", records, err)
+	}
+	if ids, err := s.List(Kind); err != nil || len(ids) != 0 {
+		t.Fatalf("live scan still lists %v %v", ids, err)
+	}
+	if *n != 1 || !ended(t, s, rec.ID) {
+		t.Fatalf("scans %d", *n)
+	}
+	if _, _, err := Resolve(context.Background(), s, c, rec.ID); code(err) != "agent_identity_stale" || !strings.Contains(err.Error(), "ended at") {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestLegacyEndedRecordIsArchivedUnderTheLock(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t)
+	s := store(t, c)
+	// An ended record written before archiving still sits with the live ones.
+	at, dev, claude := "2026-01-01T00:00:00Z", "dev", "claude"
+	legacy, err := s.Create(Kind, func(id string) any {
+		return Record{ID: id, Pane: "w1:p3", TerminalID: "term_a", Session: &dev, Harness: &claude, EndedAt: &at}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if records, err := LiveByTerminal(s); err != nil || len(records) != 0 {
+		t.Fatalf("%+v %v", records, err)
+	}
+	rec := registered(t, c, details("w1:p3", "term_a"))
+	if ids, err := s.List(Kind); err != nil || len(ids) != 1 || ids[0] != rec.ID {
+		t.Fatalf("live folder holds %v %v, want only %s", ids, err, rec.ID)
+	}
+	var stored Record
+	if err := s.Get(Kind, legacy, &stored); err != nil || stored.EndedAt == nil || *stored.EndedAt != at {
+		t.Fatalf("%+v %v", stored, err)
+	}
+	if live, err := Live(s, "term_a"); err != nil || live == nil || live.ID != rec.ID {
+		t.Fatalf("%+v %v", live, err)
 	}
 }
