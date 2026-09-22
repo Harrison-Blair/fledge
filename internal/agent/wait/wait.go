@@ -132,8 +132,9 @@ func validate(o Options) ([]string, error) {
 }
 
 // fanOut runs one wait per target. --any cancels the rest on its first match
-// and --all on its first failure; errors that end a call after that cancellation, or after ctx ends, are
-// reported as cancelled rather than as target failures.
+// and --all on its first failure; errors that end a call after that
+// cancellation, or after ctx ends, are reported as cancelled rather than as
+// target failures.
 func fanOut(ctx context.Context, c libagent.Client, targets []string, o Options) (FanOut, error) {
 	waits, cancel := context.WithCancel(ctx)
 	defer cancel()

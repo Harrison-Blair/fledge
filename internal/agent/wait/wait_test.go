@@ -193,7 +193,7 @@ func rowsByTarget(t *testing.T, out libagent.Outcome) map[string]Row {
 
 // TestWaitFanOutErrorThenMatch covers one target exiting (agent_not_running)
 // before another matches: --any records the error and succeeds on the later
-// match; --all waits for both and fails.
+// match.
 func TestWaitFanOutErrorThenMatch(t *testing.T) {
 	_, c := newFake(t, map[string]reply{"a": {err: herr("agent_not_running")}, "w1:p9": {delay: 30 * time.Millisecond, status: "done"}})
 	out := Run(context.Background(), c, Options{Names: []string{"a"}, Panes: []string{"w1:p9"}, Any: true})
@@ -210,10 +210,11 @@ func TestWaitFanOutErrorThenMatch(t *testing.T) {
 
 func TestWaitAllFailsFast(t *testing.T) {
 	_, c := newFake(t, map[string]reply{"ghost": {err: herr("agent_not_found")}, "busy": {block: true}, "w1:p9": {status: "idle"}})
-	start := time.Now()
-	out := Run(context.Background(), c, Options{Names: []string{"ghost", "busy"}, Panes: []string{"w1:p9"}, All: true})
-	if time.Since(start) > time.Second {
-		t.Fatal("remaining waits were not cancelled")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	out := Run(ctx, c, Options{Names: []string{"ghost", "busy"}, Panes: []string{"w1:p9"}, All: true})
+	if ctx.Err() != nil {
+		t.Fatalf("remaining waits were not cancelled: %+v", out.Error)
 	}
 	rows := rowsByTarget(t, out)
 	f := out.Result.(FanOut)

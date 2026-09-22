@@ -230,7 +230,9 @@ state means the agent's turn ended, **not** that its assigned work succeeded.
 rejected. One target prints `<name> is <status>.` and its JSON result is the
 agent row. Two or more targets need `--all` or `--any`, and each target gets its
 own Herdr wait. `--all` waits for every target; the first target that fails
-ends the wait with that failure and cancels the rest.
+ends the wait with that failure and cancels the rest (near-simultaneous
+failures may report `operation_failed`, and a shared `--timeout` can leave a
+mix of timed-out and cancelled rows).
 `--any` succeeds on the first match, records targets that fail (for example
 `agent_not_running` when an agent exits) while others remain, then cancels the
 rest; it fails only if every target fails. Multi-target output is one line per
