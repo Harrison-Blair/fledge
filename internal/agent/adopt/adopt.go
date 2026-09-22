@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"regexp"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
@@ -35,8 +34,8 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	switch {
 	case target == "":
 		err = libagent.Invalid("--pane is required outside a Herdr pane")
-	case o.Name != "" && !regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`).MatchString(o.Name):
-		err = libagent.Invalid("--name must match [a-z][a-z0-9_-]{0,31}")
+	case o.Name != "":
+		err = libagent.ValidateName(o.Name)
 	}
 	if err != nil {
 		out.Fail(err, "validation", false)
