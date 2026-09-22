@@ -3,6 +3,8 @@ package stop
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -232,5 +234,43 @@ func TestStopWithoutClosingKeepsRecordLive(t *testing.T) {
 	rec := identitytest.Register(t, s.Cwd, live.Agent)
 	if out := Run(context.Background(), s, Options{Name: "worker"}); out.Status != "unknown" || ended(t, s.Cwd, rec.ID) {
 		t.Fatalf("%+v", out)
+	}
+}
+
+// A closed pane whose record cannot be ended is a partial stop.
+func TestStopRecordFailureAfterCloseIsPartial(t *testing.T) {
+	live := herdrscript.Info(herdrscript.LiveAgent("idle"))
+	for name, tc := range map[string]struct {
+		get    call
+		o      func(id string) Options
+		break_ func(t *testing.T, agents string)
+	}{
+		// Live cannot read an undecodable record.
+		"lookup by name": {call{Method: "agent.get", Params: map[string]any{"target": "worker"}, Result: live}, func(string) Options { return Options{Name: "worker"} },
+			func(t *testing.T, agents string) {
+				if err := os.WriteFile(filepath.Join(agents, "0000beef.json"), []byte("{"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}},
+		// End cannot write into a read-only record directory.
+		"end by id": {call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live}, func(id string) Options { return Options{ID: id} },
+			func(t *testing.T, agents string) {
+				if err := os.Chmod(agents, 0o500); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { os.Chmod(agents, 0o700) })
+			}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := fake(t, tc.get, call{Method: "pane.close", Params: map[string]any{"pane_id": "w1:p3"}, Result: herdrscript.OK()})
+			s.Cwd = identitytest.Repository(t)
+			rec := identitytest.Register(t, s.Cwd, live.Agent)
+			tc.break_(t, filepath.Join(s.Cwd, ".fledge", "state", identity.Kind))
+			out := Run(context.Background(), s, tc.o(rec.ID))
+			if out.Status != "partial" || out.Error == nil || out.Error.Phase != "state" ||
+				!reflect.DeepEqual(out.Effects, []libagent.Effect{{Action: "closed", Kind: "pane", ID: "w1:p3"}}) {
+				t.Fatalf("%+v %+v", out, out.Error)
+			}
+		})
 	}
 }

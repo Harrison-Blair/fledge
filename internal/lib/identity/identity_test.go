@@ -215,17 +215,26 @@ func TestResolveFailsClosedWhenTerminalIsGone(t *testing.T) {
 func TestResolveLookupFailuresLeaveRecordLive(t *testing.T) {
 	t.Setenv("HERDR_SESSION", "dev")
 	down := &herdr.Error{Code: "connection_error", Message: "down"}
-	for name, calls := range map[string][]call{
-		"agent.get transport":  {{Method: "agent.get", Err: down}},
-		"agent.list transport": {{Method: "agent.get", Err: notFound()}, {Method: "agent.list", Err: down}},
-		"agent.list protocol":  {{Method: "agent.get", Err: notFound()}, {Method: "agent.list", Result: map[string]any{"type": "pane_list"}}},
-		"invalid listed agent": {{Method: "agent.get", Err: notFound()}, {Method: "agent.list", Result: listed(herdr.AgentDetails{TerminalID: "term_a"})}},
+	gone := call{Method: "agent.get", Err: notFound()}
+	list := func(result any) []call { return []call{gone, {Method: "agent.list", Result: result}} }
+	for name, tc := range map[string]struct {
+		calls []call
+		want  string
+	}{
+		"agent.get transport":  {[]call{{Method: "agent.get", Err: down}}, "connection_error"},
+		"agent.list transport": {[]call{gone, {Method: "agent.list", Err: down}}, "connection_error"},
+		"agent.list type":      {list(map[string]any{"type": "pane_list"}), "protocol_error"},
+		"agents missing":       {list(map[string]any{"type": "agent_list"}), "protocol_error"},
+		"agents null":          {list(map[string]any{"type": "agent_list", "agents": nil}), "protocol_error"},
+		"invalid matching":     {list(listed(herdr.AgentDetails{TerminalID: "term_a"})), "protocol_error"},
+		"matching without id":  {list(listed(moved("w2:p1", "w2", ""))), "protocol_error"},
+		"invalid unrelated":    {list(listed(herdr.AgentDetails{TerminalID: "term_b"})), "protocol_error"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			c := client(t, calls...)
+			c := client(t, tc.calls...)
 			rec := registered(t, c, details("w1:p3", "term_a"))
 			s := store(t, c)
-			if _, _, err := Resolve(context.Background(), s, c, rec.ID); err == nil || code(err) == "agent_identity_stale" {
+			if _, _, err := Resolve(context.Background(), s, c, rec.ID); code(err) != tc.want {
 				t.Fatalf("%v", err)
 			}
 			if live, err := Live(s, "term_a"); err != nil || live == nil || live.Pane != "w1:p3" {
@@ -434,5 +443,40 @@ func TestCallerPropagatesLookupFailures(t *testing.T) {
 				t.Fatal("registered without a provable parent lookup")
 			}
 		})
+	}
+}
+
+func TestRelocateRefusesEndedRecord(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t)
+	rec := registered(t, c, details("w1:p3", "term_a"))
+	s := store(t, c)
+	if err := End(s, rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Relocate(s, rec, moved("w2:p1", "w2", "term_a")); code(err) != "agent_identity_stale" {
+		t.Fatalf("%v", err)
+	}
+	var stored Record
+	if err := s.Get(Kind, rec.ID, &stored); err != nil || stored.Pane != "w1:p3" || stored.WorkspaceID != "w1" {
+		t.Fatalf("%+v %v", stored, err)
+	}
+}
+
+func TestEndKeepsOriginalTime(t *testing.T) {
+	c := client(t)
+	rec := registered(t, c, details("w1:p3", "term_a"))
+	s := store(t, c)
+	first := "2026-01-01T00:00:00Z"
+	var r Record
+	if err := s.Update(Kind, rec.ID, &r, func() error { r.EndedAt = &first; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := End(s, rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	var stored Record
+	if err := s.Get(Kind, rec.ID, &stored); err != nil || stored.EndedAt == nil || *stored.EndedAt != "2026-01-01T00:00:00Z" {
+		t.Fatalf("%+v %v", stored, err)
 	}
 }

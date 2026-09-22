@@ -143,11 +143,9 @@ func Caller(ctx context.Context, s *state.Store, c libagent.Client) (*Record, er
 }
 
 // Relocate points rec at the pane where a, rec's terminal, now runs, storing
-// the new pane and workspace under the same record id.
+// the new pane and workspace under the same record id. Callers pass an a whose
+// terminal is rec's.
 func Relocate(s *state.Store, rec Record, a herdr.AgentDetails) (Record, error) {
-	if a.TerminalID != rec.TerminalID {
-		return Record{}, fmt.Errorf("cannot relocate record %s to terminal %s", rec.ID, a.TerminalID)
-	}
 	if rec.Pane == a.PaneID && rec.WorkspaceID == a.WorkspaceID {
 		return rec, nil
 	}
@@ -246,17 +244,19 @@ func find(ctx context.Context, c libagent.Client, terminal string) (herdr.AgentD
 	if err == nil && (r.Type != "agent_list" || r.Agents == nil) {
 		err = libagent.Protocol("incomplete agent.list result")
 	}
+	for _, a := range r.Agents {
+		// Any malformed entry could be the terminal, so absence is unprovable.
+		if err == nil && !libagent.ValidAgentInfo(a) {
+			err = libagent.Protocol("incomplete agent.list result")
+		}
+	}
 	if err != nil {
 		return herdr.AgentDetails{}, false, err
 	}
 	for _, a := range r.Agents {
-		if a.TerminalID != terminal {
-			continue
+		if a.TerminalID == terminal {
+			return a, true, nil
 		}
-		if !libagent.ValidAgentInfo(a) {
-			return herdr.AgentDetails{}, false, libagent.Protocol("incomplete agent.list result")
-		}
-		return a, true, nil
 	}
 	return herdr.AgentDetails{}, false, nil
 }
