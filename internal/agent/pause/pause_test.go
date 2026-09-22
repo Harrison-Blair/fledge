@@ -233,10 +233,10 @@ func TestPauseByIDInterruptsVerifiedPane(t *testing.T) {
 	}
 }
 
-// TestPauseReportsHerdrSettleTimeout serves agent.wait from a real socket that
-// answers with Herdr's timeout just after timeout_ms, so a local deadline equal
-// to timeout_ms would surface a transport error instead.
-func TestPauseReportsHerdrSettleTimeout(t *testing.T) {
+// serve answers each socket request with reply(method, params), which
+// returns a result or a Herdr error object.
+func serve(t *testing.T, reply func(method string, params map[string]any) (result, err any)) {
+	t.Helper()
 	dir, err := os.MkdirTemp("", "fp-")
 	if err != nil {
 		t.Fatal(err)
@@ -263,27 +263,56 @@ func TestPauseReportsHerdrSettleTimeout(t *testing.T) {
 				if json.Unmarshal(line, &req) != nil {
 					return
 				}
-				reply := map[string]any{"id": "fledge"}
-				switch req.Method {
-				case "agent.get":
-					reply["result"] = herdrscript.Info(herdrscript.LiveAgent("working"))
-				case "agent.send_keys":
-					reply["result"] = herdrscript.OK()
-				case "agent.wait":
-					ms, _ := req.Params["timeout_ms"].(float64)
-					time.Sleep(time.Duration(ms)*time.Millisecond + 2*time.Millisecond)
-					reply["error"] = map[string]any{"code": "timeout", "message": "wait timed out"}
-				}
-				json.NewEncoder(c).Encode(reply)
+				result, failure := reply(req.Method, req.Params)
+				json.NewEncoder(c).Encode(map[string]any{"id": "fledge", "result": result, "error": failure})
 			}()
 		}
 	}()
 	t.Setenv("HERDR_ENV", "1")
 	t.Setenv("HERDR_SOCKET_PATH", path)
+}
+
+// TestPauseReportsHerdrSettleTimeout answers agent.wait with Herdr's timeout
+// just after timeout_ms, so a local deadline equal to timeout_ms would surface
+// a transport error instead.
+func TestPauseReportsHerdrSettleTimeout(t *testing.T) {
+	serve(t, func(method string, params map[string]any) (any, any) {
+		switch method {
+		case "agent.get":
+			return herdrscript.Info(herdrscript.LiveAgent("working")), nil
+		case "agent.send_keys":
+			return herdrscript.OK(), nil
+		}
+		ms, _ := params["timeout_ms"].(float64)
+		time.Sleep(time.Duration(ms)*time.Millisecond + 2*time.Millisecond)
+		return nil, map[string]any{"code": "timeout", "message": "wait timed out"}
+	})
 	for range 5 {
 		out := Run(context.Background(), libagent.FromEnvironment(200*time.Millisecond), Options{Name: "worker", Timeout: 200 * time.Millisecond})
 		if out.Error == nil || out.Error.Code != "timeout" || out.Error.Phase != "agent.wait" || !out.Result.(Result).Submitted {
 			t.Fatalf("%+v %+v", out, out.Error)
 		}
+	}
+}
+
+// TestPauseTimeoutBoundsStalledRequests keeps --timeout as the wall-clock
+// bound before agent.wait, although the transport limit is longer.
+func TestPauseTimeoutBoundsStalledRequests(t *testing.T) {
+	for _, stall := range []string{"agent.get", "agent.send_keys"} {
+		t.Run(stall, func(t *testing.T) {
+			stalled := make(chan struct{})
+			t.Cleanup(func() { close(stalled) })
+			serve(t, func(method string, _ map[string]any) (any, any) {
+				if method == stall {
+					<-stalled
+				}
+				return herdrscript.Info(herdrscript.LiveAgent("working")), nil
+			})
+			start := time.Now()
+			out := Run(context.Background(), libagent.FromEnvironment(200*time.Millisecond), Options{Name: "worker", Timeout: 200 * time.Millisecond})
+			if elapsed := time.Since(start); elapsed > 5*time.Second || out.Error == nil || out.Error.Phase != stall {
+				t.Fatalf("%s %+v %+v", elapsed, out, out.Error)
+			}
+		})
 	}
 }
