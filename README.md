@@ -104,6 +104,8 @@ fledge agent wait --name reviewer --pane w2:p3 --any --until done
 fledge agent message --name reviewer --body 'Review the current diff'
 fledge agent message --pane w2:p3 --file task.md
 cat task.md | fledge agent message --name reviewer --file -
+fledge agent send --name reviewer --text '/model claude-haiku-4-5-20251001' --key enter
+fledge agent send --name reviewer --key down --key enter
 fledge agent pause --name reviewer
 fledge agent pause --pane w2:p3 --timeout 20s --json
 fledge agent pause --name reviewer --no-wait
@@ -197,6 +199,25 @@ agent appears as `unnamed agent (PANE)`, a pane without an agent as `pane PANE`,
 and an unresolvable caller as `unknown sender`; only named agents get the reply
 command. Attribution failures never block delivery. JSON results include
 `message_id` and `sender` (`name`, `pane`, `kind`, `error`).
+
+`fledge agent send` types raw input into a live agent's terminal with **no**
+sender header, so the recipient sees no sender and has no reply channel. Use it
+for input a harness must see verbatim, such as a slash command, or to answer a
+dialog that blocks an agent. It takes exactly one of `--name`, `--pane`, or
+`--id`, and at least one of `--text` and a repeatable `--key`. Text is delivered
+first, as a paste, and does **not** press Enter; a newline inside it is typed
+literally. Keys (`enter`, `esc`, `down`, `ctrl+c`, ...) are pressed after it, in
+order, so add `--key enter` to submit. Both go to the resolved pane in one Herdr
+`pane.send_input` call. Herdr validates every key name before writing, so an
+unknown key rejects the send (`invalid_key`) and nothing is typed. Send works in
+any agent state (`idle`, `working`, `blocked`, `done`, or `unknown`) without `--force`;
+the output reports the status observed before sending, for example
+`Sent input to reviewer (claude) in w2:p3; it was blocked before sending.` JSON
+uses operation `agent.send`, the standard agent fields (with that earlier status),
+and `submitted`. A lost acknowledgement is `unknown`. Sending does not wait for
+or check the effect. Read the pane with `fledge agent read` to confirm it.
+Claude Code's `/model` also saves the chosen model as the global default for new
+Claude sessions (it rewrites `~/.claude/settings.json`), not only for the target agent.
 
 `fledge agent get` inspects one live agent with exactly one nonempty `--name` or
 `--pane` target and no positional arguments. It makes a single read request,

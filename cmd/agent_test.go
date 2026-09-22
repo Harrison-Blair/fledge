@@ -12,7 +12,7 @@ import (
 )
 
 func TestAgentHelp(t *testing.T) {
-	for _, args := range [][]string{{"agent", "--help"}, {"agent", "spawn", "--help"}, {"agent", "list", "--help"}, {"agent", "message", "--help"}, {"agent", "models", "--help"}, {"agent", "stop", "--help"}, {"agent", "get", "--help"}, {"agent", "read", "--help"}, {"agent", "wait", "--help"}, {"agent", "adopt", "--help"}, {"agent", "current", "--help"}} {
+	for _, args := range [][]string{{"agent", "--help"}, {"agent", "spawn", "--help"}, {"agent", "list", "--help"}, {"agent", "message", "--help"}, {"agent", "models", "--help"}, {"agent", "stop", "--help"}, {"agent", "get", "--help"}, {"agent", "read", "--help"}, {"agent", "wait", "--help"}, {"agent", "adopt", "--help"}, {"agent", "current", "--help"}, {"agent", "send", "--help"}} {
 		var out bytes.Buffer
 		if err := ExecuteWithArgs(args, &out); err != nil {
 			t.Fatal(err)
@@ -146,7 +146,7 @@ func TestRecordIDFlagHelp(t *testing.T) {
 		}
 	}
 	walk(NewRootCmd())
-	if found != 7 {
-		t.Fatalf("found %d record ID flags, want 7", found)
+	if found != 8 {
+		t.Fatalf("found %d record ID flags, want 8", found)
 	}
 }
