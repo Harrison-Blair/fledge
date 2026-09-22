@@ -90,6 +90,9 @@ fledge agent spawn --name existing --harness claude --pane w2:p3
 fledge agent adopt --name helper
 fledge agent adopt --pane w2:p3 --name builder --json
 fledge agent list --json
+fledge agent list --mine
+fledge agent list --parent 3f9a0c2e --json
+fledge agent current
 fledge agent get --name reviewer
 fledge agent get --id 3f9a0c2e
 fledge agent get --pane w2:p3 --json
@@ -337,8 +340,19 @@ the record only if the terminal itself is gone), the record belongs to another
 Herdr session, or the record has ended; an unknown ID fails with
 `agent_record_not_found`. `agent get` shows the record (Fledge ID, parent,
 registration time and source) whenever the live agent has one, and JSON adds
-`record`. `agent list` adds an `ID` column (`-` when unregistered) and an `id`
-field. Session names come from the environment, so these checks are a
+`record`. `agent list` adds `ID` and `PARENT` columns (`-` when unregistered or
+parentless) and `id` and `parent` fields. `--parent <id>` keeps only live agents
+whose record's parent is that ID; `--mine` does the same for the caller's own
+live record. The two are mutually exclusive, and only direct children are
+listed.
+
+`fledge agent current` shows the caller's own live record: its ID, name, pane,
+workspace, harness, worktree, parent (with the parent's name while its record
+exists), and the tasks it owns in the `assigned` state, oldest first. JSON flattens
+the record into `result` and adds `parent_name` and `tasks` (`id` and `title`).
+`agent current` and `agent list --mine` fail with `caller_unregistered` when the
+caller's pane hosts no registered agent, including outside a Herdr agent pane;
+register it with `fledge agent adopt`. Session names come from the environment, so these checks are a
 workflow guard, not a security boundary.
 
 ### Outcomes and recovery

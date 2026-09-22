@@ -3,8 +3,10 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -288,6 +290,46 @@ func TestGetForwardsTargetAndDecodesDetails(t *testing.T) {
 			want := map[string]any{"operation": "agent.get", "status": "success", "effects": []any{}, "error": nil, "result": map[string]any{"pane_id": "w2:p3", "workspace_id": "w2", "tab_id": "w2:t1", "name": "reviewer", "harness": "codex", "agent_status": "working", "cwd": "/repo", "foreground_cwd": "/repo/sub", "interactive_ready": false, "launch_pending": true, "focused": false, "title": "Review", "agent_session": map[string]any{"source": "herdr:codex", "harness": "codex", "kind": "path", "value": "/sessions/123"}, "record": nil}}
 			if !reflect.DeepEqual(envelope, want) {
 				t.Fatalf("got %s", out.String())
+			}
+		})
+	}
+}
+
+// gitRepo makes the current directory a fresh Git repository.
+func gitRepo(t *testing.T) {
+	t.Helper()
+	if b, err := exec.Command("git", "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, b)
+	}
+}
+
+func TestListParentFlagFiltersAgents(t *testing.T) {
+	l := newSocket(t)
+	gitRepo(t)
+	done := serveRPCs(l, map[string]any{"type": "agent_list", "agents": []any{map[string]any{"pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1", "agent_status": "idle", "terminal_id": "term_x"}}})
+	var out bytes.Buffer
+	if err := ExecuteWithArgs([]string{"agent", "list", "--parent", "0000beef", "--json"}, &out); err != nil {
+		t.Fatal(err, out.String())
+	}
+	waitCalls(t, l, done, 1)
+	if !strings.Contains(out.String(), `"agents":[]`) {
+		t.Fatal(out.String())
+	}
+}
+
+func TestMineAndCurrentRequireRegisteredCaller(t *testing.T) {
+	for _, args := range [][]string{{"agent", "list", "--mine", "--json"}, {"agent", "current", "--json"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			l := newSocket(t)
+			gitRepo(t)
+			t.Setenv("HERDR_PANE_ID", "")
+			done := serveRPCs(l)
+			var out bytes.Buffer
+			err := ExecuteWithArgs(args, &out)
+			waitCalls(t, l, done, 0)
+			var status interface{ ExitCode() int }
+			if !errors.As(err, &status) || status.ExitCode() != 1 || !strings.Contains(out.String(), `"code":"caller_unregistered"`) {
+				t.Fatalf("%v %s", err, out.String())
 			}
 		})
 	}

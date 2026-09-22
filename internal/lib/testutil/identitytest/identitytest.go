@@ -40,3 +40,17 @@ func Register(t *testing.T, cwd string, a herdr.AgentDetails) identity.Record {
 	}
 	return rec
 }
+
+// RegisterChild records a like Register, then sets its parent to parent.
+func RegisterChild(t *testing.T, cwd string, a herdr.AgentDetails, parent string) identity.Record {
+	t.Helper()
+	rec := Register(t, cwd, a)
+	s, err := identity.Existing(context.Background(), cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Update(identity.Kind, rec.ID, &rec, func() error { rec.Parent = &parent; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	return rec
+}

@@ -61,3 +61,27 @@ func TestUpdateStoresMutationAndRejectsOnError(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+func TestListIsOldestFirst(t *testing.T) {
+	cwd := identitytest.Repository(t)
+	if rs, err := List(nil); err != nil || rs == nil || len(rs) != 0 {
+		t.Fatalf("%v %v", rs, err)
+	}
+	s, err := identity.OpenStore(context.Background(), cwd, &libagent.Outcome{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, at := range []string{"2026-01-03T00:00:00Z", "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z"} {
+		if _, err := s.Create(Kind, func(id string) any { return Record{ID: id, Title: at, CreatedAt: at} }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rs, err := List(s)
+	var titles []string
+	for _, r := range rs {
+		titles = append(titles, r.Title)
+	}
+	if want := []string{"2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z", "2026-01-03T00:00:00Z"}; err != nil || !reflect.DeepEqual(titles, want) {
+		t.Fatalf("%v %v", titles, err)
+	}
+}
