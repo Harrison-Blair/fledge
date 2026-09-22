@@ -443,3 +443,22 @@ must handle closed checkouts through git.
 2. Run `fledge agent stop --name probe --force`; observe the pane closes and the workspace disappears from `herdr workspace list`.
 3. Run `herdr worktree remove --workspace <that id> --force`; observe `workspace_not_found`.
 4. Observe `git worktree list` still shows the checkout and `git branch --list probe` still shows the branch.
+
+---
+
+**Issue:** pi agent loses its name shortly after a successful spawn
+
+**Summary:** On 2026-09-22, `fledge agent spawn` (interactive picker, equivalent to
+`fledge agent spawn --harness pi --name picker-probe`, default `30s` timeout)
+reported success: "Spawned picker-probe (pi) in wS / wS:t3 / wS:p3". Seconds
+later `fledge agent get --name picker-probe` and `fledge agent stop --name
+picker-probe --force` both failed with `agent_not_found`, while `fledge agent get
+--pane wS:p3` showed the pi harness running `idle` with `Name: -`. Unlike the
+earlier short-timeout entry, the spawn did not time out. Observed once, Fledge
+`wave2/picker` branch built from `dev` at `495f4db`, pi reporting an available
+update to 0.87.0.
+
+**Reproduction steps:**
+1. Run `fledge agent spawn --name picker-probe --harness pi` in a Herdr pane and observe the success line.
+2. Within a few seconds run `fledge agent get --name picker-probe`; observe `agent_not_found`.
+3. Run `fledge agent list`; observe the pi agent in the new pane with name `-`.

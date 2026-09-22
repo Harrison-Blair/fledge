@@ -2,10 +2,16 @@
 package spawn
 
 import (
+	"context"
+	"os"
+	"os/signal"
+
 	"github.com/Harrison-Blair/fledge/internal/agent/spawn"
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	libmodels "github.com/Harrison-Blair/fledge/internal/lib/models"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	"golang.org/x/term"
 	"time"
 )
 
@@ -14,7 +20,7 @@ func New() *cobra.Command {
 	var asJSON bool
 	var ratio float64
 	cmd := &cobra.Command{Use: "spawn [flags] [-- native-args...]", Short: "Launch an agent in a Herdr pane",
-		Long: "Launch an agent in a Herdr pane.\n\nA first prompt from --prompt or --file is delivered once the agent is ready, prefixed\nwith the same sender header as agent message, including the reply command\n(fledge agent message --name <sender>) when the sender is a named agent."}
+		Long: "Launch an agent in a Herdr pane.\n\nA first prompt from --prompt or --file is delivered once the agent is ready, prefixed\nwith the same sender header as agent message, including the reply command\n(fledge agent message --name <sender>) when the sender is a named agent.\n\nRun with no flags or native arguments on an interactive terminal to choose the harness,\nmodel, name, and placement from prompts; the equivalent flags are printed before launch."}
 	f := cmd.Flags()
 	f.StringVar(&options.Name, "name", "", "Unique live agent name (required)")
 	f.StringVar(&options.Harness, "harness", "", "Herdr harness kind (required)")
@@ -51,7 +57,33 @@ func New() *cobra.Command {
 		if len(args) > 0 && cmd.ArgsLenAtDash() != 0 {
 			return libagent.Finish(libagent.InvalidOutcome("agent.spawn", spawn.PositionalError()), cmd.OutOrStdout(), asJSON, spawn.Render)
 		}
+		if len(options.Provided) == 0 && len(args) == 0 && isTerminal(cmd.InOrStdin()) && isTerminal(cmd.OutOrStdout()) {
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
+			client := libagent.FromEnvironment(options.Timeout)
+			picker := spawn.Picker{In: cmd.InOrStdin(), Out: cmd.OutOrStdout(),
+				Models: func(ctx context.Context, harness string) []string {
+					rows, _ := libmodels.LocalDiscovery().Discover(ctx, harness)
+					ids := []string{}
+					for _, r := range rows {
+						ids = append(ids, r.Model)
+					}
+					return ids
+				},
+				CallerTab: func(ctx context.Context) (string, error) { return spawn.CallerTab(ctx, client) }}
+			picked, err := picker.Pick(ctx, options)
+			stop()
+			if err != nil {
+				out := libagent.Outcome{Operation: "agent.spawn", Effects: []libagent.Effect{}}
+				out.Fail(err, "picker", false)
+				return libagent.Finish(out, cmd.OutOrStdout(), false, nil)
+			}
+			options = picked
+		}
 		return libagent.Finish(spawn.Run(cmd.Context(), libagent.FromEnvironment(options.Timeout), options, cmd.InOrStdin()), cmd.OutOrStdout(), asJSON, spawn.Render)
 	}
 	return cmd
+}
+func isTerminal(stream any) bool {
+	f, ok := stream.(*os.File)
+	return ok && term.IsTerminal(int(f.Fd()))
 }

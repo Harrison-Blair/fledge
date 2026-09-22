@@ -114,6 +114,14 @@ children. `--workspace-id` and `--tab-id` select existing IDs instead of names.
 `--pane` uses an existing shell and excludes other placement, cwd, env, and split
 flags. `--label` and `--focus` still apply to that pane.
 
+Running `fledge agent spawn` with no flags or native arguments, with stdin and
+stdout both on a terminal, prompts for the harness, model (from local discovery,
+or the harness default), name, and placement: a new tab, a split right or down
+of the caller's tab, or a new worktree. Empty answers take the shown default;
+EOF or Ctrl-C cancels with exit status 2 before any Herdr call. The equivalent
+flag form is printed before launch. Any flag, or a non-terminal stream, keeps the
+ordinary required-flag validation.
+
 Ordinary spawn honors Herdr's configured cwd policy unless `--cwd` is supplied.
 Use repeatable `--env KEY=VALUE` for new ordinary shells. `--direction` defaults
 to `right`; `--ratio` delegates to Herdr when omitted. These flags only affect
