@@ -68,6 +68,27 @@ func TestWorktreeCreateExplicitSourceAndManagedPrimary(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+func TestWorktreeNewSourceUsesResolvedRelativeCwd(t *testing.T) {
+	root := repository(t)
+	callerCwd := filepath.Dir(root)
+	path := filepath.Join(root, ".fledge", "worktrees", "worker")
+	p := herdrscript.Pane("w2:p1", "w2", "w2:t1")
+	p.Cwd = &path
+	o := validOptions()
+	o.Worktree = "new"
+	o.Cwd = filepath.Base(root)
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "worktree.list", Params: map[string]any{"cwd": root}, Result: herdr.WorktreeListResult{Type: "worktree_list", Source: struct {
+		RepoRoot string `json:"repo_root"`
+	}{RepoRoot: root}, Worktrees: []herdr.Worktree{}}}, call{Method: "worktree.create", Params: map[string]any{"cwd": root, "branch": "worker", "path": path, "focus": false}, Result: herdr.CreatedResult{Type: "worktree_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p, Worktree: herdr.Worktree{Path: path}}}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"))
+	s.Cwd = callerCwd
+	out := s.run(context.Background(), o, nil)
+	if out.Status != "success" {
+		t.Fatalf("%+v", out)
+	}
+	if got := out.Result.(*Result).WorktreePath; got == nil || *got != path {
+		t.Fatal(got)
+	}
+}
 func TestWorktreeFailurePreservesLocalEffects(t *testing.T) {
 	root := repository(t)
 	o := validOptions()
