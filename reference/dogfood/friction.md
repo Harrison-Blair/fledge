@@ -355,8 +355,15 @@ not establish that pause caused or fixed the initial delivery issue.
 returned status `partial` with `agent_status` `idle`, effects tab/pane created and
 agent started, and error code `agent_not_ready`, message "agent plan-reviewer is
 not an active named agent", phase `agent.prompt`. An immediate
-`fledge agent message --name plan-reviewer --file brief.md` succeeded. Observed
-once. Fledge built from `dev` at `dccfdf1`, Herdr 0.9.1. This is a recurrence of
+`fledge agent message --name plan-reviewer --file brief.md` succeeded. Fledge
+built from `dev` at `dccfdf1`, Herdr 0.9.1. Observed on both of two pi spawns on
+2026-09-21/22. The second, `fledge agent spawn --name verify-plan-doc --harness pi
+--model openai-codex/gpt-6-astra --cwd /home/penguin/source/fledge --worktree
+/home/penguin/source/fledge/.fledge/worktrees/wave1/plan-doc --tab
+verify-plan-doc --file brief.md --timeout 90s`, gave the same `partial` outcome,
+the same `agent_not_ready` at phase `agent.prompt`, and the same immediate
+success with `agent message --file`. It appears reliable for pi, not
+intermittent. This is a recurrence of
 the entry marked resolved 2026-09-19 ("First message after spawn is rejected as
 not ready"), now on the pi harness.
 
@@ -378,7 +385,31 @@ with `linked_worktree_source`. The unit test
 for that request, so it does not catch it. Suspected from code and docs on
 2026-09-21 at `dccfdf1`; not reproduced live. A fix is planned in the worktree
 library extraction ([coordination plan](../plan/coordination-plan.md)).
+Confirmed live on 2026-09-22 for the `worktree.open` path; see the next entry.
 
 **Reproduction steps:**
 1. From inside a linked worktree, run `fledge agent spawn --worktree new ...` without `--workspace`.
 2. Observe the `cwd` param of the `worktree.create` call: it is the linked checkout, not the primary root.
+
+---
+
+**Issue:** `agent spawn --worktree PATH` without an explicit source fails with `linked_worktree_source`
+
+**Summary:** On 2026-09-22, at `dev` `1aed95d` with Herdr 0.9.1, running from the
+primary checkout `/home/penguin/source/fledge`:
+`fledge agent spawn --name verify-plan-doc --harness pi --model openai-codex/gpt-6-astra --worktree /home/penguin/source/fledge/.fledge/worktrees/wave1/plan-doc --tab verify-plan-doc --file brief.md --timeout 90s`
+returned status `rejected`, no effects, error code `linked_worktree_source`,
+message "New and open worktree actions start from the repo parent workspace.",
+phase `worktree.open`. Fledge sent the linked checkout path as the `cwd` source
+because no `--cwd` or workspace selector was given (README: "Without an explicit
+source, the absolute checkout path determines its repository"). Adding
+`--cwd /home/penguin/source/fledge` made the same command succeed. This confirms
+live, for the open path, the suspected create-path issue recorded in the previous
+entry; both stem from the same source handling in
+`internal/agent/spawn/worktree.go`.
+
+**Reproduction steps:**
+1. Create a managed worktree with `--worktree new`.
+2. From the primary checkout, run `fledge agent spawn --worktree <that path> ...` with no `--cwd`/`--workspace`.
+3. Observe `linked_worktree_source` at phase `worktree.open`.
+4. Add `--cwd <primary checkout>` and observe success.
