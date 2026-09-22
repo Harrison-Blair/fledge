@@ -693,7 +693,7 @@ func TestOpenExistingRejectsMissingOrNonDirectoryRoot(t *testing.T) {
 
 func TestValidID(t *testing.T) {
 	for id, want := range map[string]bool{
-		"0123abcd": true, "": false, "0123abc": false, "0123abcde": false,
+		"0123abcd": true, "56789def": true, "": false, "0123abc": false, "0123abcde": false,
 		"0123ABCD": false, "0123abcg": false, "0123abc\n": false, "0123abcé": false,
 	} {
 		if got := ValidID(id); got != want {

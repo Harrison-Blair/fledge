@@ -23,12 +23,6 @@ func fake(t *testing.T, calls ...call) *pauser {
 	t.Helper()
 	return &pauser{Client: herdrscript.Client(t, calls...), Now: func() time.Time { return time.Unix(0, 0) }}
 }
-func pointer(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
-}
 
 func TestPauseMappings(t *testing.T) {
 	for _, h := range libagent.Harnesses() {
@@ -64,7 +58,7 @@ func TestPauseGuards(t *testing.T) {
 		for _, harness := range []string{"claude", "", "future"} {
 			t.Run(status+"/"+harness, func(t *testing.T) {
 				p := herdrscript.LiveAgent(status)
-				p.Agent = pointer(harness)
+				p.Agent = libagent.Pointer(harness)
 				a := herdrscript.Info(p)
 				pending := true
 				if status == "working" {
