@@ -100,6 +100,7 @@ it with another tool.
 | Create, list, or remove a checkout | `fledge worktree create`/`list`/`remove` | `git worktree`, Claude `isolation: "worktree"` |
 | Discover, inspect, read, wait on, interrupt, or stop agents | `fledge agent list`/`get`/`read`/`wait`/`pause`/`stop` | raw `herdr` CLI, harness TaskStop |
 | Message another agent | `fledge agent message` | Claude's SendMessage, raw `herdr` pane input |
+| Type raw input or keys into an agent (slash commands, dialog answers) | `fledge agent send` | raw `herdr pane send-text`/`send-keys` |
 | Register an already-running agent | `fledge agent adopt` | — |
 | Check the environment | `fledge doctor` | ad hoc probes |
 | Discover models | `fledge agent models` | reading harness config |
