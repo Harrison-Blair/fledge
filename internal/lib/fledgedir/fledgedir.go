@@ -15,9 +15,13 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 )
 
-// Root resolves the primary (non-linked) checkout of the repository containing cwd.
+// Root resolves the primary (non-linked) checkout of the repository containing
+// cwd. In the primary checkout the git dir is the common dir, so the answer is
+// its top level. From a linked worktree the candidate comes from the common
+// dir's core.worktree or, failing that, the parent of a common dir named .git,
+// and is accepted only if Git reports it as the checkout owning that common dir.
 func Root(ctx context.Context, cwd string) (string, error) {
-	b, err := exec.CommandContext(ctx, "git", "-C", cwd, "rev-parse", "--is-bare-repository", "--path-format=absolute", "--git-common-dir").Output()
+	b, err := exec.CommandContext(ctx, "git", "-C", cwd, "rev-parse", "--is-bare-repository", "--path-format=absolute", "--git-dir", "--git-common-dir").Output()
 	if err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
@@ -26,13 +30,30 @@ func Root(ctx context.Context, cwd string) (string, error) {
 		return "", fmt.Errorf("resolve repository: %w", err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
-	if len(lines) != 2 || lines[0] == "true" {
+	if len(lines) != 3 || lines[0] == "true" {
 		return "", fmt.Errorf("%s is in a bare repository, which has no primary checkout", cwd)
 	}
-	if filepath.Base(lines[1]) != ".git" {
-		return "", fmt.Errorf("unsupported repository layout: git directory %s is not a checkout's .git", lines[1])
+	common := filepath.Clean(lines[2])
+	candidate := cwd
+	if filepath.Clean(lines[1]) != common {
+		b, err = exec.CommandContext(ctx, "git", "--git-dir", common, "config", "--get", "core.worktree").Output()
+		switch configured := strings.TrimSpace(string(b)); {
+		case err == nil && configured != "" && filepath.IsAbs(configured):
+			candidate = configured
+		case err == nil && configured != "":
+			candidate = filepath.Join(common, configured)
+		case filepath.Base(common) == ".git":
+			candidate = filepath.Dir(common)
+		default:
+			return "", fmt.Errorf("cannot locate the primary checkout of %s: git dir %s records no checkout path", cwd, common)
+		}
 	}
-	return filepath.Dir(lines[1]), nil
+	b, err = exec.CommandContext(ctx, "git", "-C", candidate, "rev-parse", "--path-format=absolute", "--git-dir", "--show-toplevel").Output()
+	lines = strings.Split(strings.TrimSpace(string(b)), "\n")
+	if err != nil || len(lines) != 2 || filepath.Clean(lines[0]) != common {
+		return "", fmt.Errorf("cannot locate the primary checkout of %s: %s is not the checkout of %s", cwd, candidate, common)
+	}
+	return filepath.Clean(lines[1]), nil
 }
 
 // Ensure creates root/.fledge with a .gitignore whose last rule is "*", then
