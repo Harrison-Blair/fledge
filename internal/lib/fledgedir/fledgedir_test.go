@@ -279,3 +279,40 @@ func TestIgnoreWriteEffectsReflectActualMutation(t *testing.T) {
 		})
 	}
 }
+
+// racedMkdir makes another creator win: appear puts something at path just
+// before the real Mkdir runs.
+func racedMkdir(t *testing.T, appear func(path string) error) {
+	t.Helper()
+	t.Cleanup(func() { mkdir = os.Mkdir })
+	mkdir = func(path string, perm os.FileMode) error {
+		if err := appear(path); err != nil {
+			t.Fatal(err)
+		}
+		return os.Mkdir(path, perm)
+	}
+}
+
+func TestMakeParentsToleratesConcurrentCreator(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "a")
+	racedMkdir(t, func(path string) error { return os.Mkdir(path, 0o755) })
+	out := libagent.Outcome{}
+	if err := MakeParents(root, parent, &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Effects) != 0 {
+		t.Fatalf("losing creator recorded %+v", out.Effects)
+	}
+}
+
+func TestMakeParentsRefusesSymlinkFromConcurrentCreator(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "a")
+	target := t.TempDir()
+	racedMkdir(t, func(path string) error { return os.Symlink(target, path) })
+	out := libagent.Outcome{}
+	if err := MakeParents(root, parent, &out); err == nil || len(out.Effects) != 0 {
+		t.Fatalf("accepted symlink: %v %+v", err, out.Effects)
+	}
+}

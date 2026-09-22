@@ -114,8 +114,12 @@ func CheckParents(root, parent string) error {
 	return nil
 }
 
+// mkdir is replaceable so tests can interleave a concurrent creator.
+var mkdir = os.Mkdir
+
 // MakeParents creates each missing directory between root and parent,
-// recording every creation on out.
+// recording every creation on out. A directory another caller creates first
+// is accepted without an effect.
 func MakeParents(root, parent string, out *libagent.Outcome) error {
 	rel, err := filepath.Rel(root, parent)
 	if err != nil {
@@ -129,7 +133,13 @@ func MakeParents(root, parent string, out *libagent.Outcome) error {
 		} else if !os.IsNotExist(err) {
 			return err
 		}
-		if err = os.Mkdir(path, 0755); err != nil {
+		if err = mkdir(path, 0755); errors.Is(err, os.ErrExist) {
+			// Another caller created it first; accept only a real directory.
+			if info, lerr := os.Lstat(path); lerr == nil && info.IsDir() {
+				continue
+			}
+			return err
+		} else if err != nil {
 			return err
 		}
 		out.Effects = append(out.Effects, libagent.Effect{Action: "created", Kind: "directory", Path: path})
