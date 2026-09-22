@@ -134,10 +134,15 @@ func List(s *state.Store) ([]Record, error) {
 		}
 		rs = append(rs, r)
 	}
+	oldestFirst(rs)
+	return rs, nil
+}
+
+// oldestFirst sorts rs by parsed creation time, then by id.
+func oldestFirst(rs []Record) {
 	slices.SortFunc(rs, func(a, b Record) int {
 		return cmp.Or(created(a).Compare(created(b)), cmp.Compare(a.ID, b.ID))
 	})
-	return rs, nil
 }
 
 // created parses r's creation time; an unparsable one sorts first.

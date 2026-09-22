@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"reflect"
-	"slices"
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
@@ -135,18 +134,21 @@ func TestListOrdersMixedPrecisionTimesByInstant(t *testing.T) {
 	}
 }
 
-func TestListBreaksTimeTiesByID(t *testing.T) {
-	s, err := identity.OpenStore(context.Background(), identitytest.Repository(t), &libagent.Outcome{})
-	if err != nil {
-		t.Fatal(err)
+func TestOldestFirstBreaksTimeTiesByID(t *testing.T) {
+	// Tied records arrive in descending id order, with an older record last,
+	// so only the id tie-break can produce ascending ids.
+	rs := []Record{
+		{ID: "0000000c", CreatedAt: "2026-01-01T00:00:01Z"},
+		{ID: "0000000b", CreatedAt: "2026-01-01T00:00:01.000Z"},
+		{ID: "0000000a", CreatedAt: "2026-01-01T00:00:01Z"},
+		{ID: "000000ff", CreatedAt: "2026-01-01T00:00:00Z"},
 	}
-	for range 4 {
-		if _, err := s.Create(Kind, func(id string) any { return Record{ID: id, Title: id, CreatedAt: "2026-01-01T00:00:00Z"} }); err != nil {
-			t.Fatal(err)
-		}
+	oldestFirst(rs)
+	var got []string
+	for _, r := range rs {
+		got = append(got, r.ID)
 	}
-	got := titles(t, s)
-	if want := slices.Sorted(slices.Values(got)); !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %v, want ids ascending", got)
+	if want := []string{"000000ff", "0000000a", "0000000b", "0000000c"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
 	}
 }
