@@ -21,6 +21,10 @@ type Client struct {
 	initErr         error
 }
 
+// TransportMargin extends an operation timeout into the transport limit, so a
+// server-side timeout answer arrives before the local deadline cuts it off.
+const TransportMargin = 15 * time.Second
+
 // FromEnvironment creates an operation-local client without contacting Herdr.
 func FromEnvironment(timeout time.Duration) Client {
 	c := Client{CallerPane: os.Getenv("HERDR_PANE_ID")}
@@ -28,7 +32,7 @@ func FromEnvironment(timeout time.Duration) Client {
 		c.initErr = fmt.Errorf("run inside Herdr with HERDR_ENV=1 and HERDR_SOCKET_PATH set")
 	}
 	c.Cwd, _ = os.Getwd()
-	c.API = herdr.Client{Socket: os.Getenv("HERDR_SOCKET_PATH"), Timeout: timeout + 15*time.Second}
+	c.API = herdr.Client{Socket: os.Getenv("HERDR_SOCKET_PATH"), Timeout: timeout + TransportMargin}
 	return c
 }
 

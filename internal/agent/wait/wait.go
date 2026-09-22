@@ -27,9 +27,9 @@ type Options struct {
 	All, Any            bool
 }
 
-// maxTimeout is the largest finite timeout whose 15 s transport margin, added
-// by libagent.WaitFromEnvironment, cannot overflow a Duration.
-const maxTimeout = time.Duration(math.MaxInt64) - 15*time.Second
+// maxTimeout is the largest finite timeout whose transport margin, added by
+// libagent.WaitFromEnvironment, cannot overflow a Duration.
+const maxTimeout = time.Duration(math.MaxInt64) - libagent.TransportMargin
 
 // FanOut reports a multi-target wait: one row per target, in target order.
 // Winner names the first --any match.

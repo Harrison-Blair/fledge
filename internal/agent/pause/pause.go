@@ -49,7 +49,8 @@ func (s pauser) run(ctx context.Context, o Options) libagent.Outcome {
 		return out
 	}
 	deadline := s.Now().Add(o.Timeout)
-	ctx, cancel := context.WithTimeout(ctx, o.Timeout)
+	// The margin lets Herdr's own agent.wait timeout reach the caller.
+	ctx, cancel := context.WithTimeout(ctx, o.Timeout+libagent.TransportMargin)
 	defer cancel()
 	a, _, _, err := selected.Get(ctx, s.Client)
 	if err != nil {

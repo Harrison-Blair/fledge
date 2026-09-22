@@ -1,8 +1,13 @@
 package pause
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
+	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -225,5 +230,60 @@ func TestPauseByIDInterruptsVerifiedPane(t *testing.T) {
 	rec := identitytest.Register(t, s.Cwd, live.Agent)
 	if out := s.run(context.Background(), Options{ID: rec.ID, Timeout: time.Second, NoWait: true}); out.Error != nil {
 		t.Fatalf("%+v", out)
+	}
+}
+
+// TestPauseReportsHerdrSettleTimeout serves agent.wait from a real socket that
+// answers with Herdr's timeout just after timeout_ms, so a local deadline equal
+// to timeout_ms would surface a transport error instead.
+func TestPauseReportsHerdrSettleTimeout(t *testing.T) {
+	dir, err := os.MkdirTemp("", "fp-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "s")
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close(); os.RemoveAll(dir) })
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				var req struct {
+					Method string         `json:"method"`
+					Params map[string]any `json:"params"`
+				}
+				line, _ := bufio.NewReader(c).ReadBytes('\n')
+				if json.Unmarshal(line, &req) != nil {
+					return
+				}
+				reply := map[string]any{"id": "fledge"}
+				switch req.Method {
+				case "agent.get":
+					reply["result"] = herdrscript.Info(herdrscript.LiveAgent("working"))
+				case "agent.send_keys":
+					reply["result"] = herdrscript.OK()
+				case "agent.wait":
+					ms, _ := req.Params["timeout_ms"].(float64)
+					time.Sleep(time.Duration(ms)*time.Millisecond + 2*time.Millisecond)
+					reply["error"] = map[string]any{"code": "timeout", "message": "wait timed out"}
+				}
+				json.NewEncoder(c).Encode(reply)
+			}()
+		}
+	}()
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_SOCKET_PATH", path)
+	for range 5 {
+		out := Run(context.Background(), libagent.FromEnvironment(200*time.Millisecond), Options{Name: "worker", Timeout: 200 * time.Millisecond})
+		if out.Error == nil || out.Error.Code != "timeout" || out.Error.Phase != "agent.wait" || !out.Result.(Result).Submitted {
+			t.Fatalf("%+v %+v", out, out.Error)
+		}
 	}
 }
