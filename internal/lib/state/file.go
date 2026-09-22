@@ -20,31 +20,27 @@ var (
 	syncDir = fsyncDir
 )
 
-// mkdirAll creates path and any missing ancestors with mode 0700, syncing the
-// parent of each directory it creates so the new entry survives a crash. A
-// directory created concurrently by another process still gets its parent
-// synced.
-func mkdirAll(path string) error {
-	info, err := os.Stat(path)
-	if err == nil {
-		if !info.IsDir() {
-			return &fs.PathError{Op: "mkdir", Path: path, Err: syscall.ENOTDIR}
+// ensureDir creates the directory path with mode 0700 when it is missing. Its
+// parent must already exist. A directory created concurrently by another
+// process is accepted. Callers sync the parent afterwards.
+func ensureDir(path string) error {
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		err := mkdir(path, 0o700)
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("parent directory %s does not exist", filepath.Dir(path))
 		}
-		return nil
-	}
-	if !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	parent := filepath.Dir(path)
-	if parent != path {
-		if err := mkdirAll(parent); err != nil {
+		if err != nil && !errors.Is(err, fs.ErrExist) {
 			return err
 		}
 	}
-	if err := mkdir(path, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+	info, err := os.Stat(path)
+	if err != nil {
 		return err
 	}
-	return syncDir(parent)
+	if !info.IsDir() {
+		return &fs.PathError{Op: "mkdir", Path: path, Err: syscall.ENOTDIR}
+	}
+	return nil
 }
 
 // lock takes an exclusive flock on path and returns its release function. Each

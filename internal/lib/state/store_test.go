@@ -426,32 +426,35 @@ func recordDirOps(t *testing.T, mkdirErr func(path string) error) *[]string {
 }
 
 func TestOpenAndCreateSyncParentsOfNewDirectories(t *testing.T) {
-	base := t.TempDir()
-	a := filepath.Join(base, "a")
-	b := filepath.Join(a, "b")
-	root := filepath.Join(b, "state")
+	parent := t.TempDir()
+	root := filepath.Join(parent, "state")
 	ops := recordDirOps(t, nil)
 
 	store, err := Open(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{
-		"mkdir " + a, "sync " + base,
-		"mkdir " + b, "sync " + a,
-		"mkdir " + root, "sync " + b,
-		"sync " + b, "sync " + root, // unconditional root syncs
-	}
-	if !reflect.DeepEqual(*ops, want) {
+	if want := []string{"mkdir " + root, "sync " + parent, "sync " + root}; !reflect.DeepEqual(*ops, want) {
 		t.Fatalf("Open ops = %q\nwant %q", *ops, want)
 	}
 
 	*ops = nil
 	createCounter(t, store)
 	kind := filepath.Join(root, "counters")
-	want = []string{"mkdir " + kind, "sync " + root, "sync " + root, "sync " + kind}
-	if !reflect.DeepEqual(*ops, want) {
+	if want := []string{"mkdir " + kind, "sync " + root, "sync " + kind}; !reflect.DeepEqual(*ops, want) {
 		t.Fatalf("Create ops = %q\nwant %q", *ops, want)
+	}
+}
+
+func TestOpenRequiresExistingParent(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "missing")
+	root := filepath.Join(parent, "state")
+	_, err := Open(root)
+	if err == nil || !strings.Contains(err.Error(), parent) {
+		t.Fatalf("Open error = %v, want error naming %s", err, parent)
+	}
+	if _, err := os.Stat(parent); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("Open created the missing parent: stat error = %v", err)
 	}
 }
 
@@ -489,7 +492,7 @@ func TestConcurrentDirectoryCreatorStillSyncsParent(t *testing.T) {
 	if _, err := Open(root); err != nil {
 		t.Fatalf("Open with racing creator: %v", err)
 	}
-	want := []string{"mkdir " + root, "sync " + base, "sync " + base, "sync " + root}
+	want := []string{"mkdir " + root, "sync " + base, "sync " + root}
 	if !reflect.DeepEqual(*ops, want) {
 		t.Fatalf("ops = %q, want %q", *ops, want)
 	}

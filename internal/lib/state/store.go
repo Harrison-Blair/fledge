@@ -37,9 +37,10 @@ func (e *NotFoundError) Error() string {
 }
 
 // Open prepares root as a state directory, creating it and its lock file when
-// missing. It does not resolve Git roots or write ignore files.
+// missing. The parent of root must already exist; Open never creates it. It
+// does not resolve Git roots or write ignore files.
 func Open(root string) (*Store, error) {
-	if err := mkdirAll(root); err != nil {
+	if err := ensureDir(root); err != nil {
 		return nil, fmt.Errorf("state: create %s: %w", root, err)
 	}
 	lock, err := os.OpenFile(filepath.Join(root, lockName), os.O_RDWR|os.O_CREATE, 0o600)
@@ -68,7 +69,7 @@ func (s *Store) Create(kind string, build func(id string) any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := mkdirAll(dir); err != nil {
+	if err := ensureDir(dir); err != nil {
 		return "", fmt.Errorf("state: create %s: %w", dir, err)
 	}
 	// Sync even when the kind directory already existed, in case its creator
