@@ -42,8 +42,20 @@ func Open(root string) (*Store, error) {
 	if err := mkdirAll(root); err != nil {
 		return nil, fmt.Errorf("state: create %s: %w", root, err)
 	}
-	if err := createFile(filepath.Join(root, lockName)); err != nil {
+	lock, err := os.OpenFile(filepath.Join(root, lockName), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
 		return nil, fmt.Errorf("state: create lock: %w", err)
+	}
+	if err := lock.Close(); err != nil {
+		return nil, fmt.Errorf("state: create lock: %w", err)
+	}
+	// Sync even when the entries already existed: another process may have
+	// created them without having synced yet.
+	if err := syncDir(filepath.Dir(root)); err != nil {
+		return nil, err
+	}
+	if err := syncDir(root); err != nil {
+		return nil, err
 	}
 	return &Store{root: root, newID: randomID}, nil
 }
@@ -58,6 +70,11 @@ func (s *Store) Create(kind string, build func(id string) any) (string, error) {
 	}
 	if err := mkdirAll(dir); err != nil {
 		return "", fmt.Errorf("state: create %s: %w", dir, err)
+	}
+	// Sync even when the kind directory already existed, in case its creator
+	// has not synced it into root yet.
+	if err := syncDir(s.root); err != nil {
+		return "", err
 	}
 	for range createAttempts {
 		id, err := s.newID()

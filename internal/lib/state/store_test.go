@@ -440,7 +440,7 @@ func TestOpenAndCreateSyncParentsOfNewDirectories(t *testing.T) {
 		"mkdir " + a, "sync " + base,
 		"mkdir " + b, "sync " + a,
 		"mkdir " + root, "sync " + b,
-		"sync " + root, // lock file created
+		"sync " + b, "sync " + root, // unconditional root syncs
 	}
 	if !reflect.DeepEqual(*ops, want) {
 		t.Fatalf("Open ops = %q\nwant %q", *ops, want)
@@ -449,18 +449,32 @@ func TestOpenAndCreateSyncParentsOfNewDirectories(t *testing.T) {
 	*ops = nil
 	createCounter(t, store)
 	kind := filepath.Join(root, "counters")
-	want = []string{"mkdir " + kind, "sync " + root, "sync " + kind}
+	want = []string{"mkdir " + kind, "sync " + root, "sync " + root, "sync " + kind}
 	if !reflect.DeepEqual(*ops, want) {
 		t.Fatalf("Create ops = %q\nwant %q", *ops, want)
 	}
+}
 
-	*ops = nil
+// TestSyncsDoNotDependOnWhoCreatedDirectories covers a process that finds the
+// directories already present, possibly created by another process that has
+// not synced them yet.
+func TestSyncsDoNotDependOnWhoCreatedDirectories(t *testing.T) {
+	store, root := openStore(t)
+	createCounter(t, store)
+	ops := recordDirOps(t, nil)
+
 	if _, err := Open(root); err != nil {
 		t.Fatal(err)
 	}
+	if want := []string{"sync " + filepath.Dir(root), "sync " + root}; !reflect.DeepEqual(*ops, want) {
+		t.Fatalf("Open ops = %q, want %q", *ops, want)
+	}
+
+	*ops = nil
 	createCounter(t, store)
-	if want := []string{"sync " + kind}; !reflect.DeepEqual(*ops, want) {
-		t.Fatalf("ops with existing directories = %q, want %q", *ops, want)
+	kind := filepath.Join(root, "counters")
+	if want := []string{"sync " + root, "sync " + kind}; !reflect.DeepEqual(*ops, want) {
+		t.Fatalf("Create ops = %q, want %q", *ops, want)
 	}
 }
 
@@ -475,7 +489,7 @@ func TestConcurrentDirectoryCreatorStillSyncsParent(t *testing.T) {
 	if _, err := Open(root); err != nil {
 		t.Fatalf("Open with racing creator: %v", err)
 	}
-	want := []string{"mkdir " + root, "sync " + base, "sync " + root}
+	want := []string{"mkdir " + root, "sync " + base, "sync " + base, "sync " + root}
 	if !reflect.DeepEqual(*ops, want) {
 		t.Fatalf("ops = %q, want %q", *ops, want)
 	}
@@ -489,5 +503,15 @@ func TestOpenRejectsNonDirectoryRoot(t *testing.T) {
 	_, err := Open(root)
 	if !errors.Is(err, syscall.ENOTDIR) || !strings.Contains(err.Error(), "create "+root+":") {
 		t.Fatalf("Open error = %v, want ENOTDIR creating %s", err, root)
+	}
+}
+
+func TestOpenRejectsDirectoryLock(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	if err := os.MkdirAll(filepath.Join(root, lockName), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(root); err == nil {
+		t.Fatal("Open succeeded with a directory in place of the lock file")
 	}
 }

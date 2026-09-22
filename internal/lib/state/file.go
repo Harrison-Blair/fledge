@@ -47,22 +47,6 @@ func mkdirAll(path string) error {
 	return syncDir(parent)
 }
 
-// createFile creates an empty file at path when it is missing and syncs its
-// directory so the new entry survives a crash.
-func createFile(path string) error {
-	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
-	if err != nil {
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return syncDir(filepath.Dir(path))
-}
-
 // lock takes an exclusive flock on path and returns its release function. Each
 // call opens its own file description, so concurrent callers in one process
 // serialize as well as separate processes do.
