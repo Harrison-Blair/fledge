@@ -437,8 +437,8 @@ fledge worktree remove --path .fledge/worktrees/feature/task --force --json
 `list` shows every checkout, primary first, with its branch (or detached), the
 open Herdr workspace, whether it is dirty (including untracked files), whether it
 is merged, and whether it is managed under `.fledge/worktrees`. Merged means the
-branch head (or detached HEAD) is an ancestor of the integration branch: `dev`,
-else the target of `origin/HEAD`, else `main`. Squash-merged branches therefore count
+branch head (or detached HEAD) is an ancestor of the
+[integration branch](#integration-branch). Squash-merged branches therefore count
 as unmerged. Either check reports `unknown` when git cannot answer. The `OWNER`
 column names the live registered agent whose spawn created or opened that
 checkout as `name (id)`, with `+N` when N more live agents share it, or `-`.
@@ -455,12 +455,51 @@ checkout is removed through Herdr, which also closes its workspace; a closed one
 through `git worktree remove`. Its guards:
 
 - The primary checkout is never removed.
-- A checkout whose workspace holds a live agent is refused, checked again
-  immediately before removal. `--force` does not override this. The guard sees
-  only agents in the connected Herdr session; other sessions and direct Herdr
-  actions are outside it, and a closed checkout has no workspace to check.
+- A checkout in use by a live agent is refused, checked again immediately before
+  removal, whether or not the checkout is open as a workspace. An agent uses it
+  when its pane is in the checkout's workspace, when its working directory is the
+  checkout or inside it (from any workspace, so `fledge agent spawn --cwd
+  .fledge/worktrees/feat` in another tab counts), or when it is a registered
+  agent whose recorded worktree is the checkout. Paths are compared after
+  resolving symlinks, and a sibling such as `feature` is not inside `feat`.
+  `--force` does not override this. The guard sees only agents in the connected
+  Herdr session; other sessions and direct Herdr actions are outside it. Records
+  of agents no longer in Herdr do not count, but an unreadable state store
+  refuses removal.
 - A dirty or unmerged checkout, or one where either check is `unknown`, is
-  refused unless `--force` is passed.
+  refused unless `--force` is passed. Unmerged is judged against the
+  [integration branch](#integration-branch).
+
+### Integration branch
+
+`worktree list` (the `MERGED` column) and the `worktree remove` merged guard
+compare each checkout against one integration branch per repository, chosen in
+this order:
+
+1. The local branch named by the repository's git config `fledge.baseBranch`,
+   resolved as `refs/heads/<name>`.
+2. Otherwise, the branch `origin/HEAD` points to (usually the remote default,
+   such as `origin/main`).
+3. Otherwise, the local `main` branch.
+4. Otherwise, none: every checkout is merged `unknown`.
+
+Set it when work integrates into a branch other than the remote default. Fledge
+itself develops on `dev` and reaches `main` only through pull requests, so its
+checkouts set:
+
+```sh
+git config fledge.baseBranch dev
+```
+
+The setting is ordinary repository config, shared by every linked checkout; unset
+it with `git config --unset fledge.baseBranch`. Give a local branch name
+(`dev`, not `origin/dev` or `refs/heads/dev`). If it names a branch that does not
+exist, Fledge does not fall back to `origin/HEAD` or `main`: every checkout is
+merged `unknown`, `worktree list` ends with a `MERGED is unknown: ...` line
+giving the reason (JSON: `default_branch` is null and `default_branch_error`
+holds the reason), and `worktree remove` refuses without `--force`, naming the
+reason. JSON `default_branch` is the chosen branch's short name, such as `dev`
+or `origin/main`.
 
 ## Doctor
 

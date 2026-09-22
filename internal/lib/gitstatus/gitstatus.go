@@ -1,7 +1,7 @@
 // Package gitstatus answers read-only questions about checkouts with git:
-// whether a checkout is dirty, which branch is the repository default, and
-// whether a revision is merged into it. Each answer is "yes", "no", or
-// "unknown" when git cannot say.
+// whether a checkout is dirty, which branch is the repository integration
+// branch, and whether a revision is merged into it. Each answer is "yes", "no",
+// or "unknown" when git cannot say.
 package gitstatus
 
 import (

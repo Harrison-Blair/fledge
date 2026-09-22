@@ -94,13 +94,13 @@ fledge agent wait --name|--pane ... [--until STATE ...] [--timeout D] [--all|--a
 
 ### `worktree list`
 
-- Columns: path, branch, open workspace, owning agent from the state store, dirty (including untracked), merged into the repository default branch, or unknown when git cannot answer.
+- Columns: path, branch, open workspace, owning agent from the state store, dirty (including untracked), merged into the repository integration branch (git config `fledge.baseBranch`, else `origin/HEAD`, else `main`; see the README), or unknown when git cannot answer.
 
 ### `worktree remove`
 
 - Open checkouts go through Herdr `worktree.remove`; closed ones through `git worktree remove`. The primary checkout is never a target.
-- Refuses dirty or unmerged checkouts unless `--force`. Merged means the branch head is an ancestor of the default branch; squash merges therefore need `--force`.
-- Always refuses while any live agent in the connected Herdr session has a pane in that workspace, rechecked immediately before removal. `--force` never bypasses this. Other Herdr sessions and direct Herdr actions are outside this guard, and the docs say so.
+- Refuses dirty or unmerged checkouts unless `--force`. Merged means the branch head is an ancestor of the integration branch; squash merges therefore need `--force`.
+- Always refuses while any live agent in the connected Herdr session has a pane in that workspace, a working directory at or inside the checkout, or a live record naming the checkout as its worktree, whether or not the checkout is open, rechecked immediately before removal. `--force` never bypasses this. Other Herdr sessions and direct Herdr actions are outside this guard, and the docs say so.
 - The branch is kept, matching Herdr.
 
 ### `worktree create`
