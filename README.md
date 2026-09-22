@@ -460,12 +460,13 @@ through `git worktree remove`. Its guards:
   when its pane is in the checkout's workspace, when its working directory is the
   checkout or inside it (from any workspace, so `fledge agent spawn --cwd
   .fledge/worktrees/feat` in another tab counts), or when it is a registered
-  agent whose recorded worktree is the checkout. Paths are compared after
+  agent whose recorded worktree is the checkout or inside it. Paths are compared after
   resolving symlinks, and a sibling such as `feature` is not inside `feat`.
   `--force` does not override this. The guard sees only agents in the connected
   Herdr session; other sessions and direct Herdr actions are outside it. Records
   of agents no longer in Herdr do not count, but an unreadable state store
-  refuses removal.
+  refuses removal until the bad record under `.fledge/state` is repaired or
+  removed.
 - A dirty or unmerged checkout, or one where either check is `unknown`, is
   refused unless `--force` is passed. Unmerged is judged against the
   [integration branch](#integration-branch).
@@ -491,8 +492,12 @@ checkouts set:
 git config fledge.baseBranch dev
 ```
 
-The setting is ordinary repository config, shared by every linked checkout; unset
-it with `git config --unset fledge.baseBranch`. Give a local branch name
+The setting is ordinary git config, read like `git config fledge.baseBranch`
+from every scope: the repository value, shared by every linked checkout, wins,
+but a `git config --global fledge.baseBranch dev` applies to every repository
+that does not set its own. Unset it with `git config --unset fledge.baseBranch`
+(add `--global` for the global value). If git cannot read its config, merged is
+`unknown` with git's error as the reason. Give a local branch name
 (`dev`, not `origin/dev` or `refs/heads/dev`). If it names a branch that does not
 exist, Fledge does not fall back to `origin/HEAD` or `main`: every checkout is
 merged `unknown`, `worktree list` ends with a `MERGED is unknown: ...` line
