@@ -1,9 +1,8 @@
 # AGENTS.md
 
 > **Note:** This file is the single source of truth for all agent instructions in this
-> repository. `CLAUDE.md` contains only an `@AGENTS.md` import so Claude Code picks up
-> the same instructions. Do not add instructions to `CLAUDE.md` directly; edit this
-> file instead.
+> repository. Claude Code reads it directly, so there is no `CLAUDE.md`; edit this file
+> instead of adding harness-specific instruction files.
 
 ## Project
 
