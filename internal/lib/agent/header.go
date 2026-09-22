@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 )
@@ -21,9 +22,12 @@ type Sender struct {
 }
 
 // NewMessageID returns a random correlation ID of the form m-<6 lowercase hex>.
-func NewMessageID() string {
+func NewMessageID() string { return messageID(rand.Reader) }
+
+// messageID draws the ID's three random bytes from r.
+func messageID(r io.Reader) string {
 	b := make([]byte, 3)
-	rand.Read(b)
+	io.ReadFull(r, b)
 	return "m-" + hex.EncodeToString(b)
 }
 

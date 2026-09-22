@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"reflect"
@@ -12,9 +13,11 @@ import (
 
 func TestNewMessageIDIsSixLowercaseHex(t *testing.T) {
 	re := regexp.MustCompile(`^m-[0-9a-f]{6}$`)
-	a, b := NewMessageID(), NewMessageID()
-	if !re.MatchString(a) || !re.MatchString(b) || a == b {
-		t.Fatalf("%q %q", a, b)
+	if id := NewMessageID(); !re.MatchString(id) {
+		t.Fatalf("%q", id)
+	}
+	if id := messageID(bytes.NewReader([]byte{0x0a, 0x1b, 0x2c, 0xff})); id != "m-0a1b2c" {
+		t.Fatalf("%q", id)
 	}
 }
 
