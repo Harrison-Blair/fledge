@@ -55,12 +55,21 @@ func TestLifecycleCreateAssignCompleteVerify(t *testing.T) {
 		t.Fatalf("after assign %+v", r)
 	}
 
-	completed := complete.Run(ctx, tasktest.Client(t, repo, "w1:p3", tasktest.Get("w1:p3", worker)), complete.Options{ID: id, Summary: "fixed", SummarySet: true}, strings.NewReader(""))
+	completed := complete.Run(ctx, tasktest.Client(t, repo, "w1:p3",
+		tasktest.Get("w1:p3", worker),
+		tasktest.Get("w1:p1", boss),
+		tasktest.Get("w1:p3", worker),
+		herdrscript.Call{Method: "agent.prompt", Result: herdr.AgentResult{Type: "agent_prompted", Agent: boss.Agent}},
+	), complete.Options{ID: id, Summary: "fixed", SummarySet: true}, strings.NewReader(""))
 	if completed.Error != nil {
 		t.Fatalf("complete: %+v", completed.Error)
 	}
 	r = tasktest.Load(t, repo, id)
 	want.Status, want.Result, want.CompletedAt = task.Completed, tasktest.Ptr("fixed"), r.CompletedAt
+	if r.CompletionNotification == nil || r.CompletionNotification.DeliveredAt == nil {
+		t.Fatalf("after complete %+v", r)
+	}
+	want.CompletionNotification = &task.CompletionNotification{Recipient: bossRec.ID, MessageID: r.CompletionNotification.MessageID, Pane: tasktest.Ptr("w1:p1"), DeliveredAt: r.CompletionNotification.DeliveredAt}
 	if !reflect.DeepEqual(r, want) || r.CompletedAt == nil {
 		t.Fatalf("after complete %+v", r)
 	}

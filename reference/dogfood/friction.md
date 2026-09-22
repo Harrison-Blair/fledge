@@ -462,3 +462,26 @@ update to 0.87.0.
 1. Run `fledge agent spawn --name picker-probe --harness pi` in a Herdr pane and observe the success line.
 2. Within a few seconds run `fledge agent get --name picker-probe`; observe `agent_not_found`.
 3. Run `fledge agent list`; observe the pi agent in the new pane with name `-`.
+
+---
+
+**Issue:** Task completion does not notify the dispatcher
+
+**Summary:** On 2026-09-22 at `dev` `d68e0c1`, a task created by registered
+agent `pr14-dispatcher` was assigned to `pr14-worker-a`. The worker completed it
+successfully, and the durable task record moved to `completed`, but the creator
+received no Herdr message or other completion notification. The dispatcher had
+to poll `fledge task list --status completed` or `fledge task get --id ...`.
+`internal/task/complete` records only the state transition; unlike assignment,
+it does not deliver a message. This leaves dispatchers without a built-in way to
+be awakened when another agent finishes a task.
+
+Resolved 2026-09-22: `task complete` now sends the result and verification
+command to a distinct live `created_by` agent, records the delivery outcome, and
+reports failed or uncertain notifications without rolling completion back.
+
+**Reproduction steps:**
+1. Adopt or spawn a registered dispatcher and worker in the same repository.
+2. As the dispatcher, create a task and assign it to the worker.
+3. As the worker, run `fledge task complete --id <task-id> --summary done`.
+4. Observe that the task record is `completed` but no message is delivered to the dispatcher.

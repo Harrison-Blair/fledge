@@ -3,6 +3,7 @@ package complete
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
@@ -17,10 +18,14 @@ type Options struct {
 	SummarySet, FileSet, Force bool
 }
 
-// Run moves an assigned task to completed with the summary as its result.
-// Only the owner, identified by the caller's live record, may complete it
-// unless Force is set.
+// Run moves an assigned task to completed with the summary as its result, then
+// notifies a distinct registered creator. Only the owner, identified by the
+// caller's live record, may complete it unless Force is set.
 func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libagent.Outcome {
+	return run(ctx, c, o, in, libagent.NewMessageID())
+}
+
+func run(ctx context.Context, c libagent.Client, o Options, in io.Reader, messageID string) libagent.Outcome {
 	out := libagent.Outcome{Operation: "task.complete", Status: "success", Effects: []libagent.Effect{}}
 	err := task.ValidateID(o.ID)
 	var summary string
@@ -40,14 +45,32 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 		out.Fail(err, "state", false)
 		return out
 	}
+	snapshot, err := task.Get(s, o.ID)
+	if err == nil {
+		err = authorize(&snapshot, caller, o.Force)
+	}
+	if err != nil {
+		out.Fail(err, "task", false)
+		return out
+	}
+	var recipient herdr.AgentDetails
+	var notification *task.CompletionNotification
+	var notificationErr error
+	if snapshot.CreatedBy != nil && (caller == nil || *snapshot.CreatedBy != caller.ID) {
+		notification = &task.CompletionNotification{Recipient: *snapshot.CreatedBy, MessageID: messageID}
+		_, recipient, notificationErr = identity.Resolve(ctx, s, c, *snapshot.CreatedBy)
+		if notificationErr != nil {
+			msg := notificationErr.Error()
+			notification.Error = &msg
+		} else {
+			notification.Pane = &recipient.PaneID
+		}
+	}
 	r, err := task.Update(s, o.ID, func(r *task.Record) error {
-		if err := task.Require(r, "complete", task.Assigned); err != nil {
+		if err := authorize(r, caller, o.Force); err != nil {
 			return err
 		}
-		if !o.Force && (caller == nil || r.Owner == nil || *r.Owner != caller.ID) {
-			return &herdr.Error{Code: "task_not_owner", Message: fmt.Sprintf("task %s is owned by %s and only its owner may complete it; pass --force to override", r.ID, display(r.Owner))}
-		}
-		r.Status, r.Result, r.CompletedAt = task.Completed, &summary, task.Now()
+		r.Status, r.Result, r.CompletedAt, r.CompletionNotification = task.Completed, &summary, task.Now(), notification
 		return nil
 	})
 	if err != nil {
@@ -56,16 +79,77 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 	}
 	out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "task", ID: r.ID})
 	out.Result = r
+	if notification == nil {
+		return out
+	}
+	if notificationErr != nil {
+		out.Fail(notificationErr, "identity", false)
+		return out
+	}
+	sender := libagent.ResolveSender(ctx, c)
+	body := fmt.Sprintf("task completed: %s · title: %s · verify with: fledge task verify --id %s --summary \"...\"\nresult:\n%s", r.ID, r.Title, r.ID, summary)
+	agent, deliveryErr := c.Prompt(ctx, recipient.PaneID, libagent.WithHeader(messageID, sender, body))
+	if deliveryErr == nil {
+		out.Effects = append(out.Effects, libagent.Effect{Action: "submitted", Kind: "message", ID: agent.PaneID})
+	}
+	r, err = task.Update(s, o.ID, func(r *task.Record) error {
+		n := r.CompletionNotification
+		if n == nil || n.MessageID != messageID || n.Recipient != notification.Recipient {
+			return &herdr.Error{Code: "task_state_changed", Message: fmt.Sprintf("task %s's completion notification changed before its delivery could be recorded", r.ID)}
+		}
+		if deliveryErr != nil {
+			msg := deliveryErr.Error()
+			var remote *herdr.Error
+			n.Error, n.Uncertain = &msg, errors.As(deliveryErr, &remote) && remote.Uncertain
+		} else {
+			n.DeliveredAt = task.Now()
+		}
+		return nil
+	})
+	if err == nil {
+		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "task", ID: r.ID})
+		out.Result = r
+	}
+	switch {
+	case deliveryErr != nil:
+		out.Fail(deliveryErr, "agent.prompt", true)
+	case err != nil:
+		out.Fail(err, "task", false)
+	}
 	return out
 }
 
-// Render writes a successful completion.
+func authorize(r *task.Record, caller *identity.Record, force bool) error {
+	if err := task.Require(r, "complete", task.Assigned); err != nil {
+		return err
+	}
+	if !force && (caller == nil || r.Owner == nil || *r.Owner != caller.ID) {
+		return &herdr.Error{Code: "task_not_owner", Message: fmt.Sprintf("task %s is owned by %s and only its owner may complete it; pass --force to override", r.ID, display(r.Owner))}
+	}
+	return nil
+}
+
+// Render writes completion and notification results.
 func Render(w io.Writer, o libagent.Outcome) error {
 	r, ok := o.Result.(task.Record)
-	if o.Error != nil || !ok {
+	if !ok {
 		return nil
 	}
-	_, err := fmt.Fprintf(w, "Completed task %s.\n", r.ID)
+	n := r.CompletionNotification
+	var text string
+	switch {
+	case o.Error == nil && n != nil && n.DeliveredAt != nil && n.Pane != nil:
+		text = fmt.Sprintf("Completed task %s; notified creator %s in %s as message %s.\n", r.ID, n.Recipient, *n.Pane, n.MessageID)
+	case o.Error == nil:
+		text = fmt.Sprintf("Completed task %s.\n", r.ID)
+	case o.Status == "unknown" && o.Error.Phase == "agent.prompt":
+		text = fmt.Sprintf("Task %s is completed; the notification outcome is unknown and will not be retried.\n", r.ID)
+	case o.Error.Phase == "identity" || o.Error.Phase == "agent.prompt":
+		text = fmt.Sprintf("Task %s is completed; its creator was not notified and the notification will not be retried.\n", r.ID)
+	case o.Error.Phase == "task":
+		text = fmt.Sprintf("Task %s is completed; the notification outcome could not be recorded.\n", r.ID)
+	}
+	_, err := io.WriteString(w, text)
 	return err
 }
 

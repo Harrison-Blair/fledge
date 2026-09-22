@@ -69,6 +69,22 @@ func Render(w io.Writer, o libagent.Outcome) error {
 	if r.CompletedAt != nil {
 		fmt.Fprintf(&b, "completed: %s\n", *r.CompletedAt)
 	}
+	if n := r.CompletionNotification; n != nil {
+		state := "outcome unknown"
+		switch {
+		case n.DeliveredAt != nil:
+			state = "delivered " + *n.DeliveredAt
+		case n.Error != nil && n.Uncertain:
+			state = "outcome unknown: " + *n.Error
+		case n.Error != nil:
+			state = "failed: " + *n.Error
+		}
+		target := n.Recipient
+		if n.Pane != nil {
+			target += " in " + *n.Pane
+		}
+		fmt.Fprintf(&b, "completion notification: message %s to %s, %s\n", n.MessageID, target, state)
+	}
 	if r.VerifiedAt != nil {
 		verifier, forced := "an unregistered caller", ""
 		if r.Verifier != nil {

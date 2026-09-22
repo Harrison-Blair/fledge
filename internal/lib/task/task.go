@@ -36,23 +36,37 @@ var Statuses = []string{Created, Assigned, Completed, Verified, Cancelled}
 
 // Record is one task. Agent references are Fledge agent record ids.
 type Record struct {
-	ID               string    `json:"id"`
-	Title            string    `json:"title"`
-	Brief            string    `json:"brief"`
-	Owner            *string   `json:"owner"`
-	Status           string    `json:"status"`
-	Result           *string   `json:"result"`
-	Verifier         *string   `json:"verifier"`
-	VerificationNote *string   `json:"verification_note"`
-	Forced           bool      `json:"forced"`
-	CancelReason     *string   `json:"cancel_reason"`
-	CreatedAt        string    `json:"created_at"`
-	CreatedBy        *string   `json:"created_by"`
-	AssignedAt       *string   `json:"assigned_at"`
-	CompletedAt      *string   `json:"completed_at"`
-	VerifiedAt       *string   `json:"verified_at"`
-	CancelledAt      *string   `json:"cancelled_at"`
-	Delivery         *Delivery `json:"delivery"`
+	ID                     string                  `json:"id"`
+	Title                  string                  `json:"title"`
+	Brief                  string                  `json:"brief"`
+	Owner                  *string                 `json:"owner"`
+	Status                 string                  `json:"status"`
+	Result                 *string                 `json:"result"`
+	Verifier               *string                 `json:"verifier"`
+	VerificationNote       *string                 `json:"verification_note"`
+	Forced                 bool                    `json:"forced"`
+	CancelReason           *string                 `json:"cancel_reason"`
+	CreatedAt              string                  `json:"created_at"`
+	CreatedBy              *string                 `json:"created_by"`
+	AssignedAt             *string                 `json:"assigned_at"`
+	CompletedAt            *string                 `json:"completed_at"`
+	CompletionNotification *CompletionNotification `json:"completion_notification"`
+	VerifiedAt             *string                 `json:"verified_at"`
+	CancelledAt            *string                 `json:"cancelled_at"`
+	Delivery               *Delivery               `json:"delivery"`
+}
+
+// CompletionNotification is the outcome of notifying a task's registered
+// creator after completion. Pane is unknown when creator resolution fails;
+// exactly one of DeliveredAt and Error is set when notification processing
+// finishes.
+type CompletionNotification struct {
+	Recipient   string  `json:"recipient"`
+	MessageID   string  `json:"message_id"`
+	Pane        *string `json:"pane"`
+	DeliveredAt *string `json:"delivered_at"`
+	Error       *string `json:"error"`
+	Uncertain   bool    `json:"uncertain"`
 }
 
 // Delivery is the outcome of sending the brief to the owner on assignment.

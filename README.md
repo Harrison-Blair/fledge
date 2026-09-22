@@ -397,7 +397,12 @@ recorded checks.
   caller assigned it first, assign fails with `task_state_changed`.
 - `complete --id TASK` (`--summary` or `--file`) requires an `assigned` task and
   a caller whose live agent record is the owner (`task_not_owner` otherwise);
-  `--force` overrides the owner check.
+  `--force` overrides the owner check. After recording completion, it sends the
+  task ID, title, result, and verification command to the distinct registered
+  creator. An unregistered creator or a creator completing its own task needs no
+  notification. A stale creator or confirmed delivery failure returns `partial`;
+  an uncertain delivery returns `unknown`. The task remains completed, the
+  notification outcome is recorded, and delivery is never retried automatically.
 - `verify --id TASK [--summary TEXT]` requires a `completed` task and a
   registered caller other than the owner. The owner is refused with
   `task_self_verification` and an unregistered caller with
@@ -409,8 +414,10 @@ recorded checks.
 
 Each record holds `id`, `title`, `brief`, `owner`, `status`, `result`,
 `verifier`, `verification_note`, `forced`, `cancel_reason`, `created_at`,
-`created_by`, `assigned_at`, `completed_at`, `verified_at`, `cancelled_at`,
-and `delivery`. Every command supports `--json` with the same outcome envelope
+`created_by`, `assigned_at`, `completed_at`, `completion_notification`,
+`verified_at`, `cancelled_at`, and `delivery`. A completion notification records
+its `recipient`, `message_id`, optional `pane`, `delivered_at`, `error`, and
+`uncertain` state. Every command supports `--json` with the same outcome envelope
 as the agent commands; `task list` and `task get` never contact Herdr.
 
 ## Worktrees
