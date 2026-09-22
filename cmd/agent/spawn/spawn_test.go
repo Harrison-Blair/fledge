@@ -7,6 +7,9 @@ import (
 )
 
 func TestNoFlagsWithoutTerminalKeepsValidationError(t *testing.T) {
+	// Never reach a live Herdr socket, even if the terminal guard regresses.
+	t.Setenv("HERDR_ENV", "")
+	t.Setenv("HERDR_SOCKET_PATH", "")
 	var out bytes.Buffer
 	cmd := New()
 	cmd.SetArgs([]string{})
