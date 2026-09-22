@@ -48,7 +48,7 @@ func TestAddAndRemovePrerequisites(t *testing.T) {
 		t.Fatalf("%v %+v", code, r)
 	}
 	r, code, text = run(t, repo, Options{ID: x, Remove: []string{b, c}})
-	if code != nil || len(r.After) != 0 || text != "Task "+x+" has no prerequisites.\n" {
+	if code != nil || r.After != nil || tasktest.Load(t, repo, x).After != nil || text != "Task "+x+" has no prerequisites.\n" {
 		t.Fatalf("%v %+v %q", code, r, text)
 	}
 }

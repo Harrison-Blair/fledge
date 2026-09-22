@@ -5,6 +5,7 @@ import (
 	"context"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
@@ -172,5 +173,33 @@ func TestParentWithFinishedSubtasksVerifies(t *testing.T) {
 	out := Run(context.Background(), tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p1", boss)), Options{ID: id}, strings.NewReader(""))
 	if r := tasktest.Load(t, repo, id); out.Error != nil || r.Status != task.Verified || r.Forced {
 		t.Fatalf("%+v %+v", out.Error, r)
+	}
+}
+
+// A subtask created while its parent is being verified must either land
+// before verify's subtask scan, blocking it, or be refused as the parent is
+// already verified; both succeeding would leave an open subtask under a
+// parent verified without --force.
+func TestConcurrentSubtaskCreateAndParentVerify(t *testing.T) {
+	repo := identitytest.Repository(t)
+	owner := tasktest.Register(t, repo, worker)
+	tasktest.Register(t, repo, boss)
+	for range 50 {
+		parent := tasktest.Seed(t, repo, task.Record{Title: "goal", Status: task.Completed, Owner: &owner.ID})
+		var created, verified libagent.Outcome
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			created = create.Run(context.Background(), tasktest.Client(t, repo, ""), create.Options{Title: "late", Body: "b", BodySet: true, Parent: parent}, strings.NewReader(""))
+		})
+		wg.Go(func() {
+			verified = Run(context.Background(), tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p1", boss)), Options{ID: parent}, strings.NewReader(""))
+		})
+		wg.Wait()
+		switch {
+		case created.Error == nil && verified.Error != nil && verified.Error.Code == "task_open_subtasks":
+		case verified.Error == nil && created.Error != nil && created.Error.Code == "task_invalid_state":
+		default:
+			t.Fatalf("create %+v verify %+v", created.Error, verified.Error)
+		}
 	}
 }

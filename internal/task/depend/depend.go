@@ -75,6 +75,10 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			}
 			r.After = append(r.After, id)
 		}
+		// No prerequisites is stored as null, as task create stores it.
+		if len(r.After) == 0 {
+			r.After = nil
+		}
 		return nil
 	})
 	if err != nil {
