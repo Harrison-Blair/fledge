@@ -306,6 +306,44 @@ fledge agent spawn --name reviewer --harness claude --pane w2:p3
 Use the actual pane ID from the partial outcome and retain your intended harness,
 model, and native arguments. Fledge does not retry automatically.
 
+## Worktrees
+
+Worktree commands run inside Herdr like agent commands, use the same `--json`
+outcome envelope, and act on the repository containing `--cwd` (default: the
+current directory, which may be a linked checkout).
+
+```sh
+fledge worktree list
+fledge worktree list --cwd ~/src/project --json
+fledge worktree create --branch feature/task --base dev
+fledge worktree remove --branch feature/task
+fledge worktree remove --path .fledge/worktrees/feature/task --force --json
+```
+
+`list` shows every checkout, primary first, with its branch (or detached), the
+open Herdr workspace, whether it is dirty (including untracked files), whether it
+is merged, and whether it is managed under `.fledge/worktrees`. Merged means the
+branch head (or detached HEAD) is an ancestor of the default branch: the target
+of `origin/HEAD`, else `dev`, else `main`. Squash-merged branches therefore count
+as unmerged. Either check reports `unknown` when git cannot answer. JSON rows
+carry an `owner` field that is always null for now.
+
+`create` makes a managed checkout at `.fledge/worktrees/<branch>` on a new branch
+and opens it as a workspace without starting an agent. An existing branch is
+refused.
+
+`remove` takes exactly one of `--path` or `--branch` and keeps the branch. An open
+checkout is removed through Herdr, which also closes its workspace; a closed one
+through `git worktree remove`. Its guards:
+
+- The primary checkout is never removed.
+- A checkout whose workspace holds a live agent is refused, checked again
+  immediately before removal. `--force` does not override this. The guard sees
+  only agents in the connected Herdr session; other sessions and direct Herdr
+  actions are outside it, and a closed checkout has no workspace to check.
+- A dirty or unmerged checkout, or one where either check is `unknown`, is
+  refused unless `--force` is passed.
+
 ## Doctor
 
 `fledge doctor` diagnoses the local Fledge and Herdr environment with read-only

@@ -34,9 +34,11 @@ func execute(args []string, in io.Reader, out, errOut io.Writer) error {
 	if cli.IsRendered(err) {
 		return err
 	}
-	if cmd != nil && strings.HasPrefix(cmd.CommandPath(), "fledge agent ") {
-		operation := "agent." + cmd.Name()
-		return agent.Finish(agent.InvalidOutcome(operation, err), out, jsonRequested(cmd, args), nil)
+	for _, group := range []string{"agent", "worktree"} {
+		if cmd != nil && strings.HasPrefix(cmd.CommandPath(), "fledge "+group+" ") {
+			operation := group + "." + cmd.Name()
+			return agent.Finish(agent.InvalidOutcome(operation, err), out, jsonRequested(cmd, args), nil)
+		}
 	}
 	fmt.Fprintln(errOut, "Error:", err)
 	return err

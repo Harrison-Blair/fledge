@@ -6,6 +6,7 @@ import (
 	agentcmd "github.com/Harrison-Blair/fledge/cmd/agent"
 	doctorcmd "github.com/Harrison-Blair/fledge/cmd/doctor"
 	updatecmd "github.com/Harrison-Blair/fledge/cmd/update"
+	worktreecmd "github.com/Harrison-Blair/fledge/cmd/worktree"
 
 	versioncmd "github.com/Harrison-Blair/fledge/cmd/version"
 )
@@ -26,5 +27,6 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(agentcmd.New())
 	root.AddCommand(updatecmd.New())
 	root.AddCommand(doctorcmd.New())
+	root.AddCommand(worktreecmd.New())
 	return root
 }
