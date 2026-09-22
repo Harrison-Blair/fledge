@@ -84,9 +84,17 @@ A checked item means its main capability is implemented; accompanying notes reco
 
 16. [ ] **A queue with exclusive task claims.** Idle workers claim eligible work, with coordination that prevents two workers accidentally accepting the same assignment.
 
-17. [ ] **Task dependencies.** Express "implement after research" or "review after tests pass," then expose which tasks are ready to run.
+17. [x] **Task dependencies.** Express "implement after research" or "review after tests pass," then expose which tasks are ready to run.
 
-18. [ ] **Parent tasks and subtasks.** Break a larger goal into bounded pieces while preserving a useful overall progress view.
+    **Implemented:** [5a4719f](https://github.com/Harrison-Blair/fledge/commit/5a4719fe3ca885d8035f1334bce50f98f9e3d6fe) · **Author:** Harrison-Blair · **Author date:** 2026-09-22
+
+    **Implementation decisions and remaining gaps:** Prerequisites are declared with repeatable `task create --after ID` and changed with `task depend --id ID --after ID --remove ID`, which rejects unknown ids, verified or cancelled tasks, and cycles (including a task after itself), naming the chain; all of these run under the state store lock. A prerequisite is satisfied when `verified`; a `cancelled` one also counts as satisfied but stays listed with its state and reason. `task assign` refuses unmet prerequisites with `task_dependencies_unmet` unless `--force`, which records them as `unmet_at_assign` rather than reusing verify's `forced`. `task list --ready` shows created tasks with every prerequisite satisfied, `list` adds a `WAITING` column, `get` shows each prerequisite's state, and `task cancel` names the created tasks it left ready. Only task verification is modelled: "review after tests pass" can be expressed only as a task for the tests, not as a recorded check. `task verify` does not report the tasks it unblocks, and there is no automatic assignment of ready tasks. [Current behavior](../../README.md#tasks)
+
+18. [x] **Parent tasks and subtasks.** Break a larger goal into bounded pieces while preserving a useful overall progress view.
+
+    **Implemented:** [2804518](https://github.com/Harrison-Blair/fledge/commit/2804518bbb1b9c7728dc027efb4380218a3302ac) · **Author:** Harrison-Blair · **Author date:** 2026-09-22
+
+    **Implementation decisions and remaining gaps:** `task create --parent ID` fixes a parent at creation; there is no re-parenting, and a verified or cancelled parent cannot take new subtasks. Nesting is unlimited and acyclic by construction. The parent keeps its own lifecycle, and subtasks are not its prerequisites. `task list` and `task get` show the progress of direct subtasks as `2/3 verified, 1 cancelled` (cancelled subtasks are excluded from the total), `list` adds a `PARENT` column, and `task list --parent ID` lists direct subtasks. `task verify` refuses a parent with open subtasks unless `--force`, which is recorded and lists them; cancelling a parent does not cascade. Progress counts direct subtasks only; there is no recursive tree view or rolled-up progress across deeper levels. [Current behavior](../../README.md#tasks)
 
 19. [ ] **Priorities and deadlines.** Let urgent work move ahead of routine work, and show when a deadline is threatened by unresolved dependencies.
 
