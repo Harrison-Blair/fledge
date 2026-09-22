@@ -68,7 +68,7 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) li
 		return out
 	}
 	if owner == nil {
-		owner, err = identity.Live(s, a.TerminalID)
+		owner, err = identity.Match(s, a)
 		if err != nil {
 			out.Fail(err, "state", false)
 			return out

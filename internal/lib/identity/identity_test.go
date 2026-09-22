@@ -537,3 +537,118 @@ func TestResolveEndFailureIsReported(t *testing.T) {
 		t.Fatalf("%+v %v", live, err)
 	}
 }
+
+// running is d with its live harness set to harness, or unknown when "".
+func running(d herdr.AgentDetails, harness string) herdr.AgentDetails {
+	d.Agent = nil
+	if harness != "" {
+		d.Agent = &harness
+	}
+	return d
+}
+
+func ended(t *testing.T, s *state.Store, id string) bool {
+	t.Helper()
+	var rec Record
+	if err := s.Get(Kind, id, &rec); err != nil {
+		t.Fatal(err)
+	}
+	return rec.EndedAt != nil
+}
+
+func TestMismatchedComparesOnlyKnownHarnesses(t *testing.T) {
+	for _, tc := range []struct {
+		recorded, live string
+		want           bool
+	}{{"codex", "claude", true}, {"claude", "claude", false}, {"", "claude", false}, {"codex", "", false}, {"", "", false}} {
+		rec := Record{TerminalID: "term_a"}
+		if tc.recorded != "" {
+			rec.Harness = &tc.recorded
+		}
+		if got := Mismatched(rec, running(details("w1:p3", "term_a"), tc.live)); got != tc.want {
+			t.Errorf("recorded %q live %q: got %v", tc.recorded, tc.live, got)
+		}
+	}
+}
+
+func TestCallerEndsRecordOfDifferentHarness(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t, call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: info(running(details("old:p1", "term_a"), "claude"))})
+	s := store(t, c)
+	old := registered(t, c, running(details("old:p1", "term_a"), "codex"))
+	rec, err := Caller(context.Background(), s, c)
+	if err != nil || rec != nil {
+		t.Fatalf("%+v %v", rec, err)
+	}
+	if !ended(t, s, old.ID) {
+		t.Fatal("mismatched record still live")
+	}
+}
+
+func TestCallerKeepsRecordWhenHarnessUnknown(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t, call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: info(running(details("old:p1", "term_a"), ""))})
+	s := store(t, c)
+	old := registered(t, c, running(details("old:p1", "term_a"), "codex"))
+	rec, err := Caller(context.Background(), s, c)
+	if err != nil || rec == nil || rec.ID != old.ID || ended(t, s, old.ID) {
+		t.Fatalf("%+v %v", rec, err)
+	}
+}
+
+func TestResolveEndsRecordOfDifferentHarness(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t, call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: info(running(details("w1:p3", "term_a"), "claude"))})
+	s := store(t, c)
+	old := registered(t, c, running(details("w1:p3", "term_a"), "codex"))
+	_, _, err := Resolve(context.Background(), s, c, old.ID)
+	if code(err) != "agent_identity_stale" || !strings.Contains(err.Error(), "codex") || !strings.Contains(err.Error(), "claude") {
+		t.Fatalf("%v", err)
+	}
+	if !ended(t, s, old.ID) {
+		t.Fatal("mismatched record still live")
+	}
+}
+
+func TestRegisterReplacesRecordOfDifferentHarness(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t)
+	s := store(t, c)
+	old := registered(t, c, running(details("w1:p3", "term_a"), "codex"))
+	now := running(details("w1:p3", "term_a"), "claude")
+	if err := Unregistered(s, now); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := Register(context.Background(), s, libagent.Client{}, now, "adopt", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ended(t, s, old.ID) {
+		t.Fatal("mismatched record still live")
+	}
+	if live, err := Live(s, "term_a"); err != nil || live == nil || live.ID != rec.ID {
+		t.Fatalf("%+v %v", live, err)
+	}
+}
+
+func TestVerifyRefusesDifferentHarness(t *testing.T) {
+	codex := "codex"
+	rec := Record{ID: "0000beef", Pane: "w1:p3", TerminalID: "term_a", Harness: &codex}
+	if err := Verify(rec, running(details("w1:p3", "term_a"), "claude")); code(err) != "agent_identity_stale" {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestAttributedSkipsDifferentHarness(t *testing.T) {
+	codex := "codex"
+	records := map[string]Record{"term_a": {ID: "0000beef", TerminalID: "term_a", Harness: &codex}, "": {ID: "0000dead", Harness: &codex}}
+	if _, ok := Attributed(records, running(details("w1:p3", "term_a"), "claude")); ok {
+		t.Fatal("attributed a record of another harness")
+	}
+	if rec, ok := Attributed(records, running(details("w1:p3", "term_a"), "codex")); !ok || rec.ID != "0000beef" {
+		t.Fatalf("%+v %v", rec, ok)
+	}
+	if _, ok := Attributed(records, running(details("w1:p3", ""), "codex")); ok {
+		t.Fatal("attributed an agent without a terminal")
+	}
+}

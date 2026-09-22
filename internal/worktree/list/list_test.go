@@ -333,3 +333,24 @@ func TestListRespectsCancellation(t *testing.T) {
 		t.Fatalf("%+v", out)
 	}
 }
+
+// A record left in a terminal by a different harness owns nothing.
+func TestListSkipsOwnerOfDifferentHarness(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "")
+	f := newFixture(t)
+	s, err := identity.OpenStore(context.Background(), f.root, &libagent.Outcome{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Create(identity.Kind, func(id string) any {
+		return identity.Record{ID: id, Pane: "w1:t1", WorkspaceID: "w1", Harness: s2("codex"), TerminalID: "t1", RegisteredAt: "2026-01-01T00:00:00Z", RegisteredBy: "spawn", WorktreePath: &f.root}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	live := herdr.AgentDetails{Pane: herdr.Pane{PaneID: "w1:t1", Agent: s2("claude")}, TerminalID: "t1"}
+	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()}, call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": []herdr.AgentDetails{live}}})
+	out := Run(context.Background(), c, Options{Cwd: f.root})
+	if row := out.Result.(Result).Worktrees[0]; row.Owner != nil || row.OwnerCount != 0 {
+		t.Fatalf("%+v", row.Owner)
+	}
+}

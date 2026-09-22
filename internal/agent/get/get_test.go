@@ -11,6 +11,7 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
@@ -304,5 +305,25 @@ func TestGetIDExcludesOtherSelectors(t *testing.T) {
 		if out := Run(context.Background(), fake(t), o); out.ExitCode() != 2 || out.Error.Phase != "validation" {
 			t.Fatalf("%+v", out)
 		}
+	}
+}
+
+func TestGetByNameEndsRecordOfDifferentHarness(t *testing.T) {
+	live := herdrscript.Info(herdrscript.LiveAgent("idle"))
+	c := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "worker"}, Result: live})
+	c.Cwd = identitytest.Repository(t)
+	recorded, codex := live.Agent, "codex"
+	recorded.Agent = &codex
+	rec := identitytest.Register(t, c.Cwd, recorded)
+	out := Run(context.Background(), c, Options{Name: "worker"})
+	if r := out.Result.(Result); out.Error != nil || r.Record != nil {
+		t.Fatalf("%+v", out)
+	}
+	s, err := identity.Existing(context.Background(), c.Cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Get(identity.Kind, rec.ID, &rec); err != nil || rec.EndedAt == nil {
+		t.Fatalf("%+v %v", rec, err)
 	}
 }

@@ -261,3 +261,17 @@ func TestFilteredEmptyListNamesChildren(t *testing.T) {
 		t.Fatalf("%q %v", b.String(), err)
 	}
 }
+
+// A record left in the terminal by a different harness is not the live agent's.
+func TestListSkipsRecordOfDifferentHarness(t *testing.T) {
+	live := herdrscript.Info(herdrscript.LiveAgent("idle")).Agent
+	recorded, codex := live, "codex"
+	recorded.Agent = &codex
+	c := herdrscript.Client(t, call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": []herdr.AgentDetails{live}}})
+	c.Cwd = identitytest.Repository(t)
+	identitytest.Register(t, c.Cwd, recorded)
+	out := Run(context.Background(), c, Options{})
+	if rows := out.Result.(Result).Agents; out.Error != nil || len(rows) != 1 || rows[0].ID != nil {
+		t.Fatalf("%+v", out)
+	}
+}

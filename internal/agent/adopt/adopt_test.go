@@ -263,3 +263,23 @@ func TestConcurrentAdoptsRegisterOnce(t *testing.T) {
 		t.Fatalf("%+v %v", rec, err)
 	}
 }
+
+// A different harness started in an adopted terminal can be adopted afresh.
+func TestAdoptAfterHarnessChange(t *testing.T) {
+	codex := agent("w1:p3", named("worker"))
+	codex.Agent.Agent = named("codex")
+	c := client(t,
+		call{Method: "agent.get", Result: codex},
+		call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Err: notFound()},
+		call{Method: "agent.get", Result: agent("w1:p3", named("worker"))},
+		call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Err: notFound()},
+	)
+	first := Run(context.Background(), c, Options{Pane: "w1:p3"})
+	if first.Error != nil {
+		t.Fatalf("%+v", first.Error)
+	}
+	out := Run(context.Background(), c, Options{Pane: "w1:p3"})
+	if out.Error != nil || out.Result.(Result).ID == first.Result.(Result).ID || *out.Result.(Result).Harness != "claude" {
+		t.Fatalf("%+v", out)
+	}
+}

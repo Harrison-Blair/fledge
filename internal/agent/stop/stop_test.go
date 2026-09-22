@@ -277,3 +277,21 @@ func TestStopRecordFailureAfterCloseIsPartial(t *testing.T) {
 		})
 	}
 }
+
+// Stopping the agent in a terminal ends a record left there by a different
+// harness without reporting it as the stopped agent's record.
+func TestStopDoesNotAttributeRecordOfDifferentHarness(t *testing.T) {
+	live := herdrscript.Info(herdrscript.LiveAgent("idle"))
+	s := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "worker"}, Result: live}, call{Method: "pane.close", Params: map[string]any{"pane_id": "w1:p3"}, Result: herdrscript.OK()})
+	s.Cwd = identitytest.Repository(t)
+	recorded, codex := live.Agent, "codex"
+	recorded.Agent = &codex
+	rec := identitytest.Register(t, s.Cwd, recorded)
+	out := Run(context.Background(), s, Options{Name: "worker"})
+	if out.Status != "success" || !reflect.DeepEqual(out.Effects, []libagent.Effect{{Action: "closed", Kind: "pane", ID: "w1:p3"}}) {
+		t.Fatalf("%+v", out)
+	}
+	if !ended(t, s.Cwd, rec.ID) {
+		t.Fatal("record not ended")
+	}
+}

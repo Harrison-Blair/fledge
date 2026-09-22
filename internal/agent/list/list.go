@@ -84,7 +84,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	rows := make([]Row, 0, len(r.Agents))
 	for _, a := range r.Agents {
 		row := Row{AgentRow: libagent.NewAgentRow(a.Pane)}
-		if rec, ok := records[a.TerminalID]; ok && a.TerminalID != "" {
+		if rec, ok := identity.Attributed(records, a); ok {
 			row.ID, row.Parent = &rec.ID, rec.Parent
 		}
 		if o.Parent != "" && (row.Parent == nil || *row.Parent != o.Parent) {

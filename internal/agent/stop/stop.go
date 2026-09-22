@@ -71,7 +71,7 @@ func end(ctx context.Context, c libagent.Client, a herdr.AgentDetails, rec *iden
 		return "", nil
 	}
 	if rec == nil {
-		if rec, err = identity.Live(s, a.TerminalID); err != nil || rec == nil {
+		if rec, err = identity.Match(s, a); err != nil || rec == nil {
 			return "", err
 		}
 	}

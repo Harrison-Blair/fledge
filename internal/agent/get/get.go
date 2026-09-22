@@ -62,20 +62,20 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	}
 	result.Record = rec
 	if rec == nil {
-		result.Record = liveRecord(ctx, c.Cwd, a.TerminalID)
+		result.Record = liveRecord(ctx, c.Cwd, a)
 	}
 	out.Result = result
 	return out
 }
 
-// liveRecord finds the agent's record for display; an unavailable store only
-// means no record is shown.
-func liveRecord(ctx context.Context, cwd, terminal string) *identity.Record {
+// liveRecord finds a's record for display, ending one left by a different
+// harness; an unavailable store only means no record is shown.
+func liveRecord(ctx context.Context, cwd string, a herdr.AgentDetails) *identity.Record {
 	s, err := identity.Existing(ctx, cwd)
 	if err != nil || s == nil {
 		return nil
 	}
-	rec, _ := identity.Live(s, terminal)
+	rec, _ := identity.Match(s, a)
 	return rec
 }
 

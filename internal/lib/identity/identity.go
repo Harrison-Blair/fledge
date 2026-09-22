@@ -2,7 +2,8 @@
 // the terminal it names, and the agent that registered it. The terminal is the
 // record's identity; its pane is a locator that lookups refresh when Herdr
 // moves the terminal to a new pane. A lookup fails closed when the terminal
-// hosts no agent, and ends the record when the terminal is gone from Herdr.
+// hosts no agent, and ends the record when the terminal is gone from Herdr or
+// now hosts a different harness.
 package identity
 
 import (
@@ -72,13 +73,19 @@ func Existing(ctx context.Context, cwd string) (*state.Store, error) {
 // Herdr lookups happen first; the store lock then covers only the check for an
 // existing live record of the terminal and the create, so concurrent
 // registrations of one terminal yield exactly one record and the others fail
-// with agent_already_registered naming it.
+// with agent_already_registered naming it. A live record of the terminal left
+// by a different harness ends first.
 func Register(ctx context.Context, s *state.Store, c libagent.Client, details herdr.AgentDetails, by string, worktree *string) (Record, error) {
 	if details.TerminalID == "" || details.PaneID == "" {
 		return Record{}, fmt.Errorf("cannot register an agent without a pane and terminal id")
 	}
 	parent, err := Caller(ctx, s, c)
 	if err != nil {
+		return Record{}, err
+	}
+	// End a different harness's record now: Unregistered, under the lock,
+	// cannot write it.
+	if _, err := Match(s, details); err != nil {
 		return Record{}, err
 	}
 	var rec Record
@@ -103,13 +110,16 @@ func Register(ctx context.Context, s *state.Store, c libagent.Client, details he
 }
 
 // Unregistered fails with agent_already_registered, naming the existing id,
-// when a's terminal already has a live record.
+// when a's terminal already has a live record of a's harness. It only reads,
+// so it may run under the store lock. It tolerates a record left by a
+// different harness because Register ends that record via Match before taking
+// the lock; ending it under s.Exclusive would self-deadlock on the store flock.
 func Unregistered(s *state.Store, a herdr.AgentDetails) error {
 	existing, err := Live(s, a.TerminalID)
 	if err != nil {
 		return err
 	}
-	if existing != nil {
+	if existing != nil && !Mismatched(*existing, a) {
 		return &herdr.Error{Code: "agent_already_registered", Message: fmt.Sprintf("the agent in %s is already registered as %s", a.PaneID, existing.ID)}
 	}
 	return nil
@@ -130,7 +140,7 @@ func Caller(ctx context.Context, s *state.Store, c libagent.Client) (*Record, er
 	if err != nil {
 		return nil, err
 	}
-	rec, err := Live(s, caller.TerminalID)
+	rec, err := Match(s, caller)
 	if err != nil || rec == nil {
 		return nil, err
 	}
@@ -189,6 +199,30 @@ func End(s *state.Store, id string) error {
 	})
 }
 
+// Match returns the live record of a's terminal, or nil when none exists. A
+// record left by a different harness is not a's: Match ends it and returns nil.
+func Match(s *state.Store, a herdr.AgentDetails) (*Record, error) {
+	rec, err := Live(s, a.TerminalID)
+	if err != nil || rec == nil || !Mismatched(*rec, a) {
+		return rec, err
+	}
+	return nil, End(s, rec.ID)
+}
+
+// Mismatched reports whether a runs a different harness than rec recorded.
+// An unknown harness on either side is no mismatch.
+func Mismatched(rec Record, a herdr.AgentDetails) bool {
+	return rec.Harness != nil && a.Agent != nil && *rec.Harness != *a.Agent
+}
+
+// Attributed returns a's record from records, a LiveByTerminal map, unless a
+// has no terminal or runs a different harness than the record. It never
+// writes, for listings that only display records.
+func Attributed(records map[string]Record, a herdr.AgentDetails) (Record, bool) {
+	rec, ok := records[a.TerminalID]
+	return rec, ok && a.TerminalID != "" && !Mismatched(rec, a)
+}
+
 // Live returns the unended record naming terminal in the current Herdr
 // session, or nil when none exists.
 func Live(s *state.Store, terminal string) (*Record, error) {
@@ -222,8 +256,8 @@ func LiveByTerminal(s *state.Store) (map[string]Record, error) {
 // Resolve loads record id and fetches its terminal's live agent. When the
 // recorded pane no longer hosts the terminal, Herdr's agent list locates it
 // and the record follows it to its new pane. A terminal hosting no agent fails
-// closed with agent_identity_stale; if it is gone from every pane, the record
-// also ends.
+// closed with agent_identity_stale; if it is gone from every pane, or hosts a
+// different harness, the record also ends.
 func Resolve(ctx context.Context, s *state.Store, c libagent.Client, id string) (Record, herdr.AgentDetails, error) {
 	rec, err := load(s, id)
 	if err != nil {
@@ -243,6 +277,12 @@ func Resolve(ctx context.Context, s *state.Store, c libagent.Client, id string) 
 		if a, found = lookup(agents, rec.TerminalID); !found {
 			return Record{}, herdr.AgentDetails{}, gone(ctx, s, c, rec)
 		}
+	}
+	if Mismatched(rec, a) {
+		if err := End(s, rec.ID); err != nil {
+			return Record{}, herdr.AgentDetails{}, err
+		}
+		return Record{}, herdr.AgentDetails{}, harnessChanged(rec, a)
 	}
 	if rec, err = Relocate(s, rec, a); err != nil {
 		return Record{}, herdr.AgentDetails{}, err
@@ -300,12 +340,20 @@ func lookup(list []herdr.AgentDetails, terminal string) (herdr.AgentDetails, boo
 	return herdr.AgentDetails{}, false
 }
 
-// Verify fails closed unless a is the terminal rec names, in whatever pane.
+// Verify fails closed unless a is the terminal rec names, in whatever pane,
+// running the harness rec recorded.
 func Verify(rec Record, a herdr.AgentDetails) error {
 	if a.TerminalID != rec.TerminalID {
 		return stale(rec.ID, "pane %s now hosts a different terminal", a.PaneID)
 	}
+	if Mismatched(rec, a) {
+		return harnessChanged(rec, a)
+	}
 	return nil
+}
+
+func harnessChanged(rec Record, a herdr.AgentDetails) error {
+	return stale(rec.ID, "terminal %s now hosts a different harness: %s, not the recorded %s", rec.TerminalID, *a.Agent, *rec.Harness)
 }
 
 func load(s *state.Store, id string) (Record, error) {

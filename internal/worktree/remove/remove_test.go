@@ -413,3 +413,29 @@ func TestAgentInSymlinkedCheckoutBlocksRemoval(t *testing.T) {
 		}
 	}
 }
+
+// A record left in a terminal by a different harness does not block removal.
+func TestRecordOfDifferentHarnessDoesNotBlockRemoval(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "")
+	r := newRepo(t)
+	st, err := identity.OpenStore(context.Background(), r.root, &libagent.Outcome{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	codex, claude := "codex", "claude"
+	if _, err := st.Create(identity.Kind, func(id string) any {
+		return identity.Record{ID: id, Pane: "w9:p1", WorkspaceID: "w9", Harness: &codex, TerminalID: "t1", RegisteredAt: "2026-01-01T00:00:00Z", RegisteredBy: "spawn", WorktreePath: &r.topic}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	live := agentAt(r.root, "t1")
+	live.Agent = &claude
+	out := Run(context.Background(), herdrscript.Client(t,
+		call{Method: "worktree.list", Result: r.listing(false)},
+		agentList(live),
+		agentList(live),
+	), Options{Path: r.topic, Force: true, Cwd: r.root})
+	if out.Status != "success" {
+		t.Fatalf("%+v", out)
+	}
+}
