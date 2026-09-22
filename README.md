@@ -90,6 +90,11 @@ fledge agent spawn --name existing --harness claude --pane w2:p3
 fledge agent list --json
 fledge agent get --name reviewer
 fledge agent get --pane w2:p3 --json
+fledge agent read --name reviewer
+fledge agent read --pane w2:p3 --source visible --lines 40 --json
+fledge agent wait --name reviewer --timeout 10m
+fledge agent wait --name reviewer --name builder --all --json
+fledge agent wait --name reviewer --pane w2:p3 --any --until done
 fledge agent message --name reviewer --body 'Review the current diff'
 fledge agent message --pane w2:p3 --file task.md
 cat task.md | fledge agent message --name reviewer --file -
@@ -191,6 +196,33 @@ details are `null`; `interactive_ready` and `launch_pending` are optional and
 appear as `null` when absent, while `focused` is always present on a successful
 read. `effects` is empty. Failed reads use `rejected` with the error code and
 phase.
+
+`fledge agent read` prints a plain-text terminal snapshot of one live agent's
+pane, selected by exactly one of `--name`/`--pane`. It resolves the agent, then
+reads that pane without focusing it or marking output seen. `--source` is
+`visible`, `recent`, `recent-unwrapped` (default; soft wraps joined), or
+`detection`. `--lines N` requests the bottom N rows (0 to 4294967295); Herdr
+returns at most 1000 rows, and `--lines 0` returns an empty, truncated snapshot.
+Text output is a label, `Terminal snapshot of <name or pane> (<source>, <N> rows,
+truncated: yes|no)`, followed by the text. JSON adds `source`, `lines` (rows
+returned), `text`, `revision`, and `truncated` to the standard agent fields. A
+snapshot is the terminal's current contents, not a conversation transcript.
+
+`fledge agent wait` blocks until agents reach a lifecycle state. Without
+`--until`, it matches `idle`, `done`, or `blocked`; repeat `--until` to choose
+states from `idle`, `working`, `blocked`, `done`, and `unknown`. Without
+`--timeout`, it waits indefinitely with no transport deadline; Ctrl-C cancels
+it. A finite `--timeout` is passed to Herdr and fails with `timeout`. A settled
+state means the agent's turn ended, **not** that its assigned work succeeded.
+`--name` and `--pane` are repeatable and may be mixed; duplicate targets are
+rejected. One target prints `<name> is <status>.` and its JSON result is the
+agent row. Two or more targets need `--all` or `--any`, and each target gets its
+own Herdr wait. `--all` waits for every target and fails if any errored.
+`--any` succeeds on the first match, records targets that fail (for example
+`agent_not_running` when an agent exits) while others remain, then cancels the
+rest; it fails only if every target fails. Multi-target output is one line per
+target, and JSON returns `mode`, `winner`, and `targets` rows with `target`,
+`outcome` (`matched`, `errored`, or `cancelled`), `agent`, and `error`.
 
 `fledge agent pause` interrupts the current foreground turn while preserving the
 pane and conversation. It accepts exactly one nonempty `--name` or `--pane`, no

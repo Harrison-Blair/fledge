@@ -18,18 +18,29 @@ type Error struct {
 
 func (e *Error) Error() string { return e.Code + ": " + e.Message }
 
+// defaultTimeout is the transport limit when Timeout is zero; tests shorten it.
+var defaultTimeout = 15 * time.Second
+
 // Client opens one connection for each request. Timeout is a transport limit.
+// NoDeadline removes that limit for calls that may block indefinitely, such as
+// agent.wait; context cancellation still closes the connection.
 type Client struct {
-	Socket  string
-	Timeout time.Duration
+	Socket     string
+	Timeout    time.Duration
+	NoDeadline bool
 }
 
 func (c Client) Call(ctx context.Context, method string, params any, result any) error {
 	timeout := c.Timeout
 	if timeout == 0 {
-		timeout = 15 * time.Second
+		timeout = defaultTimeout
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	var cancel context.CancelFunc
+	if c.NoDeadline {
+		ctx, cancel = context.WithCancel(ctx)
+	} else {
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+	}
 	defer cancel()
 	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", c.Socket)
 	if err != nil {

@@ -132,3 +132,45 @@ func TestCallConnectionFailures(t *testing.T) {
 		})
 	}
 }
+
+// TestCallNoDeadlineOutlivesDefaultTimeout shortens the default transport
+// limit so a reply slower than it stands in for a wait longer than 15 s.
+func TestCallNoDeadlineOutlivesDefaultTimeout(t *testing.T) {
+	saved := defaultTimeout
+	defaultTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { defaultTimeout = saved })
+	for _, noDeadline := range []bool{false, true} {
+		t.Run(fmt.Sprint(noDeadline), func(t *testing.T) {
+			path := socket(t, func(c net.Conn) {
+				bufio.NewReader(c).ReadString('\n')
+				time.Sleep(300 * time.Millisecond)
+				c.Write([]byte("{\"id\":\"fledge\",\"result\":{\"type\":\"ok\"}}\n"))
+			})
+			var out any
+			err := (Client{Socket: path, NoDeadline: noDeadline}).Call(context.Background(), "test", nil, &out)
+			if noDeadline && err != nil {
+				t.Fatalf("no-deadline call failed: %v", err)
+			}
+			var e *Error
+			if !noDeadline && (!errors.As(err, &e) || e.Code != "transport_error") {
+				t.Fatalf("default limit not applied: %v", err)
+			}
+		})
+	}
+}
+
+func TestCallNoDeadlineHonorsCancellation(t *testing.T) {
+	path := socket(t, func(c net.Conn) { bufio.NewReader(c).ReadString('\n'); buf := make([]byte, 1); c.Read(buf) })
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(20*time.Millisecond, cancel)
+	var out any
+	start := time.Now()
+	err := (Client{Socket: path, NoDeadline: true}).Call(ctx, "test", nil, &out)
+	var e *Error
+	if !errors.As(err, &e) || !e.Uncertain {
+		t.Fatal(err)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatal("cancellation did not interrupt read")
+	}
+}

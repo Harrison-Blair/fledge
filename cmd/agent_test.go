@@ -11,7 +11,7 @@ import (
 )
 
 func TestAgentHelp(t *testing.T) {
-	for _, args := range [][]string{{"agent", "--help"}, {"agent", "spawn", "--help"}, {"agent", "list", "--help"}, {"agent", "message", "--help"}, {"agent", "models", "--help"}, {"agent", "stop", "--help"}, {"agent", "get", "--help"}} {
+	for _, args := range [][]string{{"agent", "--help"}, {"agent", "spawn", "--help"}, {"agent", "list", "--help"}, {"agent", "message", "--help"}, {"agent", "models", "--help"}, {"agent", "stop", "--help"}, {"agent", "get", "--help"}, {"agent", "read", "--help"}, {"agent", "wait", "--help"}} {
 		var out bytes.Buffer
 		if err := ExecuteWithArgs(args, &out); err != nil {
 			t.Fatal(err)
@@ -37,6 +37,17 @@ func TestAgentJSONValidation(t *testing.T) {
 		{"agent", "stop", "--json"},
 		{"agent", "stop", "--name", "a", "--pane", "p", "--json"},
 		{"agent", "stop", "extra", "--json"},
+		{"agent", "read", "--json"},
+		{"agent", "read", "--name", "a", "--source", "recent_unwrapped", "--json"},
+		{"agent", "read", "--name", "a", "--lines", "-1", "--json"},
+		{"agent", "read", "--name", "a", "--lines", "4294967296", "--json"},
+		{"agent", "read", "extra", "--json"},
+		{"agent", "wait", "--json"},
+		{"agent", "wait", "--name", "a", "--name", "b", "--json"},
+		{"agent", "wait", "--name", "a", "--pane", "a", "--any", "--json"},
+		{"agent", "wait", "--name", "a", "--until", "settled", "--json"},
+		{"agent", "wait", "--name", "a", "--timeout", "-1s", "--json"},
+		{"agent", "wait", "extra", "--json"},
 		{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "p", "--cwd=", "--json"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
@@ -64,7 +75,7 @@ func TestAgentGroupHelpListsSubcommands(t *testing.T) {
 	if err := ExecuteWithArgs([]string{"agent", "--help"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"stop", "get"} {
+	for _, name := range []string{"stop", "get", "read", "wait"} {
 		if !strings.Contains(out.String(), "\n  "+name+" ") {
 			t.Fatalf("%s: %s", name, out.String())
 		}

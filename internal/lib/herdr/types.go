@@ -126,3 +126,20 @@ type AgentSession struct {
 	Kind   *string `json:"kind"`
 	Value  *string `json:"value"`
 }
+
+// PaneRead is a terminal snapshot carried by pane_read results. Revision and
+// Truncated are pointers so a missing required field is detectable.
+type PaneRead struct {
+	PaneID      string  `json:"pane_id"`
+	WorkspaceID string  `json:"workspace_id"`
+	TabID       string  `json:"tab_id"`
+	Source      string  `json:"source"`
+	Format      string  `json:"format"`
+	Text        string  `json:"text"`
+	Revision    *uint64 `json:"revision"`
+	Truncated   *bool   `json:"truncated"`
+}
+type PaneReadResult struct {
+	Type string   `json:"type"`
+	Read PaneRead `json:"read"`
+}
