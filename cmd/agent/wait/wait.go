@@ -23,7 +23,7 @@ the agent's turn ended, not that its assigned work succeeded. Without
 --timeout, the wait is indefinite; interrupt it with Ctrl-C.
 
 --name and --pane are repeatable and may be mixed. Several targets need --all
-(every target must match) or --any (the first match wins and the remaining
+(every target must match; the first failure cancels the rest) or --any (the first match wins and the remaining
 waits are cancelled; targets that fail are recorded while others remain).`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
