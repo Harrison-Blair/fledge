@@ -501,6 +501,10 @@ working directory (likely the Herdr server's or the pane shell's home). Spawn
 should resolve a relative `--cwd` against the caller's working directory or
 reject relative paths.
 
+Resolved 2026-09-22: `agent spawn` now resolves a relative `--cwd` against the
+caller's working directory before sending it to Herdr; an absolute `--cwd` is
+unchanged.
+
 **Reproduction steps:**
 1. From the repository root, create a worktree such as `.fledge/worktrees/fix/agent-cmds`.
 2. Run `fledge agent spawn --name review-agent --harness claude --cwd .fledge/worktrees/fix/agent-cmds --tab review-agent --file brief.md`.

@@ -126,7 +126,8 @@ flag form is printed before launch. Any flag, or a non-terminal stream, keeps th
 ordinary required-flag validation.
 
 Ordinary spawn honors Herdr's configured cwd policy unless `--cwd` is supplied.
-Use repeatable `--env KEY=VALUE` for new ordinary shells. `--direction` defaults
+A relative `--cwd` resolves against the caller's working directory; an absolute
+path is used as given. Use repeatable `--env KEY=VALUE` for new ordinary shells. `--direction` defaults
 to `right`; `--ratio` delegates to Herdr when omitted. These flags only affect
 splits. `--focus` defaults to false and focuses the destination before launch.
 `--timeout` is a duration, default `30s`; its millisecond value must be greater

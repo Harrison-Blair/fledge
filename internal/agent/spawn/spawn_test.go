@@ -3,6 +3,7 @@ package spawn
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -122,6 +123,20 @@ func TestNewWorkspaceReusesInitialTabAndPane(t *testing.T) {
 	o.Env = []string{"K=a=b"}
 	p := herdrscript.Pane("w2:p1", "w2", "w2:t1")
 	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "pane.current", Result: herdr.PaneResult{Type: "pane_current", Pane: herdrscript.Pane("w1:p1", "w1", "w1:t1")}}, call{Method: "workspace.create", Params: map[string]any{"focus": false, "label": "new workspace", "cwd": "/chosen", "env": map[string]string{"K": "a=b"}, "source_workspace_id": "w1"}, Result: herdr.CreatedResult{Type: "workspace_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2", Label: "1"}, RootPane: p}}, call{Method: "tab.rename", Params: map[string]any{"tab_id": "w2:t1", "label": "tasks"}, Result: herdr.TabResult{Type: "tab_info", Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2", Label: "tasks"}}}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"))
+	out := s.run(context.Background(), o, nil)
+	if out.Status != "success" {
+		t.Fatalf("%+v", out)
+	}
+}
+func TestRelativeCwdResolvesAgainstCallerDirectory(t *testing.T) {
+	callerCwd := t.TempDir()
+	resolved := filepath.Join(callerCwd, "relative/sub")
+	o := validOptions()
+	o.Workspace = "new workspace"
+	o.Cwd = "relative/sub"
+	p := herdrscript.Pane("w2:p1", "w2", "w2:t1")
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "pane.current", Result: herdr.PaneResult{Type: "pane_current", Pane: herdrscript.Pane("w1:p1", "w1", "w1:t1")}}, call{Method: "workspace.create", Params: map[string]any{"focus": false, "label": "new workspace", "cwd": resolved, "source_workspace_id": "w1"}, Result: herdr.CreatedResult{Type: "workspace_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p}}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"))
+	s.Cwd = callerCwd
 	out := s.run(context.Background(), o, nil)
 	if out.Status != "success" {
 		t.Fatalf("%+v", out)
