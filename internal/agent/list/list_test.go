@@ -236,3 +236,28 @@ func TestListRejectsInvalidLineageFilters(t *testing.T) {
 		}
 	}
 }
+
+func TestListFilterFailsOnUnreadableStore(t *testing.T) {
+	l := newLineage(t)
+	if err := os.WriteFile(filepath.Join(l.cwd, ".fledge", "state", "agents", l.childID+".json"), []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range []Options{{}, {Parent: l.parentID}} {
+		c := herdrscript.Client(t, l.listCall())
+		c.Cwd = l.cwd
+		out := Run(context.Background(), c, o)
+		if filtered := o.Parent != ""; filtered != (out.Error != nil) || filtered && (out.Error.Phase != "state" || out.ExitCode() != 1) {
+			t.Fatalf("%+v: %+v", o, out)
+		}
+	}
+}
+
+func TestFilteredEmptyListNamesChildren(t *testing.T) {
+	l := newLineage(t)
+	c := herdrscript.Client(t, l.listCall())
+	c.Cwd = l.cwd
+	var b bytes.Buffer
+	if err := Run(context.Background(), c, Options{Parent: l.childID}).Write(&b, false, Render); err != nil || b.String() != "No child agents.\n" {
+		t.Fatalf("%q %v", b.String(), err)
+	}
+}

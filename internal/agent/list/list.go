@@ -16,7 +16,8 @@ import (
 )
 
 type Result struct {
-	Agents []Row `json:"agents"`
+	Agents   []Row `json:"agents"`
+	filtered bool
 }
 
 // Row is a live agent with its Fledge record ID and that record's parent,
@@ -91,7 +92,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		}
 		rows = append(rows, row)
 	}
-	out.Result = Result{Agents: rows}
+	out.Result = Result{Agents: rows, filtered: o.Parent != ""}
 	return out
 }
 
@@ -113,7 +114,11 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		return nil
 	}
 	if len(r.Agents) == 0 {
-		_, err := fmt.Fprintln(w, "No live agents.")
+		empty := "No live agents."
+		if r.filtered {
+			empty = "No child agents."
+		}
+		_, err := fmt.Fprintln(w, empty)
 		return err
 	}
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)

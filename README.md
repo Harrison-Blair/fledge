@@ -341,19 +341,22 @@ Herdr session, or the record has ended; an unknown ID fails with
 `agent_record_not_found`. `agent get` shows the record (Fledge ID, parent,
 registration time and source) whenever the live agent has one, and JSON adds
 `record`. `agent list` adds `ID` and `PARENT` columns (`-` when unregistered or
-parentless) and `id` and `parent` fields. `--parent <id>` keeps only live agents
-whose record's parent is that ID; `--mine` does the same for the caller's own
-live record. The two are mutually exclusive, and only direct children are
-listed.
+parentless) and `id` and `parent` fields. Session names come from the
+environment, so these checks are a workflow guard, not a security boundary.
+
+`agent list --parent <id>` keeps only live agents whose record's parent is that
+ID; `--mine` does the same for the caller's own live record. The two are
+mutually exclusive, only direct children are listed, and an empty result prints
+`No child agents.`
 
 `fledge agent current` shows the caller's own live record: its ID, name, pane,
-workspace, harness, worktree, parent (with the parent's name while its record
-exists), and the tasks it owns in the `assigned` state, oldest first. JSON flattens
-the record into `result` and adds `parent_name` and `tasks` (`id` and `title`).
-`agent current` and `agent list --mine` fail with `caller_unregistered` when the
-caller's pane hosts no registered agent, including outside a Herdr agent pane;
-register it with `fledge agent adopt`. Session names come from the environment, so these checks are a
-workflow guard, not a security boundary.
+workspace, harness, worktree, parent, and the tasks it owns in the `assigned`
+state, oldest first. The parent's name is the name recorded on the parent's
+record, shown while that record exists; it can differ from the parent's live
+Herdr name. JSON flattens the record into `result` and adds `parent_name` and
+`tasks` (`id` and `title`). `agent current` and `agent list --mine` fail with
+`caller_unregistered` when the caller's pane hosts no registered agent,
+including outside a Herdr agent pane; register it with `fledge agent adopt`.
 
 ### Outcomes and recovery
 
