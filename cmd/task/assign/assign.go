@@ -16,7 +16,7 @@ func New() *cobra.Command {
 	f.StringVar(&options.ID, "id", "", "Task ID")
 	f.StringVar(&options.Name, "name", "", "Live agent name")
 	f.StringVar(&options.Pane, "pane", "", "Hosting pane ID")
-	f.StringVar(&options.AgentID, "agent-id", "", "Fledge agent record ID (fails if the pane now hosts another terminal)")
+	f.StringVar(&options.AgentID, "agent-id", "", "Fledge agent record ID (follows its terminal to a new pane; fails if the terminal is gone)")
 	f.BoolVar(&asJSON, "json", false, "Emit a structured outcome")
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 		return libagent.Finish(assign.Run(cmd.Context(), libagent.FromEnvironment(0), options), cmd.OutOrStdout(), asJSON, assign.Render)
