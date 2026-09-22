@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -104,5 +105,24 @@ func TestDoctorFailPrintsReportOnceAndExitsNonzero(t *testing.T) {
 	// The report is printed exactly once: execute must not add an "Error:" line.
 	if strings.Contains(errOut.String(), "Error:") {
 		t.Fatalf("duplicate error line on stderr: %q", errOut.String())
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("stdout closed") }
+
+func TestDoctorOutputFailureIsNotReprinted(t *testing.T) {
+	l := newSocket(t)
+	done := serveRPCs(l, pongResult(), emptyList(), emptyList())
+	var errOut bytes.Buffer
+	err := execute([]string{"doctor"}, nil, failingWriter{}, &errOut)
+	waitCalls(t, l, done, 2)
+	if err == nil || ExitCode(err) != 1 {
+		t.Fatalf("err = %v, exit code = %d; want exit code 1", err, ExitCode(err))
+	}
+	// The failed report write is the whole outcome; execute must not add a line.
+	if errOut.Len() != 0 {
+		t.Fatalf("output failure was reprinted: %q", errOut.String())
 	}
 }

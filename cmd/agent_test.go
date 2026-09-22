@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	agentlogic "github.com/Harrison-Blair/fledge/internal/agent"
+	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 )
 
 func TestAgentHelp(t *testing.T) {
@@ -49,7 +49,7 @@ func TestAgentJSONValidation(t *testing.T) {
 			if !errors.As(err, &status) || status.ExitCode() != 2 {
 				t.Fatalf("wrong exit: %v", err)
 			}
-			var envelope agentlogic.Outcome
+			var envelope libagent.Outcome
 			if err = json.Unmarshal(out.Bytes(), &envelope); err != nil {
 				t.Fatalf("not one JSON object: %q: %v", out.String(), err)
 			}

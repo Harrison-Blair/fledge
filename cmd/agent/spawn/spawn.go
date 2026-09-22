@@ -2,14 +2,15 @@
 package spawn
 
 import (
-	"github.com/Harrison-Blair/fledge/internal/agent"
+	"github.com/Harrison-Blair/fledge/internal/agent/spawn"
+	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"time"
 )
 
 func New() *cobra.Command {
-	var options agent.SpawnOptions
+	var options spawn.Options
 	var asJSON bool
 	var ratio float64
 	cmd := &cobra.Command{Use: "spawn [flags] [-- native-args...]", Short: "Launch an agent in a Herdr pane"}
@@ -47,9 +48,9 @@ func New() *cobra.Command {
 		f.Visit(func(flag *pflag.Flag) { options.Provided = append(options.Provided, flag.Name) })
 		options.Args = append(options.Args, args...)
 		if len(args) > 0 && cmd.ArgsLenAtDash() != 0 {
-			return agent.Finish(agent.InvalidOutcome("agent.spawn", agent.PositionalError()), cmd.OutOrStdout(), asJSON)
+			return libagent.Finish(libagent.InvalidOutcome("agent.spawn", spawn.PositionalError()), cmd.OutOrStdout(), asJSON, spawn.Render)
 		}
-		return agent.Finish(agent.FromEnvironment(options.Timeout).Spawn(cmd.Context(), options, cmd.InOrStdin()), cmd.OutOrStdout(), asJSON)
+		return libagent.Finish(spawn.Run(cmd.Context(), libagent.FromEnvironment(options.Timeout), options, cmd.InOrStdin()), cmd.OutOrStdout(), asJSON, spawn.Render)
 	}
 	return cmd
 }

@@ -15,10 +15,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
-func archive(t *testing.T, name, body string, kind byte) []byte {
+func tarball(t *testing.T, name, body string, kind byte) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
@@ -92,7 +91,7 @@ func TestRun(t *testing.T) {
 		{name: "dev check", current: "v0.2.1-0.20260920031334-9d33d8ff0171", check: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			opts, out, errOut, downloads := fixture(t, archive(t, "fledge", "new binary", tar.TypeReg), "")
+			opts, out, errOut, downloads := fixture(t, tarball(t, "fledge", "new binary", tar.TypeReg), "")
 			if tc.current != "" {
 				opts.Current = tc.current
 			}
@@ -150,7 +149,7 @@ func TestFailedDownloadPreservesExecutable(t *testing.T) {
 			if tc.name == "empty binary" {
 				body = ""
 			}
-			opts, _, _, _ := fixture(t, archive(t, tc.entry, body, tc.kind), tc.checksum)
+			opts, _, _, _ := fixture(t, tarball(t, tc.entry, body, tc.kind), tc.checksum)
 			opts.Yes = true
 			if err := Run(context.Background(), opts); err == nil {
 				t.Fatal("expected error")
@@ -168,7 +167,7 @@ func TestFailedDownloadPreservesExecutable(t *testing.T) {
 }
 
 func TestUpdateFollowsExecutableSymlink(t *testing.T) {
-	opts, _, _, _ := fixture(t, archive(t, "fledge", "new binary", tar.TypeReg), "")
+	opts, _, _, _ := fixture(t, tarball(t, "fledge", "new binary", tar.TypeReg), "")
 	real := opts.ExecPath
 	link := filepath.Join(t.TempDir(), "fledge-link")
 	if err := os.Symlink(real, link); err != nil {
@@ -199,110 +198,6 @@ func TestUnsupportedPlatform(t *testing.T) {
 	}
 }
 
-func TestSourceFailures(t *testing.T) {
-	for _, tc := range []struct {
-		name, location string
-		status         int
-	}{
-		{"no releases", "/Harrison-Blair/fledge/releases", 302},
-		{"invalid tag", "/Harrison-Blair/fledge/releases/tag/nope", 302},
-		{"other repo", "/someone/else/releases/tag/v1.2.3", 302},
-		{"missing redirect", "", 302},
-		{"server failure", "", 500},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Location", tc.location)
-				w.WriteHeader(tc.status)
-			}))
-			defer srv.Close()
-			_, err := (Source{BaseURL: srv.URL}).LatestTag(context.Background())
-			if err == nil {
-				t.Fatal("expected error")
-			}
-		})
-	}
-}
-
-func TestRequestCancellation(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
-	defer srv.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	if _, err := (Source{BaseURL: srv.URL}).LatestTag(ctx); err == nil {
-		t.Fatal("expected timeout")
-	}
-}
-
-func TestArchiveLimit(t *testing.T) {
-	if _, err := extractBinary(archive(t, "fledge", "too large", tar.TypeReg), 3); err == nil {
-		t.Fatal("expected size limit")
-	}
-}
-
-func TestArchiveLimitIncludesHeadersAndPadding(t *testing.T) {
-	if _, err := extractBinary(archive(t, "fledge", "small", tar.TypeReg), 512); err == nil {
-		t.Fatal("uncompressed archive headers must count toward the size limit")
-	}
-}
-
-func TestMissingAssetsAndChecksums(t *testing.T) {
-	for _, tc := range []struct {
-		name, sums string
-		status     int
-	}{
-		{"missing checksum asset", "", 404},
-		{"missing archive", "abc  fledge_v0.2.0_linux_amd64.tar.gz\n", 200},
-		{"missing checksum entry", "abc  unrelated.tar.gz\n", 200},
-		{"duplicate checksums", "abc  fledge_v0.2.0_linux_amd64.tar.gz\nabc  fledge_v0.2.0_linux_amd64.tar.gz\n", 200},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if strings.HasSuffix(r.URL.Path, "checksums.txt") {
-					w.WriteHeader(tc.status)
-					fmt.Fprint(w, tc.sums)
-				} else {
-					http.NotFound(w, r)
-				}
-			}))
-			defer srv.Close()
-			if _, err := (Source{BaseURL: srv.URL}).binary(context.Background(), "v0.2.0", "amd64"); err == nil {
-				t.Fatal("expected missing asset/checksum error")
-			}
-		})
-	}
-}
-
-func TestDownloadLimit(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "oversize") }))
-	defer srv.Close()
-	if _, err := (Source{}).fetch(context.Background(), srv.URL, 3); err == nil {
-		t.Fatal("expected download limit")
-	}
-}
-
-func TestReplacementFailurePreservesOriginal(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root bypasses filesystem permissions")
-	}
-	dir := t.TempDir()
-	executable := filepath.Join(dir, "fledge")
-	if err := os.WriteFile(executable, []byte("original"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(dir, 0555); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0755) })
-	if err := replace(executable, []byte("new")); err == nil || !strings.Contains(err.Error(), "write permission") {
-		t.Fatalf("error = %v", err)
-	}
-	got, _ := os.ReadFile(executable)
-	if string(got) != "original" {
-		t.Fatalf("modified original: %q", got)
-	}
-}
-
 func TestNullDeviceIsNotAnInteractiveTerminal(t *testing.T) {
 	opts, _, _, downloads := fixture(t, nil, "")
 	f, err := os.Open(os.DevNull)
@@ -327,7 +222,7 @@ func (f failingIO) Write([]byte) (int, error) { return 0, f.err }
 func TestUpdateIOFailures(t *testing.T) {
 	for _, kind := range []string{"confirmation", "warning", "prompt", "check output", "up to date output", "canceled output", "success output"} {
 		t.Run(kind, func(t *testing.T) {
-			opts, _, _, downloads := fixture(t, archive(t, "fledge", "new binary", tar.TypeReg), "")
+			opts, _, _, downloads := fixture(t, tarball(t, "fledge", "new binary", tar.TypeReg), "")
 			sentinel := errors.New("I/O failed")
 			switch kind {
 			case "confirmation":
@@ -429,7 +324,7 @@ type updateTransport func(*http.Request) (*http.Response, error)
 func (f updateTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestCancellationAfterDownloadPreservesExecutable(t *testing.T) {
-	opts, _, _, downloads := fixture(t, archive(t, "fledge", "new binary", tar.TypeReg), "")
+	opts, _, _, downloads := fixture(t, tarball(t, "fledge", "new binary", tar.TypeReg), "")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	base := opts.Client.Transport
@@ -446,6 +341,93 @@ func TestCancellationAfterDownloadPreservesExecutable(t *testing.T) {
 	}
 	if *downloads != 2 {
 		t.Fatalf("downloads = %d, want checksums and archive", *downloads)
+	}
+	assertInstalledFile(t, opts.ExecPath, "old binary")
+}
+
+// recordRequests logs every request path Run makes, in order.
+func recordRequests(opts *Options) *[]string {
+	var paths []string
+	base := opts.Client.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	opts.Client.Transport = updateTransport(func(r *http.Request) (*http.Response, error) {
+		paths = append(paths, strings.TrimPrefix(r.URL.Path, "/Harrison-Blair/fledge/releases/"))
+		return base.RoundTrip(r)
+	})
+	return &paths
+}
+
+// TestRunSequencing pins Run's order: platform validation before any request,
+// the latest-tag lookup before comparison, confirmation and executable
+// resolution before any download, and exact user-facing text.
+func TestRunSequencing(t *testing.T) {
+	const prompt = "Install fledge v0.2.0 over v0.1.0? [y/N] "
+	for _, tc := range []struct {
+		name          string
+		setup         func(*Options)
+		wantPaths     []string
+		wantOut       string
+		wantErrOut    string
+		wantErr       string
+		wantInstalled string
+	}{
+		{name: "confirmed", wantPaths: []string{"latest", "download/v0.2.0/checksums.txt", "download/v0.2.0/fledge_v0.2.0_linux_amd64.tar.gz"},
+			wantOut: "fledge updated to v0.2.0\n", wantErrOut: prompt, wantInstalled: "new binary"},
+		{name: "yes", setup: func(o *Options) { o.Yes = true }, wantPaths: []string{"latest", "download/v0.2.0/checksums.txt", "download/v0.2.0/fledge_v0.2.0_linux_amd64.tar.gz"},
+			wantOut: "fledge updated to v0.2.0\n", wantInstalled: "new binary"},
+		{name: "check", setup: func(o *Options) { o.Check = true }, wantPaths: []string{"latest"},
+			wantOut: "fledge v0.2.0 is available (you have v0.1.0); run fledge update to install it\n"},
+		{name: "up to date", setup: func(o *Options) { o.Current = "v0.2.0" }, wantPaths: []string{"latest"}, wantOut: "fledge v0.2.0 is up to date\n"},
+		{name: "declined", setup: func(o *Options) { o.Stdin = strings.NewReader("n\n") }, wantPaths: []string{"latest"}, wantErrOut: prompt + "update canceled\n"},
+		{name: "dev check", setup: func(o *Options) { o.Current, o.Check = "dev", true }, wantPaths: []string{"latest"},
+			wantOut: "fledge v0.2.0 is available (you have dev); run fledge update to install it\n", wantErrOut: "warning: cannot compare development build \"dev\" with the latest release\n"},
+		{name: "unsupported", setup: func(o *Options) { o.GOARCH = "386" }, wantErr: "update: unsupported platform linux/386; releases support Linux amd64 and arm64"},
+		{name: "nonterminal", setup: func(o *Options) { o.IsTerminal = func() bool { return false } }, wantPaths: []string{"latest"},
+			wantErr: "update: stdin is not a terminal; use --yes to update without a prompt"},
+		{name: "missing executable", setup: func(o *Options) { o.Yes, o.ExecPath = true, o.ExecPath+"-missing" }, wantPaths: []string{"latest"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts, out, errOut, _ := fixture(t, tarball(t, "fledge", "new binary", tar.TypeReg), "")
+			exe := opts.ExecPath
+			paths := recordRequests(&opts)
+			if tc.setup != nil {
+				tc.setup(&opts)
+			}
+			err := Run(context.Background(), opts)
+			if tc.name == "missing executable" {
+				if err == nil || !strings.HasPrefix(err.Error(), "update: resolve executable: ") {
+					t.Fatalf("error = %v", err)
+				}
+			} else if (err == nil && tc.wantErr != "") || (err != nil && err.Error() != tc.wantErr) {
+				t.Fatalf("error = %v, want %q", err, tc.wantErr)
+			}
+			if len(*paths) != len(tc.wantPaths) || strings.Join(*paths, ",") != strings.Join(tc.wantPaths, ",") {
+				t.Fatalf("requests = %q, want %q", *paths, tc.wantPaths)
+			}
+			if out.String() != tc.wantOut || errOut.String() != tc.wantErrOut {
+				t.Fatalf("stdout = %q, stderr = %q; want %q, %q", out, errOut, tc.wantOut, tc.wantErrOut)
+			}
+			want := tc.wantInstalled
+			if want == "" {
+				want = "old binary"
+			}
+			assertInstalledFile(t, exe, want)
+		})
+	}
+}
+
+func TestLatestTagFailureStopsBeforeMutation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusInternalServerError) }))
+	defer srv.Close()
+	opts, out, errOut, _ := fixture(t, nil, "")
+	opts.BaseURL, opts.Client, opts.Yes = srv.URL, srv.Client(), true
+	if err := Run(context.Background(), opts); err == nil || err.Error() != "update: latest release returned HTTP 500" {
+		t.Fatalf("error = %v", err)
+	}
+	if out.Len() != 0 || errOut.Len() != 0 {
+		t.Fatalf("unexpected output: %q %q", out, errOut)
 	}
 	assertInstalledFile(t, opts.ExecPath, "old binary")
 }

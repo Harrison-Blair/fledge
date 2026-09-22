@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	internalversion "github.com/Harrison-Blair/fledge/internal/version"
+	internalversion "github.com/Harrison-Blair/fledge/internal/lib/version"
 )
 
 func TestVersionFlags(t *testing.T) {

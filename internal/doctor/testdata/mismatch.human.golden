@@ -1,0 +1,33 @@
+fledge doctor
+
+  herdr_connectivity      ok
+    socket responded to ping
+
+  herdr_compatibility     warn
+    protocol 21 != pinned 22; version=0.9.1 protocol=21
+        capabilities=live_handoff, detached_server_daemon, health_check,
+        surface_interest, endpoint_protocol_generation=1
+
+  harness_installations   ok
+    6 targets, 3 available
+
+  model_discovery         fail
+    pi 0 · codex 0 · claude 0
+    pi: discovery error: open
+        /nonexistent-home-fledge/.pi/agent/models-store.json: no such file or
+        directory
+    codex: discovery error: open
+        /nonexistent-home-fledge/.codex/models_cache.json: no such file or
+        directory
+    claude: discovery error: open
+        /nonexistent-home-fledge/.claude/cache/model-catalog: no such file or
+        directory
+
+  configuration           warn
+    HERDR_ENV      1
+    socket         /run/herdr.sock (mode unknown: permission denied)
+    pane           -
+    session        -
+    cwd            /work/dir
+
+  2 ok · 2 warn · 1 fail

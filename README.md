@@ -327,12 +327,22 @@ as a `fail`, not a crash.
 - `main.go` delegates to `cmd.Execute()` and handles the exit status.
 - `cmd/` constructs fresh command trees with `NewRootCmd()` and provides
   `ExecuteWithArgs()` for tests.
-- `cmd/<name>/` owns Cobra wiring; `internal/<name>/` owns the implementation.
-- `internal/version` reports the release tag or Go build metadata through
+- `cmd/<name>/` and `cmd/<parent>/<subcommand>/` contain thin Cobra wiring;
+  `internal/` mirrors that command nesting as `internal/<name>/` and
+  `internal/<parent>/<subcommand>/`.
+- Each internal command leaf owns its options, orchestration, result types,
+  human rendering, and tests. Internal parent packages may coordinate nested
+  components, as `doctor` does with `checks`/`report` and `update` with
+  `release`/`archive`/`install`/`confirm`; child packages do not import their
+  parents.
+- `internal/lib/<capability>/` contains focused shared code used by multiple
+  commands or packages; do not create one flat grab-bag lib package and do not
+  extract speculative utilities.
+- `internal/lib/version` reports the release tag or Go build metadata through
   `--version` and `-V`, without a maintained version file.
 
 New subcommands export `New() *cobra.Command` and are registered by their parent.
-Keep application logic in `internal/`, independent of Cobra.
+Internal packages do not import Cobra or `cmd/`.
 
 ## Development
 

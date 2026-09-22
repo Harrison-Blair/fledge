@@ -5,9 +5,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/Harrison-Blair/fledge/internal/agent"
 	"github.com/Harrison-Blair/fledge/internal/doctor"
-	"github.com/Harrison-Blair/fledge/internal/herdr"
+	"github.com/Harrison-Blair/fledge/internal/doctor/checks"
+	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/models"
 	"github.com/spf13/cobra"
 )
 
@@ -22,8 +23,8 @@ func New() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return doctor.Run(cmd.Context(), doctor.Options{
 				Herdr:     herdr.Client{Socket: os.Getenv("HERDR_SOCKET_PATH"), Timeout: 15 * time.Second},
-				Discovery: agent.LocalDiscovery(),
-				Env:       doctor.LocalEnvironment(),
+				Discovery: models.LocalDiscovery(),
+				Env:       checks.LocalEnvironment(),
 				Out:       cmd.OutOrStdout(),
 				JSON:      asJSON,
 				Verbose:   verbose,

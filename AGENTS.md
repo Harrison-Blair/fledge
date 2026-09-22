@@ -25,7 +25,7 @@ pull request, which the owner approves. Never commit directly to `main`.
 ## Releases
 
 Stable Git tags (`vMAJOR.MINOR.PATCH`) are the release version source. There is no
-maintained version file. `internal/version.Version()` uses the release value
+maintained version file. `internal/lib/version.Version()` uses the release value
 injected at build time, then Go's embedded module version, then `dev`. Development
 builds retain Go's revision and dirty metadata without runtime Git access. Cobra
 exposes the version through `--version` and `-V`; there is no `version` subcommand
@@ -64,12 +64,20 @@ named `fledge`. `cmd/` is a library package holding the root command and per-sub
 wiring. `NewRootCmd()` builds a fresh command tree; `ExecuteWithArgs()` lets tests
 inject arguments and output without changing process globals.
 
-Every subcommand gets its own folder under `cmd/<name>/` with a `New() *cobra.Command`
-constructor that calls into `internal/`. The immediate parent registers its children.
-`internal/` mirrors that: one folder per capability, plus folders for shared logic.
-Command files hold wiring only; logic and its tests live in `internal/`. Internal
-packages must not import Cobra or `cmd/`. The version flags use
-`cmd/version.Configure()` instead of a standalone command.
+Every subcommand gets its own folder as `cmd/<name>/` or
+`cmd/<parent>/<subcommand>/`, containing thin Cobra wiring: a
+`New() *cobra.Command` constructor that calls into `internal/`. The immediate
+parent registers its children. `internal/` mirrors that command nesting as
+`internal/<name>/` and `internal/<parent>/<subcommand>/`. Each internal command
+leaf owns its options, orchestration, result types, human rendering, and tests.
+Internal parent packages may coordinate their nested components, as `doctor`
+does with `checks`/`report` and `update` with
+`release`/`archive`/`install`/`confirm`; child packages do not import their
+parents. `internal/lib/<capability>/` contains focused shared code used by
+multiple commands or packages; do not create one flat grab-bag lib package and
+do not extract speculative utilities. Internal packages do not import Cobra or
+`cmd/`. The version flags use `cmd/version.Configure()` instead of a standalone
+command.
 
 Use direct functions and explicit dependencies; do not assemble command trees with
 `init` functions or shared command globals. Keep packages flat until a distinct

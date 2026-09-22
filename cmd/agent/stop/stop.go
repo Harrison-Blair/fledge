@@ -2,15 +2,16 @@
 package stop
 
 import (
-	"github.com/Harrison-Blair/fledge/internal/agent"
+	"github.com/Harrison-Blair/fledge/internal/agent/stop"
+	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/spf13/cobra"
 )
 
 func New() *cobra.Command {
-	var options agent.StopOptions
+	var options stop.Options
 	var asJSON bool
 	cmd := &cobra.Command{Use: "stop", Short: "Stop a live agent by closing its pane", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		return agent.Finish(agent.FromEnvironment(0).Stop(cmd.Context(), options), cmd.OutOrStdout(), asJSON)
+		return libagent.Finish(stop.Run(cmd.Context(), libagent.FromEnvironment(0), options), cmd.OutOrStdout(), asJSON, stop.Render)
 	}}
 	f := cmd.Flags()
 	f.StringVar(&options.Name, "name", "", "Live agent name")

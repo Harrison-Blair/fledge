@@ -2,12 +2,13 @@
 package message
 
 import (
-	"github.com/Harrison-Blair/fledge/internal/agent"
+	"github.com/Harrison-Blair/fledge/internal/agent/message"
+	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/spf13/cobra"
 )
 
 func New() *cobra.Command {
-	var options agent.MessageOptions
+	var options message.Options
 	var asJSON bool
 	cmd := &cobra.Command{Use: "message", Short: "Submit a message without waiting for agent completion", Args: cobra.NoArgs}
 	f := cmd.Flags()
@@ -19,7 +20,7 @@ func New() *cobra.Command {
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 		options.BodySet = f.Changed("body")
 		options.FileSet = f.Changed("file")
-		return agent.Finish(agent.FromEnvironment(0).Message(cmd.Context(), options, cmd.InOrStdin()), cmd.OutOrStdout(), asJSON)
+		return libagent.Finish(message.Run(cmd.Context(), libagent.FromEnvironment(0), options, cmd.InOrStdin()), cmd.OutOrStdout(), asJSON, message.Render)
 	}
 	return cmd
 }
