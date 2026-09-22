@@ -3,6 +3,7 @@ package list
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
@@ -42,10 +43,10 @@ func TestListFiltersAndNamesLiveOwners(t *testing.T) {
 	if err := out.Write(&b, false, Render); err != nil {
 		t.Fatal(err)
 	}
-	want := "ID        STATUS     OWNER     PARENT  PROGRESS  TITLE\n" +
-		first + "  created    -         -       -         first\n" +
-		second + "  assigned   worker    -       -         second\n" +
-		third + "  completed  0badc0de  -       -         third\n"
+	want := "ID        STATUS     OWNER     PARENT  WAITING  PROGRESS  TITLE\n" +
+		first + "  created    -         -       -        -         first\n" +
+		second + "  assigned   worker    -       -        -         second\n" +
+		third + "  completed  0badc0de  -       -        -         third\n"
 	if b.String() != want {
 		t.Fatalf("%q\nwant %q", b.String(), want)
 	}
@@ -97,10 +98,41 @@ func TestListParentShowsDirectChildrenAndProgress(t *testing.T) {
 	if err := Run(ctx, tasktest.Client(t, repo, ""), Options{Status: task.Assigned}).Write(&buf, false, Render); err != nil {
 		t.Fatal(err)
 	}
-	want := "ID        STATUS    OWNER  PARENT    PROGRESS                   TITLE\n" +
-		goal + "  assigned  -      -         1/2 verified, 1 cancelled  goal\n" +
-		b + "  assigned  -      " + goal + "  0/1 verified               b\n"
+	want := "ID        STATUS    OWNER  PARENT    WAITING  PROGRESS                   TITLE\n" +
+		goal + "  assigned  -      -         -        1/2 verified, 1 cancelled  goal\n" +
+		b + "  assigned  -      " + goal + "  -        0/1 verified               b\n"
 	if buf.String() != want {
 		t.Fatalf("%q\nwant %q", buf.String(), want)
+	}
+}
+
+func TestListReadyAndWaiting(t *testing.T) {
+	repo := identitytest.Repository(t)
+	seed := func(title, status string, after ...string) string {
+		return tasktest.Seed(t, repo, task.Record{Title: title, Status: status, After: after, CreatedAt: "2026-01-01T00:00:0" + string(rune('0'+len(title))) + "Z"})
+	}
+	research := seed("r", task.Assigned)
+	verified := seed("vv", task.Verified)
+	dropped := seed("ccc", task.Cancelled)
+	free := seed("ffff", task.Created)
+	unblocked := seed("uuuuu", task.Created, verified, dropped)
+	blocked := seed("bbbbbb", task.Created, verified, research)
+	seed("aaaaaaa", task.Assigned, verified)
+	ctx := context.Background()
+
+	out := Run(ctx, tasktest.Client(t, repo, ""), Options{Ready: true})
+	if got := ids(out.Result.(Result)); out.Error != nil || len(got) != 2 || got[0] != free || got[1] != unblocked {
+		t.Fatalf("%v %+v", got, out.Error)
+	}
+	all := Run(ctx, tasktest.Client(t, repo, ""), Options{Status: task.Created}).Result.(Result)
+	if w := all.Tasks[2].Waiting; all.Tasks[2].ID != blocked || len(w) != 1 || w[0] != research || all.Tasks[1].Waiting == nil || len(all.Tasks[1].Waiting) != 0 {
+		t.Fatalf("%+v", all.Tasks)
+	}
+	var b bytes.Buffer
+	if err := Run(ctx, tasktest.Client(t, repo, ""), Options{Status: task.Created}).Write(&b, false, Render); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.String(), blocked+"  created  -      -       "+research+"  -         bbbbbb\n") {
+		t.Fatalf("%q", b.String())
 	}
 }

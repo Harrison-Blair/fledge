@@ -1,11 +1,13 @@
 // Package create implements task create: recording a titled brief as a new
-// task in the created state, optionally as a subtask of an existing task.
+// task in the created state, optionally as a subtask of an existing task and
+// after prerequisite tasks.
 package create
 
 import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
@@ -15,21 +17,35 @@ import (
 
 type Options struct {
 	Title, Body, File, Parent string
+	After                     []string
 	BodySet, FileSet          bool
 }
 
 // Run stores a new task. The creator is the caller's live agent record, or
 // null when the caller is unregistered. A Parent must exist and be neither
-// verified nor cancelled; it is checked and the task stored under one store
-// lock.
+// verified nor cancelled, and every After prerequisite must exist; both are
+// checked and the task stored under one store lock. Repeated prerequisites
+// are stored once.
 func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libagent.Outcome {
 	out := libagent.Outcome{Operation: "task.create", Status: "success", Effects: []libagent.Effect{}}
 	var brief string
-	err := libagent.Invalid("--title must be nonempty and a single line")
+	var after []string
+	var err error
+	for _, id := range o.After {
+		if task.ValidateID(id) != nil {
+			err = libagent.Invalid("--after must be 8 lowercase hexadecimal characters")
+		}
+		if !slices.Contains(after, id) {
+			after = append(after, id)
+		}
+	}
 	switch {
+	case err != nil:
 	case o.Parent != "" && task.ValidateID(o.Parent) != nil:
 		err = libagent.Invalid("--parent must be 8 lowercase hexadecimal characters")
-	case o.Title != "" && !strings.ContainsAny(o.Title, "\r\n"):
+	case o.Title == "" || strings.ContainsAny(o.Title, "\r\n"):
+		err = libagent.Invalid("--title must be nonempty and a single line")
+	default:
 		brief, err = libagent.ReadText(in, libagent.TextInput{Body: o.Body, BodyFlag: "body", BodySet: o.BodySet, File: o.File, FileFlag: "file", FileSet: o.FileSet, Required: true, Noun: "brief"})
 	}
 	if err != nil {
@@ -59,8 +75,14 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 				return err
 			}
 		}
+		for _, id := range after {
+			if _, err := task.Get(s, id); err != nil {
+				phase = "task"
+				return err
+			}
+		}
 		_, err := s.Create(task.Kind, func(id string) any {
-			r = task.Record{ID: id, Title: o.Title, Brief: brief, Status: task.Created, CreatedAt: *task.Now()}
+			r = task.Record{ID: id, Title: o.Title, Brief: brief, After: after, Status: task.Created, CreatedAt: *task.Now()}
 			if o.Parent != "" {
 				r.Parent = &o.Parent
 			}

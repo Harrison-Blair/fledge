@@ -15,7 +15,7 @@ func TestTaskHelp(t *testing.T) {
 	if err := ExecuteWithArgs([]string{"task", "--help"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"create", "assign", "complete", "verify", "cancel", "list", "get"} {
+	for _, name := range []string{"create", "depend", "assign", "complete", "verify", "cancel", "list", "get"} {
 		if !strings.Contains(out.String(), "\n  "+name+" ") {
 			t.Fatalf("%s: %s", name, out.String())
 		}
@@ -44,6 +44,9 @@ func TestTaskJSONValidation(t *testing.T) {
 		{"task", "list", "--parent", "goal", "--json"},
 		{"task", "create", "--title", "t", "--body", "b", "--parent", "goal", "--json"},
 		{"task", "get", "--json"},
+		{"task", "depend", "--id", "0123abcd", "--json"},
+		{"task", "depend", "--id", "0123abcd", "--after", "nope", "--json"},
+		{"task", "create", "--title", "t", "--body", "b", "--after", "nope", "--json"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			var out bytes.Buffer

@@ -1,5 +1,5 @@
 // Package list implements task list: every task, oldest first, optionally
-// filtered by status, owner, or parent.
+// filtered by status, owner, parent, or readiness to assign.
 package list
 
 import (
@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"text/tabwriter"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
@@ -15,15 +16,21 @@ import (
 )
 
 // Options filters by status, by owner agent id, and by parent task id (direct
-// children only) when set.
-type Options struct{ Status, Owner, Parent string }
+// children only) when set. Ready keeps created tasks whose prerequisites are
+// all satisfied.
+type Options struct {
+	Status, Owner, Parent string
+	Ready                 bool
+}
 
-// Row is a task with its owner's name while the owner has a live record and
-// the progress of its direct children, null when it has none.
+// Row is a task with its owner's name while the owner has a live record, the
+// progress of its direct children (null when it has none), and its unmet
+// prerequisites.
 type Row struct {
 	task.Record
 	OwnerName *string        `json:"owner_name"`
 	Progress  *task.Progress `json:"progress"`
+	Waiting   []string       `json:"waiting"`
 }
 type Result struct {
 	Tasks []Row `json:"tasks"`
@@ -75,11 +82,16 @@ func load(ctx context.Context, cwd string, o Options) ([]Row, error) {
 	for _, rec := range live {
 		names[rec.ID] = rec.Name
 	}
+	byID := task.Index(tasks)
 	for _, r := range tasks {
+		waiting := task.Unmet(r, byID)
+		if o.Ready && (r.Status != task.Created || len(waiting) > 0) {
+			continue
+		}
 		if o.Status != "" && r.Status != o.Status || o.Owner != "" && (r.Owner == nil || *r.Owner != o.Owner) || o.Parent != "" && (r.Parent == nil || *r.Parent != o.Parent) {
 			continue
 		}
-		row := Row{Record: r, Progress: task.ChildProgress(r.ID, tasks)}
+		row := Row{Record: r, Progress: task.ChildProgress(r.ID, tasks), Waiting: waiting}
 		if r.Owner != nil {
 			row.OwnerName = names[*r.Owner]
 		}
@@ -99,7 +111,7 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		return err
 	}
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(table, "ID\tSTATUS\tOWNER\tPARENT\tPROGRESS\tTITLE")
+	fmt.Fprintln(table, "ID\tSTATUS\tOWNER\tPARENT\tWAITING\tPROGRESS\tTITLE")
 	for _, t := range r.Tasks {
 		owner := "-"
 		switch {
@@ -108,11 +120,15 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		case t.Owner != nil:
 			owner = *t.Owner
 		}
+		waiting := strings.Join(t.Waiting, ",")
+		if waiting == "" {
+			waiting = "-"
+		}
 		progress := "-"
 		if t.Progress != nil {
 			progress = t.Progress.String()
 		}
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\n", t.ID, t.Status, owner, libagent.Display(t.Parent), progress, t.Title)
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", t.ID, t.Status, owner, libagent.Display(t.Parent), waiting, progress, t.Title)
 	}
 	return table.Flush()
 }

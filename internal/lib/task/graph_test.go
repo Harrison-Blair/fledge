@@ -22,8 +22,11 @@ func TestRecordWithoutGraphFieldsLoads(t *testing.T) {
 		t.Fatal(err)
 	}
 	r, err := Get(s, id)
-	if err != nil || r.Parent != nil {
+	if err != nil || r.Parent != nil || r.After != nil || r.UnmetAtAssign != nil {
 		t.Fatalf("%+v %v", r, err)
+	}
+	if got := Unmet(r, Index([]Record{r})); len(got) != 0 {
+		t.Fatalf("%v", got)
 	}
 	if p := ChildProgress(id, []Record{r}); p != nil {
 		t.Fatalf("%+v", p)
@@ -54,3 +57,21 @@ func TestChildProgressCountsDirectChildren(t *testing.T) {
 }
 
 func tptr(s string) *string { return &s }
+
+func TestUnmetKeepsOrderAndTreatsCancelledAsSatisfied(t *testing.T) {
+	rs := []Record{
+		{ID: "00000001", Status: Verified},
+		{ID: "00000002", Status: Cancelled},
+		{ID: "00000003", Status: Completed},
+		{ID: "00000004", Status: Created},
+	}
+	r := Record{ID: "0000000a", After: []string{"00000004", "00000001", "00000002", "00000003", "0000dead"}}
+	if got, want := Unmet(r, Index(rs)), []string{"00000004", "00000003", "0000dead"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("%v", got)
+	}
+	for status, want := range map[string]bool{Created: false, Assigned: false, Completed: false, Verified: true, Cancelled: true} {
+		if Satisfied(status) != want {
+			t.Fatalf("%s", status)
+		}
+	}
+}

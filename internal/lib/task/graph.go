@@ -43,3 +43,28 @@ func (p Progress) String() string {
 	}
 	return s
 }
+
+// Satisfied reports whether a prerequisite in status no longer holds back its
+// dependents: it is verified, or cancelled.
+func Satisfied(status string) bool { return status == Verified || status == Cancelled }
+
+// Index maps rs by id.
+func Index(rs []Record) map[string]Record {
+	byID := make(map[string]Record, len(rs))
+	for _, r := range rs {
+		byID[r.ID] = r
+	}
+	return byID
+}
+
+// Unmet returns r's prerequisites that are not satisfied, in declaration
+// order. A prerequisite missing from byID is unmet.
+func Unmet(r Record, byID map[string]Record) []string {
+	unmet := []string{}
+	for _, id := range r.After {
+		if dep, ok := byID[id]; !ok || !Satisfied(dep.Status) {
+			unmet = append(unmet, id)
+		}
+	}
+	return unmet
+}

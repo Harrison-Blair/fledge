@@ -4,5 +4,5 @@
 // Herdr idle or done.
 //
 //	task.go   records, statuses, and locked store access
-//	graph.go  subtask progress derived from parent links
+//	graph.go  subtask progress and dependency satisfaction
 package task

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
@@ -20,7 +21,7 @@ func TestGetShowsFullRecord(t *testing.T) {
 		Delivery:               &task.Delivery{MessageID: "m-0a1b2c", Pane: "w1:p3", DeliveredAt: p("2026-01-01T00:01:01Z")},
 		CompletionNotification: &task.CompletionNotification{Recipient: "bbbbbbbb", MessageID: "m-abcdef", Pane: p("w1:p1"), DeliveredAt: p("2026-01-01T00:02:01Z")}})
 	out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{ID: id})
-	if out.Error != nil || out.Operation != "task.get" || !reflect.DeepEqual(out.Result, Result{Record: tasktest.Load(t, repo, id)}) {
+	if out.Error != nil || out.Operation != "task.get" || !reflect.DeepEqual(out.Result, Result{Record: tasktest.Load(t, repo, id), Dependencies: []Dependency{}}) {
 		t.Fatalf("%+v", out)
 	}
 	var b bytes.Buffer
@@ -95,5 +96,28 @@ func TestGetShowsParentAndSubtaskProgress(t *testing.T) {
 		"brief:\n  b\n"
 	if b.String() != want {
 		t.Fatalf("%q\nwant %q", b.String(), want)
+	}
+}
+
+func TestGetShowsPrerequisiteStates(t *testing.T) {
+	repo := identitytest.Repository(t)
+	p := tasktest.Ptr[string]
+	v := tasktest.Seed(t, repo, task.Record{Title: "v", Status: task.Verified})
+	c := tasktest.Seed(t, repo, task.Record{Title: "c", Status: task.Cancelled, CancelReason: p("superseded")})
+	bare := tasktest.Seed(t, repo, task.Record{Title: "bare", Status: task.Cancelled})
+	open := tasktest.Seed(t, repo, task.Record{Title: "open", Status: task.Assigned})
+	id := tasktest.Seed(t, repo, task.Record{Title: "T", Brief: "b", Status: task.Assigned, CreatedAt: "2026-01-01T00:00:00Z", After: []string{v, c, bare, open},
+		AssignedAt: p("2026-01-01T00:01:00Z"), UnmetAtAssign: []string{open}})
+	out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{ID: id})
+	want := []Dependency{{ID: v, Title: "v", Status: task.Verified, Satisfied: true}, {ID: c, Title: "c", Status: task.Cancelled, CancelReason: p("superseded"), Satisfied: true},
+		{ID: bare, Title: "bare", Status: task.Cancelled, Satisfied: true}, {ID: open, Title: "open", Status: task.Assigned}}
+	if r, ok := out.Result.(Result); out.Error != nil || !ok || !reflect.DeepEqual(r.Dependencies, want) {
+		t.Fatalf("%+v", out)
+	}
+	var b bytes.Buffer
+	out.Write(&b, false, Render)
+	line := "after: " + v + " (verified), " + c + " (cancelled: superseded), " + bare + " (cancelled), " + open + " (assigned, waiting)\n"
+	if !strings.Contains(b.String(), "owner: -\n"+line+"created: ") || !strings.Contains(b.String(), "assigned: 2026-01-01T00:01:00Z (forced; unmet then: "+open+")\n") {
+		t.Fatalf("%q", b.String())
 	}
 }

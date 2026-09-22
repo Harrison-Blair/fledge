@@ -1,5 +1,6 @@
-// Package assign implements task assign: recording a registered agent as a
-// task's owner, then delivering the brief to it as a headed message.
+// Package assign implements task assign: recording a registered agent as the
+// owner of a task whose prerequisites are satisfied, then delivering the brief
+// to it as a headed message.
 package assign
 
 import (
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
@@ -17,8 +19,11 @@ import (
 )
 
 // Options selects the task by ID and the agent by exactly one of Name, Pane,
-// or AgentID.
-type Options struct{ ID, Name, Pane, AgentID string }
+// or AgentID. Force assigns a task whose prerequisites are not all satisfied.
+type Options struct {
+	ID, Name, Pane, AgentID string
+	Force                   bool
+}
 
 // Result is the task after assignment with the owner's name when it has one.
 type Result struct {
@@ -28,7 +33,9 @@ type Result struct {
 
 // Run assigns the task and delivers its brief. Assignment and delivery are
 // stored separately: a failed delivery leaves the task assigned with the
-// failure recorded, and is never retried.
+// failure recorded, and is never retried. A task with unmet prerequisites is
+// refused before the agent is resolved unless Force is set; a forced
+// assignment records the prerequisites it bypassed as UnmetAtAssign.
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	return run(ctx, c, o, libagent.NewMessageID())
 }
@@ -57,6 +64,9 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) li
 	snapshot, err := task.Get(s, o.ID)
 	if err == nil {
 		err = task.Require(&snapshot, "assign", task.Created, task.Assigned)
+	}
+	if err == nil {
+		_, err = waiting(s, snapshot, o.Force)
 	}
 	if err != nil {
 		out.Fail(err, "task", false)
@@ -89,7 +99,11 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) li
 		if !reflect.DeepEqual(*r, snapshot) {
 			return &herdr.Error{Code: "task_state_changed", Message: fmt.Sprintf("task %s changed while it was being assigned; inspect it with fledge task get --id %s", r.ID, r.ID)}
 		}
-		r.Owner, r.Status, r.AssignedAt = &owner.ID, task.Assigned, task.Now()
+		unmet, err := waiting(s, *r, o.Force)
+		if err != nil {
+			return err
+		}
+		r.Owner, r.Status, r.AssignedAt, r.UnmetAtAssign = &owner.ID, task.Assigned, task.Now(), unmet
 		r.Delivery = &task.Delivery{MessageID: messageID, Pane: a.PaneID}
 		return nil
 	})
@@ -134,6 +148,23 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) li
 	return out
 }
 
+// waiting returns r's unmet prerequisites, nil when there are none, and
+// refuses them unless force is set.
+func waiting(s *state.Store, r task.Record, force bool) ([]string, error) {
+	rs, err := task.List(s)
+	if err != nil {
+		return nil, err
+	}
+	unmet := task.Unmet(r, task.Index(rs))
+	switch {
+	case len(unmet) == 0:
+		return nil, nil
+	case !force:
+		return nil, &herdr.Error{Code: "task_dependencies_unmet", Message: fmt.Sprintf("task %s waits on prerequisites that are not verified or cancelled: %s; assign it once they are, or pass --force", r.ID, strings.Join(unmet, ", "))}
+	}
+	return unmet, nil
+}
+
 // Render writes an assignment, or after a failed delivery, what state the
 // task was left in.
 func Render(w io.Writer, o libagent.Outcome) error {
@@ -149,6 +180,9 @@ func Render(w io.Writer, o libagent.Outcome) error {
 	switch {
 	case o.Error == nil:
 		_, err = fmt.Fprintf(w, "Assigned task %s to %s; brief delivered to %s as message %s.\n", r.ID, owner, r.Delivery.Pane, r.Delivery.MessageID)
+		if err == nil && r.UnmetAtAssign != nil {
+			_, err = fmt.Fprintf(w, "Assigned with --force before prerequisites %s were satisfied.\n", strings.Join(r.UnmetAtAssign, ", "))
+		}
 	case o.Error.Phase == "agent.prompt" && o.Status == "unknown":
 		_, err = fmt.Fprintf(w, "Task %s remains assigned to %s; the delivery outcome is unknown and will not be retried.\n", r.ID, owner)
 	case o.Error.Phase == "agent.prompt":

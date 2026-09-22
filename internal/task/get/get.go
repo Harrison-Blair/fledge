@@ -1,5 +1,5 @@
-// Package get implements task get: one task's full record and the progress of
-// its subtasks.
+// Package get implements task get: one task's full record, the progress of
+// its subtasks, and the state of its prerequisites.
 package get
 
 import (
@@ -18,7 +18,18 @@ type Options struct{ ID string }
 // has none.
 type Result struct {
 	task.Record
-	Progress *task.Progress `json:"progress"`
+	Progress     *task.Progress `json:"progress"`
+	Dependencies []Dependency   `json:"dependencies"`
+}
+
+// Dependency is one prerequisite in declaration order with its current
+// state. A verified or cancelled prerequisite is satisfied.
+type Dependency struct {
+	ID           string  `json:"id"`
+	Title        string  `json:"title"`
+	Status       string  `json:"status"`
+	CancelReason *string `json:"cancel_reason"`
+	Satisfied    bool    `json:"satisfied"`
 }
 
 // Run reads one task from the store without contacting Herdr.
@@ -43,7 +54,13 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Fail(err, "state", false)
 		return out
 	}
-	out.Result = Result{Record: r, Progress: task.ChildProgress(r.ID, rs)}
+	byID := task.Index(rs)
+	deps := []Dependency{}
+	for _, id := range r.After {
+		dep := byID[id]
+		deps = append(deps, Dependency{ID: id, Title: dep.Title, Status: dep.Status, CancelReason: dep.CancelReason, Satisfied: task.Satisfied(dep.Status)})
+	}
+	out.Result = Result{Record: r, Progress: task.ChildProgress(r.ID, rs), Dependencies: deps}
 	return out
 }
 
@@ -70,9 +87,27 @@ func Render(w io.Writer, o libagent.Outcome) error {
 	if r.Progress != nil {
 		fmt.Fprintf(&b, "subtasks: %s\n", r.Progress)
 	}
+	if len(r.Dependencies) > 0 {
+		deps := []string{}
+		for _, d := range r.Dependencies {
+			state := d.Status
+			switch {
+			case d.Status == task.Cancelled && d.CancelReason != nil:
+				state += ": " + *d.CancelReason
+			case !d.Satisfied:
+				state += ", waiting"
+			}
+			deps = append(deps, fmt.Sprintf("%s (%s)", d.ID, state))
+		}
+		fmt.Fprintf(&b, "after: %s\n", strings.Join(deps, ", "))
+	}
 	fmt.Fprintf(&b, "created: %s by %s\n", r.CreatedAt, creator)
 	if r.AssignedAt != nil {
-		fmt.Fprintf(&b, "assigned: %s\n", *r.AssignedAt)
+		forced := ""
+		if r.UnmetAtAssign != nil {
+			forced = fmt.Sprintf(" (forced; unmet then: %s)", strings.Join(r.UnmetAtAssign, ", "))
+		}
+		fmt.Fprintf(&b, "assigned: %s%s\n", *r.AssignedAt, forced)
 	}
 	if d := r.Delivery; d != nil {
 		state := "outcome unknown"
