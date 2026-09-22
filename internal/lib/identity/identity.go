@@ -83,6 +83,8 @@ func Register(ctx context.Context, s *state.Store, c libagent.Client, details he
 	if err != nil {
 		return Record{}, err
 	}
+	// End a different harness's record now: Unregistered, under the lock,
+	// cannot write it.
 	if _, err := Match(s, details); err != nil {
 		return Record{}, err
 	}
@@ -109,7 +111,9 @@ func Register(ctx context.Context, s *state.Store, c libagent.Client, details he
 
 // Unregistered fails with agent_already_registered, naming the existing id,
 // when a's terminal already has a live record of a's harness. It only reads,
-// so it may run under the store lock.
+// so it may run under the store lock. It tolerates a record left by a
+// different harness because Register ends that record via Match before taking
+// the lock; ending it under s.Exclusive would self-deadlock on the store flock.
 func Unregistered(s *state.Store, a herdr.AgentDetails) error {
 	existing, err := Live(s, a.TerminalID)
 	if err != nil {

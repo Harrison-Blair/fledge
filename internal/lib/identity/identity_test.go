@@ -641,7 +641,7 @@ func TestVerifyRefusesDifferentHarness(t *testing.T) {
 
 func TestAttributedSkipsDifferentHarness(t *testing.T) {
 	codex := "codex"
-	records := map[string]Record{"term_a": {ID: "0000beef", TerminalID: "term_a", Harness: &codex}}
+	records := map[string]Record{"term_a": {ID: "0000beef", TerminalID: "term_a", Harness: &codex}, "": {ID: "0000dead", Harness: &codex}}
 	if _, ok := Attributed(records, running(details("w1:p3", "term_a"), "claude")); ok {
 		t.Fatal("attributed a record of another harness")
 	}
