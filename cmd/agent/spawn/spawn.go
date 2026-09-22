@@ -13,7 +13,8 @@ func New() *cobra.Command {
 	var options spawn.Options
 	var asJSON bool
 	var ratio float64
-	cmd := &cobra.Command{Use: "spawn [flags] [-- native-args...]", Short: "Launch an agent in a Herdr pane"}
+	cmd := &cobra.Command{Use: "spawn [flags] [-- native-args...]", Short: "Launch an agent in a Herdr pane",
+		Long: "Launch an agent in a Herdr pane.\n\nA first prompt from --prompt or --file is delivered once the agent is ready, prefixed\nwith the same sender header as agent message, including the reply command\n(fledge agent message --name <sender>) when the sender is a named agent."}
 	f := cmd.Flags()
 	f.StringVar(&options.Name, "name", "", "Unique live agent name (required)")
 	f.StringVar(&options.Harness, "harness", "", "Herdr harness kind (required)")

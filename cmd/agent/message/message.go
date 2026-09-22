@@ -10,7 +10,8 @@ import (
 func New() *cobra.Command {
 	var options message.Options
 	var asJSON bool
-	cmd := &cobra.Command{Use: "message", Short: "Submit a message without waiting for agent completion", Args: cobra.NoArgs}
+	cmd := &cobra.Command{Use: "message", Short: "Submit a message, with a sender header, without waiting for agent completion", Args: cobra.NoArgs,
+		Long: "Submit a message without waiting for agent completion.\n\nThe delivered text starts with one header line naming the sender and a message ID,\nfor example:\n  ᛉ fledge message from orchestrator (w1:p1) · id m-0a1b2c · reply: fledge agent message --name orchestrator\nThe reply command appears only when the sender is a named agent."}
 	f := cmd.Flags()
 	f.StringVar(&options.Name, "name", "", "Live agent name")
 	f.StringVar(&options.Pane, "pane", "", "Hosting pane ID")

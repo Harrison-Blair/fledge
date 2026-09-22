@@ -17,6 +17,8 @@ type spawner struct {
 	Wait func(context.Context, time.Duration) error
 	// Now reports the current time for the spawn timeout budget; nil uses time.Now.
 	Now func() time.Time
+	// NewID generates the first prompt's message ID; nil uses libagent.NewMessageID.
+	NewID func() string
 }
 
 func (s *spawner) now() time.Time {
@@ -24,6 +26,12 @@ func (s *spawner) now() time.Time {
 		return s.Now()
 	}
 	return time.Now()
+}
+func (s *spawner) newID() string {
+	if s.NewID != nil {
+		return s.NewID()
+	}
+	return libagent.NewMessageID()
 }
 func (s *spawner) wait(ctx context.Context, d time.Duration) error {
 	if s.Wait != nil {
@@ -160,7 +168,9 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 	if !o.PromptSet && !o.FileSet {
 		return out
 	}
-	if _, err := s.prompt(ctx, o.Name, prompt, &out); err != nil {
+	id, sender := s.newID(), libagent.ResolveSender(ctx, s.Client)
+	result.MessageID, result.Sender = &id, &sender
+	if _, err := s.prompt(ctx, o.Name, libagent.WithHeader(id, sender, prompt), &out); err != nil {
 		return out
 	}
 	result.Prompted = true

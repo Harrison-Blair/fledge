@@ -168,6 +168,15 @@ and rejects empty or invalid UTF-8 content. Success acknowledges **submission**,
 without waiting for the agent to begin or finish. Blocked agents require the
 user to handle their approval dialog.
 
+Every prompt Fledge delivers, from `message` or from spawn's `--prompt`/`--file`,
+starts with one header line naming the sender and a correlation ID, e.g.
+`ᛉ fledge message from reviewer (w1:p2) · id m-0a1b2c · reply: fledge agent message --name reviewer`.
+The sender is the caller's `HERDR_PANE_ID`, resolved through Herdr: an unnamed
+agent appears as `unnamed agent (PANE)`, a pane without an agent as `pane PANE`,
+and an unresolvable caller as `unknown sender`; only named agents get the reply
+command. Attribution failures never block delivery. JSON results include
+`message_id` and `sender` (`name`, `pane`, `kind`, `error`).
+
 `fledge agent get` inspects one live agent with exactly one nonempty `--name` or
 `--pane` target and no positional arguments. It makes a single read request,
 without focusing the pane or marking output seen. Labeled text includes the list

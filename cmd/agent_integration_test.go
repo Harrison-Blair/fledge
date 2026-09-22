@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -93,6 +94,14 @@ func paramsField(t *testing.T, c rpcCall, field string) any {
 	return m[field]
 }
 
+// headered reports whether an agent.prompt text is body behind the
+// unknown-sender header used when HERDR_PANE_ID is unset.
+func headered(t *testing.T, c rpcCall, body string) bool {
+	t.Helper()
+	text, _ := paramsField(t, c, "text").(string)
+	return regexp.MustCompile(`^ᛉ fledge message from unknown sender · id m-[0-9a-f]{6}\n` + regexp.QuoteMeta(body) + `$`).MatchString(text)
+}
+
 func snapshotResult() any {
 	return map[string]any{"type": "session_snapshot", "snapshot": map[string]any{"protocol": 999, "version": "future", "workspaces": []any{}, "tabs": []any{}, "layouts": []any{}, "agents": []any{}, "panes": []any{map[string]any{"pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1"}}}}
 }
@@ -134,6 +143,7 @@ func TestSpawnForwardsExactNativeTokens(t *testing.T) {
 }
 
 func TestSpawnPromptFlagReachesAgentPromptWithExactText(t *testing.T) {
+	t.Setenv("HERDR_PANE_ID", "")
 	l := newSocket(t)
 	done := serveRPCs(l, snapshotResult(), startedResult("claude"), waitedResult(), promptedResult())
 	var out bytes.Buffer
@@ -142,7 +152,7 @@ func TestSpawnPromptFlagReachesAgentPromptWithExactText(t *testing.T) {
 		t.Fatal(err, out.String())
 	}
 	calls := waitCalls(t, l, done, 4)
-	if calls[3].Method != "agent.prompt" || paramsField(t, calls[3], "text") != "review this" {
+	if calls[3].Method != "agent.prompt" || !headered(t, calls[3], "review this") {
 		t.Fatalf("%+v", calls)
 	}
 	var envelope map[string]any
@@ -181,6 +191,7 @@ func TestSpawnFileFlagPathReachesAgentPrompt(t *testing.T) {
 	if err := os.WriteFile(path, []byte("from a file on disk"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("HERDR_PANE_ID", "")
 	l := newSocket(t)
 	done := serveRPCs(l, snapshotResult(), startedResult("claude"), waitedResult(), promptedResult())
 	var out bytes.Buffer
@@ -189,7 +200,7 @@ func TestSpawnFileFlagPathReachesAgentPrompt(t *testing.T) {
 		t.Fatal(err, out.String())
 	}
 	calls := waitCalls(t, l, done, 4)
-	if calls[3].Method != "agent.prompt" || paramsField(t, calls[3], "text") != "from a file on disk" {
+	if calls[3].Method != "agent.prompt" || !headered(t, calls[3], "from a file on disk") {
 		t.Fatalf("%+v", calls)
 	}
 }
@@ -197,6 +208,7 @@ func TestSpawnFileFlagPathReachesAgentPrompt(t *testing.T) {
 // TestSpawnFileDashReadsCommandStdin proves --file - reads the command's own
 // injected stdin (cmd.InOrStdin()), not a bare nil reader.
 func TestSpawnFileDashReadsCommandStdin(t *testing.T) {
+	t.Setenv("HERDR_PANE_ID", "")
 	l := newSocket(t)
 	done := serveRPCs(l, snapshotResult(), startedResult("claude"), waitedResult(), promptedResult())
 	var out bytes.Buffer
@@ -205,7 +217,7 @@ func TestSpawnFileDashReadsCommandStdin(t *testing.T) {
 		t.Fatal(err, out.String())
 	}
 	calls := waitCalls(t, l, done, 4)
-	if calls[3].Method != "agent.prompt" || paramsField(t, calls[3], "text") != "from stdin" {
+	if calls[3].Method != "agent.prompt" || !headered(t, calls[3], "from stdin") {
 		t.Fatalf("%+v", calls)
 	}
 }

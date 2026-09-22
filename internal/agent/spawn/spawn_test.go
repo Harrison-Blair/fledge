@@ -17,7 +17,7 @@ type call = herdrscript.Call
 
 func fake(t *testing.T, calls ...call) *spawner {
 	t.Helper()
-	return &spawner{Client: herdrscript.Client(t, calls...), Now: func() time.Time { return time.Unix(0, 0) }}
+	return &spawner{Client: herdrscript.Client(t, calls...), Now: func() time.Time { return time.Unix(0, 0) }, NewID: func() string { return "m-0a1b2c" }}
 }
 func snapshot() herdr.SnapshotResult {
 	return herdr.SnapshotResult{Type: "session_snapshot", Snapshot: &herdr.Snapshot{Workspaces: []herdr.Workspace{{ID: "w1", Label: "main"}}, Tabs: []herdr.Tab{{ID: "w1:t1", WorkspaceID: "w1", Label: "build"}}, Panes: []herdr.Pane{herdrscript.Pane("w1:p1", "w1", "w1:t1")}, Layouts: []herdr.Layout{{TabID: "w1:t1", WorkspaceID: "w1", FocusedPaneID: "w1:p1"}}, Agents: []herdr.Pane{}}}
@@ -499,7 +499,7 @@ func TestSpawnMalformedPromptResultIsUnknown(t *testing.T) {
 			o.PromptSet = true
 			p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
 			p.AgentStatus = "idle"
-			s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), call{Method: "agent.prompt", Result: tc.result(p)})
+			s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), senderCall(), call{Method: "agent.prompt", Result: tc.result(p)})
 			out := s.run(context.Background(), o, nil)
 			if out.Status != "unknown" || out.Error == nil || out.Error.Phase != "agent.prompt" {
 				t.Fatalf("%+v", out)
@@ -515,16 +515,31 @@ func TestSpawnSendsPromptAfterWaitWithExactText(t *testing.T) {
 	o.PromptSet = true
 	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
 	p.AgentStatus = "idle"
-	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": "hello\nworld\n"}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), senderCall(), call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": header + "hello\nworld\n"}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
 	out := s.run(context.Background(), o, nil)
 	r, ok := out.Result.(*Result)
 	if out.Status != "success" || !ok || !r.Prompted {
 		t.Fatalf("%+v", out)
 	}
+	if r.MessageID == nil || *r.MessageID != "m-0a1b2c" || r.Sender == nil || r.Sender.Kind != "named" || *r.Sender.Name != "orchestrator" {
+		t.Fatalf("%+v", r)
+	}
 	if last := out.Effects[len(out.Effects)-1]; last.Action != "submitted" || last.Kind != "message" || last.ID != "w1:p1" {
 		t.Fatalf("%+v", out.Effects)
 	}
 }
+
+const header = "ᛉ fledge message from orchestrator (old:p1) · id m-0a1b2c · reply: fledge agent message --name orchestrator\n"
+
+// senderCall resolves the scripted caller pane old:p1 to the named agent orchestrator.
+func senderCall() call {
+	p := herdrscript.Pane("old:p1", "old", "old:t1")
+	p.AgentStatus = "working"
+	name := "orchestrator"
+	p.Name = &name
+	return call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: herdrscript.Info(p)}
+}
+
 func TestSpawnPromptFromFileStdin(t *testing.T) {
 	o := validOptions()
 	o.Pane = "w1:p1"
@@ -532,7 +547,7 @@ func TestSpawnPromptFromFileStdin(t *testing.T) {
 	o.FileSet = true
 	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
 	p.AgentStatus = "idle"
-	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": "from file\n"}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), senderCall(), call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": header + "from file\n"}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
 	out := s.run(context.Background(), o, strings.NewReader("from file\n"))
 	if out.Status != "success" || !out.Result.(*Result).Prompted {
 		t.Fatalf("%+v", out)
@@ -544,7 +559,7 @@ func TestSpawnNoPromptFlagsDoesNotCallAgentPrompt(t *testing.T) {
 	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
 	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"))
 	out := s.run(context.Background(), o, nil)
-	if out.Status != "success" || out.Result.(*Result).Prompted {
+	if r := out.Result.(*Result); out.Status != "success" || r.Prompted || r.MessageID != nil || r.Sender != nil {
 		t.Fatalf("%+v", out)
 	}
 }
@@ -586,7 +601,7 @@ func TestSpawnPromptFailureRetainsEarlierEffects(t *testing.T) {
 	o.Prompt = "hi"
 	o.PromptSet = true
 	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
-	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), call{Method: "agent.prompt", Err: &herdr.Error{Code: "agent_blocked", Message: "approval"}})
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), senderCall(), call{Method: "agent.prompt", Err: &herdr.Error{Code: "agent_blocked", Message: "approval"}})
 	out := s.run(context.Background(), o, nil)
 	if out.Status != "partial" || out.Error == nil || out.Error.Phase != "agent.prompt" || out.ExitCode() != 1 {
 		t.Fatalf("%+v", out)

@@ -48,7 +48,7 @@ func TestSpawnJSONIncludesPromptedField(t *testing.T) {
 	if err := out.Write(&b, true, Render); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(b.String(), `"prompted":true`) {
+	if !strings.Contains(b.String(), `"prompted":true`) || !strings.Contains(b.String(), `"message_id":null,"sender":null`) {
 		t.Fatalf("%q", b.String())
 	}
 }

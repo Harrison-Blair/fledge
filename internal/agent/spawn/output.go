@@ -9,18 +9,20 @@ import (
 
 // Result reports the placement, launch, and first-prompt state of a spawn.
 type Result struct {
-	Name            string   `json:"name"`
-	Harness         string   `json:"harness"`
-	DetectedHarness *string  `json:"detected_harness"`
-	AgentStatus     *string  `json:"agent_status"`
-	WorkspaceID     *string  `json:"workspace_id"`
-	TabID           *string  `json:"tab_id"`
-	PaneID          *string  `json:"pane_id"`
-	Cwd             *string  `json:"cwd"`
-	Argv            []string `json:"argv"`
-	WorktreePath    *string  `json:"worktree_path"`
-	Split           bool     `json:"split"`
-	Prompted        bool     `json:"prompted"`
+	Name            string           `json:"name"`
+	Harness         string           `json:"harness"`
+	DetectedHarness *string          `json:"detected_harness"`
+	AgentStatus     *string          `json:"agent_status"`
+	WorkspaceID     *string          `json:"workspace_id"`
+	TabID           *string          `json:"tab_id"`
+	PaneID          *string          `json:"pane_id"`
+	Cwd             *string          `json:"cwd"`
+	Argv            []string         `json:"argv"`
+	WorktreePath    *string          `json:"worktree_path"`
+	Split           bool             `json:"split"`
+	Prompted        bool             `json:"prompted"`
+	MessageID       *string          `json:"message_id"`
+	Sender          *libagent.Sender `json:"sender"`
 }
 
 func pointer(s string) *string {

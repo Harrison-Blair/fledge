@@ -15,7 +15,9 @@ type Options struct {
 }
 type Result struct {
 	libagent.AgentRow
-	Submitted bool `json:"submitted"`
+	Submitted bool             `json:"submitted"`
+	MessageID string           `json:"message_id"`
+	Sender    *libagent.Sender `json:"sender"`
 }
 
 func (o Options) read(in io.Reader) (string, string, error) {
@@ -30,8 +32,12 @@ func (o Options) read(in io.Reader) (string, string, error) {
 	return target, text, nil
 }
 
-// Run submits a message without waiting for the agent to finish its turn.
+// Run submits a message, prefixed with a sender header, without waiting for
+// the agent to finish its turn.
 func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libagent.Outcome {
+	return run(ctx, c, o, in, libagent.NewMessageID())
+}
+func run(ctx context.Context, c libagent.Client, o Options, in io.Reader, id string) libagent.Outcome {
 	out := libagent.Outcome{Operation: "agent.message", Status: "success", Effects: []libagent.Effect{}}
 	target, text, err := o.read(in)
 	if err != nil {
@@ -43,14 +49,15 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 		out.Fail(err, "agent.get", false)
 		return out
 	}
-	out.Result = Result{AgentRow: libagent.NewAgentRow(a.Pane)}
-	agent, err := c.Prompt(ctx, target, text)
+	sender := libagent.ResolveSender(ctx, c)
+	out.Result = Result{AgentRow: libagent.NewAgentRow(a.Pane), MessageID: id, Sender: &sender}
+	agent, err := c.Prompt(ctx, target, libagent.WithHeader(id, sender, text))
 	if err != nil {
 		out.Fail(err, "agent.prompt", true)
 		return out
 	}
 	out.Effects = append(out.Effects, libagent.Effect{Action: "submitted", Kind: "message", ID: agent.PaneID})
-	out.Result = Result{AgentRow: libagent.NewAgentRow(agent.Pane), Submitted: true}
+	out.Result = Result{AgentRow: libagent.NewAgentRow(agent.Pane), Submitted: true, MessageID: id, Sender: &sender}
 	return out
 }
 
@@ -60,7 +67,11 @@ func Render(w io.Writer, o libagent.Outcome) error {
 	if o.Error != nil || !ok {
 		return nil
 	}
-	_, err := fmt.Fprintf(w, "Message submitted to %s.\n", display(r.PaneID))
+	sender := "unknown sender"
+	if r.Sender != nil {
+		sender = r.Sender.String()
+	}
+	_, err := fmt.Fprintf(w, "Message %s submitted to %s from %s.\n", r.MessageID, display(r.PaneID), sender)
 	return err
 }
 func display(s *string) string {
