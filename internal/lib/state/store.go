@@ -158,6 +158,20 @@ func (s *Store) Update(kind, id string, v any, mutate func() error) error {
 	return writeReplace(path, data)
 }
 
+// Exclusive holds the store lock while fn runs, serializing fn with every
+// other Exclusive and Update on this store directory, in any process. fn may
+// call Get, List, and Create, which never take the lock, but must not call
+// Update or Exclusive, which would deadlock. Keep fn short: it must not make
+// Herdr requests or do other blocking I/O beyond these store reads and creates.
+func (s *Store) Exclusive(fn func() error) error {
+	unlock, err := lock(filepath.Join(s.root, lockName))
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return fn()
+}
+
 func (s *Store) kindDir(kind string) (string, error) {
 	if kind == "" || kind == "." || kind == ".." || strings.ContainsAny(kind, `/\`) {
 		return "", fmt.Errorf("state: invalid kind %q", kind)

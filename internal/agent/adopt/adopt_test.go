@@ -3,11 +3,15 @@ package adopt
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
@@ -154,5 +158,82 @@ func TestAdoptOutsideRepositoryFailsBeforeRename(t *testing.T) {
 	out := Run(context.Background(), c, Options{Pane: "w1:p3", Name: "x"})
 	if out.Error == nil || out.Error.Phase != "state" || len(out.Effects) != 0 {
 		t.Fatalf("%+v", out)
+	}
+}
+
+// barrierHerdr serves agent.get concurrently: the target is a named live
+// agent, and the caller lookup, the last Herdr call before registration,
+// waits until every adopter has reached it (or fails after a bound, so an
+// adopter that stops early cannot hang the test).
+type barrierHerdr struct{ arrived sync.WaitGroup }
+
+func (b *barrierHerdr) Call(_ context.Context, method string, params any, result any) error {
+	target := params.(map[string]any)["target"]
+	if method != "agent.get" {
+		return fmt.Errorf("unexpected %s", method)
+	}
+	if target == "old:p1" {
+		b.arrived.Done()
+		all := make(chan struct{})
+		go func() { b.arrived.Wait(); close(all) }()
+		select {
+		case <-all:
+		case <-time.After(5 * time.Second):
+			return fmt.Errorf("not every adopter reached registration")
+		}
+		return notFound()
+	}
+	data, _ := json.Marshal(agent("w1:p3", named("worker")))
+	return json.Unmarshal(data, result)
+}
+
+func TestConcurrentAdoptsRegisterOnce(t *testing.T) {
+	const n = 2
+	fake := &barrierHerdr{}
+	fake.arrived.Add(n)
+	c := client(t)
+	c.API = fake
+	// Create .fledge up front: concurrent first-time creation is not under test.
+	if _, err := identity.OpenStore(context.Background(), c.Cwd, &libagent.Outcome{}); err != nil {
+		t.Fatal(err)
+	}
+	outs := make([]libagent.Outcome, n)
+	var wg sync.WaitGroup
+	for i := range outs {
+		wg.Go(func() { outs[i] = Run(context.Background(), c, Options{Pane: "w1:p3"}) })
+	}
+	wg.Wait()
+	var winner string
+	refused := 0
+	for _, out := range outs {
+		switch {
+		case out.Error == nil:
+			if winner != "" {
+				t.Fatalf("two adopts succeeded: %s and %s", winner, out.Result.(Result).ID)
+			}
+			winner = out.Result.(Result).ID
+		case out.Error.Code == "agent_already_registered":
+			refused++
+		default:
+			t.Fatalf("%+v", out.Error)
+		}
+	}
+	if winner == "" || refused != n-1 {
+		t.Fatalf("winner %q, %d refused", winner, refused)
+	}
+	for _, out := range outs {
+		if out.Error != nil && !strings.Contains(out.Error.Message, winner) {
+			t.Fatalf("refusal does not name the winner %s: %s", winner, out.Error.Message)
+		}
+	}
+	s, err := identity.Existing(context.Background(), c.Cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids, err := s.List(identity.Kind); err != nil || len(ids) != 1 || ids[0] != winner {
+		t.Fatalf("records %v, %v", ids, err)
+	}
+	if rec, err := identity.Live(s, "term_a"); err != nil || rec == nil || rec.ID != winner {
+		t.Fatalf("%+v %v", rec, err)
 	}
 }

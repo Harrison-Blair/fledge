@@ -306,7 +306,9 @@ and the text output shows `id: - (not registered: <reason>)`.
 which adopt sets through Herdr (`agent_name_taken` and `agent_launch_pending`
 are reported as is). A named agent keeps its name; a different `--name` is
 refused. A terminal that already has a live record is refused with
-`agent_already_registered` and its existing ID. Success prints
+`agent_already_registered` and its existing ID; the check and the record
+creation share one store lock, so concurrent adopts or spawn registrations of
+one terminal produce exactly one record. Success prints
 `Adopted <name> (<pane>) as <id>.`
 
 `get`, `message`, `read`, `wait` (single target only), `pause`, and `stop`

@@ -52,11 +52,8 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Fail(err, "agent.get", false)
 		return out
 	}
-	existing, err := identity.Live(store, a.TerminalID)
-	if err == nil && existing != nil {
-		err = &herdr.Error{Code: "agent_already_registered", Message: fmt.Sprintf("the agent in %s is already registered as %s", a.PaneID, existing.ID)}
-	}
-	if err != nil {
+	// Refuse before renaming; Register repeats this check under the store lock.
+	if err := identity.Unregistered(store, a); err != nil {
 		out.Fail(err, "state", false)
 		return out
 	}

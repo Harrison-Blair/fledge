@@ -13,6 +13,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 )
 
 type counter struct {
@@ -517,4 +518,121 @@ func TestOpenRejectsDirectoryLock(t *testing.T) {
 	if _, err := Open(root); err == nil {
 		t.Fatal("Open succeeded with a directory in place of the lock file")
 	}
+}
+
+func TestExclusiveBlocksOtherHolders(t *testing.T) {
+	store, root := openStore(t)
+	other, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	first := make(chan error, 1)
+	go func() {
+		first <- store.Exclusive(func() error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+	ran := make(chan error, 1)
+	go func() { ran <- other.Exclusive(func() error { return nil }) }()
+	select {
+	case err := <-ran:
+		t.Fatalf("second Exclusive ran while the first held the lock: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-ran; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExclusiveReturnsFnErrorAndReleases(t *testing.T) {
+	store, _ := openStore(t)
+	sentinel := errors.New("refused")
+	if err := store.Exclusive(func() error { return sentinel }); !errors.Is(err, sentinel) {
+		t.Fatalf("err = %v", err)
+	}
+	if err := store.Exclusive(func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// claimNext creates a "claims" record numbered by how many already exist,
+// inside one exclusive section, so overlapping sections would reuse a number.
+func claimNext(s *Store) error {
+	return s.Exclusive(func() error {
+		ids, err := s.List("claims")
+		if err != nil {
+			return err
+		}
+		_, err = s.Create("claims", func(string) any { return counter{N: len(ids)} })
+		return err
+	})
+}
+
+func checkClaims(t *testing.T, s *Store, want int) {
+	t.Helper()
+	ids, err := s.List("claims")
+	if err != nil || len(ids) != want {
+		t.Fatalf("%d claims, %v; want %d", len(ids), err, want)
+	}
+	seen := map[int]bool{}
+	for _, id := range ids {
+		var c counter
+		if err := s.Get("claims", id, &c); err != nil {
+			t.Fatal(err)
+		}
+		if seen[c.N] {
+			t.Fatalf("claim number %d reused: sections overlapped", c.N)
+		}
+		seen[c.N] = true
+	}
+}
+
+const helperClaimsEnv = "FLEDGE_STATE_HELPER_CLAIMS"
+
+// TestHelperProcessClaim is re-executed by
+// TestExclusiveSerializesProcesses and is a no-op otherwise.
+func TestHelperProcessClaim(t *testing.T) {
+	root := os.Getenv(helperClaimsEnv)
+	if root == "" {
+		t.Skip("helper process only")
+	}
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 100 {
+		if err := claimNext(store); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestExclusiveSerializesProcesses(t *testing.T) {
+	if os.Getenv(helperClaimsEnv) != "" {
+		t.Skip("inside helper process")
+	}
+	store, root := openStore(t)
+	outputs := make([][]byte, 2)
+	errs := make([]error, 2)
+	var wg sync.WaitGroup
+	for i := range outputs {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestHelperProcessClaim$", "-test.count=1")
+		cmd.Env = append(os.Environ(), helperClaimsEnv+"="+root)
+		wg.Go(func() { outputs[i], errs[i] = cmd.CombinedOutput() })
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("helper %d: %v\n%s", i, err, outputs[i])
+		}
+	}
+	checkClaims(t, store, 200)
 }

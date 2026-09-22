@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -297,5 +298,18 @@ func TestRegisterParentRequiresRecordedPane(t *testing.T) {
 	child, err := Register(context.Background(), s, c, details("w1:p3", "term_child"), "spawn", nil)
 	if err != nil || child.Parent != nil {
 		t.Fatalf("%+v %v", child, err)
+	}
+}
+
+func TestRegisterRefusesTerminalWithLiveRecord(t *testing.T) {
+	c := client(t)
+	first := registered(t, c, details("w1:p3", "term_a"))
+	_, err := Register(context.Background(), store(t, c), libagent.Client{}, details("w1:p3", "term_a"), "spawn", nil)
+	var remote *herdr.Error
+	if !errors.As(err, &remote) || remote.Code != "agent_already_registered" || !strings.Contains(remote.Message, first.ID) {
+		t.Fatalf("%v", err)
+	}
+	if ids, _ := store(t, c).List(Kind); len(ids) != 1 {
+		t.Fatalf("records %v", ids)
 	}
 }

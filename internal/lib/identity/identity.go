@@ -69,6 +69,10 @@ func Existing(ctx context.Context, cwd string) (*state.Store, error) {
 
 // Register records details as a new agent. The parent is the caller's live
 // record when the caller's pane hosts a registered terminal; otherwise null.
+// Herdr lookups happen first; the store lock then covers only the check for an
+// existing live record of the terminal and the create, so concurrent
+// registrations of one terminal yield exactly one record and the others fail
+// with agent_already_registered naming it.
 func Register(ctx context.Context, s *state.Store, c libagent.Client, details herdr.AgentDetails, by string, worktree *string) (Record, error) {
 	if details.TerminalID == "" || details.PaneID == "" {
 		return Record{}, fmt.Errorf("cannot register an agent without a pane and terminal id")
@@ -78,15 +82,37 @@ func Register(ctx context.Context, s *state.Store, c libagent.Client, details he
 		return Record{}, err
 	}
 	var rec Record
-	_, err = s.Create(Kind, func(id string) any {
-		rec = Record{ID: id, Name: details.Name, Pane: details.PaneID, WorkspaceID: details.WorkspaceID, Harness: details.Agent,
-			Session: session(), TerminalID: details.TerminalID, RegisteredAt: time.Now().UTC().Format(time.RFC3339), RegisteredBy: by, WorktreePath: worktree}
-		if parent != nil {
-			rec.Parent = &parent.ID
+	err = s.Exclusive(func() error {
+		if err := Unregistered(s, details); err != nil {
+			return err
 		}
-		return rec
+		_, err := s.Create(Kind, func(id string) any {
+			rec = Record{ID: id, Name: details.Name, Pane: details.PaneID, WorkspaceID: details.WorkspaceID, Harness: details.Agent,
+				Session: session(), TerminalID: details.TerminalID, RegisteredAt: time.Now().UTC().Format(time.RFC3339), RegisteredBy: by, WorktreePath: worktree}
+			if parent != nil {
+				rec.Parent = &parent.ID
+			}
+			return rec
+		})
+		return err
 	})
-	return rec, err
+	if err != nil {
+		return Record{}, err
+	}
+	return rec, nil
+}
+
+// Unregistered fails with agent_already_registered, naming the existing id,
+// when a's terminal already has a live record.
+func Unregistered(s *state.Store, a herdr.AgentDetails) error {
+	existing, err := Live(s, a.TerminalID)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		return &herdr.Error{Code: "agent_already_registered", Message: fmt.Sprintf("the agent in %s is already registered as %s", a.PaneID, existing.ID)}
+	}
+	return nil
 }
 
 // callerRecord finds the live record of the agent in the caller's pane, if any.
