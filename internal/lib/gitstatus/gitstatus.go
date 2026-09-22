@@ -53,7 +53,11 @@ func DefaultBranch(ctx context.Context, repo string) (string, error) {
 		}
 		return ref, nil
 	case !errors.As(err, &exit) || exit.ExitCode() != 1:
-		return "", fmt.Errorf("read git config fledge.baseBranch: %v", err)
+		detail := err.Error()
+		if exit != nil && len(exit.Stderr) > 0 {
+			detail = strings.TrimSpace(string(exit.Stderr))
+		}
+		return "", fmt.Errorf("read git config fledge.baseBranch: %s", detail)
 	}
 	if b, err := exec.CommandContext(ctx, "git", "-C", repo, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD").Output(); err == nil {
 		return strings.TrimSpace(string(b)), nil

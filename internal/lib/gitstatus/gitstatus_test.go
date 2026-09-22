@@ -125,6 +125,20 @@ func TestDefaultBranch(t *testing.T) {
 			t.Fatalf("got %q, %v", got, err)
 		}
 	})
+	// Unreadable config is an error that carries git's explanation.
+	t.Run("config unreadable", func(t *testing.T) {
+		root := repository(t)
+		f, err := os.OpenFile(filepath.Join(root, ".git", "config"), os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.WriteString("[broken\n")
+		f.Close()
+		got, err := DefaultBranch(ctx, root)
+		if got != "" || err == nil || !strings.Contains(err.Error(), "fledge.baseBranch") || !strings.Contains(err.Error(), "bad config line") {
+			t.Fatalf("got %q, %v", got, err)
+		}
+	})
 }
 
 func TestMerged(t *testing.T) {
