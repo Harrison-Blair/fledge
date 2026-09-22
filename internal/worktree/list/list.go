@@ -43,10 +43,14 @@ type Owner struct {
 	Name *string `json:"name"`
 	Pane string  `json:"pane"`
 }
+
+// Result names the integration branch that Merged is checked against, or why
+// it could not be chosen.
 type Result struct {
-	RepoRoot      string  `json:"repo_root"`
-	DefaultBranch *string `json:"default_branch"`
-	Worktrees     []Row   `json:"worktrees"`
+	RepoRoot           string  `json:"repo_root"`
+	DefaultBranch      *string `json:"default_branch"`
+	DefaultBranchError *string `json:"default_branch_error"`
+	Worktrees          []Row   `json:"worktrees"`
 }
 
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
@@ -77,7 +81,11 @@ func Inspect(ctx context.Context, c libagent.Client, cwd string) (Result, error)
 	}
 	root := filepath.Clean(listing.Source.RepoRoot)
 	r := Result{RepoRoot: root, Worktrees: make([]Row, 0, len(listing.Worktrees))}
-	target := gitstatus.DefaultBranch(ctx, root)
+	target, err := gitstatus.DefaultBranch(ctx, root)
+	if err != nil {
+		reason := err.Error()
+		r.DefaultBranchError = &reason
+	}
 	if target != "" {
 		short := strings.TrimPrefix(strings.TrimPrefix(target, "refs/heads/"), "refs/remotes/")
 		r.DefaultBranch = &short
@@ -185,5 +193,12 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		}
 		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", path, branch, workspace, row.Dirty, row.Merged, managed, owner)
 	}
-	return table.Flush()
+	if err := table.Flush(); err != nil {
+		return err
+	}
+	if r.DefaultBranchError != nil {
+		_, err := fmt.Fprintf(w, "MERGED is unknown: %s.\n", *r.DefaultBranchError)
+		return err
+	}
+	return nil
 }

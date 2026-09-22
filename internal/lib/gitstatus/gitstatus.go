@@ -7,6 +7,7 @@ package gitstatus
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -37,19 +38,30 @@ func samePath(a, b string) bool {
 }
 
 // DefaultBranch returns the full ref of the repository integration branch:
-// refs/heads/dev, else the target of refs/remotes/origin/HEAD, else
-// refs/heads/main, or "" when none of them exists.
-func DefaultBranch(ctx context.Context, repo string) string {
-	if exists(ctx, repo, "refs/heads/dev") {
-		return "refs/heads/dev"
+// the branch named by git config fledge.baseBranch, else the target of
+// refs/remotes/origin/HEAD, else refs/heads/main, or "" when none of them
+// exists. A configured branch that does not exist, or unreadable config, is an
+// error rather than a fallback, so merged checks become "unknown".
+func DefaultBranch(ctx context.Context, repo string) (string, error) {
+	name, err := exec.CommandContext(ctx, "git", "-C", repo, "config", "--get", "fledge.baseBranch").Output()
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		ref := "refs/heads/" + strings.TrimSpace(string(name))
+		if !exists(ctx, repo, ref) {
+			return "", fmt.Errorf("git config fledge.baseBranch names %s, which does not exist", ref)
+		}
+		return ref, nil
+	case !errors.As(err, &exit) || exit.ExitCode() != 1:
+		return "", fmt.Errorf("read git config fledge.baseBranch: %v", err)
 	}
 	if b, err := exec.CommandContext(ctx, "git", "-C", repo, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD").Output(); err == nil {
-		return strings.TrimSpace(string(b))
+		return strings.TrimSpace(string(b)), nil
 	}
 	if exists(ctx, repo, "refs/heads/main") {
-		return "refs/heads/main"
+		return "refs/heads/main", nil
 	}
-	return ""
+	return "", nil
 }
 
 func exists(ctx context.Context, repo, ref string) bool {

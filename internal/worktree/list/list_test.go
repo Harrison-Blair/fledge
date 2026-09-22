@@ -249,3 +249,43 @@ func TestListLeavesIncompleteStoreUnchanged(t *testing.T) {
 		t.Fatalf("state entries changed: %v", list)
 	}
 }
+
+// A configured base branch that does not exist makes every merged check
+// unknown and says why, instead of falling back to another branch.
+func TestListMissingConfiguredBaseBranch(t *testing.T) {
+	f := newFixture(t)
+	git(t, f.root, "config", "fledge.baseBranch", "dev")
+	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()})
+	out := Run(context.Background(), c, Options{Cwd: f.root})
+	r := out.Result.(Result)
+	if r.DefaultBranch != nil || r.DefaultBranchError == nil || !strings.Contains(*r.DefaultBranchError, "refs/heads/dev") {
+		t.Fatalf("%+v", r)
+	}
+	for _, row := range r.Worktrees {
+		if row.Merged != "unknown" {
+			t.Errorf("%s merged %s", row.Path, row.Merged)
+		}
+	}
+	var b bytes.Buffer
+	if err := out.Write(&b, false, Render); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.String(), "MERGED is unknown: "+*r.DefaultBranchError) {
+		t.Fatalf("%q", b.String())
+	}
+	herdrscript.CheckOutputFailures(t, Render, libagent.Outcome{Result: r})
+}
+
+func TestListUsesConfiguredBaseBranch(t *testing.T) {
+	f := newFixture(t)
+	git(t, f.root, "branch", "dev", "main~1")
+	git(t, f.root, "config", "fledge.baseBranch", "dev")
+	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()})
+	r := Run(context.Background(), c, Options{Cwd: f.root}).Result.(Result)
+	if r.DefaultBranch == nil || *r.DefaultBranch != "dev" || r.DefaultBranchError != nil {
+		t.Fatalf("%+v", r)
+	}
+	if row := r.Worktrees[1]; row.Merged != "no" {
+		t.Fatalf("merged into main but not dev: %+v", row)
+	}
+}
