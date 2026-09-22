@@ -645,7 +645,7 @@ It runs five checks, each independently:
   so command-only kinds (`opencode`, `cursor`) are not checked here; use `fledge
   agent models` for those. A missing harness is `warn` (nothing to diagnose); an
   installed harness whose cache is unreadable is `fail`; an installed harness with
-  no models is `warn`.
+  no models, including one that has not created its cache yet, is `warn`.
 - `configuration` — `HERDR_ENV`, `HERDR_SOCKET_PATH` and its file mode,
   `HERDR_PANE_ID`, `HERDR_SESSION`, and the working directory.
 

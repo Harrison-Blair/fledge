@@ -2,7 +2,9 @@ package checks
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"strings"
 
 	"github.com/Harrison-Blair/fledge/internal/doctor/report"
@@ -32,6 +34,7 @@ func Models(ctx context.Context, disc models.Discovery, list herdr.IntegrationLi
 }
 
 // discoverModels diagnoses one harness kind. A missing harness is a warning; a
+// cache the harness has not created yet means no models, also a warning; a
 // broken source for an installed harness is a failure; unknown availability
 // (integration.list failed) never escalates a discovery error past a warning.
 func discoverModels(ctx context.Context, disc models.Discovery, kind string, availability map[string]bool, listErr error) report.ModelHarness {
@@ -48,6 +51,9 @@ func discoverModels(ctx context.Context, disc models.Discovery, kind string, ava
 		return res
 	}
 	rows, err := disc.Discover(ctx, kind)
+	if errors.Is(err, fs.ErrNotExist) {
+		err = nil
+	}
 	res.Count = len(rows)
 	unknown := ""
 	if available == nil {

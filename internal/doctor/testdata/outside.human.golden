@@ -11,15 +11,9 @@ fledge doctor
 
   model_discovery         warn
     pi 0 · codex 0 · claude 0
-    pi: availability unknown; discovery error: open
-        /nonexistent-home-fledge/.pi/agent/models-store.json: no such file or
-        directory
-    codex: availability unknown; discovery error: open
-        /nonexistent-home-fledge/.codex/models_cache.json: no such file or
-        directory
-    claude: availability unknown; discovery error: open
-        /nonexistent-home-fledge/.claude/cache/model-catalog: no such file or
-        directory
+    pi: no models found (availability unknown)
+    codex: no models found (availability unknown)
+    claude: no models found (availability unknown)
 
   configuration           fail
     HERDR_ENV      -
