@@ -137,8 +137,8 @@ the source is Fledge's working directory. `--branch` defaults to the agent name,
 and `--base` optionally selects a starting ref. Checkouts are created beneath the
 primary checkout at `.fledge/worktrees/<branch>`, even when invoked from a linked
 worktree. Branch slashes create nested directories. Existing branches or paths
-fail; Fledge does not invent suffixes. A managed `.gitignore` excludes those
-checkouts without changing the root ignore file.
+fail; Fledge does not invent suffixes. `.fledge/.gitignore` excludes the
+managed directory without changing the root ignore file.
 
 `--worktree PATH` opens an existing checkout. Without an explicit source, the
 absolute checkout path determines its repository. A newly opened workspace uses
