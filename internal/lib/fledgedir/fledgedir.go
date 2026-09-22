@@ -20,6 +20,7 @@ import (
 // its top level. From a linked worktree the candidate comes from the common
 // dir's core.worktree or, failing that, the parent of a common dir named .git,
 // and is accepted only if Git reports it as the checkout owning that common dir.
+// Bare repositories, including their linked worktrees, are not supported.
 func Root(ctx context.Context, cwd string) (string, error) {
 	b, err := exec.CommandContext(ctx, "git", "-C", cwd, "rev-parse", "--is-bare-repository", "--path-format=absolute", "--git-dir", "--git-common-dir").Output()
 	if err != nil {
@@ -31,11 +32,16 @@ func Root(ctx context.Context, cwd string) (string, error) {
 	}
 	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
 	if len(lines) != 3 || lines[0] == "true" {
-		return "", fmt.Errorf("%s is in a bare repository, which has no primary checkout", cwd)
+		return "", fmt.Errorf("%s is in a bare repository, which has no primary checkout; bare repositories are not supported", cwd)
 	}
 	common := filepath.Clean(lines[2])
 	candidate := cwd
 	if filepath.Clean(lines[1]) != common {
+		// Git reports a linked worktree of a bare repository as non-bare.
+		b, err = exec.CommandContext(ctx, "git", "--git-dir", common, "config", "--type=bool", "--get", "core.bare").Output()
+		if err == nil && strings.TrimSpace(string(b)) == "true" {
+			return "", fmt.Errorf("%s is a linked worktree of bare repository %s, which has no primary checkout; bare repositories are not supported", cwd, common)
+		}
 		b, err = exec.CommandContext(ctx, "git", "--git-dir", common, "config", "--get", "core.worktree").Output()
 		switch configured := strings.TrimSpace(string(b)); {
 		case err == nil && configured != "" && filepath.IsAbs(configured):
