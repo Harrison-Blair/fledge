@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"text/tabwriter"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
@@ -32,22 +33,21 @@ func Run(ctx context.Context, c libagent.Client) libagent.Outcome {
 	if err == nil && (r.Type != "agent_list" || r.Agents == nil) {
 		err = libagent.Protocol("incomplete agent.list result")
 	}
+	if err == nil && slices.ContainsFunc(r.Agents, func(a herdr.AgentDetails) bool { return !libagent.ValidAgent(a.Pane) }) {
+		err = libagent.Protocol("incomplete agent info")
+	}
+	if err != nil {
+		out.Fail(err, "agent.list", false)
+		return out
+	}
 	records := liveRecords(ctx, c.Cwd)
 	rows := make([]Row, 0, len(r.Agents))
 	for _, a := range r.Agents {
-		if !libagent.ValidAgent(a.Pane) {
-			err = libagent.Protocol("incomplete agent info")
-			break
-		}
 		row := Row{AgentRow: libagent.NewAgentRow(a.Pane)}
 		if rec, ok := records[a.TerminalID]; ok && a.TerminalID != "" {
 			row.ID = &rec.ID
 		}
 		rows = append(rows, row)
-	}
-	if err != nil {
-		out.Fail(err, "agent.list", false)
-		return out
 	}
 	out.Result = Result{Agents: rows}
 	return out
