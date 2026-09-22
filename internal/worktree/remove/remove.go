@@ -12,6 +12,7 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/worktree/list"
 )
 
@@ -48,11 +49,9 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Fail(libagent.Invalid("%s is the primary checkout, which is never removed", row.Path), "guard", false)
 		return out
 	}
-	if row.WorkspaceID != nil {
-		if err = checkAgents(ctx, c, *row.WorkspaceID); err != nil {
-			out.Fail(err, "guard", false)
-			return out
-		}
+	if err = checkAgents(ctx, c, listing.RepoRoot, row); err != nil {
+		out.Fail(err, "guard", false)
+		return out
 	}
 	if !o.Force {
 		var reasons []string
@@ -67,6 +66,11 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			return out
 		}
 	}
+	// Recheck immediately before removal: an agent may have started since.
+	if err = checkAgents(ctx, c, listing.RepoRoot, row); err != nil {
+		out.Fail(err, "guard", false)
+		return out
+	}
 	result := Result{Path: row.Path, Branch: row.Branch, Forced: o.Force}
 	if row.WorkspaceID == nil {
 		args := []string{"-C", listing.RepoRoot, "worktree", "remove"}
@@ -79,11 +83,6 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		}
 		out.Effects = append(out.Effects, libagent.Effect{Action: "removed", Kind: "worktree", Path: row.Path})
 		out.Result = result
-		return out
-	}
-	// Recheck immediately before removal: an agent may have started since.
-	if err = checkAgents(ctx, c, *row.WorkspaceID); err != nil {
-		out.Fail(err, "guard", false)
 		return out
 	}
 	var r struct {
@@ -128,9 +127,15 @@ func target(r list.Result, o Options) (list.Row, error) {
 	return list.Row{}, libagent.Invalid("no worktree of %s has branch %s checked out", r.RepoRoot, o.Branch)
 }
 
-// checkAgents refuses when any live agent in the connected Herdr session is in workspace.
-func checkAgents(ctx context.Context, c libagent.Client, workspace string) error {
-	var r herdr.AgentListResult
+// checkAgents refuses when any live agent in the connected Herdr session is in
+// the checkout's workspace, has its cwd at or inside the checkout, or is
+// registered with the checkout as its worktree. Unreadable agent records fail
+// closed.
+func checkAgents(ctx context.Context, c libagent.Client, repo string, row list.Row) error {
+	var r struct {
+		Type   string               `json:"type"`
+		Agents []herdr.AgentDetails `json:"agents"`
+	}
 	err := c.Call(ctx, "agent.list", nil, &r)
 	if err == nil && (r.Type != "agent_list" || r.Agents == nil) {
 		err = libagent.Protocol("incomplete agent.list result")
@@ -138,16 +143,51 @@ func checkAgents(ctx context.Context, c libagent.Client, workspace string) error
 	if err != nil {
 		return err
 	}
-	for _, a := range r.Agents {
-		if a.WorkspaceID == workspace {
-			who := a.PaneID
-			if a.Name != nil && *a.Name != "" {
-				who = *a.Name + " (" + a.PaneID + ")"
-			}
-			return libagent.Invalid("live agent %s is in workspace %s; stop it first (--force does not override this)", who, workspace)
+	records := map[string]identity.Record{}
+	if s, err := identity.Existing(ctx, repo); err != nil {
+		return fmt.Errorf("read agent records: %w", err)
+	} else if s != nil {
+		if records, err = identity.LiveByTerminal(s); err != nil {
+			return fmt.Errorf("read agent records: %w", err)
 		}
 	}
+	checkout := canonical(row.Path)
+	for _, a := range r.Agents {
+		var where string
+		rec, registered := records[a.TerminalID]
+		switch {
+		case row.WorkspaceID != nil && a.WorkspaceID == *row.WorkspaceID:
+			where = "is in workspace " + a.WorkspaceID
+		case a.Cwd != nil && inside(checkout, canonical(*a.Cwd)):
+			where = "is working in " + *a.Cwd
+		case a.TerminalID != "" && registered && rec.WorktreePath != nil && inside(checkout, canonical(*rec.WorktreePath)):
+			where = "is registered to " + row.Path
+		default:
+			continue
+		}
+		who := a.PaneID
+		if a.Name != nil && *a.Name != "" {
+			who = *a.Name + " (" + a.PaneID + ")"
+		} else if registered && rec.Name != nil {
+			who = *rec.Name + " (" + a.PaneID + ")"
+		}
+		return libagent.Invalid("live agent %s %s; stop it first (--force does not override this)", who, where)
+	}
 	return nil
+}
+
+// inside reports whether p is dir or below it.
+func inside(dir, p string) bool {
+	rel, err := filepath.Rel(dir, p)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// canonical cleans p and resolves its symlinks when it exists.
+func canonical(p string) string {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved
+	}
+	return filepath.Clean(p)
 }
 
 // Render writes a successful remove outcome.
