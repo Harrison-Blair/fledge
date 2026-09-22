@@ -565,3 +565,28 @@ with `/`. Possible capabilities: a raw, unheaded send option, or
 2. Run `fledge agent message --name worker --body "/model claude-opus-5-5"`.
 3. Observe that the delivered text begins with the Fledge sender header, so Claude treats it as a prompt rather than a slash command and the model is unchanged.
 4. Observe that the only way to switch models is `fledge agent stop --name worker`, a respawn with `--model claude-opus-5-5`, and reassigning its task, which yields a new record ID.
+
+---
+
+**Issue:** A new harness in a reused terminal inherits the previous agent record
+
+**Summary:** On 2026-09-22, Fledge `dev` at `d535618` (`agent current` added in
+`ff7c96c`), Herdr 0.9.1, record `b2934d28`
+(`.fledge/state/agents/b2934d28.json`) was adopted at 2026-09-22T14:56:33Z for a
+Codex agent named `pr14-dispatcher` in terminal `term_65c12d047118e1` (pane
+`wZ:p1`). That Codex agent later exited and a Claude Code agent was started in
+the same terminal; it has no live Herdr name. `fledge agent current` from that
+Claude agent reports Fledge ID `b2934d28`, Name `pr14-dispatcher`, Harness
+`codex`; children spawned by the Claude agent record parent `b2934d28`, and
+`agent get --pane wZ:p1` showed Name `-` but the record fields. Cause: identity
+is keyed by `terminal_id`, and per README Identity a terminal whose harness
+exits keeps its record live, so the next harness launched in it is treated as
+the same agent. Possible fixes: end or invalidate the record when the harness
+kind or Herdr session reference changes, or compare the recorded harness
+against the live agent on lookup.
+
+**Reproduction steps:**
+1. Adopt an agent in a pane (`fledge agent adopt --name a`).
+2. Exit that harness, leaving the shell.
+3. Start a different harness in the same pane.
+4. Run `fledge agent current` there and observe the old name and harness.
