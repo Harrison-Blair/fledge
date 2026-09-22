@@ -159,16 +159,15 @@ func checkAgents(ctx context.Context, c libagent.Client, repo string, row herdr.
 	if err != nil {
 		return fmt.Errorf("read agent records: %w; repair or remove the bad record under .fledge/state", err)
 	}
-	checkout := worktree.Canonical(row.Path)
 	for _, a := range r.Agents {
 		var where string
 		rec, registered := identity.Attributed(records, a)
 		switch {
 		case row.OpenWorkspaceID != nil && a.WorkspaceID == *row.OpenWorkspaceID:
 			where = "is in workspace " + a.WorkspaceID
-		case a.Cwd != nil && inside(checkout, worktree.Canonical(*a.Cwd)):
+		case a.Cwd != nil && inside(row.Path, worktree.Canonical(*a.Cwd)):
 			where = "is working in " + *a.Cwd
-		case registered && rec.WorktreePath != nil && inside(checkout, worktree.Canonical(*rec.WorktreePath)):
+		case registered && rec.WorktreePath != nil && inside(row.Path, worktree.Canonical(*rec.WorktreePath)):
 			where = "is registered to " + row.Path
 		default:
 			continue

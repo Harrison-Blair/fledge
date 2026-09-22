@@ -532,6 +532,9 @@ func TestInspectsOnlyTargetCheckout(t *testing.T) {
 		t.Fatalf("%+v", out)
 	}
 	b, _ := os.ReadFile(log)
+	if !strings.Contains(string(b), "-C "+r.topic+" status") {
+		t.Fatalf("target checkout not inspected; git log:\n%s", b)
+	}
 	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
 		if strings.Contains(line, other) || strings.Contains(line, "refs/heads/other") || (strings.Contains(line, " status ") && !strings.Contains(line, r.topic)) {
 			t.Errorf("inspected another checkout: git %s", line)
