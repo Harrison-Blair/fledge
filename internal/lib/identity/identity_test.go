@@ -328,3 +328,29 @@ func TestExistingOnStateWithoutLockCreatesNothing(t *testing.T) {
 		t.Fatalf("state entries changed: %v", list)
 	}
 }
+
+func TestCallerWithoutAgentHasNoRecord(t *testing.T) {
+	c := client(t, call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Err: notFound()})
+	if rec, err := Caller(context.Background(), store(t, c), c); rec != nil || err != nil {
+		t.Fatalf("%+v %v", rec, err)
+	}
+}
+
+func TestCallerPropagatesLookupFailures(t *testing.T) {
+	for name, get := range map[string]call{
+		"transport": {Method: "agent.get", Err: &herdr.Error{Code: "connection_error", Message: "down"}},
+		"protocol":  {Method: "agent.get", Result: herdr.AgentResult{Type: "pane_info"}},
+		"other":     {Method: "agent.get", Err: &herdr.Error{Code: "agent_not_ready", Message: "busy"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := client(t, get, get)
+			rec, err := Caller(context.Background(), store(t, c), c)
+			if rec != nil || err == nil {
+				t.Fatalf("%+v %v", rec, err)
+			}
+			if _, err := Register(context.Background(), store(t, c), c, details("w1:p3", "term_a"), "spawn", nil); err == nil {
+				t.Fatal("registered without a provable parent lookup")
+			}
+		})
+	}
+}

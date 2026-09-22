@@ -116,15 +116,19 @@ func Unregistered(s *state.Store, a herdr.AgentDetails) error {
 }
 
 // Caller finds the live record of the agent in the caller's pane, if any. A
-// caller outside Herdr, or whose pane cannot be resolved, has none.
+// caller outside Herdr, or whose pane hosts no agent, has none; any other
+// lookup failure is returned.
 func Caller(ctx context.Context, s *state.Store, c libagent.Client) (*Record, error) {
 	if c.CallerPane == "" {
 		return nil, nil
 	}
 	caller, err := c.Get(ctx, c.CallerPane)
-	if err != nil {
-		// An unresolvable caller has no provable parent record.
+	var remote *herdr.Error
+	if errors.As(err, &remote) && remote.Code == "agent_not_found" {
 		return nil, nil
+	}
+	if err != nil {
+		return nil, err
 	}
 	rec, err := Live(s, caller.TerminalID)
 	if err != nil || rec == nil || rec.Pane != caller.PaneID {
