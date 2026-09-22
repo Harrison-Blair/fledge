@@ -79,8 +79,17 @@ func TestRootResolvesSeparateGitDirAndSubmodule(t *testing.T) {
 	}
 	// Git records no path back to a separate-git-dir primary checkout, so a
 	// linked worktree of one must fail rather than guess.
-	if got, err := Root(context.Background(), linked); err == nil {
+	got, err := Root(context.Background(), linked)
+	if err == nil {
 		t.Fatalf("Root(%s) guessed %s", linked, got)
+	}
+	// The error names the one-time fix, which Root then honors.
+	if !strings.Contains(err.Error(), "git config core.worktree <primary checkout path>") {
+		t.Fatalf("%v", err)
+	}
+	git(t, "-C", repo, "config", "core.worktree", repo)
+	if got, err := Root(context.Background(), linked); err != nil || got != repo {
+		t.Fatalf("Root(%s) = %s, %v want %s", linked, got, err, repo)
 	}
 }
 func TestRootRejectsCheckoutOfAnotherRepository(t *testing.T) {

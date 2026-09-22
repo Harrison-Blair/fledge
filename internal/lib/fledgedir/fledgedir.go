@@ -45,7 +45,9 @@ func Root(ctx context.Context, cwd string) (string, error) {
 		case filepath.Base(common) == ".git":
 			candidate = filepath.Dir(common)
 		default:
-			return "", fmt.Errorf("cannot locate the primary checkout of %s: git dir %s records no checkout path", cwd, common)
+			// A --separate-git-dir repository records no path back to its
+			// primary checkout; core.worktree supplies it.
+			return "", fmt.Errorf("cannot locate the primary checkout of %s: git dir %s records no checkout path; run `git config core.worktree <primary checkout path>` once", cwd, common)
 		}
 	}
 	b, err = exec.CommandContext(ctx, "git", "-C", candidate, "rev-parse", "--path-format=absolute", "--git-dir", "--show-toplevel").Output()
