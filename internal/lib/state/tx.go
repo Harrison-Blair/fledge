@@ -43,7 +43,7 @@ func (tx *Tx) Put(kind, id string, v any) error {
 
 // Archive moves record id out of List's view into the archive, keeping it
 // readable by id. An archived record is left as is; a missing one returns
-// *NotFoundError.
+// *NotFoundError. It never replaces an archived record of the same id.
 func (tx *Tx) Archive(kind, id string) error {
 	live, err := tx.s.recordPath(kind, id)
 	if err != nil {
@@ -53,17 +53,47 @@ func (tx *Tx) Archive(kind, id string) error {
 	if err != nil || path != live {
 		return err
 	}
-	dir := filepath.Join(filepath.Dir(live), archiveDir)
+	dir := filepath.Dir(archivePath(live))
 	if err := ensureDir(dir); err != nil {
 		return fmt.Errorf("state: create %s: %w", dir, err)
 	}
-	if err := os.Rename(live, filepath.Join(dir, filepath.Base(live))); err != nil {
-		return fmt.Errorf("state: archive %s: %w", live, err)
-	}
-	if err := syncDir(dir); err != nil {
+	return move(live, archivePath(live))
+}
+
+// Unarchive returns archived record id to List's view. A record that is not
+// archived is left as is; a missing one returns *NotFoundError.
+func (tx *Tx) Unarchive(kind, id string) error {
+	live, err := tx.s.recordPath(kind, id)
+	if err != nil {
 		return err
 	}
-	return syncDir(filepath.Dir(live))
+	path, err := tx.locate(kind, id)
+	if err != nil || path == live {
+		return err
+	}
+	return move(path, live)
+}
+
+// move renames from to to without replacing an existing to, which fails with
+// an error matching fs.ErrExist. A to that is already from's file, left by an
+// interrupted move, completes the move.
+func move(from, to string) error {
+	if err := os.Link(from, to); errors.Is(err, fs.ErrExist) {
+		a, aerr := os.Stat(from)
+		b, berr := os.Stat(to)
+		if aerr != nil || berr != nil || !os.SameFile(a, b) {
+			return fmt.Errorf("state: move %s: %w", from, err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("state: move %s: %w", from, err)
+	}
+	if err := os.Remove(from); err != nil {
+		return fmt.Errorf("state: move %s: %w", from, err)
+	}
+	if err := syncDir(filepath.Dir(to)); err != nil {
+		return err
+	}
+	return syncDir(filepath.Dir(from))
 }
 
 // locate returns the path of record id, live or archived.
@@ -85,3 +115,4 @@ func (tx *Tx) locate(kind, id string) (string, error) {
 func archivePath(live string) string {
 	return filepath.Join(filepath.Dir(live), archiveDir, filepath.Base(live))
 }
+

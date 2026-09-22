@@ -79,8 +79,11 @@ func OpenExisting(root string) (*Store, error) {
 }
 
 // Create stores the value returned by build under a new random id and returns
-// that id. An existing record is never overwritten; colliding ids are retried a
-// bounded number of times.
+// that id. An existing record, live or archived, is never overwritten or
+// shadowed; colliding ids are retried a bounded number of times. The archive
+// is checked before the live path is claimed, which is race-free with or
+// without the lock: Archive and Unarchive move a record by linking its new
+// path before removing its old one, so it is always at one of the two paths.
 func (s *Store) Create(kind string, build func(id string) any) (string, error) {
 	dir, err := s.kindDir(kind)
 	if err != nil {
@@ -103,7 +106,13 @@ func (s *Store) Create(kind string, build func(id string) any) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("state: encode %s record %s: %w", kind, id, err)
 		}
-		err = writeExclusive(filepath.Join(dir, id+recordSuffix), data)
+		path := filepath.Join(dir, id+recordSuffix)
+		if _, err := os.Stat(archivePath(path)); err == nil {
+			continue
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return "", fmt.Errorf("state: create %s: %w", path, err)
+		}
+		err = writeExclusive(path, data)
 		if errors.Is(err, fs.ErrExist) {
 			continue
 		}

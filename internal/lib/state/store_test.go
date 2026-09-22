@@ -1,6 +1,7 @@
 package state
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -167,6 +168,101 @@ func TestCreateGivesUpAfterBoundedCollisions(t *testing.T) {
 	var c counter
 	if err := store.Get("counters", "aaaaaaaa", &c); err != nil || c.N != 1 {
 		t.Fatalf("record = %+v, %v; want untouched N=1", c, err)
+	}
+}
+
+func TestCreateNeverReusesAnArchivedID(t *testing.T) {
+	store, _ := openStore(t)
+	ids := []string{"aaaaaaaa", "aaaaaaaa", "bbbbbbbb"}
+	store.newID = func() (string, error) {
+		id := ids[0]
+		ids = ids[1:]
+		return id, nil
+	}
+	first, err := store.Create("counters", func(string) any { return counter{N: 1} })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Exclusive(func(tx *Tx) error { return tx.Archive("counters", first) }); err != nil {
+		t.Fatal(err)
+	}
+	// The live path is free again, but the id still names the archived record.
+	second, err := store.Create("counters", func(string) any { return counter{N: 2} })
+	if err != nil || second != "bbbbbbbb" {
+		t.Fatalf("second Create = %q, %v; want bbbbbbbb", second, err)
+	}
+	var c counter
+	if err := store.Get("counters", first, &c); err != nil || c.N != 1 {
+		t.Fatalf("archived record = %+v, %v; want N=1", c, err)
+	}
+}
+
+func TestArchiveRefusesToOverwriteAnArchivedRecord(t *testing.T) {
+	store, root := openStore(t)
+	id := createCounter(t, store)
+	if err := store.Exclusive(func(tx *Tx) error { return tx.Archive("counters", id) }); err != nil {
+		t.Fatal(err)
+	}
+	live := filepath.Join(root, "counters", id+recordSuffix)
+	if err := os.WriteFile(live, []byte(`{"n": 9}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Exclusive(func(tx *Tx) error { return tx.Archive("counters", id) }); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("Archive over an archived record: %v, want fs.ErrExist", err)
+	}
+	var c counter
+	data, _ := os.ReadFile(filepath.Join(root, "counters", archiveDir, id+recordSuffix))
+	if err := json.Unmarshal(data, &c); err != nil || c.N != 0 {
+		t.Fatalf("archived record = %s, %v; want untouched", data, err)
+	}
+	if _, err := os.Stat(live); err != nil {
+		t.Fatalf("refused Archive removed the live record: %v", err)
+	}
+}
+
+func TestArchiveCompletesAnInterruptedMove(t *testing.T) {
+	store, root := openStore(t)
+	id := createCounter(t, store)
+	live := filepath.Join(root, "counters", id+recordSuffix)
+	// A move interrupted after linking leaves the record at both paths.
+	if err := os.Mkdir(filepath.Join(root, "counters", archiveDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(live, filepath.Join(root, "counters", archiveDir, id+recordSuffix)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Exclusive(func(tx *Tx) error { return tx.Archive("counters", id) }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(live); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("live path remains: %v", err)
+	}
+}
+
+func TestUnarchiveReturnsRecordToList(t *testing.T) {
+	store, root := openStore(t)
+	id := createCounter(t, store)
+	unarchive := func(id string) error {
+		return store.Exclusive(func(tx *Tx) error { return tx.Unarchive("counters", id) })
+	}
+	if err := unarchive(id); err != nil { // a live record is left as is
+		t.Fatal(err)
+	}
+	if err := store.Exclusive(func(tx *Tx) error { return tx.Archive("counters", id) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := unarchive(id); err != nil {
+		t.Fatal(err)
+	}
+	if ids, err := store.List("counters"); err != nil || !reflect.DeepEqual(ids, []string{id}) {
+		t.Fatalf("List = %v, %v", ids, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "counters", archiveDir, id+recordSuffix)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("archived copy remains: %v", err)
+	}
+	var notFound *NotFoundError
+	if err := unarchive("0123abcd"); !errors.As(err, &notFound) {
+		t.Fatalf("Unarchive of a missing record: %v, want *NotFoundError", err)
 	}
 }
 
