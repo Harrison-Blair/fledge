@@ -1,7 +1,3 @@
-// Package task stores durable task records: a brief, the agent that owns it,
-// its outcome, and who verified it. Records live in the repository's state
-// store, so they outlive their agents' panes. No status is ever derived from
-// Herdr idle or done.
 package task
 
 import (
@@ -34,11 +30,13 @@ const (
 // Statuses lists every state in lifecycle order.
 var Statuses = []string{Created, Assigned, Completed, Verified, Cancelled}
 
-// Record is one task. Agent references are Fledge agent record ids.
+// Record is one task. Agent references are Fledge agent record ids. Parent
+// is the task this one was created under; it never changes.
 type Record struct {
 	ID                     string                  `json:"id"`
 	Title                  string                  `json:"title"`
 	Brief                  string                  `json:"brief"`
+	Parent                 *string                 `json:"parent"`
 	Owner                  *string                 `json:"owner"`
 	Status                 string                  `json:"status"`
 	Result                 *string                 `json:"result"`

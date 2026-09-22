@@ -20,7 +20,7 @@ func TestGetShowsFullRecord(t *testing.T) {
 		Delivery:               &task.Delivery{MessageID: "m-0a1b2c", Pane: "w1:p3", DeliveredAt: p("2026-01-01T00:01:01Z")},
 		CompletionNotification: &task.CompletionNotification{Recipient: "bbbbbbbb", MessageID: "m-abcdef", Pane: p("w1:p1"), DeliveredAt: p("2026-01-01T00:02:01Z")}})
 	out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{ID: id})
-	if out.Error != nil || out.Operation != "task.get" || !reflect.DeepEqual(out.Result, tasktest.Load(t, repo, id)) {
+	if out.Error != nil || out.Operation != "task.get" || !reflect.DeepEqual(out.Result, Result{Record: tasktest.Load(t, repo, id)}) {
 		t.Fatalf("%+v", out)
 	}
 	var b bytes.Buffer
@@ -71,5 +71,29 @@ func TestGetMissingAndInvalid(t *testing.T) {
 	}
 	if out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{}); out.Error == nil || out.Error.Code != "invalid_input" {
 		t.Fatalf("%+v", out.Error)
+	}
+}
+
+func TestGetShowsParentAndSubtaskProgress(t *testing.T) {
+	repo := identitytest.Repository(t)
+	top := tasktest.Seed(t, repo, task.Record{Title: "top", Brief: "b", Status: task.Created, CreatedAt: "2026-01-01T00:00:00Z"})
+	goal := tasktest.Seed(t, repo, task.Record{Title: "goal", Brief: "b", Status: task.Assigned, Parent: &top, CreatedAt: "2026-01-01T00:00:00Z"})
+	for _, status := range []string{task.Verified, task.Completed, task.Created, task.Cancelled} {
+		child := tasktest.Seed(t, repo, task.Record{Title: status, Status: status, Parent: &goal})
+		tasktest.Seed(t, repo, task.Record{Title: "grandchild", Status: task.Verified, Parent: &child})
+	}
+	out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{ID: goal})
+	if r, ok := out.Result.(Result); out.Error != nil || !ok || r.Progress == nil || *r.Progress != (task.Progress{Verified: 1, Total: 3, Cancelled: 1}) {
+		t.Fatalf("%+v", out)
+	}
+	var b bytes.Buffer
+	out.Write(&b, false, Render)
+	want := "id: " + goal + "\ntitle: goal\nstatus: assigned\nowner: -\n" +
+		"parent: " + top + "\n" +
+		"subtasks: 1/3 verified, 1 cancelled\n" +
+		"created: 2026-01-01T00:00:00Z by an unregistered caller\n" +
+		"brief:\n  b\n"
+	if b.String() != want {
+		t.Fatalf("%q\nwant %q", b.String(), want)
 	}
 }

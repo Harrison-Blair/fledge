@@ -80,3 +80,45 @@ func TestCreateRejectsInvalidInput(t *testing.T) {
 		}
 	}
 }
+
+func count(t *testing.T, repo string) int {
+	t.Helper()
+	s, err := task.Existing(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs, err := task.List(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(rs)
+}
+
+func TestCreateSubtaskAtAnyDepth(t *testing.T) {
+	repo := identitytest.Repository(t)
+	top := tasktest.Seed(t, repo, task.Record{Title: "goal", Status: task.Assigned})
+	parent := top
+	for _, title := range []string{"child", "grandchild"} {
+		out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{Title: title, Body: "b", BodySet: true, Parent: parent}, strings.NewReader(""))
+		if out.Error != nil {
+			t.Fatalf("%s: %+v", title, out.Error)
+		}
+		r := out.Result.(task.Record)
+		if r.Parent == nil || *r.Parent != parent || !reflect.DeepEqual(tasktest.Load(t, repo, r.ID), r) {
+			t.Fatalf("%s: %+v", title, r)
+		}
+		parent = r.ID
+	}
+}
+
+func TestCreateSubtaskRejectsMissingOrFinishedParent(t *testing.T) {
+	repo := identitytest.Repository(t)
+	verified := tasktest.Seed(t, repo, task.Record{Title: "v", Status: task.Verified})
+	cancelled := tasktest.Seed(t, repo, task.Record{Title: "c", Status: task.Cancelled})
+	for parent, code := range map[string]string{"0123abcd": "task_not_found", verified: "task_invalid_state", cancelled: "task_invalid_state", "BAD": "invalid_input"} {
+		out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{Title: "t", Body: "b", BodySet: true, Parent: parent}, strings.NewReader(""))
+		if out.Error == nil || out.Error.Code != code || count(t, repo) != 2 {
+			t.Fatalf("%s: %+v", parent, out.Error)
+		}
+	}
+}

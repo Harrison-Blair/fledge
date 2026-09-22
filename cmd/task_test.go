@@ -41,6 +41,8 @@ func TestTaskJSONValidation(t *testing.T) {
 		{"task", "verify", "--id", "0123abcd", "--bad", "--json"},
 		{"task", "cancel", "--json"},
 		{"task", "list", "--status", "done", "--json"},
+		{"task", "list", "--parent", "goal", "--json"},
+		{"task", "create", "--title", "t", "--body", "b", "--parent", "goal", "--json"},
 		{"task", "get", "--json"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {

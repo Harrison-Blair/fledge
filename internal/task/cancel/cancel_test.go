@@ -53,3 +53,16 @@ func TestCancelRejectsInvalidInput(t *testing.T) {
 		t.Fatalf("%+v", out.Error)
 	}
 }
+
+func TestCancelParentLeavesSubtasks(t *testing.T) {
+	repo := identitytest.Repository(t)
+	parent := tasktest.Seed(t, repo, task.Record{Title: "goal", Status: task.Assigned})
+	child := tasktest.Seed(t, repo, task.Record{Title: "child", Status: task.Assigned, Parent: &parent})
+	before := tasktest.Load(t, repo, child)
+	if out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{ID: parent}); out.Error != nil {
+		t.Fatalf("%+v", out.Error)
+	}
+	if !reflect.DeepEqual(tasktest.Load(t, repo, child), before) {
+		t.Fatalf("%+v", tasktest.Load(t, repo, child))
+	}
+}

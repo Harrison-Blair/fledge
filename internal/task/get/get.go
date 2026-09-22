@@ -1,4 +1,5 @@
-// Package get implements task get: one task's full record.
+// Package get implements task get: one task's full record and the progress of
+// its subtasks.
 package get
 
 import (
@@ -12,6 +13,13 @@ import (
 )
 
 type Options struct{ ID string }
+
+// Result is the task with the progress of its direct children, null when it
+// has none.
+type Result struct {
+	task.Record
+	Progress *task.Progress `json:"progress"`
+}
 
 // Run reads one task from the store without contacting Herdr.
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
@@ -30,14 +38,19 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Fail(err, "task", false)
 		return out
 	}
-	out.Result = r
+	rs, err := task.List(s)
+	if err != nil {
+		out.Fail(err, "state", false)
+		return out
+	}
+	out.Result = Result{Record: r, Progress: task.ChildProgress(r.ID, rs)}
 	return out
 }
 
 // Render writes the task as labelled lines, omitting steps not yet reached,
 // followed by its indented texts.
 func Render(w io.Writer, o libagent.Outcome) error {
-	r, ok := o.Result.(task.Record)
+	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil
 	}
@@ -50,7 +63,14 @@ func Render(w io.Writer, o libagent.Outcome) error {
 	if r.CreatedBy != nil {
 		creator = *r.CreatedBy
 	}
-	fmt.Fprintf(&b, "id: %s\ntitle: %s\nstatus: %s\nowner: %s\ncreated: %s by %s\n", r.ID, r.Title, r.Status, owner, r.CreatedAt, creator)
+	fmt.Fprintf(&b, "id: %s\ntitle: %s\nstatus: %s\nowner: %s\n", r.ID, r.Title, r.Status, owner)
+	if r.Parent != nil {
+		fmt.Fprintf(&b, "parent: %s\n", *r.Parent)
+	}
+	if r.Progress != nil {
+		fmt.Fprintf(&b, "subtasks: %s\n", r.Progress)
+	}
+	fmt.Fprintf(&b, "created: %s by %s\n", r.CreatedAt, creator)
 	if r.AssignedAt != nil {
 		fmt.Fprintf(&b, "assigned: %s\n", *r.AssignedAt)
 	}

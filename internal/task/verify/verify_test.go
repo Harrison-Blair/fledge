@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
@@ -80,7 +81,7 @@ func TestLifecycleCreateAssignCompleteVerify(t *testing.T) {
 	}
 	r = tasktest.Load(t, repo, id)
 	want.Status, want.Verifier, want.VerificationNote, want.VerifiedAt = task.Verified, &bossRec.ID, tasktest.Ptr("looks right"), r.VerifiedAt
-	if !reflect.DeepEqual(r, want) || r.VerifiedAt == nil || !reflect.DeepEqual(verified.Result, r) {
+	if !reflect.DeepEqual(r, want) || r.VerifiedAt == nil || !reflect.DeepEqual(verified.Result, Result{Record: r, OpenSubtasks: []string{}}) {
 		t.Fatalf("after verify %+v", r)
 	}
 	var b bytes.Buffer
@@ -134,5 +135,42 @@ func TestVerifyRequiresCompleted(t *testing.T) {
 		if out.Error == nil || out.Error.Code != "task_invalid_state" {
 			t.Fatalf("%s: %+v", status, out.Error)
 		}
+	}
+}
+
+func TestParentWithOpenSubtasksNeedsForce(t *testing.T) {
+	repo, id := setup(t, task.Completed)
+	for _, status := range []string{task.Verified, task.Cancelled} {
+		done := tasktest.Seed(t, repo, task.Record{Title: status, Status: status, Parent: &id})
+		tasktest.Seed(t, repo, task.Record{Title: "grandchild", Status: task.Created, Parent: &done})
+	}
+	open := tasktest.Seed(t, repo, task.Record{Title: "open", Status: task.Completed, Parent: &id})
+	before := tasktest.Load(t, repo, id)
+	c := func() libagent.Client { return tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p1", boss)) }
+	tasktest.Register(t, repo, boss)
+	out := Run(context.Background(), c(), Options{ID: id}, strings.NewReader(""))
+	if out.Error == nil || out.Error.Code != "task_open_subtasks" || !strings.Contains(out.Error.Message, open) || !strings.Contains(out.Error.Message, "--force") || !reflect.DeepEqual(tasktest.Load(t, repo, id), before) {
+		t.Fatalf("%+v", out.Error)
+	}
+	out = Run(context.Background(), c(), Options{ID: id, Force: true}, strings.NewReader(""))
+	r := tasktest.Load(t, repo, id)
+	if out.Error != nil || r.Status != task.Verified || !r.Forced || !reflect.DeepEqual(out.Result, Result{Record: r, OpenSubtasks: []string{open}}) {
+		t.Fatalf("%+v %+v", out.Error, out.Result)
+	}
+	var b bytes.Buffer
+	if err := out.Write(&b, false, Render); err != nil || !strings.HasSuffix(b.String(), " (forced).\nOpen subtasks: "+open+".\n") {
+		t.Fatalf("%q %v", b.String(), err)
+	}
+}
+
+func TestParentWithFinishedSubtasksVerifies(t *testing.T) {
+	repo, id := setup(t, task.Completed)
+	tasktest.Register(t, repo, boss)
+	for _, status := range []string{task.Verified, task.Cancelled} {
+		tasktest.Seed(t, repo, task.Record{Title: status, Status: status, Parent: &id})
+	}
+	out := Run(context.Background(), tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p1", boss)), Options{ID: id}, strings.NewReader(""))
+	if r := tasktest.Load(t, repo, id); out.Error != nil || r.Status != task.Verified || r.Forced {
+		t.Fatalf("%+v %+v", out.Error, r)
 	}
 }
