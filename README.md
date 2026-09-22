@@ -210,12 +210,14 @@ literally. Keys (`enter`, `esc`, `down`, `ctrl+c`, ...) are pressed after it, in
 order, so add `--key enter` to submit. Both go to the resolved pane in one Herdr
 `pane.send_input` call. Herdr validates every key name before writing, so an
 unknown key rejects the send (`invalid_key`) and nothing is typed. Send works in
-any agent state (`idle`, `working`, `blocked`, or `unknown`) without `--force`;
+any agent state (`idle`, `working`, `blocked`, `done`, or `unknown`) without `--force`;
 the output reports the status observed before sending, for example
 `Sent input to reviewer (claude) in w2:p3; it was blocked before sending.` JSON
 uses operation `agent.send`, the standard agent fields (with that earlier status),
 and `submitted`. A lost acknowledgement is `unknown`. Sending does not wait for
 or check the effect. Read the pane with `fledge agent read` to confirm it.
+Claude Code's `/model` also saves the chosen model as the global default for new
+Claude sessions (it rewrites `~/.claude/settings.json`), not only for the target agent.
 
 `fledge agent get` inspects one live agent with exactly one nonempty `--name` or
 `--pane` target and no positional arguments. It makes a single read request,

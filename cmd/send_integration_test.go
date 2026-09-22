@@ -32,6 +32,20 @@ func TestSendCLI(t *testing.T) {
 	}
 }
 
+// Key values are never split on commas.
+func TestSendCLIKeyKeepsCommas(t *testing.T) {
+	l := newSocket(t)
+	done := serveRPCs(l, waitedResult(), map[string]any{"type": "ok"})
+	var b bytes.Buffer
+	if err := ExecuteWithArgs([]string{"agent", "send", "--name", "worker", "--key", "a,b"}, &b); err != nil {
+		t.Fatalf("%v: %s", err, b.String())
+	}
+	calls := waitCalls(t, l, done, 2)
+	if got := paramsField(t, calls[1], "keys"); !reflect.DeepEqual(got, []any{"a,b"}) {
+		t.Fatalf("%#v", got)
+	}
+}
+
 func TestSendCLIValidation(t *testing.T) {
 	for _, flags := range [][]string{{"--name", "a"}, {"--name", "a", "--text", ""}, {"--key", "enter"}, {"--name", "a", "--pane", "p", "--key", "enter"}, {"--name", "a", "--key", "enter", "extra"}} {
 		var b bytes.Buffer

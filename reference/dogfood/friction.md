@@ -566,7 +566,9 @@ with `/`. Possible capabilities: a raw, unheaded send option, or
 `agent set-model`. Resolved 2026-09-22: `agent send` (`1bb9b98`) types raw
 text and keys with no header, so
 `fledge agent send --name worker --text "/model claude-haiku-4-5-20251001" --key enter`
-switched a live Claude worker from Sonnet 5 to Haiku 4.5 in place.
+switched a live Claude worker from Sonnet 5 to Haiku 4.5 in place. Side effect:
+Claude Code's `/model` also saves the model as the global default for new Claude
+sessions, rewriting `~/.claude/settings.json`.
 
 **Reproduction steps:**
 1. Spawn a Claude worker with `fledge agent spawn --name worker --harness claude --model claude-sonnet-5`.

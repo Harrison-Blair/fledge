@@ -39,7 +39,7 @@ func TestSendDeliversTextAndKeysVerbatimInOneCall(t *testing.T) {
 }
 
 func TestSendReportsStatusObservedBeforeSending(t *testing.T) {
-	for _, status := range []string{"idle", "blocked", "working", "unknown"} {
+	for _, status := range []string{"idle", "blocked", "working", "unknown", "done"} {
 		t.Run(status, func(t *testing.T) {
 			p := herdrscript.LiveAgent(status)
 			s := fake(t, call{Method: "agent.get", Result: herdrscript.Info(p)}, call{Method: "pane.send_input", Result: herdrscript.OK()})
