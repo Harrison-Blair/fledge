@@ -242,7 +242,7 @@ func TestRender(t *testing.T) {
 	}
 }
 
-// agentAt is a live agent in workspace ws of another checkout, with cwd and
+// agentAt is a live agent in pane w9:p1 of another workspace, with cwd and
 // terminal as given.
 func agentAt(cwd, terminal string) herdr.AgentDetails {
 	p := herdrscript.Pane("w9:p1", "w9", "w9:t1")
@@ -262,8 +262,12 @@ func TestAgentWorkingInCheckoutBlocksRemoval(t *testing.T) {
 	for _, open := range []bool{false, true} {
 		r := newRepo(t)
 		link := filepath.Join(t.TempDir(), "link")
-		os.Symlink(r.topic, link)
-		os.Mkdir(filepath.Join(r.topic, "sub"), 0o755)
+		if err := os.Symlink(r.topic, link); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(filepath.Join(r.topic, "sub"), 0o755); err != nil {
+			t.Fatal(err)
+		}
 		for _, cwd := range []string{r.topic, filepath.Join(r.topic, "sub"), filepath.Join(link, "sub") + "/"} {
 			out := Run(context.Background(), herdrscript.Client(t,
 				call{Method: "worktree.list", Result: r.listing(open)},
@@ -352,5 +356,60 @@ func TestMissingConfiguredBaseBranchExplainsRefusal(t *testing.T) {
 	out := Run(context.Background(), herdrscript.Client(t, call{Method: "worktree.list", Result: r.listing(false)}, agentList()), Options{Branch: "topic", Cwd: r.root})
 	if out.ExitCode() != 2 || out.Error.Phase != "guard" || !strings.Contains(out.Error.Message, "merged: unknown (git config fledge.baseBranch names refs/heads/dev") {
 		t.Fatalf("%+v", out)
+	}
+}
+
+// An unreadable agent record fails the guard closed, even with --force.
+func TestUnreadableAgentRecordBlocksRemoval(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "")
+	r := newRepo(t)
+	st, err := identity.OpenStore(context.Background(), r.root, &libagent.Outcome{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := st.Create(identity.Kind, func(id string) any { return identity.Record{ID: id, TerminalID: "t1"} })
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, _ := filepath.Glob(filepath.Join(r.root, ".fledge", "state", identity.Kind, id+"*"))
+	if len(files) != 1 {
+		t.Fatalf("record files %v", files)
+	}
+	if err := os.WriteFile(files[0], []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := Run(context.Background(), herdrscript.Client(t,
+		call{Method: "worktree.list", Result: r.listing(false)},
+		agentList(),
+	), Options{Path: r.topic, Force: true, Cwd: r.root})
+	if out.ExitCode() == 0 || out.Error.Phase != "guard" || !strings.Contains(out.Error.Message, "repair or remove the bad record under .fledge/state") {
+		t.Fatalf("%+v", out)
+	}
+	if _, err := os.Stat(r.topic); err != nil {
+		t.Fatal("checkout removed")
+	}
+}
+
+// A checkout that Herdr reports through a symlink still matches an agent
+// whose cwd is its real path.
+func TestAgentInSymlinkedCheckoutBlocksRemoval(t *testing.T) {
+	for _, open := range []bool{false, true} {
+		r := newRepo(t)
+		link := filepath.Join(t.TempDir(), "link")
+		if err := os.Symlink(r.topic, link); err != nil {
+			t.Fatal(err)
+		}
+		listing := r.listing(open)
+		listing.Worktrees[1].Path = link
+		out := Run(context.Background(), herdrscript.Client(t,
+			call{Method: "worktree.list", Result: listing},
+			agentList(agentAt(r.topic, "t9")),
+		), Options{Branch: "topic", Force: true, Cwd: r.root})
+		if out.ExitCode() != 2 || out.Error.Phase != "guard" || !strings.Contains(out.Error.Message, "w9:p1") {
+			t.Fatalf("open=%v: %+v", open, out)
+		}
+		if _, err := os.Stat(r.topic); err != nil {
+			t.Fatal("checkout removed")
+		}
 	}
 }

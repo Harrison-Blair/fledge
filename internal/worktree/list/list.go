@@ -157,12 +157,12 @@ func addOwners(ctx context.Context, c libagent.Client, r Result) {
 	for _, a := range live.Agents {
 		rec, ok := records[a.TerminalID]
 		if ok && a.TerminalID != "" && rec.WorktreePath != nil {
-			p := canonical(*rec.WorktreePath)
+			p := Canonical(*rec.WorktreePath)
 			byPath[p] = append(byPath[p], rec)
 		}
 	}
 	for i := range r.Worktrees {
-		owners := byPath[canonical(r.Worktrees[i].Path)]
+		owners := byPath[Canonical(r.Worktrees[i].Path)]
 		if len(owners) == 0 {
 			continue
 		}
@@ -173,8 +173,8 @@ func addOwners(ctx context.Context, c libagent.Client, r Result) {
 	}
 }
 
-// canonical cleans p and resolves its symlinks when it exists.
-func canonical(p string) string {
+// Canonical cleans p and resolves its symlinks when it exists.
+func Canonical(p string) string {
 	if resolved, err := filepath.EvalSymlinks(p); err == nil {
 		return resolved
 	}

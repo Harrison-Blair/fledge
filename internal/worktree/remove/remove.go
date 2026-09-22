@@ -148,23 +148,23 @@ func checkAgents(ctx context.Context, c libagent.Client, repo string, row list.R
 		return err
 	}
 	records := map[string]identity.Record{}
-	if s, err := identity.Existing(ctx, repo); err != nil {
-		return fmt.Errorf("read agent records: %w", err)
-	} else if s != nil {
-		if records, err = identity.LiveByTerminal(s); err != nil {
-			return fmt.Errorf("read agent records: %w", err)
-		}
+	s, err := identity.Existing(ctx, repo)
+	if err == nil && s != nil {
+		records, err = identity.LiveByTerminal(s)
 	}
-	checkout := canonical(row.Path)
+	if err != nil {
+		return fmt.Errorf("read agent records: %w; repair or remove the bad record under .fledge/state", err)
+	}
+	checkout := list.Canonical(row.Path)
 	for _, a := range r.Agents {
 		var where string
 		rec, registered := records[a.TerminalID]
 		switch {
 		case row.WorkspaceID != nil && a.WorkspaceID == *row.WorkspaceID:
 			where = "is in workspace " + a.WorkspaceID
-		case a.Cwd != nil && inside(checkout, canonical(*a.Cwd)):
+		case a.Cwd != nil && inside(checkout, list.Canonical(*a.Cwd)):
 			where = "is working in " + *a.Cwd
-		case a.TerminalID != "" && registered && rec.WorktreePath != nil && inside(checkout, canonical(*rec.WorktreePath)):
+		case a.TerminalID != "" && registered && rec.WorktreePath != nil && inside(checkout, list.Canonical(*rec.WorktreePath)):
 			where = "is registered to " + row.Path
 		default:
 			continue
@@ -184,14 +184,6 @@ func checkAgents(ctx context.Context, c libagent.Client, repo string, row list.R
 func inside(dir, p string) bool {
 	rel, err := filepath.Rel(dir, p)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
-
-// canonical cleans p and resolves its symlinks when it exists.
-func canonical(p string) string {
-	if resolved, err := filepath.EvalSymlinks(p); err == nil {
-		return resolved
-	}
-	return filepath.Clean(p)
 }
 
 // Render writes a successful remove outcome.
