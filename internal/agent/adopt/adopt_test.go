@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -119,6 +120,31 @@ func TestAdoptRejections(t *testing.T) {
 	}
 }
 
+// Rejections decided from Herdr alone must not create .fledge or the store.
+func TestAdoptRejectionBeforeRegistrationLeavesNoFiles(t *testing.T) {
+	for label, tc := range map[string]struct {
+		o    Options
+		get  call
+		code string
+	}{
+		"missing pane":    {Options{Pane: "w9:p9", Name: "x"}, call{Method: "agent.get", Params: map[string]any{"target": "w9:p9"}, Err: notFound()}, "agent_not_found"},
+		"transport":       {Options{Pane: "w1:p3", Name: "x"}, call{Method: "agent.get", Err: &herdr.Error{Code: "connection_error", Message: "down"}}, "connection_error"},
+		"different name":  {Options{Pane: "w1:p3", Name: "other"}, call{Method: "agent.get", Result: agent("w1:p3", named("worker"))}, "invalid_input"},
+		"unnamed no name": {Options{Pane: "w1:p3"}, call{Method: "agent.get", Result: agent("w1:p3", nil)}, "invalid_input"},
+	} {
+		t.Run(label, func(t *testing.T) {
+			c := client(t, tc.get)
+			out := Run(context.Background(), c, tc.o)
+			if out.Status != "rejected" || out.Error == nil || out.Error.Code != tc.code || len(out.Effects) != 0 {
+				t.Fatalf("%+v %+v", out, out.Error)
+			}
+			if _, err := os.Stat(filepath.Join(c.Cwd, ".fledge")); !os.IsNotExist(err) {
+				t.Fatalf("created .fledge: %v", err)
+			}
+		})
+	}
+}
+
 func records(t *testing.T, out libagent.Outcome) []string {
 	for _, e := range out.Effects {
 		if e.Kind == "agent_record" {
@@ -154,7 +180,7 @@ func TestAdoptOutsidePaneRequiresPane(t *testing.T) {
 }
 
 func TestAdoptOutsideRepositoryFailsBeforeRename(t *testing.T) {
-	c := herdrscript.Client(t)
+	c := herdrscript.Client(t, call{Method: "agent.get", Result: agent("w1:p3", nil)})
 	out := Run(context.Background(), c, Options{Pane: "w1:p3", Name: "x"})
 	if out.Error == nil || out.Error.Phase != "state" || len(out.Effects) != 0 {
 		t.Fatalf("%+v", out)

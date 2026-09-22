@@ -15,7 +15,7 @@ func New() *cobra.Command {
 	f := cmd.Flags()
 	f.StringVar(&options.Name, "name", "", "Live agent name")
 	f.StringVar(&options.Pane, "pane", "", "Hosting pane ID")
-	f.StringVar(&options.ID, "id", "", "Fledge agent record ID (fails if the pane now hosts another terminal)")
+	f.StringVar(&options.ID, "id", "", "Fledge agent record ID (follows its terminal to a new pane; fails if the terminal is gone)")
 	f.StringVar(&options.Body, "body", "", "Message text")
 	f.StringVar(&options.File, "file", "", "UTF-8 message file, or - for stdin")
 	f.BoolVar(&asJSON, "json", false, "Emit a structured outcome")

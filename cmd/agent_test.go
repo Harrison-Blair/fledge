@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/spf13/cobra"
 )
 
 func TestAgentHelp(t *testing.T) {
@@ -118,5 +119,30 @@ func TestAgentOutputFailureNotReclassified(t *testing.T) {
 	err := ExecuteWithArgs([]string{"agent", "spawn", "--json"}, w)
 	if ExitCode(err) != 1 || w.writes != 1 {
 		t.Fatalf("exit=%d writes=%d err=%v", ExitCode(err), w.writes, err)
+	}
+}
+
+// Record ID flags describe lookups by terminal, which follow a moved pane.
+func TestRecordIDFlagHelp(t *testing.T) {
+	var walk func(c *cobra.Command)
+	found := 0
+	walk = func(c *cobra.Command) {
+		for _, name := range []string{"id", "agent-id"} {
+			f := c.Flags().Lookup(name)
+			if f == nil || !strings.Contains(f.Usage, "record ID") {
+				continue
+			}
+			found++
+			if !strings.Contains(f.Usage, "follows its terminal to a new pane; fails if the terminal is gone") {
+				t.Errorf("%s --%s: %q", c.CommandPath(), name, f.Usage)
+			}
+		}
+		for _, child := range c.Commands() {
+			walk(child)
+		}
+	}
+	walk(NewRootCmd())
+	if found != 7 {
+		t.Fatalf("found %d record ID flags, want 7", found)
 	}
 }

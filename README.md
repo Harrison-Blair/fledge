@@ -274,7 +274,8 @@ cannot prevent its occupant changing before Herdr receives the keys.
 of `--name`/`--pane`, resolves the agent first, and never closes a pane that does
 not host a known agent. Agents whose status is `working`, `blocked`, or `unknown`
 are refused with exit status 2 unless `--force` is passed; `idle` and `done` agents
-stop without it.
+stop without it. Once the pane closes, stop sets `ended_at` on the agent's live
+record, if it has one.
 
 `fledge agent models` lists coding-agent models discovered locally and does not
 need a Herdr session. It reads the `pi`, `codex`, and `claude` caches under the
@@ -288,12 +289,26 @@ missing file, unreadable cache, or failing command silently contributes no rows.
 
 Fledge keeps a durable record for each agent it launches or adopts, in
 `.fledge/state/agents/` under the repository's primary checkout (ignored by Git,
-shared by linked worktrees). A record holds an 8-hex `id`, the agent's name,
+shared by linked worktrees). A repository created with `--separate-git-dir`
+records no path back to its primary checkout, so commands run from its linked
+worktrees fail until you run `git config core.worktree <primary checkout path>`
+once. A record holds an 8-hex `id`, the agent's name,
 pane, workspace, harness, Herdr session (`HERDR_SESSION`), Herdr `terminal_id`,
 `parent`, `registered_at`, `registered_by` (`spawn` or `adopt`),
-`worktree_path`, and `ended_at`. The parent is the caller's record when the
-caller's pane hosts a registered agent with the same terminal; otherwise it is
-null. Records are never deleted.
+`worktree_path`, and `ended_at`. The parent is the caller's live record when the
+caller's pane hosts a registered terminal; otherwise it is null. Records are
+never deleted.
+
+The terminal is a record's identity and the pane only locates it. Herdr gives a
+pane moved across workspaces a new ID but keeps its terminal, so when a lookup
+finds the recorded pane gone or hosting another terminal, Fledge searches
+Herdr's agent list for the recorded terminal and, if found, updates the record's
+pane and workspace and keeps its ID. `ended_at` is set when `agent stop` closes
+the agent's pane, or when a lookup finds the terminal in no Herdr pane at all;
+an ended record is no longer live. A terminal that still exists but hosts no
+agent (its harness exited) only makes lookups fail; the record stays live. A
+Herdr server handoff reissues every `terminal_id`, so records from before it
+end on their next lookup and their agents need `fledge agent adopt`.
 
 Spawn registers the agent once startup settles (or once launch begins with
 `--no-wait`) and before any first prompt. Its result adds `id`, `registered`, and
@@ -313,9 +328,10 @@ one terminal produce exactly one record. Success prints
 
 `get`, `message`, `read`, `wait` (single target only), `pause`, and `stop`
 accept `--id` in place of `--name` or `--pane`; exactly one of the three is
-required. An `--id` lookup fails closed with `agent_identity_stale` when the
-recorded pane no longer hosts the recorded terminal, the record belongs to
-another Herdr session, or the record has ended; an unknown ID fails with
+required. An `--id` lookup follows a moved terminal as above, and fails closed
+with `agent_identity_stale` when the terminal no longer hosts an agent (ending
+the record only if the terminal itself is gone), the record belongs to another
+Herdr session, or the record has ended; an unknown ID fails with
 `agent_record_not_found`. `agent get` shows the record (Fledge ID, parent,
 registration time and source) whenever the live agent has one, and JSON adds
 `record`. `agent list` adds an `ID` column (`-` when unregistered) and an `id`

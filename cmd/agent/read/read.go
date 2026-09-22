@@ -29,7 +29,7 @@ bytes exactly.`,
 	f := cmd.Flags()
 	f.StringVar(&options.Name, "name", "", "Live agent name")
 	f.StringVar(&options.Pane, "pane", "", "Hosting pane ID")
-	f.StringVar(&options.ID, "id", "", "Fledge agent record ID (fails if the pane now hosts another terminal)")
+	f.StringVar(&options.ID, "id", "", "Fledge agent record ID (follows its terminal to a new pane; fails if the terminal is gone)")
 	f.StringVar(&options.Source, "source", "recent-unwrapped", "Snapshot source: visible, recent, recent-unwrapped, or detection")
 	f.Int64Var(&options.Lines, "lines", 0, "Bottom rows to request, up to Herdr's 1000-row cap (default: Herdr's extent)")
 	f.BoolVar(&asJSON, "json", false, "Emit a structured outcome")

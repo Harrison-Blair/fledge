@@ -9,6 +9,7 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
@@ -84,6 +85,32 @@ func TestReassignByAgentID(t *testing.T) {
 	r := tasktest.Load(t, repo, id)
 	if out.Error != nil || *r.Owner != next.ID || r.Delivery.Pane != "w1:p4" || r.Delivery.Error != nil || r.Delivery.MessageID == "m-ffffff" {
 		t.Fatalf("%+v %+v", out.Error, r)
+	}
+}
+
+// A registered terminal Herdr moved to a new pane keeps its record, which
+// follows it there.
+func TestAssignFollowsMovedTerminal(t *testing.T) {
+	repo := identitytest.Repository(t)
+	owner := tasktest.Register(t, repo, worker)
+	id := seed(t, repo)
+	moved := tasktest.Agent("w2:p1", "term_worker", "worker")
+	moved.Agent.WorkspaceID = "w2"
+	c := tasktest.Client(t, repo, "",
+		tasktest.Get("w2:p1", moved),
+		call{Method: "agent.prompt", Result: prompted(moved)},
+	)
+	out := Run(context.Background(), c, Options{ID: id, Pane: "w2:p1"})
+	r := tasktest.Load(t, repo, id)
+	if out.Error != nil || *r.Owner != owner.ID || r.Delivery.Pane != "w2:p1" {
+		t.Fatalf("%+v %+v", out.Error, r)
+	}
+	s, err := identity.Existing(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec, err := identity.Live(s, "term_worker"); err != nil || rec.ID != owner.ID || rec.Pane != "w2:p1" || rec.WorkspaceID != "w2" {
+		t.Fatalf("%+v %v", rec, err)
 	}
 }
 

@@ -173,24 +173,143 @@ func TestResolveMatchesLiveTerminal(t *testing.T) {
 	}
 }
 
-func TestResolveFailsClosed(t *testing.T) {
+// listed is an agent.list result of agents.
+func listed(agents ...herdr.AgentDetails) map[string]any {
+	return map[string]any{"type": "agent_list", "agents": append([]herdr.AgentDetails{}, agents...)}
+}
+
+// panes is a pane.list result of panes.
+func panes(panes ...herdr.AgentDetails) map[string]any {
+	return map[string]any{"type": "pane_list", "panes": append([]herdr.AgentDetails{}, panes...)}
+}
+
+// shell is terminal's pane after its agent exited, leaving no agent in it.
+func shell(pane, terminal string) herdr.AgentDetails {
+	d := details(pane, terminal)
+	d.Name, d.Agent, d.AgentStatus = nil, nil, "unknown"
+	return d
+}
+
+// moved is terminal's agent after Herdr moved its pane into workspace ws.
+func moved(pane, ws, terminal string) herdr.AgentDetails {
+	d := details(pane, terminal)
+	d.WorkspaceID = ws
+	return d
+}
+
+func TestResolveFailsClosedWhenTerminalIsGone(t *testing.T) {
 	t.Setenv("HERDR_SESSION", "dev")
-	for name, tc := range map[string]struct {
-		get  call
-		want string
-	}{
-		"different terminal": {call{Method: "agent.get", Result: info(details("w1:p3", "term_b"))}, "agent_identity_stale"},
-		"pane without agent": {call{Method: "agent.get", Err: notFound()}, "agent_identity_stale"},
-		"transport failure":  {call{Method: "agent.get", Err: &herdr.Error{Code: "connection_error", Message: "down"}}, "connection_error"},
+	for name, get := range map[string]call{
+		"different terminal": {Method: "agent.get", Result: info(details("w1:p3", "term_b"))},
+		"pane without agent": {Method: "agent.get", Err: notFound()},
 	} {
 		t.Run(name, func(t *testing.T) {
-			c := client(t, tc.get)
+			c := client(t, get, call{Method: "agent.list", Result: listed(details("w1:p3", "term_b"))},
+				call{Method: "pane.list", Result: panes(details("w1:p3", "term_b"), shell("w1:p4", "term_c"))})
 			rec := registered(t, c, details("w1:p3", "term_a"))
-			_, _, err := Resolve(context.Background(), store(t, c), c, rec.ID)
-			if code(err) != tc.want {
+			s := store(t, c)
+			if _, _, err := Resolve(context.Background(), s, c, rec.ID); code(err) != "agent_identity_stale" {
 				t.Fatalf("%v", err)
 			}
+			var stored Record
+			if err := s.Get(Kind, rec.ID, &stored); err != nil || stored.EndedAt == nil {
+				t.Fatalf("record not ended: %+v %v", stored, err)
+			}
+			if _, err := time.Parse(time.RFC3339, *stored.EndedAt); err != nil {
+				t.Fatal(err)
+			}
+			if live, err := Live(s, "term_a"); err != nil || live != nil {
+				t.Fatalf("ended record still live: %+v %v", live, err)
+			}
 		})
+	}
+}
+
+// A terminal that still exists but no longer hosts an agent is stale, not
+// ended: its harness may be restarted in place.
+func TestResolveTerminalWithoutAgentStaysLive(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t, call{Method: "agent.get", Err: notFound()}, call{Method: "agent.list", Result: listed()},
+		call{Method: "pane.list", Result: panes(shell("w2:p1", "term_a"))})
+	rec := registered(t, c, details("w1:p3", "term_a"))
+	s := store(t, c)
+	if _, _, err := Resolve(context.Background(), s, c, rec.ID); code(err) != "agent_identity_stale" {
+		t.Fatalf("%v", err)
+	}
+	if live, err := Live(s, "term_a"); err != nil || live == nil {
+		t.Fatalf("%+v %v", live, err)
+	}
+}
+
+func TestResolveLookupFailuresLeaveRecordLive(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	down := &herdr.Error{Code: "connection_error", Message: "down"}
+	gone := call{Method: "agent.get", Err: notFound()}
+	list := func(result any) []call { return []call{gone, {Method: "agent.list", Result: result}} }
+	for name, tc := range map[string]struct {
+		calls []call
+		want  string
+	}{
+		"agent.get transport":   {[]call{{Method: "agent.get", Err: down}}, "connection_error"},
+		"agent.list transport":  {[]call{gone, {Method: "agent.list", Err: down}}, "connection_error"},
+		"agent.list type":       {list(map[string]any{"type": "pane_list"}), "protocol_error"},
+		"agents missing":        {list(map[string]any{"type": "agent_list"}), "protocol_error"},
+		"agents null":           {list(map[string]any{"type": "agent_list", "agents": nil}), "protocol_error"},
+		"invalid matching":      {list(listed(herdr.AgentDetails{TerminalID: "term_a"})), "protocol_error"},
+		"matching without id":   {list(listed(moved("w2:p1", "w2", ""))), "protocol_error"},
+		"invalid unrelated":     {list(listed(herdr.AgentDetails{TerminalID: "term_b"})), "protocol_error"},
+		"pane.list transport":   {append(list(listed()), call{Method: "pane.list", Err: down}), "connection_error"},
+		"pane.list type":        {append(list(listed()), call{Method: "pane.list", Result: map[string]any{"type": "agent_list"}}), "protocol_error"},
+		"panes missing":         {append(list(listed()), call{Method: "pane.list", Result: map[string]any{"type": "pane_list"}}), "protocol_error"},
+		"panes null":            {append(list(listed()), call{Method: "pane.list", Result: map[string]any{"type": "pane_list", "panes": nil}}), "protocol_error"},
+		"invalid pane":          {append(list(listed()), call{Method: "pane.list", Result: panes(shell("w1:p4", "term_c"), herdr.AgentDetails{TerminalID: "term_b"})}), "protocol_error"},
+		"pane without terminal": {append(list(listed()), call{Method: "pane.list", Result: panes(shell("w1:p4", ""))}), "protocol_error"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := client(t, tc.calls...)
+			rec := registered(t, c, details("w1:p3", "term_a"))
+			s := store(t, c)
+			if _, _, err := Resolve(context.Background(), s, c, rec.ID); code(err) != tc.want {
+				t.Fatalf("%v", err)
+			}
+			if live, err := Live(s, "term_a"); err != nil || live == nil || live.Pane != "w1:p3" {
+				t.Fatalf("%+v %v", live, err)
+			}
+		})
+	}
+}
+
+// Herdr gives a pane moved across workspaces a new ID but keeps its terminal.
+func TestResolveFollowsMovedTerminal(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	for name, get := range map[string]call{
+		"pane gone":   {Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Err: notFound()},
+		"pane reused": {Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: info(details("w1:p3", "term_b"))},
+	} {
+		t.Run(name, func(t *testing.T) {
+			there := moved("w2:p1", "w2", "term_a")
+			c := client(t, get, call{Method: "agent.list", Result: listed(details("w1:p3", "term_b"), there)})
+			rec := registered(t, c, details("w1:p3", "term_a"))
+			s := store(t, c)
+			got, a, err := Resolve(context.Background(), s, c, rec.ID)
+			if err != nil || got.ID != rec.ID || got.Pane != "w2:p1" || got.WorkspaceID != "w2" || a.PaneID != "w2:p1" || a.TerminalID != "term_a" {
+				t.Fatalf("%+v %+v %v", got, a, err)
+			}
+			var stored Record
+			if err := s.Get(Kind, rec.ID, &stored); err != nil || stored.Pane != "w2:p1" || stored.WorkspaceID != "w2" || stored.EndedAt != nil {
+				t.Fatalf("%+v %v", stored, err)
+			}
+		})
+	}
+}
+
+func TestVerifyMatchesTerminalNotPane(t *testing.T) {
+	rec := Record{ID: "0000beef", Pane: "w1:p3", TerminalID: "term_a"}
+	if err := Verify(rec, moved("w2:p1", "w2", "term_a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := Verify(rec, details("w1:p3", "term_b")); code(err) != "agent_identity_stale" {
+		t.Fatalf("%v", err)
 	}
 }
 
@@ -287,17 +406,24 @@ func TestTargetGetIDWithoutStore(t *testing.T) {
 	}
 }
 
-func TestRegisterParentRequiresRecordedPane(t *testing.T) {
+// A caller whose terminal moved to a new pane keeps its record, which is
+// updated to the pane it now occupies.
+func TestCallerFollowsMovedTerminal(t *testing.T) {
 	t.Setenv("HERDR_SESSION", "dev")
 	c := client(t, call{Method: "agent.get", Err: notFound()},
-		call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: info(details("old:p1", "term_parent"))})
+		call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: info(moved("old:p1", "old", "term_parent"))})
 	s := store(t, c)
-	if _, err := Register(context.Background(), s, c, details("old:p9", "term_parent"), "adopt", nil); err != nil {
+	parent, err := Register(context.Background(), s, c, details("w1:p9", "term_parent"), "adopt", nil)
+	if err != nil {
 		t.Fatal(err)
 	}
 	child, err := Register(context.Background(), s, c, details("w1:p3", "term_child"), "spawn", nil)
-	if err != nil || child.Parent != nil {
+	if err != nil || child.Parent == nil || *child.Parent != parent.ID {
 		t.Fatalf("%+v %v", child, err)
+	}
+	var stored Record
+	if err := s.Get(Kind, parent.ID, &stored); err != nil || stored.Pane != "old:p1" || stored.WorkspaceID != "old" {
+		t.Fatalf("%+v %v", stored, err)
 	}
 }
 
@@ -326,5 +452,88 @@ func TestExistingOnStateWithoutLockCreatesNothing(t *testing.T) {
 	}
 	if list, _ := os.ReadDir(dir); len(list) != 1 || list[0].Name() != Kind {
 		t.Fatalf("state entries changed: %v", list)
+	}
+}
+
+func TestCallerWithoutAgentHasNoRecord(t *testing.T) {
+	c := client(t, call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Err: notFound()})
+	if rec, err := Caller(context.Background(), store(t, c), c); rec != nil || err != nil {
+		t.Fatalf("%+v %v", rec, err)
+	}
+}
+
+func TestCallerPropagatesLookupFailures(t *testing.T) {
+	for name, get := range map[string]call{
+		"transport": {Method: "agent.get", Err: &herdr.Error{Code: "connection_error", Message: "down"}},
+		"protocol":  {Method: "agent.get", Result: herdr.AgentResult{Type: "pane_info"}},
+		"other":     {Method: "agent.get", Err: &herdr.Error{Code: "agent_not_ready", Message: "busy"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := client(t, get, get)
+			rec, err := Caller(context.Background(), store(t, c), c)
+			if rec != nil || err == nil {
+				t.Fatalf("%+v %v", rec, err)
+			}
+			if _, err := Register(context.Background(), store(t, c), c, details("w1:p3", "term_a"), "spawn", nil); err == nil {
+				t.Fatal("registered without a provable parent lookup")
+			}
+		})
+	}
+}
+
+func TestRelocateRefusesEndedRecord(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t)
+	rec := registered(t, c, details("w1:p3", "term_a"))
+	s := store(t, c)
+	if err := End(s, rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Relocate(s, rec, moved("w2:p1", "w2", "term_a")); code(err) != "agent_identity_stale" {
+		t.Fatalf("%v", err)
+	}
+	var stored Record
+	if err := s.Get(Kind, rec.ID, &stored); err != nil || stored.Pane != "w1:p3" || stored.WorkspaceID != "w1" {
+		t.Fatalf("%+v %v", stored, err)
+	}
+}
+
+func TestEndKeepsOriginalTime(t *testing.T) {
+	c := client(t)
+	rec := registered(t, c, details("w1:p3", "term_a"))
+	s := store(t, c)
+	first := "2026-01-01T00:00:00Z"
+	var r Record
+	if err := s.Update(Kind, rec.ID, &r, func() error { r.EndedAt = &first; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := End(s, rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	var stored Record
+	if err := s.Get(Kind, rec.ID, &stored); err != nil || stored.EndedAt == nil || *stored.EndedAt != "2026-01-01T00:00:00Z" {
+		t.Fatalf("%+v %v", stored, err)
+	}
+}
+
+// A record that cannot be ended reports the store failure, not staleness.
+func TestResolveEndFailureIsReported(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t, call{Method: "agent.get", Err: notFound()}, call{Method: "agent.list", Result: listed()}, call{Method: "pane.list", Result: panes()})
+	rec := registered(t, c, details("w1:p3", "term_a"))
+	s := store(t, c)
+	agents := filepath.Join(c.Cwd, ".fledge", "state", Kind)
+	if err := os.Chmod(agents, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(agents, 0o700) })
+	if _, _, err := Resolve(context.Background(), s, c, rec.ID); err == nil || code(err) == "agent_identity_stale" {
+		t.Fatalf("%v", err)
+	}
+	if live, err := Live(s, "term_a"); err != nil || live == nil {
+		t.Fatalf("%+v %v", live, err)
 	}
 }

@@ -3,12 +3,15 @@ package stop
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
@@ -169,7 +172,7 @@ func TestStopByStaleIDDoesNotClose(t *testing.T) {
 		"no agent":       {Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Err: &herdr.Error{Code: "agent_not_found", Message: "gone"}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			s := fake(t, get)
+			s := fake(t, get, call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": []any{}}}, call{Method: "pane.list", Result: map[string]any{"type": "pane_list", "panes": []any{}}})
 			s.Cwd = identitytest.Repository(t)
 			recorded := herdrscript.Info(herdrscript.LiveAgent("idle")).Agent
 			recorded.TerminalID = "term_old"
@@ -177,6 +180,99 @@ func TestStopByStaleIDDoesNotClose(t *testing.T) {
 			out := Run(context.Background(), s, Options{ID: rec.ID, Force: true})
 			if out.Error == nil || out.Error.Code != "agent_identity_stale" || out.Error.Phase != "identity" || len(out.Effects) != 0 {
 				t.Fatalf("%+v", out)
+			}
+		})
+	}
+}
+
+// ended reports whether record id has ended_at set.
+func ended(t *testing.T, cwd, id string) bool {
+	t.Helper()
+	s, err := identity.Existing(context.Background(), cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rec identity.Record
+	if err := s.Get(identity.Kind, id, &rec); err != nil {
+		t.Fatal(err)
+	}
+	return rec.EndedAt != nil
+}
+
+func TestStopEndsAgentRecord(t *testing.T) {
+	live := herdrscript.Info(herdrscript.LiveAgent("idle"))
+	for name, tc := range map[string]struct {
+		get call
+		o   func(id string) Options
+	}{
+		"by name": {call{Method: "agent.get", Params: map[string]any{"target": "worker"}, Result: live}, func(string) Options { return Options{Name: "worker"} }},
+		"by id":   {call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live}, func(id string) Options { return Options{ID: id} }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := fake(t, tc.get, call{Method: "pane.close", Params: map[string]any{"pane_id": "w1:p3"}, Result: herdrscript.OK()})
+			s.Cwd = identitytest.Repository(t)
+			rec := identitytest.Register(t, s.Cwd, live.Agent)
+			out := Run(context.Background(), s, tc.o(rec.ID))
+			if out.Status != "success" || !out.Result.(Result).Stopped {
+				t.Fatalf("%+v", out)
+			}
+			want := []libagent.Effect{{Action: "closed", Kind: "pane", ID: "w1:p3"}, {Action: "updated", Kind: "agent_record", ID: rec.ID}}
+			if !reflect.DeepEqual(out.Effects, want) {
+				t.Fatalf("effects %+v", out.Effects)
+			}
+			if !ended(t, s.Cwd, rec.ID) {
+				t.Fatal("record not ended")
+			}
+		})
+	}
+}
+
+func TestStopWithoutClosingKeepsRecordLive(t *testing.T) {
+	live := herdrscript.Info(herdrscript.LiveAgent("idle"))
+	s := fake(t, call{Method: "agent.get", Result: live}, call{Method: "pane.close", Err: &herdr.Error{Code: "transport_error", Message: "lost", Uncertain: true}})
+	s.Cwd = identitytest.Repository(t)
+	rec := identitytest.Register(t, s.Cwd, live.Agent)
+	if out := Run(context.Background(), s, Options{Name: "worker"}); out.Status != "unknown" || ended(t, s.Cwd, rec.ID) {
+		t.Fatalf("%+v", out)
+	}
+}
+
+// A closed pane whose record cannot be ended is a partial stop.
+func TestStopRecordFailureAfterCloseIsPartial(t *testing.T) {
+	live := herdrscript.Info(herdrscript.LiveAgent("idle"))
+	for name, tc := range map[string]struct {
+		get    call
+		o      func(id string) Options
+		break_ func(t *testing.T, agents string)
+	}{
+		// Live cannot read an undecodable record.
+		"lookup by name": {call{Method: "agent.get", Params: map[string]any{"target": "worker"}, Result: live}, func(string) Options { return Options{Name: "worker"} },
+			func(t *testing.T, agents string) {
+				if err := os.WriteFile(filepath.Join(agents, "0000beef.json"), []byte("{"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}},
+		// End cannot write into a read-only record directory.
+		"end by id": {call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live}, func(id string) Options { return Options{ID: id} },
+			func(t *testing.T, agents string) {
+				if os.Geteuid() == 0 {
+					t.Skip("root ignores directory permissions")
+				}
+				if err := os.Chmod(agents, 0o500); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { os.Chmod(agents, 0o700) })
+			}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := fake(t, tc.get, call{Method: "pane.close", Params: map[string]any{"pane_id": "w1:p3"}, Result: herdrscript.OK()})
+			s.Cwd = identitytest.Repository(t)
+			rec := identitytest.Register(t, s.Cwd, live.Agent)
+			tc.break_(t, filepath.Join(s.Cwd, ".fledge", "state", identity.Kind))
+			out := Run(context.Background(), s, tc.o(rec.ID))
+			if out.Status != "partial" || out.Error == nil || out.Error.Phase != "state" ||
+				!reflect.DeepEqual(out.Effects, []libagent.Effect{{Action: "closed", Kind: "pane", ID: "w1:p3"}}) {
+				t.Fatalf("%+v %+v", out, out.Error)
 			}
 		})
 	}

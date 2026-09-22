@@ -1,4 +1,5 @@
-// Package stop implements agent stop: tearing down a live agent by closing its pane.
+// Package stop implements agent stop: tearing down a live agent by closing its
+// pane and ending its Fledge record.
 package stop
 
 import (
@@ -7,6 +8,7 @@ import (
 	"io"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 )
 
@@ -26,7 +28,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Fail(err, "validation", false)
 		return out
 	}
-	a, target, _, err := selected.Get(ctx, c)
+	a, target, rec, err := selected.Get(ctx, c)
 	if err != nil {
 		out.Fail(err, "agent.get", false)
 		return out
@@ -49,7 +51,31 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	}
 	out.Result = Result{AgentRow: libagent.NewAgentRow(a.Pane), Stopped: true}
 	out.Effects = append(out.Effects, libagent.Effect{Action: "closed", Kind: "pane", ID: a.PaneID})
+	ended, err := end(ctx, c, a, rec)
+	if err != nil {
+		out.Fail(err, "state", false)
+		return out
+	}
+	if ended != "" {
+		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "agent_record", ID: ended})
+	}
 	return out
+}
+
+// end marks the stopped agent's live record ended and returns its id, or ""
+// when the agent has no record. Like agent get, it treats an unavailable
+// store as holding no record, so stop works outside a repository.
+func end(ctx context.Context, c libagent.Client, a herdr.AgentDetails, rec *identity.Record) (string, error) {
+	s, err := identity.Existing(ctx, c.Cwd)
+	if err != nil || s == nil {
+		return "", nil
+	}
+	if rec == nil {
+		if rec, err = identity.Live(s, a.TerminalID); err != nil || rec == nil {
+			return "", err
+		}
+	}
+	return rec.ID, identity.End(s, rec.ID)
 }
 
 // Render writes a successful stop outcome.

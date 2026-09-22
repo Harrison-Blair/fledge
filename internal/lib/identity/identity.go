@@ -1,7 +1,8 @@
 // Package identity gives live Herdr agents a durable Fledge record: an id,
-// the terminal it names, and the agent that registered it. A record is valid
-// only while its terminal still occupies the recorded pane, so every lookup by
-// id fails closed when the live terminal differs.
+// the terminal it names, and the agent that registered it. The terminal is the
+// record's identity; its pane is a locator that lookups refresh when Herdr
+// moves the terminal to a new pane. A lookup fails closed when the terminal
+// hosts no agent, and ends the record when the terminal is gone from Herdr.
 package identity
 
 import (
@@ -22,8 +23,8 @@ import (
 // Kind is the state store kind holding agent records.
 const Kind = "agents"
 
-// Record is one registered agent. EndedAt stays null until a later command
-// observes the agent gone; records are never deleted.
+// Record is one registered agent. EndedAt stays null until agent stop closes
+// its pane or a lookup observes its terminal gone; records are never deleted.
 type Record struct {
 	ID           string  `json:"id"`
 	Name         *string `json:"name"`
@@ -116,21 +117,59 @@ func Unregistered(s *state.Store, a herdr.AgentDetails) error {
 }
 
 // Caller finds the live record of the agent in the caller's pane, if any. A
-// caller outside Herdr, or whose pane cannot be resolved, has none.
+// caller outside Herdr, or whose pane hosts no agent, has none; any other
+// lookup failure is returned.
 func Caller(ctx context.Context, s *state.Store, c libagent.Client) (*Record, error) {
 	if c.CallerPane == "" {
 		return nil, nil
 	}
 	caller, err := c.Get(ctx, c.CallerPane)
-	if err != nil {
-		// An unresolvable caller has no provable parent record.
+	var remote *herdr.Error
+	if errors.As(err, &remote) && remote.Code == "agent_not_found" {
 		return nil, nil
 	}
-	rec, err := Live(s, caller.TerminalID)
-	if err != nil || rec == nil || rec.Pane != caller.PaneID {
+	if err != nil {
 		return nil, err
 	}
-	return rec, nil
+	rec, err := Live(s, caller.TerminalID)
+	if err != nil || rec == nil {
+		return nil, err
+	}
+	moved, err := Relocate(s, *rec, caller)
+	if err != nil {
+		return nil, err
+	}
+	return &moved, nil
+}
+
+// Relocate points rec at the pane where a, rec's terminal, now runs, storing
+// the new pane and workspace under the same record id. Callers pass an a whose
+// terminal is rec's.
+func Relocate(s *state.Store, rec Record, a herdr.AgentDetails) (Record, error) {
+	if rec.Pane == a.PaneID && rec.WorkspaceID == a.WorkspaceID {
+		return rec, nil
+	}
+	err := s.Update(Kind, rec.ID, &rec, func() error {
+		if rec.EndedAt != nil {
+			return stale(rec.ID, "the agent ended at %s", *rec.EndedAt)
+		}
+		rec.Pane, rec.WorkspaceID = a.PaneID, a.WorkspaceID
+		return nil
+	})
+	return rec, err
+}
+
+// End records that the agent of record id is gone. An already ended record
+// keeps its original time.
+func End(s *state.Store, id string) error {
+	var rec Record
+	return s.Update(Kind, id, &rec, func() error {
+		if rec.EndedAt == nil {
+			now := time.Now().UTC().Format(time.RFC3339)
+			rec.EndedAt = &now
+		}
+		return nil
+	})
 }
 
 // Live returns the unended record naming terminal in the current Herdr
@@ -163,8 +202,11 @@ func LiveByTerminal(s *state.Store) (map[string]Record, error) {
 	return records, nil
 }
 
-// Resolve loads record id and fetches the agent now in its pane, failing
-// closed with agent_identity_stale unless that agent is the recorded terminal.
+// Resolve loads record id and fetches its terminal's live agent. When the
+// recorded pane no longer hosts the terminal, Herdr's agent list locates it
+// and the record follows it to its new pane. A terminal hosting no agent fails
+// closed with agent_identity_stale; if it is gone from every pane, the record
+// also ends.
 func Resolve(ctx context.Context, s *state.Store, c libagent.Client, id string) (Record, herdr.AgentDetails, error) {
 	rec, err := load(s, id)
 	if err != nil {
@@ -172,22 +214,79 @@ func Resolve(ctx context.Context, s *state.Store, c libagent.Client, id string) 
 	}
 	a, err := c.Get(ctx, rec.Pane)
 	var remote *herdr.Error
-	switch {
-	case errors.As(err, &remote) && remote.Code == "agent_not_found":
-		err = stale(id, "pane %s no longer hosts an agent", rec.Pane)
-	case err == nil:
-		err = Verify(rec, a)
+	if err != nil && !(errors.As(err, &remote) && remote.Code == "agent_not_found") {
+		return Record{}, herdr.AgentDetails{}, err
 	}
-	if err != nil {
+	if err != nil || a.TerminalID != rec.TerminalID {
+		agents, err := entries(ctx, c, "agent.list", "agent_list")
+		if err != nil {
+			return Record{}, herdr.AgentDetails{}, err
+		}
+		var found bool
+		if a, found = lookup(agents, rec.TerminalID); !found {
+			return Record{}, herdr.AgentDetails{}, gone(ctx, s, c, rec)
+		}
+	}
+	if rec, err = Relocate(s, rec, a); err != nil {
 		return Record{}, herdr.AgentDetails{}, err
 	}
 	return rec, a, nil
 }
 
-// Verify fails closed unless a is the terminal rec names.
+// gone explains why rec's terminal hosts no agent. Only a terminal missing
+// from every pane ends the record; one still in a pane may host an agent again.
+func gone(ctx context.Context, s *state.Store, c libagent.Client, rec Record) error {
+	panes, err := entries(ctx, c, "pane.list", "pane_list")
+	if err != nil {
+		return err
+	}
+	if p, ok := lookup(panes, rec.TerminalID); ok {
+		return stale(rec.ID, "terminal %s in pane %s no longer hosts an agent", rec.TerminalID, p.PaneID)
+	}
+	if err := End(s, rec.ID); err != nil {
+		return err
+	}
+	return stale(rec.ID, "terminal %s is gone from Herdr", rec.TerminalID)
+}
+
+// entries calls method, whose kind result carries agents or panes, and
+// validates every entry: a malformed one could be the terminal sought, which
+// would make its absence unprovable.
+func entries(ctx context.Context, c libagent.Client, method, kind string) ([]herdr.AgentDetails, error) {
+	var r struct {
+		Type   string               `json:"type"`
+		Agents []herdr.AgentDetails `json:"agents"`
+		Panes  []herdr.AgentDetails `json:"panes"`
+	}
+	err := c.Call(ctx, method, nil, &r)
+	list := r.Agents
+	if kind == "pane_list" {
+		list = r.Panes
+	}
+	if err == nil && (r.Type != kind || list == nil) {
+		err = libagent.Protocol("incomplete " + method + " result")
+	}
+	for _, a := range list {
+		if err == nil && !libagent.ValidAgentInfo(a) {
+			err = libagent.Protocol("incomplete " + method + " result")
+		}
+	}
+	return list, err
+}
+
+func lookup(list []herdr.AgentDetails, terminal string) (herdr.AgentDetails, bool) {
+	for _, a := range list {
+		if a.TerminalID == terminal {
+			return a, true
+		}
+	}
+	return herdr.AgentDetails{}, false
+}
+
+// Verify fails closed unless a is the terminal rec names, in whatever pane.
 func Verify(rec Record, a herdr.AgentDetails) error {
-	if a.TerminalID != rec.TerminalID || a.PaneID != rec.Pane {
-		return stale(rec.ID, "pane %s now hosts a different terminal", rec.Pane)
+	if a.TerminalID != rec.TerminalID {
+		return stale(rec.ID, "pane %s now hosts a different terminal", a.PaneID)
 	}
 	return nil
 }

@@ -42,19 +42,9 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Fail(err, "validation", false)
 		return out
 	}
-	store, err := identity.OpenStore(ctx, c.Cwd, &out)
-	if err != nil {
-		out.Fail(err, "state", false)
-		return out
-	}
 	a, err := c.Get(ctx, target)
 	if err != nil {
 		out.Fail(err, "agent.get", false)
-		return out
-	}
-	// Refuse before renaming; Register repeats this check under the store lock.
-	if err := identity.Unregistered(store, a); err != nil {
-		out.Fail(err, "state", false)
 		return out
 	}
 	current := ""
@@ -69,6 +59,17 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	}
 	if err != nil {
 		out.Fail(err, "validation", false)
+		return out
+	}
+	// The store is created only once Herdr and the options allow adoption.
+	store, err := identity.OpenStore(ctx, c.Cwd, &out)
+	if err != nil {
+		out.Fail(err, "state", false)
+		return out
+	}
+	// Refuse before renaming; Register repeats this check under the store lock.
+	if err := identity.Unregistered(store, a); err != nil {
+		out.Fail(err, "state", false)
 		return out
 	}
 	renamed := current == ""
