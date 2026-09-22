@@ -490,6 +490,24 @@ func TestPathThroughSymlinkFindsCheckout(t *testing.T) {
 	}
 }
 
+// --path through a symlink finds a checkout whose directory is gone.
+func TestPathThroughSymlinkFindsMissingCheckout(t *testing.T) {
+	r := newRepo(t)
+	link, l := r.symlinked(t, true)
+	if err := os.RemoveAll(r.topic); err != nil {
+		t.Fatal(err)
+	}
+	out := Run(context.Background(), herdrscript.Client(t,
+		call{Method: "worktree.list", Result: l},
+		agentList(),
+		agentList(),
+		call{Method: "worktree.remove", Params: map[string]any{"workspace_id": "w2", "force": true}, Result: removed(r.topic, true)},
+	), Options{Path: filepath.Join(link, ".fledge", "worktrees", "topic"), Cwd: link, Force: true})
+	if out.Status != "success" || out.Result.(Result).Path != r.topic {
+		t.Fatalf("%+v", out)
+	}
+}
+
 // Removal inspects only its target: no git command runs in, or names, another
 // linked checkout of the repository.
 func TestInspectsOnlyTargetCheckout(t *testing.T) {

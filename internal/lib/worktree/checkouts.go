@@ -48,10 +48,19 @@ func State(ctx context.Context, root, target string, w herdr.Worktree) (dirty, m
 	return dirty, gitstatus.Merged(ctx, w.Path, "HEAD", target)
 }
 
-// Canonical cleans p and resolves its symlinks when it exists.
+// Canonical cleans p and resolves symlinks in its longest existing ancestor,
+// keeping any missing tail, so a removed checkout still compares by its real path.
 func Canonical(p string) string {
-	if resolved, err := filepath.EvalSymlinks(p); err == nil {
-		return resolved
+	p = filepath.Clean(p)
+	dir, tail := p, ""
+	for {
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(resolved, tail)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return p
+		}
+		dir, tail = parent, filepath.Join(filepath.Base(dir), tail)
 	}
-	return filepath.Clean(p)
 }
