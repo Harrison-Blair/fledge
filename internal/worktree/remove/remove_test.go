@@ -344,3 +344,13 @@ func TestClosedCheckoutRecheckedBeforeRemoval(t *testing.T) {
 		t.Fatal("checkout removed")
 	}
 }
+
+// A configured base branch that does not exist refuses removal with its reason.
+func TestMissingConfiguredBaseBranchExplainsRefusal(t *testing.T) {
+	r := newRepo(t)
+	git(t, r.root, "config", "fledge.baseBranch", "dev")
+	out := Run(context.Background(), herdrscript.Client(t, call{Method: "worktree.list", Result: r.listing(false)}, agentList()), Options{Branch: "topic", Cwd: r.root})
+	if out.ExitCode() != 2 || out.Error.Phase != "guard" || !strings.Contains(out.Error.Message, "merged: unknown (git config fledge.baseBranch names refs/heads/dev") {
+		t.Fatalf("%+v", out)
+	}
+}

@@ -59,7 +59,11 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			reasons = append(reasons, "dirty: "+row.Dirty)
 		}
 		if row.Merged != "yes" {
-			reasons = append(reasons, "merged: "+row.Merged)
+			reason := "merged: " + row.Merged
+			if listing.DefaultBranchError != nil {
+				reason += " (" + *listing.DefaultBranchError + ")"
+			}
+			reasons = append(reasons, reason)
 		}
 		if len(reasons) > 0 {
 			out.Fail(libagent.Invalid("worktree %s is not known to be clean and merged (%s); pass --force to remove it anyway", row.Path, strings.Join(reasons, ", ")), "guard", false)
