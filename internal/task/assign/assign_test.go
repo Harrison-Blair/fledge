@@ -249,3 +249,40 @@ func TestAssignRefusesAgentWhoseRecordIsAnotherHarness(t *testing.T) {
 		t.Fatalf("%+v", out.Error)
 	}
 }
+
+func TestAssignWaitsForPrerequisitesUnlessForced(t *testing.T) {
+	repo := identitytest.Repository(t)
+	owner := tasktest.Register(t, repo, worker)
+	open := tasktest.Seed(t, repo, task.Record{Title: "research", Status: task.Completed})
+	done := tasktest.Seed(t, repo, task.Record{Title: "done", Status: task.Verified})
+	id := tasktest.Seed(t, repo, task.Record{Title: "Fix it", Brief: "do the thing", Status: task.Created, After: []string{done, open}})
+	before := tasktest.Load(t, repo, id)
+	out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{ID: id, Name: "worker"})
+	if out.Error == nil || out.Error.Code != "task_dependencies_unmet" || out.Error.Phase != "task" || !strings.Contains(out.Error.Message, open) ||
+		strings.Contains(out.Error.Message, done) || !strings.Contains(out.Error.Message, "--force") || !reflect.DeepEqual(tasktest.Load(t, repo, id), before) {
+		t.Fatalf("%+v", out.Error)
+	}
+	c := tasktest.Client(t, repo, "", tasktest.Get("worker", worker), call{Method: "agent.prompt", Result: prompted(worker)})
+	out = Run(context.Background(), c, Options{ID: id, Name: "worker", Force: true})
+	r := tasktest.Load(t, repo, id)
+	if out.Error != nil || r.Status != task.Assigned || *r.Owner != owner.ID || !reflect.DeepEqual(r.UnmetAtAssign, []string{open}) || r.Forced {
+		t.Fatalf("%+v %+v", out.Error, r)
+	}
+	var b bytes.Buffer
+	if err := out.Write(&b, false, Render); err != nil || !strings.HasSuffix(b.String(), "Assigned with --force before prerequisites "+open+" were satisfied.\n") {
+		t.Fatalf("%q %v", b.String(), err)
+	}
+}
+
+func TestAssignWithSatisfiedPrerequisites(t *testing.T) {
+	repo := identitytest.Repository(t)
+	tasktest.Register(t, repo, worker)
+	done := tasktest.Seed(t, repo, task.Record{Title: "done", Status: task.Verified})
+	dropped := tasktest.Seed(t, repo, task.Record{Title: "dropped", Status: task.Cancelled})
+	id := tasktest.Seed(t, repo, task.Record{Title: "Fix it", Brief: "do the thing", Status: task.Created, After: []string{done, dropped}})
+	c := tasktest.Client(t, repo, "", tasktest.Get("worker", worker), call{Method: "agent.prompt", Result: prompted(worker)})
+	out := Run(context.Background(), c, Options{ID: id, Name: "worker", Force: true})
+	if r := tasktest.Load(t, repo, id); out.Error != nil || r.Status != task.Assigned || r.UnmetAtAssign != nil {
+		t.Fatalf("%+v %+v", out.Error, r)
+	}
+}

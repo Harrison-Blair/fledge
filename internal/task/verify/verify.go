@@ -1,11 +1,12 @@
 // Package verify implements task verify: a second agent accepting a completed
-// task's result.
+// task's result once its subtasks are finished.
 package verify
 
 import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
@@ -20,10 +21,17 @@ type Options struct {
 	SummarySet, FileSet, Force bool
 }
 
+// Result is the verified task with its direct subtasks that were neither
+// verified nor cancelled, which only a forced verification leaves.
+type Result struct {
+	task.Record
+	OpenSubtasks []string `json:"open_subtasks"`
+}
+
 // Run moves a completed task to verified. The verifier must be a registered
-// agent other than the owner unless Force is set; the verifier and whether
-// Force was used are recorded. This is a workflow guard, not a security
-// boundary.
+// agent other than the owner, and every direct subtask must be verified or
+// cancelled, unless Force is set; the verifier and whether Force was used are
+// recorded. This is a workflow guard, not a security boundary.
 func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libagent.Outcome {
 	out := libagent.Outcome{Operation: "task.verify", Status: "success", Effects: []libagent.Effect{}}
 	err := task.ValidateID(o.ID)
@@ -44,9 +52,19 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 		out.Fail(err, "state", false)
 		return out
 	}
+	open := []string{}
 	r, err := task.Update(s, o.ID, func(r *task.Record) error {
 		if err := task.Require(r, "verify", task.Completed); err != nil {
 			return err
+		}
+		rs, err := task.List(s)
+		if err != nil {
+			return err
+		}
+		for _, child := range rs {
+			if child.Parent != nil && *child.Parent == r.ID && child.Status != task.Verified && child.Status != task.Cancelled {
+				open = append(open, child.ID)
+			}
 		}
 		switch {
 		case o.Force:
@@ -54,6 +72,8 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 			return &herdr.Error{Code: "caller_unregistered", Message: "the caller has no live Fledge record, so it cannot be recorded as the verifier; register with fledge agent adopt, or pass --force"}
 		case r.Owner != nil && *r.Owner == caller.ID:
 			return &herdr.Error{Code: "task_self_verification", Message: fmt.Sprintf("task %s is owned by the caller (%s); another agent should verify it, or pass --force", r.ID, caller.ID)}
+		case len(open) > 0:
+			return &herdr.Error{Code: "task_open_subtasks", Message: fmt.Sprintf("task %s has subtasks that are not verified or cancelled: %s; finish them first, or pass --force", r.ID, strings.Join(open, ", "))}
 		}
 		r.Status, r.VerifiedAt, r.Forced = task.Verified, task.Now(), o.Force
 		if caller != nil {
@@ -69,13 +89,13 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 		return out
 	}
 	out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "task", ID: r.ID})
-	out.Result = r
+	out.Result = Result{Record: r, OpenSubtasks: open}
 	return out
 }
 
 // Render writes a successful verification.
 func Render(w io.Writer, o libagent.Outcome) error {
-	r, ok := o.Result.(task.Record)
+	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil
 	}
@@ -86,6 +106,9 @@ func Render(w io.Writer, o libagent.Outcome) error {
 	if r.Forced {
 		forced = " (forced)"
 	}
-	_, err := fmt.Fprintf(w, "Verified task %s as %s%s.\n", r.ID, verifier, forced)
+	if _, err := fmt.Fprintf(w, "Verified task %s as %s%s.\n", r.ID, verifier, forced); err != nil || len(r.OpenSubtasks) == 0 {
+		return err
+	}
+	_, err := fmt.Fprintf(w, "Open subtasks: %s.\n", strings.Join(r.OpenSubtasks, ", "))
 	return err
 }

@@ -96,7 +96,7 @@ it with another tool.
 | Need | Fledge command | Instead of |
 | --- | --- | --- |
 | Launch a sub-agent | `fledge agent spawn` | Claude's Agent tool, Codex subagents |
-| Track and hand off work between agents | `fledge task create`/`assign`/`complete`/`verify`/`cancel`/`list`/`get` | harness todo or task lists |
+| Track and hand off work between agents | `fledge task create`/`depend`/`assign`/`complete`/`verify`/`cancel`/`list`/`get` | harness todo or task lists |
 | Create, list, or remove a checkout | `fledge worktree create`/`list`/`remove` | `git worktree`, Claude `isolation: "worktree"` |
 | Discover, inspect, read, wait on, interrupt, or stop agents | `fledge agent list`/`get`/`read`/`wait`/`pause`/`stop` | raw `herdr` CLI, harness TaskStop |
 | Message another agent | `fledge agent message` | Claude's SendMessage, raw `herdr` pane input |
@@ -144,7 +144,7 @@ of Herdr session-control commands, with a task-specific justification and a narr
 command prefix. Do not first run a socket command in the sandbox to rediscover the known
 `connect: operation not permitted` failure. Use the normal approval mechanism; these
 instructions do not override an approval denial or authorize unrelated session changes.
-Help, version, `agent models`, `task get`/`list`/`cancel`, and `update` do not require
+Help, version, `agent models`, `task get`/`list`/`cancel`/`depend`, and `update` do not require
 Herdr socket access.
 
 Name the tab an agent runs in after the agent's own name or role so panes are identifiable at a glance:

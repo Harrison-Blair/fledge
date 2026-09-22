@@ -430,6 +430,9 @@ completion is never derived from Herdr idle or done.
 
 ```sh
 fledge task create --title "Fix the parser" --file brief.md   # prints the task ID
+fledge task create --title "Add tests" --body "..." --parent 1a2b3c4d --after 5e6f7a8b
+fledge task depend --id 9c0d1e2f --after 1a2b3c4d --remove 5e6f7a8b
+fledge task list --ready                                        # created and unblocked
 fledge task assign --id 1a2b3c4d --name worker
 fledge task complete --id 1a2b3c4d --summary "Fixed in abc123"  # run by the owner
 fledge task verify --id 1a2b3c4d --summary "Tests pass"         # run by another agent
@@ -440,12 +443,44 @@ fledge task get --id 1a2b3c4d
 A task moves `created` → `assigned` → `completed` → `verified`; `task cancel
 [--reason TEXT]` ends a `created`, `assigned`, or `completed` task as
 `cancelled`. Verified and cancelled tasks are final, and other out-of-order
-transitions fail with `task_invalid_state`. There are no progress updates and no
-recorded checks.
+transitions fail with `task_invalid_state`. There are no progress updates within
+a task and no recorded checks.
+
+A task can be a **subtask** of a parent and can run **after** prerequisite tasks.
+The two are independent: a parent keeps its own lifecycle and does not wait for
+its subtasks, and a subtask is not a prerequisite of its parent.
+
+- **Subtasks.** `create --parent TASK` fixes the parent at creation; it cannot
+  change later. The parent must exist and be neither verified nor cancelled
+  (`task_not_found` or `task_invalid_state`); nesting depth is unlimited and
+  cycles cannot form because a parent always predates its subtasks. `list` and
+  `get` show the progress of direct subtasks as `2/3 verified`, adding
+  `, 1 cancelled` when any were cancelled: cancelled subtasks are shown but not
+  counted toward the total. `verify` refuses a parent whose direct subtasks are
+  not all verified or cancelled with `task_open_subtasks`; `--force` verifies
+  it anyway, records `forced: true`, and lists the open subtasks. Cancelling a
+  parent leaves its subtasks unchanged.
+- **Dependencies.** A prerequisite is satisfied once it is `verified`. A
+  `cancelled` prerequisite also counts as satisfied but stays on its dependents
+  and is shown with its state and reason, never dropped. Declare prerequisites
+  with repeatable `create --after TASK`, or change them later with
+  `depend --id TASK --after PREREQ --remove PREREQ` (both repeatable; removals
+  apply first; adding a present prerequisite or removing an absent one changes
+  nothing). `depend` refuses a verified or cancelled task (`task_invalid_state`),
+  an unknown prerequisite (`task_not_found`), and any addition that would form
+  a cycle, including a task after itself (`task_dependency_cycle`, naming the
+  chain). `assign` refuses a task with unmet prerequisites with
+  `task_dependencies_unmet`, naming them, before it contacts the agent;
+  `--force` assigns it anyway and records the unmet prerequisites as
+  `unmet_at_assign` (null otherwise), separately from verify's `forced`.
+  `cancel` names the created tasks it left ready. These checks and the changes
+  they guard run under the state store lock, so concurrent commands cannot
+  form a cycle or lose an edit.
 
 - `create` requires a single-line `--title` and a brief (`--body`, or `--file`
-  with `-` for stdin). `created_by` is the caller's agent record, or null when
-  the caller is unregistered.
+  with `-` for stdin), and takes optional `--parent` and repeatable `--after`.
+  `created_by` is the caller's agent record, or null when the caller is
+  unregistered.
 - `assign --id TASK` takes exactly one of `--name`, `--pane`, or `--agent-id`.
   The agent must be registered; otherwise it fails with `agent_unregistered` and
   suggests `fledge agent adopt`. A `created` or `assigned` task is first stored
@@ -473,17 +508,28 @@ recorded checks.
   `task_self_verification` and an unregistered caller with
   `caller_unregistered`; `--force` overrides both and records `forced: true`.
   This is a workflow guard, not a security boundary.
-- `list [--status STATE] [--owner AGENT_ID]` prints ID, status, owner (the
-  agent's name while its record is live, otherwise its ID), and title, oldest
-  first. `get --id TASK` prints the full record.
+- `list [--status STATE] [--owner AGENT_ID] [--parent TASK] [--ready]` prints
+  ID, status, owner (the agent's name while its record is live, otherwise its
+  ID), parent, waiting (unmet prerequisites), subtask progress, and title,
+  oldest first. `--parent` keeps direct subtasks only; `--ready` keeps created
+  tasks whose prerequisites are all satisfied. Filters combine. `get --id TASK`
+  prints the full record with its parent, subtask progress, and each
+  prerequisite's state, for example
+  `after: 1a2b3c4d (verified), 5e6f7a8b (cancelled: superseded), 9c0d1e2f (assigned, waiting)`.
 
-Each record holds `id`, `title`, `brief`, `owner`, `status`, `result`,
-`verifier`, `verification_note`, `forced`, `cancel_reason`, `created_at`,
-`created_by`, `assigned_at`, `completed_at`, `completion_notification`,
-`verified_at`, `cancelled_at`, and `delivery`. A completion notification records
+Each record holds `id`, `title`, `brief`, `parent`, `after`, `owner`, `status`,
+`result`, `verifier`, `verification_note`, `forced`, `cancel_reason`,
+`created_at`, `created_by`, `assigned_at`, `unmet_at_assign`, `completed_at`,
+`completion_notification`, `verified_at`, `cancelled_at`, and `delivery`.
+Records written before subtasks and dependencies load with a null `parent`,
+`after`, and `unmet_at_assign`. A completion notification records
 its `recipient`, `message_id`, optional `pane`, `delivered_at`, `error`, and
 `uncertain` state. Every command supports `--json` with the same outcome envelope
-as the agent commands; `task list` and `task get` never contact Herdr.
+as the agent commands. JSON results add derived fields: list rows `progress`
+(`verified`, `total`, `cancelled`, or null) and `waiting`; get `progress` and
+`dependencies` (`id`, `title`, `status`, `cancel_reason`, `satisfied`); verify
+`open_subtasks`; and cancel `unblocked`. `task list`, `task get`, and
+`task depend` never contact Herdr.
 
 ## Worktrees
 

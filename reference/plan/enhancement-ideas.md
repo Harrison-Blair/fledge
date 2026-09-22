@@ -84,9 +84,17 @@ A checked item means its main capability is implemented; accompanying notes reco
 
 16. [ ] **A queue with exclusive task claims.** Idle workers claim eligible work, with coordination that prevents two workers accidentally accepting the same assignment.
 
-17. [ ] **Task dependencies.** Express "implement after research" or "review after tests pass," then expose which tasks are ready to run.
+17. [x] **Task dependencies.** Express "implement after research" or "review after tests pass," then expose which tasks are ready to run.
 
-18. [ ] **Parent tasks and subtasks.** Break a larger goal into bounded pieces while preserving a useful overall progress view.
+    **Implemented:** [5a4719f](https://github.com/Harrison-Blair/fledge/commit/5a4719fe3ca885d8035f1334bce50f98f9e3d6fe) · **Author:** Harrison-Blair · **Author date:** 2026-09-22
+
+    **Implementation decisions and remaining gaps:** Prerequisites are set with `task create --after` or `task depend`, which rejects cycles; checks run under the state store lock. A prerequisite is satisfied when verified or cancelled; cancelled ones stay visible. `task assign` refuses unmet prerequisites unless `--force`, which is recorded separately from verify's `forced`. `task list --ready` shows assignable tasks and `task cancel` names the tasks it left ready. Only task verification is modelled, so "after tests pass" needs a task for the tests. `task verify` does not report the tasks it unblocks, and ready tasks are not assigned automatically. [Current behavior](../../README.md#tasks)
+
+18. [x] **Parent tasks and subtasks.** Break a larger goal into bounded pieces while preserving a useful overall progress view.
+
+    **Implemented:** [2804518](https://github.com/Harrison-Blair/fledge/commit/2804518bbb1b9c7728dc027efb4380218a3302ac) · **Author:** Harrison-Blair · **Author date:** 2026-09-22
+
+    **Implementation decisions and remaining gaps:** `task create --parent` fixes a parent at creation; a verified or cancelled parent takes no new subtasks. The parent keeps its own lifecycle, and subtasks are not its prerequisites. `task list` and `task get` show direct-subtask progress such as `2/3 verified, 1 cancelled`, excluding cancelled subtasks from the total, and `task list --parent` lists direct subtasks. `task verify` refuses a parent with open subtasks unless `--force`; cancelling a parent does not cascade. There is no recursive tree view or progress rolled up across deeper levels. [Current behavior](../../README.md#tasks)
 
 19. [ ] **Priorities and deadlines.** Let urgent work move ahead of routine work, and show when a deadline is threatened by unresolved dependencies.
 

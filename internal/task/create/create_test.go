@@ -80,3 +80,73 @@ func TestCreateRejectsInvalidInput(t *testing.T) {
 		}
 	}
 }
+
+func count(t *testing.T, repo string) int {
+	t.Helper()
+	s, err := task.Existing(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs, err := task.List(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(rs)
+}
+
+func TestCreateSubtaskAtAnyDepth(t *testing.T) {
+	repo := identitytest.Repository(t)
+	top := tasktest.Seed(t, repo, task.Record{Title: "goal", Status: task.Assigned})
+	parent := top
+	for _, title := range []string{"child", "grandchild"} {
+		out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{Title: title, Body: "b", BodySet: true, Parent: parent}, strings.NewReader(""))
+		if out.Error != nil {
+			t.Fatalf("%s: %+v", title, out.Error)
+		}
+		r := out.Result.(task.Record)
+		if r.Parent == nil || *r.Parent != parent || !reflect.DeepEqual(tasktest.Load(t, repo, r.ID), r) {
+			t.Fatalf("%s: %+v", title, r)
+		}
+		parent = r.ID
+	}
+}
+
+func TestCreateSubtaskRejectsMissingOrFinishedParent(t *testing.T) {
+	repo := identitytest.Repository(t)
+	verified := tasktest.Seed(t, repo, task.Record{Title: "v", Status: task.Verified})
+	cancelled := tasktest.Seed(t, repo, task.Record{Title: "c", Status: task.Cancelled})
+	for parent, code := range map[string]string{"0123abcd": "task_not_found", verified: "task_invalid_state", cancelled: "task_invalid_state", "BAD": "invalid_input"} {
+		out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{Title: "t", Body: "b", BodySet: true, Parent: parent}, strings.NewReader(""))
+		if out.Error == nil || out.Error.Code != code || count(t, repo) != 2 {
+			t.Fatalf("%s: %+v", parent, out.Error)
+		}
+	}
+}
+
+func TestCreateWithPrerequisites(t *testing.T) {
+	repo := identitytest.Repository(t)
+	research := tasktest.Seed(t, repo, task.Record{Title: "research", Status: task.Assigned})
+	dropped := tasktest.Seed(t, repo, task.Record{Title: "dropped", Status: task.Cancelled})
+	out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{Title: "implement", Body: "b", BodySet: true, After: []string{research, dropped, research}}, strings.NewReader(""))
+	if out.Error != nil {
+		t.Fatalf("%+v", out.Error)
+	}
+	r := out.Result.(task.Record)
+	if !reflect.DeepEqual(r.After, []string{research, dropped}) || !reflect.DeepEqual(tasktest.Load(t, repo, r.ID), r) {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestCreateRejectsUnknownPrerequisites(t *testing.T) {
+	repo := identitytest.Repository(t)
+	known := tasktest.Seed(t, repo, task.Record{Title: "known", Status: task.Created})
+	for _, after := range [][]string{{known, "0123abcd"}, {"BAD"}} {
+		out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{Title: "t", Body: "b", BodySet: true, After: after}, strings.NewReader(""))
+		if out.Error == nil || count(t, repo) != 1 {
+			t.Fatalf("%v: %+v", after, out.Error)
+		}
+		if want := map[bool]string{true: "invalid_input", false: "task_not_found"}[after[0] == "BAD"]; out.Error.Code != want {
+			t.Fatalf("%v: %+v", after, out.Error)
+		}
+	}
+}

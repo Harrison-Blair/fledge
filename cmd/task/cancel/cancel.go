@@ -11,7 +11,7 @@ func New() *cobra.Command {
 	var options cancel.Options
 	var asJSON bool
 	cmd := &cobra.Command{Use: "cancel", Short: "Cancel a task that is not verified or already cancelled", Args: cobra.NoArgs,
-		Long: "Cancel a created, assigned, or completed task. Verified and cancelled tasks are\nfinal. Cancelling does not message or stop the owner."}
+		Long: "Cancel a created, assigned, or completed task. Verified and cancelled tasks are\nfinal. Cancelling does not message or stop the owner and leaves subtasks as they\nare. A cancelled prerequisite counts as satisfied but stays listed on its\ndependents; the output names created tasks it left ready."}
 	f := cmd.Flags()
 	f.StringVar(&options.ID, "id", "", "Task ID")
 	f.StringVar(&options.Reason, "reason", "", "Why the task was cancelled")
