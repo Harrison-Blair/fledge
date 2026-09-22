@@ -39,14 +39,10 @@ func (e *NotFoundError) Error() string {
 // Open prepares root as a state directory, creating it and its lock file when
 // missing. It does not resolve Git roots or write ignore files.
 func Open(root string) (*Store, error) {
-	if err := os.MkdirAll(root, 0o700); err != nil {
+	if err := mkdirAll(root); err != nil {
 		return nil, fmt.Errorf("state: create %s: %w", root, err)
 	}
-	lock, err := os.OpenFile(filepath.Join(root, lockName), os.O_RDWR|os.O_CREATE, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("state: create lock: %w", err)
-	}
-	if err := lock.Close(); err != nil {
+	if err := createFile(filepath.Join(root, lockName)); err != nil {
 		return nil, fmt.Errorf("state: create lock: %w", err)
 	}
 	return &Store{root: root, newID: randomID}, nil
@@ -60,7 +56,7 @@ func (s *Store) Create(kind string, build func(id string) any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := mkdirAll(dir); err != nil {
 		return "", fmt.Errorf("state: create %s: %w", dir, err)
 	}
 	for range createAttempts {

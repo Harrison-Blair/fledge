@@ -3,6 +3,7 @@ package state
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 )
 
@@ -396,5 +398,96 @@ func TestConcurrentProcessesDoNotLoseWrites(t *testing.T) {
 	var c counter
 	if err := store.Get("counters", id, &c); err != nil || c.N != 2*n {
 		t.Fatalf("counter = %+v, %v; want %d", c, err, 2*n)
+	}
+}
+
+// recordDirOps routes directory creation and syncing through the real
+// operations while logging each call as "mkdir <path>" or "sync <path>".
+func recordDirOps(t *testing.T, mkdirErr func(path string) error) *[]string {
+	t.Helper()
+	var ops []string
+	realMkdir, realSync := mkdir, syncDir
+	mkdir = func(path string, perm os.FileMode) error {
+		ops = append(ops, "mkdir "+path)
+		if err := realMkdir(path, perm); err != nil {
+			return err
+		}
+		if mkdirErr != nil {
+			return mkdirErr(path)
+		}
+		return nil
+	}
+	syncDir = func(path string) error {
+		ops = append(ops, "sync "+path)
+		return realSync(path)
+	}
+	t.Cleanup(func() { mkdir, syncDir = realMkdir, realSync })
+	return &ops
+}
+
+func TestOpenAndCreateSyncParentsOfNewDirectories(t *testing.T) {
+	base := t.TempDir()
+	a := filepath.Join(base, "a")
+	b := filepath.Join(a, "b")
+	root := filepath.Join(b, "state")
+	ops := recordDirOps(t, nil)
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"mkdir " + a, "sync " + base,
+		"mkdir " + b, "sync " + a,
+		"mkdir " + root, "sync " + b,
+		"sync " + root, // lock file created
+	}
+	if !reflect.DeepEqual(*ops, want) {
+		t.Fatalf("Open ops = %q\nwant %q", *ops, want)
+	}
+
+	*ops = nil
+	createCounter(t, store)
+	kind := filepath.Join(root, "counters")
+	want = []string{"mkdir " + kind, "sync " + root, "sync " + kind}
+	if !reflect.DeepEqual(*ops, want) {
+		t.Fatalf("Create ops = %q\nwant %q", *ops, want)
+	}
+
+	*ops = nil
+	if _, err := Open(root); err != nil {
+		t.Fatal(err)
+	}
+	createCounter(t, store)
+	if want := []string{"sync " + kind}; !reflect.DeepEqual(*ops, want) {
+		t.Fatalf("ops with existing directories = %q, want %q", *ops, want)
+	}
+}
+
+func TestConcurrentDirectoryCreatorStillSyncsParent(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "state")
+	// The directory appears between the existence check and Mkdir, as when
+	// another process wins the race.
+	ops := recordDirOps(t, func(path string) error {
+		return &os.PathError{Op: "mkdir", Path: path, Err: fs.ErrExist}
+	})
+	if _, err := Open(root); err != nil {
+		t.Fatalf("Open with racing creator: %v", err)
+	}
+	want := []string{"mkdir " + root, "sync " + base, "sync " + root}
+	if !reflect.DeepEqual(*ops, want) {
+		t.Fatalf("ops = %q, want %q", *ops, want)
+	}
+}
+
+func TestOpenRejectsNonDirectoryRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	if err := os.WriteFile(root, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Open(root)
+	if !errors.Is(err, syscall.ENOTDIR) || !strings.Contains(err.Error(), "create "+root+":") {
+		t.Fatalf("Open error = %v, want ENOTDIR creating %s", err, root)
 	}
 }
