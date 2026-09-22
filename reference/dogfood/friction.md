@@ -485,3 +485,43 @@ reports failed or uncertain notifications without rolling completion back.
 2. As the dispatcher, create a task and assign it to the worker.
 3. As the worker, run `fledge task complete --id <task-id> --summary done`.
 4. Observe that the task record is `completed` but no message is delivered to the dispatcher.
+
+---
+
+**Issue:** `agent spawn --cwd` with a relative path starts the agent in the wrong directory
+
+**Summary:** On 2026-09-22 with Fledge built from `dev` `a61f7ae`, running
+`fledge agent spawn --name review-agent --harness claude --cwd
+.fledge/worktrees/fix/agent-cmds --tab review-agent --file brief.md` from
+`/home/penguin/source/fledge` launched Claude in `/home/penguin` instead of the
+worktree. Claude showed its folder-trust dialog for `/home/penguin`, and spawn
+reported "Agent is waiting on a startup prompt". An absolute `--cwd` works. The
+relative path appears to be resolved against something other than the caller's
+working directory (likely the Herdr server's or the pane shell's home). Spawn
+should resolve a relative `--cwd` against the caller's working directory or
+reject relative paths.
+
+**Reproduction steps:**
+1. From the repository root, create a worktree such as `.fledge/worktrees/fix/agent-cmds`.
+2. Run `fledge agent spawn --name review-agent --harness claude --cwd .fledge/worktrees/fix/agent-cmds --tab review-agent --file brief.md`.
+3. Observe that spawn reports the agent waiting on a startup prompt and that Claude's folder-trust dialog names `/home/penguin`, not the worktree.
+4. Repeat with the absolute worktree path as `--cwd`; observe that the agent starts in the worktree.
+
+---
+
+**Issue:** No way to change a live agent's model
+
+**Summary:** On 2026-09-22 with Fledge built from `dev` `a61f7ae`, switching a
+running Claude worker from Sonnet 5 to Opus 5.5 required `agent stop`, a
+respawn with `--worktree <path> --model claude-opus-5-5`, and `task assign`
+again, which creates a new agent record ID. `agent message` cannot carry a
+harness slash command such as `/model claude-opus-5-5`, because every delivered
+message is prefixed with the sender header line, so the text no longer begins
+with `/`. Possible capabilities: a raw, unheaded send option, or
+`agent set-model`.
+
+**Reproduction steps:**
+1. Spawn a Claude worker with `fledge agent spawn --name worker --harness claude --model claude-sonnet-5`.
+2. Run `fledge agent message --name worker --body "/model claude-opus-5-5"`.
+3. Observe that the delivered text begins with the Fledge sender header, so Claude treats it as a prompt rather than a slash command and the model is unchanged.
+4. Observe that the only way to switch models is `fledge agent stop --name worker`, a respawn with `--model claude-opus-5-5`, and reassigning its task, which yields a new record ID.
