@@ -149,3 +149,16 @@ func TestNewAgentRow(t *testing.T) {
 		t.Fatalf("empty values must be null: %+v", empty)
 	}
 }
+
+func TestPointerAndDisplay(t *testing.T) {
+	if Pointer("") != nil || Display(nil) != "-" || Display(Pointer("")) != "-" {
+		t.Fatal("empty values must render as -")
+	}
+	empty := ""
+	if Display(&empty) != "-" {
+		t.Fatal("an empty string must render as -")
+	}
+	if p := Pointer("w1"); p == nil || *p != "w1" || Display(p) != "w1" {
+		t.Fatalf("Pointer/Display round trip: %v", p)
+	}
+}

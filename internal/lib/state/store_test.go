@@ -75,7 +75,7 @@ func TestCreateGetRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if !validID(id) {
+	if !ValidID(id) {
 		t.Fatalf("id %q is not 8 lowercase hex characters", id)
 	}
 	var got agent
@@ -688,5 +688,16 @@ func TestOpenExistingRejectsMissingOrNonDirectoryRoot(t *testing.T) {
 	}
 	if _, err := OpenExisting(file); !errors.Is(err, syscall.ENOTDIR) {
 		t.Fatalf("OpenExisting file = %v, want ENOTDIR", err)
+	}
+}
+
+func TestValidID(t *testing.T) {
+	for id, want := range map[string]bool{
+		"0123abcd": true, "56789def": true, "": false, "0123abc": false, "0123abcde": false,
+		"0123ABCD": false, "0123abcg": false, "0123abc\n": false, "0123abcé": false,
+	} {
+		if got := ValidID(id); got != want {
+			t.Errorf("ValidID(%q) = %v, want %v", id, got, want)
+		}
 	}
 }

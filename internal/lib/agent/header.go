@@ -41,14 +41,14 @@ func ResolveSender(ctx context.Context, c Client) Sender {
 	var remote *herdr.Error
 	switch {
 	case err == nil && a.Pane.Name != nil && *a.Pane.Name != "":
-		return Sender{Name: a.Pane.Name, Pane: pointer(a.Pane.PaneID), Kind: "named"}
+		return Sender{Name: a.Pane.Name, Pane: Pointer(a.Pane.PaneID), Kind: "named"}
 	case err == nil:
-		return Sender{Pane: pointer(a.Pane.PaneID), Kind: "unnamed"}
+		return Sender{Pane: Pointer(a.Pane.PaneID), Kind: "unnamed"}
 	case errors.As(err, &remote) && remote.Code == "agent_not_found":
-		return Sender{Pane: pointer(c.CallerPane), Kind: "pane"}
+		return Sender{Pane: Pointer(c.CallerPane), Kind: "pane"}
 	}
 	msg := err.Error()
-	return Sender{Pane: pointer(c.CallerPane), Kind: "unknown", Error: &msg}
+	return Sender{Pane: Pointer(c.CallerPane), Kind: "unknown", Error: &msg}
 }
 
 // String describes the sender as it appears in headers and human output.

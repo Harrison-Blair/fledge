@@ -141,7 +141,7 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 	}
 	setPlacement(result, r.Agent.Pane)
 	result.DetectedHarness = r.Agent.Agent
-	result.AgentStatus = pointer(r.Agent.AgentStatus)
+	result.AgentStatus = libagent.Pointer(r.Agent.AgentStatus)
 	result.Argv = r.Argv
 	out.Effects = append(out.Effects, libagent.Effect{Action: "started", Kind: "agent", ID: r.Agent.PaneID})
 	if o.NoWait {
@@ -161,7 +161,7 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 	}
 	setPlacement(result, w.Agent.Pane)
 	result.DetectedHarness = w.Agent.Agent
-	result.AgentStatus = pointer(w.Agent.AgentStatus)
+	result.AgentStatus = libagent.Pointer(w.Agent.AgentStatus)
 	s.register(ctx, w.Agent, &out)
 	if w.Agent.AgentStatus == "blocked" {
 		out.Fail(&herdr.Error{Code: "agent_blocked", Message: fmt.Sprintf("agent %s is waiting on a startup prompt", o.Name)}, "agent.wait", true)
@@ -197,9 +197,9 @@ func (s *spawner) start(ctx context.Context, params map[string]any, r *herdr.Age
 	}
 }
 func setPlacement(r *Result, p herdr.Pane) {
-	r.WorkspaceID = pointer(p.WorkspaceID)
-	r.TabID = pointer(p.TabID)
-	r.PaneID = pointer(p.PaneID)
+	r.WorkspaceID = libagent.Pointer(p.WorkspaceID)
+	r.TabID = libagent.Pointer(p.TabID)
+	r.PaneID = libagent.Pointer(p.PaneID)
 	r.Cwd = p.Cwd
 }
 

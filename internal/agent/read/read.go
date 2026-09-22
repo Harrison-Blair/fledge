@@ -97,12 +97,6 @@ func Render(w io.Writer, o libagent.Outcome) error {
 	if text != "" && !strings.HasSuffix(text, "\n") {
 		text += "\n"
 	}
-	_, err := fmt.Fprintf(w, "Terminal snapshot of %s (%s, %d rows, truncated: %s)\n%s", display(who), r.Source, r.Lines, truncated, text)
+	_, err := fmt.Fprintf(w, "Terminal snapshot of %s (%s, %d rows, truncated: %s)\n%s", libagent.Display(who), r.Source, r.Lines, truncated, text)
 	return err
-}
-func display(s *string) string {
-	if s == nil || *s == "" {
-		return "-"
-	}
-	return *s
 }

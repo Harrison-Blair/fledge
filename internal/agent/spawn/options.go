@@ -2,7 +2,6 @@ package spawn
 
 import (
 	"math"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -30,8 +29,8 @@ func (o Options) Validate() ([]string, error) {
 			return nil, libagent.Invalid("--%s cannot be empty", flag)
 		}
 	}
-	if !regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`).MatchString(o.Name) {
-		return nil, libagent.Invalid("--name must match [a-z][a-z0-9_-]{0,31}")
+	if err := libagent.ValidateName(o.Name); err != nil {
+		return nil, err
 	}
 	if err := libagent.ValidateHarness(o.Harness); err != nil {
 		return nil, err

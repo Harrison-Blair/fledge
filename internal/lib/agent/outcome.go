@@ -42,13 +42,23 @@ type AgentRow struct {
 
 // NewAgentRow reports a live pane's agent fields, preserving empty values as null.
 func NewAgentRow(p herdr.Pane) AgentRow {
-	return AgentRow{Name: p.Name, Harness: p.Agent, AgentStatus: pointer(p.AgentStatus), WorkspaceID: pointer(p.WorkspaceID), TabID: pointer(p.TabID), PaneID: pointer(p.PaneID), Cwd: p.Cwd}
+	return AgentRow{Name: p.Name, Harness: p.Agent, AgentStatus: Pointer(p.AgentStatus), WorkspaceID: Pointer(p.WorkspaceID), TabID: Pointer(p.TabID), PaneID: Pointer(p.PaneID), Cwd: p.Cwd}
 }
-func pointer(s string) *string {
+
+// Pointer returns nil for an empty string, so optional JSON fields encode null.
+func Pointer(s string) *string {
 	if s == "" {
 		return nil
 	}
 	return &s
+}
+
+// Display renders an optional value for humans, showing "-" when it is absent.
+func Display(s *string) string {
+	if s == nil || *s == "" {
+		return "-"
+	}
+	return *s
 }
 
 // Fail records err as the outcome's failure. A located transport error

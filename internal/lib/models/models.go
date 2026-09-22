@@ -12,6 +12,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 )
 
 // Runner executes a harness command and returns its standard output.
@@ -116,7 +118,7 @@ func piModels(_ context.Context, d Discovery) ([]Row, error) {
 	for provider, entry := range store {
 		for _, m := range entry.Models {
 			if m.ID != "" {
-				rows = append(rows, Row{Model: provider + "/" + m.ID, Name: pointer(m.Name)})
+				rows = append(rows, Row{Model: provider + "/" + m.ID, Name: libagent.Pointer(m.Name)})
 			}
 		}
 	}
@@ -136,7 +138,7 @@ func codexModels(_ context.Context, d Discovery) ([]Row, error) {
 	var rows []Row
 	for _, m := range cache.Models {
 		if m.Slug != "" && m.Visibility == "list" {
-			rows = append(rows, Row{Model: m.Slug, Name: pointer(m.DisplayName)})
+			rows = append(rows, Row{Model: m.Slug, Name: libagent.Pointer(m.DisplayName)})
 		}
 	}
 	return rows, nil
@@ -174,7 +176,7 @@ func claudeModels(_ context.Context, d Discovery) ([]Row, error) {
 	var rows []Row
 	for _, m := range catalog.Catalog.Config.Models {
 		if m.ID != "" {
-			rows = append(rows, Row{Model: m.ID, Name: pointer(m.Name)})
+			rows = append(rows, Row{Model: m.ID, Name: libagent.Pointer(m.Name)})
 		}
 	}
 	return rows, nil
@@ -213,14 +215,8 @@ func cursorModels(ctx context.Context, d Discovery) ([]Row, error) {
 	for _, line := range output {
 		id, label, ok := strings.Cut(line, " - ")
 		if id = strings.TrimSpace(id); ok && id != "" {
-			rows = append(rows, Row{Model: id, Name: pointer(strings.TrimSpace(label))})
+			rows = append(rows, Row{Model: id, Name: libagent.Pointer(strings.TrimSpace(label))})
 		}
 	}
 	return rows, nil
-}
-func pointer(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
 }

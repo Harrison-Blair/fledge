@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
@@ -291,10 +290,8 @@ func Verify(rec Record, a herdr.AgentDetails) error {
 	return nil
 }
 
-var idPattern = regexp.MustCompile(`^[0-9a-f]{8}$`)
-
 func load(s *state.Store, id string) (Record, error) {
-	if !idPattern.MatchString(id) {
+	if !state.ValidID(id) {
 		return Record{}, libagent.Invalid("--id must be 8 lowercase hexadecimal characters")
 	}
 	var rec Record

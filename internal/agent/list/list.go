@@ -77,13 +77,7 @@ func Render(w io.Writer, o libagent.Outcome) error {
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(table, "ID\tNAME\tHARNESS\tSTATUS\tWORKSPACE\tTAB\tPANE\tCWD")
 	for _, a := range r.Agents {
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", display(a.ID), display(a.Name), display(a.Harness), display(a.AgentStatus), display(a.WorkspaceID), display(a.TabID), display(a.PaneID), display(a.Cwd))
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", libagent.Display(a.ID), libagent.Display(a.Name), libagent.Display(a.Harness), libagent.Display(a.AgentStatus), libagent.Display(a.WorkspaceID), libagent.Display(a.TabID), libagent.Display(a.PaneID), libagent.Display(a.Cwd))
 	}
 	return table.Flush()
-}
-func display(s *string) string {
-	if s == nil || *s == "" {
-		return "-"
-	}
-	return *s
 }

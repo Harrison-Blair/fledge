@@ -148,12 +148,6 @@ func Render(w io.Writer, o libagent.Outcome) error {
 			text = "Already idle or done"
 		}
 	}
-	_, err := fmt.Fprintf(w, "%s: %s (%s) in %s.\n", text, display(r.Name), display(r.Harness), display(r.PaneID))
+	_, err := fmt.Fprintf(w, "%s: %s (%s) in %s.\n", text, libagent.Display(r.Name), libagent.Display(r.Harness), libagent.Display(r.PaneID))
 	return err
-}
-func display(s *string) string {
-	if s == nil || *s == "" {
-		return "-"
-	}
-	return *s
 }

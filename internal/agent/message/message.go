@@ -72,12 +72,6 @@ func Render(w io.Writer, o libagent.Outcome) error {
 	if r.Sender != nil {
 		sender = r.Sender.String()
 	}
-	_, err := fmt.Fprintf(w, "Message %s submitted to %s from %s.\n", r.MessageID, display(r.PaneID), sender)
+	_, err := fmt.Fprintf(w, "Message %s submitted to %s from %s.\n", r.MessageID, libagent.Display(r.PaneID), sender)
 	return err
-}
-func display(s *string) string {
-	if s == nil || *s == "" {
-		return "-"
-	}
-	return *s
 }

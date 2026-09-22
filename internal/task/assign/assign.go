@@ -8,11 +8,11 @@ import (
 	"fmt"
 	"io"
 	"reflect"
-	"regexp"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 )
 
@@ -40,7 +40,7 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) li
 	if err == nil {
 		err = target.Validate()
 	}
-	if err == nil && o.AgentID != "" && !regexp.MustCompile(`^[0-9a-f]{8}$`).MatchString(o.AgentID) {
+	if err == nil && o.AgentID != "" && !state.ValidID(o.AgentID) {
 		err = libagent.Invalid("--agent-id must be 8 lowercase hexadecimal characters")
 	}
 	if err != nil {
