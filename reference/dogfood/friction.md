@@ -621,3 +621,25 @@ Workaround: rely on the verifier's message for the final result.
 3. Run `fledge task verify --id <task>` again.
 4. Observe `task_invalid_state`, and that neither `task complete` nor any other
    command can move the task back to a verifiable state.
+
+---
+
+**Issue:** `agent stop` refuses a finished agent still reported as working
+
+**Summary:** At about 6:45 PM on 2026-09-22 the Claude verifier `docs-verify`
+(pane `w1J:p2`) had sent its final report, and its terminal showed an empty
+prompt with `Worked for 51s · done 6:45 PM`. Right afterwards,
+`fledge agent stop --name docs-verify` was rejected with
+`agent docs-verify is working; pass --force to stop it anyway (guard)`.
+`fledge worktree remove` then also refused because the live agent was in the
+workspace, which its `--force` does not override, so cleanup needed
+`agent stop --force`. This is the inverse of "`agent get` still reports `idle`
+just after a successful message" above: the reported status lags the
+terminal in both directions. Workaround: check `fledge agent read` for an idle
+prompt, then stop the agent with `--force`.
+
+**Reproduction steps:**
+1. Let a spawned Claude agent finish its turn right after sending a message.
+2. Confirm with `fledge agent read --name <agent>` that it shows an idle prompt.
+3. Immediately run `fledge agent stop --name <agent>`.
+4. Observe the `is working; pass --force` guard rejection.
