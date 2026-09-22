@@ -84,12 +84,6 @@ func Render(w io.Writer, o libagent.Outcome) error {
 	if o.Error != nil || !ok {
 		return nil
 	}
-	_, err := fmt.Fprintf(w, "Stopped %s (%s) in %s.\n", display(r.Name), display(r.Harness), display(r.PaneID))
+	_, err := fmt.Fprintf(w, "Stopped %s (%s) in %s.\n", libagent.Display(r.Name), libagent.Display(r.Harness), libagent.Display(r.PaneID))
 	return err
-}
-func display(s *string) string {
-	if s == nil || *s == "" {
-		return "-"
-	}
-	return *s
 }

@@ -61,13 +61,7 @@ func Render(w io.Writer, o libagent.Outcome) error {
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(table, "HARNESS\tMODEL\tNAME")
 	for _, m := range r.Models {
-		fmt.Fprintf(table, "%s\t%s\t%s\n", m.Harness, m.Model, display(m.Name))
+		fmt.Fprintf(table, "%s\t%s\t%s\n", m.Harness, m.Model, libagent.Display(m.Name))
 	}
 	return table.Flush()
-}
-func display(s *string) string {
-	if s == nil || *s == "" {
-		return "-"
-	}
-	return *s
 }

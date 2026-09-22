@@ -29,13 +29,6 @@ type Result struct {
 	Sender            *libagent.Sender `json:"sender"`
 }
 
-func pointer(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
-}
-
 // Render writes a successful spawn, or a startup recovery hint after the
 // generic failure lines that libagent writes first.
 func Render(w io.Writer, o libagent.Outcome) error {
@@ -60,24 +53,18 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		}
 		return nil
 	}
-	id := display(r.ID)
+	id := libagent.Display(r.ID)
 	if r.RegistrationError != nil {
 		id += " (not registered: " + *r.RegistrationError + ")"
 	}
-	if _, err := fmt.Fprintf(w, "Spawned %s (%s) in %s / %s / %s\n  cwd: %s\n  worktree: %s\n  id: %s\n", r.Name, r.Harness, display(r.WorkspaceID), display(r.TabID), display(r.PaneID), display(r.Cwd), display(r.WorktreePath), id); err != nil {
+	if _, err := fmt.Fprintf(w, "Spawned %s (%s) in %s / %s / %s\n  cwd: %s\n  worktree: %s\n  id: %s\n", r.Name, r.Harness, libagent.Display(r.WorkspaceID), libagent.Display(r.TabID), libagent.Display(r.PaneID), libagent.Display(r.Cwd), libagent.Display(r.WorktreePath), id); err != nil {
 		return err
 	}
 	if r.Prompted {
-		_, err := fmt.Fprintf(w, "Message submitted to %s.\n", display(r.PaneID))
+		_, err := fmt.Fprintf(w, "Message submitted to %s.\n", libagent.Display(r.PaneID))
 		return err
 	}
 	return nil
-}
-func display(s *string) string {
-	if s == nil || *s == "" {
-		return "-"
-	}
-	return *s
 }
 
 // PositionalError explains the native-argument separator requirement.

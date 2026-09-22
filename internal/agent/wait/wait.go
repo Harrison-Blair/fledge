@@ -224,14 +224,14 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		if r.Name != nil && *r.Name != "" {
 			who = r.Name
 		}
-		_, err := fmt.Fprintf(w, "%s is %s.\n", display(who), display(r.AgentStatus))
+		_, err := fmt.Fprintf(w, "%s is %s.\n", libagent.Display(who), libagent.Display(r.AgentStatus))
 		return err
 	case FanOut:
 		for _, row := range r.Targets {
 			var line string
 			switch row.Outcome {
 			case "matched":
-				line = fmt.Sprintf("%s is %s", row.Target, display(row.Agent.AgentStatus))
+				line = fmt.Sprintf("%s is %s", row.Target, libagent.Display(row.Agent.AgentStatus))
 				if r.Winner != nil && *r.Winner == row.Target {
 					line += " (first match)"
 				}
@@ -246,10 +246,4 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		}
 	}
 	return nil
-}
-func display(s *string) string {
-	if s == nil || *s == "" {
-		return "-"
-	}
-	return *s
 }

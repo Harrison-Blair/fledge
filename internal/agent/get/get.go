@@ -90,20 +90,20 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		session = &SessionIdentity{}
 	}
 	for _, f := range []struct{ label, value string }{
-		{"Name", display(r.Name)}, {"Harness", display(r.Harness)}, {"Status", display(r.AgentStatus)},
-		{"Workspace ID", display(r.WorkspaceID)}, {"Tab ID", display(r.TabID)}, {"Pane ID", display(r.PaneID)},
-		{"Working directory", display(r.Cwd)}, {"Foreground working directory", display(r.ForegroundCwd)},
+		{"Name", libagent.Display(r.Name)}, {"Harness", libagent.Display(r.Harness)}, {"Status", libagent.Display(r.AgentStatus)},
+		{"Workspace ID", libagent.Display(r.WorkspaceID)}, {"Tab ID", libagent.Display(r.TabID)}, {"Pane ID", libagent.Display(r.PaneID)},
+		{"Working directory", libagent.Display(r.Cwd)}, {"Foreground working directory", libagent.Display(r.ForegroundCwd)},
 		{"Interactive ready", displayBool(r.InteractiveReady)}, {"Launch pending", displayBool(r.LaunchPending)},
-		{"Focused", displayBool(r.Focused)}, {"Title", display(r.Title)},
-		{"Session source", display(session.Source)}, {"Session harness", display(session.Harness)},
-		{"Session reference kind", display(session.Kind)}, {"Session reference value", display(session.Value)},
+		{"Focused", displayBool(r.Focused)}, {"Title", libagent.Display(r.Title)},
+		{"Session source", libagent.Display(session.Source)}, {"Session harness", libagent.Display(session.Harness)},
+		{"Session reference kind", libagent.Display(session.Kind)}, {"Session reference value", libagent.Display(session.Value)},
 	} {
 		if _, err := fmt.Fprintf(w, "%s: %s\n", f.label, f.value); err != nil {
 			return err
 		}
 	}
 	if rec := r.Record; rec != nil {
-		_, err := fmt.Fprintf(w, "Fledge ID: %s\nParent: %s\nRegistered at: %s\nRegistered by: %s\n", rec.ID, display(rec.Parent), rec.RegisteredAt, rec.RegisteredBy)
+		_, err := fmt.Fprintf(w, "Fledge ID: %s\nParent: %s\nRegistered at: %s\nRegistered by: %s\n", rec.ID, libagent.Display(rec.Parent), rec.RegisteredAt, rec.RegisteredBy)
 		return err
 	}
 	return nil
@@ -113,10 +113,4 @@ func displayBool(b *bool) string {
 		return "-"
 	}
 	return strconv.FormatBool(*b)
-}
-func display(s *string) string {
-	if s == nil || *s == "" {
-		return "-"
-	}
-	return *s
 }
