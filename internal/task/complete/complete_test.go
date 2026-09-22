@@ -51,6 +51,17 @@ func TestOwnerCompletes(t *testing.T) {
 	}
 }
 
+// The owner keeps its task after Herdr moves its terminal to a new pane.
+func TestOwnerCompletesAfterItsPaneMoved(t *testing.T) {
+	repo, id := setup(t, task.Assigned)
+	moved := tasktest.Agent("w2:p1", "term_worker", "worker")
+	moved.Agent.WorkspaceID = "w2"
+	out := Run(context.Background(), tasktest.Client(t, repo, "w2:p1", tasktest.Get("w2:p1", moved)), Options{ID: id, Summary: "done", SummarySet: true}, strings.NewReader(""))
+	if r := tasktest.Load(t, repo, id); out.Error != nil || r.Status != task.Completed {
+		t.Fatalf("%+v %+v", out.Error, r)
+	}
+}
+
 func TestOwnerCompletionNotifiesCreator(t *testing.T) {
 	repo := identitytest.Repository(t)
 	creator := tasktest.Register(t, repo, boss)
@@ -106,6 +117,7 @@ func TestStaleCreatorLeavesTaskCompletedWithPartialOutcome(t *testing.T) {
 	c := tasktest.Client(t, repo, "w1:p3",
 		tasktest.Get("w1:p3", worker),
 		herdrscript.Call{Method: "agent.get", Params: map[string]any{"target": "w1:p1"}, Err: &herdr.Error{Code: "agent_not_found", Message: "gone"}},
+		herdrscript.Call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": []any{}}},
 	)
 	out := run(context.Background(), c, Options{ID: id, Summary: "done", SummarySet: true}, strings.NewReader(""), "m-0a1b2c")
 	r := tasktest.Load(t, repo, id)

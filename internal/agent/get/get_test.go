@@ -288,7 +288,7 @@ func TestGetByNameShowsLiveRecord(t *testing.T) {
 
 func TestGetByIDFailsClosedOnStaleTerminal(t *testing.T) {
 	live := herdrscript.Info(herdrscript.LiveAgent("idle"))
-	c := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live})
+	c := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live}, call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": []any{}}})
 	c.Cwd = identitytest.Repository(t)
 	recorded := live.Agent
 	recorded.TerminalID = "term_old"

@@ -73,10 +73,17 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) li
 			out.Fail(err, "state", false)
 			return out
 		}
-		if owner == nil || owner.Pane != a.PaneID {
+		if owner == nil {
 			out.Fail(&herdr.Error{Code: "agent_unregistered", Message: fmt.Sprintf("the agent in %s has no Fledge record; register it first with: fledge agent adopt --pane %s", a.PaneID, a.PaneID)}, "identity", false)
 			return out
 		}
+		// The terminal is the identity; the record follows it to a new pane.
+		moved, err := identity.Relocate(s, *owner, a)
+		if err != nil {
+			out.Fail(err, "state", false)
+			return out
+		}
+		owner = &moved
 	}
 	r, err := task.Update(s, o.ID, func(r *task.Record) error {
 		if !reflect.DeepEqual(*r, snapshot) {
