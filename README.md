@@ -315,6 +315,12 @@ pane and workspace and keeps its ID. `ended_at` is set when `agent stop` closes
 the agent's pane, or when a lookup finds the terminal in no Herdr pane at all;
 an ended record is no longer live. A terminal that still exists but hosts no
 agent (its harness exited) only makes lookups fail; the record stays live. A
+record belongs to the harness that registered it: when its terminal now runs a
+different harness (the record's `harness` differs from Herdr's live agent kind,
+both known), a lookup of that agent ends the record, `--id` fails with
+`agent_identity_stale`, and the terminal counts as unregistered, so its new
+agent has no parent record and can be adopted. Listings never attribute such a
+record to the live agent. A
 Herdr server handoff reissues every `terminal_id`, so records from before it
 end on their next lookup and their agents need `fledge agent adopt`.
 

@@ -236,3 +236,16 @@ func TestAssignUncertainDeliveryIsReportedUnknown(t *testing.T) {
 		t.Fatalf("%q", b.String())
 	}
 }
+
+func TestAssignRefusesAgentWhoseRecordIsAnotherHarness(t *testing.T) {
+	repo := identitytest.Repository(t)
+	codex := worker
+	harness := "codex"
+	codex.Agent.Agent = &harness
+	tasktest.Register(t, repo, codex)
+	id := seed(t, repo)
+	out := Run(context.Background(), tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p3", worker)), Options{ID: id, Pane: "w1:p3"})
+	if out.Error == nil || out.Error.Code != "agent_unregistered" {
+		t.Fatalf("%+v", out.Error)
+	}
+}

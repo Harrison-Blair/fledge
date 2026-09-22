@@ -155,8 +155,8 @@ func addOwners(ctx context.Context, c libagent.Client, r Result) {
 	}
 	byPath := map[string][]identity.Record{}
 	for _, a := range live.Agents {
-		rec, ok := records[a.TerminalID]
-		if ok && a.TerminalID != "" && rec.WorktreePath != nil {
+		rec, ok := identity.Attributed(records, a)
+		if ok && rec.WorktreePath != nil {
 			p := Canonical(*rec.WorktreePath)
 			byPath[p] = append(byPath[p], rec)
 		}

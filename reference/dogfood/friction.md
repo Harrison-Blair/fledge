@@ -583,7 +583,9 @@ is keyed by `terminal_id`, and per README Identity a terminal whose harness
 exits keeps its record live, so the next harness launched in it is treated as
 the same agent. Possible fixes: end or invalidate the record when the harness
 kind or Herdr session reference changes, or compare the recorded harness
-against the live agent on lookup.
+against the live agent on lookup. Resolved 2026-09-22: a lookup that finds a
+record's terminal running a different known harness ends the record and treats
+the terminal as unregistered; listings skip such records.
 
 **Reproduction steps:**
 1. Adopt an agent in a pane (`fledge agent adopt --name a`).

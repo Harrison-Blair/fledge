@@ -158,13 +158,13 @@ func checkAgents(ctx context.Context, c libagent.Client, repo string, row list.R
 	checkout := list.Canonical(row.Path)
 	for _, a := range r.Agents {
 		var where string
-		rec, registered := records[a.TerminalID]
+		rec, registered := identity.Attributed(records, a)
 		switch {
 		case row.WorkspaceID != nil && a.WorkspaceID == *row.WorkspaceID:
 			where = "is in workspace " + a.WorkspaceID
 		case a.Cwd != nil && inside(checkout, list.Canonical(*a.Cwd)):
 			where = "is working in " + *a.Cwd
-		case a.TerminalID != "" && registered && rec.WorktreePath != nil && inside(checkout, list.Canonical(*rec.WorktreePath)):
+		case registered && rec.WorktreePath != nil && inside(checkout, list.Canonical(*rec.WorktreePath)):
 			where = "is registered to " + row.Path
 		default:
 			continue
