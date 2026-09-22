@@ -313,3 +313,18 @@ func TestRegisterRefusesTerminalWithLiveRecord(t *testing.T) {
 		t.Fatalf("records %v", ids)
 	}
 }
+
+func TestExistingOnStateWithoutLockCreatesNothing(t *testing.T) {
+	root := repository(t)
+	dir := filepath.Join(root, ".fledge", "state")
+	if err := os.MkdirAll(filepath.Join(dir, Kind), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Existing(context.Background(), root)
+	if err != nil || s == nil {
+		t.Fatalf("%v %v", s, err)
+	}
+	if list, _ := os.ReadDir(dir); len(list) != 1 || list[0].Name() != Kind {
+		t.Fatalf("state entries changed: %v", list)
+	}
+}

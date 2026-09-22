@@ -232,3 +232,20 @@ func TestListOwnersUnavailableWhenAgentListFails(t *testing.T) {
 		t.Fatalf("%+v", out)
 	}
 }
+
+func TestListLeavesIncompleteStoreUnchanged(t *testing.T) {
+	f := newFixture(t)
+	dir := filepath.Join(f.root, ".fledge", "state")
+	os.MkdirAll(dir, 0o700)
+	if err := os.WriteFile(filepath.Join(dir, identity.Kind), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()})
+	out := Run(context.Background(), c, Options{Cwd: f.root})
+	if out.Status != "success" || out.Result.(Result).Worktrees[1].Owner != nil {
+		t.Fatalf("%+v", out)
+	}
+	if list, _ := os.ReadDir(dir); len(list) != 1 || list[0].Name() != identity.Kind {
+		t.Fatalf("state entries changed: %v", list)
+	}
+}

@@ -636,3 +636,57 @@ func TestExclusiveSerializesProcesses(t *testing.T) {
 	}
 	checkClaims(t, store, 200)
 }
+
+func entries(t *testing.T, dir string) []string {
+	t.Helper()
+	list, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := []string{}
+	for _, e := range list {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+func TestOpenExistingCreatesNothing(t *testing.T) {
+	store, root := openStore(t)
+	id := createCounter(t, store)
+	if err := os.Remove(filepath.Join(root, lockName)); err != nil {
+		t.Fatal(err)
+	}
+	before := entries(t, root)
+	existing, err := OpenExisting(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c counter
+	if ids, err := existing.List("counters"); err != nil || !reflect.DeepEqual(ids, []string{id}) || existing.Get("counters", id, &c) != nil {
+		t.Fatalf("List = %v %v", ids, err)
+	}
+	if after := entries(t, root); !reflect.DeepEqual(after, before) {
+		t.Fatalf("entries %v, want %v", after, before)
+	}
+	// Writes still work, taking the lock lazily.
+	if err := increment(existing, id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOpenExistingRejectsMissingOrNonDirectoryRoot(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "state")
+	if _, err := OpenExisting(missing); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("OpenExisting missing = %v, want not exist", err)
+	}
+	if _, err := os.Stat(missing); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("OpenExisting created %s", missing)
+	}
+	file := filepath.Join(t.TempDir(), "state")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenExisting(file); !errors.Is(err, syscall.ENOTDIR) {
+		t.Fatalf("OpenExisting file = %v, want ENOTDIR", err)
+	}
+}

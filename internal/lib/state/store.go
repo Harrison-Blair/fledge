@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 )
 
 const (
@@ -57,6 +58,22 @@ func Open(root string) (*Store, error) {
 	}
 	if err := syncDir(root); err != nil {
 		return nil, err
+	}
+	return &Store{root: root, newID: randomID}, nil
+}
+
+// OpenExisting opens root for lookups without creating anything, not even the
+// lock file. It fails with an error matching fs.ErrNotExist when root is
+// missing, or syscall.ENOTDIR when root is not a directory. Update, Exclusive,
+// and Create still work on the returned store; they create the lock file or
+// kind directory as needed, as on a store from Open.
+func OpenExisting(root string) (*Store, error) {
+	info, err := os.Stat(root)
+	if err != nil {
+		return nil, fmt.Errorf("state: open %s: %w", root, err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("state: open %s: %w", root, syscall.ENOTDIR)
 	}
 	return &Store{root: root, newID: randomID}, nil
 }

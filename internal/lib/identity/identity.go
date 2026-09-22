@@ -60,11 +60,11 @@ func Existing(ctx context.Context, cwd string) (*state.Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	dir := filepath.Join(root, ".fledge", "state")
-	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+	s, err := state.OpenExisting(filepath.Join(root, ".fledge", "state"))
+	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
-	return state.Open(dir)
+	return s, err
 }
 
 // Register records details as a new agent. The parent is the caller's live
