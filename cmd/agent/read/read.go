@@ -17,7 +17,9 @@ func New() *cobra.Command {
 
 The snapshot is what the terminal currently holds, not a conversation
 transcript. Reading does not change focus or seen state. Herdr returns at
-most 1000 rows; --lines 0 returns an empty, truncated snapshot.`,
+most 1000 rows; --lines 0 returns an empty, truncated snapshot. Human output
+ends with a newline even when the snapshot does not; --json preserves the
+bytes exactly.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			options.LinesSet = cmd.Flags().Changed("lines")

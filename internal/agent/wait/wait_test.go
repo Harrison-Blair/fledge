@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"math"
 	"reflect"
 	"sync"
 	"testing"
@@ -152,12 +153,27 @@ func TestWaitValidation(t *testing.T) {
 		{Names: []string{"a"}, Until: []string{"settled"}},
 		{Names: []string{"a"}, Timeout: -time.Second},
 		{Names: []string{"a"}, Timeout: time.Microsecond},
+		{Names: []string{"a"}, Timeout: maxTimeout + 1},
+		{Names: []string{"a"}, Timeout: math.MaxInt64},
 	} {
 		_, c := newFake(t, nil)
 		out := Run(context.Background(), c, o)
 		if out.ExitCode() != 2 || out.Status != "rejected" || out.Error.Phase != "validation" || out.Error.Code != "invalid_input" {
 			t.Fatalf("%+v: %+v", o, out)
 		}
+	}
+}
+
+// TestWaitLargestTimeout accepts the largest timeout whose transport margin
+// cannot overflow; the next value is rejected in TestWaitValidation.
+func TestWaitLargestTimeout(t *testing.T) {
+	if maxTimeout != time.Duration(math.MaxInt64)-15*time.Second {
+		t.Fatalf("bound %d", maxTimeout)
+	}
+	f, c := newFake(t, map[string]reply{"a": {status: "idle"}})
+	out := Run(context.Background(), c, Options{Names: []string{"a"}, Timeout: maxTimeout})
+	if out.Error != nil || f.params["a"]["timeout_ms"] != float64(maxTimeout.Milliseconds()) {
+		t.Fatalf("%+v %v", out, f.params)
 	}
 }
 

@@ -204,7 +204,8 @@ reads that pane without focusing it or marking output seen. `--source` is
 `detection`. `--lines N` requests the bottom N rows (0 to 4294967295); Herdr
 returns at most 1000 rows, and `--lines 0` returns an empty, truncated snapshot.
 Text output is a label, `Terminal snapshot of <name or pane> (<source>, <N> rows,
-truncated: yes|no)`, followed by the text. JSON adds `source`, `lines` (rows
+truncated: yes|no)`, followed by the text. Human output ends with a newline even
+when the snapshot does not; `--json` preserves the bytes exactly. JSON adds `source`, `lines` (rows
 returned), `text`, `revision`, and `truncated` to the standard agent fields. A
 snapshot is the terminal's current contents, not a conversation transcript.
 

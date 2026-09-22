@@ -107,10 +107,27 @@ func TestRender(t *testing.T) {
 	var decoded map[string]any
 	json.Unmarshal(b.Bytes(), &decoded)
 	result := decoded["result"].(map[string]any)
+	if result["text"] != "one\ntwo" {
+		t.Fatalf("JSON text not byte-exact: %q", result["text"])
+	}
 	for _, key := range []string{"name", "harness", "agent_status", "workspace_id", "tab_id", "pane_id", "cwd", "source", "lines", "text", "revision", "truncated"} {
 		if _, ok := result[key]; !ok {
 			t.Fatalf("missing %s: %s", key, b.String())
 		}
 	}
 	herdrscript.CheckOutputFailures(t, Render, libagent.Outcome{Operation: "agent.read", Status: "success", Result: named, Effects: []libagent.Effect{}})
+}
+
+// TestReadJSONPreservesSnapshotBytes checks that only human output gains a
+// final newline; JSON keeps a snapshot without one unchanged.
+func TestReadJSONPreservesSnapshotBytes(t *testing.T) {
+	out := Run(context.Background(), fake(t, getCall("worker"), call{Method: "agent.read", Result: readResult("recent", "a\nb", false)}), Options{Name: "worker", Source: "recent"})
+	var b bytes.Buffer
+	if err := out.Write(&b, true, Render); err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct{ Result struct{ Text string } }
+	if err := json.Unmarshal(b.Bytes(), &decoded); err != nil || decoded.Result.Text != "a\nb" {
+		t.Fatalf("%v %q", err, b.String())
+	}
 }

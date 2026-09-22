@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -22,6 +23,10 @@ type Options struct {
 	Timeout             time.Duration
 	All, Any            bool
 }
+
+// maxTimeout is the largest finite timeout whose 15 s transport margin, added
+// by libagent.WaitFromEnvironment, cannot overflow a Duration.
+const maxTimeout = time.Duration(math.MaxInt64) - 15*time.Second
 
 // FanOut reports a multi-target wait: one row per target, in target order.
 // Winner names the first --any match.
@@ -79,6 +84,8 @@ func validate(o Options) ([]string, error) {
 		return nil, libagent.Invalid("waiting on several targets requires --all or --any")
 	case o.Timeout < 0 || (o.Timeout > 0 && o.Timeout < time.Millisecond):
 		return nil, libagent.Invalid("--timeout must be zero (indefinite) or at least 1ms")
+	case o.Timeout > maxTimeout:
+		return nil, libagent.Invalid("--timeout must be at most %s", maxTimeout)
 	}
 	for i, t := range targets {
 		if strings.TrimSpace(t) == "" {
