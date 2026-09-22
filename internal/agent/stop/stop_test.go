@@ -227,13 +227,42 @@ func TestStopEndsAgentRecord(t *testing.T) {
 	}
 }
 
-func TestStopWithoutClosingKeepsRecordLive(t *testing.T) {
+// An agent stopping its own pane is hung up by pane.close before control
+// returns, so the record must already be ended when the pane closes.
+func TestStopEndsRecordBeforeClosingPane(t *testing.T) {
 	live := herdrscript.Info(herdrscript.LiveAgent("idle"))
-	s := fake(t, call{Method: "agent.get", Result: live}, call{Method: "pane.close", Err: &herdr.Error{Code: "transport_error", Message: "lost", Uncertain: true}})
+	var cwd, id string
+	endedAtClose := false
+	s := fake(t, call{Method: "agent.get", Result: live}, call{Method: "pane.close", Result: herdrscript.OK(), Before: func() { endedAtClose = ended(t, cwd, id) }})
 	s.Cwd = identitytest.Repository(t)
-	rec := identitytest.Register(t, s.Cwd, live.Agent)
-	if out := Run(context.Background(), s, Options{Name: "worker"}); out.Status != "unknown" || ended(t, s.Cwd, rec.ID) {
-		t.Fatalf("%+v", out)
+	cwd, id = s.Cwd, identitytest.Register(t, s.Cwd, live.Agent).ID
+	if out := Run(context.Background(), s, Options{Name: "worker"}); out.Status != "success" || !endedAtClose || !ended(t, cwd, id) {
+		t.Fatalf("ended at close %v: %+v", endedAtClose, out)
+	}
+}
+
+// A failed close rolls the ended record back to live, reporting no record
+// effect.
+func TestStopWithoutClosingKeepsRecordLive(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err    error
+		status string
+	}{
+		"known":     {&herdr.Error{Code: "internal_error", Message: "refused"}, "rejected"},
+		"uncertain": {&herdr.Error{Code: "transport_error", Message: "lost", Uncertain: true}, "unknown"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			live := herdrscript.Info(herdrscript.LiveAgent("idle"))
+			var cwd, id string
+			endedAtClose := false
+			s := fake(t, call{Method: "agent.get", Result: live}, call{Method: "pane.close", Err: tc.err, Before: func() { endedAtClose = ended(t, cwd, id) }})
+			s.Cwd = identitytest.Repository(t)
+			cwd, id = s.Cwd, identitytest.Register(t, s.Cwd, live.Agent).ID
+			out := Run(context.Background(), s, Options{Name: "worker"})
+			if out.Status != tc.status || out.Error.Phase != "pane.close" || len(out.Effects) != 0 || !endedAtClose || ended(t, cwd, id) {
+				t.Fatalf("ended at close %v: %+v", endedAtClose, out)
+			}
+		})
 	}
 }
 

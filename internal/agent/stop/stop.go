@@ -10,6 +10,7 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
 )
 
 type Options struct {
@@ -38,6 +39,9 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Fail(libagent.Invalid("agent %s is %s; pass --force to stop it anyway", target, status), "guard", false)
 		return out
 	}
+	// End the record before closing: an agent stopping its own pane is hung up
+	// by pane.close before control returns here.
+	store, ended, endErr := end(ctx, c, a, rec)
 	var closed struct {
 		Type string `json:"type"`
 	}
@@ -46,14 +50,18 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		err = libagent.Protocol("incomplete pane.close result")
 	}
 	if err != nil {
+		if ended != "" {
+			if restoreErr := restore(store, ended); restoreErr != nil {
+				err = fmt.Errorf("%w; agent record %s could not be restored: %v", err, ended, restoreErr)
+			}
+		}
 		out.Fail(err, "pane.close", true)
 		return out
 	}
 	out.Result = Result{AgentRow: libagent.NewAgentRow(a.Pane), Stopped: true}
 	out.Effects = append(out.Effects, libagent.Effect{Action: "closed", Kind: "pane", ID: a.PaneID})
-	ended, err := end(ctx, c, a, rec)
-	if err != nil {
-		out.Fail(err, "state", false)
+	if endErr != nil {
+		out.Fail(endErr, "state", false)
 		return out
 	}
 	if ended != "" {
@@ -62,20 +70,33 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	return out
 }
 
-// end marks the stopped agent's live record ended and returns its id, or ""
-// when the agent has no record. Like agent get, it treats an unavailable
-// store as holding no record, so stop works outside a repository.
-func end(ctx context.Context, c libagent.Client, a herdr.AgentDetails, rec *identity.Record) (string, error) {
+// end marks the agent's live record ended and returns its store and id, or ""
+// when the agent has no record. Like agent get, it treats an unavailable store
+// as holding no record, so stop works outside a repository.
+func end(ctx context.Context, c libagent.Client, a herdr.AgentDetails, rec *identity.Record) (*state.Store, string, error) {
 	s, err := identity.Existing(ctx, c.Cwd)
 	if err != nil || s == nil {
-		return "", nil
+		return nil, "", nil
 	}
 	if rec == nil {
 		if rec, err = identity.Match(s, a); err != nil || rec == nil {
-			return "", err
+			return nil, "", err
 		}
 	}
-	return rec.ID, identity.End(s, rec.ID)
+	if err := identity.End(s, rec.ID); err != nil {
+		return nil, "", err
+	}
+	return s, rec.ID, nil
+}
+
+// restore makes record id live again after its pane failed to close. end only
+// ends a live record, so clearing ended_at returns it to its prior state.
+func restore(s *state.Store, id string) error {
+	var rec identity.Record
+	return s.Update(identity.Kind, id, &rec, func() error {
+		rec.EndedAt = nil
+		return nil
+	})
 }
 
 // Render writes a successful stop outcome.

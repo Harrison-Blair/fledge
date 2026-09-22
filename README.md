@@ -303,8 +303,9 @@ cannot prevent its occupant changing before Herdr receives the keys.
 of `--name`/`--pane`, resolves the agent first, and never closes a pane that does
 not host a known agent. Agents whose status is `working`, `blocked`, or `unknown`
 are refused with exit status 2 unless `--force` is passed; `idle` and `done` agents
-stop without it. Once the pane closes, stop sets `ended_at` on the agent's live
-record, if it has one.
+stop without it. Stop sets `ended_at` on the agent's live record, if it has one,
+just before closing the pane, so an agent can stop its own pane, and clears it
+again if the pane fails to close.
 
 `fledge agent models` lists coding-agent models discovered locally and does not
 need a Herdr session. It reads the `pi`, `codex`, and `claude` caches under the
