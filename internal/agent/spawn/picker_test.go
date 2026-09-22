@@ -224,7 +224,7 @@ func TestPickerCancelDuringBranchCheck(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
-		for {
+		for ctx.Err() == nil {
 			if _, err := os.Stat(marker); err == nil {
 				cancel()
 				return
