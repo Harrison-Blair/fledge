@@ -160,3 +160,13 @@ fledge agent stop --name reviewer
 ```
 
 Agents that are `working`, `blocked`, or `unknown` require `--force`. When acting as an orchestrator, stop only the workers you spawned, and only after their work and any verification or follow-up have been read.
+
+When acting as an orchestrator, run a feature's verifier in that feature's managed
+worktree (`fledge agent spawn --worktree <feature checkout path>`), not in the primary
+checkout, a separate copy, or a temporary directory. The implementer and verifier take
+turns on the shared checkout: the implementer commits and leaves a clean tree before
+verification starts and makes no edits while it runs; the verifier undoes every
+experimental change, such as mutation tests, and confirms `git status` is clean before
+reporting; repairs go back to the implementer through the orchestrator. Verifiers run
+`fledge task verify` only when no findings remain open, because a verified task cannot
+be reopened.
