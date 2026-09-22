@@ -88,27 +88,60 @@ responsibility needs a narrow API. Packages with multiple non-test files have a
 
 ### Dogfooding
 
-When working in this repository, use Fledge itself for agent coordination: `fledge agent spawn` to launch agents, `fledge agent list` to discover them, `fledge agent get` to inspect one, and `fledge agent message` to delegate tasks and exchange messages. Treat this as dogfooding: exercise the project CLI in real work and surface bugs or missing capabilities instead of silently bypassing it with another coordination tool.
+When working in this repository, use Fledge for every capability it offers, including
+over the harness's own built-in tools. Treat this as dogfooding: exercise the project
+CLI in real work and surface bugs or missing capabilities instead of silently bypassing
+it with another tool.
+
+| Need | Fledge command | Instead of |
+| --- | --- | --- |
+| Launch a sub-agent | `fledge agent spawn` | Claude's Agent tool, Codex subagents |
+| Track and hand off work between agents | `fledge task create`/`assign`/`complete`/`verify`/`list`/`get` | harness todo or task lists |
+| Create, list, or remove a checkout | `fledge worktree create`/`list`/`remove` | `git worktree`, Claude `isolation: "worktree"` |
+| Discover, inspect, read, wait on, interrupt, or stop agents | `fledge agent list`/`get`/`read`/`wait`/`pause`/`stop` | raw `herdr` CLI, harness TaskStop |
+| Message another agent | `fledge agent message` | raw pane input |
+| Register an already-running agent | `fledge agent adopt` | none |
+| Check the environment | `fledge doctor` | ad hoc probes |
+| Discover models | `fledge agent models` | reading harness config |
+| Update the binary | `fledge update` | manual downloads |
+
+Harness built-ins remain allowed only where Fledge has no equivalent yet, such as
+quick read-only lookups inside a single agent, or where Fledge fails.
 
 Maintain `reference/dogfood/` as the record of dogfooding information for this repository.
 Whenever an agent or one of its subagents hits a Fledge bug, missing capability, or
-workaround, append an entry to `reference/dogfood/friction.md` using its Issue / Summary /
-Reproduction steps format.
+workaround, including any fallback to a harness built-in caused by one, append an entry
+to `reference/dogfood/friction.md` using its Issue / Summary / Reproduction steps format.
 
-Before launching agents, check `fledge agent --help` for the commands needed for
-both the task and cleanup. If the installed binary lacks commands present in this
-checkout, build the current source into a temporary directory and use that binary
-consistently for the task, including cleanup.
+Before using Fledge, check `--help` for the command groups needed for both the task and
+cleanup (`fledge agent`, `task`, `worktree`). If the installed binary lacks commands
+present in this checkout, build the current source into a temporary directory and use
+that binary consistently for the task, including cleanup.
 
-Fledge's `agent spawn`, `get`, `list`, `message`, and `stop` commands connect to Herdr's
-local Unix socket. In Codex's restricted sandbox, request
-`sandbox_permissions: "require_escalated"` on the first invocation of these
-commands and of Herdr session-control commands, with a task-specific justification
-and a narrow command prefix. Do not first run a socket command in the sandbox to
-rediscover the known `connect: operation not permitted` failure. Use the normal
-approval mechanism; these instructions do not override an approval denial or
-authorize unrelated session changes. Help, version, and `agent models` do not
-require Herdr socket access.
+Known workarounds: spawn prompts and messages always start with a sender header, so ask
+a spawned agent in plain words to invoke a skill (a leading slash command will not run);
+pass absolute paths to `--cwd`; see `reference/dogfood/friction.md` for current issues.
+
+Agents in this repository usually run inside a managed Fledge session: a Herdr pane,
+often spawned by an orchestrator and given a Fledge agent record id. Expect messages
+from the orchestrator and other agents. Each starts with a one-line header,
+`ᛉ fledge message from <name> (<pane>) · id m-<hex> · reply: fledge agent message --name <name>`;
+unnamed senders appear as `unnamed agent (<pane>)` with no reply command. A
+`fledge task assign` brief adds a line naming the task, its title, and
+`complete with: fledge task complete --id <task> --summary "..."`, and a task's creator
+receives a `task completed:` notification naming `fledge task verify`. Treat these as
+coordination input: reply with the header's reply command (or `--pane <pane>` when the
+sender is unnamed), and finish assigned tasks with `fledge task complete`.
+
+Fledge's `agent` commands other than `models`, `task create`/`assign`/`complete`/`verify`,
+`worktree` commands, and `doctor` connect to Herdr's local Unix socket. In Codex's
+restricted sandbox, request `sandbox_permissions: "require_escalated"` on the first
+invocation of these commands and of Herdr session-control commands, with a
+task-specific justification and a narrow command prefix. Do not first run a socket
+command in the sandbox to rediscover the known `connect: operation not permitted`
+failure. Use the normal approval mechanism; these instructions do not override an
+approval denial or authorize unrelated session changes. Help, version, `agent models`,
+`task get`/`list`/`cancel`, and `update` do not require Herdr socket access.
 
 Name the tab an agent runs in after the agent's own name or role so panes are identifiable at a glance:
 
