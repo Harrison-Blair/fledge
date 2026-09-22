@@ -96,11 +96,11 @@ it with another tool.
 | Need | Fledge command | Instead of |
 | --- | --- | --- |
 | Launch a sub-agent | `fledge agent spawn` | Claude's Agent tool, Codex subagents |
-| Track and hand off work between agents | `fledge task create`/`assign`/`complete`/`verify`/`list`/`get` | harness todo or task lists |
+| Track and hand off work between agents | `fledge task create`/`assign`/`complete`/`verify`/`cancel`/`list`/`get` | harness todo or task lists |
 | Create, list, or remove a checkout | `fledge worktree create`/`list`/`remove` | `git worktree`, Claude `isolation: "worktree"` |
 | Discover, inspect, read, wait on, interrupt, or stop agents | `fledge agent list`/`get`/`read`/`wait`/`pause`/`stop` | raw `herdr` CLI, harness TaskStop |
-| Message another agent | `fledge agent message` | raw pane input |
-| Register an already-running agent | `fledge agent adopt` | none |
+| Message another agent | `fledge agent message` | Claude's SendMessage, raw `herdr` pane input |
+| Register an already-running agent | `fledge agent adopt` | — |
 | Check the environment | `fledge doctor` | ad hoc probes |
 | Discover models | `fledge agent models` | reading harness config |
 | Update the binary | `fledge update` | manual downloads |
@@ -126,22 +126,25 @@ Agents in this repository usually run inside a managed Fledge session: a Herdr p
 often spawned by an orchestrator and given a Fledge agent record id. Expect messages
 from the orchestrator and other agents. Each starts with a one-line header,
 `ᛉ fledge message from <name> (<pane>) · id m-<hex> · reply: fledge agent message --name <name>`;
-unnamed senders appear as `unnamed agent (<pane>)` with no reply command. A
-`fledge task assign` brief adds a line naming the task, its title, and
-`complete with: fledge task complete --id <task> --summary "..."`, and a task's creator
-receives a `task completed:` notification naming `fledge task verify`. Treat these as
-coordination input: reply with the header's reply command (or `--pane <pane>` when the
-sender is unnamed), and finish assigned tasks with `fledge task complete`.
+unnamed senders appear as `unnamed agent (<pane>)` and non-agent panes as `pane <pane>`,
+with no reply command. A `fledge task assign` brief adds a line naming the task, its
+title, and `complete with: fledge task complete --id <task> --summary "..."`, and a
+task's creator, when it is another registered agent, receives a `task completed:`
+notification naming `fledge task verify`. Treat these as coordination input: reply with
+the header's reply command (or `--pane <pane>` when the header has no reply command),
+and finish assigned tasks with `fledge task complete`.
 
-Fledge's `agent` commands other than `models`, `task create`/`assign`/`complete`/`verify`,
-`worktree` commands, and `doctor` connect to Herdr's local Unix socket. In Codex's
-restricted sandbox, request `sandbox_permissions: "require_escalated"` on the first
-invocation of these commands and of Herdr session-control commands, with a
-task-specific justification and a narrow command prefix. Do not first run a socket
-command in the sandbox to rediscover the known `connect: operation not permitted`
-failure. Use the normal approval mechanism; these instructions do not override an
-approval denial or authorize unrelated session changes. Help, version, `agent models`,
-`task get`/`list`/`cancel`, and `update` do not require Herdr socket access.
+Every Fledge `agent` command except `models`, plus
+`task create`/`assign`/`complete`/`verify`, the `worktree` commands, and `doctor`,
+connect to Herdr's local Unix socket (`task create`/`verify` only when run inside a
+Herdr pane). In Codex's restricted sandbox, request
+`sandbox_permissions: "require_escalated"` on the first invocation of these commands and
+of Herdr session-control commands, with a task-specific justification and a narrow
+command prefix. Do not first run a socket command in the sandbox to rediscover the known
+`connect: operation not permitted` failure. Use the normal approval mechanism; these
+instructions do not override an approval denial or authorize unrelated session changes.
+Help, version, `agent models`, `task get`/`list`/`cancel`, and `update` do not require
+Herdr socket access.
 
 Name the tab an agent runs in after the agent's own name or role so panes are identifiable at a glance:
 
