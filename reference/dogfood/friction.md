@@ -345,3 +345,40 @@ not establish that pause caused or fixed the initial delivery issue.
 2. Compare the delivery acknowledgement with the terminal; in this trial no prompt or session appeared.
 3. Later submit another message and inspect the terminal; in this trial that message worked.
 4. Treat the timing and cause as unconfirmed until independently reproduced.
+
+---
+
+**Issue:** `spawn --file` on the pi harness fails the prompt with `agent_not_ready` after reporting the agent idle
+
+**Summary:** On 2026-09-21, `fledge agent spawn --name plan-reviewer --harness pi
+--model openai-codex/gpt-6-astra --tab plan-reviewer --file brief.md --timeout 90s`
+returned status `partial` with `agent_status` `idle`, effects tab/pane created and
+agent started, and error code `agent_not_ready`, message "agent plan-reviewer is
+not an active named agent", phase `agent.prompt`. An immediate
+`fledge agent message --name plan-reviewer --file brief.md` succeeded. Observed
+once. Fledge built from `dev` at `dccfdf1`, Herdr 0.9.1. This is a recurrence of
+the entry marked resolved 2026-09-19 ("First message after spawn is rejected as
+not ready"), now on the pi harness.
+
+**Reproduction steps:**
+1. Spawn a pi agent with `--file`, for example `fledge agent spawn --name plan-reviewer --harness pi --model openai-codex/gpt-6-astra --tab plan-reviewer --file brief.md --timeout 90s`.
+2. Observe the `partial` outcome with `agent_status` `idle` and `agent_not_ready` in phase `agent.prompt`.
+3. Immediately run `fledge agent message --name plan-reviewer --file brief.md` and observe success.
+
+---
+
+**Issue:** Spawn from a linked worktree sends the linked checkout as the `worktree.create` source
+
+**Summary:** `internal/agent/spawn/worktree.go` resolves the primary root from
+`worktree.list` for the destination path but keeps the caller's linked `cwd` as
+the `cwd` param of the following `worktree.create`/`worktree.open` call.
+`reference/herdr/api/worktree.md` states those methods reject a linked source
+with `linked_worktree_source`. The unit test
+`TestNewWorktreeFromLinkedCheckoutUsesPrimaryRoot` scripts a successful response
+for that request, so it does not catch it. Suspected from code and docs on
+2026-09-21 at `dccfdf1`; not reproduced live. A fix is planned in the worktree
+library extraction ([coordination plan](../plan/coordination-plan.md)).
+
+**Reproduction steps:**
+1. From inside a linked worktree, run `fledge agent spawn --worktree new ...` without `--workspace`.
+2. Observe the `cwd` param of the `worktree.create` call: it is the linked checkout, not the primary root.
