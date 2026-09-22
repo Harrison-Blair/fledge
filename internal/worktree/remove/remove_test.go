@@ -439,3 +439,34 @@ func TestRecordOfDifferentHarnessDoesNotBlockRemoval(t *testing.T) {
 		t.Fatalf("%+v", out)
 	}
 }
+
+// Removal inspects only its target: no git command runs in, or names, another
+// linked checkout of the repository.
+func TestInspectsOnlyTargetCheckout(t *testing.T) {
+	r := newRepo(t)
+	other := filepath.Join(r.root, ".fledge", "worktrees", "other")
+	git(t, r.root, "worktree", "add", "-q", "-b", "other", other)
+	l := r.listing(false)
+	l.Worktrees = append(l.Worktrees, herdr.Worktree{Path: other, Branch: s("other")})
+	real, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	log := filepath.Join(t.TempDir(), "git.log")
+	script := "#!/bin/sh\necho \"$*\" >> \"" + log + "\"\nexec \"" + real + "\" \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out := Run(context.Background(), herdrscript.Client(t, call{Method: "worktree.list", Result: l}, agentList(), agentList()), Options{Branch: "topic", Cwd: r.root})
+	if out.Status != "success" {
+		t.Fatalf("%+v", out)
+	}
+	b, _ := os.ReadFile(log)
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		if strings.Contains(line, other) || strings.Contains(line, "refs/heads/other") || (strings.Contains(line, " status ") && !strings.Contains(line, r.topic)) {
+			t.Errorf("inspected another checkout: git %s", line)
+		}
+	}
+}
