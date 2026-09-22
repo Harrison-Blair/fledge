@@ -515,3 +515,25 @@ func TestEndKeepsOriginalTime(t *testing.T) {
 		t.Fatalf("%+v %v", stored, err)
 	}
 }
+
+// A record that cannot be ended reports the store failure, not staleness.
+func TestResolveEndFailureIsReported(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t, call{Method: "agent.get", Err: notFound()}, call{Method: "agent.list", Result: listed()}, call{Method: "pane.list", Result: panes()})
+	rec := registered(t, c, details("w1:p3", "term_a"))
+	s := store(t, c)
+	agents := filepath.Join(c.Cwd, ".fledge", "state", Kind)
+	if err := os.Chmod(agents, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(agents, 0o700) })
+	if _, _, err := Resolve(context.Background(), s, c, rec.ID); err == nil || code(err) == "agent_identity_stale" {
+		t.Fatalf("%v", err)
+	}
+	if live, err := Live(s, "term_a"); err != nil || live == nil {
+		t.Fatalf("%+v %v", live, err)
+	}
+}

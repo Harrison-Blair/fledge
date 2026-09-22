@@ -255,6 +255,9 @@ func TestStopRecordFailureAfterCloseIsPartial(t *testing.T) {
 		// End cannot write into a read-only record directory.
 		"end by id": {call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live}, func(id string) Options { return Options{ID: id} },
 			func(t *testing.T, agents string) {
+				if os.Geteuid() == 0 {
+					t.Skip("root ignores directory permissions")
+				}
 				if err := os.Chmod(agents, 0o500); err != nil {
 					t.Fatal(err)
 				}
