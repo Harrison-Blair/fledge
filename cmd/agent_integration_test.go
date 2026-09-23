@@ -195,6 +195,33 @@ func TestSpawnNoWaitFlagSkipsAgentWaitOnSocket(t *testing.T) {
 	}
 }
 
+// TestSpawnPromptWaitsForLaunchReadiness serves a lifecycle-idle wait whose
+// launch is still pending, then readiness polls by pane: the first prompt is
+// sent exactly once, only after the launch clears.
+func TestSpawnPromptWaitsForLaunchReadiness(t *testing.T) {
+	t.Setenv("HERDR_PANE_ID", "")
+	l := newSocket(t)
+	pending := readyAs("claude").(map[string]any)
+	a := pending["agent"].(map[string]any)
+	delete(a, "interactive_ready")
+	a["launch_pending"] = true
+	done := serveRPCs(l, snapshotResult(), startedResult("claude"), pending, pending, readyAs("claude"), promptedResult())
+	var out bytes.Buffer
+	err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "w1:p1", "--prompt", "review this", "--json"}, &out)
+	if err != nil {
+		t.Fatal(err, out.String())
+	}
+	calls := waitCalls(t, l, done, 6)
+	for _, i := range []int{3, 4} {
+		if calls[i].Method != "agent.get" || paramsField(t, calls[i], "target") != "w1:p1" {
+			t.Fatalf("%+v", calls)
+		}
+	}
+	if calls[5].Method != "agent.prompt" || !headered(t, calls[5], "review this") {
+		t.Fatalf("%+v", calls)
+	}
+}
+
 // TestSpawnShortTimeoutKeepsStartReservation proves a short --timeout still
 // reserves Herdr's 30s startup, so the name outlives a slow launch.
 func TestSpawnShortTimeoutKeepsStartReservation(t *testing.T) {

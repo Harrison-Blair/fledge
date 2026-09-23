@@ -189,11 +189,16 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 		out.Fail(err, "agent.wait", true)
 		return out
 	}
-	setPlacement(result, w.Agent.Pane)
-	result.DetectedHarness = w.Agent.Agent
-	result.AgentStatus = libagent.Pointer(w.Agent.AgentStatus)
-	s.register(ctx, withHarness(w.Agent, o.Harness), &out)
-	if w.Agent.AgentStatus == "blocked" {
+	a, err := s.ready(ctx, o, r.Agent, w.Agent, started.Add(o.Timeout))
+	if err != nil {
+		out.Fail(libagent.AtPhase("agent.wait", err), "agent.wait", true)
+		return out
+	}
+	setPlacement(result, a.Pane)
+	result.DetectedHarness = a.Agent
+	result.AgentStatus = libagent.Pointer(a.AgentStatus)
+	s.register(ctx, withHarness(a, o.Harness), &out)
+	if a.AgentStatus == "blocked" {
 		out.Fail(&herdr.Error{Code: "agent_blocked", Message: fmt.Sprintf("agent %s is waiting on a startup prompt", o.Name)}, "agent.wait", true)
 		return out
 	}
