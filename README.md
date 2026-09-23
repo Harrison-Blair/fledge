@@ -214,6 +214,19 @@ and rejects empty or invalid UTF-8 content. Success acknowledges **submission**,
 without waiting for the agent to begin or finish. Blocked agents require the
 user to handle their approval dialog.
 
+`--confirm` also waits, up to `--timeout` (default 10s; valid only with
+`--confirm`), for Herdr to observe the agent become active after submission. A
+reply of `working`, or a quickly finished `done`/`idle`, reports
+`confirmed: true`. An agent already working when messaged still receives the
+message, but reports `already_working: true` and `confirmed: false`: Herdr
+tracks lifecycle state, not individual prompts, so this prompt's start is not
+confirmed. An agent that turns `blocked` after submission, or Herdr's
+`agent_prompt_stalled` (no activity seen within five seconds), is `partial`
+with a `submitted` effect; a wait `timeout` or lost acknowledgement is
+`unknown`. None of these is retried; the message was, or may have been,
+delivered, so read the pane instead of resending. Refusals made before input
+(`agent_blocked`, `agent_not_ready`) stay `rejected`.
+
 Every prompt Fledge delivers, from `message` or from spawn's `--prompt`/`--file`,
 starts with one header line naming the sender and a correlation ID, e.g.
 `ᛉ fledge message from reviewer (w1:p2) · id m-0a1b2c · reply: fledge agent message --name reviewer`.
