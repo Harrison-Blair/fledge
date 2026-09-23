@@ -401,6 +401,12 @@ intermittent. This is a recurrence of
 the entry marked resolved 2026-09-19 ("First message after spawn is rejected as
 not ready"), now on the pi harness.
 
+Observed again 2026-09-23 with a role-only first prompt: `agent spawn --profile
+verifier` (pi, openai-codex/gpt-6-astra) built from feat/agent-profiles returned
+partial `agent_not_ready` at agent.prompt, so the profile's role text was not
+delivered. The orchestrator resent it with `agent message`. Profiles that
+resolve to pi are therefore affected by this entry too.
+
 **Reproduction steps:**
 1. Spawn a pi agent with `--file`, for example `fledge agent spawn --name plan-reviewer --harness pi --model openai-codex/gpt-6-astra --tab plan-reviewer --file brief.md --timeout 90s`.
 2. Observe the `partial` outcome with `agent_status` `idle` and `agent_not_ready` in phase `agent.prompt`.
@@ -775,3 +781,24 @@ the same names was rejected with "agent name ... is already in use
 1. Run `fledge agent spawn --harness claude --worktree new --branch <b> --base dev ...`.
 2. Interrupt the fledge process (SIGINT) after the agent starts but before spawn prints its result.
 3. Run `fledge agent list` and look for the missing ID.
+
+---
+
+**Issue:** `worktree remove` reports branches merged into dev as unmerged.
+
+**Summary:** on 2026-09-23 the orchestrator removed three wave-1 checkouts whose
+branches were already merged into `dev` (confirmed with
+`git merge-base --is-ancestor <branch> dev`). `fledge worktree remove --branch
+<b>` refused each one with "is not known to be clean and merged (merged: no)"
+because its merged check uses fledge.baseBranch, then origin/HEAD, then main,
+and this repository integrates into dev before main. The workaround was --force
+after checking ancestry by hand. `fledge agent cleanup` (feature #12) avoids
+this for checkouts its workers created, by using the base recorded at spawn, but
+plain `worktree remove` and `worktree list`'s MERGED column still use the
+repository-wide policy. Setting `git config fledge.baseBranch dev` would be the
+manual fix.
+
+**Reproduction steps:**
+1. Merge a feature branch into dev only.
+2. Run `fledge worktree list` and see MERGED no.
+3. Run `fledge worktree remove --branch <b>` and see the refusal.
