@@ -351,3 +351,17 @@ func TestAssignedParentOwnerNeedsForce(t *testing.T) {
 		t.Fatalf("%+v %+v", out.Error, r)
 	}
 }
+
+// A cancelled parent stays final even when its subtasks would let a created
+// or assigned parent be verified.
+func TestCancelledParentWithVerifiedSubtaskIsRefused(t *testing.T) {
+	repo, id, _ := parent(t, task.Cancelled, task.Verified)
+	before := tasktest.Load(t, repo, id)
+	for _, force := range []bool{false, true} {
+		out := Run(context.Background(), tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p1", boss)), Options{ID: id, Force: force}, strings.NewReader(""))
+		r := tasktest.Load(t, repo, id)
+		if out.Error == nil || out.Error.Code != "task_invalid_state" || r.Status != task.Cancelled || !reflect.DeepEqual(r, before) {
+			t.Fatalf("force=%v: %+v %+v", force, out.Error, r)
+		}
+	}
+}
