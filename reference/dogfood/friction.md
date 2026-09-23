@@ -407,6 +407,14 @@ partial `agent_not_ready` at agent.prompt, so the profile's role text was not
 delivered. The orchestrator resent it with `agent message`. Profiles that
 resolve to pi are therefore affected by this entry too.
 
+Observed again 2026-09-23 at `dev` `b833d6f`: `agent spawn --profile planner
+--name backlog-astra --timeout 90s` (no `--file`) returned partial
+`agent_not_ready` at agent.prompt, and an `agent message --file` sent right
+after it was also rejected with `agent_not_ready`, while `agent get` already
+showed the agent named and `idle` with `Interactive ready: true`. A second
+`agent message` a few seconds later was delivered. So the immediate resend is
+not a reliable workaround either.
+
 **Reproduction steps:**
 1. Spawn a pi agent with `--file`, for example `fledge agent spawn --name plan-reviewer --harness pi --model openai-codex/gpt-6-astra --tab plan-reviewer --file brief.md --timeout 90s`.
 2. Observe the `partial` outcome with `agent_status` `idle` and `agent_not_ready` in phase `agent.prompt`.
