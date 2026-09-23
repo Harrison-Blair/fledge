@@ -3,6 +3,7 @@ package profiles
 import (
 	"bytes"
 	"fmt"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -25,6 +26,9 @@ type file struct {
 	RoleAppend    *string   `toml:"role_append"`
 }
 
+// keys are the exact key names a profile file may use.
+var keys = []string{"schema_version", "extends", "harness", "model", "args", "role", "role_append"}
+
 // decode strictly parses and validates one profile file.
 func decode(data []byte) (file, error) {
 	var f file
@@ -32,8 +36,11 @@ func decode(data []byte) (file, error) {
 	if err != nil {
 		return f, err
 	}
-	if keys := md.Undecoded(); len(keys) > 0 {
-		return f, fmt.Errorf("unknown key %q", keys[0].String())
+	// The decoder matches keys case-insensitively, so check exact names.
+	for _, key := range md.Keys() {
+		if !slices.Contains(keys, key.String()) {
+			return f, fmt.Errorf("unknown key %q", key.String())
+		}
 	}
 	if f.SchemaVersion == nil {
 		return f, fmt.Errorf("schema_version is required")
