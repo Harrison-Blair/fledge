@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/gitstatus"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/worktree"
 )
 
@@ -75,7 +77,13 @@ func (s *spawner) worktreePlacement(ctx context.Context, o Options, snap *herdr.
 	}
 	out.Result.(*Result).WorktreePath = &path
 	var r herdr.CreatedResult
+	var base *string
 	if method == "worktree.create" {
+		// Herdr creates from the primary checkout's HEAD when no base is given.
+		base = libagent.Pointer(o.Base)
+		if base == nil {
+			base = gitstatus.Branch(ctx, listing.Source.RepoRoot)
+		}
 		r, err = worktree.Create(ctx, s, src, listing, branch, o.Base, path)
 	} else {
 		r, err = worktree.Open(ctx, s, src, listing, path)
@@ -87,10 +95,12 @@ func (s *spawner) worktreePlacement(ctx context.Context, o Options, snap *herdr.
 	path = r.Worktree.Path
 	out.Result.(*Result).WorktreePath = &path
 	o.Cwd = path
+	s.checkout = &identity.Checkout{Path: path}
 	alreadyOpen := r.AlreadyOpen != nil && *r.AlreadyOpen
 	if !alreadyOpen {
 		if method == "worktree.create" {
 			out.Effects = append(out.Effects, libagent.Effect{Action: "created", Kind: "worktree", Path: path})
+			s.checkout.Created, s.checkout.Base = true, base
 		}
 		recordCreated(out, r, true)
 		return s.initialTab(ctx, o, r, out)

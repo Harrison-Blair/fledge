@@ -151,6 +151,22 @@ func (s *Store) List(kind string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return listDir(dir)
+}
+
+// ListArchived returns the ids of every archived record of kind in sorted
+// order, for readers that need ended records too. A record whose archiving
+// was interrupted can appear in both List and ListArchived.
+func (s *Store) ListArchived(kind string) ([]string, error) {
+	dir, err := s.kindDir(kind)
+	if err != nil {
+		return nil, err
+	}
+	return listDir(filepath.Join(dir, archiveDir))
+}
+
+// listDir returns the sorted record ids in dir, or none when dir is missing.
+func listDir(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return []string{}, nil

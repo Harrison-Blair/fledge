@@ -74,7 +74,8 @@ func TestRegisterRecordsAgentWithoutParent(t *testing.T) {
 	s := store(t, c)
 	tree := "/repo/.fledge/worktrees/w"
 	before := time.Now().Add(-time.Second)
-	rec, err := Register(context.Background(), s, c, details("w1:p3", "term_a"), "spawn", &tree)
+	base := "dev"
+	rec, err := Register(context.Background(), s, c, details("w1:p3", "term_a"), "spawn", &Checkout{Path: tree, Created: true, Base: &base})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +89,7 @@ func TestRegisterRecordsAgentWithoutParent(t *testing.T) {
 	}
 	if stored.ID != rec.ID || *stored.Name != "worker" || stored.Pane != "w1:p3" || stored.WorkspaceID != "w1" || *stored.Harness != "claude" ||
 		*stored.Session != "dev" || stored.TerminalID != "term_a" || stored.Parent != nil || stored.RegisteredBy != "spawn" ||
-		*stored.WorktreePath != tree || stored.EndedAt != nil {
+		*stored.WorktreePath != tree || !stored.WorktreeCreated || *stored.WorktreeBase != base || stored.EndedAt != nil {
 		t.Fatalf("%+v", stored)
 	}
 }
@@ -938,7 +939,7 @@ func TestRenameUpdatesNameAndLocationKeepingRecord(t *testing.T) {
 			d.Name = stored
 			tree := "/repo/.fledge/worktrees/w"
 			c.CallerPane = ""
-			rec, err := Register(context.Background(), store(t, c), c, d, "spawn", &tree)
+			rec, err := Register(context.Background(), store(t, c), c, d, "spawn", &Checkout{Path: tree})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1002,5 +1003,48 @@ func TestRegisteredFindsLiveRecordOfSameHarness(t *testing.T) {
 	want := registered(t, c, details("w1:p3", "term_a"))
 	if rec, err := Registered(s, moved("w2:p1", "w2", "term_a")); err != nil || rec == nil || !reflect.DeepEqual(*rec, want) {
 		t.Fatalf("%+v %v", rec, err)
+	}
+}
+
+// Children reads ended records from the archive as well as live ones, so a
+// caller can still find what an agent it already stopped left behind.
+func TestChildrenIncludesEndedRecordsOfOneParent(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t)
+	c.CallerPane = ""
+	s := store(t, c)
+	register := func(terminal string, parent *string) Record {
+		t.Helper()
+		rec, err := Register(context.Background(), s, c, details("w1:"+terminal, terminal), "spawn", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if parent != nil {
+			if err := s.Update(Kind, rec.ID, &rec, func() error { rec.Parent = parent; return nil }); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return rec
+	}
+	parent := register("term_parent", nil)
+	live, ended := register("term_live", &parent.ID), register("term_ended", &parent.ID)
+	register("term_grandchild", &live.ID)
+	register("term_other", nil)
+	if err := End(s, ended.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Children(s, parent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{}
+	for _, r := range got {
+		ids[r.ID] = r.EndedAt != nil
+	}
+	if len(got) != 2 || ids[live.ID] || !ids[ended.ID] {
+		t.Fatalf("Children = %+v; want live %s and ended %s", got, live.ID, ended.ID)
+	}
+	if got, err := Children(nil, parent.ID); err != nil || len(got) != 0 {
+		t.Fatalf("Children of a nil store = %v, %v", got, err)
 	}
 }

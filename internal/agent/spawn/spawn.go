@@ -10,6 +10,7 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 )
 
 type spawner struct {
@@ -20,6 +21,8 @@ type spawner struct {
 	Now func() time.Time
 	// NewID generates the first prompt's message ID; nil uses libagent.NewMessageID.
 	NewID func() string
+	// checkout is the placement's checkout, recorded on the agent's record.
+	checkout *identity.Checkout
 }
 
 func (s *spawner) now() time.Time {

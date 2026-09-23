@@ -19,9 +19,11 @@ import (
 
 // Options names the checkout by exactly one of Path or Branch. Force permits
 // removing dirty or unmerged checkouts; it never overrides the live-agent guard.
+// Base, when set, is the ref the merged check uses instead of the repository
+// integration branch, as for a checkout created from that ref.
 type Options struct {
-	Path, Branch, Cwd string
-	Force             bool
+	Path, Branch, Cwd, Base string
+	Force                   bool
 }
 type Result struct {
 	Path              string  `json:"path"`
@@ -55,7 +57,10 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		return out
 	}
 	if !o.Force {
-		target, targetErr := gitstatus.DefaultBranch(ctx, listing.Root)
+		target, targetErr := o.Base, error(nil)
+		if target == "" {
+			target, targetErr = gitstatus.DefaultBranch(ctx, listing.Root)
+		}
 		dirty, merged := worktree.State(ctx, listing.Root, target, row)
 		var reasons []string
 		if dirty != "no" {
@@ -152,34 +157,10 @@ func checkAgents(ctx context.Context, c libagent.Client, repo string, row herdr.
 	if err != nil {
 		return fmt.Errorf("read agent records: %w; repair or remove the bad record under .fledge/state", err)
 	}
-	for _, a := range agents {
-		var where string
-		rec, registered := identity.Attributed(records, a)
-		switch {
-		case row.OpenWorkspaceID != nil && a.WorkspaceID == *row.OpenWorkspaceID:
-			where = "is in workspace " + a.WorkspaceID
-		case a.Cwd != nil && inside(row.Path, worktree.Canonical(*a.Cwd)):
-			where = "is working in " + *a.Cwd
-		case registered && rec.WorktreePath != nil && inside(row.Path, worktree.Canonical(*rec.WorktreePath)):
-			where = "is registered to " + row.Path
-		default:
-			continue
-		}
-		who := a.PaneID
-		if a.Name != nil && *a.Name != "" {
-			who = *a.Name + " (" + a.PaneID + ")"
-		} else if registered && rec.Name != nil {
-			who = *rec.Name + " (" + a.PaneID + ")"
-		}
-		return libagent.Invalid("live agent %s %s; stop it first (--force does not override this)", who, where)
+	if user := worktree.User(agents, records, row); user != "" {
+		return libagent.Invalid("%s; stop it first (--force does not override this)", user)
 	}
 	return nil
-}
-
-// inside reports whether p is dir or below it.
-func inside(dir, p string) bool {
-	rel, err := filepath.Rel(dir, p)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // Render writes a successful remove outcome.

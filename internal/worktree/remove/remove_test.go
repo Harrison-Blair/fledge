@@ -561,3 +561,35 @@ func TestInspectsOnlyTargetCheckout(t *testing.T) {
 		}
 	}
 }
+
+// Base replaces the integration branch in the merged check: a checkout merged
+// into its base is removed even when the integration branch lacks it, and one
+// merged only into the integration branch is kept.
+func TestBaseReplacesIntegrationBranchForMergedCheck(t *testing.T) {
+	for _, tc := range []struct {
+		name, mergedInto string
+		removed          bool
+	}{{"merged into base", "dev", true}, {"merged into main only", "main", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRepo(t)
+			git(t, r.root, "branch", "dev")
+			git(t, r.topic, "commit", "-qm", "work", "--allow-empty")
+			if tc.mergedInto == "main" {
+				git(t, r.root, "reset", "-q", "--hard", "topic")
+			} else {
+				git(t, r.root, "branch", "-f", "dev", "topic")
+			}
+			calls := []call{{Method: "worktree.list", Result: r.listing(false)}, agentList()}
+			if tc.removed {
+				calls = append(calls, agentList())
+			}
+			out := Run(context.Background(), herdrscript.Client(t, calls...), Options{Path: r.topic, Cwd: r.root, Base: "dev"})
+			if _, err := os.Stat(r.topic); tc.removed != os.IsNotExist(err) {
+				t.Fatalf("removed=%v: %+v", !tc.removed, out)
+			}
+			if !tc.removed && (out.Error == nil || !strings.Contains(out.Error.Message, "merged: no")) {
+				t.Fatalf("%+v", out)
+			}
+		})
+	}
+}
