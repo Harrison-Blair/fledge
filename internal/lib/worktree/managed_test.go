@@ -149,3 +149,20 @@ func TestBranchNamespaceCollisionsBeforeWrites(t *testing.T) {
 		})
 	}
 }
+
+func TestManaged(t *testing.T) {
+	root := "/repo"
+	for path, want := range map[string]bool{
+		"/repo/.fledge/worktrees/topic":         true,
+		"/repo/.fledge/worktrees/feature/topic": true,
+		"/repo/.fledge/worktrees":               false,
+		"/repo/.fledge/worktreesX/topic":        false,
+		"/repo/.fledge/topic":                   false,
+		"/repo":                                 false,
+		"/elsewhere/.fledge/worktrees/topic":    false,
+	} {
+		if got := Managed(root, path); got != want {
+			t.Errorf("Managed(%s) = %v, want %v", path, got, want)
+		}
+	}
+}

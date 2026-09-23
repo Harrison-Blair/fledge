@@ -781,3 +781,37 @@ func TestReplacementDuringStopIsKept(t *testing.T) {
 		t.Fatalf("%+v %+v", out, c)
 	}
 }
+
+// A checkout moved out of the managed tree while its worker is being stopped,
+// its old path left as a symlink to it, keeps its marker but is kept: removal
+// requires the checkout still at the planned path under .fledge/worktrees.
+// (Regression from verification.)
+func TestMovedOutsideManagedTreeIsKept(t *testing.T) {
+	r := newRepo(t)
+	a := agent("w1:p1", "w1", "t_caller", "caller", "working")
+	caller := r.register(t, a, nil, "adopt", nil)
+	w := agent("w2:p1", "w2", "t_worker", "worker", "idle")
+	rec := r.register(t, w, &caller.ID, "spawn", created(t, r.topic, "dev"))
+	tasktest.Seed(t, r.root, task.Record{Title: "accepted", Owner: &rec.ID, Status: task.Verified})
+	outside := filepath.Join(t.TempDir(), "outside")
+	move := func() {
+		git(t, r.root, "worktree", "move", r.topic, outside)
+		if err := os.Symlink(outside, r.topic); err != nil {
+			t.Fatal(err)
+		}
+	}
+	movedListing := r.listing(nil, outside)
+	movedListing.Worktrees[1].Branch = s("topic")
+	out := Run(context.Background(), client(t, r,
+		get(a), agentList(a, w), call{Method: "worktree.list", Result: r.listing(nil, r.topic)},
+		get(w), call{Method: "pane.close", Before: move, Result: herdrscript.OK()},
+		call{Method: "worktree.list", Result: movedListing}, agentList(a), agentList(a),
+	), Options{})
+	if _, err := os.Stat(outside); os.IsNotExist(err) {
+		t.Fatalf("checkout moved outside managed tree was DELETED: %+v", out.Result)
+	}
+	c := checkout(out.Result.(Result), r.topic)
+	if out.Status != "success" || c.Outcome != "skipped" || c.Reason == nil || !strings.Contains(*c.Reason, "moved since cleanup planned it") {
+		t.Fatalf("%+v %+v", out, c)
+	}
+}

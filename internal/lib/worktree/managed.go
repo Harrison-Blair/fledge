@@ -88,3 +88,12 @@ func Prepare(ctx context.Context, root, branch string, out *libagent.Outcome) (s
 	}
 	return path, nil
 }
+
+// Managed reports whether path, canonical, is a checkout location strictly
+// below root/.fledge/worktrees, where root is the canonical primary checkout.
+// The comparison is lexical on canonical paths, so a path reached through a
+// symlink anywhere below root never qualifies.
+func Managed(root, path string) bool {
+	rel, err := filepath.Rel(filepath.Join(root, ".fledge", "worktrees"), path)
+	return err == nil && rel != "." && filepath.IsLocal(rel)
+}

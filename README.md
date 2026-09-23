@@ -482,8 +482,12 @@ held, with reasons. Otherwise cleanup stops each eligible worker by its record
 ID, as `agent stop --id` without `--force`, after reading its tasks again, and
 then removes each eligible checkout through `worktree remove` without
 `--force`, which rechecks live agents, cleanliness, and the merge into the
-recorded base, and last, immediately before deleting, that the checkout still
-carries the worker's marker and branch. A task assigned, a live worker of the
+recorded base, and last, immediately before deleting, that the checkout is
+still at the resolved path it was planned at under `.fledge/worktrees` and
+still carries the worker's marker and branch. A checkout moved meanwhile, even
+with a symlink left at its old path, is kept as `moved since cleanup planned
+it`. These identity and location checks apply only to cleanup; an explicit
+`worktree remove` is unchanged. A task assigned, a live worker of the
 worker registered, or a worker busy again after planning holds it; a checkout
 replaced meanwhile is kept as `replaced since the worker's spawn`; nothing is
 ever forced. The text output starts with

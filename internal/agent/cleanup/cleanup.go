@@ -111,7 +111,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			ch.Outcome, ch.Reason = "skipped", libagent.Pointer("its worker "+ch.Worker+" was not stopped")
 			continue
 		}
-		ch.Outcome, ch.Reason = record(remove.Run(ctx, c, remove.Options{Path: ch.Path, Cwd: p.root, Base: *ch.Base, Marker: ch.marker, MarkedBranch: ch.markedBranch}))
+		ch.Outcome, ch.Reason = record(remove.Run(ctx, c, remove.Options{Path: ch.Path, Cwd: p.root, Base: *ch.Base, Marker: ch.marker, MarkedBranch: ch.markedBranch, PlannedPath: ch.Path}))
 	}
 	out.Result = p.Result
 	if len(failures) > 0 {

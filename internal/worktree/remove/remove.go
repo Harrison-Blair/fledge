@@ -22,12 +22,13 @@ import (
 // Base, when set, is the ref the merged check uses instead of the repository
 // integration branch, as for a checkout created from that ref. Marker, when
 // set, names the exact checkout to remove: the one carrying that marker (see
-// worktree.Mark) with MarkedBranch checked out; any other checkout at the path
+// worktree.Mark) with MarkedBranch checked out, still at PlannedPath, its
+// canonical path when planned, below .fledge/worktrees; any other checkout, or one moved since,
 // is kept, whatever Force says.
 type Options struct {
-	Path, Branch, Cwd, Base string
-	Marker, MarkedBranch    string
-	Force                   bool
+	Path, Branch, Cwd, Base           string
+	Marker, MarkedBranch, PlannedPath string
+	Force                             bool
 }
 type Result struct {
 	Path              string  `json:"path"`
@@ -89,6 +90,12 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	}
 	// Check identity last: the checkout may have been replaced since it was chosen.
 	if o.Marker != "" {
+		// PlannedPath was canonical when planned; resolving it again would
+		// follow a symlink left at it to wherever the checkout moved.
+		if row.Path != filepath.Clean(o.PlannedPath) || !worktree.Managed(listing.Root, row.Path) {
+			out.Fail(libagent.Invalid("worktree %s moved since cleanup planned it (now at %s); it is kept", o.PlannedPath, row.Path), "guard", false)
+			return out
+		}
 		branch := gitstatus.Branch(ctx, row.Path)
 		if worktree.Marker(ctx, row.Path) != o.Marker || branch == nil || *branch != o.MarkedBranch {
 			out.Fail(libagent.Invalid("worktree %s was replaced since the worker's spawn; it is kept", row.Path), "guard", false)
