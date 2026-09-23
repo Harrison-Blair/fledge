@@ -48,7 +48,7 @@ func TestSpawnJSONIncludesPromptedField(t *testing.T) {
 	if err := out.Write(&b, true, Render); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(b.String(), `"prompted":true`) || !strings.Contains(b.String(), `"message_id":null,"sender":null`) {
+	if !strings.Contains(b.String(), `"prompted":true,"prompt_requested":false`) || !strings.Contains(b.String(), `"message_id":null,"sender":null`) {
 		t.Fatalf("%q", b.String())
 	}
 }
@@ -108,5 +108,66 @@ func TestOutputFailuresPropagate(t *testing.T) {
 		libagent.Outcome{Result: &Result{Name: "worker", Prompted: true}},
 		libagent.Outcome{Status: "partial", Error: &libagent.Failure{Message: "failed"}, Effects: []libagent.Effect{{Action: "created", Kind: "pane", ID: "w1:p1"}}},
 		libagent.Outcome{Status: "partial", Result: &Result{Name: "worker"}, Error: &libagent.Failure{Message: "blocked", Code: "agent_blocked", Phase: "agent.wait"}},
+		libagent.Outcome{Status: "partial", Result: &Result{Name: "worker", PromptRequested: true}, Error: &libagent.Failure{Message: "blocked", Code: "agent_blocked", Phase: "agent.wait"}},
+		libagent.Outcome{Status: "partial", Result: &Result{Name: "worker", PromptRequested: true}, Error: &libagent.Failure{Message: "timeout", Code: "timeout", Phase: "agent.start"}},
 	)
+}
+
+func renderHuman(t *testing.T, out libagent.Outcome) string {
+	t.Helper()
+	var b bytes.Buffer
+	if err := out.Write(&b, false, Render); err != nil {
+		t.Fatal(err)
+	}
+	return b.String()
+}
+
+// Recovery hints name Fledge commands addressed by pane, since the agent's
+// name may not resolve, and never echo the prompt or raw Herdr commands.
+func TestBlockedWaitHintsUseFledgeByPane(t *testing.T) {
+	pid := "w1:p4"
+	for _, requested := range []bool{true, false} {
+		out := libagent.Outcome{Status: "partial", Result: &Result{Name: "worker", PaneID: &pid, PromptRequested: requested}, Error: &libagent.Failure{Code: "agent_blocked", Message: "agent worker is waiting on a startup prompt", Phase: "agent.wait"}}
+		s := renderHuman(t, out)
+		for _, want := range []string{"fledge agent read --pane w1:p4", "fledge agent send --pane w1:p4 --key <key>"} {
+			if !strings.Contains(s, want) {
+				t.Fatalf("requested=%v: %q missing %q", requested, s, want)
+			}
+		}
+		if strings.Contains(s, "herdr ") {
+			t.Fatalf("raw herdr hint: %q", s)
+		}
+		const notSubmitted = "The first prompt was not submitted"
+		const resend = "fledge agent message --pane w1:p4 --file <brief>"
+		if requested != strings.Contains(s, notSubmitted) || requested != strings.Contains(s, resend) {
+			t.Fatalf("requested=%v: %q", requested, s)
+		}
+	}
+}
+
+func TestStartupNotConfirmedHintsUseFledgeByPane(t *testing.T) {
+	pid := "w1:p4"
+	for _, phase := range []string{"agent.wait", "agent.start"} {
+		for _, requested := range []bool{true, false} {
+			out := libagent.Outcome{Status: "partial", Result: &Result{Name: "worker", PaneID: &pid, PromptRequested: requested}, Error: &libagent.Failure{Code: "timeout", Message: "timed out", Phase: phase}}
+			s := renderHuman(t, out)
+			if !strings.Contains(s, "fledge agent get --pane w1:p4") || !strings.Contains(s, "fledge agent read --pane w1:p4") || strings.Contains(s, "herdr ") {
+				t.Fatalf("%s requested=%v: %q", phase, requested, s)
+			}
+			if requested != strings.Contains(s, "The first prompt was not submitted") {
+				t.Fatalf("%s requested=%v: %q", phase, requested, s)
+			}
+		}
+	}
+}
+
+// An agent.prompt failure may have reached the agent, so it is never called unsubmitted.
+func TestPromptFailureNotCalledUnsubmitted(t *testing.T) {
+	pid := "w1:p4"
+	for _, status := range []string{"unknown", "partial"} {
+		out := libagent.Outcome{Status: status, Result: &Result{Name: "worker", PaneID: &pid, PromptRequested: true}, Error: &libagent.Failure{Code: "transport_error", Message: "lost", Phase: "agent.prompt"}}
+		if s := renderHuman(t, out); strings.Contains(s, "not submitted") || strings.Contains(s, "not delivered") {
+			t.Fatalf("%q", s)
+		}
+	}
 }
