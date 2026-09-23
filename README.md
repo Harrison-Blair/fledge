@@ -284,8 +284,11 @@ failures may report `operation_failed`, and a shared `--timeout` can leave a
 mix of timed-out and cancelled rows).
 `--any` succeeds on the first match, records targets that fail (for example
 `agent_not_running` when an agent exits) while others remain, then cancels the
-rest; it fails only if every target fails. Multi-target output is one line per
-target, and JSON returns `mode`, `winner`, and `targets` rows with `target`,
+rest; it fails only if every target fails. In human mode, a target that fails
+while others remain is reported on stderr at once, for example
+`b failed: agent_not_running: ... (still waiting on 1 target).`, and the wait
+continues. Multi-target output is one line per target, and JSON (which writes
+no progress lines) returns `mode`, `winner`, and `targets` rows with `target`,
 `outcome` (`matched`, `errored`, or `cancelled`), `agent`, and `error`.
 
 `fledge agent pause` interrupts the current foreground turn while preserving the
