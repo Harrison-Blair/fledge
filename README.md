@@ -149,7 +149,30 @@ default `30s`; its millisecond value must be greater than 3000 and at most
 
 By default, spawn waits for the launch to settle before returning, so a
 successful spawn reports the settled status (e.g. `idle`) rather than `unknown`.
-`--timeout` covers launch and this wait together. `--no-wait` restores the old
+Settled means ready for input, not just a lifecycle status: Herdr must report
+`interactive_ready`, no pending launch, and `idle` or `done`, since an agent
+such as pi reports `idle` seconds before it accepts a prompt. Spawn polls the
+pane for this with or without a first prompt, and fails `unknown` without
+registering or prompting if a different terminal, name, or harness answers.
+`--timeout` is one budget from launch through the first prompt: Herdr requests
+for the launch, lifecycle wait, readiness polls, registration, sender lookup,
+and prompt submission stop at its deadline, and a reply that arrives after it
+is not accepted. Registration's local step, taking the state lock and writing
+the record, cannot be interrupted, so spawn can overrun `--timeout` while
+another Fledge process holds the state lock; no first prompt is sent after the
+deadline either way. Out of
+budget before the prompt is submitted, spawn exits `partial` with `timeout` and
+says the prompt was not submitted; out of budget while it is being submitted,
+the outcome is `unknown`, so inspect with `fledge agent read --pane P` before
+resending. A spawn that times out before the agent is ready does not register
+it (register it later with `fledge agent adopt --pane P`); a record already
+written is kept and reported, and a registration the deadline cuts off is
+reported as `registration_error`. Herdr's own startup
+reservation is the larger of `--timeout` and 30s: Herdr drops the name of an
+agent whose reservation expires mid-launch, so a short `--timeout` bounds only
+spawn itself, and a `partial` timeout can still finish launching under its
+name. A launch unfinished when the reservation expires can still lose its name;
+address it by pane. `--no-wait` restores the old
 behavior: return once the launch begins, without waiting for readiness. If the
 agent settles on `blocked` (its own startup dialog, e.g. an update prompt),
 spawn fails with `agent_blocked` and a `partial` outcome (exit 1); the agent

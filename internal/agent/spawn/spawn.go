@@ -159,9 +159,13 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 		return out
 	}
 
-	started := s.now()
+	// Registration and the first prompt share the startup budget, so a spawn
+	// never submits a prompt after --timeout.
+	budgetCtx, cancel := context.WithTimeout(ctx, o.Timeout)
+	defer cancel()
+	b := budget{ctx: budgetCtx, parent: ctx, deadline: s.now().Add(o.Timeout), now: s.now, timeout: o.Timeout}
 	var r herdr.AgentResult
-	err = s.start(ctx, map[string]any{"name": o.Name, "kind": o.Harness, "pane_id": p.PaneID, "args": args, "timeout_ms": o.Timeout.Milliseconds()}, &r)
+	err = s.start(b.ctx, map[string]any{"name": o.Name, "kind": o.Harness, "pane_id": p.PaneID, "args": args, "timeout_ms": max(o.Timeout, startReservation).Milliseconds()}, &r)
 	if err == nil && (r.Type != "agent_started" || !libagent.ValidAgent(r.Agent.Pane) || !samePane(r.Agent.Pane, p) || r.Argv == nil) {
 		err = libagent.Protocol("incomplete agent.start result")
 	}
@@ -175,39 +179,68 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 	result.Argv = r.Argv
 	out.Effects = append(out.Effects, libagent.Effect{Action: "started", Kind: "agent", ID: r.Agent.PaneID})
 	if o.NoWait {
-		s.register(ctx, withHarness(r.Agent, o.Harness), &out)
+		s.register(b.ctx, withHarness(r.Agent, o.Harness), &out)
+		return out
+	}
+	if b.expired() {
+		out.Fail(b.exhausted(o.Name, "was not ready for input"), "agent.wait", true)
 		return out
 	}
 
-	remaining := max(o.Timeout-s.now().Sub(started), 0)
 	var w herdr.AgentResult
-	err = s.Call(ctx, "agent.wait", map[string]any{"target": o.Name, "timeout_ms": remaining.Milliseconds()}, &w)
+	err = s.Call(b.ctx, "agent.wait", map[string]any{"target": o.Name, "timeout_ms": b.deadline.Sub(s.now()).Milliseconds()}, &w)
 	if err == nil && (w.Type != "agent_info" || !libagent.ValidAgentInfo(w.Agent) || !samePane(w.Agent.Pane, r.Agent.Pane)) {
 		err = libagent.Protocol("incomplete agent.wait result")
+	}
+	if err != nil && b.expired() {
+		err = b.exhausted(o.Name, "was not ready for input")
 	}
 	if err != nil {
 		out.Fail(err, "agent.wait", true)
 		return out
 	}
-	setPlacement(result, w.Agent.Pane)
-	result.DetectedHarness = w.Agent.Agent
-	result.AgentStatus = libagent.Pointer(w.Agent.AgentStatus)
-	s.register(ctx, withHarness(w.Agent, o.Harness), &out)
-	if w.Agent.AgentStatus == "blocked" {
+	a, err := s.ready(b, o, r.Agent, w.Agent)
+	if err != nil {
+		out.Fail(libagent.AtPhase("agent.wait", err), "agent.wait", true)
+		return out
+	}
+	setPlacement(result, a.Pane)
+	result.DetectedHarness = a.Agent
+	result.AgentStatus = libagent.Pointer(a.AgentStatus)
+	s.register(b.ctx, withHarness(a, o.Harness), &out)
+	if a.AgentStatus == "blocked" {
 		out.Fail(&herdr.Error{Code: "agent_blocked", Message: fmt.Sprintf("agent %s is waiting on a startup prompt", o.Name)}, "agent.wait", true)
 		return out
 	}
 	if !result.PromptRequested {
 		return out
 	}
-	id, sender := s.newID(), libagent.ResolveSender(ctx, s.Client)
+	// A record written late is kept; the prompt is not sent once the budget is spent.
+	unsent := func() bool {
+		if b.expired() {
+			out.Fail(b.exhausted(o.Name, "was ready, but its first prompt was not submitted"), "agent.prompt", false)
+		}
+		return out.Error != nil
+	}
+	if unsent() {
+		return out
+	}
+	id, sender := s.newID(), libagent.ResolveSender(b.ctx, s.Client)
+	if unsent() {
+		return out
+	}
 	result.MessageID, result.Sender = &id, &sender
-	if _, err := s.prompt(ctx, o.Name, libagent.WithHeader(id, sender, prompt), &out); err != nil {
+	if _, err := s.prompt(b.ctx, o.Name, libagent.WithHeader(id, sender, prompt), &out); err != nil {
 		return out
 	}
 	result.Prompted = true
 	return out
 }
+
+// startReservation is the least startup time agent.start asks Herdr for. Herdr
+// drops the agent's name when that reservation expires before launch completes,
+// so a short --timeout bounds only spawn's own waiting.
+const startReservation = 30 * time.Second
 
 // busyBackoff paces agent.start retries while a fresh shell reaches its prompt.
 var busyBackoff = []time.Duration{50 * time.Millisecond, 100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond, 800 * time.Millisecond, 800 * time.Millisecond}

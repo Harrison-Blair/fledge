@@ -37,7 +37,7 @@ func startArgs(t *testing.T, c rpcCall) (string, []string) {
 func TestSpawnProfileFlagSetsLaunchAndOneHeaderedPrompt(t *testing.T) {
 	t.Setenv("HERDR_PANE_ID", "")
 	l := newSocket(t)
-	done := serveRPCs(l, snapshotResult(), startedResult("pi"), waitedResult(), promptedResult())
+	done := serveRPCs(l, snapshotResult(), startedResult("pi"), readyAs("pi"), promptedResult())
 	var out bytes.Buffer
 	err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--profile", "reviewer", "--pane", "w1:p1", "--prompt", "review this", "--json"}, &out)
 	if err != nil {
@@ -70,7 +70,7 @@ func TestSpawnProfileFlagSetsLaunchAndOneHeaderedPrompt(t *testing.T) {
 func TestSpawnProfileExplicitNativeTokensReplaceProfileArgs(t *testing.T) {
 	t.Setenv("HERDR_PANE_ID", "")
 	l := newSocket(t)
-	done := serveRPCs(l, snapshotResult(), startedResult("pi"), waitedResult(), promptedResult())
+	done := serveRPCs(l, snapshotResult(), startedResult("pi"), readyAs("pi"), promptedResult())
 	var out bytes.Buffer
 	err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--profile", "planner", "--pane", "w1:p1", "--args=--search", "--", "--native"}, &out)
 	if err != nil {
@@ -94,7 +94,7 @@ func TestSpawnProfileReadsInvokingRepositoryOverride(t *testing.T) {
 	gitRepo(t)
 	os.MkdirAll(filepath.Join(".fledge", "profiles"), 0755)
 	os.WriteFile(filepath.Join(".fledge", "profiles", "reviewer.toml"), []byte("schema_version = 1\nharness = \"claude\"\nmodel = \"sonnet\"\nrole = \"Local role.\"\n"), 0644)
-	done := serveRPCs(l, snapshotResult(), startedResult("claude"), waitedResult(), promptedResult())
+	done := serveRPCs(l, snapshotResult(), startedResult("claude"), readyAs("claude"), promptedResult())
 	var out bytes.Buffer
 	if err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--profile", "reviewer", "--pane", "w1:p1", "--prompt", "go"}, &out); err != nil {
 		t.Fatal(err, out.String())

@@ -110,10 +110,18 @@ func snapshotResult() any {
 	return map[string]any{"type": "session_snapshot", "snapshot": map[string]any{"protocol": 999, "version": "future", "workspaces": []any{}, "tabs": []any{}, "layouts": []any{}, "agents": []any{}, "panes": []any{map[string]any{"pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1"}}}}
 }
 func startedResult(argv ...string) any {
-	return map[string]any{"type": "agent_started", "agent": map[string]any{"pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1", "agent": "claude", "agent_status": "unknown"}, "argv": argv}
+	return map[string]any{"type": "agent_started", "agent": map[string]any{"pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1", "name": "worker", "agent": "claude", "agent_status": "unknown", "terminal_id": "term_x", "launch_pending": true}, "argv": argv}
 }
 func waitedResult() any {
 	return map[string]any{"type": "agent_info", "agent": map[string]any{"pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1", "agent": "claude", "agent_status": "idle", "terminal_id": "term_x", "focused": false, "revision": 0}}
+}
+
+// readyAs is the spawned worker's settled, prompt-ready agent.wait result as harness.
+func readyAs(harness string) any {
+	r := waitedResult().(map[string]any)
+	a := r["agent"].(map[string]any)
+	a["name"], a["agent"], a["interactive_ready"] = "worker", harness, true
+	return r
 }
 func promptedResult() any {
 	return map[string]any{"type": "agent_prompted", "agent": map[string]any{"pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1", "agent": "claude", "agent_status": "working"}}
@@ -121,7 +129,7 @@ func promptedResult() any {
 
 func TestSpawnForwardsExactNativeTokens(t *testing.T) {
 	l := newSocket(t)
-	done := serveRPCs(l, snapshotResult(), startedResult("--setting=a,b", "two words", "--native", "x,y"), waitedResult())
+	done := serveRPCs(l, snapshotResult(), startedResult("--setting=a,b", "two words", "--native", "x,y"), readyAs("claude"))
 	var out bytes.Buffer
 	err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "w1:p1", "--args=--setting=a,b", "--args", "two words", "--json", "--", "--native", "x,y"}, &out)
 	if err != nil {
@@ -149,7 +157,7 @@ func TestSpawnForwardsExactNativeTokens(t *testing.T) {
 func TestSpawnPromptFlagReachesAgentPromptWithExactText(t *testing.T) {
 	t.Setenv("HERDR_PANE_ID", "")
 	l := newSocket(t)
-	done := serveRPCs(l, snapshotResult(), startedResult("claude"), waitedResult(), promptedResult())
+	done := serveRPCs(l, snapshotResult(), startedResult("claude"), readyAs("claude"), promptedResult())
 	var out bytes.Buffer
 	err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "w1:p1", "--prompt", "review this", "--json"}, &out)
 	if err != nil {
@@ -187,6 +195,116 @@ func TestSpawnNoWaitFlagSkipsAgentWaitOnSocket(t *testing.T) {
 	}
 }
 
+// TestSpawnPromptWaitsForLaunchReadiness serves a lifecycle-idle wait whose
+// launch is still pending, then readiness polls by pane: the first prompt is
+// sent exactly once, only after the launch clears.
+func TestSpawnPromptWaitsForLaunchReadiness(t *testing.T) {
+	t.Setenv("HERDR_PANE_ID", "")
+	l := newSocket(t)
+	pending := readyAs("claude").(map[string]any)
+	a := pending["agent"].(map[string]any)
+	delete(a, "interactive_ready")
+	a["launch_pending"] = true
+	done := serveRPCs(l, snapshotResult(), startedResult("claude"), pending, pending, readyAs("claude"), promptedResult())
+	var out bytes.Buffer
+	err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "w1:p1", "--prompt", "review this", "--json"}, &out)
+	if err != nil {
+		t.Fatal(err, out.String())
+	}
+	calls := waitCalls(t, l, done, 6)
+	for _, i := range []int{3, 4} {
+		if calls[i].Method != "agent.get" || paramsField(t, calls[i], "target") != "w1:p1" {
+			t.Fatalf("%+v", calls)
+		}
+	}
+	if calls[5].Method != "agent.prompt" || !headered(t, calls[5], "review this") {
+		t.Fatalf("%+v", calls)
+	}
+}
+
+// TestSpawnShortTimeoutKeepsStartReservation proves a short --timeout still
+// reserves Herdr's 30s startup, so the name outlives a slow launch.
+func TestSpawnShortTimeoutKeepsStartReservation(t *testing.T) {
+	l := newSocket(t)
+	done := serveRPCs(l, snapshotResult(), startedResult("claude"))
+	var out bytes.Buffer
+	err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "w1:p1", "--timeout", "3001ms", "--no-wait", "--json"}, &out)
+	if err != nil {
+		t.Fatal(err, out.String())
+	}
+	if calls := waitCalls(t, l, done, 2); paramsField(t, calls[1], "timeout_ms") != float64(30000) {
+		t.Fatalf("%s", calls[1].Params)
+	}
+}
+
+// serveLateRPC is serveRPCs, except the reply to request late is written 4s
+// after it arrives, without holding up later requests.
+func serveLateRPC(l net.Listener, late int, results ...any) <-chan []rpcCall {
+	done := make(chan []rpcCall, 1)
+	go func() {
+		var calls []rpcCall
+		for i, result := range results {
+			conn, err := l.Accept()
+			if err != nil {
+				done <- calls
+				return
+			}
+			var req struct {
+				ID     string          `json:"id"`
+				Method string          `json:"method"`
+				Params json.RawMessage `json:"params"`
+			}
+			json.NewDecoder(conn).Decode(&req)
+			calls = append(calls, rpcCall{Method: req.Method, Params: req.Params})
+			reply := func() {
+				json.NewEncoder(conn).Encode(map[string]any{"id": req.ID, "result": result})
+				conn.Close()
+			}
+			if i == late {
+				time.AfterFunc(4*time.Second, reply)
+			} else {
+				reply()
+			}
+		}
+		l.Close()
+		done <- calls
+	}()
+	return done
+}
+
+// TestSpawnTimeoutCutsOffLateReplies proves --timeout bounds spawn on the
+// socket: a late readiness poll ends it partial with the prompt unsent, and a
+// late prompt acknowledgement ends it unknown, each at the deadline.
+func TestSpawnTimeoutCutsOffLateReplies(t *testing.T) {
+	pending := readyAs("claude").(map[string]any)
+	delete(pending["agent"].(map[string]any), "interactive_ready")
+	for _, tc := range []struct {
+		name    string
+		results []any
+		status  string
+		hint    string
+	}{
+		{"readiness poll", []any{snapshotResult(), startedResult("claude"), pending, readyAs("claude")}, "partial", "The first prompt was not submitted"},
+		{"prompt ack", []any{snapshotResult(), startedResult("claude"), readyAs("claude"), promptedResult()}, "unknown", "may have been submitted"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HERDR_PANE_ID", "")
+			l := newSocket(t)
+			done := serveLateRPC(l, len(tc.results)-1, tc.results...)
+			var out bytes.Buffer
+			begin := time.Now()
+			err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "w1:p1", "--timeout", "3001ms", "--prompt", "late"}, &out)
+			if elapsed := time.Since(begin); ExitCode(err) != 1 || elapsed > 3800*time.Millisecond {
+				t.Fatalf("exit %d after %v: %s", ExitCode(err), elapsed, out.String())
+			}
+			waitCalls(t, l, done, len(tc.results))
+			if s := out.String(); !strings.HasPrefix(s, tc.status+":") || !strings.Contains(s, tc.hint) {
+				t.Fatalf("%q", s)
+			}
+		})
+	}
+}
+
 // TestSpawnFileFlagPathReachesAgentPrompt proves --file <path> is wired
 // (FileSet) end to end: the file's exact text reaches agent.prompt.
 func TestSpawnFileFlagPathReachesAgentPrompt(t *testing.T) {
@@ -197,7 +315,7 @@ func TestSpawnFileFlagPathReachesAgentPrompt(t *testing.T) {
 	}
 	t.Setenv("HERDR_PANE_ID", "")
 	l := newSocket(t)
-	done := serveRPCs(l, snapshotResult(), startedResult("claude"), waitedResult(), promptedResult())
+	done := serveRPCs(l, snapshotResult(), startedResult("claude"), readyAs("claude"), promptedResult())
 	var out bytes.Buffer
 	err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "w1:p1", "--file", path, "--json"}, &out)
 	if err != nil {
@@ -214,7 +332,7 @@ func TestSpawnFileFlagPathReachesAgentPrompt(t *testing.T) {
 func TestSpawnFileDashReadsCommandStdin(t *testing.T) {
 	t.Setenv("HERDR_PANE_ID", "")
 	l := newSocket(t)
-	done := serveRPCs(l, snapshotResult(), startedResult("claude"), waitedResult(), promptedResult())
+	done := serveRPCs(l, snapshotResult(), startedResult("claude"), readyAs("claude"), promptedResult())
 	var out bytes.Buffer
 	err := execute([]string{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "w1:p1", "--file", "-", "--json"}, strings.NewReader("from stdin"), &out, &out)
 	if err != nil {
@@ -232,7 +350,7 @@ func TestSpawnFileDashReadsCommandStdin(t *testing.T) {
 func TestSpawnBlockedWaitWithPromptIsPartialWithFledgeHints(t *testing.T) {
 	t.Setenv("HERDR_PANE_ID", "")
 	l := newSocket(t)
-	blocked := waitedResult().(map[string]any)
+	blocked := readyAs("claude").(map[string]any)
 	blocked["agent"].(map[string]any)["agent_status"] = "blocked"
 	done := serveRPCs(l, snapshotResult(), startedResult("claude"), blocked)
 	var out bytes.Buffer
