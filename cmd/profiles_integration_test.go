@@ -70,14 +70,14 @@ func TestSpawnProfileFlagSetsLaunchAndOneHeaderedPrompt(t *testing.T) {
 func TestSpawnProfileExplicitNativeTokensReplaceProfileArgs(t *testing.T) {
 	t.Setenv("HERDR_PANE_ID", "")
 	l := newSocket(t)
-	done := serveRPCs(l, snapshotResult(), startedResult("codex"), waitedResult(), promptedResult())
+	done := serveRPCs(l, snapshotResult(), startedResult("pi"), waitedResult(), promptedResult())
 	var out bytes.Buffer
 	err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--profile", "planner", "--pane", "w1:p1", "--args=--search", "--", "--native"}, &out)
 	if err != nil {
 		t.Fatal(err, out.String())
 	}
 	calls := waitCalls(t, l, done, 4)
-	if kind, args := startArgs(t, calls[1]); kind != "codex" || !reflect.DeepEqual(args, []string{"--model", "gpt-6-astra", "--search", "--native"}) {
+	if kind, args := startArgs(t, calls[1]); kind != "pi" || !reflect.DeepEqual(args, []string{"--model", "openai-codex/gpt-6-astra", "--search", "--native"}) {
 		t.Fatalf("%s %q", kind, args)
 	}
 	if !headered(t, calls[3], builtinRole(t, "planner")) {

@@ -62,7 +62,7 @@ func TestBuiltinsShipFiveRolesWithDefaults(t *testing.T) {
 	}{
 		{"implementer", "claude", "claude-opus-5-5", []string{}},
 		{"orchestrator", "claude", "claude-opus-5-5", []string{}},
-		{"planner", "codex", "gpt-6-astra", []string{"-c", "model_reasoning_effort=xhigh"}},
+		{"planner", "pi", "openai-codex/gpt-6-astra", []string{"--thinking", "xhigh"}},
 		{"reviewer", "pi", "openai-codex/gpt-6-astra", []string{}},
 		{"verifier", "pi", "openai-codex/gpt-6-astra", []string{}},
 	}
@@ -82,6 +82,9 @@ func TestBuiltinsShipFiveRolesWithDefaults(t *testing.T) {
 			t.Fatalf("role not distinct: %q", p.Role)
 		}
 		roles[p.Role] = true
+		if p.Harness == "codex" {
+			t.Fatalf("%s uses the codex harness; codex models go through pi", p.Name)
+		}
 		for _, a := range p.Args {
 			if strings.Contains(strings.ToLower(a), "permission") || strings.Contains(a, "bypass") || strings.Contains(a, "dangerous") || strings.Contains(a, "yolo") || strings.Contains(a, "sandbox") {
 				t.Fatalf("%s ships permission-changing args %q", p.Name, p.Args)
@@ -117,7 +120,7 @@ func TestOmittedFieldsInheritAndEmptyValuesClear(t *testing.T) {
 		t.Fatalf("omitted fields lost: %+v", got)
 	}
 	write(t, root, "planner", "schema_version = 1\nargs = []\nmodel = \"\"\nrole = \"\"\n")
-	if got := load(t, root, "planner"); got.Harness != "codex" || got.Model != "" || !reflect.DeepEqual(got.Args, []string{}) || got.Role != "" {
+	if got := load(t, root, "planner"); got.Harness != "pi" || got.Model != "" || !reflect.DeepEqual(got.Args, []string{}) || got.Role != "" {
 		t.Fatalf("empty values did not clear: %+v", got)
 	}
 	write(t, root, "planner", "schema_version = 1\nargs = [\"--x\"]\nrole = \"Replacement.\"\n")
@@ -135,7 +138,7 @@ func TestCustomProfilesExtendABuiltinOrStandAlone(t *testing.T) {
 	}
 	// An explicit base replaces the same-name default.
 	write(t, root, "verifier", "schema_version = 1\nextends = \"builtin:planner\"\n")
-	if p := load(t, root, "verifier"); p.Harness != "codex" || p.Role != builtin(t, "planner").Role || *p.Base != "builtin:planner" {
+	if p := load(t, root, "verifier"); !reflect.DeepEqual(p.Args, []string{"--thinking", "xhigh"}) || p.Role != builtin(t, "planner").Role || *p.Base != "builtin:planner" {
 		t.Fatalf("%+v", p)
 	}
 	write(t, root, "scout", "schema_version = 1\nrole = \"Explore.\"\n")

@@ -1,5 +1,5 @@
 schema_version = 1
-harness = "codex"
-model = "gpt-6-astra"
-args = ["-c", "model_reasoning_effort=xhigh"]
+harness = "pi"
+model = "openai-codex/gpt-6-astra"
+args = ["--thinking", "xhigh"]
 role = "Investigate and produce an implementation-ready plan with evidence, options, recommendation, dependencies, and acceptance checks. Keep the task read-only unless implementation is explicitly authorized."

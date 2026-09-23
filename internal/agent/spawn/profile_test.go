@@ -73,10 +73,10 @@ func TestProfileSuppliesLaunchSettingsAndPrefixesRoleToPrompt(t *testing.T) {
 	planner := builtinProfile(t, "planner")
 	o := profileOptions("planner")
 	o.Prompt, o.PromptSet = "Plan #14.", true
-	s := profileSpawn(t, "codex", []string{"--model", "gpt-6-astra", "-c", "model_reasoning_effort=xhigh"}, header+planner.Role+"\n\nPlan #14.")
+	s := profileSpawn(t, "pi", []string{"--model", "openai-codex/gpt-6-astra", "--thinking", "xhigh"}, header+planner.Role+"\n\nPlan #14.")
 	out := s.run(context.Background(), o, nil)
 	r := out.Result.(*Result)
-	if out.Status != "success" || !r.Prompted || !r.PromptRequested || r.Harness != "codex" {
+	if out.Status != "success" || !r.Prompted || !r.PromptRequested || r.Harness != "pi" {
 		t.Fatalf("%+v", out)
 	}
 	if r.Profile == nil || r.Profile.Name != "planner" || r.Profile.Source != "builtin" || r.Profile.Path != nil || r.Profile.Base != nil {
@@ -122,12 +122,12 @@ func TestProfilePrecedence(t *testing.T) {
 		kind string
 		args []string
 	}{
-		{"profile only", func(*Options) {}, "codex", []string{"--model", "gpt-6-astra", "-c", "model_reasoning_effort=xhigh"}},
-		{"same harness keeps everything", func(o *Options) { o.Harness = "codex" }, "codex", []string{"--model", "gpt-6-astra", "-c", "model_reasoning_effort=xhigh"}},
+		{"profile only", func(*Options) {}, "pi", []string{"--model", "openai-codex/gpt-6-astra", "--thinking", "xhigh"}},
+		{"same harness keeps everything", func(o *Options) { o.Harness = "pi" }, "pi", []string{"--model", "openai-codex/gpt-6-astra", "--thinking", "xhigh"}},
 		{"other harness drops model and args", func(o *Options) { o.Harness = "claude" }, "claude", []string{}},
 		{"other harness with explicit model", func(o *Options) { o.Harness, o.Model = "claude", "sonnet" }, "claude", []string{"--model", "sonnet"}},
-		{"explicit model replaces", func(o *Options) { o.Model = "gpt-5" }, "codex", []string{"--model", "gpt-5", "-c", "model_reasoning_effort=xhigh"}},
-		{"explicit args replace", func(o *Options) { o.Args = []string{"--search"} }, "codex", []string{"--model", "gpt-6-astra", "--search"}},
+		{"explicit model replaces", func(o *Options) { o.Model = "gpt-5" }, "pi", []string{"--model", "gpt-5", "--thinking", "xhigh"}},
+		{"explicit args replace", func(o *Options) { o.Args = []string{"--search"} }, "pi", []string{"--model", "openai-codex/gpt-6-astra", "--search"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			o := profileOptions("planner")

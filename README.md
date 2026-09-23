@@ -346,11 +346,12 @@ repository:
 | --- | --- | --- | --- |
 | `orchestrator` | `claude` | `claude-opus-5-5` | none |
 | `implementer` | `claude` | `claude-opus-5-5` | none |
-| `planner` | `codex` | `gpt-6-astra` | `-c model_reasoning_effort=xhigh` |
+| `planner` | `pi` | `openai-codex/gpt-6-astra` | `--thinking xhigh` |
 | `reviewer` | `pi` | `openai-codex/gpt-6-astra` | none |
 | `verifier` | `pi` | `openai-codex/gpt-6-astra` | none |
 
-Built-ins set no permission-mode arguments. Their roles are ordinary first-prompt
+Codex models run through the `pi` harness; no built-in uses `codex`. Built-ins
+set no permission-mode arguments. Their roles are ordinary first-prompt
 instructions, subordinate to the task and repository instructions; they grant no
 permissions and change no task state.
 

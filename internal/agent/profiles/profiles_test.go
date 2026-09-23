@@ -28,7 +28,7 @@ func TestListShowsBuiltinsOutsideGit(t *testing.T) {
 	want := "NAME          HARNESS  MODEL                     SOURCE\n" +
 		"implementer   claude   claude-opus-5-5           built-in\n" +
 		"orchestrator  claude   claude-opus-5-5           built-in\n" +
-		"planner       codex    gpt-6-astra               built-in\n" +
+		"planner       pi       openai-codex/gpt-6-astra  built-in\n" +
 		"reviewer      pi       openai-codex/gpt-6-astra  built-in\n" +
 		"verifier      pi       openai-codex/gpt-6-astra  built-in\n"
 	if got := render(t, out, false); got != want {
@@ -46,7 +46,7 @@ func TestListShowsBuiltinsOutsideGit(t *testing.T) {
 	if err := json.Unmarshal([]byte(render(t, out, true)), &envelope); err != nil {
 		t.Fatal(err)
 	}
-	if envelope.Operation != "agent.profiles" || len(envelope.Result.Profiles) != 5 || envelope.Result.Profiles[2].Name != "planner" || envelope.Result.Profiles[2].Args[0] != "-c" || envelope.Result.Profiles[2].Role == "" {
+	if envelope.Operation != "agent.profiles" || len(envelope.Result.Profiles) != 5 || envelope.Result.Profiles[2].Name != "planner" || envelope.Result.Profiles[2].Args[0] != "--thinking" || envelope.Result.Profiles[2].Role == "" {
 		t.Fatalf("%+v", envelope)
 	}
 }
@@ -59,13 +59,13 @@ func TestShowPrintsResolvedProfileAndProvenance(t *testing.T) {
 	os.WriteFile(path, []byte("schema_version = 1\nextends = \"builtin:planner\"\nrole_append = \"Mind Go.\"\n"), 0644)
 	out := Run(context.Background(), root, Options{Name: "go-review"})
 	got := render(t, out, false)
-	for _, want := range []string{"Profile go-review\n", "  source: " + path + "\n", "  extends: builtin:planner\n", "  harness: codex\n", "  model: gpt-6-astra\n", "  args: \"-c\" \"model_reasoning_effort=xhigh\"\n", "  role:\n    Investigate", "\n\n    Mind Go.\n"} {
+	for _, want := range []string{"Profile go-review\n", "  source: " + path + "\n", "  extends: builtin:planner\n", "  harness: pi\n", "  model: openai-codex/gpt-6-astra\n", "  args: \"--thinking\" \"xhigh\"\n", "  role:\n    Investigate", "\n\n    Mind Go.\n"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in\n%s", want, got)
 		}
 	}
 	list := render(t, Run(context.Background(), root, Options{}), false)
-	if !strings.Contains(list, "go-review     codex    gpt-6-astra               "+path+"\n") {
+	if !strings.Contains(list, "go-review     pi       openai-codex/gpt-6-astra  "+path+"\n") {
 		t.Fatal(list)
 	}
 	if _, err := os.Lstat(filepath.Join(root, ".fledge", ".gitignore")); !os.IsNotExist(err) {
