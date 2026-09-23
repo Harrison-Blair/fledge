@@ -903,3 +903,23 @@ func TestReopenLegacyEndedRecordInLiveFolder(t *testing.T) {
 		t.Fatalf("%+v %v", live, err)
 	}
 }
+
+func TestReopenRefusesRecordOfAnotherSession(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "other")
+	c := client(t)
+	s := store(t, c)
+	rec := registered(t, c, details("w1:p3", "term_a"))
+	if _, err := EndOnce(s, rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	// In this session the terminal has no live record, so only the session
+	// check can refuse.
+	t.Setenv("HERDR_SESSION", "dev")
+	err := Reopen(s, rec.ID)
+	if code(err) != "agent_identity_stale" || !strings.Contains(err.Error(), "another Herdr session") {
+		t.Fatalf("%v", err)
+	}
+	if !ended(t, s, rec.ID) {
+		t.Fatal("refused Reopen un-ended the record")
+	}
+}

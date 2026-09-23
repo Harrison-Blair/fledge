@@ -284,7 +284,8 @@ func end(tx *state.Tx, id string) (bool, error) {
 // record from the archive to the live records and clears ended_at. It refuses
 // with agent_already_registered, naming the other record and changing nothing,
 // when another live record in the current Herdr session now holds the
-// terminal. An unknown id fails with agent_record_not_found. A record that has
+// terminal, and with agent_identity_stale for a record of another Herdr
+// session. An unknown id fails with agent_record_not_found. A record that has
 // not ended is left as is without error; that is the only no-op.
 func Reopen(s *state.Store, id string) error {
 	if !state.ValidID(id) {
@@ -298,8 +299,11 @@ func Reopen(s *state.Store, id string) error {
 		} else if err != nil {
 			return err
 		}
-		if rec.EndedAt == nil {
+		switch {
+		case rec.EndedAt == nil:
 			return nil
+		case !sameSession(rec):
+			return stale(id, "it belongs to another Herdr session")
 		}
 		records, err := live(tx)
 		if err != nil {
