@@ -154,9 +154,13 @@ Settled means ready for input, not just a lifecycle status: Herdr must report
 such as pi reports `idle` seconds before it accepts a prompt. Spawn polls the
 pane for this with or without a first prompt, and fails `unknown` without
 registering or prompting if a different terminal, name, or harness answers.
-`--timeout` is one budget from launch through the first prompt: the lifecycle
-wait, readiness polls, registration, sender lookup, and prompt submission all
-stop at its deadline, and a reply that arrives after it is not accepted. Out of
+`--timeout` is one budget from launch through the first prompt: Herdr requests
+for the launch, lifecycle wait, readiness polls, registration, sender lookup,
+and prompt submission stop at its deadline, and a reply that arrives after it
+is not accepted. Registration's local step, taking the state lock and writing
+the record, cannot be interrupted, so spawn can overrun `--timeout` while
+another Fledge process holds the state lock; no first prompt is sent after the
+deadline either way. Out of
 budget before the prompt is submitted, spawn exits `partial` with `timeout` and
 says the prompt was not submitted; out of budget while it is being submitted,
 the outcome is `unknown`, so inspect with `fledge agent read --pane P` before
