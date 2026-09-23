@@ -346,13 +346,20 @@ once. Bare repositories, including their linked worktrees, have no primary
 checkout and are not supported. A record holds an 8-hex `id`, the agent's name,
 pane, workspace, harness, Herdr session (`HERDR_SESSION`), Herdr `terminal_id`,
 `parent`, `registered_at`, `registered_by` (`spawn` or `adopt`),
-`worktree_path`, `worktree_created`, `worktree_base`, and `ended_at`.
+`worktree_path`, `worktree_created`, `worktree_base`, `worktree_branch`,
+`worktree_marker`, and `ended_at`.
 `worktree_created` is true only when the agent's spawn created its checkout
 (`--worktree new`), not when it opened an existing one; `worktree_base` is the
 ref that checkout was created from, as spawn passed it to Herdr: `--base` as
 given, otherwise the primary checkout's branch at spawn time (null when that
-checkout was detached, so no base was passed). Records
-written before these fields existed read as not created. The parent is the caller's live record when the
+checkout was detached, so no base was passed). `worktree_branch` and
+`worktree_marker` identify the created checkout itself: spawn writes a random
+marker into that checkout's Git admin directory
+(`<git dir>/worktrees/<name>/fledge-checkout-id`), which Git deletes when the
+checkout is removed or pruned, so a checkout later recreated at the same path,
+even on the same branch, never carries it. The marker is null if it could not be
+written. Records written before these fields existed read as not created or
+unidentified. The parent is the caller's live record when the
 caller's pane hosts a registered terminal; otherwise it is null. Records are
 never deleted: an ended record moves to `.fledge/state/agents/archive/`, where
 lookups by ID still find it but scans for live agents no longer read it.
@@ -451,15 +458,20 @@ reports; Fledge cannot detect that itself. Every other worker is held and
 reported with its reasons.
 
 A checkout is removed only when all of these hold: a worker's spawn created it
-(`worktree_created`), it is a managed checkout under `.fledge/worktrees` and not
+(`worktree_created`) and it is still that same checkout (its Git marker and
+checked-out branch match `worktree_marker` and `worktree_branch`), it is a managed checkout under `.fledge/worktrees` and not
 the primary checkout, a base branch was recorded, its worker has ended or is
 being stopped now, it is clean, it is merged into that recorded base (for
 example `dev`), not into the [integration branch](#integration-branch), and no
 live agent other than the workers being stopped uses it, by the same rules as
 `worktree remove`. Branches are always kept. Checkouts a worker only opened,
-checkouts recorded before creation was tracked, and any that fail a check are
-reported and kept; remove them yourself with `fledge worktree remove` once they
-are no longer needed. Because a stopped worker's record moves to the archive,
+checkouts recorded before creation or identity was tracked, checkouts replaced
+since the worker's spawn (reason `replaced since the worker's spawn`), and any
+that fail a check are reported and kept. When several workers recorded the same
+path, only the one whose recorded marker matches the checkout there can own it;
+registration order never decides. Once the created checkout is gone, its record
+can never authorize a removal again. Remove kept checkouts yourself with
+`fledge worktree remove` once they are no longer needed. Because a stopped worker's record moves to the archive,
 cleanup also reads archived records, so a later run removes a checkout whose
 worker it already stopped once the checkout is safe. A checkout no longer
 listed by Git is not reported.

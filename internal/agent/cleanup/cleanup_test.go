@@ -12,11 +12,13 @@ import (
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/gitstatus"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/tasktest"
+	"github.com/Harrison-Blair/fledge/internal/lib/worktree"
 )
 
 type call = herdrscript.Call
@@ -115,8 +117,18 @@ func (r repo) load(t *testing.T, id string) identity.Record {
 	return rec
 }
 
-func created(path, base string) *identity.Checkout {
-	return &identity.Checkout{Path: path, Created: true, Base: &base}
+// created is the provenance a spawn records after creating the checkout at
+// path from base: its branch and its marker, marking it if needed. The
+// primary checkout cannot be marked and gets no marker.
+func created(t *testing.T, path, base string) *identity.Checkout {
+	t.Helper()
+	c := &identity.Checkout{Path: path, Created: true, Base: &base, Branch: gitstatus.Branch(context.Background(), path)}
+	id := worktree.Marker(context.Background(), path)
+	if id == "" {
+		id, _ = worktree.Mark(context.Background(), path)
+	}
+	c.Marker = libagent.Pointer(id)
+	return c
 }
 
 func client(t *testing.T, r repo, calls ...call) libagent.Client {
@@ -266,7 +278,7 @@ func TestDryRunPlansWithoutWrites(t *testing.T) {
 	moved.PaneID = "w1:p9"
 	callerRec := r.register(t, moved, nil, "adopt", nil)
 	w := agent("w2:p1", "w2", "t_worker", "worker", "idle")
-	wrec := r.register(t, w, &callerRec.ID, "spawn", created(r.topic, "dev"))
+	wrec := r.register(t, w, &callerRec.ID, "spawn", created(t, r.topic, "dev"))
 	tasktest.Seed(t, r.root, task.Record{Title: "t", Owner: &wrec.ID, Status: task.Verified})
 	before := snapshot(t, filepath.Join(r.root, ".fledge", "state"))
 	out := Run(context.Background(), client(t, r, get(callerAgent), agentList(callerAgent, w), call{Method: "worktree.list", Result: r.listing(map[string]string{r.topic: "w2"}, r.topic)}), Options{DryRun: true})
@@ -312,7 +324,7 @@ func TestCleanupStopsWorkerAndRemovesItsCheckout(t *testing.T) {
 	callerAgent := agent("w1:p1", "w1", "t_caller", "orchestrator", "working")
 	callerRec := r.register(t, callerAgent, nil, "adopt", nil)
 	w := agent("w2:p1", "w2", "t_worker", "worker", "idle")
-	wrec := r.register(t, w, &callerRec.ID, "spawn", created(r.topic, "dev"))
+	wrec := r.register(t, w, &callerRec.ID, "spawn", created(t, r.topic, "dev"))
 	tasktest.Seed(t, r.root, task.Record{Title: "t", Owner: &wrec.ID, Status: task.Verified})
 	open := map[string]string{r.topic: "w2"}
 	out := Run(context.Background(), client(t, r,
@@ -367,10 +379,24 @@ func TestCheckoutGuards(t *testing.T) {
 			git(t, r.root, "merge", "-q", "--ff-only", "topic")
 		}},
 		{"unknown base", "merged into gone: unknown", func(t *testing.T, r repo, _ *string, c **identity.Checkout, _ *[]herdr.AgentDetails) {
-			*c = created(r.topic, "gone")
+			*c = created(t, r.topic, "gone")
 		}},
-		{"legacy record without base", "no recorded base branch", func(t *testing.T, r repo, _ *string, c **identity.Checkout, _ *[]herdr.AgentDetails) {
-			*c = &identity.Checkout{Path: r.topic, Created: true}
+		{"no recorded base", "no recorded base branch", func(t *testing.T, r repo, _ *string, c **identity.Checkout, _ *[]herdr.AgentDetails) {
+			*c = created(t, r.topic, "dev")
+			(*c).Base = nil
+		}},
+		{"legacy record without marker", "no recorded checkout identity", func(t *testing.T, r repo, _ *string, c **identity.Checkout, _ *[]herdr.AgentDetails) {
+			base := "dev"
+			*c = &identity.Checkout{Path: r.topic, Created: true, Base: &base, Branch: s("topic")}
+		}},
+		{"empty recorded marker on an unmarked checkout", "replaced since the worker's spawn", func(t *testing.T, r repo, _ *string, c **identity.Checkout, _ *[]herdr.AgentDetails) {
+			git(t, r.root, "worktree", "remove", r.topic)
+			git(t, r.root, "worktree", "add", "-q", r.topic, "topic")
+			base := "dev"
+			*c = &identity.Checkout{Path: r.topic, Created: true, Base: &base, Branch: s("topic"), Marker: s("")}
+		}},
+		{"branch switched", "replaced since the worker's spawn", func(t *testing.T, r repo, _ *string, _ **identity.Checkout, _ *[]herdr.AgentDetails) {
+			git(t, r.topic, "switch", "-q", "-c", "other")
 		}},
 		{"borrowed", "not created by its worker's spawn", func(t *testing.T, r repo, _ *string, c **identity.Checkout, _ *[]herdr.AgentDetails) {
 			*c = &identity.Checkout{Path: r.topic}
@@ -379,10 +405,10 @@ func TestCheckoutGuards(t *testing.T) {
 			ext, _ := filepath.EvalSymlinks(t.TempDir())
 			ext = filepath.Join(ext, "ext")
 			git(t, r.root, "worktree", "add", "-q", "-b", "ext", ext, "dev")
-			*path, *c = ext, created(ext, "dev")
+			*path, *c = ext, created(t, ext, "dev")
 		}},
 		{"primary", "primary checkout", func(t *testing.T, r repo, path *string, c **identity.Checkout, _ *[]herdr.AgentDetails) {
-			*path, *c = r.root, created(r.root, "dev")
+			*path, *c = r.root, created(t, r.root, "dev")
 		}},
 		{"used by an unrelated agent", "live agent stranger (w9:p1) is working in", func(t *testing.T, r repo, _ *string, _ **identity.Checkout, others *[]herdr.AgentDetails) {
 			a := agent("w9:p1", "w9", "t_stranger", "stranger", "idle")
@@ -400,7 +426,7 @@ func TestCheckoutGuards(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newRepo(t)
-			path, c := r.topic, created(r.topic, "dev")
+			path, c := r.topic, created(t, r.topic, "dev")
 			var others []herdr.AgentDetails
 			tc.setup(t, r, &path, &c, &others)
 			callerAgent := agent("w1:p1", "w1", "t_caller", "orchestrator", "working")
@@ -437,7 +463,7 @@ func TestHeldWorkerKeepsCheckout(t *testing.T) {
 	callerAgent := agent("w1:p1", "w1", "t_caller", "orchestrator", "working")
 	callerRec := r.register(t, callerAgent, nil, "adopt", nil)
 	w := agent("w2:p1", "w2", "t_worker", "worker", "idle")
-	wrec := r.register(t, w, &callerRec.ID, "spawn", created(r.topic, "dev"))
+	wrec := r.register(t, w, &callerRec.ID, "spawn", created(t, r.topic, "dev"))
 	tasktest.Seed(t, r.root, task.Record{Title: "t", Owner: &wrec.ID, Status: task.Completed})
 	out := Run(context.Background(), client(t, r, get(callerAgent), agentList(callerAgent, w), call{Method: "worktree.list", Result: r.listing(map[string]string{r.topic: "w2"}, r.topic)}), Options{})
 	res := out.Result.(Result)
@@ -459,7 +485,7 @@ func TestGuardsRecheckedBeforeStopping(t *testing.T) {
 			callerAgent := agent("w1:p1", "w1", "t_caller", "orchestrator", "working")
 			callerRec := r.register(t, callerAgent, nil, "adopt", nil)
 			w := agent("w2:p1", "w2", "t_worker", "worker", "idle")
-			wrec := r.register(t, w, &callerRec.ID, "spawn", created(r.topic, "dev"))
+			wrec := r.register(t, w, &callerRec.ID, "spawn", created(t, r.topic, "dev"))
 			tasktest.Seed(t, r.root, task.Record{Title: "t", Owner: &wrec.ID, Status: task.Verified})
 			busy := w
 			busy.AgentStatus = "working"
@@ -516,7 +542,7 @@ func TestRerunRemovesCheckoutOfStoppedWorker(t *testing.T) {
 	callerAgent := agent("w1:p1", "w1", "t_caller", "orchestrator", "working")
 	callerRec := r.register(t, callerAgent, nil, "adopt", nil)
 	w := agent("w2:p1", "w2", "t_worker", "worker", "idle")
-	wrec := r.register(t, w, &callerRec.ID, "spawn", created(r.topic, "dev"))
+	wrec := r.register(t, w, &callerRec.ID, "spawn", created(t, r.topic, "dev"))
 	tasktest.Seed(t, r.root, task.Record{Title: "t", Owner: &wrec.ID, Status: task.Verified})
 	out := Run(context.Background(), client(t, r,
 		get(callerAgent), agentList(callerAgent, w), call{Method: "worktree.list", Result: r.listing(map[string]string{r.topic: "w2"}, r.topic)},
@@ -552,7 +578,7 @@ func TestStopFailureIsPartial(t *testing.T) {
 	callerAgent := agent("w1:p1", "w1", "t_caller", "orchestrator", "working")
 	callerRec := r.register(t, callerAgent, nil, "adopt", nil)
 	w := agent("w2:p1", "w2", "t_worker", "worker", "idle")
-	wrec := r.register(t, w, &callerRec.ID, "spawn", created(r.topic, "dev"))
+	wrec := r.register(t, w, &callerRec.ID, "spawn", created(t, r.topic, "dev"))
 	w2 := agent("w3:p1", "w3", "t_worker2", "worker2", "idle")
 	w2rec := r.register(t, w2, &callerRec.ID, "spawn", nil)
 	for _, id := range []string{wrec.ID, w2rec.ID} {
@@ -641,6 +667,87 @@ func TestNewDescendantHoldsWorker(t *testing.T) {
 			}
 			if r.load(t, rec.ID).EndedAt != nil {
 				t.Fatal("worker record ended")
+			}
+		})
+	}
+}
+
+// endRecord ends record id as a completed agent stop would.
+func (r repo) endRecord(t *testing.T, id string) {
+	t.Helper()
+	st, err := identity.Existing(context.Background(), r.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := identity.End(st, id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A stopped worker's provenance belongs to the checkout its spawn created,
+// not to its path: once that checkout is removed, one recreated at the same
+// path, by hand on another branch or on the same branch, is reported as
+// replaced and never removed. Only the planning calls are scripted, so any
+// removal attempt fails the test. (Regression from verification.)
+func TestArchivedProvenanceDoesNotOwnReplacement(t *testing.T) {
+	for _, branch := range []string{"replacement", "topic"} {
+		for _, dryRun := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s dry-run=%v", branch, dryRun), func(t *testing.T) {
+				r := newRepo(t)
+				a := agent("w1:p1", "w1", "t_caller", "orchestrator", "working")
+				caller := r.register(t, a, nil, "adopt", nil)
+				w := agent("w2:p1", "w2", "t_old", "old", "done")
+				old := r.register(t, w, &caller.ID, "spawn", created(t, r.topic, "dev"))
+				r.endRecord(t, old.ID)
+				git(t, r.root, "worktree", "remove", r.topic)
+				if branch == "topic" {
+					git(t, r.root, "worktree", "add", "-q", r.topic, "topic")
+				} else {
+					git(t, r.root, "worktree", "add", "-q", "-b", branch, r.topic, "dev")
+				}
+				listing := r.listing(nil, r.topic)
+				listing.Worktrees[1].Branch = s(branch)
+				out := Run(context.Background(), client(t, r, get(a), agentList(a), call{Method: "worktree.list", Result: listing}), Options{DryRun: dryRun})
+				c := checkout(out.Result.(Result), r.topic)
+				if out.Status != "success" || c.Outcome != "skipped" || c.Reason == nil || !strings.Contains(*c.Reason, "replaced since the worker's spawn") {
+					t.Fatalf("replacement checkout must not inherit archived provenance: %+v %+v", out, c)
+				}
+				if _, err := os.Stat(r.topic); err != nil {
+					t.Fatal("replacement checkout deleted")
+				}
+			})
+		}
+	}
+}
+
+// When several of the caller's workers recorded the same path, only the one
+// whose recorded marker matches the checkout there owns it, whichever
+// registered first or last.
+func TestOnlyMatchingIncarnationOwnsSharedPath(t *testing.T) {
+	for _, newerOwns := range []bool{true, false} {
+		t.Run(fmt.Sprintf("newer owns=%v", newerOwns), func(t *testing.T) {
+			r := newRepo(t)
+			a := agent("w1:p1", "w1", "t_caller", "orchestrator", "working")
+			caller := r.register(t, a, nil, "adopt", nil)
+			stale := created(t, r.topic, "dev")
+			stale.Marker = s("0123456789abcdef0123456789abcdef")
+			current := created(t, r.topic, "dev")
+			first, second := stale, current
+			if !newerOwns {
+				first, second = current, stale
+			}
+			older := r.register(t, agent("w2:p1", "w2", "t_older", "older", "done"), &caller.ID, "spawn", first)
+			r.endRecord(t, older.ID)
+			newer := r.register(t, agent("w3:p1", "w3", "t_newer", "newer", "done"), &caller.ID, "spawn", second)
+			r.endRecord(t, newer.ID)
+			owner := newer.ID
+			if !newerOwns {
+				owner = older.ID
+			}
+			out := Run(context.Background(), client(t, r, get(a), agentList(a), call{Method: "worktree.list", Result: r.listing(nil, r.topic)}), Options{DryRun: true})
+			res := out.Result.(Result)
+			if c := checkout(res, r.topic); len(res.Checkouts) != 1 || c.Outcome != "planned" || c.Worker != owner {
+				t.Fatalf("want planned under %s: %+v", owner, res.Checkouts)
 			}
 		})
 	}

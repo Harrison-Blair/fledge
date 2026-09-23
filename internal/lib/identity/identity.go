@@ -28,8 +28,10 @@ const Kind = "agents"
 // Record is one registered agent. EndedAt stays null until agent stop closes
 // its pane or a lookup observes its terminal gone; the record then moves to the
 // store's archive. Records are never deleted. WorktreeCreated and WorktreeBase
-// record that the agent's spawn created its checkout and from which ref;
-// records written before they existed read as not created.
+// record that the agent's spawn created its checkout and from which ref, and
+// WorktreeBranch and WorktreeMarker identify that very checkout, so one
+// recreated later at the same path is not taken for it; records written
+// before they existed read as not created or unidentified.
 type Record struct {
 	ID              string  `json:"id"`
 	Name            *string `json:"name"`
@@ -44,16 +46,20 @@ type Record struct {
 	WorktreePath    *string `json:"worktree_path"`
 	WorktreeCreated bool    `json:"worktree_created"`
 	WorktreeBase    *string `json:"worktree_base"`
+	WorktreeBranch  *string `json:"worktree_branch"`
+	WorktreeMarker  *string `json:"worktree_marker"`
 	EndedAt         *string `json:"ended_at"`
 }
 
 // Checkout is the checkout an agent was placed in. Created records that the
 // agent's spawn created it, from Base when that is known, rather than opening
-// an existing one.
+// an existing one; Branch and Marker (see worktree.Mark) identify the created
+// checkout.
 type Checkout struct {
-	Path    string
-	Created bool
-	Base    *string
+	Path           string
+	Created        bool
+	Base           *string
+	Branch, Marker *string
 }
 
 // OpenStore opens the state store of the repository containing cwd, creating
@@ -127,6 +133,7 @@ func Register(ctx context.Context, s *state.Store, c libagent.Client, details he
 				Session: session(), TerminalID: details.TerminalID, RegisteredAt: time.Now().UTC().Format(time.RFC3339), RegisteredBy: by, Parent: parent}
 			if checkout != nil {
 				rec.WorktreePath, rec.WorktreeCreated, rec.WorktreeBase = &checkout.Path, checkout.Created, checkout.Base
+				rec.WorktreeBranch, rec.WorktreeMarker = checkout.Branch, checkout.Marker
 			}
 			return rec
 		})

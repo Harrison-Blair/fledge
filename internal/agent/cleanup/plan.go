@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/gitstatus"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
@@ -180,11 +181,13 @@ func taskHold(tasks []task.Record, owner string, collected bool) string {
 }
 
 // planCheckouts decides each checkout still listed that one of caller's
-// spawned workers recorded. Only a managed checkout the worker's spawn created
-// from a recorded base is planned for removal, and only when its worker is
-// ended or being stopped, it is clean and merged into that base, and no live
-// agent other than the workers being stopped uses it. A checkout recorded by
-// several workers is decided once, under the worker that created it.
+// spawned workers recorded. Only a managed checkout that a worker's spawn
+// created, and that is still that same checkout, is planned for removal, and
+// only when its worker is ended or being stopped, a base was recorded, it is
+// clean and merged into that base, and no live agent other than the workers
+// being stopped uses it. A path several workers recorded is decided once:
+// under the worker whose recorded checkout it still is, or, when none owns
+// it, under the latest to record it.
 func planCheckouts(ctx context.Context, caller string, records []identity.Record, workers []Worker, agents []herdr.AgentDetails, live map[string]identity.Record, listing worktree.Checkouts) []Checkout {
 	outcomes := map[string]string{}
 	for _, w := range workers {
@@ -196,31 +199,37 @@ func planCheckouts(ctx context.Context, caller string, records []identity.Record
 			others = append(others, a)
 		}
 	}
-	creatorsFirst := slices.Clone(records)
-	slices.SortStableFunc(creatorsFirst, func(a, b identity.Record) int {
-		switch {
-		case a.WorktreeCreated == b.WorktreeCreated:
-			return 0
-		case a.WorktreeCreated:
-			return -1
-		}
-		return 1
-	})
-	managed := worktree.Canonical(filepath.Join(listing.Root, ".fledge", "worktrees"))
-	checkouts, seen := []Checkout{}, map[string]bool{}
-	for _, rec := range creatorsFirst {
+	var paths []string
+	claims := map[string][]identity.Record{}
+	for _, rec := range records {
 		if !spawnedBy(caller, rec) || rec.WorktreePath == nil {
 			continue
 		}
 		path := worktree.Canonical(*rec.WorktreePath)
+		if claims[path] == nil {
+			paths = append(paths, path)
+		}
+		claims[path] = append(claims[path], rec)
+	}
+	managed := worktree.Canonical(filepath.Join(listing.Root, ".fledge", "worktrees"))
+	checkouts := []Checkout{}
+	for _, path := range paths {
 		i := slices.IndexFunc(listing.Worktrees, func(w herdr.Worktree) bool { return w.Path == path })
-		if i < 0 || seen[path] {
+		if i < 0 {
 			continue
 		}
-		seen[path] = true
 		row := listing.Worktrees[i]
+		marker, branch := worktree.Marker(ctx, row.Path), gitstatus.Branch(ctx, row.Path)
+		recs := claims[path]
+		rec, owned := recs[len(recs)-1], false
+		for _, r := range recs {
+			if owns(r, marker, branch) {
+				rec, owned = r, true
+				break
+			}
+		}
 		c := Checkout{Path: row.Path, Branch: row.Branch, Base: rec.WorktreeBase, Worker: rec.ID, Outcome: "planned"}
-		if reasons := checkoutHold(ctx, rec, row, listing.Root, managed, outcomes, others, live); len(reasons) > 0 {
+		if reasons := checkoutHold(ctx, rec, owned, row, listing.Root, managed, outcomes, others, live); len(reasons) > 0 {
 			c.Outcome, c.Reason = "skipped", libagent.Pointer(strings.Join(reasons, "; "))
 		}
 		checkouts = append(checkouts, c)
@@ -228,18 +237,31 @@ func planCheckouts(ctx context.Context, caller string, records []identity.Record
 	return checkouts
 }
 
+// owns reports whether rec's spawn created the checkout whose marker and
+// checked-out branch, both read from Git, are marker and branch.
+func owns(rec identity.Record, marker string, branch *string) bool {
+	return rec.WorktreeCreated && marker != "" && rec.WorktreeMarker != nil && *rec.WorktreeMarker == marker &&
+		rec.WorktreeBranch != nil && branch != nil && *rec.WorktreeBranch == *branch
+}
+
 // checkoutHold explains why checkout row, recorded by rec, is kept, or
-// returns none. outcomes maps each worker with a live record to its planned
-// outcome; others are the live agents that are not being stopped.
-func checkoutHold(ctx context.Context, rec identity.Record, row herdr.Worktree, root, managed string, outcomes map[string]string, others []herdr.AgentDetails, live map[string]identity.Record) []string {
+// returns none. owned reports whether rec's spawn created row itself.
+// outcomes maps each worker with a live record to its planned outcome; others
+// are the live agents that are not being stopped.
+func checkoutHold(ctx context.Context, rec identity.Record, owned bool, row herdr.Worktree, root, managed string, outcomes map[string]string, others []herdr.AgentDetails, live map[string]identity.Record) []string {
+	const manual = "; remove it with fledge worktree remove once it is no longer needed"
 	rel, err := filepath.Rel(managed, row.Path)
 	switch {
 	case !rec.WorktreeCreated:
-		return []string{"not created by its worker's spawn; remove it with fledge worktree remove once it is no longer needed"}
+		return []string{"not created by its worker's spawn" + manual}
 	case row.Path == root:
 		return []string{"primary checkout"}
 	case err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)):
-		return []string{"not a managed checkout under .fledge/worktrees; remove it with fledge worktree remove once it is no longer needed"}
+		return []string{"not a managed checkout under .fledge/worktrees" + manual}
+	case rec.WorktreeMarker == nil:
+		return []string{"no recorded checkout identity, so it may not be the one its worker's spawn created" + manual}
+	case !owned:
+		return []string{"replaced since the worker's spawn" + manual}
 	case rec.WorktreeBase == nil:
 		return []string{"no recorded base branch; check it and remove it with fledge worktree remove"}
 	}

@@ -105,7 +105,12 @@ func (s *spawner) worktreePlacement(ctx context.Context, o Options, snap *herdr.
 	if !alreadyOpen {
 		if method == "worktree.create" {
 			out.Effects = append(out.Effects, libagent.Effect{Action: "created", Kind: "worktree", Path: path})
-			s.checkout.Created, s.checkout.Base = true, base
+			s.checkout.Created, s.checkout.Base, s.checkout.Branch = true, base, &branch
+			// Mark this checkout so cleanup can tell it from a later one at
+			// the same path. Unmarked, cleanup only reports it.
+			if marker, err := worktree.Mark(ctx, path); err == nil {
+				s.checkout.Marker = &marker
+			}
 		}
 		recordCreated(out, r, true)
 		return s.initialTab(ctx, o, r, out)

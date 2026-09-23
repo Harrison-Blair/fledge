@@ -2,5 +2,6 @@
 // that create and open them.
 // checkouts.go lists a repository's checkouts with canonical paths and reports each one's git state and live users;
 // managed.go validates and prepares managed checkout paths under .fledge/worktrees;
+// marker.go marks a created checkout so it can be told from a later one at the same path;
 // request.go builds and validates worktree.list, worktree.create, and worktree.open.
 package worktree
