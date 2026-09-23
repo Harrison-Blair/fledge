@@ -10,6 +10,7 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
 )
 
 type Options struct {
@@ -38,6 +39,9 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Fail(libagent.Invalid("agent %s is %s; pass --force to stop it anyway", target, status), "guard", false)
 		return out
 	}
+	// End the record before closing: an agent stopping its own pane is hung up
+	// by pane.close before control returns here.
+	store, ended, reopen, endErr := end(ctx, c, a, rec)
 	var closed struct {
 		Type string `json:"type"`
 	}
@@ -46,14 +50,18 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		err = libagent.Protocol("incomplete pane.close result")
 	}
 	if err != nil {
+		if reopen {
+			if reopenErr := identity.Reopen(store, ended); reopenErr != nil {
+				err = fmt.Errorf("%w; agent record %s could not be reopened: %v", err, ended, reopenErr)
+			}
+		}
 		out.Fail(err, "pane.close", true)
 		return out
 	}
 	out.Result = Result{AgentRow: libagent.NewAgentRow(a.Pane), Stopped: true}
 	out.Effects = append(out.Effects, libagent.Effect{Action: "closed", Kind: "pane", ID: a.PaneID})
-	ended, err := end(ctx, c, a, rec)
-	if err != nil {
-		out.Fail(err, "state", false)
+	if endErr != nil {
+		out.Fail(endErr, "state", false)
 		return out
 	}
 	if ended != "" {
@@ -62,20 +70,25 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	return out
 }
 
-// end marks the stopped agent's live record ended and returns its id, or ""
-// when the agent has no record. Like agent get, it treats an unavailable
+// end marks the agent's live record ended and returns its store and id, or ""
+// when the agent has no record, and whether this call ended it, so a failed
+// close reopens only its own end. Like agent get, it treats an unavailable
 // store as holding no record, so stop works outside a repository.
-func end(ctx context.Context, c libagent.Client, a herdr.AgentDetails, rec *identity.Record) (string, error) {
+func end(ctx context.Context, c libagent.Client, a herdr.AgentDetails, rec *identity.Record) (*state.Store, string, bool, error) {
 	s, err := identity.Existing(ctx, c.Cwd)
 	if err != nil || s == nil {
-		return "", nil
+		return nil, "", false, nil
 	}
 	if rec == nil {
 		if rec, err = identity.Match(s, a); err != nil || rec == nil {
-			return "", err
+			return nil, "", false, err
 		}
 	}
-	return rec.ID, identity.End(s, rec.ID)
+	ended, err := identity.EndOnce(s, rec.ID)
+	if err != nil {
+		return nil, "", false, err
+	}
+	return s, rec.ID, ended, nil
 }
 
 // Render writes a successful stop outcome.

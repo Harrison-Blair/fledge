@@ -89,6 +89,14 @@ func discovery() models.Discovery {
 	}}
 }
 
+// brokenPiDiscovery reads a fixture home whose pi model store is corrupt and
+// whose other model caches were never created.
+func brokenPiDiscovery() models.Discovery {
+	d := discovery()
+	d.Home = filepath.Join("testdata", "broken-model-cache")
+	return d
+}
+
 func env(vars map[string]string, mode fs.FileMode, statErr error) checks.Environment {
 	return checks.Environment{
 		Getenv: func(k string) string { return vars[k] },
@@ -198,7 +206,7 @@ func TestRunGolden(t *testing.T) {
 	scenarios := map[string]doctor.Options{
 		"healthy":  healthy(),
 		"outside":  outsideHerdr(),
-		"mismatch": {Herdr: fakeProber{pong: herdr.PongResult{Type: "pong", Version: "0.9.1", Protocol: 21, Capabilities: full}, list: integrationList("pi", "codex", "claude")}, Discovery: discovery(), Env: env(map[string]string{"HERDR_ENV": "1", "HERDR_SOCKET_PATH": "/run/herdr.sock"}, 0, errors.New("permission denied"))},
+		"mismatch": {Herdr: fakeProber{pong: herdr.PongResult{Type: "pong", Version: "0.9.1", Protocol: 21, Capabilities: full}, list: integrationList("pi", "codex", "claude")}, Discovery: brokenPiDiscovery(), Env: env(map[string]string{"HERDR_ENV": "1", "HERDR_SOCKET_PATH": "/run/herdr.sock"}, 0, errors.New("permission denied"))},
 		"home":     {Herdr: fakeProber{pong: pong(22)}, Discovery: discovery(), Env: homeEnv},
 	}
 	for name, o := range scenarios {

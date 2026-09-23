@@ -16,15 +16,9 @@ fledge doctor
 
   model_discovery         fail
     pi 0 · codex 0 · claude 0
-    pi: discovery error: open
-        /nonexistent-home-fledge/.pi/agent/models-store.json: no such file or
-        directory
-    codex: discovery error: open
-        /nonexistent-home-fledge/.codex/models_cache.json: no such file or
-        directory
-    claude: discovery error: open
-        /nonexistent-home-fledge/.claude/cache/model-catalog: no such file or
-        directory
+    pi: discovery error: unexpected end of JSON input
+    codex: no models found
+    claude: no models found
 
   configuration           warn
     HERDR_ENV      1

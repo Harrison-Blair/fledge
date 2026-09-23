@@ -88,6 +88,56 @@ func TestSpawnNoWaitRegistersFromStart(t *testing.T) {
 	}
 }
 
+func TestSpawnNoWaitRecordsRequestedHarness(t *testing.T) {
+	// agent.start reports no harness until Herdr detects one; the record must
+	// still carry the requested harness so a later different harness in the
+	// same terminal does not inherit it.
+	o := validOptions()
+	o.Pane = "w1:p1"
+	o.NoWait = true
+	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
+	start := started(p)
+	start.Agent.Agent, start.Agent.TerminalID = nil, "term_start"
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: start}, callerNotAgent())
+	s.Cwd = identitytest.Repository(t)
+	out := s.run(context.Background(), o, nil)
+	r := out.Result.(*Result)
+	if out.Status != "success" || !r.Registered {
+		t.Fatalf("%+v %+v", out, r)
+	}
+	if rec := stored(t, s.Cwd, *r.ID); rec.Harness == nil || *rec.Harness != "claude" {
+		t.Fatalf("harness = %v, want claude", rec.Harness)
+	}
+	if r.DetectedHarness != nil {
+		t.Fatalf("detected harness = %q, want none", *r.DetectedHarness)
+	}
+}
+
+func TestSpawnWaitRecordsRequestedHarnessWhenUnclassified(t *testing.T) {
+	// agent.wait can settle before Herdr classifies the agent; the record must
+	// still carry the requested harness.
+	o := validOptions()
+	o.Pane = "w1:p1"
+	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
+	wait := waitCall("worker", p, "idle")
+	if wait.Result.(herdr.AgentResult).Agent.Agent != nil {
+		t.Fatal("fixture must model an unclassified agent")
+	}
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p)}, wait, callerNotAgent())
+	s.Cwd = identitytest.Repository(t)
+	out := s.run(context.Background(), o, nil)
+	r := out.Result.(*Result)
+	if out.Status != "success" || !r.Registered {
+		t.Fatalf("%+v %+v", out, r)
+	}
+	if rec := stored(t, s.Cwd, *r.ID); rec.Harness == nil || *rec.Harness != "claude" {
+		t.Fatalf("harness = %v, want claude", rec.Harness)
+	}
+	if r.DetectedHarness != nil {
+		t.Fatalf("detected harness = %q, want none", *r.DetectedHarness)
+	}
+}
+
 func TestSpawnRegistersBeforeFirstPrompt(t *testing.T) {
 	o := validOptions()
 	o.Pane = "w1:p1"

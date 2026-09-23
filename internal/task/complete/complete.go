@@ -144,7 +144,9 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		text = fmt.Sprintf("Completed task %s.\n", r.ID)
 	case o.Status == "unknown" && o.Error.Phase == "agent.prompt":
 		text = fmt.Sprintf("Task %s is completed; the notification outcome is unknown and will not be retried.\n", r.ID)
-	case o.Error.Phase == "identity" || o.Error.Phase == "agent.prompt":
+	// A creator lookup failure is stored on the notification; its phase names
+	// whichever Herdr call failed.
+	case o.Error.Phase == "agent.prompt" || n != nil && n.Error != nil:
 		text = fmt.Sprintf("Task %s is completed; its creator was not notified and the notification will not be retried.\n", r.ID)
 	case o.Error.Phase == "task":
 		text = fmt.Sprintf("Task %s is completed; the notification outcome could not be recorded.\n", r.ID)

@@ -67,7 +67,8 @@ func TestModelUnavailableIsWarnNotFail(t *testing.T) {
 
 func TestModelAvailabilityUnknownWhenListFails(t *testing.T) {
 	// integration.list failed: availability is unknown, discovery still attempted.
-	m := checks.Models(context.Background(), discovery(), herdr.IntegrationListResult{}, errors.New("down"))
+	home := homeWithPi(t, `{"broken":`)
+	m := checks.Models(context.Background(), fatalRunDiscovery(t, home), herdr.IntegrationListResult{}, errors.New("down"))
 	if !strings.Contains(m.Detail, "pi") {
 		t.Fatalf("model %+v", m)
 	}
@@ -86,5 +87,19 @@ func TestModelAvailabilityUnknownWithModels(t *testing.T) {
 	m := checks.Models(context.Background(), fatalRunDiscovery(t, home), herdr.IntegrationListResult{}, errors.New("down"))
 	if pi := m.Data.(report.ModelData).Harnesses[0]; pi.Status != report.OK || pi.Detail != "1 models (availability unknown)" {
 		t.Fatalf("pi = %+v", pi)
+	}
+}
+
+func TestModelAvailableMissingCacheIsWarnNotFail(t *testing.T) {
+	// Fresh machine: every harness is installed but none has written its model
+	// cache yet. A never-created cache means no models, not a broken source.
+	m := checks.Models(context.Background(), fatalRunDiscovery(t, t.TempDir()), integrationList("pi", "codex", "claude"), nil)
+	if m.Status != report.Warn || m.Detail != "pi:warn(0) codex:warn(0) claude:warn(0)" {
+		t.Fatalf("model %+v", m)
+	}
+	for _, h := range m.Data.(report.ModelData).Harnesses {
+		if h.Status != report.Warn || h.Detail != "no models found" || h.Available == nil || !*h.Available {
+			t.Fatalf("harness %+v", h)
+		}
 	}
 }
