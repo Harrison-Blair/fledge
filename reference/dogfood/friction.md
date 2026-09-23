@@ -615,6 +615,10 @@ because `verified` is terminal and no command reopens or re-completes a task.
 The task record therefore reflects the earlier commit, not the re-verified one.
 Workaround: rely on the verifier's message for the final result.
 
+Resolved 2026-09-23: `fledge task verify` now accepts a `verified` task and
+applies the same checks again; the repeat replaces the verifier, note, forced
+flag, and time, keeping only the latest verification.
+
 **Reproduction steps:**
 1. Assign a task, complete it, and run `fledge task verify --id <task>`.
 2. Commit follow-up repairs for findings from that verification.
@@ -694,6 +698,10 @@ real `.fledge/state/agents/`, not to the throwaway repo named by `--cwd`.
 The probes then blocked at Claude's trust dialog and had to be stopped by the
 orchestrator. Workaround: run any spawn that registers from a working directory
 inside the repository whose state should hold the record.
+
+Resolved 2026-09-23: documented as intended. The invoking repository owns
+coordination state; `--cwd` only places the shell. See README "Identity" and
+`fledge agent spawn --help`.
 
 **Reproduction steps:**
 1. From inside repository A, run `fledge agent spawn --harness claude --name probe --no-wait --cwd <repository B>`.

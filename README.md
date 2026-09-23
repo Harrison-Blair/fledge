@@ -132,9 +132,11 @@ ordinary required-flag validation.
 
 Ordinary spawn honors Herdr's configured cwd policy unless `--cwd` is supplied.
 A relative `--cwd` resolves against the caller's working directory; an
-absolute path is used as given. Use repeatable `--env KEY=VALUE` for new
-ordinary shells. `--direction` defaults to `right`; `--ratio` delegates to
-Herdr when omitted. These flags only affect splits. `--focus` defaults to
+absolute path is used as given. `--cwd` only places the shell (and selects the
+source for `--worktree new`); the agent is still registered in the repository
+Fledge was invoked from (see [Identity](#identity)). Use repeatable
+`--env KEY=VALUE` for new ordinary shells. `--direction` defaults to `right`;
+`--ratio` delegates to Herdr when omitted. These flags only affect splits. `--focus` defaults to
 false and focuses the destination before launch. `--timeout` is a duration,
 default `30s`; its millisecond value must be greater than 3000 and at most
 300000.
@@ -356,6 +358,16 @@ Spawn registers the agent once startup settles (or once launch begins with
 written, the agent still runs and spawn still succeeds: `registered` is false
 and the text output shows `id: - (not registered: <reason>)`.
 
+The repository Fledge is invoked from owns this coordination state, not the one
+named by `--cwd`, which only changes where the agent's shell starts and, with
+`--worktree new`, the source repository. Spawning from repository A with
+`--cwd` in repository B records the agent in A; a caller outside any Git
+repository gets an unregistered spawn even when `--cwd` names one. `--name` and
+`--pane` are live Herdr selectors that work from anywhere, but `--id` and task
+records are read from the invoking repository. A worker launched into B that
+should use A's records must run those commands from A, for example
+`cd /abs/path/to/A && fledge task complete --id <task> --summary "..."`.
+
 `fledge agent adopt` registers an agent that is already running. Without
 `--pane` it targets the caller's own pane. An unnamed agent needs `--name`,
 which adopt sets through Herdr (`agent_name_taken` and `agent_launch_pending`
@@ -454,8 +466,9 @@ fledge task get --id 1a2b3c4d
 
 A task moves `created` → `assigned` → `completed` → `verified`; `task cancel
 [--reason TEXT]` ends a `created`, `assigned`, or `completed` task as
-`cancelled`. Verified and cancelled tasks are final, and other out-of-order
-transitions fail with `task_invalid_state`. There are no progress updates within
+`cancelled`. A verified task can only be verified again (see `verify` below),
+cancelled tasks are final, and other out-of-order transitions fail with
+`task_invalid_state`. There are no progress updates within
 a task and no recorded checks.
 
 A task can be a **subtask** of a parent and can run **after** prerequisite tasks.
@@ -515,11 +528,17 @@ its subtasks, and a subtask is not a prerequisite of its parent.
   notification. A stale creator or confirmed delivery failure returns `partial`;
   an uncertain delivery returns `unknown`. The task remains completed, the
   notification outcome is recorded, and delivery is never retried automatically.
-- `verify --id TASK [--summary TEXT]` requires a `completed` task and a
-  registered caller other than the owner. The owner is refused with
+- `verify --id TASK [--summary TEXT]` requires a `completed` or `verified` task
+  and a registered caller other than the owner. The owner is refused with
   `task_self_verification` and an unregistered caller with
   `caller_unregistered`; `--force` overrides both and records `forced: true`.
-  This is a workflow guard, not a security boundary.
+  This is a workflow guard, not a security boundary. Verifying an
+  already-verified task, for example after repairs, applies the same checks and
+  replaces `verifier` (null for an unregistered `--force`), `verification_note`
+  (null when omitted), `forced`, and `verified_at`; only the latest
+  verification is kept, and the result, completion, and owner are unchanged.
+  Verification is not tied to a Git revision, so name the checked commit in
+  `--summary` when it matters.
 - `list [--status STATE] [--owner AGENT_ID] [--parent TASK] [--ready]` prints
   ID, status, owner (the agent's name while its record is live, otherwise its
   ID), parent, waiting (unmet prerequisites), subtask progress, and title,
