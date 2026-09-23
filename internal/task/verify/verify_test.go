@@ -130,8 +130,8 @@ func TestUnregisteredVerifierNeedsForce(t *testing.T) {
 	}
 }
 
-func TestVerifyRequiresCompleted(t *testing.T) {
-	for _, status := range []string{task.Created, task.Assigned, task.Verified, task.Cancelled} {
+func TestVerifyRequiresCompletedOrVerified(t *testing.T) {
+	for _, status := range []string{task.Created, task.Assigned, task.Cancelled} {
 		repo, id := setup(t, status)
 		out := Run(context.Background(), tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p1", boss)), Options{ID: id, Force: true}, strings.NewReader(""))
 		if out.Error == nil || out.Error.Code != "task_invalid_state" {
@@ -202,5 +202,67 @@ func TestConcurrentSubtaskCreateAndParentVerify(t *testing.T) {
 		default:
 			t.Fatalf("create %+v verify %+v", created.Error, verified.Error)
 		}
+	}
+}
+
+// verified seeds a task already verified by boss, forced, with a note, so a
+// repeat verification must replace every verification field.
+func verified(t *testing.T) (repo, id string, before task.Record) {
+	repo = identitytest.Repository(t)
+	owner := tasktest.Register(t, repo, worker)
+	first := tasktest.Register(t, repo, boss)
+	id = tasktest.Seed(t, repo, task.Record{Title: "t", Status: task.Verified, Owner: &owner.ID, Result: tasktest.Ptr("done"),
+		CompletedAt: tasktest.Ptr("2026-01-01T00:00:00Z"), CompletionNotification: &task.CompletionNotification{Recipient: first.ID, MessageID: "m-1"},
+		Verifier: &first.ID, VerificationNote: tasktest.Ptr("old note"), Forced: true, VerifiedAt: tasktest.Ptr("2026-01-02T00:00:00Z")})
+	return repo, id, tasktest.Load(t, repo, id)
+}
+
+func TestRepeatVerificationReplacesLatestVerification(t *testing.T) {
+	repo, id, before := verified(t)
+	other := tasktest.Agent("w1:p5", "term_other", "other")
+	otherRec := tasktest.Register(t, repo, other)
+	out := Run(context.Background(), tasktest.Client(t, repo, "w1:p5", tasktest.Get("w1:p5", other)), Options{ID: id}, strings.NewReader(""))
+	r := tasktest.Load(t, repo, id)
+	if out.Error != nil || r.VerifiedAt == nil || *r.VerifiedAt == *before.VerifiedAt {
+		t.Fatalf("%+v %+v", out.Error, r)
+	}
+	want := before
+	want.Verifier, want.VerificationNote, want.Forced, want.VerifiedAt = &otherRec.ID, nil, false, r.VerifiedAt
+	if !reflect.DeepEqual(r, want) {
+		t.Fatalf("got %+v\nwant %+v", r, want)
+	}
+}
+
+func TestRepeatVerificationRejectsOwner(t *testing.T) {
+	repo, id, before := verified(t)
+	out := Run(context.Background(), tasktest.Client(t, repo, "w1:p3", tasktest.Get("w1:p3", worker)), Options{ID: id}, strings.NewReader(""))
+	if out.Error == nil || out.Error.Code != "task_self_verification" || !reflect.DeepEqual(tasktest.Load(t, repo, id), before) {
+		t.Fatalf("%+v", out.Error)
+	}
+}
+
+func TestRepeatUnregisteredForceClearsVerifierAndNote(t *testing.T) {
+	repo, id, before := verified(t)
+	out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{ID: id, Force: true}, strings.NewReader(""))
+	r := tasktest.Load(t, repo, id)
+	want := before
+	want.Verifier, want.VerificationNote, want.VerifiedAt = nil, nil, r.VerifiedAt
+	if out.Error != nil || !reflect.DeepEqual(r, want) || *r.VerifiedAt == *before.VerifiedAt {
+		t.Fatalf("%+v %+v", out.Error, r)
+	}
+}
+
+func TestRepeatAfterForcedAcceptanceStillChecksOpenSubtasks(t *testing.T) {
+	repo, id := setup(t, task.Completed)
+	tasktest.Register(t, repo, boss)
+	open := tasktest.Seed(t, repo, task.Record{Title: "open", Status: task.Created, Parent: &id})
+	c := func() libagent.Client { return tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p1", boss)) }
+	if out := Run(context.Background(), c(), Options{ID: id, Force: true}, strings.NewReader("")); out.Error != nil {
+		t.Fatalf("%+v", out.Error)
+	}
+	before := tasktest.Load(t, repo, id)
+	out := Run(context.Background(), c(), Options{ID: id}, strings.NewReader(""))
+	if out.Error == nil || out.Error.Code != "task_open_subtasks" || !strings.Contains(out.Error.Message, open) || !reflect.DeepEqual(tasktest.Load(t, repo, id), before) {
+		t.Fatalf("%+v", out.Error)
 	}
 }

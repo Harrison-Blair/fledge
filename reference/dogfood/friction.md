@@ -615,6 +615,10 @@ because `verified` is terminal and no command reopens or re-completes a task.
 The task record therefore reflects the earlier commit, not the re-verified one.
 Workaround: rely on the verifier's message for the final result.
 
+Resolved 2026-09-23: `fledge task verify` now accepts a `verified` task and
+applies the same checks again; the repeat replaces the verifier, note, forced
+flag, and time, keeping only the latest verification.
+
 **Reproduction steps:**
 1. Assign a task, complete it, and run `fledge task verify --id <task>`.
 2. Commit follow-up repairs for findings from that verification.

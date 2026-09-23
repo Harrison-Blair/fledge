@@ -167,5 +167,6 @@ turns on the shared checkout: the implementer commits and leaves a clean tree be
 verification starts and makes no edits while it runs; the verifier undoes every
 experimental change, such as mutation tests, and confirms `git status` is clean before
 reporting; repairs go back to the implementer through the orchestrator. Verifiers run
-`fledge task verify` only when no findings remain open, because a verified task cannot
-be reopened.
+`fledge task verify` only when no findings remain open. If repairs follow a
+verification, the verifier runs `fledge task verify` again after checking them; this
+replaces the earlier verification, so name the checked commit in `--summary`.

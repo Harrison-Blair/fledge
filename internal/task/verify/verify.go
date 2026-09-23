@@ -1,5 +1,5 @@
 // Package verify implements task verify: a second agent accepting a completed
-// task's result once its subtasks are finished.
+// task's result once its subtasks are finished, or verifying it again.
 package verify
 
 import (
@@ -28,10 +28,12 @@ type Result struct {
 	OpenSubtasks []string `json:"open_subtasks"`
 }
 
-// Run moves a completed task to verified. The verifier must be a registered
-// agent other than the owner, and every direct subtask must be verified or
-// cancelled, unless Force is set; the verifier and whether Force was used are
-// recorded. This is a workflow guard, not a security boundary.
+// Run moves a completed task to verified, or verifies a verified task again.
+// The verifier must be a registered agent other than the owner, and every
+// direct subtask must be verified or cancelled, unless Force is set; the
+// verifier and whether Force was used are recorded. A repeat verification
+// replaces the previous verifier, note, time, and Force flag, keeping only the
+// latest. This is a workflow guard, not a security boundary.
 func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libagent.Outcome {
 	out := libagent.Outcome{Operation: "task.verify", Status: "success", Effects: []libagent.Effect{}}
 	err := task.ValidateID(o.ID)
@@ -54,7 +56,7 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 	}
 	open := []string{}
 	r, err := task.Update(s, o.ID, func(r *task.Record) error {
-		if err := task.Require(r, "verify", task.Completed); err != nil {
+		if err := task.Require(r, "verify", task.Completed, task.Verified); err != nil {
 			return err
 		}
 		rs, err := task.List(s)
@@ -75,7 +77,7 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 		case len(open) > 0:
 			return &herdr.Error{Code: "task_open_subtasks", Message: fmt.Sprintf("task %s has subtasks that are not verified or cancelled: %s; finish them first, or pass --force", r.ID, strings.Join(open, ", "))}
 		}
-		r.Status, r.VerifiedAt, r.Forced = task.Verified, task.Now(), o.Force
+		r.Status, r.VerifiedAt, r.Forced, r.Verifier, r.VerificationNote = task.Verified, task.Now(), o.Force, nil, nil
 		if caller != nil {
 			r.Verifier = &caller.ID
 		}

@@ -449,8 +449,9 @@ fledge task get --id 1a2b3c4d
 
 A task moves `created` → `assigned` → `completed` → `verified`; `task cancel
 [--reason TEXT]` ends a `created`, `assigned`, or `completed` task as
-`cancelled`. Verified and cancelled tasks are final, and other out-of-order
-transitions fail with `task_invalid_state`. There are no progress updates within
+`cancelled`. A verified task can only be verified again (see `verify` below),
+cancelled tasks are final, and other out-of-order transitions fail with
+`task_invalid_state`. There are no progress updates within
 a task and no recorded checks.
 
 A task can be a **subtask** of a parent and can run **after** prerequisite tasks.
@@ -510,11 +511,17 @@ its subtasks, and a subtask is not a prerequisite of its parent.
   notification. A stale creator or confirmed delivery failure returns `partial`;
   an uncertain delivery returns `unknown`. The task remains completed, the
   notification outcome is recorded, and delivery is never retried automatically.
-- `verify --id TASK [--summary TEXT]` requires a `completed` task and a
-  registered caller other than the owner. The owner is refused with
+- `verify --id TASK [--summary TEXT]` requires a `completed` or `verified` task
+  and a registered caller other than the owner. The owner is refused with
   `task_self_verification` and an unregistered caller with
   `caller_unregistered`; `--force` overrides both and records `forced: true`.
-  This is a workflow guard, not a security boundary.
+  This is a workflow guard, not a security boundary. Verifying an
+  already-verified task, for example after repairs, applies the same checks and
+  replaces `verifier` (null for an unregistered `--force`), `verification_note`
+  (null when omitted), `forced`, and `verified_at`; only the latest
+  verification is kept, and the result, completion, and owner are unchanged.
+  Verification is not tied to a Git revision, so name the checked commit in
+  `--summary` when it matters.
 - `list [--status STATE] [--owner AGENT_ID] [--parent TASK] [--ready]` prints
   ID, status, owner (the agent's name while its record is live, otherwise its
   ID), parent, waiting (unmet prerequisites), subtask progress, and title,
