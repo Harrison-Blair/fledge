@@ -79,12 +79,17 @@ func (s *spawner) worktreePlacement(ctx context.Context, o Options, snap *herdr.
 	var r herdr.CreatedResult
 	var base *string
 	if method == "worktree.create" {
-		// Herdr creates from the primary checkout's HEAD when no base is given.
+		// Without --base, send the primary checkout's branch explicitly, so the
+		// recorded base is the one used; a detached primary sends none.
 		base = libagent.Pointer(o.Base)
 		if base == nil {
 			base = gitstatus.Branch(ctx, listing.Source.RepoRoot)
 		}
-		r, err = worktree.Create(ctx, s, src, listing, branch, o.Base, path)
+		sent := ""
+		if base != nil {
+			sent = *base
+		}
+		r, err = worktree.Create(ctx, s, src, listing, branch, sent, path)
 	} else {
 		r, err = worktree.Open(ctx, s, src, listing, path)
 	}

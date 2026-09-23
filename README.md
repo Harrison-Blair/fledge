@@ -172,7 +172,10 @@ prompt may have arrived.
 With `--worktree new`, workspace selectors identify an **existing source**
 repository workspace. That source takes precedence over `--cwd`; without either,
 the source is Fledge's working directory. `--branch` defaults to the agent name,
-and `--base` optionally selects a starting ref. Checkouts are created beneath the
+and `--base` selects the starting ref. Without `--base`, spawn passes the branch
+checked out in the primary checkout as the base (even when invoked from a linked
+worktree); with a detached primary checkout it passes none and Herdr chooses.
+Checkouts are created beneath the
 primary checkout at `.fledge/worktrees/<branch>`, even when invoked from a linked
 worktree. Branch slashes create nested directories. Existing branches or paths
 fail; Fledge does not invent suffixes. `.fledge/.gitignore` excludes the
@@ -346,8 +349,9 @@ pane, workspace, harness, Herdr session (`HERDR_SESSION`), Herdr `terminal_id`,
 `worktree_path`, `worktree_created`, `worktree_base`, and `ended_at`.
 `worktree_created` is true only when the agent's spawn created its checkout
 (`--worktree new`), not when it opened an existing one; `worktree_base` is the
-ref that checkout was created from: `--base` as given, otherwise the branch
-checked out in the primary checkout at spawn time (null when detached). Records
+ref that checkout was created from, as spawn passed it to Herdr: `--base` as
+given, otherwise the primary checkout's branch at spawn time (null when that
+checkout was detached, so no base was passed). Records
 written before these fields existed read as not created. The parent is the caller's live record when the
 caller's pane hosts a registered terminal; otherwise it is null. Records are
 never deleted: an ended record moves to `.fledge/state/agents/archive/`, where
