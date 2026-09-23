@@ -923,3 +923,20 @@ func TestValidID(t *testing.T) {
 		}
 	}
 }
+
+func TestListArchivedReturnsOnlyArchivedIDs(t *testing.T) {
+	store, _ := openStore(t)
+	if ids, err := store.ListArchived("counters"); err != nil || len(ids) != 0 || ids == nil {
+		t.Fatalf("ListArchived before any records = %#v, %v", ids, err)
+	}
+	kept, archived := createCounter(t, store), createCounter(t, store)
+	if ids, err := store.ListArchived("counters"); err != nil || len(ids) != 0 {
+		t.Fatalf("ListArchived before archiving = %v, %v", ids, err)
+	}
+	if err := store.Exclusive(func(tx *Tx) error { return tx.Archive("counters", archived) }); err != nil {
+		t.Fatal(err)
+	}
+	if ids, err := store.ListArchived("counters"); err != nil || !reflect.DeepEqual(ids, []string{archived}) {
+		t.Fatalf("ListArchived = %v, %v; want only %s, not %s", ids, err, archived, kept)
+	}
+}

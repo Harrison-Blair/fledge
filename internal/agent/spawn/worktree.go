@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/gitstatus"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/worktree"
 )
 
@@ -75,8 +77,19 @@ func (s *spawner) worktreePlacement(ctx context.Context, o Options, snap *herdr.
 	}
 	out.Result.(*Result).WorktreePath = &path
 	var r herdr.CreatedResult
+	var base *string
 	if method == "worktree.create" {
-		r, err = worktree.Create(ctx, s, src, listing, branch, o.Base, path)
+		// Without --base, send the primary checkout's branch explicitly, so the
+		// recorded base is the one used; a detached primary sends none.
+		base = libagent.Pointer(o.Base)
+		if base == nil {
+			base = gitstatus.Branch(ctx, listing.Source.RepoRoot)
+		}
+		sent := ""
+		if base != nil {
+			sent = *base
+		}
+		r, err = worktree.Create(ctx, s, src, listing, branch, sent, path)
 	} else {
 		r, err = worktree.Open(ctx, s, src, listing, path)
 	}
@@ -87,10 +100,17 @@ func (s *spawner) worktreePlacement(ctx context.Context, o Options, snap *herdr.
 	path = r.Worktree.Path
 	out.Result.(*Result).WorktreePath = &path
 	o.Cwd = path
+	s.checkout = &identity.Checkout{Path: path}
 	alreadyOpen := r.AlreadyOpen != nil && *r.AlreadyOpen
 	if !alreadyOpen {
 		if method == "worktree.create" {
 			out.Effects = append(out.Effects, libagent.Effect{Action: "created", Kind: "worktree", Path: path})
+			s.checkout.Created, s.checkout.Base, s.checkout.Branch = true, base, &branch
+			// Mark this checkout so cleanup can tell it from a later one at
+			// the same path. Unmarked, cleanup only reports it.
+			if marker, err := worktree.Mark(ctx, path); err == nil {
+				s.checkout.Marker = &marker
+			}
 		}
 		recordCreated(out, r, true)
 		return s.initialTab(ctx, o, r, out)

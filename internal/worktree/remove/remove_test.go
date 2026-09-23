@@ -13,6 +13,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
+	"github.com/Harrison-Blair/fledge/internal/lib/worktree"
 )
 
 type call = herdrscript.Call
@@ -559,5 +560,152 @@ func TestInspectsOnlyTargetCheckout(t *testing.T) {
 		if strings.Contains(line, other) || strings.Contains(line, "refs/heads/other") || (strings.Contains(line, " status ") && !strings.Contains(line, r.topic)) {
 			t.Errorf("inspected another checkout: git %s", line)
 		}
+	}
+}
+
+// Base replaces the integration branch in the merged check: a checkout merged
+// into its base is removed even when the integration branch lacks it, and one
+// merged only into the integration branch is kept.
+func TestBaseReplacesIntegrationBranchForMergedCheck(t *testing.T) {
+	for _, tc := range []struct {
+		name, mergedInto string
+		removed          bool
+	}{{"merged into base", "dev", true}, {"merged into main only", "main", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRepo(t)
+			git(t, r.root, "branch", "dev")
+			git(t, r.topic, "commit", "-qm", "work", "--allow-empty")
+			if tc.mergedInto == "main" {
+				git(t, r.root, "reset", "-q", "--hard", "topic")
+			} else {
+				git(t, r.root, "branch", "-f", "dev", "topic")
+			}
+			calls := []call{{Method: "worktree.list", Result: r.listing(false)}, agentList()}
+			if tc.removed {
+				calls = append(calls, agentList())
+			}
+			out := Run(context.Background(), herdrscript.Client(t, calls...), Options{Path: r.topic, Cwd: r.root, Base: "dev"})
+			if _, err := os.Stat(r.topic); tc.removed != os.IsNotExist(err) {
+				t.Fatalf("removed=%v: %+v", !tc.removed, out)
+			}
+			if !tc.removed && (out.Error == nil || !strings.Contains(out.Error.Message, "merged: no")) {
+				t.Fatalf("%+v", out)
+			}
+		})
+	}
+}
+
+// Marker and MarkedBranch name the exact checkout to remove: a checkout at the
+// path with another marker, none, or another branch is kept even with Force,
+// checked after every other guard, immediately before removal.
+func TestMarkerGuardsCheckoutIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		setup   func(t *testing.T, r repo, marker string) (string, string)
+		removed bool
+	}{
+		{"matching", func(t *testing.T, r repo, m string) (string, string) { return m, "topic" }, true},
+		{"other marker", func(t *testing.T, r repo, m string) (string, string) {
+			return "0123456789abcdef0123456789abcdef", "topic"
+		}, false},
+		{"other branch", func(t *testing.T, r repo, m string) (string, string) {
+			git(t, r.topic, "switch", "-q", "-c", "other")
+			return m, "topic"
+		}, false},
+		{"recreated without marker", func(t *testing.T, r repo, m string) (string, string) {
+			git(t, r.root, "worktree", "remove", r.topic)
+			git(t, r.root, "worktree", "add", "-q", r.topic, "topic")
+			return m, "topic"
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRepo(t)
+			m, err := worktree.Mark(context.Background(), r.topic)
+			if err != nil {
+				t.Fatal(err)
+			}
+			marker, branch := tc.setup(t, r, m)
+			out := Run(context.Background(), herdrscript.Client(t, call{Method: "worktree.list", Result: r.listing(false)}, agentList(), agentList()),
+				Options{Path: r.topic, Cwd: r.root, Force: true, Marker: marker, MarkedBranch: branch, PlannedPath: r.topic})
+			if _, err := os.Stat(r.topic); tc.removed != os.IsNotExist(err) {
+				t.Fatalf("removed=%v: %+v", !tc.removed, out)
+			}
+			if !tc.removed && (out.ExitCode() != 2 || out.Error.Phase != "guard" || !strings.Contains(out.Error.Message, "replaced since the worker's spawn")) {
+				t.Fatalf("%+v", out)
+			}
+		})
+	}
+}
+
+// With a marker, removal also requires the checkout at exactly PlannedPath,
+// still under .fledge/worktrees: a marked checkout moved elsewhere, reached
+// through a symlink at the planned path, or planned outside the managed tree
+// is kept. Without a marker, an unmanaged checkout is removed as usual.
+func TestPlannedPathGuardsMarkedCheckout(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		setup   func(t *testing.T, r repo) (target, planned string, listing herdr.WorktreeListResult, marked bool)
+		removed bool
+	}{
+		{"at planned managed path", func(t *testing.T, r repo) (string, string, herdr.WorktreeListResult, bool) {
+			return r.topic, r.topic, r.listing(false), true
+		}, true},
+		{"moved out behind a symlink", func(t *testing.T, r repo) (string, string, herdr.WorktreeListResult, bool) {
+			outside := filepath.Join(t.TempDir(), "outside")
+			git(t, r.root, "worktree", "move", r.topic, outside)
+			if err := os.Symlink(outside, r.topic); err != nil {
+				t.Fatal(err)
+			}
+			l := r.listing(false)
+			l.Worktrees[1].Path = outside
+			return r.topic, r.topic, l, true
+		}, false},
+		{"moved within the managed tree behind a symlink", func(t *testing.T, r repo) (string, string, herdr.WorktreeListResult, bool) {
+			other := filepath.Join(r.root, ".fledge", "worktrees", "other")
+			git(t, r.root, "worktree", "move", r.topic, other)
+			if err := os.Symlink(other, r.topic); err != nil {
+				t.Fatal(err)
+			}
+			l := r.listing(false)
+			l.Worktrees[1].Path = other
+			return r.topic, r.topic, l, true
+		}, false},
+		{"planned outside the managed tree", func(t *testing.T, r repo) (string, string, herdr.WorktreeListResult, bool) {
+			outside, _ := filepath.EvalSymlinks(t.TempDir())
+			outside = filepath.Join(outside, "outside")
+			git(t, r.root, "worktree", "move", r.topic, outside)
+			l := r.listing(false)
+			l.Worktrees[1].Path = outside
+			return outside, outside, l, true
+		}, false},
+		{"unmarked explicit remove outside the managed tree", func(t *testing.T, r repo) (string, string, herdr.WorktreeListResult, bool) {
+			outside, _ := filepath.EvalSymlinks(t.TempDir())
+			outside = filepath.Join(outside, "outside")
+			git(t, r.root, "worktree", "move", r.topic, outside)
+			l := r.listing(false)
+			l.Worktrees[1].Path = outside
+			return outside, "", l, false
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRepo(t)
+			m, err := worktree.Mark(context.Background(), r.topic)
+			if err != nil {
+				t.Fatal(err)
+			}
+			target, planned, listing, marked := tc.setup(t, r)
+			o := Options{Path: target, Cwd: r.root, PlannedPath: planned}
+			if marked {
+				o.Marker, o.MarkedBranch = m, "topic"
+			}
+			out := Run(context.Background(), herdrscript.Client(t, call{Method: "worktree.list", Result: listing}, agentList(), agentList()), o)
+			gone := listing.Worktrees[1].Path
+			if _, err := os.Stat(gone); tc.removed != os.IsNotExist(err) {
+				t.Fatalf("removed=%v: %+v", !tc.removed, out)
+			}
+			if !tc.removed && (out.ExitCode() != 2 || out.Error.Phase != "guard" || !strings.Contains(out.Error.Message, "moved since cleanup planned it")) {
+				t.Fatalf("%+v", out)
+			}
+		})
 	}
 }

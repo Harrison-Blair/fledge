@@ -114,6 +114,8 @@ fledge agent pause --pane w2:p3 --timeout 20s --json
 fledge agent pause --name reviewer --no-wait
 fledge agent stop --name reviewer
 fledge agent stop --pane w2:p3 --force --json
+fledge agent cleanup --dry-run
+fledge agent cleanup --results-collected --json
 fledge agent models --harness codex --json
 ```
 
@@ -174,7 +176,10 @@ prompt may have arrived.
 With `--worktree new`, workspace selectors identify an **existing source**
 repository workspace. That source takes precedence over `--cwd`; without either,
 the source is Fledge's working directory. `--branch` defaults to the agent name,
-and `--base` optionally selects a starting ref. Checkouts are created beneath the
+and `--base` selects the starting ref. Without `--base`, spawn passes the branch
+checked out in the primary checkout as the base (even when invoked from a linked
+worktree); with a detached primary checkout it passes none and Herdr chooses.
+Checkouts are created beneath the
 primary checkout at `.fledge/worktrees/<branch>`, even when invoked from a linked
 worktree. Branch slashes create nested directories. Existing branches or paths
 fail; Fledge does not invent suffixes. `.fledge/.gitignore` excludes the
@@ -414,7 +419,20 @@ once. Bare repositories, including their linked worktrees, have no primary
 checkout and are not supported. A record holds an 8-hex `id`, the agent's name,
 pane, workspace, harness, Herdr session (`HERDR_SESSION`), Herdr `terminal_id`,
 `parent`, `registered_at`, `registered_by` (`spawn` or `adopt`),
-`worktree_path`, and `ended_at`. The parent is the caller's live record when the
+`worktree_path`, `worktree_created`, `worktree_base`, `worktree_branch`,
+`worktree_marker`, and `ended_at`.
+`worktree_created` is true only when the agent's spawn created its checkout
+(`--worktree new`), not when it opened an existing one; `worktree_base` is the
+ref that checkout was created from, as spawn passed it to Herdr: `--base` as
+given, otherwise the primary checkout's branch at spawn time (null when that
+checkout was detached, so no base was passed). `worktree_branch` and
+`worktree_marker` identify the created checkout itself: spawn writes a random
+marker into that checkout's Git admin directory
+(`<git dir>/worktrees/<name>/fledge-checkout-id`), which Git deletes when the
+checkout is removed or pruned, so a checkout later recreated at the same path,
+even on the same branch, never carries it. The marker is null if it could not be
+written. Records written before these fields existed read as not created or
+unidentified. The parent is the caller's live record when the
 caller's pane hosts a registered terminal; otherwise it is null. Records are
 never deleted: an ended record moves to `.fledge/state/agents/archive/`, where
 lookups by ID still find it but scans for live agents no longer read it.
@@ -494,6 +512,76 @@ Herdr name. JSON flattens the record into `result` and adds `parent_name` and
 `tasks` (`id` and `title`). `agent current` and `agent list --mine` fail with
 `caller_unregistered` when the caller's pane hosts no registered agent,
 including outside a Herdr agent pane; register it with `fledge agent adopt`.
+
+### Cleanup
+
+`fledge agent cleanup` retires the caller's finished workers and removes the
+checkouts their spawns created. It acts only on direct workers the caller
+spawned: records whose parent is the caller's live record and whose
+`registered_by` is `spawn`. The caller itself, siblings, grandchildren, adopted
+agents, and unregistered agents are never touched; the caller must have a live
+record (`caller_unregistered` otherwise).
+
+A worker with a live record is stopped only when its agent is `idle` or `done`,
+no live record names it as parent, and every task it owns, whoever created it,
+is `verified` or `cancelled`. `idle` or `done` alone never counts as accepted
+results. A worker that owns no task is held unless you pass
+`--results-collected`, which asserts that you have read and kept all of its
+reports; Fledge cannot detect that itself. Every other worker is held and
+reported with its reasons.
+
+A checkout is removed only when all of these hold: a worker's spawn created it
+(`worktree_created`) and it is still that same checkout (its Git marker and
+checked-out branch match `worktree_marker` and `worktree_branch`), it is a managed checkout under `.fledge/worktrees` and not
+the primary checkout, a base branch was recorded, its worker has ended or is
+being stopped now, it is clean, it is merged into that recorded base (for
+example `dev`), not into the [integration branch](#integration-branch), and no
+live agent other than the workers being stopped uses it, by the same rules as
+`worktree remove`. Branches are always kept. Checkouts a worker only opened,
+checkouts recorded before creation or identity was tracked, checkouts replaced
+since the worker's spawn (reason `replaced since the worker's spawn`), and any
+that fail a check are reported and kept. When several workers recorded the same
+path, only the one whose recorded marker matches the checkout there can own it;
+registration order never decides. Once the created checkout is gone, its record
+can never authorize a removal again. Remove kept checkouts yourself with
+`fledge worktree remove` once they are no longer needed. Because a stopped worker's record moves to the archive,
+cleanup also reads archived records, so a later run removes a checkout whose
+worker it already stopped once the checkout is safe. A checkout no longer
+listed by Git is not reported.
+
+`--dry-run` makes no changes, not even updating the caller's recorded pane,
+and needs no assertion: it lists what would be stopped and removed and what is
+held, with reasons. Otherwise cleanup stops each eligible worker by its record
+ID, as `agent stop --id` without `--force`, after reading its tasks again, and
+then removes each eligible checkout through `worktree remove` without
+`--force`, which rechecks live agents, cleanliness, and the merge into the
+recorded base, and last, immediately before deleting, that the checkout is
+still at the resolved path it was planned at under `.fledge/worktrees` and
+still carries the worker's marker and branch. A checkout moved meanwhile, even
+with a symlink left at its old path, is kept as `moved since cleanup planned
+it`. These identity and location checks apply only to cleanup; an explicit
+`worktree remove` is unchanged. A task assigned, a live worker of the
+worker registered, or a worker busy again after planning holds it; a checkout
+replaced meanwhile is kept as `replaced since the worker's spawn`; nothing is
+ever forced. The text output starts with
+`Stopped N of M workers and removed N of M checkouts.` (`Dry run: would stop
+...` for a dry run) and lists each worker as `stop`/`stopped`, `hold`, or
+`failed`, and each checkout as `remove`/`removed`, `keep`, or `failed`, with
+reasons. JSON uses operation `agent.cleanup`; `result` has `dry_run`, `caller`,
+`workers` (`id`, `name`, `pane_id`, `agent_status`), and `checkouts` (`path`,
+`branch`, `base`, `worker`), each entry with an `outcome` (`planned`, `done`,
+`skipped`, or `failed`) and a `reason`. Effects are those of the stops and
+removals. Held and skipped resources still exit 0. Failed actions do not stop
+the others and are never rolled back: the outcome is then `partial` (or
+`rejected` when nothing changed), or `unknown` when a stop or removal may have
+applied, with exit status 1.
+
+Cleanup rechecks its guards right before each action but cannot make task
+assignment, Herdr, and Git changes one transaction, so run it when you are not
+dispatching new work to those workers. A worktree whose spawn failed before
+registration has no record and needs `worktree remove`. Clean means Git's view
+of tracked and untracked, nonignored files; ignored build artifacts in a
+removed checkout are lost. Squash-merged branches count as unmerged.
 
 ### Outcomes and recovery
 
@@ -704,7 +792,8 @@ through `git worktree remove`. Its guards:
 
 `worktree list` (the `MERGED` column) and the `worktree remove` merged guard
 compare each checkout against one integration branch per repository, chosen in
-this order:
+this order (`agent cleanup` instead uses the base each checkout was created
+from; see [Cleanup](#cleanup)):
 
 1. The local branch named by the repository's git config `fledge.baseBranch`,
    resolved as `refs/heads/<name>`.

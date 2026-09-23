@@ -12,7 +12,7 @@ import (
 )
 
 func TestAgentHelp(t *testing.T) {
-	for _, args := range [][]string{{"agent", "--help"}, {"agent", "spawn", "--help"}, {"agent", "list", "--help"}, {"agent", "message", "--help"}, {"agent", "models", "--help"}, {"agent", "stop", "--help"}, {"agent", "get", "--help"}, {"agent", "read", "--help"}, {"agent", "wait", "--help"}, {"agent", "adopt", "--help"}, {"agent", "current", "--help"}, {"agent", "send", "--help"}} {
+	for _, args := range [][]string{{"agent", "--help"}, {"agent", "spawn", "--help"}, {"agent", "list", "--help"}, {"agent", "message", "--help"}, {"agent", "models", "--help"}, {"agent", "stop", "--help"}, {"agent", "get", "--help"}, {"agent", "read", "--help"}, {"agent", "wait", "--help"}, {"agent", "adopt", "--help"}, {"agent", "current", "--help"}, {"agent", "send", "--help"}, {"agent", "cleanup", "--help"}} {
 		var out bytes.Buffer
 		if err := ExecuteWithArgs(args, &out); err != nil {
 			t.Fatal(err)
@@ -62,6 +62,7 @@ func TestAgentJSONValidation(t *testing.T) {
 		{"agent", "list", "--parent", "BEEF", "--json"},
 		{"agent", "list", "extra", "--json"},
 		{"agent", "current", "extra", "--json"},
+		{"agent", "cleanup", "extra", "--json"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			var out bytes.Buffer
@@ -88,7 +89,7 @@ func TestAgentGroupHelpListsSubcommands(t *testing.T) {
 	if err := ExecuteWithArgs([]string{"agent", "--help"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"stop", "get", "read", "wait", "adopt", "current"} {
+	for _, name := range []string{"stop", "get", "read", "wait", "adopt", "current", "cleanup"} {
 		if !strings.Contains(out.String(), "\n  "+name+" ") {
 			t.Fatalf("%s: %s", name, out.String())
 		}

@@ -7,11 +7,13 @@
 package identity
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
@@ -25,20 +27,39 @@ const Kind = "agents"
 
 // Record is one registered agent. EndedAt stays null until agent stop closes
 // its pane or a lookup observes its terminal gone; the record then moves to the
-// store's archive. Records are never deleted.
+// store's archive. Records are never deleted. WorktreeCreated and WorktreeBase
+// record that the agent's spawn created its checkout and from which ref, and
+// WorktreeBranch and WorktreeMarker identify that very checkout, so one
+// recreated later at the same path is not taken for it; records written
+// before they existed read as not created or unidentified.
 type Record struct {
-	ID           string  `json:"id"`
-	Name         *string `json:"name"`
-	Pane         string  `json:"pane"`
-	WorkspaceID  string  `json:"workspace_id"`
-	Harness      *string `json:"harness"`
-	Session      *string `json:"session"`
-	TerminalID   string  `json:"terminal_id"`
-	Parent       *string `json:"parent"`
-	RegisteredAt string  `json:"registered_at"`
-	RegisteredBy string  `json:"registered_by"`
-	WorktreePath *string `json:"worktree_path"`
-	EndedAt      *string `json:"ended_at"`
+	ID              string  `json:"id"`
+	Name            *string `json:"name"`
+	Pane            string  `json:"pane"`
+	WorkspaceID     string  `json:"workspace_id"`
+	Harness         *string `json:"harness"`
+	Session         *string `json:"session"`
+	TerminalID      string  `json:"terminal_id"`
+	Parent          *string `json:"parent"`
+	RegisteredAt    string  `json:"registered_at"`
+	RegisteredBy    string  `json:"registered_by"`
+	WorktreePath    *string `json:"worktree_path"`
+	WorktreeCreated bool    `json:"worktree_created"`
+	WorktreeBase    *string `json:"worktree_base"`
+	WorktreeBranch  *string `json:"worktree_branch"`
+	WorktreeMarker  *string `json:"worktree_marker"`
+	EndedAt         *string `json:"ended_at"`
+}
+
+// Checkout is the checkout an agent was placed in. Created records that the
+// agent's spawn created it, from Base when that is known, rather than opening
+// an existing one; Branch and Marker (see worktree.Mark) identify the created
+// checkout.
+type Checkout struct {
+	Path           string
+	Created        bool
+	Base           *string
+	Branch, Marker *string
 }
 
 // OpenStore opens the state store of the repository containing cwd, creating
@@ -76,8 +97,8 @@ func Existing(ctx context.Context, cwd string) (*state.Store, error) {
 // terminal, and the create, so concurrent registrations of one terminal yield
 // exactly one live record and the others fail with agent_already_registered
 // naming it. A live record of the terminal left by a different harness ends
-// under the same lock.
-func Register(ctx context.Context, s *state.Store, c libagent.Client, details herdr.AgentDetails, by string, worktree *string) (Record, error) {
+// under the same lock. A nil checkout records none.
+func Register(ctx context.Context, s *state.Store, c libagent.Client, details herdr.AgentDetails, by string, checkout *Checkout) (Record, error) {
 	if details.TerminalID == "" || details.PaneID == "" {
 		return Record{}, fmt.Errorf("cannot register an agent without a pane and terminal id")
 	}
@@ -109,7 +130,11 @@ func Register(ctx context.Context, s *state.Store, c libagent.Client, details he
 		}
 		_, err = tx.Create(Kind, func(id string) any {
 			rec = Record{ID: id, Name: details.Name, Pane: details.PaneID, WorkspaceID: details.WorkspaceID, Harness: details.Agent,
-				Session: session(), TerminalID: details.TerminalID, RegisteredAt: time.Now().UTC().Format(time.RFC3339), RegisteredBy: by, WorktreePath: worktree, Parent: parent}
+				Session: session(), TerminalID: details.TerminalID, RegisteredAt: time.Now().UTC().Format(time.RFC3339), RegisteredBy: by, Parent: parent}
+			if checkout != nil {
+				rec.WorktreePath, rec.WorktreeCreated, rec.WorktreeBase = &checkout.Path, checkout.Created, checkout.Base
+				rec.WorktreeBranch, rec.WorktreeMarker = checkout.Branch, checkout.Marker
+			}
 			return rec
 		})
 		return err
@@ -379,6 +404,41 @@ func Live(s *state.Store, terminal string) (*Record, error) {
 func LiveByTerminal(s *state.Store) (map[string]Record, error) {
 	records, _, err := scan(s)
 	return records, err
+}
+
+// Children returns every record, live or ended, whose parent is id, oldest
+// first. It never writes. A nil s has none.
+func Children(s *state.Store, id string) ([]Record, error) {
+	children := []Record{}
+	if s == nil {
+		return children, nil
+	}
+	live, err := s.List(Kind)
+	if err != nil {
+		return nil, err
+	}
+	archived, err := s.ListArchived(Kind)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	for _, rid := range append(live, archived...) {
+		var rec Record
+		if seen[rid] {
+			continue
+		}
+		seen[rid] = true
+		if err := s.Get(Kind, rid, &rec); err != nil {
+			return nil, err
+		}
+		if rec.Parent != nil && *rec.Parent == id {
+			children = append(children, rec)
+		}
+	}
+	slices.SortFunc(children, func(a, b Record) int {
+		return cmp.Or(cmp.Compare(a.RegisteredAt, b.RegisteredAt), cmp.Compare(a.ID, b.ID))
+	})
+	return children, nil
 }
 
 // reader is the read side shared by state.Store and state.Tx.

@@ -342,7 +342,7 @@ func seed(t *testing.T, c libagent.Client, name *string) identity.Record {
 	d := agent("w1:p9", name).Agent
 	d.WorkspaceID = "w9"
 	tree := "/repo/.fledge/worktrees/w"
-	rec, err := identity.Register(context.Background(), s, libagent.Client{}, d, "spawn", &tree)
+	rec, err := identity.Register(context.Background(), s, libagent.Client{}, d, "spawn", &identity.Checkout{Path: tree})
 	if err != nil {
 		t.Fatal(err)
 	}

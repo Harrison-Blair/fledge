@@ -1,7 +1,7 @@
 // Package gitstatus answers read-only questions about checkouts with git:
-// whether a checkout is dirty, which branch is the repository integration
-// branch, and whether a revision is merged into it. Each answer is "yes", "no",
-// or "unknown" when git cannot say.
+// whether a checkout is dirty, which branch it has checked out, which branch is
+// the repository integration branch, and whether a revision is merged into it.
+// Each yes-or-no answer is "yes", "no", or "unknown" when git cannot say.
 package gitstatus
 
 import (
@@ -66,6 +66,17 @@ func DefaultBranch(ctx context.Context, repo string) (string, error) {
 		return "refs/heads/main", nil
 	}
 	return "", nil
+}
+
+// Branch returns the short name of the branch checked out at dir, or nil
+// when HEAD is detached or git cannot say.
+func Branch(ctx context.Context, dir string) *string {
+	b, err := exec.CommandContext(ctx, "git", "-C", dir, "symbolic-ref", "--quiet", "--short", "HEAD").Output()
+	if err != nil {
+		return nil
+	}
+	name := strings.TrimSpace(string(b))
+	return &name
 }
 
 func exists(ctx context.Context, repo, ref string) bool {

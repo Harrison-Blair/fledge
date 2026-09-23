@@ -15,7 +15,7 @@ func (s *spawner) register(ctx context.Context, a herdr.AgentDetails, out *libag
 	store, err := identity.OpenStore(ctx, s.Cwd, out)
 	var rec identity.Record
 	if err == nil {
-		rec, err = identity.Register(ctx, store, s.Client, a, "spawn", result.WorktreePath)
+		rec, err = identity.Register(ctx, store, s.Client, a, "spawn", s.checkout)
 	}
 	if err != nil {
 		reason := err.Error()

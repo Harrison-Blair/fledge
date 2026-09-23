@@ -3,6 +3,7 @@ package agent
 
 import (
 	"github.com/Harrison-Blair/fledge/cmd/agent/adopt"
+	"github.com/Harrison-Blair/fledge/cmd/agent/cleanup"
 	"github.com/Harrison-Blair/fledge/cmd/agent/current"
 	"github.com/Harrison-Blair/fledge/cmd/agent/get"
 	"github.com/Harrison-Blair/fledge/cmd/agent/list"
@@ -19,7 +20,7 @@ import (
 )
 
 func New() *cobra.Command {
-	cmd := &cobra.Command{Use: "agent", Short: "Launch, adopt, list, inspect, identify the caller, message, send input to, pause, stop, read, wait for, discover models for, and list launch profiles for Herdr agents", Args: cobra.NoArgs}
-	cmd.AddCommand(spawn.New(), adopt.New(), list.New(), get.New(), current.New(), message.New(), send.New(), pause.New(), stop.New(), models.New(), profiles.New(), read.New(), wait.New())
+	cmd := &cobra.Command{Use: "agent", Short: "Launch, adopt, list, inspect, identify the caller, message, send input to, pause, stop, read, wait for, clean up, discover models for, and list launch profiles for Herdr agents", Args: cobra.NoArgs}
+	cmd.AddCommand(spawn.New(), adopt.New(), list.New(), get.New(), current.New(), message.New(), send.New(), pause.New(), stop.New(), cleanup.New(), models.New(), profiles.New(), read.New(), wait.New())
 	return cmd
 }
