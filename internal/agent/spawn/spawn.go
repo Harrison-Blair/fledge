@@ -161,7 +161,7 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 
 	started := s.now()
 	var r herdr.AgentResult
-	err = s.start(ctx, map[string]any{"name": o.Name, "kind": o.Harness, "pane_id": p.PaneID, "args": args, "timeout_ms": o.Timeout.Milliseconds()}, &r)
+	err = s.start(ctx, map[string]any{"name": o.Name, "kind": o.Harness, "pane_id": p.PaneID, "args": args, "timeout_ms": max(o.Timeout, startReservation).Milliseconds()}, &r)
 	if err == nil && (r.Type != "agent_started" || !libagent.ValidAgent(r.Agent.Pane) || !samePane(r.Agent.Pane, p) || r.Argv == nil) {
 		err = libagent.Protocol("incomplete agent.start result")
 	}
@@ -208,6 +208,11 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 	result.Prompted = true
 	return out
 }
+
+// startReservation is the least startup time agent.start asks Herdr for. Herdr
+// drops the agent's name when that reservation expires before launch completes,
+// so a short --timeout bounds only spawn's own waiting.
+const startReservation = 30 * time.Second
 
 // busyBackoff paces agent.start retries while a fresh shell reaches its prompt.
 var busyBackoff = []time.Duration{50 * time.Millisecond, 100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond, 800 * time.Millisecond, 800 * time.Millisecond}

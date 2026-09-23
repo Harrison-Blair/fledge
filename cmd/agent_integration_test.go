@@ -195,6 +195,21 @@ func TestSpawnNoWaitFlagSkipsAgentWaitOnSocket(t *testing.T) {
 	}
 }
 
+// TestSpawnShortTimeoutKeepsStartReservation proves a short --timeout still
+// reserves Herdr's 30s startup, so the name outlives a slow launch.
+func TestSpawnShortTimeoutKeepsStartReservation(t *testing.T) {
+	l := newSocket(t)
+	done := serveRPCs(l, snapshotResult(), startedResult("claude"))
+	var out bytes.Buffer
+	err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "w1:p1", "--timeout", "3001ms", "--no-wait", "--json"}, &out)
+	if err != nil {
+		t.Fatal(err, out.String())
+	}
+	if calls := waitCalls(t, l, done, 2); paramsField(t, calls[1], "timeout_ms") != float64(30000) {
+		t.Fatalf("%s", calls[1].Params)
+	}
+}
+
 // TestSpawnFileFlagPathReachesAgentPrompt proves --file <path> is wired
 // (FileSet) end to end: the file's exact text reaches agent.prompt.
 func TestSpawnFileFlagPathReachesAgentPrompt(t *testing.T) {

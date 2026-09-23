@@ -742,3 +742,38 @@ func TestSpawnSubmittedPromptIsRequested(t *testing.T) {
 		t.Fatalf("%+v", out)
 	}
 }
+
+func paneOptions() Options {
+	o := validOptions()
+	o.Pane = "w1:p1"
+	return o
+}
+
+// Herdr drops the name when its start reservation expires, so agent.start
+// always reserves at least 30s while the local budget stays --timeout.
+func TestSpawnStartReservationOutlastsShortTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		timeout       time.Duration
+		start, waitMs int64
+		noWait        bool
+	}{
+		{3001 * time.Millisecond, 30000, 3001, false},
+		{3001 * time.Millisecond, 30000, 0, true},
+		{30 * time.Second, 30000, 30000, false},
+		{45 * time.Second, 45000, 45000, false},
+		{300 * time.Second, 300000, 300000, false},
+	} {
+		t.Run(tc.timeout.String(), func(t *testing.T) {
+			p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
+			o := paneOptions()
+			o.Timeout, o.NoWait = tc.timeout, tc.noWait
+			calls := []call{{Method: "session.snapshot", Result: snapshot()}, {Method: "agent.start", Params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w1:p1", "args": []string{}, "timeout_ms": tc.start}, Result: started(p)}}
+			if !tc.noWait {
+				calls = append(calls, call{Method: "agent.wait", Params: map[string]any{"target": "worker", "timeout_ms": tc.waitMs}, Result: settled(p, "idle")})
+			}
+			if out := fake(t, calls...).run(context.Background(), o, nil); out.Status != "success" {
+				t.Fatalf("%+v %+v", out, out.Error)
+			}
+		})
+	}
+}
