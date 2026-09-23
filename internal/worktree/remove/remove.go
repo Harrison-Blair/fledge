@@ -137,17 +137,10 @@ func target(r worktree.Checkouts, o Options) (herdr.Worktree, error) {
 
 // checkAgents refuses when any live agent in the connected Herdr session is in
 // the checkout's workspace, has its cwd at or inside the checkout, or is
-// registered with the checkout as its worktree. Unreadable agent records fail
-// closed.
+// registered with the checkout as its worktree. Unreadable agent records and
+// incomplete agent.list entries fail closed.
 func checkAgents(ctx context.Context, c libagent.Client, repo string, row herdr.Worktree) error {
-	var r struct {
-		Type   string               `json:"type"`
-		Agents []herdr.AgentDetails `json:"agents"`
-	}
-	err := c.Call(ctx, "agent.list", nil, &r)
-	if err == nil && (r.Type != "agent_list" || r.Agents == nil) {
-		err = libagent.Protocol("incomplete agent.list result")
-	}
+	agents, err := c.List(ctx)
 	if err != nil {
 		return err
 	}
@@ -159,7 +152,7 @@ func checkAgents(ctx context.Context, c libagent.Client, repo string, row herdr.
 	if err != nil {
 		return fmt.Errorf("read agent records: %w; repair or remove the bad record under .fledge/state", err)
 	}
-	for _, a := range r.Agents {
+	for _, a := range agents {
 		var where string
 		rec, registered := identity.Attributed(records, a)
 		switch {

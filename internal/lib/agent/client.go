@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
@@ -56,6 +57,21 @@ func (c Client) Get(ctx context.Context, target string) (herdr.AgentDetails, err
 		err = Protocol("incomplete agent.get result")
 	}
 	return r.Agent, err
+}
+
+// List fetches every live agent, rejecting the whole agent.list result when
+// any entry is incomplete: callers attribute or look up agents by terminal, so
+// a malformed entry could hide the one they need.
+func (c Client) List(ctx context.Context) ([]herdr.AgentDetails, error) {
+	var r herdr.AgentListResult
+	err := c.Call(ctx, "agent.list", nil, &r)
+	if err == nil && (r.Type != "agent_list" || r.Agents == nil || slices.ContainsFunc(r.Agents, func(a herdr.AgentDetails) bool { return !ValidAgentInfo(a) })) {
+		err = Protocol("incomplete agent.list result")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return r.Agents, nil
 }
 
 // Prompt submits text to target, rejecting incomplete agent.prompt results.

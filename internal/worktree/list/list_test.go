@@ -170,10 +170,18 @@ func s2(v string) *string {
 	}
 	return &v
 }
+// liveAgent is a complete agent.list entry for terminal, hosted in pane w1:<terminal>.
+func liveAgent(terminal string) herdr.AgentDetails {
+	p := herdrscript.Pane("w1:"+terminal, "w1", "w1:t1")
+	p.AgentStatus = "idle"
+	a := herdrscript.Info(p).Agent
+	a.TerminalID = terminal
+	return a
+}
 func liveAgents(terminals ...string) call {
 	agents := []herdr.AgentDetails{}
 	for _, term := range terminals {
-		agents = append(agents, herdr.AgentDetails{Pane: herdr.Pane{PaneID: "w1:" + term}, TerminalID: term})
+		agents = append(agents, liveAgent(term))
 	}
 	return call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": agents}}
 }
@@ -227,6 +235,21 @@ func TestListOwnersUnavailableWhenAgentListFails(t *testing.T) {
 	f := newFixture(t)
 	record(t, f.root, "t1", "alpha", f.merged, "2026-01-01T00:00:00Z")
 	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()}, call{Method: "agent.list", Err: errors.New("offline")})
+	out := Run(context.Background(), c, Options{Cwd: f.root})
+	if out.Status != "success" || out.Result.(Result).Worktrees[1].Owner != nil {
+		t.Fatalf("%+v", out)
+	}
+}
+
+// One incomplete agent.list entry makes the whole list unusable, so owners
+// stay unknown rather than partly attributed.
+func TestListOwnersUnavailableWhenAgentListIncomplete(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "")
+	f := newFixture(t)
+	record(t, f.root, "t1", "alpha", f.merged, "2026-01-01T00:00:00Z")
+	incomplete := liveAgent("t2")
+	incomplete.Revision = nil
+	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()}, call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": []herdr.AgentDetails{liveAgent("t1"), incomplete}}})
 	out := Run(context.Background(), c, Options{Cwd: f.root})
 	if out.Status != "success" || out.Result.(Result).Worktrees[1].Owner != nil {
 		t.Fatalf("%+v", out)
@@ -347,7 +370,8 @@ func TestListSkipsOwnerOfDifferentHarness(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	live := herdr.AgentDetails{Pane: herdr.Pane{PaneID: "w1:t1", Agent: s2("claude")}, TerminalID: "t1"}
+	live := liveAgent("t1")
+	live.Agent = s2("claude")
 	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()}, call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": []herdr.AgentDetails{live}}})
 	out := Run(context.Background(), c, Options{Cwd: f.root})
 	if row := out.Result.(Result).Worktrees[0]; row.Owner != nil || row.OwnerCount != 0 {

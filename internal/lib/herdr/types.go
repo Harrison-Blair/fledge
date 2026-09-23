@@ -83,8 +83,8 @@ type AgentResult struct {
 	Argv  []string     `json:"argv"`
 }
 type AgentListResult struct {
-	Type   string `json:"type"`
-	Agents []Pane `json:"agents"`
+	Type   string         `json:"type"`
+	Agents []AgentDetails `json:"agents"`
 }
 type TabResult struct {
 	Type string `json:"type"`

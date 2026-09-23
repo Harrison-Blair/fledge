@@ -375,7 +375,9 @@ Herdr session, or the record has ended; an unknown ID fails with
 `agent_record_not_found`. `agent get` shows the record (Fledge ID, parent,
 registration time and source) whenever the live agent has one, and JSON adds
 `record`. `agent list` adds `ID` and `PARENT` columns (`-` when unregistered or
-parentless) and `id` and `parent` fields. Session names come from the
+parentless) and `id` and `parent` fields; it fails with `protocol_error`
+rather than list partially when any entry of Herdr's agent list lacks a
+required field, such as its terminal ID. Session names come from the
 environment, so these checks are a workflow guard, not a security boundary.
 
 `agent list --parent <id>` keeps only live agents whose record's parent is that
@@ -560,7 +562,9 @@ column names the live registered agent whose spawn created or opened that
 checkout as `name (id)`, with `+N` when N more live agents share it, or `-`.
 JSON rows carry `owner` (`{id, name, pane}` of the earliest registered such
 agent, or null) and `owner_count`. Records of agents no longer in Herdr do not
-count, and a repository without a state store shows no owners.
+count, and a repository without a state store shows no owners. Owners are best
+effort: when Herdr's agent list is unavailable, or any of its entries lacks a
+required field such as its terminal ID, every row shows no owner.
 
 `create` makes a managed checkout at `.fledge/worktrees/<branch>` on a new branch
 and opens it as a workspace without starting an agent. An existing branch is
@@ -582,7 +586,8 @@ through `git worktree remove`. Its guards:
   Herdr session; other sessions and direct Herdr actions are outside it. Records
   of agents no longer in Herdr do not count, but an unreadable state store
   refuses removal until the bad record under `.fledge/state` is repaired or
-  removed.
+  removed. An agent list with any entry missing a required field, such as its
+  terminal ID, refuses removal with `protocol_error`.
 - A dirty or unmerged checkout, or one where either check is `unknown`, is
   refused unless `--force` is passed. Unmerged is judged against the
   [integration branch](#integration-branch).

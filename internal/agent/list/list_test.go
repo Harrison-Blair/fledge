@@ -20,9 +20,19 @@ type call = herdrscript.Call
 func TestListIncludesUnnamed(t *testing.T) {
 	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
 	p.AgentStatus = "idle"
-	out := Run(context.Background(), herdrscript.Client(t, call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": []herdr.Pane{p}}}), Options{})
+	out := Run(context.Background(), herdrscript.Client(t, call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": []herdr.AgentDetails{herdrscript.Info(p).Agent}}}), Options{})
 	if out.Status != "success" || len(out.Result.(Result).Agents) != 1 {
 		t.Fatal(out)
+	}
+}
+// TestListRejectsIncompleteAgentInfo holds agent.list entries to the full
+// AgentInfo shape: pane ids and a status are not enough without a terminal.
+func TestListRejectsIncompleteAgentInfo(t *testing.T) {
+	good, bad := herdrscript.Info(herdrscript.LiveAgent("idle")).Agent, herdrscript.Info(herdrscript.LiveAgent("idle")).Agent
+	bad.PaneID, bad.TerminalID = "w1:p4", ""
+	out := Run(context.Background(), herdrscript.Client(t, call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": []herdr.AgentDetails{good, bad}}}), Options{})
+	if out.Status != "rejected" || out.Result != nil || out.Error == nil || *out.Error != (libagent.Failure{Code: "protocol_error", Message: "protocol_error: incomplete agent.list result", Phase: "agent.list"}) {
+		t.Fatalf("%+v %+v", out, out.Error)
 	}
 }
 func TestRuntimeErrorExit(t *testing.T) {

@@ -412,7 +412,7 @@ func Resolve(ctx context.Context, s *state.Store, c libagent.Client, id string) 
 		return Record{}, herdr.AgentDetails{}, err
 	}
 	if err != nil || a.TerminalID != rec.TerminalID {
-		agents, err := entries(ctx, c, "agent.list", "agent_list")
+		agents, err := c.List(ctx)
 		if err != nil {
 			return Record{}, herdr.AgentDetails{}, err
 		}
@@ -436,7 +436,7 @@ func Resolve(ctx context.Context, s *state.Store, c libagent.Client, id string) 
 // gone explains why rec's terminal hosts no agent. Only a terminal missing
 // from every pane ends the record; one still in a pane may host an agent again.
 func gone(ctx context.Context, s *state.Store, c libagent.Client, rec Record) error {
-	panes, err := entries(ctx, c, "pane.list", "pane_list")
+	panes, err := paneList(ctx, c)
 	if err != nil {
 		return err
 	}
@@ -449,29 +449,24 @@ func gone(ctx context.Context, s *state.Store, c libagent.Client, rec Record) er
 	return stale(rec.ID, "terminal %s is gone from Herdr", rec.TerminalID)
 }
 
-// entries calls method, whose kind result carries agents or panes, and
-// validates every entry: a malformed one could be the terminal sought, which
-// would make its absence unprovable.
-func entries(ctx context.Context, c libagent.Client, method, kind string) ([]herdr.AgentDetails, error) {
+// paneList fetches every pane and validates each entry, as Client.List does
+// for agents: a malformed one could be the terminal sought, which would make
+// its absence unprovable.
+func paneList(ctx context.Context, c libagent.Client) ([]herdr.AgentDetails, error) {
 	var r struct {
-		Type   string               `json:"type"`
-		Agents []herdr.AgentDetails `json:"agents"`
-		Panes  []herdr.AgentDetails `json:"panes"`
+		Type  string               `json:"type"`
+		Panes []herdr.AgentDetails `json:"panes"`
 	}
-	err := c.Call(ctx, method, nil, &r)
-	list := r.Agents
-	if kind == "pane_list" {
-		list = r.Panes
+	err := c.Call(ctx, "pane.list", nil, &r)
+	if err == nil && (r.Type != "pane_list" || r.Panes == nil) {
+		err = libagent.Protocol("incomplete pane.list result")
 	}
-	if err == nil && (r.Type != kind || list == nil) {
-		err = libagent.Protocol("incomplete " + method + " result")
-	}
-	for _, a := range list {
+	for _, a := range r.Panes {
 		if err == nil && !libagent.ValidAgentInfo(a) {
-			err = libagent.Protocol("incomplete " + method + " result")
+			err = libagent.Protocol("incomplete pane.list result")
 		}
 	}
-	return list, err
+	return r.Panes, err
 }
 
 func lookup(list []herdr.AgentDetails, terminal string) (herdr.AgentDetails, bool) {
