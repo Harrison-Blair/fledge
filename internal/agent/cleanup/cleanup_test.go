@@ -494,7 +494,8 @@ func TestGuardsRecheckedBeforeStopping(t *testing.T) {
 			if change == "task" {
 				calls[2].Before = func() { tasktest.Seed(t, r.root, task.Record{Title: "more", Owner: &wrec.ID, Status: task.Assigned}) }
 			} else {
-				calls = append(calls, get(busy))
+				// Still working when stop's settle grace expires.
+				calls = append(calls, get(busy), call{Method: "agent.wait", Params: map[string]any{"target": "w2:p1", "until": []string{"idle", "done", "blocked"}, "timeout_ms": 5000}, Err: &herdr.Error{Code: "timeout", Message: "timed out"}})
 			}
 			out := Run(context.Background(), client(t, r, calls...), Options{})
 			res := out.Result.(Result)

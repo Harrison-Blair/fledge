@@ -342,7 +342,12 @@ cannot prevent its occupant changing before Herdr receives the keys.
 of `--name`/`--pane`, resolves the agent first, and never closes a pane that does
 not host a known agent. Agents whose status is `working`, `blocked`, or `unknown`
 are refused with exit status 2 unless `--force` is passed; `idle` and `done` agents
-stop without it. Stop sets `ended_at` on the agent's live record, if it has one,
+stop without it. A `working` agent is first given up to `--grace` (default 5s,
+0s through 60s) to finish its turn, since a worker often reports just before its
+turn ends: it is stopped if it settles `idle` or `done` in the same terminal, and
+refused as before if it is still working, becomes `blocked`, or the wait fails.
+`--grace 0` refuses at once. `blocked` and `unknown` agents get no grace, and
+`--force` never waits, so `--grace` with `--force` is invalid. Stop sets `ended_at` on the agent's live record, if it has one,
 just before closing the pane, so an agent can stop its own pane. If the pane
 fails to close, stop reopens the record it ended, returning it from the archive;
 it leaves a record another command ended alone and reports a reopen refused

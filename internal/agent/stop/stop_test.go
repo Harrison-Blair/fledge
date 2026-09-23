@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
@@ -46,7 +47,11 @@ func TestStopByPaneTargetsThatPane(t *testing.T) {
 func TestStopBusyRequiresForce(t *testing.T) {
 	for _, status := range []string{"working", "blocked", "unknown"} {
 		t.Run(status, func(t *testing.T) {
-			s := fake(t, call{Method: "agent.get", Result: herdrscript.Info(herdrscript.LiveAgent(status))})
+			calls := []call{{Method: "agent.get", Result: herdrscript.Info(herdrscript.LiveAgent(status))}}
+			if status == "working" {
+				calls = append(calls, call{Method: "agent.wait", Err: &herdr.Error{Code: "timeout", Message: "timed out"}})
+			}
+			s := fake(t, calls...)
 			out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}})
 			if out.Status != "rejected" || out.ExitCode() != 2 || out.Error.Code != "invalid_input" || len(out.Effects) != 0 {
 				t.Fatalf("%+v", out)
@@ -410,5 +415,114 @@ func TestStopDoesNotAttributeRecordOfDifferentHarness(t *testing.T) {
 	}
 	if !ended(t, s.Cwd, rec.ID) {
 		t.Fatal("record not ended")
+	}
+}
+
+// A working agent often reports before its turn ends; stop gives it the
+// default grace to settle and closes it with the settled row.
+func TestStopWorkingSettlesWithinGrace(t *testing.T) {
+	s := fake(t,
+		call{Method: "agent.get", Result: herdrscript.Info(herdrscript.LiveAgent("working"))},
+		call{Method: "agent.wait", Params: map[string]any{"target": "worker", "until": []string{"idle", "done", "blocked"}, "timeout_ms": 5000}, Result: herdrscript.Waited(herdrscript.LiveAgent("working"), "done")},
+		call{Method: "pane.close", Params: map[string]any{"pane_id": "w1:p3"}, Result: herdrscript.OK()})
+	out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}})
+	if out.Status != "success" || !out.Result.(Result).Stopped || *out.Result.(Result).AgentStatus != "done" {
+		t.Fatalf("%+v", out)
+	}
+}
+
+// Any failed settle wait, including an agent still working at grace expiry,
+// is today's refusal.
+func TestStopWorkingUnsettledRefuses(t *testing.T) {
+	for _, code := range []string{"timeout", "agent_not_running", "transport_error"} {
+		t.Run(code, func(t *testing.T) {
+			s := fake(t,
+				call{Method: "agent.get", Result: herdrscript.Info(herdrscript.LiveAgent("working"))},
+				call{Method: "agent.wait", Err: &herdr.Error{Code: code, Message: "failed", Uncertain: code == "transport_error"}})
+			out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}})
+			if out.Status != "rejected" || out.ExitCode() != 2 || out.Error.Phase != "guard" || out.Error.Message != "agent worker is working; pass --force to stop it anyway" || len(out.Effects) != 0 {
+				t.Fatalf("%+v", out)
+			}
+		})
+	}
+}
+
+// A settled agent that turns out to be blocked is refused as blocked.
+func TestStopWorkingSettledBlockedRefuses(t *testing.T) {
+	s := fake(t,
+		call{Method: "agent.get", Result: herdrscript.Info(herdrscript.LiveAgent("working"))},
+		call{Method: "agent.wait", Result: herdrscript.Waited(herdrscript.LiveAgent("working"), "blocked")})
+	out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}})
+	if out.Status != "rejected" || out.Error.Phase != "guard" || !strings.Contains(out.Error.Message, "is blocked") {
+		t.Fatalf("%+v", out)
+	}
+}
+
+// A settled row from another terminal is not the agent stop inspected.
+func TestStopWorkingSettledOtherTerminalRefuses(t *testing.T) {
+	other := herdrscript.Waited(herdrscript.LiveAgent("working"), "idle")
+	other.Agent.TerminalID = "term_other"
+	s := fake(t,
+		call{Method: "agent.get", Result: herdrscript.Info(herdrscript.LiveAgent("working"))},
+		call{Method: "agent.wait", Result: other})
+	out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}})
+	if out.Status != "rejected" || out.Error.Phase != "guard" || !strings.Contains(out.Error.Message, "is working") {
+		t.Fatalf("%+v", out)
+	}
+}
+
+// An --id target's settled row must still match its record.
+func TestStopByIDSettledRowIsVerified(t *testing.T) {
+	live := herdrscript.Info(herdrscript.LiveAgent("working"))
+	settled := herdrscript.Waited(herdrscript.LiveAgent("working"), "idle")
+	codex := "codex"
+	settled.Agent.Agent = &codex
+	s := fake(t,
+		call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live},
+		call{Method: "agent.wait", Params: map[string]any{"target": "w1:p3", "until": []string{"idle", "done", "blocked"}, "timeout_ms": 5000}, Result: settled})
+	s.Cwd = identitytest.Repository(t)
+	rec := identitytest.Register(t, s.Cwd, live.Agent)
+	out := Run(context.Background(), s, Options{Target: identity.Target{ID: rec.ID}})
+	if out.Status != "rejected" || out.Error.Phase != "guard" || !strings.Contains(out.Error.Message, "is working") || ended(t, s.Cwd, rec.ID) {
+		t.Fatalf("%+v", out)
+	}
+}
+
+// --grace tunes the settle wait; --grace 0 refuses at once with no agent.wait.
+func TestStopGraceFlag(t *testing.T) {
+	s := fake(t,
+		call{Method: "agent.get", Result: herdrscript.Info(herdrscript.LiveAgent("working"))},
+		call{Method: "agent.wait", Params: map[string]any{"target": "worker", "until": []string{"idle", "done", "blocked"}, "timeout_ms": 1500}, Result: herdrscript.Waited(herdrscript.LiveAgent("working"), "idle")},
+		call{Method: "pane.close", Params: map[string]any{"pane_id": "w1:p3"}, Result: herdrscript.OK()})
+	if out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}, Grace: 1500 * time.Millisecond, GraceSet: true}); out.Status != "success" {
+		t.Fatalf("%+v", out)
+	}
+	s = fake(t, call{Method: "agent.get", Result: herdrscript.Info(herdrscript.LiveAgent("working"))})
+	if out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}, GraceSet: true}); out.Status != "rejected" || out.Error.Phase != "guard" {
+		t.Fatalf("%+v", out)
+	}
+}
+
+func TestStopGraceValidation(t *testing.T) {
+	for name, o := range map[string]Options{
+		"negative":   {Grace: -time.Second, GraceSet: true},
+		"over max":   {Grace: time.Minute + time.Millisecond, GraceSet: true},
+		"with force": {Grace: time.Second, GraceSet: true, Force: true},
+		"zero force": {GraceSet: true, Force: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			o.Target = identity.Target{Name: "worker"}
+			out := Run(context.Background(), fake(t), o)
+			if out.Status != "rejected" || out.ExitCode() != 2 || out.Error.Phase != "validation" || !strings.Contains(out.Error.Message, "--grace") {
+				t.Fatalf("%+v", out)
+			}
+		})
+	}
+	s := fake(t,
+		call{Method: "agent.get", Result: herdrscript.Info(herdrscript.LiveAgent("working"))},
+		call{Method: "agent.wait", Params: map[string]any{"target": "worker", "until": []string{"idle", "done", "blocked"}, "timeout_ms": 60000}, Result: herdrscript.Waited(herdrscript.LiveAgent("working"), "idle")},
+		call{Method: "pane.close", Result: herdrscript.OK()})
+	if out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}, Grace: time.Minute, GraceSet: true}); out.Status != "success" {
+		t.Fatalf("max grace: %+v", out)
 	}
 }
