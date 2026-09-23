@@ -556,6 +556,42 @@ func recordDirOps(t *testing.T, mkdirErr func(path string) error) *[]string {
 	return &ops
 }
 
+func TestMovesSyncTheNewPathBeforeRemovingTheOld(t *testing.T) {
+	store, root := openStore(t)
+	id := createCounter(t, store)
+	kind, archive := filepath.Join(root, "counters"), filepath.Join(root, "counters", archiveDir)
+	live, archived := filepath.Join(kind, id+recordSuffix), filepath.Join(archive, id+recordSuffix)
+	ops := recordDirOps(t, nil)
+	realSync := syncDir
+	// Log which record paths exist as each sync starts: an unlink synced
+	// before the link would lose the record in a crash.
+	syncDir = func(path string) error {
+		for _, p := range []string{live, archived} {
+			if _, err := os.Stat(p); err == nil {
+				*ops = append(*ops, "  has "+p)
+			}
+		}
+		return realSync(path)
+	}
+	if err := store.Exclusive(func(tx *Tx) error { return tx.Archive("counters", id) }); err != nil {
+		t.Fatal(err)
+	}
+	// The new archive directory is synced into the kind directory before it
+	// holds the only copy of the record.
+	want := []string{"mkdir " + archive, "  has " + live, "sync " + kind, "  has " + live, "  has " + archived, "sync " + archive, "  has " + archived, "sync " + kind}
+	if !reflect.DeepEqual(*ops, want) {
+		t.Fatalf("Archive ops = %q\nwant %q", *ops, want)
+	}
+	*ops = nil
+	if err := store.Exclusive(func(tx *Tx) error { return tx.Unarchive("counters", id) }); err != nil {
+		t.Fatal(err)
+	}
+	want = []string{"  has " + live, "  has " + archived, "sync " + kind, "  has " + live, "sync " + archive}
+	if !reflect.DeepEqual(*ops, want) {
+		t.Fatalf("Unarchive ops = %q\nwant %q", *ops, want)
+	}
+}
+
 func TestOpenAndCreateSyncParentsOfNewDirectories(t *testing.T) {
 	parent := t.TempDir()
 	root := filepath.Join(parent, "state")

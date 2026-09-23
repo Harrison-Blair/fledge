@@ -57,6 +57,11 @@ func (tx *Tx) Archive(kind, id string) error {
 	if err := ensureDir(dir); err != nil {
 		return fmt.Errorf("state: create %s: %w", dir, err)
 	}
+	// Sync even when the archive already existed, in case its creator has
+	// not synced it into the kind directory yet.
+	if err := syncDir(filepath.Dir(live)); err != nil {
+		return err
+	}
 	return move(live, archivePath(live))
 }
 
@@ -76,7 +81,8 @@ func (tx *Tx) Unarchive(kind, id string) error {
 
 // move renames from to to without replacing an existing to, which fails with
 // an error matching fs.ErrExist. A to that is already from's file, left by an
-// interrupted move, completes the move.
+// interrupted move, completes the move. The new link is synced before the old
+// one is removed, so a crash never loses the record.
 func move(from, to string) error {
 	if err := os.Link(from, to); errors.Is(err, fs.ErrExist) {
 		a, aerr := os.Stat(from)
@@ -87,11 +93,11 @@ func move(from, to string) error {
 	} else if err != nil {
 		return fmt.Errorf("state: move %s: %w", from, err)
 	}
-	if err := os.Remove(from); err != nil {
-		return fmt.Errorf("state: move %s: %w", from, err)
-	}
 	if err := syncDir(filepath.Dir(to)); err != nil {
 		return err
+	}
+	if err := os.Remove(from); err != nil {
+		return fmt.Errorf("state: move %s: %w", from, err)
 	}
 	return syncDir(filepath.Dir(from))
 }
