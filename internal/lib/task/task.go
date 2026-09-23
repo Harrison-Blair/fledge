@@ -63,23 +63,17 @@ type Record struct {
 // exactly one of DeliveredAt and Error is set when notification processing
 // finishes.
 type CompletionNotification struct {
-	Recipient   string  `json:"recipient"`
-	MessageID   string  `json:"message_id"`
-	Pane        *string `json:"pane"`
-	DeliveredAt *string `json:"delivered_at"`
-	Error       *string `json:"error"`
-	Uncertain   bool    `json:"uncertain"`
+	Recipient string  `json:"recipient"`
+	MessageID string  `json:"message_id"`
+	Pane      *string `json:"pane"`
+	Attempt
 }
 
 // Delivery is the outcome of sending the brief to the owner on assignment.
-// Exactly one of DeliveredAt and Error is set once the attempt has finished;
-// Uncertain marks an Error after which the brief may still have arrived.
 type Delivery struct {
-	MessageID   string  `json:"message_id"`
-	Pane        string  `json:"pane"`
-	DeliveredAt *string `json:"delivered_at"`
-	Error       *string `json:"error"`
-	Uncertain   bool    `json:"uncertain"`
+	MessageID string `json:"message_id"`
+	Pane      string `json:"pane"`
+	Attempt
 }
 
 // Now is the timestamp format of every task time field: UTC RFC 3339 with

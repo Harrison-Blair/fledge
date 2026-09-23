@@ -11,8 +11,9 @@ import (
 )
 
 type Options struct {
-	Name, Pane, ID, Body, File string
-	BodySet, FileSet           bool
+	identity.Target
+	Body, File       string
+	BodySet, FileSet bool
 }
 type Result struct {
 	libagent.AgentRow
@@ -22,7 +23,7 @@ type Result struct {
 }
 
 func (o Options) read(in io.Reader) (identity.Target, string, error) {
-	target := identity.Target{Name: o.Name, Pane: o.Pane, ID: o.ID}
+	target := o.Target
 	if err := target.Validate(); err != nil {
 		return target, "", err
 	}

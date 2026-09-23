@@ -14,8 +14,8 @@ import (
 )
 
 type Options struct {
-	Name, Pane, ID string
-	Force          bool
+	identity.Target
+	Force bool
 }
 type Result struct {
 	libagent.AgentRow
@@ -24,12 +24,11 @@ type Result struct {
 
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	out := libagent.Outcome{Operation: "agent.stop", Status: "success", Effects: []libagent.Effect{}}
-	selected := identity.Target{Name: o.Name, Pane: o.Pane, ID: o.ID}
-	if err := selected.Validate(); err != nil {
+	if err := o.Target.Validate(); err != nil {
 		out.Fail(err, "validation", false)
 		return out
 	}
-	a, target, rec, err := selected.Get(ctx, c)
+	a, target, rec, err := o.Target.Get(ctx, c)
 	if err != nil {
 		out.Fail(err, "agent.get", false)
 		return out
@@ -64,7 +63,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Fail(endErr, "state", false)
 		return out
 	}
-	if ended != "" {
+	if reopen {
 		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "agent_record", ID: ended})
 	}
 	return out

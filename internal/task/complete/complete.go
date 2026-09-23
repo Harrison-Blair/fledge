@@ -3,7 +3,6 @@ package complete
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 
@@ -86,35 +85,15 @@ func run(ctx context.Context, c libagent.Client, o Options, in io.Reader, messag
 		out.Fail(notificationErr, "identity", false)
 		return out
 	}
-	sender := libagent.ResolveSender(ctx, c)
 	body := fmt.Sprintf("task completed: %s · title: %s · verify with: fledge task verify --id %s --summary \"...\"\nresult:\n%s", r.ID, r.Title, r.ID, summary)
-	agent, deliveryErr := c.Prompt(ctx, recipient.PaneID, libagent.WithHeader(messageID, sender, body))
-	if deliveryErr == nil {
-		out.Effects = append(out.Effects, libagent.Effect{Action: "submitted", Kind: "message", ID: agent.PaneID})
-	}
-	r, err = task.Update(s, o.ID, func(r *task.Record) error {
+	if r, ok := task.Deliver(ctx, c, s, &out, o.ID, recipient.PaneID, messageID, body, func(r *task.Record) (*task.Attempt, error) {
 		n := r.CompletionNotification
 		if n == nil || n.MessageID != messageID || n.Recipient != notification.Recipient {
-			return &herdr.Error{Code: "task_state_changed", Message: fmt.Sprintf("task %s's completion notification changed before its delivery could be recorded", r.ID)}
+			return nil, &herdr.Error{Code: "task_state_changed", Message: fmt.Sprintf("task %s's completion notification changed before its delivery could be recorded", r.ID)}
 		}
-		if deliveryErr != nil {
-			msg := deliveryErr.Error()
-			var remote *herdr.Error
-			n.Error, n.Uncertain = &msg, errors.As(deliveryErr, &remote) && remote.Uncertain
-		} else {
-			n.DeliveredAt = task.Now()
-		}
-		return nil
-	})
-	if err == nil {
-		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "task", ID: r.ID})
+		return &n.Attempt, nil
+	}); ok {
 		out.Result = r
-	}
-	switch {
-	case deliveryErr != nil:
-		out.Fail(deliveryErr, "agent.prompt", true)
-	case err != nil:
-		out.Fail(err, "task", false)
 	}
 	return out
 }

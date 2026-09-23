@@ -13,6 +13,7 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
@@ -37,7 +38,7 @@ func TestPauseMappings(t *testing.T) {
 			p := herdrscript.LiveAgent("working")
 			p.Agent = &h
 			s := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "worker"}, Result: herdrscript.Info(p)}, call{Method: "agent.send_keys", Params: map[string]any{"target": p.PaneID, "keys": keys}, Result: herdrscript.OK()})
-			out := s.run(context.Background(), Options{Name: "worker", Timeout: 10 * time.Second, NoWait: true})
+			out := s.run(context.Background(), Options{Target: identity.Target{Name: "worker"}, Timeout: 10 * time.Second, NoWait: true})
 			r := out.Result.(Result)
 			if out.Status != "success" || !r.Submitted || r.Settled || len(out.Effects) != 1 || out.Effects[0] != (libagent.Effect{Action: "submitted", Kind: "interrupt", ID: p.PaneID}) {
 				t.Fatalf("%+v %+v", out, r)
@@ -46,7 +47,7 @@ func TestPauseMappings(t *testing.T) {
 	}
 }
 func TestPauseValidation(t *testing.T) {
-	for _, o := range []Options{{Timeout: time.Second}, {Name: "w", Pane: "p", Timeout: time.Second}, {Name: "w"}, {Name: "w", Timeout: -time.Second}, {Name: " ", Timeout: time.Second}, {Pane: "\t", Timeout: time.Second}} {
+	for _, o := range []Options{{Timeout: time.Second}, {Target: identity.Target{Name: "w", Pane: "p"}, Timeout: time.Second}, {Target: identity.Target{Name: "w"}}, {Target: identity.Target{Name: "w"}, Timeout: -time.Second}, {Target: identity.Target{Name: " "}, Timeout: time.Second}, {Target: identity.Target{Pane: "\t"}, Timeout: time.Second}} {
 		out := fake(t).run(context.Background(), o)
 		if out.ExitCode() != 2 || out.Error.Phase != "validation" {
 			t.Fatalf("%+v", out)
@@ -64,7 +65,7 @@ func TestPauseGuards(t *testing.T) {
 				if status == "working" {
 					a.Agent.LaunchPending = &pending
 				}
-				out := fake(t, call{Method: "agent.get", Result: a}).run(context.Background(), Options{Pane: p.PaneID, Timeout: time.Second})
+				out := fake(t, call{Method: "agent.get", Result: a}).run(context.Background(), Options{Target: identity.Target{Pane: p.PaneID}, Timeout: time.Second})
 				success := (status == "idle" || status == "done") && harness == "claude"
 				if (out.Status == "success") != success {
 					t.Fatalf("%+v", out)
@@ -84,7 +85,7 @@ func TestPauseWait(t *testing.T) {
 			now := time.Unix(0, 0)
 			s := fake(t, call{Method: "agent.get", Params: map[string]any{"target": p.PaneID}, Result: herdrscript.Info(p), Before: func() { now = now.Add(time.Second) }}, call{Method: "agent.send_keys", Result: herdrscript.OK(), Before: func() { now = now.Add(2 * time.Second) }}, call{Method: "agent.wait", Params: map[string]any{"target": p.PaneID, "timeout_ms": 17000}, Result: herdrscript.Waited(p, status)})
 			s.Now = func() time.Time { return now }
-			out := s.run(context.Background(), Options{Pane: p.PaneID, Timeout: 20 * time.Second})
+			out := s.run(context.Background(), Options{Target: identity.Target{Pane: p.PaneID}, Timeout: 20 * time.Second})
 			r := out.Result.(Result)
 			if out.Status != "success" || !r.Submitted || !r.Settled || *r.AgentStatus != status {
 				t.Fatalf("%+v %+v", out, r)
@@ -105,7 +106,7 @@ func TestPauseSendFailures(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := fake(t, call{Method: "agent.get", Result: herdrscript.Info(herdrscript.LiveAgent("working"))}, call{Method: "agent.send_keys", Result: tc.result, Err: tc.err})
-			out := s.run(context.Background(), Options{Name: "worker", Timeout: time.Second})
+			out := s.run(context.Background(), Options{Target: identity.Target{Name: "worker"}, Timeout: time.Second})
 			if out.Status != tc.status || out.Error.Phase != "agent.send_keys" || out.Result.(Result).Submitted || len(out.Effects) != 0 {
 				t.Fatalf("%+v", out)
 			}
@@ -138,7 +139,7 @@ func TestPauseWaitFailures(t *testing.T) {
 				w.Agent.LaunchPending = &b
 			}
 			s := fake(t, call{Method: "agent.get", Result: herdrscript.Info(p)}, call{Method: "agent.send_keys", Result: herdrscript.OK()}, call{Method: "agent.wait", Result: w, Err: err})
-			out := s.run(context.Background(), Options{Name: "worker", Timeout: time.Second})
+			out := s.run(context.Background(), Options{Target: identity.Target{Name: "worker"}, Timeout: time.Second})
 			r := out.Result.(Result)
 			if out.Status != "partial" || out.Error.Phase != "agent.wait" || !r.Submitted || r.Settled || len(out.Effects) != 1 {
 				t.Fatalf("%+v %+v", out, r)
@@ -164,7 +165,7 @@ func TestPauseBudgetExhausted(t *testing.T) {
 			}
 			s := fake(t, calls...)
 			s.Now = func() time.Time { return now }
-			out := s.run(context.Background(), Options{Name: "worker", Timeout: time.Second})
+			out := s.run(context.Background(), Options{Target: identity.Target{Name: "worker"}, Timeout: time.Second})
 			if out.Error == nil || out.Error.Code != "timeout" || out.Result.(Result).Submitted != afterSend {
 				t.Fatalf("%+v", out)
 			}
@@ -173,7 +174,7 @@ func TestPauseBudgetExhausted(t *testing.T) {
 }
 func TestPauseLookupFailures(t *testing.T) {
 	for _, c := range []call{{Method: "agent.get", Result: map[string]any{}}, {Method: "agent.get", Err: &herdr.Error{Code: "agent_not_found", Message: "gone"}}} {
-		out := fake(t, c).run(context.Background(), Options{Name: "worker", Timeout: time.Second})
+		out := fake(t, c).run(context.Background(), Options{Target: identity.Target{Name: "worker"}, Timeout: time.Second})
 		if out.Status != "rejected" || out.Error.Phase != "agent.get" {
 			t.Fatalf("%+v", out)
 		}
@@ -210,7 +211,7 @@ func TestPauseByIDFailsClosedOnStaleTerminal(t *testing.T) {
 	recorded := live.Agent
 	recorded.TerminalID = "term_old"
 	rec := identitytest.Register(t, s.Cwd, recorded)
-	out := s.run(context.Background(), Options{ID: rec.ID, Timeout: time.Second})
+	out := s.run(context.Background(), Options{Target: identity.Target{ID: rec.ID}, Timeout: time.Second})
 	if out.Error == nil || out.Error.Code != "agent_identity_stale" || len(out.Effects) != 0 {
 		t.Fatalf("%+v", out)
 	}
@@ -222,7 +223,7 @@ func TestPauseByIDInterruptsVerifiedPane(t *testing.T) {
 		call{Method: "agent.send_keys", Params: map[string]any{"target": "w1:p3", "keys": []string{"esc"}}, Result: herdrscript.OK()})
 	s.Cwd = identitytest.Repository(t)
 	rec := identitytest.Register(t, s.Cwd, live.Agent)
-	if out := s.run(context.Background(), Options{ID: rec.ID, Timeout: time.Second, NoWait: true}); out.Error != nil {
+	if out := s.run(context.Background(), Options{Target: identity.Target{ID: rec.ID}, Timeout: time.Second, NoWait: true}); out.Error != nil {
 		t.Fatalf("%+v", out)
 	}
 }
@@ -282,7 +283,7 @@ func TestPauseReportsHerdrSettleTimeout(t *testing.T) {
 		return nil, map[string]any{"code": "timeout", "message": "wait timed out"}
 	})
 	for range 5 {
-		out := Run(context.Background(), libagent.FromEnvironment(200*time.Millisecond), Options{Name: "worker", Timeout: 200 * time.Millisecond})
+		out := Run(context.Background(), libagent.FromEnvironment(200*time.Millisecond), Options{Target: identity.Target{Name: "worker"}, Timeout: 200 * time.Millisecond})
 		if out.Error == nil || out.Error.Code != "timeout" || out.Error.Phase != "agent.wait" || !out.Result.(Result).Submitted {
 			t.Fatalf("%+v %+v", out, out.Error)
 		}
@@ -303,7 +304,7 @@ func TestPauseTimeoutBoundsStalledRequests(t *testing.T) {
 				return herdrscript.Info(herdrscript.LiveAgent("working")), nil
 			})
 			start := time.Now()
-			out := Run(context.Background(), libagent.FromEnvironment(200*time.Millisecond), Options{Name: "worker", Timeout: 200 * time.Millisecond})
+			out := Run(context.Background(), libagent.FromEnvironment(200*time.Millisecond), Options{Target: identity.Target{Name: "worker"}, Timeout: 200 * time.Millisecond})
 			if elapsed := time.Since(start); elapsed > 5*time.Second || out.Error == nil || out.Error.Phase != stall {
 				t.Fatalf("%s %+v %+v", elapsed, out, out.Error)
 			}

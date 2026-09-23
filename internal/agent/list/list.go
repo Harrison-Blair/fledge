@@ -6,11 +6,9 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"slices"
 	"text/tabwriter"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
-	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 )
@@ -61,17 +59,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		}
 		o.Parent = caller.ID
 	}
-	var r struct {
-		Type   string               `json:"type"`
-		Agents []herdr.AgentDetails `json:"agents"`
-	}
-	err = c.Call(ctx, "agent.list", nil, &r)
-	if err == nil && (r.Type != "agent_list" || r.Agents == nil) {
-		err = libagent.Protocol("incomplete agent.list result")
-	}
-	if err == nil && slices.ContainsFunc(r.Agents, func(a herdr.AgentDetails) bool { return !libagent.ValidAgent(a.Pane) }) {
-		err = libagent.Protocol("incomplete agent info")
-	}
+	agents, err := c.List(ctx)
 	if err != nil {
 		out.Fail(err, "agent.list", false)
 		return out
@@ -81,8 +69,8 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Fail(err, "state", false)
 		return out
 	}
-	rows := make([]Row, 0, len(r.Agents))
-	for _, a := range r.Agents {
+	rows := make([]Row, 0, len(agents))
+	for _, a := range agents {
 		row := Row{AgentRow: libagent.NewAgentRow(a.Pane)}
 		if rec, ok := identity.Attributed(records, a); ok {
 			row.ID, row.Parent = &rec.ID, rec.Parent

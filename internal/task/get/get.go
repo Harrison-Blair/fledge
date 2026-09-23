@@ -110,35 +110,17 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		fmt.Fprintf(&b, "assigned: %s%s\n", *r.AssignedAt, forced)
 	}
 	if d := r.Delivery; d != nil {
-		state := "outcome unknown"
-		switch {
-		case d.DeliveredAt != nil:
-			state = "delivered " + *d.DeliveredAt
-		case d.Error != nil && d.Uncertain:
-			state = "outcome unknown: " + *d.Error
-		case d.Error != nil:
-			state = "failed: " + *d.Error
-		}
-		fmt.Fprintf(&b, "delivery: message %s to %s, %s\n", d.MessageID, d.Pane, state)
+		fmt.Fprintf(&b, "delivery: message %s to %s, %s\n", d.MessageID, d.Pane, d.State())
 	}
 	if r.CompletedAt != nil {
 		fmt.Fprintf(&b, "completed: %s\n", *r.CompletedAt)
 	}
 	if n := r.CompletionNotification; n != nil {
-		state := "outcome unknown"
-		switch {
-		case n.DeliveredAt != nil:
-			state = "delivered " + *n.DeliveredAt
-		case n.Error != nil && n.Uncertain:
-			state = "outcome unknown: " + *n.Error
-		case n.Error != nil:
-			state = "failed: " + *n.Error
-		}
 		target := n.Recipient
 		if n.Pane != nil {
 			target += " in " + *n.Pane
 		}
-		fmt.Fprintf(&b, "completion notification: message %s to %s, %s\n", n.MessageID, target, state)
+		fmt.Fprintf(&b, "completion notification: message %s to %s, %s\n", n.MessageID, target, n.State())
 	}
 	if r.VerifiedAt != nil {
 		verifier, forced := "an unregistered caller", ""

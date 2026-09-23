@@ -293,3 +293,31 @@ func TestCompleteRejectsInvalidInput(t *testing.T) {
 		t.Fatalf("%+v", out.Error)
 	}
 }
+
+// A notification replaced while the message was in flight is left as it is;
+// the outcome fails at phase task and says it could not be recorded.
+func TestNotificationNotRecordedAfterChange(t *testing.T) {
+	repo := identitytest.Repository(t)
+	creator := tasktest.Register(t, repo, boss)
+	owner := tasktest.Register(t, repo, worker)
+	id := tasktest.Seed(t, repo, task.Record{Title: "Fix it", Status: task.Assigned, Owner: &owner.ID, CreatedBy: &creator.ID})
+	c := tasktest.Client(t, repo, "w1:p3",
+		tasktest.Get("w1:p3", worker),
+		tasktest.Get("w1:p1", boss),
+		tasktest.Get("w1:p3", worker),
+		herdrscript.Call{Method: "agent.prompt", Result: herdr.AgentResult{Type: "agent_prompted", Agent: boss.Agent}, Before: func() {
+			if _, err := task.Update(mustStore(t, repo), id, func(r *task.Record) error { r.CompletionNotification.MessageID = "m-ffffff"; return nil }); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	)
+	out := run(context.Background(), c, Options{ID: id, Summary: "all done", SummarySet: true}, strings.NewReader(""), "m-0a1b2c")
+	n := tasktest.Load(t, repo, id).CompletionNotification
+	if out.Status != "partial" || out.Error == nil || out.Error.Code != "task_state_changed" || out.Error.Phase != "task" || n.MessageID != "m-ffffff" || n.DeliveredAt != nil || n.Error != nil {
+		t.Fatalf("%+v %+v %+v", out, out.Error, n)
+	}
+	var b bytes.Buffer
+	if err := out.Write(&b, false, Render); err != nil || !strings.HasSuffix(b.String(), "\nTask "+id+" is completed; the notification outcome could not be recorded.\n") {
+		t.Fatalf("%q %v", b.String(), err)
+	}
+}

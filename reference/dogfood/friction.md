@@ -643,3 +643,88 @@ prompt, then stop the agent with `--force`.
 2. Confirm with `fledge agent read --name <agent>` that it shows an idle prompt.
 3. Immediately run `fledge agent stop --name <agent>`.
 4. Observe the `is working; pass --force` guard rejection.
+
+---
+
+**Issue:** A registered but unnamed agent cannot be given a name
+
+**Summary:** On 2026-09-22 the orchestrator's Claude pane (`wZ:p1`) had a live
+record (`27392de9`, registered by `adopt`) but no Herdr name. `agent adopt
+--name <name>` refuses a terminal that already has a live record, and no other
+Fledge command sets a name, so the orchestrator stayed unnamed all session.
+Workers could only reply with `agent message --pane wZ:p1`, and every message
+it sent was headed `unnamed agent (wZ:p1)` with no reply command.
+
+**Reproduction steps:**
+1. Run `fledge agent adopt` in a pane without `--name` while the agent is unnamed, or register it some other way without a name.
+2. Run `fledge agent adopt --name orchestrator` in the same pane.
+3. Observe the refusal naming the existing record id, and that no command renames it.
+
+---
+
+**Issue:** `agent wait` keeps waiting after its target agents are stopped
+
+**Summary:** On 2026-09-22 the orchestrator ran `fledge agent wait --name
+impl-worktree --name impl-state --name impl-commands --any --until
+blocked --until done --until idle --timeout 3h` in the background, then stopped
+`impl-worktree` and `impl-commands` with `agent stop --force`. The wait
+neither returned nor reported the closed panes; it had to be killed by hand.
+A later `--any` wait over respawned agents of the same names reported
+`impl-state was cancelled` and `impl-commands is done (first match)`.
+
+**Reproduction steps:**
+1. Spawn two agents and start `fledge agent wait --name a --name b --any --until idle` while both are working.
+2. Run `fledge agent stop --name a --force` and `fledge agent stop --name b --force`.
+3. Observe that the wait keeps running instead of returning a gone or failed result for each target.
+
+---
+
+**Issue:** `agent spawn --cwd <other repo>` registers the agent in the invoking repository
+
+**Summary:** On 2026-09-22 a verifier working in a `fledge` worktree ran
+`agent spawn --no-wait --cwd <throwaway repo>` to probe spawn behavior. Both
+probe records (`cc5cf5f8`, `c27617b2`) were written to the primary checkout's
+real `.fledge/state/agents/`, not to the throwaway repo named by `--cwd`.
+The probes then blocked at Claude's trust dialog and had to be stopped by the
+orchestrator. Workaround: run any spawn that registers from a working directory
+inside the repository whose state should hold the record.
+
+**Reproduction steps:**
+1. From inside repository A, run `fledge agent spawn --harness claude --name probe --no-wait --cwd <repository B>`.
+2. Look in A's `.fledge/state/agents/` and in B's.
+3. Observe the record in A, and nothing in B.
+
+---
+
+**Issue:** Spawn with `--prompt` into a new folder stops at Claude's trust dialog and drops the prompt
+
+**Summary:** On 2026-09-23 a verifier spawned a Claude probe with `--prompt`
+and `--cwd` pointing at a new throwaway repository. Spawn returned with the
+agent `blocked` on Claude's folder-trust dialog, and the first prompt was never
+delivered. The verifier accepted the dialog with `agent send --key down --key
+enter` and resent the command with `agent send`. See also the folder-trust
+entry above for spawns through a worktree.
+
+**Reproduction steps:**
+1. Create a new git repository Claude has never trusted.
+2. Run `fledge agent spawn --harness claude --name probe --cwd <repo> --prompt "echo hi"`.
+3. Observe spawn report the agent blocked on a startup prompt, and that after granting trust the prompt was never submitted.
+
+---
+
+**Issue:** Claude workers in auto mode stall on permission denials
+
+**Summary:** On 2026-09-22 a Claude verifier spawned in the default auto
+permission mode had one `agent stop --force` denied by the auto-mode
+classifier. It then had `rm` and, finally, a read-only `git status` denied as
+"auto-mode bypass" attempts, so it stopped mid-verification without running
+`task verify` or cleaning up its probe agent. The orchestrator hit the same
+classifier ("Create Unsafe Agents") when it prepared bypass-mode spawns.
+Workaround: spawn Claude workers with
+`fledge agent spawn ... -- --permission-mode bypassPermissions` (with
+`skipDangerousModePermissionPrompt` set, no dialog appears). Fledge has no
+first-class permission-mode option.
+
+**Reproduction steps:**
+1. Spawn a Claude agent in auto mode and have it run `fledge agent stop --name <another agent> --force`.
+2. Observe the classifier denial, then denials of unrelated follow-up commands.

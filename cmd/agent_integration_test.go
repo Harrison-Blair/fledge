@@ -306,7 +306,7 @@ func gitRepo(t *testing.T) {
 func TestListParentFlagFiltersAgents(t *testing.T) {
 	l := newSocket(t)
 	gitRepo(t)
-	done := serveRPCs(l, map[string]any{"type": "agent_list", "agents": []any{map[string]any{"pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1", "agent_status": "idle", "terminal_id": "term_x"}}})
+	done := serveRPCs(l, map[string]any{"type": "agent_list", "agents": []any{map[string]any{"pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1", "agent_status": "idle", "terminal_id": "term_x", "focused": false, "revision": 0}}})
 	var out bytes.Buffer
 	if err := ExecuteWithArgs([]string{"agent", "list", "--parent", "0000beef", "--json"}, &out); err != nil {
 		t.Fatal(err, out.String())

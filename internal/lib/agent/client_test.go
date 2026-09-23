@@ -109,6 +109,49 @@ func TestGetValidatesAgentInfo(t *testing.T) {
 	}
 }
 
+func TestListValidatesEveryAgentInfo(t *testing.T) {
+	noTerminal := agentInfo("idle")
+	noTerminal.TerminalID = ""
+	for _, tc := range []struct {
+		name     string
+		response any
+		ok       bool
+	}{
+		{"valid", map[string]any{"type": "agent_list", "agents": []herdr.AgentDetails{agentInfo("idle"), agentInfo("working")}}, true},
+		{"empty", map[string]any{"type": "agent_list", "agents": []herdr.AgentDetails{}}, true},
+		{"wrong type", map[string]any{"type": "pane_list", "agents": []herdr.AgentDetails{}}, false},
+		{"agents missing", map[string]any{"type": "agent_list"}, false},
+		{"agents null", map[string]any{"type": "agent_list", "agents": nil}, false},
+		{"bad status", map[string]any{"type": "agent_list", "agents": []herdr.AgentDetails{agentInfo("idle"), agentInfo("sleeping")}}, false},
+		{"no terminal", map[string]any{"type": "agent_list", "agents": []herdr.AgentDetails{noTerminal}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Client{API: apiFunc(func(method string, params any) (any, error) {
+				if method != "agent.list" || params != nil {
+					t.Fatalf("%s %#v", method, params)
+				}
+				return tc.response, nil
+			})}
+			agents, err := c.List(context.Background())
+			if tc.ok != (err == nil) || !tc.ok && agents != nil || tc.ok && agents == nil {
+				t.Fatalf("%+v %v", agents, err)
+			}
+			var remote *herdr.Error
+			if !tc.ok && (!errors.As(err, &remote) || remote.Code != "protocol_error" || !remote.Uncertain || err.Error() != "protocol_error: incomplete agent.list result") {
+				t.Fatalf("%v", err)
+			}
+		})
+	}
+	sent := errors.New("socket closed")
+	c := Client{API: apiFunc(func(string, any) (any, error) { return nil, sent })}
+	o := Outcome{}
+	_, err := c.List(context.Background())
+	o.Fail(err, "state", false)
+	if !errors.Is(err, sent) || o.Error.Phase != "agent.list" {
+		t.Fatalf("%v %+v", err, o.Error)
+	}
+}
+
 func TestPromptValidatesAcknowledgement(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -139,22 +182,6 @@ func TestPromptValidatesAcknowledgement(t *testing.T) {
 	_, err := Client{API: apiFunc(func(string, any) (any, error) { return nil, sent })}.Prompt(context.Background(), "worker", "hi")
 	if !errors.Is(err, sent) {
 		t.Fatal(err)
-	}
-}
-
-func TestResolveTarget(t *testing.T) {
-	for _, c := range []struct {
-		name, pane, want string
-		ok               bool
-	}{{"worker", "", "worker", true}, {"", "w1:p3", "w1:p3", true}, {"", "", "", false}, {"worker", "w1:p3", "", false}} {
-		got, err := ResolveTarget(c.name, c.pane)
-		if got != c.want || (err == nil) != c.ok {
-			t.Fatalf("%+v: got %q, %v", c, got, err)
-		}
-		var input *InputError
-		if !c.ok && (err.Error() != "exactly one of --name or --pane is required" || !errors.As(err, &input)) {
-			t.Fatalf("%+v: %v", c, err)
-		}
 	}
 }
 

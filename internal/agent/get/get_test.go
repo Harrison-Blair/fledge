@@ -24,10 +24,10 @@ func TestGetTargetsAndStates(t *testing.T) {
 	for _, status := range []string{"idle", "working", "blocked", "done", "unknown"} {
 		for _, byPane := range []bool{false, true} {
 			p := herdrscript.LiveAgent(status)
-			o, target := Options{Name: "worker"}, "worker"
+			o, target := Options{Target: identity.Target{Name: "worker"}}, "worker"
 			if byPane {
 				p.Name = nil
-				o = Options{Pane: p.PaneID}
+				o = Options{Target: identity.Target{Pane: p.PaneID}}
 				target = p.PaneID
 			}
 			out := Run(context.Background(), fake(t, call{Method: "agent.get", Params: map[string]any{"target": target}, Result: herdrscript.Info(p)}), o)
@@ -42,7 +42,7 @@ func TestGetTargetsAndStates(t *testing.T) {
 }
 
 func TestGetInvalidTargets(t *testing.T) {
-	for _, o := range []Options{{}, {Name: "worker", Pane: "w1:p3"}} {
+	for _, o := range []Options{{}, {Target: identity.Target{Name: "worker", Pane: "w1:p3"}}} {
 		out := Run(context.Background(), fake(t), o)
 		if out.ExitCode() != 2 || out.Status != "rejected" || out.Error.Phase != "validation" {
 			t.Fatalf("%+v", out)
@@ -52,7 +52,7 @@ func TestGetInvalidTargets(t *testing.T) {
 
 func TestGetFailures(t *testing.T) {
 	for _, code := range []string{"agent_not_found", "transport_error", "protocol_error"} {
-		out := Run(context.Background(), fake(t, call{Method: "agent.get", Err: &herdr.Error{Code: code, Message: "failed", Uncertain: true}}), Options{Name: "worker"})
+		out := Run(context.Background(), fake(t, call{Method: "agent.get", Err: &herdr.Error{Code: code, Message: "failed", Uncertain: true}}), Options{Target: identity.Target{Name: "worker"}})
 		if out.ExitCode() != 1 || out.Status != "rejected" || out.Error.Code != code || out.Error.Phase != "agent.get" || len(out.Effects) != 0 {
 			t.Fatalf("%+v", out)
 		}
@@ -68,7 +68,7 @@ func TestGetFailures(t *testing.T) {
 		default:
 			p[field] = ""
 		}
-		out := Run(context.Background(), fake(t, call{Method: "agent.get", Result: r}), Options{Name: "worker"})
+		out := Run(context.Background(), fake(t, call{Method: "agent.get", Result: r}), Options{Target: identity.Target{Name: "worker"}})
 		if out.ExitCode() != 1 || out.Status != "rejected" || out.Error.Code != "protocol_error" || out.Error.Phase != "agent.get" {
 			t.Fatalf("%s: %+v", field, out)
 		}
@@ -107,7 +107,7 @@ func TestGetRejectsMalformedSession(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := base()
 			p["agent_session"] = tc.session
-			out := Run(context.Background(), fake(t, call{Method: "agent.get", Result: map[string]any{"type": "agent_info", "agent": p}}), Options{Name: "worker"})
+			out := Run(context.Background(), fake(t, call{Method: "agent.get", Result: map[string]any{"type": "agent_info", "agent": p}}), Options{Target: identity.Target{Name: "worker"}})
 			if out.ExitCode() != 1 || out.Status != "rejected" || out.Error.Code != "protocol_error" || out.Error.Phase != "agent.get" {
 				t.Fatalf("%+v", out)
 			}
@@ -125,14 +125,14 @@ func TestGetRejectsMalformedSession(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := base()
 			p["agent_session"] = tc.session
-			out := Run(context.Background(), fake(t, call{Method: "agent.get", Result: map[string]any{"type": "agent_info", "agent": p}}), Options{Name: "worker"})
+			out := Run(context.Background(), fake(t, call{Method: "agent.get", Result: map[string]any{"type": "agent_info", "agent": p}}), Options{Target: identity.Target{Name: "worker"}})
 			if out.ExitCode() != 0 || out.Status != "success" {
 				t.Fatalf("%+v", out)
 			}
 		})
 	}
 	t.Run("absent", func(t *testing.T) {
-		out := Run(context.Background(), fake(t, call{Method: "agent.get", Result: map[string]any{"type": "agent_info", "agent": base()}}), Options{Name: "worker"})
+		out := Run(context.Background(), fake(t, call{Method: "agent.get", Result: map[string]any{"type": "agent_info", "agent": base()}}), Options{Target: identity.Target{Name: "worker"}})
 		if out.ExitCode() != 0 || out.Status != "success" {
 			t.Fatalf("%+v", out)
 		}
@@ -140,7 +140,7 @@ func TestGetRejectsMalformedSession(t *testing.T) {
 	t.Run("explicit null", func(t *testing.T) {
 		p := base()
 		p["agent_session"] = nil
-		out := Run(context.Background(), fake(t, call{Method: "agent.get", Result: map[string]any{"type": "agent_info", "agent": p}}), Options{Name: "worker"})
+		out := Run(context.Background(), fake(t, call{Method: "agent.get", Result: map[string]any{"type": "agent_info", "agent": p}}), Options{Target: identity.Target{Name: "worker"}})
 		if out.ExitCode() != 0 || out.Status != "success" {
 			t.Fatalf("%+v", out)
 		}
@@ -176,7 +176,7 @@ func TestGetResolvesTitle(t *testing.T) {
 			if tc.terminalTitleStripped != nil {
 				p["terminal_title_stripped"] = *tc.terminalTitleStripped
 			}
-			out := Run(context.Background(), fake(t, call{Method: "agent.get", Result: map[string]any{"type": "agent_info", "agent": p}}), Options{Name: "worker"})
+			out := Run(context.Background(), fake(t, call{Method: "agent.get", Result: map[string]any{"type": "agent_info", "agent": p}}), Options{Target: identity.Target{Name: "worker"}})
 			if out.ExitCode() != 0 || out.Status != "success" {
 				t.Fatalf("%+v", out)
 			}
@@ -217,7 +217,7 @@ func TestGetOutput(t *testing.T) {
 			p["agent_session"] = map[string]any{"source": "herdr:claude", "agent": "claude", "kind": "id", "value": "session-1"}
 			want = "Name: -\nHarness: -\nStatus: idle\nWorkspace ID: w1\nTab ID: w1:t2\nPane ID: w1:p3\nWorking directory: -\nForeground working directory: /repo/sub\nInteractive ready: true\nLaunch pending: false\nFocused: false\nTitle: Review\nSession source: herdr:claude\nSession harness: claude\nSession reference kind: id\nSession reference value: session-1\n"
 		}
-		out := Run(context.Background(), fake(t, call{Method: "agent.get", Result: map[string]any{"type": "agent_info", "agent": p}}), Options{Pane: "w1:p3"})
+		out := Run(context.Background(), fake(t, call{Method: "agent.get", Result: map[string]any{"type": "agent_info", "agent": p}}), Options{Target: identity.Target{Pane: "w1:p3"}})
 		var b bytes.Buffer
 		if err := out.Write(&b, false, Render); err != nil {
 			t.Fatal(err)
@@ -261,7 +261,7 @@ func TestGetByIDShowsRecord(t *testing.T) {
 	c := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live})
 	c.Cwd = identitytest.Repository(t)
 	rec := identitytest.Register(t, c.Cwd, live.Agent)
-	out := Run(context.Background(), c, Options{ID: rec.ID})
+	out := Run(context.Background(), c, Options{Target: identity.Target{ID: rec.ID}})
 	r, ok := out.Result.(Result)
 	if out.Error != nil || !ok || r.Record == nil || !reflect.DeepEqual(*r.Record, rec) {
 		t.Fatalf("%+v", out)
@@ -281,7 +281,7 @@ func TestGetByNameShowsLiveRecord(t *testing.T) {
 	c := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "worker"}, Result: live})
 	c.Cwd = identitytest.Repository(t)
 	rec := identitytest.Register(t, c.Cwd, live.Agent)
-	out := Run(context.Background(), c, Options{Name: "worker"})
+	out := Run(context.Background(), c, Options{Target: identity.Target{Name: "worker"}})
 	if r := out.Result.(Result); r.Record == nil || r.Record.ID != rec.ID {
 		t.Fatalf("%+v", out)
 	}
@@ -294,14 +294,14 @@ func TestGetByIDFailsClosedOnStaleTerminal(t *testing.T) {
 	recorded := live.Agent
 	recorded.TerminalID = "term_old"
 	rec := identitytest.Register(t, c.Cwd, recorded)
-	out := Run(context.Background(), c, Options{ID: rec.ID})
+	out := Run(context.Background(), c, Options{Target: identity.Target{ID: rec.ID}})
 	if out.Error == nil || out.Error.Code != "agent_identity_stale" || out.Error.Phase != "identity" || out.Result != nil {
 		t.Fatalf("%+v", out)
 	}
 }
 
 func TestGetIDExcludesOtherSelectors(t *testing.T) {
-	for _, o := range []Options{{Name: "worker", ID: "0000beef"}, {Pane: "w1:p3", ID: "0000beef"}} {
+	for _, o := range []Options{{Target: identity.Target{Name: "worker", ID: "0000beef"}}, {Target: identity.Target{Pane: "w1:p3", ID: "0000beef"}}} {
 		if out := Run(context.Background(), fake(t), o); out.ExitCode() != 2 || out.Error.Phase != "validation" {
 			t.Fatalf("%+v", out)
 		}
@@ -315,7 +315,7 @@ func TestGetByNameEndsRecordOfDifferentHarness(t *testing.T) {
 	recorded, codex := live.Agent, "codex"
 	recorded.Agent = &codex
 	rec := identitytest.Register(t, c.Cwd, recorded)
-	out := Run(context.Background(), c, Options{Name: "worker"})
+	out := Run(context.Background(), c, Options{Target: identity.Target{Name: "worker"}})
 	if r := out.Result.(Result); out.Error != nil || r.Record != nil {
 		t.Fatalf("%+v", out)
 	}

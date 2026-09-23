@@ -55,11 +55,11 @@ func (r repo) listing(open bool) herdr.WorktreeListResult {
 }
 
 func agents(workspaces ...string) herdr.AgentListResult {
-	r := herdr.AgentListResult{Type: "agent_list", Agents: []herdr.Pane{}}
+	r := herdr.AgentListResult{Type: "agent_list", Agents: []herdr.AgentDetails{}}
 	for i, ws := range workspaces {
 		p := herdrscript.Pane(ws+":p"+string(rune('1'+i)), ws, ws+":t1")
 		p.AgentStatus = "idle"
-		r.Agents = append(r.Agents, p)
+		r.Agents = append(r.Agents, herdrscript.Info(p).Agent)
 	}
 	return r
 }
@@ -247,7 +247,9 @@ func TestRender(t *testing.T) {
 func agentAt(cwd, terminal string) herdr.AgentDetails {
 	p := herdrscript.Pane("w9:p1", "w9", "w9:t1")
 	p.Cwd, p.AgentStatus = &cwd, "idle"
-	return herdr.AgentDetails{Pane: p, TerminalID: terminal}
+	a := herdrscript.Info(p).Agent
+	a.TerminalID = terminal
+	return a
 }
 func agentList(agents ...herdr.AgentDetails) call {
 	if agents == nil {
@@ -343,6 +345,24 @@ func TestClosedCheckoutRecheckedBeforeRemoval(t *testing.T) {
 	), Options{Path: r.topic, Force: true, Cwd: r.root})
 	if out.ExitCode() != 2 || out.Error.Phase != "guard" {
 		t.Fatalf("%+v", out)
+	}
+	if _, err := os.Stat(r.topic); err != nil {
+		t.Fatal("checkout removed")
+	}
+}
+
+// An incomplete agent.list entry, even one outside the checkout, fails the
+// guard closed: without its terminal its record cannot be attributed.
+func TestIncompleteAgentInfoRefusesRemoval(t *testing.T) {
+	r := newRepo(t)
+	incomplete := agentAt(t.TempDir(), "t9")
+	incomplete.Focused = nil
+	out := Run(context.Background(), herdrscript.Client(t,
+		call{Method: "worktree.list", Result: r.listing(false)},
+		agentList(incomplete),
+	), Options{Path: r.topic, Force: true, Cwd: r.root})
+	if out.Status != "rejected" || out.Error == nil || out.Error.Code != "protocol_error" || out.Error.Phase != "guard" || len(out.Effects) != 0 {
+		t.Fatalf("%+v %+v", out, out.Error)
 	}
 	if _, err := os.Stat(r.topic); err != nil {
 		t.Fatal("checkout removed")

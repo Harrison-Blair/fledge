@@ -18,8 +18,8 @@ func TestGetShowsFullRecord(t *testing.T) {
 	id := tasktest.Seed(t, repo, task.Record{Title: "Fix it", Brief: "line one\nline two\n", Status: task.Verified, Owner: p("aaaaaaaa"),
 		Result: p("fixed"), Verifier: p("bbbbbbbb"), VerificationNote: p("ok"), Forced: true, CreatedAt: "2026-01-01T00:00:00Z", CreatedBy: p("bbbbbbbb"),
 		AssignedAt: p("2026-01-01T00:01:00Z"), CompletedAt: p("2026-01-01T00:02:00Z"), VerifiedAt: p("2026-01-01T00:03:00Z"),
-		Delivery:               &task.Delivery{MessageID: "m-0a1b2c", Pane: "w1:p3", DeliveredAt: p("2026-01-01T00:01:01Z")},
-		CompletionNotification: &task.CompletionNotification{Recipient: "bbbbbbbb", MessageID: "m-abcdef", Pane: p("w1:p1"), DeliveredAt: p("2026-01-01T00:02:01Z")}})
+		Delivery:               &task.Delivery{MessageID: "m-0a1b2c", Pane: "w1:p3", Attempt: task.Attempt{DeliveredAt: p("2026-01-01T00:01:01Z")}},
+		CompletionNotification: &task.CompletionNotification{Recipient: "bbbbbbbb", MessageID: "m-abcdef", Pane: p("w1:p1"), Attempt: task.Attempt{DeliveredAt: p("2026-01-01T00:02:01Z")}}})
 	out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{ID: id})
 	if out.Error != nil || out.Operation != "task.get" || !reflect.DeepEqual(out.Result, Result{Record: tasktest.Load(t, repo, id), Dependencies: []Dependency{}}) {
 		t.Fatalf("%+v", out)
@@ -48,8 +48,8 @@ func TestGetSparseRecord(t *testing.T) {
 	p := tasktest.Ptr[string]
 	id := tasktest.Seed(t, repo, task.Record{Title: "T", Brief: "b", Status: task.Cancelled, CreatedAt: "2026-01-01T00:00:00Z",
 		AssignedAt: p("2026-01-01T00:01:00Z"), Owner: p("aaaaaaaa"), CancelledAt: p("2026-01-01T00:05:00Z"), CancelReason: p("dup"),
-		Delivery:               &task.Delivery{MessageID: "m-0a1b2c", Pane: "w1:p3", Error: p("agent_blocked: approval")},
-		CompletionNotification: &task.CompletionNotification{Recipient: "bbbbbbbb", MessageID: "m-abcdef", Error: p("transport_error: lost"), Uncertain: true}})
+		Delivery:               &task.Delivery{MessageID: "m-0a1b2c", Pane: "w1:p3", Attempt: task.Attempt{Error: p("agent_blocked: approval")}},
+		CompletionNotification: &task.CompletionNotification{Recipient: "bbbbbbbb", MessageID: "m-abcdef", Attempt: task.Attempt{Error: p("transport_error: lost"), Uncertain: true}}})
 	out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{ID: id})
 	var b bytes.Buffer
 	out.Write(&b, false, Render)

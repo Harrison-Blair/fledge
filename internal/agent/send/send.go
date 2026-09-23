@@ -13,8 +13,9 @@ import (
 // Options selects a live agent and the input to deliver: Text as a paste,
 // then Keys pressed in order.
 type Options struct {
-	Name, Pane, ID, Text string
-	Keys                 []string
+	identity.Target
+	Text string
+	Keys []string
 }
 
 // Result reports the agent as observed before sending.
@@ -27,8 +28,7 @@ type Result struct {
 // state. Nothing is prefixed, so the recipient has no reply channel.
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	out := libagent.Outcome{Operation: "agent.send", Status: "success", Effects: []libagent.Effect{}}
-	selected := identity.Target{Name: o.Name, Pane: o.Pane, ID: o.ID}
-	err := selected.Validate()
+	err := o.Target.Validate()
 	if err == nil && o.Text == "" && len(o.Keys) == 0 {
 		err = libagent.Invalid("at least one of --text or --key is required")
 	}
@@ -36,7 +36,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Fail(err, "validation", false)
 		return out
 	}
-	a, _, _, err := selected.Get(ctx, c)
+	a, _, _, err := o.Target.Get(ctx, c)
 	if err != nil {
 		out.Fail(err, "agent.get", false)
 		return out

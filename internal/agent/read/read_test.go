@@ -9,6 +9,7 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
@@ -29,7 +30,7 @@ func TestReadTranslatesSourceSpelling(t *testing.T) {
 	for cli, wire := range map[string]string{"visible": "visible", "recent": "recent", "recent-unwrapped": "recent_unwrapped", "detection": "detection"} {
 		out := Run(context.Background(), fake(t, getCall("worker"),
 			call{Method: "agent.read", Params: map[string]any{"target": "w1:p3", "source": wire, "format": "text"}, Result: readResult(wire, "a\nb\n", false)}),
-			Options{Name: "worker", Source: cli})
+			Options{Target: identity.Target{Name: "worker"}, Source: cli})
 		if out.Operation != "agent.read" || out.Status != "success" || out.ExitCode() != 0 || len(out.Effects) != 0 {
 			t.Fatalf("%s: %+v", cli, out)
 		}
@@ -43,12 +44,12 @@ func TestReadTranslatesSourceSpelling(t *testing.T) {
 func TestReadRejectsInvalidInputWithoutCalls(t *testing.T) {
 	for _, o := range []Options{
 		{Source: "recent"},
-		{Name: "worker", Pane: "w1:p3", Source: "recent"},
-		{Name: "worker", Source: "recent_unwrapped"},
-		{Name: "worker", Source: ""},
-		{Name: "worker", Source: "ansi"},
-		{Name: "worker", Source: "recent", Lines: -1, LinesSet: true},
-		{Name: "worker", Source: "recent", Lines: 1 << 32, LinesSet: true},
+		{Target: identity.Target{Name: "worker", Pane: "w1:p3"}, Source: "recent"},
+		{Target: identity.Target{Name: "worker"}, Source: "recent_unwrapped"},
+		{Target: identity.Target{Name: "worker"}, Source: ""},
+		{Target: identity.Target{Name: "worker"}, Source: "ansi"},
+		{Target: identity.Target{Name: "worker"}, Source: "recent", Lines: -1, LinesSet: true},
+		{Target: identity.Target{Name: "worker"}, Source: "recent", Lines: 1 << 32, LinesSet: true},
 	} {
 		out := Run(context.Background(), fake(t), o)
 		if out.ExitCode() != 2 || out.Status != "rejected" || out.Error.Phase != "validation" || out.Error.Code != "invalid_input" {
@@ -61,7 +62,7 @@ func TestReadForwardsLines(t *testing.T) {
 	for _, lines := range []int64{0, 1000, 1<<32 - 1} {
 		out := Run(context.Background(), fake(t, getCall("w1:p3"),
 			call{Method: "agent.read", Params: map[string]any{"target": "w1:p3", "source": "recent", "format": "text", "lines": lines}, Result: readResult("recent", "", true)}),
-			Options{Pane: "w1:p3", Source: "recent", Lines: lines, LinesSet: true})
+			Options{Target: identity.Target{Pane: "w1:p3"}, Source: "recent", Lines: lines, LinesSet: true})
 		if out.Error != nil || out.Result.(Result).Lines != 0 || !out.Result.(Result).Truncated {
 			t.Fatalf("%d: %+v", lines, out)
 		}
@@ -69,17 +70,17 @@ func TestReadForwardsLines(t *testing.T) {
 }
 
 func TestReadFailures(t *testing.T) {
-	out := Run(context.Background(), fake(t, call{Method: "agent.get", Err: &herdr.Error{Code: "agent_not_found", Message: "missing"}}), Options{Name: "worker", Source: "recent"})
+	out := Run(context.Background(), fake(t, call{Method: "agent.get", Err: &herdr.Error{Code: "agent_not_found", Message: "missing"}}), Options{Target: identity.Target{Name: "worker"}, Source: "recent"})
 	if out.ExitCode() != 1 || out.Status != "rejected" || out.Error.Code != "agent_not_found" || out.Error.Phase != "agent.get" || out.Result != nil {
 		t.Fatalf("%+v", out)
 	}
-	out = Run(context.Background(), fake(t, getCall("worker"), call{Method: "agent.read", Err: &herdr.Error{Code: "agent_not_found", Message: "gone"}}), Options{Name: "worker", Source: "recent"})
+	out = Run(context.Background(), fake(t, getCall("worker"), call{Method: "agent.read", Err: &herdr.Error{Code: "agent_not_found", Message: "gone"}}), Options{Target: identity.Target{Name: "worker"}, Source: "recent"})
 	if out.ExitCode() != 1 || out.Status != "rejected" || out.Error.Code != "agent_not_found" || out.Error.Phase != "agent.read" {
 		t.Fatalf("%+v", out)
 	}
 	moved := readResult("recent", "x", false)
 	moved["read"].(map[string]any)["pane_id"] = "w1:p9"
-	out = Run(context.Background(), fake(t, getCall("worker"), call{Method: "agent.read", Result: moved}), Options{Name: "worker", Source: "recent"})
+	out = Run(context.Background(), fake(t, getCall("worker"), call{Method: "agent.read", Result: moved}), Options{Target: identity.Target{Name: "worker"}, Source: "recent"})
 	if out.ExitCode() != 1 || out.Error.Code != "protocol_error" || out.Error.Phase != "agent.read" {
 		t.Fatalf("%+v", out)
 	}
@@ -122,7 +123,7 @@ func TestRender(t *testing.T) {
 // TestReadJSONPreservesSnapshotBytes checks that only human output gains a
 // final newline; JSON keeps a snapshot without one unchanged.
 func TestReadJSONPreservesSnapshotBytes(t *testing.T) {
-	out := Run(context.Background(), fake(t, getCall("worker"), call{Method: "agent.read", Result: readResult("recent", "a\nb", false)}), Options{Name: "worker", Source: "recent"})
+	out := Run(context.Background(), fake(t, getCall("worker"), call{Method: "agent.read", Result: readResult("recent", "a\nb", false)}), Options{Target: identity.Target{Name: "worker"}, Source: "recent"})
 	var b bytes.Buffer
 	if err := out.Write(&b, true, Render); err != nil {
 		t.Fatal(err)
@@ -138,7 +139,7 @@ func TestReadByIDReadsVerifiedPane(t *testing.T) {
 	c := fake(t, getCall("w1:p3"), call{Method: "agent.read", Params: map[string]any{"target": "w1:p3", "source": "recent_unwrapped", "format": "text"}, Result: readResult("recent_unwrapped", "x\n", false)})
 	c.Cwd = identitytest.Repository(t)
 	rec := identitytest.Register(t, c.Cwd, live.Agent)
-	if out := Run(context.Background(), c, Options{ID: rec.ID, Source: "recent-unwrapped"}); out.Status != "success" {
+	if out := Run(context.Background(), c, Options{Target: identity.Target{ID: rec.ID}, Source: "recent-unwrapped"}); out.Status != "success" {
 		t.Fatalf("%+v", out)
 	}
 	stale := live.Agent
@@ -146,7 +147,7 @@ func TestReadByIDReadsVerifiedPane(t *testing.T) {
 	c = fake(t, getCall("w1:p3"), call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": []any{}}}, call{Method: "pane.list", Result: map[string]any{"type": "pane_list", "panes": []any{}}})
 	c.Cwd = identitytest.Repository(t)
 	rec = identitytest.Register(t, c.Cwd, stale)
-	if out := Run(context.Background(), c, Options{ID: rec.ID, Source: "recent-unwrapped"}); out.Error == nil || out.Error.Code != "agent_identity_stale" {
+	if out := Run(context.Background(), c, Options{Target: identity.Target{ID: rec.ID}, Source: "recent-unwrapped"}); out.Error == nil || out.Error.Code != "agent_identity_stale" {
 		t.Fatalf("%+v", out)
 	}
 }

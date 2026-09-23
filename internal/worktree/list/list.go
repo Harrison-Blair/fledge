@@ -122,8 +122,8 @@ func inspect(ctx context.Context, root, managed, target string, w herdr.Worktree
 }
 
 // addOwners fills each row's owner from live agent records. Owners are
-// best effort: a missing or unreadable store, or an unavailable agent.list,
-// leaves them null without creating anything.
+// best effort: a missing or unreadable store, or an unavailable or incomplete
+// agent.list, leaves them null without creating anything.
 func addOwners(ctx context.Context, c libagent.Client, r Result) {
 	s, err := identity.Existing(ctx, r.RepoRoot)
 	if err != nil || s == nil {
@@ -133,15 +133,12 @@ func addOwners(ctx context.Context, c libagent.Client, r Result) {
 	if err != nil || len(records) == 0 {
 		return
 	}
-	var live struct {
-		Type   string               `json:"type"`
-		Agents []herdr.AgentDetails `json:"agents"`
-	}
-	if err := c.Call(ctx, "agent.list", nil, &live); err != nil || live.Type != "agent_list" {
+	live, err := c.List(ctx)
+	if err != nil {
 		return
 	}
 	byPath := map[string][]identity.Record{}
-	for _, a := range live.Agents {
+	for _, a := range live {
 		rec, ok := identity.Attributed(records, a)
 		if ok && rec.WorktreePath != nil {
 			p := worktree.Canonical(*rec.WorktreePath)

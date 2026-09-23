@@ -13,7 +13,7 @@ import (
 )
 
 // Options selects one live agent by name, hosting pane, or Fledge record ID.
-type Options struct{ Name, Pane, ID string }
+type Options struct{ identity.Target }
 
 // Result exposes inspection details, preserving unavailable values as null.
 type Result struct {
@@ -46,12 +46,11 @@ func resolveTitle(a herdr.AgentDetails) *string {
 // Run inspects an agent without focusing its pane or marking output seen.
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	out := libagent.Outcome{Operation: "agent.get", Status: "success", Effects: []libagent.Effect{}}
-	target := identity.Target{Name: o.Name, Pane: o.Pane, ID: o.ID}
-	if err := target.Validate(); err != nil {
+	if err := o.Target.Validate(); err != nil {
 		out.Fail(err, "validation", false)
 		return out
 	}
-	a, _, rec, err := target.Get(ctx, c)
+	a, _, rec, err := o.Target.Get(ctx, c)
 	if err != nil {
 		out.Fail(err, "agent.get", false)
 		return out
