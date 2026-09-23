@@ -98,6 +98,7 @@ it with another tool.
 | Track and hand off work between agents | `fledge task create`/`depend`/`assign`/`complete`/`verify`/`cancel`/`list`/`get` | harness todo or task lists |
 | Create, list, or remove a checkout | `fledge worktree create`/`list`/`remove` | `git worktree`, Claude `isolation: "worktree"` |
 | Discover, inspect, read, wait on, interrupt, or stop agents | `fledge agent list`/`get`/`read`/`wait`/`pause`/`stop` | raw `herdr` CLI, harness TaskStop |
+| Retire your finished spawned workers and the checkouts their spawns created | `fledge agent cleanup` | stopping each worker and removing each checkout by hand |
 | Message another agent | `fledge agent message` | Claude's SendMessage, raw `herdr` pane input |
 | Type raw input or keys into an agent (slash commands, dialog answers) | `fledge agent send` | raw `herdr pane send-text`/`send-keys` |
 | Register an already-running agent | `fledge agent adopt` | — |
@@ -152,7 +153,9 @@ Name the tab an agent runs in after the agent's own name or role so panes are id
 fledge agent spawn --name reviewer --harness claude --tab reviewer
 ```
 
-Stop agents when their task is finished instead of leaving idle agents and tabs behind:
+Stop agents when their task is finished instead of leaving idle agents and tabs behind.
+To retire your spawned workers and the checkouts their spawns created, run `fledge agent cleanup`
+(`--dry-run` first to see what it would stop, remove, or hold). To stop one agent:
 
 ```sh
 fledge agent stop --name reviewer
