@@ -24,12 +24,17 @@ the agent's turn ended, not that its assigned work succeeded. Without
 
 --name and --pane are repeatable and may be mixed. Several targets need --all
 (every target must match; the first failure cancels the rest) or --any (the
-first match wins and the remaining waits are cancelled; targets that fail are
-recorded while others remain).`,
+first match wins and the remaining waits are cancelled). With --any, a target
+that fails, such as one that is stopped, is reported on stderr at once while
+the wait continues on the remaining targets; --json reports only the final
+outcome.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
 			defer stop()
+			if !asJSON {
+				options.Progress = cmd.ErrOrStderr()
+			}
 			return libagent.Finish(wait.Run(ctx, libagent.WaitFromEnvironment(options.Timeout), options), cmd.OutOrStdout(), asJSON, wait.Render)
 		},
 	}

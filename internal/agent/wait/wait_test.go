@@ -17,12 +17,18 @@ import (
 )
 
 // reply scripts one target's agent.wait: after delay it returns err or a
-// matched agent in status. block holds the call until its context ends.
+// matched agent in status. block holds the call until its context ends;
+// release, when set, holds it until closed instead of delay.
 type reply struct {
-	delay  time.Duration
-	status string
-	err    error
-	block  bool
+	delay   time.Duration
+	status  string
+	err     error
+	block   bool
+	release chan struct{}
+	// onCancel replaces the transport error returned when the context ends,
+	// after cancelDelay.
+	onCancel    error
+	cancelDelay time.Duration
 }
 
 // fanFake serves concurrent agent.wait calls by target and, like the socket
@@ -62,12 +68,21 @@ func (f *fanFake) Call(ctx context.Context, method string, params any, result an
 		f.t.Errorf("unscripted target %q", target)
 		return &herdr.Error{Code: "test", Message: "unscripted"}
 	}
-	var ready <-chan time.Time
-	if !r.block {
-		ready = time.After(r.delay)
+	var ready <-chan struct{}
+	switch {
+	case r.release != nil:
+		ready = r.release
+	case !r.block:
+		done := make(chan struct{})
+		time.AfterFunc(r.delay, func() { close(done) })
+		ready = done
 	}
 	select {
 	case <-ctx.Done():
+		time.Sleep(r.cancelDelay)
+		if r.onCancel != nil {
+			return r.onCancel
+		}
 		return &herdr.Error{Code: "transport_error", Message: "use of closed network connection", Uncertain: true}
 	case <-ready:
 	}
@@ -265,6 +280,64 @@ func TestWaitAnyFailsWhenEveryTargetErrors(t *testing.T) {
 	if out.ExitCode() != 1 || out.Status != "rejected" || out.Error.Code != "operation_failed" || out.Error.Phase != "agent.wait" ||
 		rows["a"].Outcome != "errored" || rows["b"].Outcome != "errored" || out.Result.(FanOut).Winner != nil {
 		t.Fatalf("%+v %+v", out, rows)
+	}
+}
+
+// lineWriter delivers each progress write on a channel, so a test can act
+// between one target's failure and the rest of the wait.
+type lineWriter chan string
+
+func (w lineWriter) Write(p []byte) (int, error) { w <- string(p); return len(p), nil }
+
+// TestWaitAnyReportsFailureWhileOthersPending proves a failed --any target is
+// reported before a still-pending target finishes, not only in the final
+// rendering.
+func TestWaitAnyReportsFailureWhileOthersPending(t *testing.T) {
+	release := make(chan struct{})
+	_, c := newFake(t, map[string]reply{"a": {err: herr("agent_not_running")}, "b": {release: release, status: "idle"}, "c": {block: true}})
+	lines := make(lineWriter, 4)
+	outs := make(chan libagent.Outcome, 1)
+	go func() {
+		outs <- Run(context.Background(), c, Options{Names: []string{"a", "b", "c"}, Any: true, Progress: lines})
+	}()
+	select {
+	case line := <-lines:
+		if line != "a failed: agent_not_running: agent_not_running message (still waiting on 2 targets).\n" {
+			t.Fatalf("%q", line)
+		}
+	case <-outs:
+		t.Fatal("wait ended before b was released")
+	case <-time.After(time.Second):
+		t.Fatal("no progress line while b and c were pending")
+	}
+	close(release)
+	out := <-outs
+	if out.Error != nil || *out.Result.(FanOut).Winner != "b" || len(lines) != 0 {
+		t.Fatalf("%+v, extra progress %d", out, len(lines))
+	}
+}
+
+// TestWaitProgressOnlyForFailuresWithPendingTargets writes nothing for a
+// winner, cancelled rows, --all failures, or a failure that ends the wait.
+func TestWaitProgressOnlyForFailuresWithPendingTargets(t *testing.T) {
+	for _, tc := range []struct {
+		o       Options
+		replies map[string]reply
+		want    string
+	}{
+		{Options{Names: []string{"a", "b", "c"}, Any: true}, map[string]reply{"a": {delay: 10 * time.Millisecond, status: "idle"}, "b": {block: true}, "c": {block: true}}, ""},
+		{Options{Names: []string{"a", "b"}, All: true}, map[string]reply{"a": {err: herr("agent_not_found")}, "b": {block: true}}, ""},
+		{Options{Names: []string{"a", "b", "c"}, Any: true}, map[string]reply{"a": {status: "idle"}, "b": {block: true, onCancel: herr("agent_not_running")}, "c": {block: true, cancelDelay: 50 * time.Millisecond}}, ""},
+		{Options{Names: []string{"a", "b"}, Any: true}, map[string]reply{"a": {err: herr("agent_not_running")}, "b": {delay: 30 * time.Millisecond, err: herr("agent_not_found")}},
+			"a failed: agent_not_running: agent_not_running message (still waiting on 1 target).\n"},
+	} {
+		_, c := newFake(t, tc.replies)
+		var b bytes.Buffer
+		tc.o.Progress = &b
+		Run(context.Background(), c, tc.o)
+		if b.String() != tc.want {
+			t.Fatalf("%+v: %q", tc.o, b.String())
+		}
 	}
 }
 
