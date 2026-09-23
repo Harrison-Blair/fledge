@@ -16,14 +16,17 @@ import (
 // empty. Name names an unnamed agent, or must match an existing name.
 type Options struct{ Name, Pane string }
 
-// Result is the new record and whether adopt named the agent.
+// Result is the agent's record, new or named, and whether adopt named the
+// agent.
 type Result struct {
 	identity.Record
 	Renamed bool `json:"renamed"`
 }
 
-// Run registers the live agent in the selected pane. It refuses a terminal
-// that already has a live record and never renames a named agent.
+// Run registers the live agent in the selected pane. An unnamed agent whose
+// terminal already has a live record is named and keeps that record, storing
+// the new name. Run never renames a named agent, and refuses one whose
+// terminal already has a live record.
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	out := libagent.Outcome{Operation: "agent.adopt", Status: "success", Effects: []libagent.Effect{}}
 	target := o.Pane
@@ -67,10 +70,12 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		return out
 	}
 	renamed := current == ""
+	var existing *identity.Record
 	if renamed {
-		// Refuse before renaming; Register repeats this check under the store
-		// lock, and alone makes it for an agent adopt does not rename.
-		if err := unregistered(store, a); err != nil {
+		// Herdr calls never run under the store lock, so look for the
+		// terminal's record before renaming; Register repeats its check under
+		// the lock.
+		if existing, err = registered(store, a); err != nil {
 			out.Fail(err, "state", false)
 			return out
 		}
@@ -79,6 +84,16 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			return out
 		}
 		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "agent_name", ID: a.PaneID})
+	}
+	if existing != nil {
+		rec, err := identity.Rename(store, *existing, a)
+		if err != nil {
+			out.Fail(err, "state", false)
+			return out
+		}
+		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "agent_record", ID: rec.ID})
+		out.Result = Result{Record: rec, Renamed: true}
+		return out
 	}
 	rec, err := identity.Register(ctx, store, c, a, "adopt", nil)
 	if err != nil {
@@ -90,9 +105,9 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	return out
 }
 
-// unregistered is replaceable so tests can count adopt's scans of the agent
+// registered is replaceable so tests can count adopt's scans of the agent
 // records beyond Register's one.
-var unregistered = identity.Unregistered
+var registered = identity.Registered
 
 // rename names the agent a and confirms the same terminal now carries name.
 func rename(ctx context.Context, c libagent.Client, a herdr.AgentDetails, name string) (herdr.AgentDetails, error) {

@@ -624,8 +624,8 @@ func TestRegisterReplacesRecordOfDifferentHarness(t *testing.T) {
 	s := store(t, c)
 	old := registered(t, c, running(details("w1:p3", "term_a"), "codex"))
 	now := running(details("w1:p3", "term_a"), "claude")
-	if err := Unregistered(s, now); err != nil {
-		t.Fatal(err)
+	if rec, err := Registered(s, now); err != nil || rec != nil {
+		t.Fatalf("%+v %v", rec, err)
 	}
 	rec, err := Register(context.Background(), s, libagent.Client{}, now, "adopt", nil)
 	if err != nil {
@@ -926,5 +926,81 @@ func TestReopenRefusesRecordOfAnotherSession(t *testing.T) {
 	}
 	if !ended(t, s, rec.ID) {
 		t.Fatal("refused Reopen un-ended the record")
+	}
+}
+
+func TestRenameUpdatesNameAndLocationKeepingRecord(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	for label, stored := range map[string]*string{"lost name": libagent.Pointer("worker"), "never named": nil} {
+		t.Run(label, func(t *testing.T) {
+			c := client(t)
+			d := details("w1:p3", "term_a")
+			d.Name = stored
+			tree := "/repo/.fledge/worktrees/w"
+			c.CallerPane = ""
+			rec, err := Register(context.Background(), store(t, c), c, d, "spawn", &tree)
+			if err != nil {
+				t.Fatal(err)
+			}
+			a := moved("w2:p1", "w2", "term_a")
+			a.Name = libagent.Pointer("helper")
+			got, err := Rename(store(t, c), rec, a)
+			want := rec
+			want.Name, want.Pane, want.WorkspaceID = libagent.Pointer("helper"), "w2:p1", "w2"
+			if err != nil || !reflect.DeepEqual(got, want) {
+				t.Fatalf("%+v %v", got, err)
+			}
+			var saved Record
+			if err := store(t, c).Get(Kind, rec.ID, &saved); err != nil || !reflect.DeepEqual(saved, want) {
+				t.Fatalf("%+v %v", saved, err)
+			}
+			if ids, _ := store(t, c).List(Kind); len(ids) != 1 {
+				t.Fatalf("records %v", ids)
+			}
+		})
+	}
+}
+
+func TestRenameRefusesStaleRecordUnchanged(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	for label, tc := range map[string]struct {
+		end bool
+		a   herdr.AgentDetails
+	}{
+		"ended":             {true, details("w1:p3", "term_a")},
+		"other terminal":    {false, details("w1:p3", "term_b")},
+		"different harness": {false, running(details("w1:p3", "term_a"), "codex")},
+	} {
+		t.Run(label, func(t *testing.T) {
+			c := client(t)
+			rec := registered(t, c, details("w1:p3", "term_a"))
+			s := store(t, c)
+			if tc.end {
+				if err := End(s, rec.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			tc.a.Name = libagent.Pointer("helper")
+			if _, err := Rename(s, rec, tc.a); code(err) != "agent_identity_stale" {
+				t.Fatalf("%v", err)
+			}
+			var stored Record
+			if err := s.Get(Kind, rec.ID, &stored); err != nil || *stored.Name != "worker" {
+				t.Fatalf("%+v %v", stored, err)
+			}
+		})
+	}
+}
+
+func TestRegisteredFindsLiveRecordOfSameHarness(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t)
+	s := store(t, c)
+	if rec, err := Registered(s, details("w1:p3", "term_a")); err != nil || rec != nil {
+		t.Fatalf("%+v %v", rec, err)
+	}
+	want := registered(t, c, details("w1:p3", "term_a"))
+	if rec, err := Registered(s, moved("w2:p1", "w2", "term_a")); err != nil || rec == nil || !reflect.DeepEqual(*rec, want) {
+		t.Fatalf("%+v %v", rec, err)
 	}
 }

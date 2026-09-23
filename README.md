@@ -360,10 +360,15 @@ and the text output shows `id: - (not registered: <reason>)`.
 `--pane` it targets the caller's own pane. An unnamed agent needs `--name`,
 which adopt sets through Herdr (`agent_name_taken` and `agent_launch_pending`
 are reported as is). A named agent keeps its name; a different `--name` is
-refused. A terminal that already has a live record is refused with
-`agent_already_registered` and its existing ID; the check and the record
+refused. A named agent whose terminal already has a live record is refused
+with `agent_already_registered` and its existing ID; the check and the record
 creation share one store lock, so concurrent adopts or spawn registrations of
-one terminal produce exactly one record. Success prints
+one terminal produce exactly one record. An unnamed agent whose terminal
+already has a live record, such as one whose Herdr name was lost, is named
+through Herdr and keeps that record: the same ID, parent, and registration,
+with the new name and its current pane stored and an `updated` `agent_record`
+effect. If the record ends after the rename, the outcome is `partial`: the
+agent is named but the record is unchanged. Success prints
 `Adopted <name> (<pane>) as <id>.`
 
 `get`, `message`, `read`, `wait` (single target only), `pause`, and `stop`

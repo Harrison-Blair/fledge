@@ -655,10 +655,16 @@ Fledge command sets a name, so the orchestrator stayed unnamed all session.
 Workers could only reply with `agent message --pane wZ:p1`, and every message
 it sent was headed `unnamed agent (wZ:p1)` with no reply command.
 
+Resolved 2026-09-23: `agent adopt --name <name>` on a terminal with a live
+record whose live Herdr agent is unnamed now names it through Herdr and keeps
+the same record (ID, parent, registration, worktree), storing the new name and
+current pane. Whether the agent is unnamed is decided from Herdr, not from the
+record's stored name. Renaming a named agent is still refused.
+
 **Reproduction steps:**
-1. Run `fledge agent adopt` in a pane without `--name` while the agent is unnamed, or register it some other way without a name.
+1. Register an agent while it is named (`fledge agent adopt --name worker`, or `fledge agent spawn --name worker`), then clear its Herdr name so the live agent is unnamed while its record stays live. (`fledge agent adopt` without `--name` on an unnamed agent is itself refused, so it cannot create such a record.)
 2. Run `fledge agent adopt --name orchestrator` in the same pane.
-3. Observe the refusal naming the existing record id, and that no command renames it.
+3. Before the fix: observe the refusal naming the existing record id, and that no command renames it.
 
 ---
 

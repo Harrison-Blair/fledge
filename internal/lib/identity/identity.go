@@ -146,19 +146,16 @@ func live(tx *state.Tx) (map[string]Record, error) {
 	return records, err
 }
 
-// Unregistered fails with agent_already_registered, naming the existing id,
-// when a's terminal already has a live record of a's harness. It lets callers
-// refuse before acting; Register repeats the check under the store lock and
-// ends a record left by a different harness, which Unregistered tolerates.
-func Unregistered(s *state.Store, a herdr.AgentDetails) error {
+// Registered returns the live record of a's terminal when it records a's
+// harness, or nil. It lets callers decide before acting; Register repeats the
+// check under the store lock and ends a record left by a different harness,
+// which Registered does not return.
+func Registered(s *state.Store, a herdr.AgentDetails) (*Record, error) {
 	existing, err := Live(s, a.TerminalID)
-	if err != nil {
-		return err
+	if err != nil || existing == nil || Mismatched(*existing, a) {
+		return nil, err
 	}
-	if existing != nil && !Mismatched(*existing, a) {
-		return alreadyRegistered(a, *existing)
-	}
-	return nil
+	return existing, nil
 }
 
 func alreadyRegistered(a herdr.AgentDetails, existing Record) error {
@@ -241,6 +238,27 @@ func relocate(tx *state.Tx, rec *Record, a herdr.AgentDetails) error {
 	}
 	rec.Pane, rec.WorkspaceID = a.PaneID, a.WorkspaceID
 	return tx.Put(Kind, rec.ID, rec)
+}
+
+// Rename stores a's name on rec after Herdr renamed a, rec's live agent, and
+// points rec at a's current pane and workspace, under the same record id. It
+// rereads rec under the store lock and fails closed with agent_identity_stale,
+// changing nothing, when rec has ended or a is not rec's terminal and harness.
+func Rename(s *state.Store, rec Record, a herdr.AgentDetails) (Record, error) {
+	err := s.Exclusive(func(tx *state.Tx) error {
+		if err := tx.Get(Kind, rec.ID, &rec); err != nil {
+			return err
+		}
+		if rec.EndedAt != nil {
+			return stale(rec.ID, "the agent ended at %s", *rec.EndedAt)
+		}
+		if err := Verify(rec, a); err != nil {
+			return err
+		}
+		rec.Name, rec.Pane, rec.WorkspaceID = a.Name, a.PaneID, a.WorkspaceID
+		return tx.Put(Kind, rec.ID, rec)
+	})
+	return rec, err
 }
 
 // End records that the agent of record id is gone and archives the record, so
