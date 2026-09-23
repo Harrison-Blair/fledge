@@ -20,9 +20,13 @@ import (
 // Options names the checkout by exactly one of Path or Branch. Force permits
 // removing dirty or unmerged checkouts; it never overrides the live-agent guard.
 // Base, when set, is the ref the merged check uses instead of the repository
-// integration branch, as for a checkout created from that ref.
+// integration branch, as for a checkout created from that ref. Marker, when
+// set, names the exact checkout to remove: the one carrying that marker (see
+// worktree.Mark) with MarkedBranch checked out; any other checkout at the path
+// is kept, whatever Force says.
 type Options struct {
 	Path, Branch, Cwd, Base string
+	Marker, MarkedBranch    string
 	Force                   bool
 }
 type Result struct {
@@ -82,6 +86,14 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	if err = checkAgents(ctx, c, listing.Root, row); err != nil {
 		out.Fail(err, "guard", false)
 		return out
+	}
+	// Check identity last: the checkout may have been replaced since it was chosen.
+	if o.Marker != "" {
+		branch := gitstatus.Branch(ctx, row.Path)
+		if worktree.Marker(ctx, row.Path) != o.Marker || branch == nil || *branch != o.MarkedBranch {
+			out.Fail(libagent.Invalid("worktree %s was replaced since the worker's spawn; it is kept", row.Path), "guard", false)
+			return out
+		}
 	}
 	result := Result{Path: row.Path, Branch: row.Branch, Forced: o.Force}
 	if row.OpenWorkspaceID == nil {

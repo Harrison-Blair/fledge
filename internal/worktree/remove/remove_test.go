@@ -13,6 +13,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
+	"github.com/Harrison-Blair/fledge/internal/lib/worktree"
 )
 
 type call = herdrscript.Call
@@ -588,6 +589,46 @@ func TestBaseReplacesIntegrationBranchForMergedCheck(t *testing.T) {
 				t.Fatalf("removed=%v: %+v", !tc.removed, out)
 			}
 			if !tc.removed && (out.Error == nil || !strings.Contains(out.Error.Message, "merged: no")) {
+				t.Fatalf("%+v", out)
+			}
+		})
+	}
+}
+
+// Marker and MarkedBranch name the exact checkout to remove: a checkout at the
+// path with another marker, none, or another branch is kept even with Force,
+// checked after every other guard, immediately before removal.
+func TestMarkerGuardsCheckoutIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		setup   func(t *testing.T, r repo, marker string) (string, string)
+		removed bool
+	}{
+		{"matching", func(t *testing.T, r repo, m string) (string, string) { return m, "topic" }, true},
+		{"other marker", func(t *testing.T, r repo, m string) (string, string) { return "0123456789abcdef0123456789abcdef", "topic" }, false},
+		{"other branch", func(t *testing.T, r repo, m string) (string, string) {
+			git(t, r.topic, "switch", "-q", "-c", "other")
+			return m, "topic"
+		}, false},
+		{"recreated without marker", func(t *testing.T, r repo, m string) (string, string) {
+			git(t, r.root, "worktree", "remove", r.topic)
+			git(t, r.root, "worktree", "add", "-q", r.topic, "topic")
+			return m, "topic"
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRepo(t)
+			m, err := worktree.Mark(context.Background(), r.topic)
+			if err != nil {
+				t.Fatal(err)
+			}
+			marker, branch := tc.setup(t, r, m)
+			out := Run(context.Background(), herdrscript.Client(t, call{Method: "worktree.list", Result: r.listing(false)}, agentList(), agentList()),
+				Options{Path: r.topic, Cwd: r.root, Force: true, Marker: marker, MarkedBranch: branch})
+			if _, err := os.Stat(r.topic); tc.removed != os.IsNotExist(err) {
+				t.Fatalf("removed=%v: %+v", !tc.removed, out)
+			}
+			if !tc.removed && (out.ExitCode() != 2 || out.Error.Phase != "guard" || !strings.Contains(out.Error.Message, "replaced since the worker's spawn")) {
 				t.Fatalf("%+v", out)
 			}
 		})

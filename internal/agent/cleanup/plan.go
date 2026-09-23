@@ -229,6 +229,9 @@ func planCheckouts(ctx context.Context, caller string, records []identity.Record
 			}
 		}
 		c := Checkout{Path: row.Path, Branch: row.Branch, Base: rec.WorktreeBase, Worker: rec.ID, Outcome: "planned"}
+		if owned {
+			c.marker, c.markedBranch = *rec.WorktreeMarker, *rec.WorktreeBranch
+		}
 		if reasons := checkoutHold(ctx, rec, owned, row, listing.Root, managed, outcomes, others, live); len(reasons) > 0 {
 			c.Outcome, c.Reason = "skipped", libagent.Pointer(strings.Join(reasons, "; "))
 		}

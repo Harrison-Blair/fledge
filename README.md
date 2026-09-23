@@ -482,8 +482,11 @@ held, with reasons. Otherwise cleanup stops each eligible worker by its record
 ID, as `agent stop --id` without `--force`, after reading its tasks again, and
 then removes each eligible checkout through `worktree remove` without
 `--force`, which rechecks live agents, cleanliness, and the merge into the
-recorded base. A task assigned, or a worker busy again, after planning holds
-it; nothing is ever forced. The text output starts with
+recorded base, and last, immediately before deleting, that the checkout still
+carries the worker's marker and branch. A task assigned, a live worker of the
+worker registered, or a worker busy again after planning holds it; a checkout
+replaced meanwhile is kept as `replaced since the worker's spawn`; nothing is
+ever forced. The text output starts with
 `Stopped N of M workers and removed N of M checkouts.` (`Dry run: would stop
 ...` for a dry run) and lists each worker as `stop`/`stopped`, `hold`, or
 `failed`, and each checkout as `remove`/`removed`, `keep`, or `failed`, with

@@ -46,6 +46,8 @@ type Checkout struct {
 	Worker  string  `json:"worker"`
 	Outcome string  `json:"outcome"`
 	Reason  *string `json:"reason"`
+	// marker and markedBranch identify the owned checkout planned for removal.
+	marker, markedBranch string
 }
 
 // Run plans the cleanup of the caller's finished workers and their checkouts
@@ -109,7 +111,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			ch.Outcome, ch.Reason = "skipped", libagent.Pointer("its worker "+ch.Worker+" was not stopped")
 			continue
 		}
-		ch.Outcome, ch.Reason = record(remove.Run(ctx, c, remove.Options{Path: ch.Path, Cwd: p.root, Base: *ch.Base}))
+		ch.Outcome, ch.Reason = record(remove.Run(ctx, c, remove.Options{Path: ch.Path, Cwd: p.root, Base: *ch.Base, Marker: ch.marker, MarkedBranch: ch.markedBranch}))
 	}
 	out.Result = p.Result
 	if len(failures) > 0 {

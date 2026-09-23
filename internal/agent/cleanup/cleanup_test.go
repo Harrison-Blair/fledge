@@ -752,3 +752,32 @@ func TestOnlyMatchingIncarnationOwnsSharedPath(t *testing.T) {
 		})
 	}
 }
+
+// A checkout replaced while its worker is being stopped (same path, same
+// branch, no marker) is kept: removal rechecks the checkout's identity last,
+// right before deleting. (Regression from verification.)
+func TestReplacementDuringStopIsKept(t *testing.T) {
+	r := newRepo(t)
+	a := agent("w1:p1", "w1", "t_caller", "caller", "working")
+	caller := r.register(t, a, nil, "adopt", nil)
+	w := agent("w2:p1", "w2", "t_worker", "worker", "idle")
+	rec := r.register(t, w, &caller.ID, "spawn", created(t, r.topic, "dev"))
+	tasktest.Seed(t, r.root, task.Record{Title: "accepted", Owner: &rec.ID, Status: task.Verified})
+	replace := func() {
+		git(t, r.root, "worktree", "remove", r.topic)
+		git(t, r.root, "worktree", "add", "-q", r.topic, "topic")
+	}
+	listing := r.listing(nil, r.topic)
+	out := Run(context.Background(), client(t, r,
+		get(a), agentList(a, w), call{Method: "worktree.list", Result: listing},
+		get(w), call{Method: "pane.close", Before: replace, Result: herdrscript.OK()},
+		call{Method: "worktree.list", Result: listing}, agentList(a), agentList(a),
+	), Options{})
+	if _, err := os.Stat(r.topic); os.IsNotExist(err) {
+		t.Fatalf("replacement created during worker stop was DELETED: %+v", out.Result)
+	}
+	c := checkout(out.Result.(Result), r.topic)
+	if out.Status != "success" || worker(out.Result.(Result), rec.ID).Outcome != "done" || c.Outcome != "skipped" || c.Reason == nil || !strings.Contains(*c.Reason, "replaced since the worker's spawn") {
+		t.Fatalf("%+v %+v", out, c)
+	}
+}
