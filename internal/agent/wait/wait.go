@@ -19,12 +19,14 @@ import (
 
 // Options selects targets by name and pane, or one agent by record ID, the
 // states to match, and a timeout (zero waits indefinitely). Two or more
-// targets need exactly one of All or Any.
+// targets need exactly one of All or Any. Progress, when set, receives a
+// line as soon as an --any target fails while others are still pending.
 type Options struct {
 	Names, Panes, Until []string
 	ID                  string
 	Timeout             time.Duration
 	All, Any            bool
+	Progress            io.Writer
 }
 
 // maxTimeout is the largest finite timeout whose transport margin, added by
@@ -157,7 +159,7 @@ func fanOut(ctx context.Context, c libagent.Client, targets []string, o Options)
 	for i, target := range targets {
 		result.Targets[i].Target = target
 	}
-	for range targets {
+	for received := range targets {
 		r := <-replies
 		row := &result.Targets[r.index]
 		switch {
@@ -176,6 +178,8 @@ func fanOut(ctx context.Context, c libagent.Client, targets []string, o Options)
 			row.Outcome, row.Error = "errored", failed.Error
 			if o.All {
 				cancel()
+			} else if pending := len(targets) - received - 1; o.Progress != nil && pending > 0 && waits.Err() == nil {
+				progress(o.Progress, *row, pending)
 			}
 		}
 	}
@@ -202,6 +206,16 @@ func fanOut(ctx context.Context, c libagent.Client, targets []string, o Options)
 		code = codes[0]
 	}
 	return result, &herdr.Error{Code: code, Message: fmt.Sprintf("%d of %d targets failed: %s", len(failures), len(targets), strings.Join(failures, ", "))}
+}
+
+// progress reports a failed --any target while others are pending. It is
+// best effort: a failed write must not end the wait.
+func progress(w io.Writer, row Row, pending int) {
+	unit := "targets"
+	if pending == 1 {
+		unit = "target"
+	}
+	fmt.Fprintf(w, "%s failed: %s (still waiting on %d %s).\n", row.Target, row.Error.Message, pending, unit)
 }
 
 // serverError reports a definite Herdr answer, as opposed to a local transport
