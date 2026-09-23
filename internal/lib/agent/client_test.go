@@ -142,22 +142,6 @@ func TestPromptValidatesAcknowledgement(t *testing.T) {
 	}
 }
 
-func TestResolveTarget(t *testing.T) {
-	for _, c := range []struct {
-		name, pane, want string
-		ok               bool
-	}{{"worker", "", "worker", true}, {"", "w1:p3", "w1:p3", true}, {"", "", "", false}, {"worker", "w1:p3", "", false}} {
-		got, err := ResolveTarget(c.name, c.pane)
-		if got != c.want || (err == nil) != c.ok {
-			t.Fatalf("%+v: got %q, %v", c, got, err)
-		}
-		var input *InputError
-		if !c.ok && (err.Error() != "exactly one of --name or --pane is required" || !errors.As(err, &input)) {
-			t.Fatalf("%+v: %v", c, err)
-		}
-	}
-}
-
 func TestValidPaneRequiresOwnership(t *testing.T) {
 	for _, p := range []herdr.Pane{{WorkspaceID: "w1", TabID: "t"}, {PaneID: "p", TabID: "t"}, {PaneID: "p", WorkspaceID: "w1"}} {
 		if ValidPane(p) || ValidAgent(p) {

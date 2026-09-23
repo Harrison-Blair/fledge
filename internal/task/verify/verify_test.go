@@ -10,6 +10,7 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
@@ -43,7 +44,7 @@ func TestLifecycleCreateAssignCompleteVerify(t *testing.T) {
 	}
 
 	assigned := assign.Run(ctx, tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p3", worker), tasktest.Get("w1:p1", boss),
-		herdrscript.Call{Method: "agent.prompt", Result: herdr.AgentResult{Type: "agent_prompted", Agent: worker.Agent}}), assign.Options{ID: id, Pane: "w1:p3"})
+		herdrscript.Call{Method: "agent.prompt", Result: herdr.AgentResult{Type: "agent_prompted", Agent: worker.Agent}}), assign.Options{ID: id, Agent: identity.Target{Pane: "w1:p3"}})
 	if assigned.Error != nil {
 		t.Fatalf("assign: %+v", assigned.Error)
 	}

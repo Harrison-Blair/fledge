@@ -382,13 +382,18 @@ func TestTargetValidatesExactlyOneSelector(t *testing.T) {
 	}
 }
 
-func TestTargetGetByNameAndID(t *testing.T) {
+func TestTargetGetByNamePaneAndID(t *testing.T) {
 	t.Setenv("HERDR_SESSION", "dev")
 	live := details("w1:p3", "term_a")
 	c := client(t, call{Method: "agent.get", Params: map[string]any{"target": "worker"}, Result: info(live)},
+		call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: info(live)},
 		call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: info(live)})
 	a, target, rec, err := Target{Name: "worker"}.Get(context.Background(), c)
 	if err != nil || target != "worker" || rec != nil || a.TerminalID != "term_a" {
+		t.Fatalf("%+v %s %+v %v", a, target, rec, err)
+	}
+	a, target, rec, err = Target{Pane: "w1:p3"}.Get(context.Background(), c)
+	if err != nil || target != "w1:p3" || rec != nil || a.TerminalID != "term_a" {
 		t.Fatalf("%+v %s %+v %v", a, target, rec, err)
 	}
 	want := registered(t, c, live)

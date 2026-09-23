@@ -565,7 +565,10 @@ func (t Target) Validate() error {
 // also returns its record. Record lookup failures are located at phase identity.
 func (t Target) Get(ctx context.Context, c libagent.Client) (herdr.AgentDetails, string, *Record, error) {
 	if t.ID == "" {
-		target, _ := libagent.ResolveTarget(t.Name, t.Pane)
+		target := t.Name
+		if target == "" {
+			target = t.Pane
+		}
 		a, err := c.Get(ctx, target)
 		return a, target, nil, err
 	}

@@ -71,17 +71,6 @@ func (c Client) Prompt(ctx context.Context, target, text string) (herdr.AgentDet
 	return r.Agent, nil
 }
 
-// ResolveTarget collapses the exactly-one-of --name/--pane choice into one agent target.
-func ResolveTarget(name, pane string) (string, error) {
-	if (name == "") == (pane == "") {
-		return "", Invalid("exactly one of --name or --pane is required")
-	}
-	if name != "" {
-		return name, nil
-	}
-	return pane, nil
-}
-
 // Protocol reports a malformed Herdr result; the request may have taken effect.
 func Protocol(message string) error {
 	return &herdr.Error{Code: "protocol_error", Message: message, Uncertain: true}

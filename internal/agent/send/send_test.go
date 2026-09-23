@@ -8,6 +8,7 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
@@ -22,9 +23,9 @@ func TestSendDeliversTextAndKeysVerbatimInOneCall(t *testing.T) {
 		o      Options
 		params map[string]any
 	}{
-		{"text", Options{Name: "worker", Text: "/model x\nsecond"}, map[string]any{"pane_id": "w1:p3", "text": "/model x\nsecond"}},
-		{"keys", Options{Name: "worker", Keys: []string{"down", "enter"}}, map[string]any{"pane_id": "w1:p3", "keys": []any{"down", "enter"}}},
-		{"both", Options{Name: "worker", Text: "/model x", Keys: []string{"enter", "esc"}}, map[string]any{"pane_id": "w1:p3", "text": "/model x", "keys": []any{"enter", "esc"}}},
+		{"text", Options{Target: identity.Target{Name: "worker"}, Text: "/model x\nsecond"}, map[string]any{"pane_id": "w1:p3", "text": "/model x\nsecond"}},
+		{"keys", Options{Target: identity.Target{Name: "worker"}, Keys: []string{"down", "enter"}}, map[string]any{"pane_id": "w1:p3", "keys": []any{"down", "enter"}}},
+		{"both", Options{Target: identity.Target{Name: "worker"}, Text: "/model x", Keys: []string{"enter", "esc"}}, map[string]any{"pane_id": "w1:p3", "text": "/model x", "keys": []any{"enter", "esc"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := herdrscript.LiveAgent("working")
@@ -43,7 +44,7 @@ func TestSendReportsStatusObservedBeforeSending(t *testing.T) {
 		t.Run(status, func(t *testing.T) {
 			p := herdrscript.LiveAgent(status)
 			s := fake(t, call{Method: "agent.get", Result: herdrscript.Info(p)}, call{Method: "pane.send_input", Result: herdrscript.OK()})
-			out := Run(context.Background(), s, Options{Pane: "w1:p3", Keys: []string{"enter"}})
+			out := Run(context.Background(), s, Options{Target: identity.Target{Pane: "w1:p3"}, Keys: []string{"enter"}})
 			r := out.Result.(Result)
 			if out.Status != "success" || r.AgentStatus == nil || *r.AgentStatus != status {
 				t.Fatalf("%+v", out)
@@ -53,7 +54,7 @@ func TestSendReportsStatusObservedBeforeSending(t *testing.T) {
 }
 
 func TestSendRequiresTextOrKeysBeforeAPI(t *testing.T) {
-	for _, o := range []Options{{Name: "worker"}, {Name: "worker", Keys: []string{}}} {
+	for _, o := range []Options{{Target: identity.Target{Name: "worker"}}, {Target: identity.Target{Name: "worker"}, Keys: []string{}}} {
 		out := Run(context.Background(), fake(t), o)
 		if out.Status != "rejected" || out.ExitCode() != 2 || out.Error.Phase != "validation" || out.Error.Message != "at least one of --text or --key is required" {
 			t.Fatalf("%+v", out)
@@ -62,7 +63,7 @@ func TestSendRequiresTextOrKeysBeforeAPI(t *testing.T) {
 }
 
 func TestSendTargetValidation(t *testing.T) {
-	for _, o := range []Options{{Keys: []string{"enter"}}, {Name: "a", Pane: "p", Keys: []string{"enter"}}, {Name: "a", ID: "0000beef", Keys: []string{"enter"}}} {
+	for _, o := range []Options{{Keys: []string{"enter"}}, {Target: identity.Target{Name: "a", Pane: "p"}, Keys: []string{"enter"}}, {Target: identity.Target{Name: "a", ID: "0000beef"}, Keys: []string{"enter"}}} {
 		out := Run(context.Background(), fake(t), o)
 		if out.ExitCode() != 2 || out.Error.Phase != "validation" {
 			t.Fatalf("%+v", out)
@@ -72,7 +73,7 @@ func TestSendTargetValidation(t *testing.T) {
 
 func TestSendInvalidKeyIsRejected(t *testing.T) {
 	s := fake(t, call{Method: "agent.get", Result: herdrscript.Info(herdrscript.LiveAgent("idle"))}, call{Method: "pane.send_input", Err: &herdr.Error{Code: "invalid_key", Message: "unsupported key bogus"}})
-	out := Run(context.Background(), s, Options{Name: "worker", Text: "hi", Keys: []string{"bogus"}})
+	out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}, Text: "hi", Keys: []string{"bogus"}})
 	if out.Status != "rejected" || out.Error.Code != "invalid_key" || out.Error.Phase != "pane.send_input" || out.Result.(Result).Submitted || len(out.Effects) != 0 {
 		t.Fatalf("%+v", out)
 	}
@@ -90,7 +91,7 @@ func TestSendDeliveryFailures(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := fake(t, call{Method: "agent.get", Result: herdrscript.Info(herdrscript.LiveAgent("idle"))}, call{Method: "pane.send_input", Result: tc.result, Err: tc.err})
-			out := Run(context.Background(), s, Options{Name: "worker", Keys: []string{"enter"}})
+			out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}, Keys: []string{"enter"}})
 			if out.Status != tc.status || out.Error.Phase != "pane.send_input" || out.Result.(Result).Submitted {
 				t.Fatalf("%+v", out)
 			}
@@ -100,7 +101,7 @@ func TestSendDeliveryFailures(t *testing.T) {
 
 func TestSendLookupFailureDoesNotSend(t *testing.T) {
 	s := fake(t, call{Method: "agent.get", Err: &herdr.Error{Code: "agent_not_found", Message: "no agent"}})
-	out := Run(context.Background(), s, Options{Name: "worker", Keys: []string{"enter"}})
+	out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}, Keys: []string{"enter"}})
 	if out.Status != "rejected" || out.Error.Phase != "agent.get" || out.Error.Code != "agent_not_found" {
 		t.Fatalf("%+v", out)
 	}
@@ -112,7 +113,7 @@ func TestSendByIDUsesVerifiedPane(t *testing.T) {
 		call{Method: "pane.send_input", Params: map[string]any{"pane_id": "w1:p3", "keys": []any{"down", "enter"}}, Result: herdrscript.OK()})
 	s.Cwd = identitytest.Repository(t)
 	rec := identitytest.Register(t, s.Cwd, live.Agent)
-	out := Run(context.Background(), s, Options{ID: rec.ID, Keys: []string{"down", "enter"}})
+	out := Run(context.Background(), s, Options{Target: identity.Target{ID: rec.ID}, Keys: []string{"down", "enter"}})
 	if out.Status != "success" || !out.Result.(Result).Submitted {
 		t.Fatalf("%+v", out)
 	}
@@ -125,7 +126,7 @@ func TestSendByStaleIDDoesNotSend(t *testing.T) {
 	recorded := live.Agent
 	recorded.TerminalID = "term_old"
 	rec := identitytest.Register(t, s.Cwd, recorded)
-	out := Run(context.Background(), s, Options{ID: rec.ID, Keys: []string{"enter"}})
+	out := Run(context.Background(), s, Options{Target: identity.Target{ID: rec.ID}, Keys: []string{"enter"}})
 	if out.Error == nil || out.Error.Code != "agent_identity_stale" || len(out.Effects) != 0 {
 		t.Fatalf("%+v", out)
 	}

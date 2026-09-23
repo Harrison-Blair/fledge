@@ -18,11 +18,12 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 )
 
-// Options selects the task by ID and the agent by exactly one of Name, Pane,
-// or AgentID. Force assigns a task whose prerequisites are not all satisfied.
+// Options selects the task by ID and the agent by exactly one of Agent's
+// Name, Pane, or ID. Force assigns a task whose prerequisites are not all satisfied.
 type Options struct {
-	ID, Name, Pane, AgentID string
-	Force                   bool
+	ID    string
+	Agent identity.Target
+	Force bool
 }
 
 // Result is the task after assignment with the owner's name when it has one.
@@ -42,12 +43,11 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 
 func run(ctx context.Context, c libagent.Client, o Options, messageID string) libagent.Outcome {
 	out := libagent.Outcome{Operation: "task.assign", Status: "success", Effects: []libagent.Effect{}}
-	target := identity.Target{Name: o.Name, Pane: o.Pane, ID: o.AgentID}
 	err := task.ValidateID(o.ID)
 	if err == nil {
-		err = target.Validate()
+		err = o.Agent.Validate()
 	}
-	if err == nil && o.AgentID != "" && !state.ValidID(o.AgentID) {
+	if err == nil && o.Agent.ID != "" && !state.ValidID(o.Agent.ID) {
 		err = libagent.Invalid("--agent-id must be 8 lowercase hexadecimal characters")
 	}
 	if err != nil {
@@ -72,7 +72,7 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) li
 		out.Fail(err, "task", false)
 		return out
 	}
-	a, _, owner, err := target.Get(ctx, c)
+	a, _, owner, err := o.Agent.Get(ctx, c)
 	if err != nil {
 		out.Fail(err, "agent.get", false)
 		return out

@@ -15,9 +15,10 @@ import (
 // Options selects one live agent and the snapshot to capture. Source uses the
 // CLI spelling; Lines applies only when LinesSet.
 type Options struct {
-	Name, Pane, ID, Source string
-	Lines                  int64
-	LinesSet               bool
+	identity.Target
+	Source   string
+	Lines    int64
+	LinesSet bool
 }
 
 // Result is the agent row plus the captured snapshot. Lines counts returned rows.
@@ -37,8 +38,7 @@ var wireSources = map[string]string{"visible": "visible", "recent": "recent", "r
 // Run resolves the agent, then reads its pane without focusing it or marking output seen.
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	out := libagent.Outcome{Operation: "agent.read", Status: "success", Effects: []libagent.Effect{}}
-	selected := identity.Target{Name: o.Name, Pane: o.Pane, ID: o.ID}
-	err := selected.Validate()
+	err := o.Target.Validate()
 	source, known := wireSources[o.Source]
 	if err == nil && !known {
 		err = libagent.Invalid("--source must be visible, recent, recent-unwrapped, or detection")
@@ -50,7 +50,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Fail(err, "validation", false)
 		return out
 	}
-	a, _, _, err := selected.Get(ctx, c)
+	a, _, _, err := o.Target.Get(ctx, c)
 	if err != nil {
 		out.Fail(err, "agent.get", false)
 		return out
