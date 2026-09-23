@@ -154,10 +154,19 @@ Settled means ready for input, not just a lifecycle status: Herdr must report
 such as pi reports `idle` seconds before it accepts a prompt. Spawn polls the
 pane for this with or without a first prompt, and fails `unknown` without
 registering or prompting if a different terminal, name, or harness answers.
-`--timeout` covers launch and this wait together. Herdr's own startup
+`--timeout` is one budget from launch through the first prompt: the lifecycle
+wait, readiness polls, registration, sender lookup, and prompt submission all
+stop at its deadline, and a reply that arrives after it is not accepted. Out of
+budget before the prompt is submitted, spawn exits `partial` with `timeout` and
+says the prompt was not submitted; out of budget while it is being submitted,
+the outcome is `unknown`, so inspect with `fledge agent read --pane P` before
+resending. A spawn that times out before the agent is ready does not register
+it (register it later with `fledge agent adopt --pane P`); a record already
+written is kept and reported, and a registration the deadline cuts off is
+reported as `registration_error`. Herdr's own startup
 reservation is the larger of `--timeout` and 30s: Herdr drops the name of an
 agent whose reservation expires mid-launch, so a short `--timeout` bounds only
-spawn's wait, and a `partial` timeout can still finish launching under its
+spawn itself, and a `partial` timeout can still finish launching under its
 name. A launch unfinished when the reservation expires can still lose its name;
 address it by pane. `--no-wait` restores the old
 behavior: return once the launch begins, without waiting for readiness. If the
