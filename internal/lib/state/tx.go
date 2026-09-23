@@ -115,4 +115,3 @@ func (tx *Tx) locate(kind, id string) (string, error) {
 func archivePath(live string) string {
 	return filepath.Join(filepath.Dir(live), archiveDir, filepath.Base(live))
 }
-
