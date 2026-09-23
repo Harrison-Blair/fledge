@@ -1,5 +1,6 @@
 // Package verify implements task verify: a second agent accepting a completed
-// task's result once its subtasks are finished, or verifying it again.
+// task's result once its subtasks are finished, verifying a grouping parent
+// whose subtasks are finished, or verifying a task again.
 package verify
 
 import (
@@ -29,6 +30,8 @@ type Result struct {
 }
 
 // Run moves a completed task to verified, or verifies a verified task again.
+// A created or assigned parent can also be verified once every direct subtask
+// is verified or cancelled and at least one is verified.
 // The verifier must be a registered agent other than the owner, and every
 // direct subtask must be verified or cancelled, unless Force is set; the
 // verifier and whether Force was used are recorded. A repeat verification
@@ -56,17 +59,26 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 	}
 	open := []string{}
 	r, err := task.Update(s, o.ID, func(r *task.Record) error {
-		if err := task.Require(r, "verify", task.Completed, task.Verified); err != nil {
-			return err
-		}
 		rs, err := task.List(s)
 		if err != nil {
 			return err
 		}
+		children, verified := 0, 0
 		for _, child := range rs {
-			if child.Parent != nil && *child.Parent == r.ID && child.Status != task.Verified && child.Status != task.Cancelled {
+			if child.Parent == nil || *child.Parent != r.ID {
+				continue
+			}
+			children++
+			switch child.Status {
+			case task.Verified:
+				verified++
+			case task.Cancelled:
+			default:
 				open = append(open, child.ID)
 			}
+		}
+		if err := requireVerifiable(r, children, verified, open); err != nil {
+			return err
 		}
 		switch {
 		case o.Force:
@@ -93,6 +105,22 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 	out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "task", ID: r.ID})
 	out.Result = Result{Record: r, OpenSubtasks: open}
 	return out
+}
+
+// requireVerifiable accepts a completed or verified task, or a created or
+// assigned parent whose direct subtasks are all verified or cancelled with at
+// least one verified. Force never widens this.
+func requireVerifiable(r *task.Record, children, verified int, open []string) error {
+	if children == 0 || (r.Status != task.Created && r.Status != task.Assigned) {
+		return task.Require(r, "verify", task.Completed, task.Verified)
+	}
+	if len(open) > 0 {
+		return &herdr.Error{Code: "task_open_subtasks", Message: fmt.Sprintf("task %s is %s and has subtasks that are not verified or cancelled: %s; finish them first", r.ID, r.Status, strings.Join(open, ", "))}
+	}
+	if verified == 0 {
+		return &herdr.Error{Code: "task_invalid_state", Message: fmt.Sprintf("task %s is %s and all its subtasks were cancelled; cancel it instead with fledge task cancel --id %s", r.ID, r.Status, r.ID)}
+	}
+	return nil
 }
 
 // Render writes a successful verification.
