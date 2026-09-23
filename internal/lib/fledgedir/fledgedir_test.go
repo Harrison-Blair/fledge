@@ -325,3 +325,26 @@ func TestMakeParentsRefusesSymlinkFromConcurrentCreator(t *testing.T) {
 		t.Fatalf("accepted symlink: %v %+v", err, out.Effects)
 	}
 }
+
+func TestRootRejectsLinkedWorktreeOfBareRepository(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Git reports a linked worktree of a bare repository as non-bare. The bare
+	// repository has no primary checkout, and Git refuses core.worktree
+	// alongside core.bare, so the error must not advise setting it.
+	for _, name := range []string{"repo.git", filepath.Join("named", ".git")} {
+		bare := filepath.Join(base, name)
+		git(t, "init", "-q", "--bare", bare)
+		linked := filepath.Join(base, "linked-"+filepath.Base(filepath.Dir(bare)))
+		git(t, "--git-dir", bare, "worktree", "add", "-q", "--orphan", "-b", "linked", linked)
+		got, err := Root(context.Background(), linked)
+		if err == nil {
+			t.Fatalf("Root(%s) accepted: %s", linked, got)
+		}
+		if msg := err.Error(); !strings.Contains(msg, "bare repositories are not supported") || strings.Contains(msg, "core.worktree") {
+			t.Fatalf("Root(%s): %v", linked, err)
+		}
+	}
+}

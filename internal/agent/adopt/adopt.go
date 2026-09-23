@@ -66,13 +66,14 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Fail(err, "state", false)
 		return out
 	}
-	// Refuse before renaming; Register repeats this check under the store lock.
-	if err := identity.Unregistered(store, a); err != nil {
-		out.Fail(err, "state", false)
-		return out
-	}
 	renamed := current == ""
 	if renamed {
+		// Refuse before renaming; Register repeats this check under the store
+		// lock, and alone makes it for an agent adopt does not rename.
+		if err := unregistered(store, a); err != nil {
+			out.Fail(err, "state", false)
+			return out
+		}
 		if a, err = rename(ctx, c, a, o.Name); err != nil {
 			out.Fail(err, "agent.rename", true)
 			return out
@@ -88,6 +89,10 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	out.Result = Result{Record: rec, Renamed: renamed}
 	return out
 }
+
+// unregistered is replaceable so tests can count adopt's scans of the agent
+// records beyond Register's one.
+var unregistered = identity.Unregistered
 
 // rename names the agent a and confirms the same terminal now carries name.
 func rename(ctx context.Context, c libagent.Client, a herdr.AgentDetails, name string) (herdr.AgentDetails, error) {

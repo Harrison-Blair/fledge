@@ -322,12 +322,14 @@ Fledge keeps a durable record for each agent it launches or adopts, in
 shared by linked worktrees). A repository created with `--separate-git-dir`
 records no path back to its primary checkout, so commands run from its linked
 worktrees fail until you run `git config core.worktree <primary checkout path>`
-once. A record holds an 8-hex `id`, the agent's name,
+once. Bare repositories, including their linked worktrees, have no primary
+checkout and are not supported. A record holds an 8-hex `id`, the agent's name,
 pane, workspace, harness, Herdr session (`HERDR_SESSION`), Herdr `terminal_id`,
 `parent`, `registered_at`, `registered_by` (`spawn` or `adopt`),
 `worktree_path`, and `ended_at`. The parent is the caller's live record when the
 caller's pane hosts a registered terminal; otherwise it is null. Records are
-never deleted.
+never deleted: an ended record moves to `.fledge/state/agents/archive/`, where
+lookups by ID still find it but scans for live agents no longer read it.
 
 The terminal is a record's identity and the pane only locates it. Herdr gives a
 pane moved across workspaces a new ID but keeps its terminal, so when a lookup

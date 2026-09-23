@@ -12,6 +12,7 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 )
 
@@ -64,7 +65,7 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 	}
 	var r task.Record
 	phase := "state"
-	err = s.Exclusive(func() error {
+	err = s.Exclusive(func(tx *state.Tx) error {
 		if o.Parent != "" {
 			parent, err := task.Get(s, o.Parent)
 			if err == nil {
@@ -81,7 +82,7 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 				return err
 			}
 		}
-		_, err := s.Create(task.Kind, func(id string) any {
+		_, err := tx.Create(task.Kind, func(id string) any {
 			r = task.Record{ID: id, Title: o.Title, Brief: brief, After: after, Status: task.Created, CreatedAt: *task.Now()}
 			if o.Parent != "" {
 				r.Parent = &o.Parent

@@ -11,9 +11,10 @@ import (
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/gitstatus"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
-	"github.com/Harrison-Blair/fledge/internal/worktree/list"
+	"github.com/Harrison-Blair/fledge/internal/lib/worktree"
 )
 
 // Options names the checkout by exactly one of Path or Branch. Force permits
@@ -35,7 +36,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Fail(libagent.Invalid("exactly one of --path or --branch is required"), "validation", false)
 		return out
 	}
-	listing, err := list.Inspect(ctx, c, o.Cwd)
+	listing, err := worktree.ListCheckouts(ctx, c, o.Cwd)
 	if err != nil {
 		out.Fail(err, "worktree.list", false)
 		return out
@@ -45,23 +46,25 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Fail(err, "validation", false)
 		return out
 	}
-	if row.Primary {
+	if row.Path == listing.Root {
 		out.Fail(libagent.Invalid("%s is the primary checkout, which is never removed", row.Path), "guard", false)
 		return out
 	}
-	if err = checkAgents(ctx, c, listing.RepoRoot, row); err != nil {
+	if err = checkAgents(ctx, c, listing.Root, row); err != nil {
 		out.Fail(err, "guard", false)
 		return out
 	}
 	if !o.Force {
+		target, targetErr := gitstatus.DefaultBranch(ctx, listing.Root)
+		dirty, merged := worktree.State(ctx, listing.Root, target, row)
 		var reasons []string
-		if row.Dirty != "no" {
-			reasons = append(reasons, "dirty: "+row.Dirty)
+		if dirty != "no" {
+			reasons = append(reasons, "dirty: "+dirty)
 		}
-		if row.Merged != "yes" {
-			reason := "merged: " + row.Merged
-			if listing.DefaultBranchError != nil {
-				reason += " (" + *listing.DefaultBranchError + ")"
+		if merged != "yes" {
+			reason := "merged: " + merged
+			if targetErr != nil {
+				reason += " (" + targetErr.Error() + ")"
 			}
 			reasons = append(reasons, reason)
 		}
@@ -71,13 +74,13 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		}
 	}
 	// Recheck immediately before removal: an agent may have started since.
-	if err = checkAgents(ctx, c, listing.RepoRoot, row); err != nil {
+	if err = checkAgents(ctx, c, listing.Root, row); err != nil {
 		out.Fail(err, "guard", false)
 		return out
 	}
 	result := Result{Path: row.Path, Branch: row.Branch, Forced: o.Force}
-	if row.WorkspaceID == nil {
-		args := []string{"-C", listing.RepoRoot, "worktree", "remove"}
+	if row.OpenWorkspaceID == nil {
+		args := []string{"-C", listing.Root, "worktree", "remove"}
 		if o.Force {
 			args = append(args, "--force")
 		}
@@ -94,7 +97,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		WorkspaceID string `json:"workspace_id"`
 		Path        string `json:"path"`
 	}
-	err = c.Call(ctx, "worktree.remove", map[string]any{"workspace_id": *row.WorkspaceID, "force": o.Force}, &r)
+	err = c.Call(ctx, "worktree.remove", map[string]any{"workspace_id": *row.OpenWorkspaceID, "force": o.Force}, &r)
 	if err == nil && (r.Type != "worktree_removed" || r.Path == "") {
 		err = libagent.Protocol("incomplete worktree.remove result")
 	}
@@ -103,22 +106,23 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		return out
 	}
 	result.Path = filepath.Clean(r.Path)
-	result.ClosedWorkspaceID = row.WorkspaceID
+	result.ClosedWorkspaceID = row.OpenWorkspaceID
 	out.Effects = append(out.Effects,
 		libagent.Effect{Action: "removed", Kind: "worktree", Path: result.Path},
-		libagent.Effect{Action: "closed", Kind: "workspace", ID: *row.WorkspaceID})
+		libagent.Effect{Action: "closed", Kind: "workspace", ID: *row.OpenWorkspaceID})
 	out.Result = result
 	return out
 }
 
-func target(r list.Result, o Options) (list.Row, error) {
+// target selects the checkout named by o, comparing canonical paths.
+func target(r worktree.Checkouts, o Options) (herdr.Worktree, error) {
 	path := o.Path
 	if path != "" {
 		abs, err := filepath.Abs(path)
 		if err != nil {
-			return list.Row{}, err
+			return herdr.Worktree{}, err
 		}
-		path = abs
+		path = worktree.Canonical(abs)
 	}
 	for _, row := range r.Worktrees {
 		if (path != "" && row.Path == path) || (o.Branch != "" && row.Branch != nil && *row.Branch == o.Branch) {
@@ -126,16 +130,16 @@ func target(r list.Result, o Options) (list.Row, error) {
 		}
 	}
 	if path != "" {
-		return list.Row{}, libagent.Invalid("no worktree of %s at %s", r.RepoRoot, path)
+		return herdr.Worktree{}, libagent.Invalid("no worktree of %s at %s", r.Root, path)
 	}
-	return list.Row{}, libagent.Invalid("no worktree of %s has branch %s checked out", r.RepoRoot, o.Branch)
+	return herdr.Worktree{}, libagent.Invalid("no worktree of %s has branch %s checked out", r.Root, o.Branch)
 }
 
 // checkAgents refuses when any live agent in the connected Herdr session is in
 // the checkout's workspace, has its cwd at or inside the checkout, or is
 // registered with the checkout as its worktree. Unreadable agent records fail
 // closed.
-func checkAgents(ctx context.Context, c libagent.Client, repo string, row list.Row) error {
+func checkAgents(ctx context.Context, c libagent.Client, repo string, row herdr.Worktree) error {
 	var r struct {
 		Type   string               `json:"type"`
 		Agents []herdr.AgentDetails `json:"agents"`
@@ -155,16 +159,15 @@ func checkAgents(ctx context.Context, c libagent.Client, repo string, row list.R
 	if err != nil {
 		return fmt.Errorf("read agent records: %w; repair or remove the bad record under .fledge/state", err)
 	}
-	checkout := list.Canonical(row.Path)
 	for _, a := range r.Agents {
 		var where string
 		rec, registered := identity.Attributed(records, a)
 		switch {
-		case row.WorkspaceID != nil && a.WorkspaceID == *row.WorkspaceID:
+		case row.OpenWorkspaceID != nil && a.WorkspaceID == *row.OpenWorkspaceID:
 			where = "is in workspace " + a.WorkspaceID
-		case a.Cwd != nil && inside(checkout, list.Canonical(*a.Cwd)):
+		case a.Cwd != nil && inside(row.Path, worktree.Canonical(*a.Cwd)):
 			where = "is working in " + *a.Cwd
-		case registered && rec.WorktreePath != nil && inside(checkout, list.Canonical(*rec.WorktreePath)):
+		case registered && rec.WorktreePath != nil && inside(row.Path, worktree.Canonical(*rec.WorktreePath)):
 			where = "is registered to " + row.Path
 		default:
 			continue
