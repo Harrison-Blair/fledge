@@ -80,10 +80,11 @@ func OpenExisting(root string) (*Store, error) {
 
 // Create stores the value returned by build under a new random id and returns
 // that id. An existing record, live or archived, is never overwritten or
-// shadowed; colliding ids are retried a bounded number of times. The archive
-// is checked before the live path is claimed, which is race-free with or
-// without the lock: Archive and Unarchive move a record by linking its new
-// path before removing its old one, so it is always at one of the two paths.
+// shadowed; colliding ids are retried a bounded number of times. Create
+// claims the live path, then gives it back if the id is archived. That is
+// race-free with or without the lock: Archive and Unarchive link a record's
+// new path before removing its old one, so a record is always at one of the
+// two, and one archived after the claim was live and so blocked the claim.
 func (s *Store) Create(kind string, build func(id string) any) (string, error) {
 	dir, err := s.kindDir(kind)
 	if err != nil {
@@ -107,11 +108,6 @@ func (s *Store) Create(kind string, build func(id string) any) (string, error) {
 			return "", fmt.Errorf("state: encode %s record %s: %w", kind, id, err)
 		}
 		path := filepath.Join(dir, id+recordSuffix)
-		if _, err := os.Stat(archivePath(path)); err == nil {
-			continue
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			return "", fmt.Errorf("state: create %s: %w", path, err)
-		}
 		err = writeExclusive(path, data)
 		if errors.Is(err, fs.ErrExist) {
 			continue
@@ -119,7 +115,15 @@ func (s *Store) Create(kind string, build func(id string) any) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return id, nil
+		createStep()
+		if _, err := os.Stat(archivePath(path)); errors.Is(err, fs.ErrNotExist) {
+			return id, nil
+		} else if err != nil {
+			return "", fmt.Errorf("state: create %s: %w", path, err)
+		}
+		if err := os.Remove(path); err != nil {
+			return "", fmt.Errorf("state: create %s: %w", path, err)
+		}
 	}
 	return "", fmt.Errorf("state: no free %s id after %d attempts", kind, createAttempts)
 }

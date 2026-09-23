@@ -197,6 +197,40 @@ func TestCreateNeverReusesAnArchivedID(t *testing.T) {
 	}
 }
 
+func TestUnlockedCreateRacingArchiveNeverReusesTheID(t *testing.T) {
+	store, _ := openStore(t)
+	ids := []string{"aaaaaaaa", "aaaaaaaa", "bbbbbbbb"}
+	store.newID = func() (string, error) {
+		id := ids[0]
+		ids = ids[1:]
+		return id, nil
+	}
+	first, err := store.Create("counters", func(string) any { return counter{N: 1} })
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The colliding record is archived between Create's two steps, which
+	// checking the archive before claiming the live path would miss.
+	archived := false
+	createStep = func() {
+		if !archived {
+			archived = true
+			if err := store.Exclusive(func(tx *Tx) error { return tx.Archive("counters", first) }); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	t.Cleanup(func() { createStep = func() {} })
+	second, err := store.Create("counters", func(string) any { return counter{N: 2} })
+	if err != nil || second != "bbbbbbbb" || !archived {
+		t.Fatalf("second Create = %q, %v (archived %v); want bbbbbbbb", second, err, archived)
+	}
+	var c counter
+	if err := store.Get("counters", first, &c); err != nil || c.N != 1 {
+		t.Fatalf("archived record = %+v, %v; want N=1", c, err)
+	}
+}
+
 func TestArchiveRefusesToOverwriteAnArchivedRecord(t *testing.T) {
 	store, root := openStore(t)
 	id := createCounter(t, store)
