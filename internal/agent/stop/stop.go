@@ -63,7 +63,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Fail(endErr, "state", false)
 		return out
 	}
-	if ended != "" {
+	if reopen {
 		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "agent_record", ID: ended})
 	}
 	return out

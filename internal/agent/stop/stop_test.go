@@ -309,6 +309,31 @@ func TestStopFailedCloseKeepsOthersEnd(t *testing.T) {
 	}
 }
 
+// A record another actor ended after stop looked it up was not updated by
+// stop, so a successful close reports only the closed pane.
+func TestStopReportsOnlyItsOwnRecordEnd(t *testing.T) {
+	live := herdrscript.Info(herdrscript.LiveAgent("idle"))
+	var cwd, id string
+	endOthers := func() {
+		s, err := identity.Existing(context.Background(), cwd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := identity.End(s, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live, Before: endOthers},
+		call{Method: "pane.close", Params: map[string]any{"pane_id": "w1:p3"}, Result: herdrscript.OK()})
+	s.Cwd = identitytest.Repository(t)
+	cwd, id = s.Cwd, identitytest.Register(t, s.Cwd, live.Agent).ID
+	out := Run(context.Background(), s, Options{Target: identity.Target{ID: id}})
+	want := []libagent.Effect{{Action: "closed", Kind: "pane", ID: "w1:p3"}}
+	if out.Status != "success" || out.Error != nil || !reflect.DeepEqual(out.Effects, want) || !ended(t, cwd, id) {
+		t.Fatalf("%+v %+v", out, out.Error)
+	}
+}
+
 // When the terminal was registered anew before the close failed, the refused
 // reopen is reported alongside the close error, whose code is kept.
 func TestStopFailedCloseReportsRefusedReopen(t *testing.T) {
