@@ -6,6 +6,7 @@
 !*.go
 !go.mod
 !go.sum
+!/internal/lib/profiles/builtin/*.toml
 
 # Documentation
 !*.md

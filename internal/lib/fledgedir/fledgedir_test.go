@@ -125,7 +125,7 @@ func TestEnsureCreatesIgnoredDirectory(t *testing.T) {
 		t.Fatal(dir)
 	}
 	b, _ := os.ReadFile(filepath.Join(dir, ".gitignore"))
-	if string(b) != "*\n" {
+	if string(b) != managedBlock {
 		t.Fatalf("%q", b)
 	}
 	if len(out.Effects) != 2 || out.Effects[0] != (libagent.Effect{Action: "created", Kind: "directory", Path: dir}) || out.Effects[1] != (libagent.Effect{Action: "created", Kind: "file", Path: filepath.Join(dir, ".gitignore")}) {
@@ -150,7 +150,7 @@ func TestEnsureAppendsOnly(t *testing.T) {
 			t.Fatal(err)
 		}
 		b, _ := os.ReadFile(filepath.Join(dir, ".gitignore"))
-		if !strings.HasPrefix(string(b), existing) || !strings.HasSuffix(string(b), "\n*\n") || len(b) > len(existing)+3 {
+		if !strings.HasPrefix(string(b), existing) || !strings.HasSuffix(string(b), "\n"+managedBlock) || len(b) > len(existing)+1+len(managedBlock) {
 			t.Fatalf("%q", b)
 		}
 		if len(out.Effects) != 1 || out.Effects[0].Action != "updated" {
@@ -248,7 +248,7 @@ func TestIgnoreUpdateAppendsWithoutRewritingExistingBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := string(existing) + "*\n"
+	want := string(existing) + managedBlock
 	if string(got) != want {
 		t.Fatalf("%q want %q", got, want)
 	}
@@ -346,5 +346,77 @@ func TestRootRejectsLinkedWorktreeOfBareRepository(t *testing.T) {
 		if msg := err.Error(); !strings.Contains(msg, "bare repositories are not supported") || strings.Contains(msg, "core.worktree") {
 			t.Fatalf("Root(%s): %v", linked, err)
 		}
+	}
+}
+
+const managedBlock = "*\n!/profiles/\n!/profiles/*.toml\n"
+
+// ignored reports whether git ignores path, relative to root.
+func ignored(t *testing.T, root, path string) bool {
+	t.Helper()
+	err := exec.Command("git", "-C", root, "check-ignore", "--no-index", "--quiet", "--", path).Run()
+	var exit *exec.ExitError
+	if err != nil && !(errors.As(err, &exit) && exit.ExitCode() == 1) {
+		t.Fatal(err)
+	}
+	return err == nil
+}
+
+// Profile TOML files are trackable while state, managed checkouts, the ignore
+// file itself, and anything else under .fledge stay ignored, whether Ensure
+// creates the file, migrates a legacy "*" file, or appends after user rules.
+func TestEnsureLeavesOnlyProfileFilesTrackable(t *testing.T) {
+	for _, tc := range []struct{ name, existing, want string }{
+		{"fresh", "", managedBlock},
+		{"legacy", "*\n", managedBlock},
+		{"legacy with user rules", "# mine\n!keep\n*\n", "# mine\n!keep\n" + managedBlock},
+		{"user rules after star", "*\n!keep", "*\n!keep\n" + managedBlock},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := repository(t)
+			ignore := filepath.Join(root, ".fledge", ".gitignore")
+			if tc.existing != "" {
+				os.Mkdir(filepath.Dir(ignore), 0755)
+				os.WriteFile(ignore, []byte(tc.existing), 0644)
+			}
+			for range 3 {
+				if _, err := Ensure(root, &libagent.Outcome{}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if b, _ := os.ReadFile(ignore); string(b) != tc.want {
+				t.Fatalf("%q want %q", b, tc.want)
+			}
+			for path, want := range map[string]bool{
+				".fledge/profiles/reviewer.toml":    false,
+				".fledge/.gitignore":                true,
+				".fledge/state/agents/a.json":       true,
+				".fledge/state/lock":                true,
+				".fledge/worktrees/feat/x/file.go":  true,
+				".fledge/worktrees/profiles/x.toml": true,
+				".fledge/profiles/notes.md":         true,
+				".fledge/profiles/sub/x.toml":       true,
+				".fledge/state/profiles/x.toml":     true,
+				".fledge/other.toml":                true,
+			} {
+				if got := ignored(t, root, path); got != want {
+					t.Errorf("%s ignored = %v, want %v", path, got, want)
+				}
+			}
+		})
+	}
+}
+func TestEnsureRepeatedHasNoEffects(t *testing.T) {
+	root := repository(t)
+	dir := filepath.Join(root, ".fledge")
+	os.Mkdir(dir, 0755)
+	os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("*\n"), 0644)
+	out := libagent.Outcome{}
+	if _, err := Ensure(root, &out); err != nil || len(out.Effects) != 1 || out.Effects[0].Action != "updated" {
+		t.Fatalf("migration: %v %+v", err, out.Effects)
+	}
+	out = libagent.Outcome{}
+	if _, err := Ensure(root, &out); err != nil || len(out.Effects) != 0 {
+		t.Fatalf("repeat: %v %+v", err, out.Effects)
 	}
 }

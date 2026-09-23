@@ -171,3 +171,25 @@ func TestPromptFailureNotCalledUnsubmitted(t *testing.T) {
 		}
 	}
 }
+
+func TestHumanSpawnNamesProfileSource(t *testing.T) {
+	path, base := "/repo/.fledge/profiles/go-review.toml", "builtin:reviewer"
+	for _, tc := range []struct {
+		profile *ProfileRef
+		want    string
+	}{
+		{&ProfileRef{Name: "reviewer", Source: "builtin"}, "  profile: reviewer (built-in)\n"},
+		{&ProfileRef{Name: "go-review", Source: "repo", Path: &path, Base: &base}, "  profile: go-review (" + path + ", extends builtin:reviewer)\n"},
+		{&ProfileRef{Name: "scout", Source: "repo", Path: &path}, "  profile: scout (" + path + ")\n"},
+		{nil, ""},
+	} {
+		out := libagent.Outcome{Status: "success", Result: &Result{Name: "worker", Harness: "claude", Profile: tc.profile}}
+		var b bytes.Buffer
+		if err := out.Write(&b, false, Render); err != nil {
+			t.Fatal(err)
+		}
+		if tc.want != "" && !strings.Contains(b.String(), tc.want) || tc.want == "" && strings.Contains(b.String(), "profile:") {
+			t.Fatalf("%q want %q", b.String(), tc.want)
+		}
+	}
+}

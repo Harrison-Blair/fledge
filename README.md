@@ -87,6 +87,9 @@ fledge agent spawn --name reviewer --harness claude --model sonnet
 fledge agent spawn --name builder --harness codex --workspace backend --tab builds
 fledge agent spawn --name task --harness codex --workspace backend --worktree new --branch feature/task
 fledge agent spawn --name existing --harness claude --pane w2:p3
+fledge agent spawn --name review-1 --profile reviewer --file brief.md
+fledge agent profiles
+fledge agent profiles reviewer --json
 fledge agent adopt --name helper
 fledge agent adopt --pane w2:p3 --name builder --json
 fledge agent list --json
@@ -114,7 +117,8 @@ fledge agent stop --pane w2:p3 --force --json
 fledge agent models --harness codex --json
 ```
 
-Spawn requires a unique live `--name` and a `--harness`. By default it creates a
+Spawn requires a unique live `--name` and a `--harness`, which a
+[profile](#profiles) can supply. By default it creates a
 new tab in the caller's workspace. Workspace and tab names match exactly and
 case-sensitively: missing destination names are created, ambiguous names fail,
 and an existing tab receives a fresh split. New containers reuse their initial
@@ -174,7 +178,8 @@ and `--base` optionally selects a starting ref. Checkouts are created beneath th
 primary checkout at `.fledge/worktrees/<branch>`, even when invoked from a linked
 worktree. Branch slashes create nested directories. Existing branches or paths
 fail; Fledge does not invent suffixes. `.fledge/.gitignore` excludes the
-managed directory without changing the root ignore file.
+managed directory, except [profile](#profiles) files, without changing the root
+ignore file.
 
 `--worktree PATH` opens an existing checkout. Without an explicit source, the
 absolute checkout path determines its repository. A newly opened workspace uses
@@ -329,6 +334,73 @@ harness kinds are not yet supported. Rows are sorted by harness then model, and
 `MODEL` is the value to pass to `--model`. `--harness` limits output to one
 documented kind; an unsupported or uninstalled kind yields an empty list, and a
 missing file, unreadable cache, or failing command silently contributes no rows.
+
+### Profiles
+
+A profile is a named launch configuration: harness, model, native arguments, and
+a role brief. `fledge agent spawn --profile NAME` applies one. Five built-ins
+ship inside the binary and update with it; they are never copied into a
+repository:
+
+| Profile | Harness | Model | Args |
+| --- | --- | --- | --- |
+| `orchestrator` | `claude` | `claude-opus-5-5` | none |
+| `implementer` | `claude` | `claude-opus-5-5` | none |
+| `planner` | `codex` | `gpt-6-astra` | `-c model_reasoning_effort=xhigh` |
+| `reviewer` | `pi` | `openai-codex/gpt-6-astra` | none |
+| `verifier` | `pi` | `openai-codex/gpt-6-astra` | none |
+
+Built-ins set no permission-mode arguments. Their roles are ordinary first-prompt
+instructions, subordinate to the task and repository instructions; they grant no
+permissions and change no task state.
+
+`fledge agent profiles` lists the effective profiles with their source, and
+`fledge agent profiles NAME` shows one resolved profile: source, built-in base,
+harness, model, args, and full role. Both accept `--json`, need no Herdr session,
+work outside Git (built-ins only), and write nothing.
+
+Repository profiles live in `.fledge/profiles/NAME.toml` at the Git top level of
+the checkout Fledge is invoked from, so a linked worktree uses its own branch's
+profiles. This differs from agent and task state, which the primary checkout
+shares, and from `--cwd`, which only places the agent. A file named after a
+built-in overrides and extends it; any other name is a custom profile, which
+may extend a built-in explicitly or stand alone:
+
+```toml
+schema_version = 1                # required
+extends = "builtin:reviewer"      # optional; only built-in bases
+harness = "claude"
+model = "sonnet"
+args = ["--permission-mode", "plan"]   # exact tokens, never shell text
+role_append = "Focus on this repository's Go conventions."
+# role = "Full replacement brief"       # instead of role_append
+```
+
+Only fields present in the file apply. Scalars replace the base, `args` replaces
+the whole list (`[]` clears it), `role` replaces the role (`""` clears it), and
+`role_append` adds a paragraph to the inherited role; `role` and `role_append`
+cannot both be set. Unknown keys, wrong types, unknown bases or schema versions,
+and invalid names fail before Herdr is contacted; an invalid override never falls
+back to its built-in. Fledge never rewrites these files. Inherited built-in role
+text follows binary upgrades; set `role` to pin it.
+
+On spawn, explicit flags win. `--harness` matching the profile keeps everything;
+a different `--harness` drops the profile's model and args, which belong to its
+harness, and keeps the role. `--model` replaces the model, and `--args` or
+tokens after `--` replace the args (a native model option in the effective args
+still conflicts with `--model`). The role is sent before the task from
+`--prompt`/`--file`, separated by a blank line, in one first prompt with one
+sender header; a role alone is sent by itself, so `--no-wait` is rejected when
+the profile has a role. Human output names the profile and its source, and JSON
+adds `profile` (`name`, `source`, `path`, `base`).
+
+`.fledge/.gitignore` keeps everything else in `.fledge` ignored and ends with
+`*`, `!/profiles/`, `!/profiles/*.toml`, so profile files can be committed. The
+next command that prepares `.fledge`, such as agent registration or managed
+worktree creation, appends any missing rules to an existing file and preserves
+its contents. A linked worktree has no `.fledge/.gitignore`, so root ignore
+rules apply there; an allowlist-style root `.gitignore` must allow
+`.fledge/profiles/*.toml` to add profile files from a linked worktree.
 
 ### Identity
 
