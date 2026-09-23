@@ -27,11 +27,19 @@ func started(p herdr.Pane) herdr.AgentResult {
 	p.AgentStatus = "idle"
 	h := "claude"
 	p.Agent = &h
-	return herdr.AgentResult{Type: "agent_started", Agent: herdr.AgentDetails{Pane: p}, Argv: []string{"claude"}}
+	return herdr.AgentResult{Type: "agent_started", Agent: herdr.AgentDetails{Pane: p, TerminalID: "term_x"}, Argv: []string{"claude"}}
 }
 
 func waitCall(target string, p herdr.Pane, status string) call {
-	return call{Method: "agent.wait", Params: map[string]any{"target": target, "timeout_ms": 30000}, Result: herdrscript.Waited(p, status)}
+	return call{Method: "agent.wait", Params: map[string]any{"target": target, "timeout_ms": 30000}, Result: settled(p, status)}
+}
+
+// settled is the agent.wait result for worker in p once Herdr admits prompts.
+func settled(p herdr.Pane, status string) herdr.AgentResult {
+	r := herdrscript.Waited(p, status)
+	name, ready := "worker", true
+	r.Agent.Name, r.Agent.InteractiveReady = &name, &ready
+	return r
 }
 func TestDefaultSpawnUsesResolvedCallerAndPolicy(t *testing.T) {
 	p := herdrscript.Pane("w1:p2", "w1", "w1:t2")
@@ -365,7 +373,7 @@ func TestSpawnStatusAndPlacementComeFromWait(t *testing.T) {
 	sp.AgentStatus = "unknown"
 	startHarness := "unknown-detected"
 	sp.Agent = &startHarness
-	startResult := herdr.AgentResult{Type: "agent_started", Agent: herdr.AgentDetails{Pane: sp}, Argv: []string{"claude"}}
+	startResult := herdr.AgentResult{Type: "agent_started", Agent: herdr.AgentDetails{Pane: sp, TerminalID: "term_x"}, Argv: []string{"claude"}}
 	wp := herdrscript.Pane("w1:p1", "w1", "w1:t1")
 	cwd := "/repo"
 	wp.Cwd = &cwd
@@ -417,7 +425,7 @@ func TestSpawnWaitTimeoutIsRemainingBudget(t *testing.T) {
 			o.Pane = "w1:p1"
 			p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
 			clock := &movableClock{t: t0}
-			s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p), Before: func() { clock.advance(tc.elapsed) }}, call{Method: "agent.wait", Params: map[string]any{"target": "worker", "timeout_ms": tc.wantMs}, Result: herdrscript.Waited(p, "idle")})
+			s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p), Before: func() { clock.advance(tc.elapsed) }}, call{Method: "agent.wait", Params: map[string]any{"target": "worker", "timeout_ms": tc.wantMs}, Result: settled(p, "idle")})
 			s.Now = clock.now
 			out := s.run(context.Background(), o, nil)
 			if out.Status != "success" {
@@ -464,17 +472,17 @@ func TestSpawnMalformedWaitResultIsUnknown(t *testing.T) {
 		result func() herdr.AgentResult
 	}{
 		{"wrong type", func() herdr.AgentResult {
-			r := herdrscript.Waited(herdrscript.Pane("w1:p1", "w1", "w1:t1"), "idle")
+			r := settled(herdrscript.Pane("w1:p1", "w1", "w1:t1"), "idle")
 			r.Type = "wrong"
 			return r
 		}},
 		{"incomplete agent info", func() herdr.AgentResult {
-			r := herdrscript.Waited(herdrscript.Pane("w1:p1", "w1", "w1:t1"), "idle")
+			r := settled(herdrscript.Pane("w1:p1", "w1", "w1:t1"), "idle")
 			r.Agent.TerminalID = ""
 			return r
 		}},
 		{"different pane", func() herdr.AgentResult {
-			return herdrscript.Waited(herdrscript.Pane("w1:p9", "w1", "w1:t1"), "idle")
+			return settled(herdrscript.Pane("w1:p9", "w1", "w1:t1"), "idle")
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

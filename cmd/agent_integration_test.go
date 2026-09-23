@@ -110,10 +110,18 @@ func snapshotResult() any {
 	return map[string]any{"type": "session_snapshot", "snapshot": map[string]any{"protocol": 999, "version": "future", "workspaces": []any{}, "tabs": []any{}, "layouts": []any{}, "agents": []any{}, "panes": []any{map[string]any{"pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1"}}}}
 }
 func startedResult(argv ...string) any {
-	return map[string]any{"type": "agent_started", "agent": map[string]any{"pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1", "agent": "claude", "agent_status": "unknown"}, "argv": argv}
+	return map[string]any{"type": "agent_started", "agent": map[string]any{"pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1", "name": "worker", "agent": "claude", "agent_status": "unknown", "terminal_id": "term_x", "launch_pending": true}, "argv": argv}
 }
 func waitedResult() any {
 	return map[string]any{"type": "agent_info", "agent": map[string]any{"pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1", "agent": "claude", "agent_status": "idle", "terminal_id": "term_x", "focused": false, "revision": 0}}
+}
+
+// readyAs is the spawned worker's settled, prompt-ready agent.wait result as harness.
+func readyAs(harness string) any {
+	r := waitedResult().(map[string]any)
+	a := r["agent"].(map[string]any)
+	a["name"], a["agent"], a["interactive_ready"] = "worker", harness, true
+	return r
 }
 func promptedResult() any {
 	return map[string]any{"type": "agent_prompted", "agent": map[string]any{"pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1", "agent": "claude", "agent_status": "working"}}
@@ -121,7 +129,7 @@ func promptedResult() any {
 
 func TestSpawnForwardsExactNativeTokens(t *testing.T) {
 	l := newSocket(t)
-	done := serveRPCs(l, snapshotResult(), startedResult("--setting=a,b", "two words", "--native", "x,y"), waitedResult())
+	done := serveRPCs(l, snapshotResult(), startedResult("--setting=a,b", "two words", "--native", "x,y"), readyAs("claude"))
 	var out bytes.Buffer
 	err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "w1:p1", "--args=--setting=a,b", "--args", "two words", "--json", "--", "--native", "x,y"}, &out)
 	if err != nil {
@@ -149,7 +157,7 @@ func TestSpawnForwardsExactNativeTokens(t *testing.T) {
 func TestSpawnPromptFlagReachesAgentPromptWithExactText(t *testing.T) {
 	t.Setenv("HERDR_PANE_ID", "")
 	l := newSocket(t)
-	done := serveRPCs(l, snapshotResult(), startedResult("claude"), waitedResult(), promptedResult())
+	done := serveRPCs(l, snapshotResult(), startedResult("claude"), readyAs("claude"), promptedResult())
 	var out bytes.Buffer
 	err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "w1:p1", "--prompt", "review this", "--json"}, &out)
 	if err != nil {
@@ -197,7 +205,7 @@ func TestSpawnFileFlagPathReachesAgentPrompt(t *testing.T) {
 	}
 	t.Setenv("HERDR_PANE_ID", "")
 	l := newSocket(t)
-	done := serveRPCs(l, snapshotResult(), startedResult("claude"), waitedResult(), promptedResult())
+	done := serveRPCs(l, snapshotResult(), startedResult("claude"), readyAs("claude"), promptedResult())
 	var out bytes.Buffer
 	err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "w1:p1", "--file", path, "--json"}, &out)
 	if err != nil {
@@ -214,7 +222,7 @@ func TestSpawnFileFlagPathReachesAgentPrompt(t *testing.T) {
 func TestSpawnFileDashReadsCommandStdin(t *testing.T) {
 	t.Setenv("HERDR_PANE_ID", "")
 	l := newSocket(t)
-	done := serveRPCs(l, snapshotResult(), startedResult("claude"), waitedResult(), promptedResult())
+	done := serveRPCs(l, snapshotResult(), startedResult("claude"), readyAs("claude"), promptedResult())
 	var out bytes.Buffer
 	err := execute([]string{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "w1:p1", "--file", "-", "--json"}, strings.NewReader("from stdin"), &out, &out)
 	if err != nil {
@@ -232,7 +240,7 @@ func TestSpawnFileDashReadsCommandStdin(t *testing.T) {
 func TestSpawnBlockedWaitWithPromptIsPartialWithFledgeHints(t *testing.T) {
 	t.Setenv("HERDR_PANE_ID", "")
 	l := newSocket(t)
-	blocked := waitedResult().(map[string]any)
+	blocked := readyAs("claude").(map[string]any)
 	blocked["agent"].(map[string]any)["agent_status"] = "blocked"
 	done := serveRPCs(l, snapshotResult(), startedResult("claude"), blocked)
 	var out bytes.Buffer
