@@ -20,7 +20,7 @@ func New() *cobra.Command {
 	var asJSON bool
 	var ratio float64
 	cmd := &cobra.Command{Use: "spawn [flags] [-- native-args...]", Short: "Launch an agent in a Herdr pane",
-		Long: "Launch an agent in a Herdr pane.\n\nA first prompt from --prompt or --file is delivered once the agent is ready, prefixed\nwith the same sender header as agent message, including the reply command\n(fledge agent message --name <sender>) when the sender is a named agent.\n\nRun with no flags or native arguments on an interactive terminal to choose the harness,\nmodel, name, and placement from prompts; the equivalent flags are printed before launch."}
+		Long: "Launch an agent in a Herdr pane.\n\nA first prompt from --prompt or --file is delivered once the agent is ready, prefixed\nwith the same sender header as agent message, including the reply command\n(fledge agent message --name <sender>) when the sender is a named agent.\n\nRun with no flags or native arguments on an interactive terminal to choose the harness,\nmodel, name, and placement from prompts; the equivalent flags are printed before launch.\n\nThe agent is registered in the repository Fledge is invoked from, not the one named by\n--cwd, which only places the shell (and selects the --worktree new source). Outside Git\nthe spawn succeeds unregistered. --name and --pane select live Herdr agents from\nanywhere; --id and task records are read from the invoking repository, so a worker\nlaunched into another repository runs those commands from this one\n(cd /abs/path && fledge task ...)."}
 	f := cmd.Flags()
 	f.StringVar(&options.Name, "name", "", "Unique live agent name (required)")
 	f.StringVar(&options.Harness, "harness", "", "Herdr harness kind (required)")

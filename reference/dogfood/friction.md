@@ -693,6 +693,10 @@ The probes then blocked at Claude's trust dialog and had to be stopped by the
 orchestrator. Workaround: run any spawn that registers from a working directory
 inside the repository whose state should hold the record.
 
+Resolved 2026-09-23: documented as intended. The invoking repository owns
+coordination state; `--cwd` only places the shell. See README "Identity" and
+`fledge agent spawn --help`.
+
 **Reproduction steps:**
 1. From inside repository A, run `fledge agent spawn --harness claude --name probe --no-wait --cwd <repository B>`.
 2. Look in A's `.fledge/state/agents/` and in B's.
