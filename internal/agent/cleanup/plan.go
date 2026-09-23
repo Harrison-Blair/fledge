@@ -118,15 +118,7 @@ func selectWorkers(caller string, records []identity.Record, agents []herdr.Agen
 				reasons = append(reasons, "agent is "+a.AgentStatus)
 			}
 		}
-		var descendants []string
-		for _, d := range live {
-			if d.Parent != nil && *d.Parent == rec.ID {
-				descendants = append(descendants, "its worker "+d.ID+" is live")
-			}
-		}
-		slices.Sort(descendants)
-		reasons = append(reasons, descendants...)
-		if r := taskHold(tasks, rec.ID, collected); r != "" {
+		if r := hold(live, tasks, rec.ID, collected); r != "" {
 			reasons = append(reasons, r)
 		}
 		if len(reasons) > 0 {
@@ -145,6 +137,22 @@ func running(agents []herdr.AgentDetails, rec identity.Record) (herdr.AgentDetai
 		}
 	}
 	return herdr.AgentDetails{}, false
+}
+
+// hold explains why id's live workers or its tasks hold it, or returns "".
+// live is a LiveByTerminal map.
+func hold(live map[string]identity.Record, tasks []task.Record, id string, collected bool) string {
+	var reasons []string
+	for _, d := range live {
+		if d.Parent != nil && *d.Parent == id {
+			reasons = append(reasons, "its worker "+d.ID+" is live")
+		}
+	}
+	slices.Sort(reasons)
+	if r := taskHold(tasks, id, collected); r != "" {
+		reasons = append(reasons, r)
+	}
+	return strings.Join(reasons, "; ")
 }
 
 // taskHold explains why the tasks owned by owner hold it, or returns "": any

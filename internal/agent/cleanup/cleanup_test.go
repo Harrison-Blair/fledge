@@ -606,3 +606,42 @@ func TestRender(t *testing.T) {
 		herdrscript.CheckOutputFailures(t, Render, libagent.Outcome{Result: tc.result})
 	}
 }
+
+// A live worker of the worker holds it whether registered before planning or
+// between planning and the stop, so its pane is never closed under the new
+// worker. (Regression from verification: descendants were not rechecked.)
+func TestNewDescendantHoldsWorker(t *testing.T) {
+	for _, late := range []bool{false, true} {
+		name := "before_planning"
+		if late {
+			name = "after_planning"
+		}
+		t.Run(name, func(t *testing.T) {
+			r := newRepo(t)
+			a := agent("w1:p1", "w1", "t_caller", "orchestrator", "working")
+			caller := r.register(t, a, nil, "adopt", nil)
+			w := agent("w2:p1", "w2", "t_worker", "worker", "idle")
+			rec := r.register(t, w, &caller.ID, "spawn", nil)
+			tasktest.Seed(t, r.root, task.Record{Title: "accepted", Owner: &rec.ID, Status: task.Verified})
+			addChild := func() {
+				child := agent("w3:p1", "w3", "t_child", "child", "working")
+				r.register(t, child, &rec.ID, "spawn", nil)
+			}
+			listing := agentList(a, w)
+			if late {
+				listing.Before = addChild
+			} else {
+				addChild()
+			}
+			// No agent.get or pane.close of the worker is scripted: stopping it fails the test.
+			out := Run(context.Background(), client(t, r, get(a), listing), Options{})
+			got := worker(out.Result.(Result), rec.ID)
+			if out.Status != "success" || len(out.Effects) != 0 || got.Outcome != "skipped" || got.Reason == nil || !strings.Contains(*got.Reason, "is live") {
+				t.Fatalf("new live descendant must hold its parent: %+v %+v", out, got)
+			}
+			if r.load(t, rec.ID).EndedAt != nil {
+				t.Fatal("worker record ended")
+			}
+		})
+	}
+}

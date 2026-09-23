@@ -83,13 +83,17 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			continue
 		}
 		stopped[w.ID] = false
-		// Recheck its tasks: one may have been assigned since planning.
-		tasks, err := task.List(p.store)
+		// Recheck its workers and tasks: either may have appeared since planning.
+		live, err := identity.LiveByTerminal(p.store)
+		var tasks []task.Record
+		if err == nil {
+			tasks, err = task.List(p.store)
+		}
 		if err != nil {
 			w.Outcome, w.Reason = record(libagent.Outcome{Error: &libagent.Failure{Code: "operation_failed", Message: err.Error(), Phase: "state"}})
 			continue
 		}
-		if r := taskHold(tasks, w.ID, o.ResultsCollected); r != "" {
+		if r := hold(live, tasks, w.ID, o.ResultsCollected); r != "" {
 			w.Outcome, w.Reason = "skipped", &r
 			continue
 		}
