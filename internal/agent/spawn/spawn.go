@@ -102,6 +102,8 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 		out.Fail(err, "validation", false)
 		return out
 	}
+	// The effective first prompt is the only input to PromptRequested.
+	result.PromptRequested = prompt != ""
 	if o.Cwd != "" && !filepath.IsAbs(o.Cwd) {
 		o.Cwd = filepath.Join(s.Cwd, o.Cwd)
 	}
@@ -171,7 +173,7 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 		out.Fail(&herdr.Error{Code: "agent_blocked", Message: fmt.Sprintf("agent %s is waiting on a startup prompt", o.Name)}, "agent.wait", true)
 		return out
 	}
-	if !o.PromptSet && !o.FileSet {
+	if !result.PromptRequested {
 		return out
 	}
 	id, sender := s.newID(), libagent.ResolveSender(ctx, s.Client)

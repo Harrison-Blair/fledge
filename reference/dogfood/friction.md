@@ -144,6 +144,12 @@ Observed 2026-09-18, Fledge 0.0.3 built from `dev` (`fc4538b`), Herdr
 workaround is `fledge agent send --name x --text 2`; spawn still reports
 success and gives no reason for the block.
 
+Resolved 2026-09-23: spawn waits by default and a `blocked` wait fails as
+`partial` `agent_blocked` (exit 1), keeping the agent and its record. Human
+output now points at `fledge agent read --pane P` and
+`fledge agent send --pane P --key <key>` instead of raw Herdr commands. It
+still cannot say what the dialog is (see the entry above).
+
 **Reproduction steps:**
 1. With a Codex update pending, run
    `fledge agent spawn --name x --harness codex --tab x`.
@@ -704,6 +710,12 @@ agent `blocked` on Claude's folder-trust dialog, and the first prompt was never
 delivered. The verifier accepted the dialog with `agent send --key down --key
 enter` and resent the command with `agent send`. See also the folder-trust
 entry above for spawns through a worktree.
+
+Resolved 2026-09-23: the result now carries `prompt_requested`, so
+`prompted=false` with `prompt_requested=true` marks an unsent first prompt. The
+human output says the first prompt was not submitted and gives
+`fledge agent read`/`send`/`message --pane P` hints to resolve the dialog and
+resend it. Spawn deliberately does not queue, replay, or answer the dialog.
 
 **Reproduction steps:**
 1. Create a new git repository Claude has never trusted.

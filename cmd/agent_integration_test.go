@@ -226,6 +226,34 @@ func TestSpawnFileDashReadsCommandStdin(t *testing.T) {
 	}
 }
 
+// TestSpawnBlockedWaitWithPromptIsPartialWithFledgeHints serves only
+// snapshot, start, and a blocked wait, so an agent.prompt dial would fail
+// fast; the human output must name the unsent prompt without echoing it.
+func TestSpawnBlockedWaitWithPromptIsPartialWithFledgeHints(t *testing.T) {
+	t.Setenv("HERDR_PANE_ID", "")
+	l := newSocket(t)
+	blocked := waitedResult().(map[string]any)
+	blocked["agent"].(map[string]any)["agent_status"] = "blocked"
+	done := serveRPCs(l, snapshotResult(), startedResult("claude"), blocked)
+	var out bytes.Buffer
+	err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "w1:p1", "--prompt", "secret brief"}, &out)
+	if ExitCode(err) != 1 {
+		t.Fatalf("exit code = %d (%v): %s", ExitCode(err), err, out.String())
+	}
+	if calls := waitCalls(t, l, done, 3); calls[2].Method != "agent.wait" {
+		t.Fatalf("%+v", calls)
+	}
+	s := out.String()
+	for _, want := range []string{"partial:", "The first prompt was not submitted", "fledge agent read --pane w1:p1", "fledge agent send --pane w1:p1 --key <key>", "fledge agent message --pane w1:p1 --file <brief>"} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("%q missing %q", s, want)
+		}
+	}
+	if strings.Contains(s, "secret brief") || strings.Contains(s, "herdr ") {
+		t.Fatalf("%q", s)
+	}
+}
+
 func TestGetForwardsTargetAndDecodesDetails(t *testing.T) {
 	for _, flag := range []string{"--name", "--pane"} {
 		t.Run(flag, func(t *testing.T) {

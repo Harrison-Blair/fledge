@@ -662,3 +662,75 @@ func TestWorkspaceRenameFailureRetainsResources(t *testing.T) {
 		})
 	}
 }
+
+// A blocked startup wait never reaches agent.prompt (the script has no such
+// call, so one would fail the test), keeps the agent and its registration
+// attempt, and reports a requested but unsubmitted first prompt.
+func TestSpawnBlockedWaitReportsRequestedPromptUnsubmitted(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(*Options)
+		in   string
+		want bool
+	}{
+		{"inline prompt", func(o *Options) { o.Prompt, o.PromptSet = "secret brief", true }, "", true},
+		{"file prompt", func(o *Options) { o.File, o.FileSet = "-", true }, "secret brief\n", true},
+		{"no prompt", func(*Options) {}, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := validOptions()
+			o.Pane = "w1:p1"
+			tc.set(&o)
+			p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
+			s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "blocked"))
+			out := s.run(context.Background(), o, strings.NewReader(tc.in))
+			r := out.Result.(*Result)
+			if out.Status != "partial" || out.ExitCode() != 1 || out.Error == nil || out.Error.Code != "agent_blocked" || out.Error.Phase != "agent.wait" {
+				t.Fatalf("%+v", out)
+			}
+			if r.Prompted || r.PromptRequested != tc.want || r.MessageID != nil {
+				t.Fatalf("prompted=%v prompt_requested=%v message_id=%v", r.Prompted, r.PromptRequested, r.MessageID)
+			}
+			if !r.Registered && r.RegistrationError == nil {
+				t.Fatalf("registration not attempted: %+v", r)
+			}
+		})
+	}
+}
+
+func TestSpawnWaitTimeoutReportsRequestedPrompt(t *testing.T) {
+	o := validOptions()
+	o.Pane = "w1:p1"
+	o.Prompt, o.PromptSet = "hi", true
+	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p)}, call{Method: "agent.wait", Err: &herdr.Error{Code: "timeout", Message: "no settled state"}})
+	out := s.run(context.Background(), o, nil)
+	if r := out.Result.(*Result); out.Status != "partial" || r.Prompted || !r.PromptRequested {
+		t.Fatalf("%+v", out)
+	}
+}
+
+func TestSpawnUnknownPromptSubmissionKeepsRequest(t *testing.T) {
+	o := validOptions()
+	o.Pane = "w1:p1"
+	o.Prompt, o.PromptSet = "hi", true
+	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), senderCall(), call{Method: "agent.prompt", Err: &herdr.Error{Code: "transport_error", Message: "lost", Uncertain: true}})
+	out := s.run(context.Background(), o, nil)
+	if r := out.Result.(*Result); out.Status != "unknown" || out.Error.Phase != "agent.prompt" || r.Prompted || !r.PromptRequested {
+		t.Fatalf("%+v", out)
+	}
+}
+
+func TestSpawnSubmittedPromptIsRequested(t *testing.T) {
+	o := validOptions()
+	o.Pane = "w1:p1"
+	o.Prompt, o.PromptSet = "hi", true
+	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
+	p.AgentStatus = "idle"
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), senderCall(), call{Method: "agent.prompt", Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
+	out := s.run(context.Background(), o, nil)
+	if r := out.Result.(*Result); out.Status != "success" || !r.Prompted || !r.PromptRequested {
+		t.Fatalf("%+v", out)
+	}
+}

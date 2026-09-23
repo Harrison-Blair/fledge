@@ -9,6 +9,8 @@ import (
 
 // Result reports the placement, launch, registration, and first-prompt state
 // of a spawn. RegistrationError explains why a started agent has no record.
+// PromptRequested reports a first prompt was given, so Prompted=false
+// distinguishes "none requested" from "not submitted".
 type Result struct {
 	Name              string           `json:"name"`
 	Harness           string           `json:"harness"`
@@ -25,12 +27,13 @@ type Result struct {
 	Registered        bool             `json:"registered"`
 	RegistrationError *string          `json:"registration_error"`
 	Prompted          bool             `json:"prompted"`
+	PromptRequested   bool             `json:"prompt_requested"`
 	MessageID         *string          `json:"message_id"`
 	Sender            *libagent.Sender `json:"sender"`
 }
 
-// Render writes a successful spawn, or a startup recovery hint after the
-// generic failure lines that libagent writes first.
+// Render writes a successful spawn, or startup recovery hints by pane after
+// the generic failure lines that libagent writes first.
 func Render(w io.Writer, o libagent.Outcome) error {
 	r, ok := o.Result.(*Result)
 	if !ok {
@@ -40,16 +43,28 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		if o.Status != "partial" && o.Status != "unknown" {
 			return nil
 		}
+		pane := libagent.Display(r.PaneID)
 		switch o.Error.Phase {
 		case "agent.wait":
 			if o.Error.Code == "agent_blocked" {
-				_, err := fmt.Fprintf(w, "Agent is waiting on a startup prompt. Inspect with: herdr agent get %s; herdr agent read %s\n", r.Name, r.Name)
+				if _, err := fmt.Fprintf(w, "Agent is waiting on a startup prompt. Inspect with: fledge agent read --pane %s\nAfter inspecting, answer with: fledge agent send --pane %s --key <key>\n", pane, pane); err != nil {
+					return err
+				}
+				if !r.PromptRequested {
+					return nil
+				}
+				_, err := fmt.Fprintf(w, "The first prompt was not submitted; after resolving the dialog, resend it with: fledge agent message --pane %s --file <brief> (or --body <text>)\n", pane)
 				return err
 			}
 			fallthrough
 		case "agent.start":
-			_, err := fmt.Fprintf(w, "Startup was not confirmed; a process may still be running. Inspect with: herdr agent get %s; herdr agent read %s\n", r.Name, r.Name)
-			return err
+			if _, err := fmt.Fprintf(w, "Startup was not confirmed; a process may still be running. Inspect with: fledge agent get --pane %s; fledge agent read --pane %s\n", pane, pane); err != nil {
+				return err
+			}
+			if r.PromptRequested {
+				_, err := fmt.Fprintln(w, "The first prompt was not submitted.")
+				return err
+			}
 		}
 		return nil
 	}

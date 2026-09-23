@@ -144,15 +144,26 @@ successful spawn reports the settled status (e.g. `idle`) rather than `unknown`.
 `--timeout` covers launch and this wait together. `--no-wait` restores the old
 behavior: return once the launch begins, without waiting for readiness. If the
 agent settles on `blocked` (its own startup dialog, e.g. an update prompt),
-spawn fails with `agent_blocked` and a `partial` outcome; the agent is left
-running. A wait timeout is also `partial`, like a startup timeout.
+spawn fails with `agent_blocked` and a `partial` outcome (exit 1); the agent
+and its record are left running. A wait timeout is also `partial`, like a
+startup timeout. Human output then gives recovery hints addressed by pane,
+since the name may not resolve: `fledge agent read --pane P` to inspect the
+dialog, then `fledge agent send --pane P --key <key>` to answer it. Spawn never
+answers a dialog itself.
 
 Pass `--prompt TEXT` or `--file PATH|-` (mutually exclusive; unlike `message`,
 inline text on spawn is `--prompt`, not `--body`) to deliver a first prompt once
 the agent is ready. The prompt is read and validated before any Herdr mutation,
 so a missing file never leaves a tab or agent behind. Spawn does not wait for
 the prompted turn to finish. `--no-wait` cannot be combined with `--prompt` or
-`--file`, since there would be no settled agent to prompt.
+`--file`, since there would be no settled agent to prompt. The result's
+`prompt_requested` reports whether a first prompt was given, so
+`prompted=false` separates "none requested" from "not submitted". A spawn that
+stops before prompting (blocked, timed out, or unconfirmed startup) says the
+first prompt was not submitted; it is not queued or replayed, so resend it after
+resolving the dialog with `fledge agent message --pane P --file <brief>` (or
+`--body`). An uncertain `agent.prompt` failure makes no such claim, since the
+prompt may have arrived.
 
 With `--worktree new`, workspace selectors identify an **existing source**
 repository workspace. That source takes precedence over `--cwd`; without either,
