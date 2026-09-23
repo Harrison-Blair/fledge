@@ -304,8 +304,10 @@ of `--name`/`--pane`, resolves the agent first, and never closes a pane that doe
 not host a known agent. Agents whose status is `working`, `blocked`, or `unknown`
 are refused with exit status 2 unless `--force` is passed; `idle` and `done` agents
 stop without it. Stop sets `ended_at` on the agent's live record, if it has one,
-just before closing the pane, so an agent can stop its own pane, and clears it
-again if the pane fails to close.
+just before closing the pane, so an agent can stop its own pane. If the pane
+fails to close, stop reopens the record it ended, returning it from the archive;
+it leaves a record another command ended alone and reports a reopen refused
+because the terminal was registered again.
 
 `fledge agent models` lists coding-agent models discovered locally and does not
 need a Herdr session. It reads the `pi`, `codex`, and `claude` caches under the

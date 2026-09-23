@@ -41,7 +41,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	}
 	// End the record before closing: an agent stopping its own pane is hung up
 	// by pane.close before control returns here.
-	store, ended, endErr := end(ctx, c, a, rec)
+	store, ended, reopen, endErr := end(ctx, c, a, rec)
 	var closed struct {
 		Type string `json:"type"`
 	}
@@ -50,9 +50,9 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		err = libagent.Protocol("incomplete pane.close result")
 	}
 	if err != nil {
-		if ended != "" {
-			if restoreErr := restore(store, ended); restoreErr != nil {
-				err = fmt.Errorf("%w; agent record %s could not be restored: %v", err, ended, restoreErr)
+		if reopen {
+			if reopenErr := identity.Reopen(store, ended); reopenErr != nil {
+				err = fmt.Errorf("%w; agent record %s could not be reopened: %v", err, ended, reopenErr)
 			}
 		}
 		out.Fail(err, "pane.close", true)
@@ -71,32 +71,24 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 }
 
 // end marks the agent's live record ended and returns its store and id, or ""
-// when the agent has no record. Like agent get, it treats an unavailable store
-// as holding no record, so stop works outside a repository.
-func end(ctx context.Context, c libagent.Client, a herdr.AgentDetails, rec *identity.Record) (*state.Store, string, error) {
+// when the agent has no record, and whether this call ended it, so a failed
+// close reopens only its own end. Like agent get, it treats an unavailable
+// store as holding no record, so stop works outside a repository.
+func end(ctx context.Context, c libagent.Client, a herdr.AgentDetails, rec *identity.Record) (*state.Store, string, bool, error) {
 	s, err := identity.Existing(ctx, c.Cwd)
 	if err != nil || s == nil {
-		return nil, "", nil
+		return nil, "", false, nil
 	}
 	if rec == nil {
 		if rec, err = identity.Match(s, a); err != nil || rec == nil {
-			return nil, "", err
+			return nil, "", false, err
 		}
 	}
-	if err := identity.End(s, rec.ID); err != nil {
-		return nil, "", err
+	ended, err := identity.EndOnce(s, rec.ID)
+	if err != nil {
+		return nil, "", false, err
 	}
-	return s, rec.ID, nil
-}
-
-// restore makes record id live again after its pane failed to close. end only
-// ends a live record, so clearing ended_at returns it to its prior state.
-func restore(s *state.Store, id string) error {
-	var rec identity.Record
-	return s.Update(identity.Kind, id, &rec, func() error {
-		rec.EndedAt = nil
-		return nil
-	})
+	return s, rec.ID, ended, nil
 }
 
 // Render writes a successful stop outcome.

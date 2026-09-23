@@ -259,10 +259,73 @@ func TestStopWithoutClosingKeepsRecordLive(t *testing.T) {
 			s.Cwd = identitytest.Repository(t)
 			cwd, id = s.Cwd, identitytest.Register(t, s.Cwd, live.Agent).ID
 			out := Run(context.Background(), s, Options{Name: "worker"})
-			if out.Status != tc.status || out.Error.Phase != "pane.close" || len(out.Effects) != 0 || !endedAtClose || ended(t, cwd, id) {
+			if out.Status != tc.status || out.Error.Phase != "pane.close" || len(out.Effects) != 0 || !endedAtClose || ended(t, cwd, id) || !isLive(t, cwd, id) {
 				t.Fatalf("ended at close %v: %+v", endedAtClose, out)
 			}
 		})
+	}
+}
+
+// isLive reports whether record id is among the live records scans find.
+func isLive(t *testing.T, cwd, id string) bool {
+	t.Helper()
+	s, err := identity.Existing(context.Background(), cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := identity.LiveByTerminal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rec := range records {
+		if rec.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// A record another actor ended after stop looked it up is not stop's to
+// reopen when the close fails.
+func TestStopFailedCloseKeepsOthersEnd(t *testing.T) {
+	live := herdrscript.Info(herdrscript.LiveAgent("idle"))
+	var cwd, id string
+	endOthers := func() {
+		s, err := identity.Existing(context.Background(), cwd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := identity.End(s, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live, Before: endOthers},
+		call{Method: "pane.close", Err: &herdr.Error{Code: "internal_error", Message: "refused"}})
+	s.Cwd = identitytest.Repository(t)
+	cwd, id = s.Cwd, identitytest.Register(t, s.Cwd, live.Agent).ID
+	out := Run(context.Background(), s, Options{ID: id})
+	if out.Error == nil || out.Error.Code != "internal_error" || out.Error.Phase != "pane.close" || !ended(t, cwd, id) || isLive(t, cwd, id) {
+		t.Fatalf("%+v %+v", out, out.Error)
+	}
+}
+
+// When the terminal was registered anew before the close failed, the refused
+// reopen is reported alongside the close error, whose code is kept.
+func TestStopFailedCloseReportsRefusedReopen(t *testing.T) {
+	live := herdrscript.Info(herdrscript.LiveAgent("idle"))
+	var cwd, newID string
+	reregister := func() { newID = identitytest.Register(t, cwd, live.Agent).ID }
+	s := fake(t, call{Method: "agent.get", Result: live}, call{Method: "pane.close", Err: &herdr.Error{Code: "internal_error", Message: "refused"}, Before: reregister})
+	s.Cwd = identitytest.Repository(t)
+	cwd = s.Cwd
+	id := identitytest.Register(t, s.Cwd, live.Agent).ID
+	out := Run(context.Background(), s, Options{Name: "worker"})
+	if out.Error == nil || out.Error.Code != "internal_error" || out.Error.Phase != "pane.close" || !strings.Contains(out.Error.Message, "refused") ||
+		!strings.Contains(out.Error.Message, "agent_already_registered") || !strings.Contains(out.Error.Message, newID) {
+		t.Fatalf("%+v %+v", out, out.Error)
+	}
+	if !ended(t, cwd, id) || isLive(t, cwd, id) || !isLive(t, cwd, newID) {
+		t.Fatal("reopen must not displace the new registration")
 	}
 }
 
