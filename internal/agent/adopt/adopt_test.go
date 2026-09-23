@@ -292,16 +292,17 @@ func TestAdoptAfterHarnessChange(t *testing.T) {
 // which itself scans once.
 func countPrechecks(t *testing.T) *int {
 	t.Helper()
-	n, real := 0, unregistered
-	unregistered = func(s *state.Store, a herdr.AgentDetails) error { n++; return real(s, a) }
-	t.Cleanup(func() { unregistered = real })
+	n, real := 0, registered
+	registered = func(s *state.Store, a herdr.AgentDetails) (*identity.Record, error) { n++; return real(s, a) }
+	t.Cleanup(func() { registered = real })
 	return &n
 }
 
 // Adopting a named agent scans the agent records once, in Register. Renaming
 // an unnamed agent is a Herdr call that cannot run under the store lock, so
-// adopt scans once more beforehand to refuse a registered terminal without
-// renaming it: two scans, a deliberate exception to one scan per adopt.
+// adopt scans once more beforehand to find a record of the terminal to name
+// instead of registering anew: two scans, a deliberate exception to one scan
+// per adopt.
 func TestAdoptScansOnceUnlessItMustRenameFirst(t *testing.T) {
 	t.Setenv("HERDR_SESSION", "dev")
 	n := countPrechecks(t)
@@ -329,21 +330,144 @@ func TestAdoptScansOnceUnlessItMustRenameFirst(t *testing.T) {
 	}
 }
 
-// A registered terminal whose agent lost its name is refused before adopt
-// renames it: the script allows no agent.rename call.
-func TestAdoptRefusesRegisteredTerminalWithoutRenaming(t *testing.T) {
-	t.Setenv("HERDR_SESSION", "dev")
-	c := client(t, call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: agent("w1:p3", nil)})
+// seed stores a live record of the adopt fixture's terminal as registered
+// from pane w1:p9 in workspace w9 with the given name, a parent, and a
+// worktree, and returns it.
+func seed(t *testing.T, c libagent.Client, name *string) identity.Record {
+	t.Helper()
 	s, err := identity.OpenStore(context.Background(), c.Cwd, &libagent.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	existing, err := identity.Register(context.Background(), s, libagent.Client{}, agent("w1:p3", named("worker")).Agent, "adopt", nil)
+	d := agent("w1:p9", name).Agent
+	d.WorkspaceID = "w9"
+	tree := "/repo/.fledge/worktrees/w"
+	rec, err := identity.Register(context.Background(), s, libagent.Client{}, d, "spawn", &tree)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := s.Update(identity.Kind, rec.ID, &rec, func() error { rec.Parent = named("0000beef"); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	return rec
+}
+
+func stored(t *testing.T, c libagent.Client, id string) identity.Record {
+	t.Helper()
+	s, err := identity.Existing(context.Background(), c.Cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids, err := s.List(identity.Kind); err != nil || len(ids) != 1 {
+		t.Fatalf("records %v %v", ids, err)
+	}
+	var rec identity.Record
+	if err := s.Get(identity.Kind, id, &rec); err != nil {
+		t.Fatal(err)
+	}
+	return rec
+}
+
+// A registered terminal whose live agent is unnamed is named through Herdr and
+// keeps its record: the same id, parent, registration, and worktree, with the
+// new name and the pane where it now runs. Whether the record kept a former
+// name does not matter; Herdr's live name decides.
+func TestAdoptNamesRegisteredUnnamedAgentKeepingRecord(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	for label, former := range map[string]*string{"lost name": named("worker"), "never named": nil} {
+		t.Run(label, func(t *testing.T) {
+			c := client(t,
+				call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: agent("w1:p3", nil)},
+				call{Method: "agent.rename", Params: map[string]any{"target": "w1:p3", "name": "helper"}, Result: agent("w1:p3", named("helper"))},
+			)
+			existing := seed(t, c, former)
+			out := Run(context.Background(), c, Options{Pane: "w1:p3", Name: "helper"})
+			if out.Status != "success" || out.Error != nil {
+				t.Fatalf("%+v", out.Error)
+			}
+			want := existing
+			want.Name, want.Pane, want.WorkspaceID = named("helper"), "w1:p3", "w1"
+			r := out.Result.(Result)
+			if !r.Renamed || !reflect.DeepEqual(r.Record, want) {
+				t.Fatalf("%+v", r)
+			}
+			if got := stored(t, c, existing.ID); !reflect.DeepEqual(got, want) {
+				t.Fatalf("%+v", got)
+			}
+			if !reflect.DeepEqual(out.Effects, []libagent.Effect{{Action: "updated", Kind: "agent_name", ID: "w1:p3"}, {Action: "updated", Kind: "agent_record", ID: existing.ID}}) {
+				t.Fatalf("%+v", out.Effects)
+			}
+			var b bytes.Buffer
+			if err := out.Write(&b, false, Render); err != nil || b.String() != "Adopted helper (w1:p3) as "+existing.ID+".\n" {
+				t.Fatalf("%q %v", b.String(), err)
+			}
+		})
+	}
+}
+
+// When naming a registered agent fails, or its outcome is uncertain, the record
+// is left as it was.
+func TestAdoptNamingRegisteredAgentFailures(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	other := agent("w1:p3", named("helper"))
+	other.Agent.TerminalID = "term_b"
+	for label, tc := range map[string]struct {
+		rename call
+		status string
+		code   string
+	}{
+		"name taken":       {call{Method: "agent.rename", Err: &herdr.Error{Code: "agent_name_taken", Message: "taken"}}, "rejected", "agent_name_taken"},
+		"launch pending":   {call{Method: "agent.rename", Err: &herdr.Error{Code: "agent_launch_pending", Message: "pending"}}, "rejected", "agent_launch_pending"},
+		"mismatched reply": {call{Method: "agent.rename", Result: other}, "unknown", "protocol_error"},
+		"uncertain":        {call{Method: "agent.rename", Err: &herdr.Error{Code: "timeout", Message: "slow", Uncertain: true}}, "unknown", "timeout"},
+	} {
+		t.Run(label, func(t *testing.T) {
+			c := client(t, call{Method: "agent.get", Result: agent("w1:p3", nil)}, tc.rename)
+			existing := seed(t, c, named("worker"))
+			out := Run(context.Background(), c, Options{Pane: "w1:p3", Name: "helper"})
+			if out.Status != tc.status || out.Error == nil || out.Error.Code != tc.code || out.Error.Phase != "agent.rename" || len(out.Effects) != 0 {
+				t.Fatalf("%+v %+v", out, out.Error)
+			}
+			if got := stored(t, c, existing.ID); !reflect.DeepEqual(got, existing) {
+				t.Fatalf("%+v", got)
+			}
+		})
+	}
+}
+
+// A record that ends after adopt looked it up but before it stores the new
+// name leaves a partial outcome: Herdr renamed the agent, the record did not
+// change.
+func TestAdoptRenamedButRecordEndedIsPartial(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	var existing identity.Record
+	var c libagent.Client
+	c = client(t,
+		call{Method: "agent.get", Result: agent("w1:p3", nil)},
+		call{Method: "agent.rename", Result: agent("w1:p3", named("helper")), Before: func() {
+			s, err := identity.Existing(context.Background(), c.Cwd)
+			if err == nil {
+				err = identity.End(s, existing.ID)
+			}
+			if err != nil {
+				t.Error(err)
+			}
+		}},
+	)
+	existing = seed(t, c, named("worker"))
 	out := Run(context.Background(), c, Options{Pane: "w1:p3", Name: "helper"})
-	if out.Error == nil || out.Error.Code != "agent_already_registered" || !strings.Contains(out.Error.Message, existing.ID) {
-		t.Fatalf("%+v", out.Error)
+	if out.Status != "partial" || out.Error == nil || out.Error.Code != "agent_identity_stale" || out.Error.Phase != "state" {
+		t.Fatalf("%+v %+v", out, out.Error)
+	}
+	if !reflect.DeepEqual(out.Effects, []libagent.Effect{{Action: "updated", Kind: "agent_name", ID: "w1:p3"}}) {
+		t.Fatalf("%+v", out.Effects)
+	}
+	s, err := identity.Existing(context.Background(), c.Cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got identity.Record
+	if err := s.Get(identity.Kind, existing.ID, &got); err != nil || got.EndedAt == nil || *got.Name != "worker" || got.Pane != "w1:p9" {
+		t.Fatalf("%+v %v", got, err)
 	}
 }
