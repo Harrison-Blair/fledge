@@ -149,7 +149,17 @@ default `30s`; its millisecond value must be greater than 3000 and at most
 
 By default, spawn waits for the launch to settle before returning, so a
 successful spawn reports the settled status (e.g. `idle`) rather than `unknown`.
-`--timeout` covers launch and this wait together. `--no-wait` restores the old
+Settled means ready for input, not just a lifecycle status: Herdr must report
+`interactive_ready`, no pending launch, and `idle` or `done`, since an agent
+such as pi reports `idle` seconds before it accepts a prompt. Spawn polls the
+pane for this with or without a first prompt, and fails `unknown` without
+registering or prompting if a different terminal, name, or harness answers.
+`--timeout` covers launch and this wait together. Herdr's own startup
+reservation is the larger of `--timeout` and 30s: Herdr drops the name of an
+agent whose reservation expires mid-launch, so a short `--timeout` bounds only
+spawn's wait, and a `partial` timeout can still finish launching under its
+name. A launch unfinished when the reservation expires can still lose its name;
+address it by pane. `--no-wait` restores the old
 behavior: return once the launch begins, without waiting for readiness. If the
 agent settles on `blocked` (its own startup dialog, e.g. an update prompt),
 spawn fails with `agent_blocked` and a `partial` outcome (exit 1); the agent
