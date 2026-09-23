@@ -76,6 +76,15 @@ func Render(w io.Writer, o libagent.Outcome) error {
 				_, err := fmt.Fprintln(w, "The first prompt was not submitted.")
 				return err
 			}
+		case "agent.prompt":
+			if o.Status == "unknown" {
+				_, err := fmt.Fprintf(w, "The first prompt may have been submitted. Inspect with: fledge agent read --pane %s before resending it.\n", pane)
+				return err
+			}
+			if o.Error.Code == "timeout" {
+				_, err := fmt.Fprintf(w, "The first prompt was not submitted; resend it with: fledge agent message --pane %s --file <brief> (or --body <text>)\n", pane)
+				return err
+			}
 		}
 		return nil
 	}

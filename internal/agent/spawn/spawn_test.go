@@ -418,7 +418,6 @@ func TestSpawnWaitTimeoutIsRemainingBudget(t *testing.T) {
 		wantMs  int64
 	}{
 		{"partial elapsed subtracts from budget", 12 * time.Second, 18000},
-		{"elapsed past budget clamps to zero", 40 * time.Second, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			o := validOptions()

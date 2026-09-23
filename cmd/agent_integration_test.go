@@ -237,6 +237,74 @@ func TestSpawnShortTimeoutKeepsStartReservation(t *testing.T) {
 	}
 }
 
+// serveLateRPC is serveRPCs, except the reply to request late is written 4s
+// after it arrives, without holding up later requests.
+func serveLateRPC(l net.Listener, late int, results ...any) <-chan []rpcCall {
+	done := make(chan []rpcCall, 1)
+	go func() {
+		var calls []rpcCall
+		for i, result := range results {
+			conn, err := l.Accept()
+			if err != nil {
+				done <- calls
+				return
+			}
+			var req struct {
+				ID     string          `json:"id"`
+				Method string          `json:"method"`
+				Params json.RawMessage `json:"params"`
+			}
+			json.NewDecoder(conn).Decode(&req)
+			calls = append(calls, rpcCall{Method: req.Method, Params: req.Params})
+			reply := func() {
+				json.NewEncoder(conn).Encode(map[string]any{"id": req.ID, "result": result})
+				conn.Close()
+			}
+			if i == late {
+				time.AfterFunc(4*time.Second, reply)
+			} else {
+				reply()
+			}
+		}
+		l.Close()
+		done <- calls
+	}()
+	return done
+}
+
+// TestSpawnTimeoutCutsOffLateReplies proves --timeout bounds spawn on the
+// socket: a late readiness poll ends it partial with the prompt unsent, and a
+// late prompt acknowledgement ends it unknown, each at the deadline.
+func TestSpawnTimeoutCutsOffLateReplies(t *testing.T) {
+	pending := readyAs("claude").(map[string]any)
+	delete(pending["agent"].(map[string]any), "interactive_ready")
+	for _, tc := range []struct {
+		name    string
+		results []any
+		status  string
+		hint    string
+	}{
+		{"readiness poll", []any{snapshotResult(), startedResult("claude"), pending, readyAs("claude")}, "partial", "The first prompt was not submitted"},
+		{"prompt ack", []any{snapshotResult(), startedResult("claude"), readyAs("claude"), promptedResult()}, "unknown", "may have been submitted"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HERDR_PANE_ID", "")
+			l := newSocket(t)
+			done := serveLateRPC(l, len(tc.results)-1, tc.results...)
+			var out bytes.Buffer
+			begin := time.Now()
+			err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "w1:p1", "--timeout", "3001ms", "--prompt", "late"}, &out)
+			if elapsed := time.Since(begin); ExitCode(err) != 1 || elapsed > 3800*time.Millisecond {
+				t.Fatalf("exit %d after %v: %s", ExitCode(err), elapsed, out.String())
+			}
+			waitCalls(t, l, done, len(tc.results))
+			if s := out.String(); !strings.HasPrefix(s, tc.status+":") || !strings.Contains(s, tc.hint) {
+				t.Fatalf("%q", s)
+			}
+		})
+	}
+}
+
 // TestSpawnFileFlagPathReachesAgentPrompt proves --file <path> is wired
 // (FileSet) end to end: the file's exact text reaches agent.prompt.
 func TestSpawnFileFlagPathReachesAgentPrompt(t *testing.T) {
