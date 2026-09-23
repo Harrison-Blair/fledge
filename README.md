@@ -682,9 +682,10 @@ fledge task get --id 1a2b3c4d
 
 A task moves `created` → `assigned` → `completed` → `verified`; `task cancel
 [--reason TEXT]` ends a `created`, `assigned`, or `completed` task as
-`cancelled`. A verified task can only be verified again (see `verify` below),
-cancelled tasks are final, and other out-of-order transitions fail with
-`task_invalid_state`. There are no progress updates within
+`cancelled`. A `created` or `assigned` parent can also go straight to
+`verified` once its subtasks are finished (see `verify` below). A verified task
+can only be verified again, cancelled tasks are final, and other out-of-order
+transitions fail with `task_invalid_state`. There are no progress updates within
 a task and no recorded checks.
 
 A task can be a **subtask** of a parent and can run **after** prerequisite tasks.
@@ -699,7 +700,8 @@ its subtasks, and a subtask is not a prerequisite of its parent.
   `, 1 cancelled` when any were cancelled: cancelled subtasks are shown but not
   counted toward the total. `verify` refuses a parent whose direct subtasks are
   not all verified or cancelled with `task_open_subtasks`; `--force` verifies
-  it anyway, records `forced: true`, and lists the open subtasks. Cancelling a
+  a completed parent anyway, records `forced: true`, and lists the open
+  subtasks. Cancelling a
   parent leaves its subtasks unchanged.
 - **Dependencies.** A prerequisite is satisfied once it is `verified`. A
   `cancelled` prerequisite also counts as satisfied but stays on its dependents
@@ -755,6 +757,13 @@ its subtasks, and a subtask is not a prerequisite of its parent.
   verification is kept, and the result, completion, and owner are unchanged.
   Verification is not tied to a Git revision, so name the checked commit in
   `--summary` when it matters.
+  A `created` or `assigned` task that groups subtasks can be verified without
+  being completed once every direct subtask is `verified` or `cancelled` and at
+  least one is `verified`, with the same caller checks; its owner, if any, is
+  unchanged and not notified. Such a task with open subtasks is refused with
+  `task_open_subtasks`, naming them; one whose subtasks were all cancelled, or
+  that has no subtasks, is refused with `task_invalid_state` (cancel the
+  former instead). `--force` never overrides these state checks.
 - `list [--status STATE] [--owner AGENT_ID] [--parent TASK] [--ready]` prints
   ID, status, owner (the agent's name while its record is live, otherwise its
   ID), parent, waiting (unmet prerequisites), subtask progress, and title,
