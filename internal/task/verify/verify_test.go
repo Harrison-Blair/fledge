@@ -266,3 +266,88 @@ func TestRepeatAfterForcedAcceptanceStillChecksOpenSubtasks(t *testing.T) {
 		t.Fatalf("%+v", out.Error)
 	}
 }
+
+// parent seeds a grouping parent in status, owned by worker when assigned,
+// with one direct subtask per status in children, and registers boss.
+func parent(t *testing.T, status string, children ...string) (repo, id string, subtasks []string) {
+	repo = identitytest.Repository(t)
+	owner := tasktest.Register(t, repo, worker)
+	tasktest.Register(t, repo, boss)
+	r := task.Record{Title: "goal", Status: status}
+	if status == task.Assigned {
+		r.Owner = &owner.ID
+	}
+	id = tasktest.Seed(t, repo, r)
+	for _, c := range children {
+		subtasks = append(subtasks, tasktest.Seed(t, repo, task.Record{Title: c, Status: c, Parent: &id}))
+	}
+	return repo, id, subtasks
+}
+
+func TestFinishedParentVerifiesFromCreatedOrAssigned(t *testing.T) {
+	for _, tc := range []struct {
+		status   string
+		children []string
+	}{
+		{task.Created, []string{task.Verified, task.Verified}},
+		{task.Assigned, []string{task.Verified, task.Verified}},
+		{task.Created, []string{task.Verified, task.Cancelled}},
+		{task.Assigned, []string{task.Cancelled, task.Verified}},
+	} {
+		t.Run(tc.status+"/"+strings.Join(tc.children, ","), func(t *testing.T) {
+			repo, id, _ := parent(t, tc.status, tc.children...)
+			before := tasktest.Load(t, repo, id)
+			out := Run(context.Background(), tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p1", boss)), Options{ID: id, Summary: "all done", SummarySet: true}, strings.NewReader(""))
+			r := tasktest.Load(t, repo, id)
+			if out.Error != nil || r.Verifier == nil || r.VerifiedAt == nil {
+				t.Fatalf("%+v %+v", out.Error, r)
+			}
+			want := before
+			want.Status, want.Verifier, want.VerificationNote, want.VerifiedAt = task.Verified, r.Verifier, tasktest.Ptr("all done"), r.VerifiedAt
+			if !reflect.DeepEqual(r, want) || !reflect.DeepEqual(out.Result, Result{Record: r, OpenSubtasks: []string{}}) {
+				t.Fatalf("got %+v\nwant %+v", r, want)
+			}
+		})
+	}
+}
+
+func TestParentWithOnlyCancelledSubtasksIsRefused(t *testing.T) {
+	for _, status := range []string{task.Created, task.Assigned} {
+		repo, id, _ := parent(t, status, task.Cancelled, task.Cancelled)
+		before := tasktest.Load(t, repo, id)
+		for _, force := range []bool{false, true} {
+			out := Run(context.Background(), tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p1", boss)), Options{ID: id, Force: force}, strings.NewReader(""))
+			if out.Error == nil || out.Error.Code != "task_invalid_state" || !strings.Contains(out.Error.Message, "fledge task cancel") || !reflect.DeepEqual(tasktest.Load(t, repo, id), before) {
+				t.Fatalf("%s force=%v: %+v", status, force, out.Error)
+			}
+		}
+	}
+}
+
+func TestUnfinishedParentIsRefusedEvenWithForce(t *testing.T) {
+	for _, status := range []string{task.Created, task.Assigned} {
+		repo, id, subtasks := parent(t, status, task.Verified, task.Completed)
+		before := tasktest.Load(t, repo, id)
+		for _, force := range []bool{false, true} {
+			out := Run(context.Background(), tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p1", boss)), Options{ID: id, Force: force}, strings.NewReader(""))
+			if out.Error == nil || out.Error.Code != "task_open_subtasks" || !strings.Contains(out.Error.Message, subtasks[1]) || strings.Contains(out.Error.Message, subtasks[0]) || strings.Contains(out.Error.Message, "--force") || !reflect.DeepEqual(tasktest.Load(t, repo, id), before) {
+				t.Fatalf("%s force=%v: %+v", status, force, out.Error)
+			}
+		}
+	}
+}
+
+func TestAssignedParentOwnerNeedsForce(t *testing.T) {
+	repo, id, _ := parent(t, task.Assigned, task.Verified)
+	before := tasktest.Load(t, repo, id)
+	c := func() libagent.Client { return tasktest.Client(t, repo, "w1:p3", tasktest.Get("w1:p3", worker)) }
+	out := Run(context.Background(), c(), Options{ID: id}, strings.NewReader(""))
+	if out.Error == nil || out.Error.Code != "task_self_verification" || !reflect.DeepEqual(tasktest.Load(t, repo, id), before) {
+		t.Fatalf("%+v", out.Error)
+	}
+	out = Run(context.Background(), c(), Options{ID: id, Force: true}, strings.NewReader(""))
+	r := tasktest.Load(t, repo, id)
+	if out.Error != nil || r.Status != task.Verified || !r.Forced || *r.Verifier != *before.Owner {
+		t.Fatalf("%+v %+v", out.Error, r)
+	}
+}
