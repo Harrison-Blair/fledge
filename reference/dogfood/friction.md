@@ -754,3 +754,24 @@ first-class permission-mode option.
 **Reproduction steps:**
 1. Spawn a Claude agent in auto mode and have it run `fledge agent stop --name <another agent> --force`.
 2. Observe the classifier denial, then denials of unrelated follow-up commands.
+
+---
+
+**Issue:** An interrupted `agent spawn` can leave a live agent with no Fledge record
+
+**Summary:** On 2026-09-23 an orchestrator ran a loop of three
+`fledge agent spawn --harness claude --worktree new --branch <b> --base dev ...`
+commands. The user interrupted the tool call. All three agents still started in
+new worktrees. The third, `impl-d`, had a live Herdr name but no Fledge record:
+`fledge agent list` showed ID `-` and `worktree list` showed OWNER `-`. The
+likely cause is that the interruption landed between agent start and
+registration; this is not confirmed. Workaround: `fledge agent adopt --pane
+<pane> --name <name>` registered it (as `dbf053f3`). That record has no
+worktree association, because adopt does not record one. A later `spawn` with
+the same names was rejected with "agent name ... is already in use
+(preflight)", which showed that the agents existed.
+
+**Reproduction steps:**
+1. Run `fledge agent spawn --harness claude --worktree new --branch <b> --base dev ...`.
+2. Interrupt the fledge process (SIGINT) after the agent starts but before spawn prints its result.
+3. Run `fledge agent list` and look for the missing ID.
