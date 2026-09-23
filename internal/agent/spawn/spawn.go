@@ -149,13 +149,7 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 	result.Argv = r.Argv
 	out.Effects = append(out.Effects, libagent.Effect{Action: "started", Kind: "agent", ID: r.Agent.PaneID})
 	if o.NoWait {
-		// agent.start precedes harness detection; record the requested harness
-		// so a different harness later in this terminal is not attributed to it.
-		a := r.Agent
-		if a.Agent == nil {
-			a.Agent = &o.Harness
-		}
-		s.register(ctx, a, &out)
+		s.register(ctx, withHarness(r.Agent, o.Harness), &out)
 		return out
 	}
 
@@ -172,7 +166,7 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 	setPlacement(result, w.Agent.Pane)
 	result.DetectedHarness = w.Agent.Agent
 	result.AgentStatus = libagent.Pointer(w.Agent.AgentStatus)
-	s.register(ctx, w.Agent, &out)
+	s.register(ctx, withHarness(w.Agent, o.Harness), &out)
 	if w.Agent.AgentStatus == "blocked" {
 		out.Fail(&herdr.Error{Code: "agent_blocked", Message: fmt.Sprintf("agent %s is waiting on a startup prompt", o.Name)}, "agent.wait", true)
 		return out

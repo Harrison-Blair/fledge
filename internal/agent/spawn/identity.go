@@ -25,3 +25,13 @@ func (s *spawner) register(ctx context.Context, a herdr.AgentDetails, out *libag
 	result.ID, result.Registered = &rec.ID, true
 	out.Effects = append(out.Effects, libagent.Effect{Action: "created", Kind: "agent_record", ID: rec.ID})
 }
+
+// withHarness returns a with the requested harness when Herdr has not
+// classified the agent yet, as after agent.start or an early agent.wait, so a
+// different harness later in this terminal is not attributed to its record.
+func withHarness(a herdr.AgentDetails, harness string) herdr.AgentDetails {
+	if a.Agent == nil {
+		a.Agent = &harness
+	}
+	return a
+}

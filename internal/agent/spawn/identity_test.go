@@ -113,6 +113,31 @@ func TestSpawnNoWaitRecordsRequestedHarness(t *testing.T) {
 	}
 }
 
+func TestSpawnWaitRecordsRequestedHarnessWhenUnclassified(t *testing.T) {
+	// agent.wait can settle before Herdr classifies the agent; the record must
+	// still carry the requested harness.
+	o := validOptions()
+	o.Pane = "w1:p1"
+	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
+	wait := waitCall("worker", p, "idle")
+	if wait.Result.(herdr.AgentResult).Agent.Agent != nil {
+		t.Fatal("fixture must model an unclassified agent")
+	}
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p)}, wait, callerNotAgent())
+	s.Cwd = identitytest.Repository(t)
+	out := s.run(context.Background(), o, nil)
+	r := out.Result.(*Result)
+	if out.Status != "success" || !r.Registered {
+		t.Fatalf("%+v %+v", out, r)
+	}
+	if rec := stored(t, s.Cwd, *r.ID); rec.Harness == nil || *rec.Harness != "claude" {
+		t.Fatalf("harness = %v, want claude", rec.Harness)
+	}
+	if r.DetectedHarness != nil {
+		t.Fatalf("detected harness = %q, want none", *r.DetectedHarness)
+	}
+}
+
 func TestSpawnRegistersBeforeFirstPrompt(t *testing.T) {
 	o := validOptions()
 	o.Pane = "w1:p1"
