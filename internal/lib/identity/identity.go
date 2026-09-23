@@ -103,7 +103,7 @@ func Register(ctx context.Context, s *state.Store, c libagent.Client, details he
 			if !Mismatched(existing, details) {
 				return alreadyRegistered(details, existing)
 			}
-			if err := end(tx, existing.ID); err != nil {
+			if _, err := end(tx, existing.ID); err != nil {
 				return err
 			}
 		}
@@ -125,7 +125,8 @@ func Register(ctx context.Context, s *state.Store, c libagent.Client, details he
 // different harness.
 func attach(tx *state.Tx, rec Record, caller herdr.AgentDetails) (*string, error) {
 	if Mismatched(rec, caller) {
-		return nil, end(tx, rec.ID)
+		_, err := end(tx, rec.ID)
+		return nil, err
 	}
 	if err := relocate(tx, &rec, caller); err != nil {
 		return nil, err
@@ -246,22 +247,75 @@ func relocate(tx *state.Tx, rec *Record, a herdr.AgentDetails) error {
 // scans for live agents no longer read it; it stays loadable by id. An already
 // ended record keeps its original time.
 func End(s *state.Store, id string) error {
-	return s.Exclusive(func(tx *state.Tx) error { return end(tx, id) })
+	_, err := EndOnce(s, id)
+	return err
 }
 
-func end(tx *state.Tx, id string) error {
+// EndOnce is End that also reports whether this call ended the record: false
+// when it had already ended. A caller that must roll back its own end passes
+// only a record it ended to Reopen, so it never undoes another caller's end.
+func EndOnce(s *state.Store, id string) (bool, error) {
+	var ended bool
+	err := s.Exclusive(func(tx *state.Tx) error {
+		var err error
+		ended, err = end(tx, id)
+		return err
+	})
+	return ended, err
+}
+
+func end(tx *state.Tx, id string) (bool, error) {
 	var rec Record
 	if err := tx.Get(Kind, id, &rec); err != nil {
-		return err
+		return false, err
 	}
-	if rec.EndedAt == nil {
+	ended := rec.EndedAt == nil
+	if ended {
 		now := time.Now().UTC().Format(time.RFC3339)
 		rec.EndedAt = &now
 		if err := tx.Put(Kind, id, rec); err != nil {
-			return err
+			return false, err
 		}
 	}
-	return tx.Archive(Kind, id)
+	return ended, tx.Archive(Kind, id)
+}
+
+// Reopen undoes the end of record id under one store lock: it returns the
+// record from the archive to the live records and clears ended_at. It refuses
+// with agent_already_registered, naming the other record and changing nothing,
+// when another live record in the current Herdr session now holds the
+// terminal. An unknown id fails with agent_record_not_found. A record that has
+// not ended is left as is without error; that is the only no-op.
+func Reopen(s *state.Store, id string) error {
+	if !state.ValidID(id) {
+		return libagent.Invalid("--id must be 8 lowercase hexadecimal characters")
+	}
+	return s.Exclusive(func(tx *state.Tx) error {
+		var rec Record
+		var missing *state.NotFoundError
+		if err := tx.Get(Kind, id, &rec); errors.As(err, &missing) {
+			return &herdr.Error{Code: "agent_record_not_found", Message: fmt.Sprintf("no agent record with id %s", id)}
+		} else if err != nil {
+			return err
+		}
+		if rec.EndedAt == nil {
+			return nil
+		}
+		records, err := live(tx)
+		if err != nil {
+			return err
+		}
+		if other, ok := records[rec.TerminalID]; ok {
+			return &herdr.Error{Code: "agent_already_registered", Message: fmt.Sprintf("cannot reopen agent record %s: terminal %s is registered as %s", id, rec.TerminalID, other.ID)}
+		}
+		// Unarchive first: interrupted here, the record is live but ended,
+		// which the next scan under the lock archives again.
+		if err := tx.Unarchive(Kind, id); err != nil {
+			return err
+		}
+		rec.EndedAt = nil
+		return tx.Put(Kind, id, rec)
+	})
 }
 
 // Match returns the live record of a's terminal, or nil when none exists. A

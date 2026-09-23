@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -788,6 +789,117 @@ func TestLegacyEndedRecordIsArchivedUnderTheLock(t *testing.T) {
 		t.Fatalf("%+v %v", stored, err)
 	}
 	if live, err := Live(s, "term_a"); err != nil || live == nil || live.ID != rec.ID {
+		t.Fatalf("%+v %v", live, err)
+	}
+}
+
+func TestEndOnceReportsWhetherThisCallEnded(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t)
+	s := store(t, c)
+	rec := registered(t, c, details("w1:p3", "term_a"))
+	for i, want := range []bool{true, false} {
+		ended, err := EndOnce(s, rec.ID)
+		if err != nil || ended != want {
+			t.Fatalf("call %d: ended %v, %v; want %v", i, ended, err, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(c.Cwd, ".fledge", "state", Kind, "archive", rec.ID+".json")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReopenReturnsEndedRecordToLiveScans(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t)
+	s := store(t, c)
+	rec := registered(t, c, details("w1:p3", "term_a"))
+	if _, err := EndOnce(s, rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := Reopen(s, rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	if live, err := LiveByTerminal(s); err != nil || live["term_a"].ID != rec.ID {
+		t.Fatalf("%+v %v", live, err)
+	}
+	agents := filepath.Join(c.Cwd, ".fledge", "state", Kind)
+	if _, err := os.Stat(filepath.Join(agents, rec.ID+".json")); err != nil {
+		t.Fatalf("reopened record not live: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(agents, "archive", rec.ID+".json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("reopened record still archived: %v", err)
+	}
+	if ended(t, s, rec.ID) {
+		t.Fatal("reopened record still ended")
+	}
+}
+
+func TestReopenRefusesTerminalRegisteredAgain(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t)
+	s := store(t, c)
+	old := registered(t, c, details("w1:p3", "term_a"))
+	if _, err := EndOnce(s, old.ID); err != nil {
+		t.Fatal(err)
+	}
+	now := registered(t, c, details("w1:p3", "term_a"))
+	err := Reopen(s, old.ID)
+	if code(err) != "agent_already_registered" || !strings.Contains(err.Error(), now.ID) {
+		t.Fatalf("%v", err)
+	}
+	if !ended(t, s, old.ID) {
+		t.Fatal("refused Reopen un-ended the record")
+	}
+	if live, err := LiveByTerminal(s); err != nil || live["term_a"].ID != now.ID {
+		t.Fatalf("%+v %v", live, err)
+	}
+	if ids, err := s.List(Kind); err != nil || len(ids) != 1 || ids[0] != now.ID {
+		t.Fatalf("refused Reopen left %v %v in the live folder", ids, err)
+	}
+}
+
+func TestReopenOfLiveRecordIsNoop(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t)
+	s := store(t, c)
+	rec := registered(t, c, details("w1:p3", "term_a"))
+	if err := Reopen(s, rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	var stored Record
+	if err := s.Get(Kind, rec.ID, &stored); err != nil || !reflect.DeepEqual(stored, rec) {
+		t.Fatalf("%+v %v", stored, err)
+	}
+}
+
+func TestReopenUnknownOrInvalidRecord(t *testing.T) {
+	c := client(t)
+	s := store(t, c)
+	if err := Reopen(s, "0123abcd"); code(err) != "agent_record_not_found" {
+		t.Fatalf("%v", err)
+	}
+	var input *libagent.InputError
+	if err := Reopen(s, "nope"); !errors.As(err, &input) {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestReopenLegacyEndedRecordInLiveFolder(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t)
+	s := store(t, c)
+	at, dev := "2026-01-01T00:00:00Z", "dev"
+	id, err := s.Create(Kind, func(id string) any {
+		return Record{ID: id, Pane: "w1:p3", TerminalID: "term_a", Session: &dev, EndedAt: &at}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Reopen(s, id); err != nil {
+		t.Fatal(err)
+	}
+	if live, err := LiveByTerminal(s); err != nil || live["term_a"].ID != id {
 		t.Fatalf("%+v %v", live, err)
 	}
 }
