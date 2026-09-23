@@ -26,9 +26,9 @@ A checked item means its main capability is implemented; accompanying notes reco
 
 3. [x] **Wait for agents.** An `agent wait` command with timeouts, specific states, and "any worker" or "all workers" options. This removes repeated manual polling.
 
-   **Implemented:** [f4eb51c](https://github.com/Harrison-Blair/fledge/commit/f4eb51c1151a12beaa061dc2a5ccb374b56d8a5e) · **Author:** Harrison-Blair · **Author date:** 2026-09-22
+   **Implemented:** [f4eb51c](https://github.com/Harrison-Blair/fledge/commit/f4eb51c1151a12beaa061dc2a5ccb374b56d8a5e) (`--any` progress lines added in [2fc07cd](https://github.com/Harrison-Blair/fledge/commit/2fc07cd56a6a90d6c1950a150b33e831f3d393ed), 2026-09-23) · **Author:** Harrison-Blair · **Author date:** 2026-09-22
 
-   **Implementation decisions and remaining gaps:** `agent wait` blocks until agents reach a lifecycle state. Repeatable `--until` chooses among `idle`, `working`, `blocked`, `done`, and `unknown` (default: `idle`/`done`/`blocked`); `--timeout` bounds the wait, otherwise it is indefinite. `--name`/`--pane` are repeatable and mixable; a single target waits directly, two or more require `--all` or `--any`. A settled state means the agent's turn ended, not that its assigned work succeeded. [Current behavior](../../README.md#agents)
+   **Implementation decisions and remaining gaps:** `agent wait` blocks until agents reach a lifecycle state. Repeatable `--until` chooses among `idle`, `working`, `blocked`, `done`, and `unknown` (default: `idle`/`done`/`blocked`); `--timeout` bounds the wait, otherwise it is indefinite. `--name`/`--pane` are repeatable and mixable; a single target waits directly, two or more require `--all` or `--any`. With `--any`, a target that fails (for example `agent_not_running` after its pane is closed) while others are still waited on is reported at once as one stderr line, such as `b failed: ... (still waiting on 1 target).`; JSON output stays a single final outcome. A settled state means the agent's turn ended, not that its assigned work succeeded. [Current behavior](../../README.md#agents)
 
 4. [ ] **Watch activity as it happens.** An event stream for agent starts, state changes, exits, and blockers, with readable output for people and streaming JSON for automation.
 
@@ -46,13 +46,13 @@ A checked item means its main capability is implemented; accompanying notes reco
 
 7. [ ] **Verify task results.** Associate checks with a task and record their actual outcomes. Distinguish "worker reported complete" from "verification passed" and "review accepted."
 
-   **Existing support:** `task verify --id TASK [--summary TEXT]` requires a `completed` task and a registered caller other than the owner, moving it to `verified` and so distinguishing that from merely `completed`. `--force` overrides both checks and records `forced: true`. There are no recorded checks, so associating specific checks with a task and recording their individual outcomes remains open.
+   **Existing support:** `task verify --id TASK [--summary TEXT]` requires a `completed` task and a registered caller other than the owner, moving it to `verified` and so distinguishing that from merely `completed`. It can be repeated on a `verified` task, for example after repairs; the latest verification replaces the earlier one. `--force` overrides both checks and records `forced: true`. There are no recorded checks, so associating specific checks with a task and recording their individual outcomes remains open.
 
 8. [x] **Launch with an assignment.** One operation to start an agent and deliver its task, reporting which steps succeeded if launch or delivery fails.
 
-   **Implemented:** [180abb1](https://github.com/Harrison-Blair/fledge/commit/180abb1b6b23fb29b55f240855fbc752e27abcf6) · **Author:** Harrison-Blair · **Author date:** 2026-09-19
+   **Implemented:** [180abb1](https://github.com/Harrison-Blair/fledge/commit/180abb1b6b23fb29b55f240855fbc752e27abcf6) (readiness gate, start reservation, and shared budget added in [124d096](https://github.com/Harrison-Blair/fledge/commit/124d09666ef7c9d8753f34907f3bf57a9d0d9461), [ff3ce2d](https://github.com/Harrison-Blair/fledge/commit/ff3ce2dab35aec4140f09c53bb5cb2a6693fd246), and [f985675](https://github.com/Harrison-Blair/fledge/commit/f985675d5d1d495dac314bc736cd11b5e8bf8ace), 2026-09-23) · **Author:** Harrison-Blair · **Author date:** 2026-09-19
 
-   **Implementation decisions and remaining gaps:** `agent spawn --prompt TEXT` or `--file PATH|-` submits the first prompt after readiness. Input is validated before resources are created, and these flags cannot be combined with `--no-wait`. Outcomes report the failing phase and known resource effects if launch or delivery fails. Success confirms prompt submission, not completion of the assigned work; durable task tracking and result verification remain separate ideas. [Current behavior](../../README.md#agents)
+   **Implementation decisions and remaining gaps:** `agent spawn --prompt TEXT` or `--file PATH|-` submits the first prompt after readiness: Herdr must report `interactive_ready`, no pending launch, and `idle` or `done`, because pi reports `idle` seconds before it accepts a prompt. `--timeout` is one budget from launch through the first prompt, and no prompt is sent after its deadline; Herdr's start reservation is the larger of `--timeout` and 30s, so a short `--timeout` no longer drops the agent's name mid-launch. Input is validated before resources are created, and these flags cannot be combined with `--no-wait`. Outcomes report the failing phase and known resource effects if launch or delivery fails. Success confirms prompt submission, not completion of the assigned work; durable task tracking and result verification remain separate ideas. Remaining gap: registration's local state lock and record write cannot be interrupted, so spawn can overrun `--timeout` while another Fledge process holds the lock. [Current behavior](../../README.md#agents)
 
 9. [ ] **Show everything needing attention.** A single queue of approval dialogs, unanswered questions, failed checks, and stalled assignments, each linked to the relevant agent.
 
@@ -136,7 +136,7 @@ A checked item means its main capability is implemented; accompanying notes reco
 
     **Implemented:** [75ec269](https://github.com/Harrison-Blair/fledge/commit/75ec26936e8eb964f16dbe627db028d6f493cca3) · **Author:** Harrison-Blair · **Author date:** 2026-09-22
 
-    **Implementation decisions and remaining gaps:** `agent adopt` registers an already-running agent in the caller's own pane, or in `--pane`; an unnamed agent needs `--name` (a named agent keeps its name, and a different `--name` is refused), and a terminal that already has a live record is refused with `agent_already_registered`. Adoption gives the agent a Fledge identity but does not itself deliver an assignment; use `agent message` or `task assign` afterward. [Current behavior](../../README.md#identity)
+    **Implementation decisions and remaining gaps:** `agent adopt` registers an already-running agent in the caller's own pane, or in `--pane`; an unnamed agent needs `--name` (a named agent keeps its name, and a different `--name` is refused), and a named agent whose terminal already has a live record is refused with `agent_already_registered`. An unnamed agent whose terminal already has a live record, such as one whose Herdr name was lost, is named through Herdr and keeps that record's ID. Adoption gives the agent a Fledge identity but does not itself deliver an assignment; use `agent message` or `task assign` afterward. [Current behavior](../../README.md#identity)
 
 31. [ ] **Resume native conversations.** Preserve harness session references and expose resume operations where supported, with clear capability reporting.
 
@@ -161,6 +161,8 @@ A checked item means its main capability is implemented; accompanying notes reco
 40. [ ] **A durable agent mailbox.** Preserve messages until they are consumed, including messages sent while the recipient is restarting or temporarily unavailable.
 
 41. [ ] **Meaningful delivery states.** Distinguish queued, submitted to the harness, acknowledged by the worker, and answered—where each can actually be observed.
+
+    **Existing support:** `agent message --confirm` ([8dc6b66](https://github.com/Harrison-Blair/fledge/commit/8dc6b6635e175e3c44c8001d0593a700e9095f15)) waits, up to `--timeout`, for Herdr to observe the agent become active after submission and reports `confirmed`; a post-submission `blocked` or stall is `partial` with a `submitted` effect, and a wait timeout or lost acknowledgement is `unknown`. Herdr tracks lifecycle state, not individual prompts, so a target already working reports `already_working` without confirming this prompt's start. Without per-prompt correlation, queued, acknowledged, and answered states remain open.
 
 42. [ ] **Messages linked to tasks and requests.** Make every reply attributable to the question or assignment it answers.
 
