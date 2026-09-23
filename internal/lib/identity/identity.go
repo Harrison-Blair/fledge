@@ -24,7 +24,8 @@ import (
 const Kind = "agents"
 
 // Record is one registered agent. EndedAt stays null until agent stop closes
-// its pane or a lookup observes its terminal gone; records are never deleted.
+// its pane or a lookup observes its terminal gone; the record then moves to the
+// store's archive. Records are never deleted.
 type Record struct {
 	ID           string  `json:"id"`
 	Name         *string `json:"name"`
@@ -70,35 +71,45 @@ func Existing(ctx context.Context, cwd string) (*state.Store, error) {
 
 // Register records details as a new agent. The parent is the caller's live
 // record when the caller's pane hosts a registered terminal; otherwise null.
-// Herdr lookups happen first; the store lock then covers only the check for an
-// existing live record of the terminal and the create, so concurrent
-// registrations of one terminal yield exactly one record and the others fail
-// with agent_already_registered naming it. A live record of the terminal left
-// by a different harness ends first.
+// Herdr lookups happen first; one store lock then covers a single scan of the
+// records, the caller's relocation, the check for a live record of the
+// terminal, and the create, so concurrent registrations of one terminal yield
+// exactly one live record and the others fail with agent_already_registered
+// naming it. A live record of the terminal left by a different harness ends
+// under the same lock.
 func Register(ctx context.Context, s *state.Store, c libagent.Client, details herdr.AgentDetails, by string, worktree *string) (Record, error) {
 	if details.TerminalID == "" || details.PaneID == "" {
 		return Record{}, fmt.Errorf("cannot register an agent without a pane and terminal id")
 	}
-	parent, err := Caller(ctx, s, c)
+	caller, err := callerAgent(ctx, c)
 	if err != nil {
 		return Record{}, err
 	}
-	// End a different harness's record now: Unregistered, under the lock,
-	// cannot write it.
-	if _, err := Match(s, details); err != nil {
-		return Record{}, err
-	}
 	var rec Record
-	err = s.Exclusive(func() error {
-		if err := Unregistered(s, details); err != nil {
+	err = s.Exclusive(func(tx *state.Tx) error {
+		records, err := live(tx)
+		if err != nil {
 			return err
 		}
-		_, err := s.Create(Kind, func(id string) any {
-			rec = Record{ID: id, Name: details.Name, Pane: details.PaneID, WorkspaceID: details.WorkspaceID, Harness: details.Agent,
-				Session: session(), TerminalID: details.TerminalID, RegisteredAt: time.Now().UTC().Format(time.RFC3339), RegisteredBy: by, WorktreePath: worktree}
-			if parent != nil {
-				rec.Parent = &parent.ID
+		var parent *string
+		if caller != nil {
+			if p, ok := records[caller.TerminalID]; ok {
+				if parent, err = attach(tx, p, *caller); err != nil {
+					return err
+				}
 			}
+		}
+		if existing, ok := records[details.TerminalID]; ok {
+			if !Mismatched(existing, details) {
+				return alreadyRegistered(details, existing)
+			}
+			if _, err := end(tx, existing.ID); err != nil {
+				return err
+			}
+		}
+		_, err = tx.Create(Kind, func(id string) any {
+			rec = Record{ID: id, Name: details.Name, Pane: details.PaneID, WorkspaceID: details.WorkspaceID, Harness: details.Agent,
+				Session: session(), TerminalID: details.TerminalID, RegisteredAt: time.Now().UTC().Format(time.RFC3339), RegisteredBy: by, WorktreePath: worktree, Parent: parent}
 			return rec
 		})
 		return err
@@ -109,26 +120,73 @@ func Register(ctx context.Context, s *state.Store, c libagent.Client, details he
 	return rec, nil
 }
 
+// attach returns the id of rec, the caller's live record, after pointing it at
+// the caller's current pane, or nil after ending it when the caller now runs a
+// different harness.
+func attach(tx *state.Tx, rec Record, caller herdr.AgentDetails) (*string, error) {
+	if Mismatched(rec, caller) {
+		_, err := end(tx, rec.ID)
+		return nil, err
+	}
+	if err := relocate(tx, &rec, caller); err != nil {
+		return nil, err
+	}
+	return &rec.ID, nil
+}
+
+// live is liveRecords under the store lock, which also archives the ended
+// records it finds among the live ones.
+func live(tx *state.Tx) (map[string]Record, error) {
+	records, ended, err := scan(tx)
+	for _, id := range ended {
+		if err == nil {
+			err = tx.Archive(Kind, id)
+		}
+	}
+	return records, err
+}
+
 // Unregistered fails with agent_already_registered, naming the existing id,
-// when a's terminal already has a live record of a's harness. It only reads,
-// so it may run under the store lock. It tolerates a record left by a
-// different harness because Register ends that record via Match before taking
-// the lock; ending it under s.Exclusive would self-deadlock on the store flock.
+// when a's terminal already has a live record of a's harness. It lets callers
+// refuse before acting; Register repeats the check under the store lock and
+// ends a record left by a different harness, which Unregistered tolerates.
 func Unregistered(s *state.Store, a herdr.AgentDetails) error {
 	existing, err := Live(s, a.TerminalID)
 	if err != nil {
 		return err
 	}
 	if existing != nil && !Mismatched(*existing, a) {
-		return &herdr.Error{Code: "agent_already_registered", Message: fmt.Sprintf("the agent in %s is already registered as %s", a.PaneID, existing.ID)}
+		return alreadyRegistered(a, *existing)
 	}
 	return nil
+}
+
+func alreadyRegistered(a herdr.AgentDetails, existing Record) error {
+	return &herdr.Error{Code: "agent_already_registered", Message: fmt.Sprintf("the agent in %s is already registered as %s", a.PaneID, existing.ID)}
 }
 
 // Caller finds the live record of the agent in the caller's pane, if any. A
 // caller outside Herdr, or whose pane hosts no agent, has none; any other
 // lookup failure is returned.
 func Caller(ctx context.Context, s *state.Store, c libagent.Client) (*Record, error) {
+	caller, err := callerAgent(ctx, c)
+	if err != nil || caller == nil {
+		return nil, err
+	}
+	rec, err := Match(s, *caller)
+	if err != nil || rec == nil {
+		return nil, err
+	}
+	moved, err := Relocate(s, *rec, *caller)
+	if err != nil {
+		return nil, err
+	}
+	return &moved, nil
+}
+
+// callerAgent fetches the agent in the caller's pane, or nil for a caller
+// outside Herdr or whose pane hosts no agent.
+func callerAgent(ctx context.Context, c libagent.Client) (*herdr.AgentDetails, error) {
 	if c.CallerPane == "" {
 		return nil, nil
 	}
@@ -140,15 +198,7 @@ func Caller(ctx context.Context, s *state.Store, c libagent.Client) (*Record, er
 	if err != nil {
 		return nil, err
 	}
-	rec, err := Match(s, caller)
-	if err != nil || rec == nil {
-		return nil, err
-	}
-	moved, err := Relocate(s, *rec, caller)
-	if err != nil {
-		return nil, err
-	}
-	return &moved, nil
+	return &caller, nil
 }
 
 // RequireCaller is Caller for commands that act on the caller's own record:
@@ -176,26 +226,99 @@ func Relocate(s *state.Store, rec Record, a herdr.AgentDetails) (Record, error) 
 	if rec.Pane == a.PaneID && rec.WorkspaceID == a.WorkspaceID {
 		return rec, nil
 	}
-	err := s.Update(Kind, rec.ID, &rec, func() error {
-		if rec.EndedAt != nil {
-			return stale(rec.ID, "the agent ended at %s", *rec.EndedAt)
-		}
-		rec.Pane, rec.WorkspaceID = a.PaneID, a.WorkspaceID
-		return nil
-	})
+	err := s.Exclusive(func(tx *state.Tx) error { return relocate(tx, &rec, a) })
 	return rec, err
 }
 
-// End records that the agent of record id is gone. An already ended record
-// keeps its original time.
+// relocate is Relocate under the store lock, rereading rec first. An ended
+// rec is stale.
+func relocate(tx *state.Tx, rec *Record, a herdr.AgentDetails) error {
+	if err := tx.Get(Kind, rec.ID, rec); err != nil {
+		return err
+	}
+	if rec.EndedAt != nil {
+		return stale(rec.ID, "the agent ended at %s", *rec.EndedAt)
+	}
+	rec.Pane, rec.WorkspaceID = a.PaneID, a.WorkspaceID
+	return tx.Put(Kind, rec.ID, rec)
+}
+
+// End records that the agent of record id is gone and archives the record, so
+// scans for live agents no longer read it; it stays loadable by id. An already
+// ended record keeps its original time.
 func End(s *state.Store, id string) error {
+	_, err := EndOnce(s, id)
+	return err
+}
+
+// EndOnce is End that also reports whether this call ended the record: false
+// when it had already ended. A caller that must roll back its own end passes
+// only a record it ended to Reopen, so it never undoes another caller's end.
+func EndOnce(s *state.Store, id string) (bool, error) {
+	var ended bool
+	err := s.Exclusive(func(tx *state.Tx) error {
+		var err error
+		ended, err = end(tx, id)
+		return err
+	})
+	return ended, err
+}
+
+func end(tx *state.Tx, id string) (bool, error) {
 	var rec Record
-	return s.Update(Kind, id, &rec, func() error {
-		if rec.EndedAt == nil {
-			now := time.Now().UTC().Format(time.RFC3339)
-			rec.EndedAt = &now
+	if err := tx.Get(Kind, id, &rec); err != nil {
+		return false, err
+	}
+	ended := rec.EndedAt == nil
+	if ended {
+		now := time.Now().UTC().Format(time.RFC3339)
+		rec.EndedAt = &now
+		if err := tx.Put(Kind, id, rec); err != nil {
+			return false, err
 		}
-		return nil
+	}
+	return ended, tx.Archive(Kind, id)
+}
+
+// Reopen undoes the end of record id under one store lock: it returns the
+// record from the archive to the live records and clears ended_at. It refuses
+// with agent_already_registered, naming the other record and changing nothing,
+// when another live record in the current Herdr session now holds the
+// terminal, and with agent_identity_stale for a record of another Herdr
+// session. An unknown id fails with agent_record_not_found. A record that has
+// not ended is left as is without error; that is the only no-op.
+func Reopen(s *state.Store, id string) error {
+	if !state.ValidID(id) {
+		return libagent.Invalid("--id must be 8 lowercase hexadecimal characters")
+	}
+	return s.Exclusive(func(tx *state.Tx) error {
+		var rec Record
+		var missing *state.NotFoundError
+		if err := tx.Get(Kind, id, &rec); errors.As(err, &missing) {
+			return &herdr.Error{Code: "agent_record_not_found", Message: fmt.Sprintf("no agent record with id %s", id)}
+		} else if err != nil {
+			return err
+		}
+		switch {
+		case rec.EndedAt == nil:
+			return nil
+		case !sameSession(rec):
+			return stale(id, "it belongs to another Herdr session")
+		}
+		records, err := live(tx)
+		if err != nil {
+			return err
+		}
+		if other, ok := records[rec.TerminalID]; ok {
+			return &herdr.Error{Code: "agent_already_registered", Message: fmt.Sprintf("cannot reopen agent record %s: terminal %s is registered as %s", id, rec.TerminalID, other.ID)}
+		}
+		// Unarchive first: interrupted here, the record is live but ended,
+		// which the next scan under the lock archives again.
+		if err := tx.Unarchive(Kind, id); err != nil {
+			return err
+		}
+		rec.EndedAt = nil
+		return tx.Put(Kind, id, rec)
 	})
 }
 
@@ -236,21 +359,41 @@ func Live(s *state.Store, terminal string) (*Record, error) {
 // LiveByTerminal maps each terminal id to its unended record in the current
 // Herdr session.
 func LiveByTerminal(s *state.Store) (map[string]Record, error) {
-	ids, err := s.List(Kind)
+	records, _, err := scan(s)
+	return records, err
+}
+
+// reader is the read side shared by state.Store and state.Tx.
+type reader interface {
+	Get(kind, id string, v any) error
+	List(kind string) ([]string, error)
+}
+
+// scan is replaceable so tests can count scans of the agent records.
+var scan = liveRecords
+
+// liveRecords reads every unarchived agent record once, mapping each terminal
+// to its unended record in the current Herdr session. It also returns the ids
+// of ended records not yet archived, which predate archiving.
+func liveRecords(r reader) (map[string]Record, []string, error) {
+	ids, err := r.List(Kind)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	records := map[string]Record{}
+	records, ended := map[string]Record{}, []string{}
 	for _, id := range ids {
 		var rec Record
-		if err := s.Get(Kind, id, &rec); err != nil {
-			return nil, err
+		if err := r.Get(Kind, id, &rec); err != nil {
+			return nil, nil, err
 		}
-		if rec.EndedAt == nil && sameSession(rec) {
+		switch {
+		case rec.EndedAt != nil:
+			ended = append(ended, id)
+		case sameSession(rec):
 			records[rec.TerminalID] = rec
 		}
 	}
-	return records, nil
+	return records, ended, nil
 }
 
 // Resolve loads record id and fetches its terminal's live agent. When the

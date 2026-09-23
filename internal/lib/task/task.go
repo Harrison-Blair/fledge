@@ -82,9 +82,10 @@ type Delivery struct {
 	Uncertain   bool    `json:"uncertain"`
 }
 
-// Now is the timestamp format of every task time field.
+// Now is the timestamp format of every task time field: UTC RFC 3339 with
+// nanoseconds, so tasks created within one second still order correctly.
 func Now() *string {
-	s := time.Now().UTC().Format(time.RFC3339)
+	s := time.Now().UTC().Format(time.RFC3339Nano)
 	return &s
 }
 
@@ -114,7 +115,9 @@ func Get(s *state.Store, id string) (Record, error) {
 	return r, mapMissing(s.Get(Kind, id, &r), id)
 }
 
-// List returns every task, oldest first; a nil s has none.
+// List returns every task, oldest first by parsed creation time, so records
+// written at whole-second precision order correctly among newer ones; equal
+// times fall back to id order. A nil s has none.
 func List(s *state.Store) ([]Record, error) {
 	rs := []Record{}
 	if s == nil {
@@ -131,8 +134,21 @@ func List(s *state.Store) ([]Record, error) {
 		}
 		rs = append(rs, r)
 	}
-	slices.SortStableFunc(rs, func(a, b Record) int { return cmp.Compare(a.CreatedAt, b.CreatedAt) })
+	oldestFirst(rs)
 	return rs, nil
+}
+
+// oldestFirst sorts rs by parsed creation time, then by id.
+func oldestFirst(rs []Record) {
+	slices.SortFunc(rs, func(a, b Record) int {
+		return cmp.Or(created(a).Compare(created(b)), cmp.Compare(a.ID, b.ID))
+	})
+}
+
+// created parses r's creation time; an unparsable one sorts first.
+func created(r Record) time.Time {
+	t, _ := time.Parse(time.RFC3339Nano, r.CreatedAt)
+	return t
 }
 
 // Update runs mutate on task id under the store lock and stores the result.

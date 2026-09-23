@@ -9,6 +9,7 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
 
@@ -83,5 +84,71 @@ func TestListIsOldestFirst(t *testing.T) {
 	}
 	if want := []string{"2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z", "2026-01-03T00:00:00Z"}; err != nil || !reflect.DeepEqual(titles, want) {
 		t.Fatalf("%v %v", titles, err)
+	}
+}
+
+func titles(t *testing.T, s *state.Store) []string {
+	t.Helper()
+	rs, err := List(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, r := range rs {
+		out = append(out, r.Title)
+	}
+	return out
+}
+
+func TestListOrdersBurstCreatesByCreation(t *testing.T) {
+	s, err := identity.OpenStore(context.Background(), identitytest.Repository(t), &libagent.Outcome{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"1", "2", "3", "4", "5", "6"}
+	for _, title := range want {
+		if _, err := s.Create(Kind, func(id string) any { return Record{ID: id, Title: title, CreatedAt: *Now()} }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := titles(t, s); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestListOrdersMixedPrecisionTimesByInstant(t *testing.T) {
+	s, err := identity.OpenStore(context.Background(), identitytest.Repository(t), &libagent.Outcome{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Whole-second records predate nanosecond timestamps; a string compare
+	// would put "00.5Z" before "00Z".
+	for _, at := range []string{"2026-01-01T00:00:00.5Z", "2026-01-01T00:00:01Z", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00.000000001Z"} {
+		if _, err := s.Create(Kind, func(id string) any { return Record{ID: id, Title: at, CreatedAt: at} }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{"2026-01-01T00:00:00Z", "2026-01-01T00:00:00.000000001Z", "2026-01-01T00:00:00.5Z", "2026-01-01T00:00:01Z"}
+	if got := titles(t, s); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestOldestFirstBreaksTimeTiesByID(t *testing.T) {
+	// Tied records arrive in descending id order, with an older record last,
+	// so only the id tie-break can produce ascending ids.
+	rs := []Record{
+		{ID: "0000000c", CreatedAt: "2026-01-01T00:00:01Z"},
+		{ID: "0000000b", CreatedAt: "2026-01-01T00:00:01.000Z"},
+		{ID: "0000000a", CreatedAt: "2026-01-01T00:00:01Z"},
+		{ID: "000000ff", CreatedAt: "2026-01-01T00:00:00Z"},
+	}
+	oldestFirst(rs)
+	var got []string
+	for _, r := range rs {
+		got = append(got, r.ID)
+	}
+	if want := []string{"000000ff", "0000000a", "0000000b", "0000000c"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
 	}
 }

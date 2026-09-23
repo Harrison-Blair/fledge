@@ -79,8 +79,12 @@ func OpenExisting(root string) (*Store, error) {
 }
 
 // Create stores the value returned by build under a new random id and returns
-// that id. An existing record is never overwritten; colliding ids are retried a
-// bounded number of times.
+// that id. An existing record, live or archived, is never overwritten or
+// shadowed; colliding ids are retried a bounded number of times. Create
+// claims the live path, then gives it back if the id is archived. That is
+// race-free with or without the lock: Archive and Unarchive link a record's
+// new path before removing its old one, so a record is always at one of the
+// two, and one archived after the claim was live and so blocked the claim.
 func (s *Store) Create(kind string, build func(id string) any) (string, error) {
 	dir, err := s.kindDir(kind)
 	if err != nil {
@@ -103,29 +107,45 @@ func (s *Store) Create(kind string, build func(id string) any) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("state: encode %s record %s: %w", kind, id, err)
 		}
-		err = writeExclusive(filepath.Join(dir, id+recordSuffix), data)
+		path := filepath.Join(dir, id+recordSuffix)
+		err = writeExclusive(path, data)
 		if errors.Is(err, fs.ErrExist) {
 			continue
 		}
 		if err != nil {
 			return "", err
 		}
-		return id, nil
+		createStep()
+		if _, err := os.Stat(archivePath(path)); errors.Is(err, fs.ErrNotExist) {
+			return id, nil
+		} else if err != nil {
+			return "", fmt.Errorf("state: create %s: %w", path, err)
+		}
+		if err := os.Remove(path); err != nil {
+			return "", fmt.Errorf("state: create %s: %w", path, err)
+		}
 	}
 	return "", fmt.Errorf("state: no free %s id after %d attempts", kind, createAttempts)
 }
 
-// Get decodes the record into v. A missing record returns *NotFoundError.
+// Get decodes the record into v, live or archived. A missing record returns
+// *NotFoundError. The live path is read first: archiving moves a record from
+// there under the lock, so a lookup racing it still finds the archived copy.
 func (s *Store) Get(kind, id string, v any) error {
 	path, err := s.recordPath(kind, id)
 	if err != nil {
 		return err
 	}
-	return read(path, kind, id, v)
+	err = read(path, kind, id, v)
+	var missing *NotFoundError
+	if errors.As(err, &missing) {
+		return read(archivePath(path), kind, id, v)
+	}
+	return err
 }
 
-// List returns the ids of every record of kind in sorted order. A kind with no
-// records yet returns an empty list.
+// List returns the ids of every unarchived record of kind in sorted order. A
+// kind with no records yet returns an empty list.
 func (s *Store) List(kind string) ([]string, error) {
 	dir, err := s.kindDir(kind)
 	if err != nil {
@@ -150,43 +170,33 @@ func (s *Store) List(kind string) ([]string, error) {
 }
 
 // Update holds the store lock while it decodes the current record into v, runs
-// mutate, and atomically writes v back. If mutate fails the record is left
-// unchanged. The lock is released before Update returns.
+// mutate, and atomically writes v back, in the archive when the record is
+// archived. If mutate fails the record is left unchanged. The lock is released
+// before Update returns.
 func (s *Store) Update(kind, id string, v any, mutate func() error) error {
-	path, err := s.recordPath(kind, id)
-	if err != nil {
-		return err
-	}
-	unlock, err := lock(filepath.Join(s.root, lockName))
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	if err := read(path, kind, id, v); err != nil {
-		return err
-	}
-	if err := mutate(); err != nil {
-		return err
-	}
-	data, err := encode(v)
-	if err != nil {
-		return fmt.Errorf("state: encode %s: %w", path, err)
-	}
-	return writeReplace(path, data)
+	return s.Exclusive(func(tx *Tx) error {
+		if err := tx.Get(kind, id, v); err != nil {
+			return err
+		}
+		if err := mutate(); err != nil {
+			return err
+		}
+		return tx.Put(kind, id, v)
+	})
 }
 
 // Exclusive holds the store lock while fn runs, serializing fn with every
-// other Exclusive and Update on this store directory, in any process. fn may
-// call Get, List, and Create, which never take the lock, but must not call
-// Update or Exclusive, which would deadlock. Keep fn short: it must not make
-// Herdr requests or do other blocking I/O beyond these store reads and creates.
-func (s *Store) Exclusive(fn func() error) error {
+// other Exclusive and Update on this store directory, in any process. fn reads
+// and writes through tx; it must not call Update or Exclusive, which would
+// deadlock on the lock it holds. Keep fn short: it must not make Herdr
+// requests or do other blocking I/O beyond these store operations.
+func (s *Store) Exclusive(fn func(tx *Tx) error) error {
 	unlock, err := lock(filepath.Join(s.root, lockName))
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	return fn()
+	return fn(&Tx{s: s})
 }
 
 func (s *Store) kindDir(kind string) (string, error) {

@@ -14,10 +14,12 @@ import (
 const tempPrefix = ".tmp-"
 
 // mkdir and syncDir are replaceable so tests can observe directory creation
-// and syncing.
+// and syncing; createStep runs between Create's claim and its archive check so tests
+// can interleave an archive.
 var (
-	mkdir   = os.Mkdir
-	syncDir = fsyncDir
+	mkdir      = os.Mkdir
+	syncDir    = fsyncDir
+	createStep = func() {}
 )
 
 // ensureDir creates the directory path with mode 0700 when it is missing. Its
