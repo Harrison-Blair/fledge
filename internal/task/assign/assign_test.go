@@ -76,7 +76,7 @@ func TestReassignByAgentID(t *testing.T) {
 	other := tasktest.Agent("w1:p4", "term_other", "other")
 	next := tasktest.Register(t, repo, other)
 	id := tasktest.Seed(t, repo, task.Record{Title: "Fix it", Brief: "do the thing", Status: task.Assigned, Owner: tasktest.Ptr("00000000"),
-		Delivery: &task.Delivery{MessageID: "m-ffffff", Pane: "w1:p3", Error: tasktest.Ptr("old")}})
+		Delivery: &task.Delivery{MessageID: "m-ffffff", Pane: "w1:p3", Attempt: task.Attempt{Error: tasktest.Ptr("old")}}})
 	c := tasktest.Client(t, repo, "",
 		tasktest.Get("w1:p4", other),
 		call{Method: "agent.prompt", Result: prompted(other)},
@@ -284,5 +284,31 @@ func TestAssignWithSatisfiedPrerequisites(t *testing.T) {
 	out := Run(context.Background(), c, Options{Agent: identity.Target{Name: "worker"}, ID: id, Force: true})
 	if r := tasktest.Load(t, repo, id); out.Error != nil || r.Status != task.Assigned || r.UnmetAtAssign != nil {
 		t.Fatalf("%+v %+v", out.Error, r)
+	}
+}
+
+// A task reassigned while its brief was in flight keeps the new assignment's
+// delivery untouched; the old outcome fails at phase task.
+func TestAssignDeliveryNotRecordedAfterReassignment(t *testing.T) {
+	repo := identitytest.Repository(t)
+	tasktest.Register(t, repo, worker)
+	id := seed(t, repo)
+	c := tasktest.Client(t, repo, "w1:p1",
+		tasktest.Get("worker", worker),
+		tasktest.Get("w1:p1", boss),
+		call{Method: "agent.prompt", Result: prompted(worker), Before: func() {
+			s, err := task.Existing(context.Background(), repo)
+			if err == nil {
+				_, err = task.Update(s, id, func(r *task.Record) error { r.Delivery.MessageID = "m-ffffff"; return nil })
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+		}},
+	)
+	out := run(context.Background(), c, Options{Agent: identity.Target{Name: "worker"}, ID: id}, "m-0a1b2c")
+	d := tasktest.Load(t, repo, id).Delivery
+	if out.Status != "partial" || out.Error == nil || out.Error.Code != "task_state_changed" || out.Error.Phase != "task" || d.MessageID != "m-ffffff" || d.DeliveredAt != nil || d.Error != nil {
+		t.Fatalf("%+v %+v %+v", out, out.Error, d)
 	}
 }

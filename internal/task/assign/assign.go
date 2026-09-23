@@ -5,7 +5,6 @@ package assign
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -113,37 +112,17 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) li
 	}
 	out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "task", ID: r.ID})
 	out.Result = Result{Record: r, OwnerName: owner.Name}
-	sender := libagent.ResolveSender(ctx, c)
 	body := fmt.Sprintf("task: %s · title: %s · complete with: fledge task complete --id %s --summary \"...\"\n%s", r.ID, r.Title, r.ID, r.Brief)
-	_, deliveryErr := c.Prompt(ctx, a.PaneID, libagent.WithHeader(messageID, sender, body))
-	if deliveryErr == nil {
-		out.Effects = append(out.Effects, libagent.Effect{Action: "submitted", Kind: "message", ID: a.PaneID})
-	}
 	assignedAt := r.AssignedAt
-	r, err = task.Update(s, o.ID, func(r *task.Record) error {
+	if r, ok := task.Deliver(ctx, c, s, &out, o.ID, a.PaneID, messageID, body, func(r *task.Record) (*task.Attempt, error) {
 		// Record the outcome only for this assignment; the owner may already
 		// have completed the task, so the status is not checked.
 		if r.AssignedAt == nil || *r.AssignedAt != *assignedAt || r.Owner == nil || *r.Owner != owner.ID || r.Delivery == nil || r.Delivery.MessageID != messageID {
-			return &herdr.Error{Code: "task_state_changed", Message: fmt.Sprintf("task %s was reassigned before its delivery could be recorded", r.ID)}
+			return nil, &herdr.Error{Code: "task_state_changed", Message: fmt.Sprintf("task %s was reassigned before its delivery could be recorded", r.ID)}
 		}
-		if deliveryErr != nil {
-			msg := deliveryErr.Error()
-			var remote *herdr.Error
-			r.Delivery.Error, r.Delivery.Uncertain = &msg, errors.As(deliveryErr, &remote) && remote.Uncertain
-		} else {
-			r.Delivery.DeliveredAt = task.Now()
-		}
-		return nil
-	})
-	if err == nil {
-		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "task", ID: r.ID})
+		return &r.Delivery.Attempt, nil
+	}); ok {
 		out.Result = Result{Record: r, OwnerName: owner.Name}
-	}
-	switch {
-	case deliveryErr != nil:
-		out.Fail(deliveryErr, "agent.prompt", true)
-	case err != nil:
-		out.Fail(err, "task", false)
 	}
 	return out
 }

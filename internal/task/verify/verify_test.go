@@ -53,7 +53,7 @@ func TestLifecycleCreateAssignCompleteVerify(t *testing.T) {
 		t.Fatalf("after assign %+v", r)
 	}
 	want.Status, want.Owner, want.AssignedAt = task.Assigned, &workerRec.ID, r.AssignedAt
-	want.Delivery = &task.Delivery{MessageID: r.Delivery.MessageID, Pane: "w1:p3", DeliveredAt: r.Delivery.DeliveredAt}
+	want.Delivery = &task.Delivery{MessageID: r.Delivery.MessageID, Pane: "w1:p3", Attempt: task.Attempt{DeliveredAt: r.Delivery.DeliveredAt}}
 	if !reflect.DeepEqual(r, want) {
 		t.Fatalf("after assign %+v", r)
 	}
@@ -72,7 +72,7 @@ func TestLifecycleCreateAssignCompleteVerify(t *testing.T) {
 	if r.CompletionNotification == nil || r.CompletionNotification.DeliveredAt == nil {
 		t.Fatalf("after complete %+v", r)
 	}
-	want.CompletionNotification = &task.CompletionNotification{Recipient: bossRec.ID, MessageID: r.CompletionNotification.MessageID, Pane: tasktest.Ptr("w1:p1"), DeliveredAt: r.CompletionNotification.DeliveredAt}
+	want.CompletionNotification = &task.CompletionNotification{Recipient: bossRec.ID, MessageID: r.CompletionNotification.MessageID, Pane: tasktest.Ptr("w1:p1"), Attempt: task.Attempt{DeliveredAt: r.CompletionNotification.DeliveredAt}}
 	if !reflect.DeepEqual(r, want) || r.CompletedAt == nil {
 		t.Fatalf("after complete %+v", r)
 	}
