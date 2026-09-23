@@ -38,6 +38,11 @@ status and an immediate `agent message`/`--prompt` no longer races
 `agent_not_ready`; `--no-wait` restores the old return-immediately
 behavior.
 
+Resolved 2026-09-23 for pi as well: see the resolution of "`spawn --file` on
+the pi harness fails the prompt with `agent_not_ready`" below. Spawn now also
+waits for `interactive_ready` and a cleared `launch_pending`, not only a
+lifecycle status.
+
 **Reproduction steps:**
 1. Run `fledge agent spawn --name w --harness claude --tab w`.
 2. Immediately run `fledge agent message --name w --body "hi"` (or
@@ -55,10 +60,22 @@ reports status `idle`, so a loop that waits for `idle` exits before work
 starts. Observed 2026-09-18, Fledge 0.0.3 built from `dev` (`fc4538b`),
 Herdr 0.9.1, binary `/tmp/fledge-dev`.
 
+Resolved 2026-09-23: measured on `dev` `b833d6f`, the lag is sub-second, not
+seconds. `agent.prompt` acknowledges once text and Enter are written, and
+Herdr's screen detection sees `working` 0.1-0.3 s after `message` returns; until
+then `agent get` shows the previous settled state, `idle` or `done` (12/13
+Claude immediate gets; pi was already `working` 5/5). `agent message --confirm`
+(`790c0f0`, `8dc6b66`, `1cb3596`) makes Herdr wait for observed activity after
+submission: live, 10/10 Claude and 5/5 pi returned `working` at command return
+in 0.5-0.8 s, while a wait-less mutation returned the stale `done` 15/15. Plain
+`agent message` is unchanged and still confirms submission only, so loops of the
+form `message; wait --until idle` should use `--confirm`.
+
 **Reproduction steps:**
 1. Message an idle agent with `fledge agent message --name w --body "..."`.
 2. Immediately run `fledge agent get --name w`.
-3. Observe the status still reads `idle` for a few seconds.
+3. Observe the status still reads the previous settled state (`idle` or
+   `done`) for about 0.1-0.3 s.
 
 ---
 
@@ -268,6 +285,17 @@ gets the full budget and `agent.wait` the remainder, so both deadlines fire
 together and Herdr's start-side teardown wins. Only measured at 3001 ms.
 Observed 2026-09-19, Fledge `dev` @ `180abb1`, Herdr 0.9.1.
 
+Resolved 2026-09-23: the cause is Herdr's `agent.start` reservation, which
+Fledge set to the local `--timeout`; when it expired mid-launch, Herdr's
+teardown dropped the name. Spawn now sends a reservation of the larger of
+`--timeout` and 30s (`ff3ce2d`), while its own budget stays `--timeout`. Live pi
+runs at `--timeout 3001ms` (file, bare, and `--no-wait`, 3 each) lost the name
+9/9 on `dev` `b833d6f` at 3.06-3.47 s, 6 of them after reporting success, and
+0/9 on the branch through 36 s, in both the implementer's and the verifier's
+runs. A short timeout can now return `partial` while Herdr still finishes the
+launch under its name. A launch still unfinished when the 30s reservation
+expires can still lose its name.
+
 **Reproduction steps:**
 1. Run `fledge agent spawn --name vfy-f --harness claude --tab vfy-f --timeout 3001ms`.
 2. Observe a `partial` outcome with error code `agent_not_running`, phase
@@ -415,6 +443,21 @@ showed the agent named and `idle` with `Interactive ready: true`. A second
 `agent message` a few seconds later was delivered. So the immediate resend is
 not a reliable workaround either.
 
+Resolved 2026-09-23: pi reaches lifecycle `idle` at about 0.7 s while
+`launch_pending` is still true and `interactive_ready` is unset; launch clears
+at 3.1-3.5 s. Spawn now polls the started pane after the lifecycle wait until
+`interactive_ready` is true, `launch_pending` is clear, and the status is
+`idle` or `done`, with or without a first prompt (`124d096`). It fails closed if
+a different terminal, name, or harness answers. `--timeout` is now one budget
+from launch through the first prompt, and no prompt is sent after its deadline
+(`f985675`, documented in `3e211d3` and `7a20b17`). Live on `dev` `b833d6f`,
+10/10 pi `--file` spawns and 5/5 role-only profile spawns failed
+`agent_not_ready` at 0.6-0.8 s. On the branch, with no resend, the
+implementer's runs delivered 10/10 file and 5/5 role prompts with one exact
+reply each, and the verifier's delivered 10/10 file prompts, 10/10 more with an
+exact reply line each, and 5/5 role prompts; spawn takes about 3.3-3.6 s. Claude spawns were unchanged at about 4.3 s. No
+prompt retry was added.
+
 **Reproduction steps:**
 1. Spawn a pi agent with `--file`, for example `fledge agent spawn --name plan-reviewer --harness pi --model openai-codex/gpt-6-astra --tab plan-reviewer --file brief.md --timeout 90s`.
 2. Observe the `partial` outcome with `agent_status` `idle` and `agent_not_ready` in phase `agent.prompt`.
@@ -518,6 +561,17 @@ picker-probe --force` both failed with `agent_not_found`, while `fledge agent ge
 earlier short-timeout entry, the spawn did not time out. Observed once, Fledge
 `wave2/picker` branch built from `dev` at `495f4db`, pi reporting an available
 update to 0.87.0.
+
+Still open 2026-09-23, cause unknown. Wave-3 sightings at `dev` `b833d6f` spawn
+code, Herdr 0.9.1: the planners saw 0 of 9 pi spawns lose their name through
+36 s. `ws-b` saw it once: `b5-p1`, a default spawn without a prompt, was named
+and `idle` about 5 s after spawn and unnamed by about 80 s, while its pane, pi,
+and its Fledge record survived. `ws-d` saw it once: `d6-p1`, idle and never
+prompted, had lost its name about 3 minutes after spawn; `agent get --pane`
+showed a live idle pi with `name: null`. `verify-a` saw 0 of 30 in the branch
+runs, each observed through 37 s. Losing the name at default timeout is not
+fixed by the readiness gate or the 30s start reservation. Workaround: target the
+agent by `--pane` or `--id`.
 
 **Reproduction steps:**
 1. Run `fledge agent spawn --name picker-probe --harness pi` in a Herdr pane and observe the success line.
@@ -662,6 +716,23 @@ just after a successful message" above: the reported status lags the
 terminal in both directions. Workaround: check `fledge agent read` for an idle
 prompt, then stop the agent with `--force`.
 
+Resolved 2026-09-23: two effects were measured on `dev` `b833d6f`. The dominant
+trigger is a report sent from a tool call before the worker's turn ends: the
+worker keeps generating, and settles `done` 1.2-1.5 s later, so a stop fired on
+the report was refused 5/5 (4 Claude, 1 pi). The second, smaller effect is
+detection lag at turn end, at most 231 ms (5/5). A non-forced stop now gives a
+`working` agent up to `--grace` (default 5s, 0s through 60s; `0` refuses at
+once) to settle `idle` or `done` in the same terminal before refusing
+(`99d8558`, `de26175`); `blocked` and `unknown` get no grace, and `--force`
+never waits, so `--grace` with `--force` is invalid. The stop client's transport
+limit is sized to the grace (`9be0e00`), so a grace above 15s is not cut short.
+`agent cleanup`'s stop recheck inherits the default 5s. Live, the verifier's
+report-then-stop cycles stopped 10/10 without `--force` in 1.5-4.0 s (baseline
+refused 5/5); the implementer's runs stopped 14/15, the miss being a turn that
+was really still working at 5 s ("Cogitated for 8s"). A genuinely busy agent is still refused after
+about 5.1 s (3/3), and `--grace 60s` stopped a real agent that settled after
+18.2 s.
+
 **Reproduction steps:**
 1. Let a spawned Claude agent finish its turn right after sending a message.
 2. Confirm with `fledge agent read --name <agent>` that it shows an idle prompt.
@@ -702,10 +773,26 @@ neither returned nor reported the closed panes; it had to be killed by hand.
 A later `--any` wait over respawned agents of the same names reported
 `impl-state was cancelled` and `impl-commands is done (first match)`.
 
+Corrected 2026-09-23: on `dev` `b833d6f` with Herdr 0.9.1, stopping *all*
+targets ends the wait promptly: a single target returned `agent_not_running`
+0.08-0.7 s after its stop, and `--any` over targets that were all stopped
+returned 0.07-0.24 s after the last stop. The historical hang did not reproduce
+and its cause is unproven. The real symptom is `--any` with some targets stopped
+and others alive: it correctly keeps waiting on the survivors, but printed
+nothing (0 bytes for 8 s and more) until the whole wait ended, so the stopped
+targets were invisible.
+
+Resolved 2026-09-23: without `--json`, `agent wait --any` now writes one stderr
+line per target that fails while others are still waited on (`2fc07cd`,
+`d16dec9`), for example `c4-k1 failed: agent_not_running: agent is no longer
+running in the target pane (still waiting on 2 targets).`. Live, each line
+appeared 0.08-0.23 s after its `agent stop` (3/3 runs, and 3/3 in the
+verifier's runs); JSON output stays a single final outcome.
+
 **Reproduction steps:**
-1. Spawn two agents and start `fledge agent wait --name a --name b --any --until idle` while both are working.
+1. Spawn three agents and start `fledge agent wait --name a --name b --name c --any --until working` while all are idle.
 2. Run `fledge agent stop --name a --force` and `fledge agent stop --name b --force`.
-3. Observe that the wait keeps running instead of returning a gone or failed result for each target.
+3. Before the fix: observe that the wait keeps running with no output at all until `c` is also stopped. Stopping all three ends it promptly.
 
 ---
 
@@ -810,3 +897,94 @@ manual fix.
 1. Merge a feature branch into dev only.
 2. Run `fledge worktree list` and see MERGED no.
 3. Run `fledge worktree remove --branch <b>` and see the refusal.
+
+---
+
+**Issue:** A verification task gated with `--after` on the task it verifies can never be assigned without `--force`
+
+**Summary:** On 2026-09-23 (`dev` `b833d6f`) the orchestrator created each
+wave-3 verify task with `task create --after <impl task>`, to show that
+verification follows implementation. `task assign` treats a prerequisite as
+satisfied only when it is `verified` or `cancelled`, but the verify task's whole
+job is to verify that implementation task, so `assign` refused with
+`task_dependencies_unmet` until `--force` was passed. There is no "after
+completed" dependency kind.
+
+**Reproduction steps:**
+1. `fledge task create --title impl --body x` → I; `fledge task create --title verify --after I --body y` → V.
+2. Assign I and complete it (`task complete --id I`).
+3. `fledge task assign --id V --name <verifier>` → `task_dependencies_unmet`; only `--force` works.
+
+---
+
+**Issue:** `agent cleanup` from an isolated probe repository has no registered caller
+
+**Summary:** On 2026-09-23 verifier `verify-c`, registered in the project
+repository, spawned and stopped 32 named probes from a throwaway repository, as
+required so that probe records stay out of real state. `agent cleanup --dry-run
+--json` run there returned `caller_unregistered`, because records belong to one
+repository and the verifier's record is in the project repository. `verify-d`
+hit the same refusal with `--dry-run --results-collected`. Bulk cleanup of
+probes therefore needs a list of probe names plus explicit
+`agent stop --name ... --force` calls.
+
+**Reproduction steps:**
+1. As an agent registered in repository A, create throwaway Git repository B.
+2. `cd B` and spawn a named probe with absolute `--cwd B`.
+3. `cd B` and run `fledge agent cleanup --dry-run --json`; observe `caller_unregistered`.
+
+---
+
+**Issue:** Claude's trust dialog defaults to "No, exit", and `agent send` once reported a dialog-blocked probe `idle`
+
+**Summary:** On 2026-09-23, during wave-3 planning and verification, every
+Claude probe spawned into a fresh folder stopped at Claude's folder-trust
+dialog with the cursor on "No, exit". The workaround documented earlier,
+`agent send --key enter`, would therefore exit Claude; `agent send --key down
+--key enter` is needed, after reading the screen with `agent read`. Separately,
+once during planning, `agent send` reported probe `o2-b` as `idle` before
+sending while its trust dialog was on screen; the sibling probe `o2-a`, on the
+same dialog, reported `blocked`. Seen once and not pursued.
+
+**Reproduction steps:**
+1. Spawn a Claude agent with `--cwd` pointing at a new Git repository Claude has never trusted.
+2. Run `fledge agent read --name <agent>` and observe the trust dialog with "No, exit" selected.
+3. Run `fledge agent send --name <agent> --key down --key enter` to trust the folder; `--key enter` alone exits Claude.
+
+---
+
+**Issue:** Spawn can overrun `--timeout` while another Fledge process holds the state lock
+
+**Summary:** Known limitation, accepted 2026-09-23. Spawn's `--timeout` bounds
+every Herdr request from launch through the first prompt, but registration's
+local step, taking the state lock and writing the record, uses a blocking file
+lock and cannot be interrupted. `verify-a` held only a throwaway repository's
+state lock for 5 s, and a ready `--timeout 3001ms --prompt ...` spawn against
+a fake Herdr socket returned
+at 5.0 s: `partial` timeout, prompt not sent, record kept. No prompt is sent
+after the deadline either way. The state lock is normally held for
+milliseconds, so the orchestrator accepted this without a code change; README
+and `agent spawn --help` document it (`7a20b17`).
+
+**Reproduction steps:**
+1. In a throwaway repository, hold an exclusive `flock` on `.fledge/state/lock` from another process for 5 s.
+2. Spawn a ready agent with `--timeout 3001ms --prompt "..."`.
+3. Observe spawn return after about 5 s with a `partial` timeout and the prompt not sent.
+
+---
+
+**Issue:** `agent read` with a small `--lines` can miss a Claude reply
+
+**Summary:** On 2026-09-23 two wave-3 implementers checked probe replies with
+`fledge agent read --lines 40` and missed replies that had been delivered.
+`impl-a` found that Claude repaints its screen, so the default
+`recent-unwrapped` source with 40 lines could miss the reply;
+`--source recent --lines 200` found it. `impl-d` found that on a fresh Claude
+pane the startup banner and earlier turns pushed replies out of a 40-row
+window; a 1000-row read showed each reply exactly once. Use a larger `--lines`
+(and `--source recent` for Claude) when checking whether a reply arrived.
+
+**Reproduction steps:**
+1. Spawn a Claude agent and have it answer a few short prompts, each with a unique token.
+2. Run `fledge agent read --name <agent> --lines 40` and look for the first token's reply line.
+3. Run `fledge agent read --name <agent> --source recent --lines 200` and find it.
