@@ -56,7 +56,7 @@ type Result struct {
 
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	out := libagent.Outcome{Operation: "worktree.list", Status: "success", Effects: []libagent.Effect{}}
-	r, err := Inspect(ctx, c, o.Cwd)
+	r, err := inspectAll(ctx, c, o.Cwd)
 	if err != nil {
 		out.Fail(err, "worktree.list", false)
 		return out
@@ -66,21 +66,14 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	return out
 }
 
-// Inspect lists the repository containing cwd (the process working directory
-// when empty) and computes each checkout's git state, primary checkout first.
-func Inspect(ctx context.Context, c libagent.Client, cwd string) (Result, error) {
-	if cwd == "" {
-		cwd = c.Cwd
-	}
-	cwd, err := filepath.Abs(cwd)
+// inspectAll lists the repository containing cwd and computes each
+// checkout's git state, primary checkout first.
+func inspectAll(ctx context.Context, c libagent.Client, cwd string) (Result, error) {
+	listing, err := worktree.ListCheckouts(ctx, c, cwd)
 	if err != nil {
 		return Result{}, err
 	}
-	listing, err := worktree.List(ctx, c, worktree.Source{Cwd: cwd})
-	if err != nil {
-		return Result{}, err
-	}
-	root := filepath.Clean(listing.Source.RepoRoot)
+	root := listing.Root
 	r := Result{RepoRoot: root, Worktrees: make([]Row, 0, len(listing.Worktrees))}
 	target, err := gitstatus.DefaultBranch(ctx, root)
 	if err != nil {
@@ -121,14 +114,8 @@ func Inspect(ctx context.Context, c libagent.Client, cwd string) (Result, error)
 
 // inspect computes the row for checkout w of the repository at root.
 func inspect(ctx context.Context, root, managed, target string, w herdr.Worktree) Row {
-	row := Row{Path: filepath.Clean(w.Path), Branch: w.Branch, WorkspaceID: w.OpenWorkspaceID}
-	row.Primary = row.Path == root
-	row.Dirty = gitstatus.Dirty(ctx, row.Path)
-	if row.Branch != nil {
-		row.Merged = gitstatus.Merged(ctx, root, "refs/heads/"+*row.Branch, target)
-	} else {
-		row.Merged = gitstatus.Merged(ctx, row.Path, "HEAD", target)
-	}
+	row := Row{Path: w.Path, Branch: w.Branch, WorkspaceID: w.OpenWorkspaceID, Primary: w.Path == root}
+	row.Dirty, row.Merged = worktree.State(ctx, root, target, w)
 	rel, err := filepath.Rel(managed, row.Path)
 	row.Managed = err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 	return row
@@ -157,12 +144,12 @@ func addOwners(ctx context.Context, c libagent.Client, r Result) {
 	for _, a := range live.Agents {
 		rec, ok := identity.Attributed(records, a)
 		if ok && rec.WorktreePath != nil {
-			p := Canonical(*rec.WorktreePath)
+			p := worktree.Canonical(*rec.WorktreePath)
 			byPath[p] = append(byPath[p], rec)
 		}
 	}
 	for i := range r.Worktrees {
-		owners := byPath[Canonical(r.Worktrees[i].Path)]
+		owners := byPath[r.Worktrees[i].Path]
 		if len(owners) == 0 {
 			continue
 		}
@@ -171,14 +158,6 @@ func addOwners(ctx context.Context, c libagent.Client, r Result) {
 		r.Worktrees[i].Owner = &Owner{ID: first.ID, Name: first.Name, Pane: first.Pane}
 		r.Worktrees[i].OwnerCount = len(owners)
 	}
-}
-
-// Canonical cleans p and resolves its symlinks when it exists.
-func Canonical(p string) string {
-	if resolved, err := filepath.EvalSymlinks(p); err == nil {
-		return resolved
-	}
-	return filepath.Clean(p)
 }
 
 // Render writes a successful list outcome as a table.

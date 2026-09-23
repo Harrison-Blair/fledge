@@ -439,3 +439,105 @@ func TestRecordOfDifferentHarnessDoesNotBlockRemoval(t *testing.T) {
 		t.Fatalf("%+v", out)
 	}
 }
+
+// symlinked returns r's listing as Herdr reports it for a cwd reached through
+// a symlink to the primary checkout: repo_root repeats the symlinked path
+// while checkout paths are real.
+func (r repo) symlinked(t *testing.T, open bool) (string, herdr.WorktreeListResult) {
+	t.Helper()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(r.root, link); err != nil {
+		t.Fatal(err)
+	}
+	l := r.listing(open)
+	l.Source.RepoRoot = link
+	return link, l
+}
+
+// Fledge's own guard refuses the primary checkout reached through a symlink.
+func TestRefusesPrimaryCheckoutThroughSymlink(t *testing.T) {
+	r := newRepo(t)
+	link, l := r.symlinked(t, false)
+	for _, o := range []Options{{Path: link, Force: true}, {Branch: "main", Force: true}} {
+		o.Cwd = link
+		out := Run(context.Background(), herdrscript.Client(t, call{Method: "worktree.list", Result: l}), o)
+		if out.ExitCode() != 2 || out.Error.Phase != "guard" || !strings.Contains(out.Error.Message, "primary") {
+			t.Fatalf("%+v: %+v", o, out)
+		}
+	}
+}
+
+// --path finds a checkout named through a symlink, absolute or relative to
+// the process working directory.
+func TestPathThroughSymlinkFindsCheckout(t *testing.T) {
+	for name, relative := range map[string]bool{"absolute": false, "relative": true} {
+		t.Run(name, func(t *testing.T) {
+			r := newRepo(t)
+			link, l := r.symlinked(t, false)
+			path := filepath.Join(link, ".fledge", "worktrees", "topic")
+			if relative {
+				t.Chdir(link)
+				path = filepath.Join(".fledge", "worktrees", "topic")
+			}
+			out := Run(context.Background(), herdrscript.Client(t, call{Method: "worktree.list", Result: l}, agentList(), agentList()), Options{Path: path, Cwd: link})
+			if out.Status != "success" || out.Result.(Result).Path != r.topic {
+				t.Fatalf("%+v", out)
+			}
+			if _, err := os.Stat(r.topic); !os.IsNotExist(err) {
+				t.Fatal("checkout kept")
+			}
+		})
+	}
+}
+
+// --path through a symlink finds a checkout whose directory is gone.
+func TestPathThroughSymlinkFindsMissingCheckout(t *testing.T) {
+	r := newRepo(t)
+	link, l := r.symlinked(t, true)
+	if err := os.RemoveAll(r.topic); err != nil {
+		t.Fatal(err)
+	}
+	out := Run(context.Background(), herdrscript.Client(t,
+		call{Method: "worktree.list", Result: l},
+		agentList(),
+		agentList(),
+		call{Method: "worktree.remove", Params: map[string]any{"workspace_id": "w2", "force": true}, Result: removed(r.topic, true)},
+	), Options{Path: filepath.Join(link, ".fledge", "worktrees", "topic"), Cwd: link, Force: true})
+	if out.Status != "success" || out.Result.(Result).Path != r.topic {
+		t.Fatalf("%+v", out)
+	}
+}
+
+// Removal inspects only its target: no git command runs in, or names, another
+// linked checkout of the repository.
+func TestInspectsOnlyTargetCheckout(t *testing.T) {
+	r := newRepo(t)
+	other := filepath.Join(r.root, ".fledge", "worktrees", "other")
+	git(t, r.root, "worktree", "add", "-q", "-b", "other", other)
+	l := r.listing(false)
+	l.Worktrees = append(l.Worktrees, herdr.Worktree{Path: other, Branch: s("other")})
+	real, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	log := filepath.Join(t.TempDir(), "git.log")
+	script := "#!/bin/sh\necho \"$*\" >> \"" + log + "\"\nexec \"" + real + "\" \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out := Run(context.Background(), herdrscript.Client(t, call{Method: "worktree.list", Result: l}, agentList(), agentList()), Options{Branch: "topic", Cwd: r.root})
+	if out.Status != "success" {
+		t.Fatalf("%+v", out)
+	}
+	b, _ := os.ReadFile(log)
+	if !strings.Contains(string(b), "-C "+r.topic+" status") {
+		t.Fatalf("target checkout not inspected; git log:\n%s", b)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		if strings.Contains(line, other) || strings.Contains(line, "refs/heads/other") || (strings.Contains(line, " status ") && !strings.Contains(line, r.topic)) {
+			t.Errorf("inspected another checkout: git %s", line)
+		}
+	}
+}
