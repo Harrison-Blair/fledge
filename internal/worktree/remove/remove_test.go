@@ -605,7 +605,9 @@ func TestMarkerGuardsCheckoutIdentity(t *testing.T) {
 		removed bool
 	}{
 		{"matching", func(t *testing.T, r repo, m string) (string, string) { return m, "topic" }, true},
-		{"other marker", func(t *testing.T, r repo, m string) (string, string) { return "0123456789abcdef0123456789abcdef", "topic" }, false},
+		{"other marker", func(t *testing.T, r repo, m string) (string, string) {
+			return "0123456789abcdef0123456789abcdef", "topic"
+		}, false},
 		{"other branch", func(t *testing.T, r repo, m string) (string, string) {
 			git(t, r.topic, "switch", "-q", "-c", "other")
 			return m, "topic"
