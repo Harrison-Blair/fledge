@@ -30,6 +30,17 @@ type Result struct {
 	PromptRequested   bool             `json:"prompt_requested"`
 	MessageID         *string          `json:"message_id"`
 	Sender            *libagent.Sender `json:"sender"`
+	Profile           *ProfileRef      `json:"profile"`
+}
+
+// ProfileRef names the profile a spawn used and where it came from: source
+// is "builtin" or "repo", path the repository file, and base the built-in it
+// inherits from.
+type ProfileRef struct {
+	Name   string  `json:"name"`
+	Source string  `json:"source"`
+	Path   *string `json:"path"`
+	Base   *string `json:"base"`
 }
 
 // Render writes a successful spawn, or startup recovery hints by pane after
@@ -74,6 +85,18 @@ func Render(w io.Writer, o libagent.Outcome) error {
 	}
 	if _, err := fmt.Fprintf(w, "Spawned %s (%s) in %s / %s / %s\n  cwd: %s\n  worktree: %s\n  id: %s\n", r.Name, r.Harness, libagent.Display(r.WorkspaceID), libagent.Display(r.TabID), libagent.Display(r.PaneID), libagent.Display(r.Cwd), libagent.Display(r.WorktreePath), id); err != nil {
 		return err
+	}
+	if p := r.Profile; p != nil {
+		source := "built-in"
+		if p.Path != nil {
+			source = *p.Path
+		}
+		if p.Base != nil {
+			source += ", extends " + *p.Base
+		}
+		if _, err := fmt.Fprintf(w, "  profile: %s (%s)\n", p.Name, source); err != nil {
+			return err
+		}
 	}
 	if r.Prompted {
 		_, err := fmt.Fprintf(w, "Message submitted to %s.\n", libagent.Display(r.PaneID))

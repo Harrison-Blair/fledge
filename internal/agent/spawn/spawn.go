@@ -10,6 +10,7 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/profiles"
 )
 
 type spawner struct {
@@ -92,17 +93,37 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Outcome {
 	result := &Result{Name: o.Name, Harness: o.Harness}
 	out := libagent.Outcome{Operation: "agent.spawn", Status: "success", Result: result, Effects: []libagent.Effect{}}
+	role := ""
+	if o.Profile != "" {
+		p, err := profiles.Load(ctx, s.Cwd, o.Profile)
+		if err != nil {
+			out.Fail(err, "validation", false)
+			return out
+		}
+		if o.Harness == "" && p.Harness == "" {
+			out.Fail(libagent.Invalid("--harness is required; profile %s sets no harness", p.Name), "validation", false)
+			return out
+		}
+		o, role = applyProfile(o, p), p.Role
+		result.Harness = o.Harness
+		result.Profile = &ProfileRef{Name: p.Name, Source: p.Source, Path: p.Path, Base: p.Base}
+	}
 	args, err := o.Validate()
+	if err == nil && o.NoWait && role != "" {
+		err = libagent.Invalid("--no-wait cannot be combined with a profile role, which is sent as the first prompt")
+	}
 	if err != nil {
 		out.Fail(err, "validation", false)
 		return out
 	}
-	prompt, err := libagent.ReadText(in, libagent.TextInput{Body: o.Prompt, BodyFlag: "prompt", BodySet: o.PromptSet, File: o.File, FileFlag: "file", FileSet: o.FileSet, Required: false, Noun: "prompt"})
+	body, err := libagent.ReadText(in, libagent.TextInput{Body: o.Prompt, BodyFlag: "prompt", BodySet: o.PromptSet, File: o.File, FileFlag: "file", FileSet: o.FileSet, Required: false, Noun: "prompt"})
 	if err != nil {
 		out.Fail(err, "validation", false)
 		return out
 	}
-	// The effective first prompt is the only input to PromptRequested.
+	prompt := firstPrompt(role, body)
+	// The effective first prompt, including any profile role, is the only
+	// input to PromptRequested.
 	result.PromptRequested = prompt != ""
 	if o.Cwd != "" && !filepath.IsAbs(o.Cwd) {
 		o.Cwd = filepath.Join(s.Cwd, o.Cwd)

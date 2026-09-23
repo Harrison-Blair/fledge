@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
@@ -64,7 +65,8 @@ func Root(ctx context.Context, cwd string) (string, error) {
 	return filepath.Clean(lines[1]), nil
 }
 
-// Ensure creates root/.fledge with a .gitignore whose last rule is "*", then
+// Ensure creates root/.fledge with a .gitignore whose final rules are the
+// managed block, which ignores everything except profile TOML files, then
 // verifies git ignores its contents. It validates everything before writing,
 // only appends to an existing ignore file, and records each mutation on out.
 func Ensure(root string, out *libagent.Outcome) (string, error) {
@@ -87,7 +89,7 @@ func Ensure(root string, out *libagent.Outcome) (string, error) {
 	if err = MakeParents(root, dir, out); err != nil {
 		return "", err
 	}
-	if lastRule(content) != "*" {
+	if len(missingRules(content)) > 0 {
 		if err = appendIgnoreRule(ignore, content, info == nil, out); err != nil {
 			return "", err
 		}
@@ -154,19 +156,30 @@ func MakeParents(root, parent string, out *libagent.Outcome) error {
 	}
 	return nil
 }
-func lastRule(content []byte) string {
-	lines := strings.Split(string(content), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line != "" && !strings.HasPrefix(line, "#") {
-			return line
+
+// managedRules ignore everything in .fledge except versioned profile files.
+var managedRules = []string{"*", "!/profiles/", "!/profiles/*.toml"}
+
+// missingRules returns the managed rules to append so that content ends with
+// the managed block. A legacy file ending in "*" needs only the exceptions.
+func missingRules(content []byte) []string {
+	var rules []string
+	for _, line := range strings.Split(string(content), "\n") {
+		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
+			rules = append(rules, line)
 		}
 	}
-	return ""
+	if slices.Equal(rules[max(len(rules)-len(managedRules), 0):], managedRules) {
+		return nil
+	}
+	if len(rules) > 0 && rules[len(rules)-1] == "*" {
+		return managedRules[1:]
+	}
+	return managedRules
 }
 
 func appendIgnoreRule(path string, observed []byte, created bool, out *libagent.Outcome) error {
-	suffix := []byte("*\n")
+	suffix := []byte(strings.Join(missingRules(observed), "\n") + "\n")
 	if len(observed) > 0 && observed[len(observed)-1] != '\n' {
 		suffix = append([]byte{'\n'}, suffix...)
 	}

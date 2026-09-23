@@ -14,7 +14,7 @@ import (
 type Options struct {
 	Provided                                                                                                      []string
 	Name, Harness, Model, Workspace, WorkspaceID, Tab, TabID, Pane, Worktree, Branch, Base, Cwd, Label, Direction string
-	Prompt, File                                                                                                  string
+	Prompt, File, Profile                                                                                         string
 	Env, Args                                                                                                     []string
 	Focus, DirectionSet, NoWait, PromptSet, FileSet                                                               bool
 	Ratio                                                                                                         *float64

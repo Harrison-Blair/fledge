@@ -76,7 +76,11 @@ A checked item means its main capability is implemented; accompanying notes reco
 
     **Implementation decisions and remaining gaps:** `doctor` checks Herdr connectivity, protocol compatibility, harness installations, local model discovery, and configuration. A protocol mismatch is a warning, not a failure. Model discovery reads only local caches for `pi`, `codex`, and `claude` so diagnostics stay read-only; command-based discovery for `opencode` and `cursor` remains available through `agent models`. Reports support text, `--verbose`, and JSON output. [Current behavior](../../README.md#doctor)
 
-14. [ ] **Save reusable agent profiles.** Named configurations such as `reviewer`, `implementer`, and `researcher`, containing the harness, model, launch arguments, and role instructions.
+14. [x] **Save reusable agent profiles.** Named configurations such as `reviewer`, `implementer`, and `researcher`, containing the harness, model, launch arguments, and role instructions.
+
+   **Implemented:** [SHA-PENDING](https://github.com/Harrison-Blair/fledge/commit/SHA-PENDING) · **Author:** Harrison-Blair · **Author date:** 2026-09-22
+
+   **Implementation decisions and remaining gaps:** `agent spawn --profile NAME` applies a harness, model, native args, and role; `agent profiles [NAME]` lists or shows them without Herdr. Five built-ins (`orchestrator`, `implementer`, `planner`, `reviewer`, `verifier`) are embedded TOML in the binary with owner-chosen harness and model defaults (Codex models through the `pi` harness, never `codex`) and no permission-mode args; they update with the binary and are never copied into repositories. Repository files at `.fledge/profiles/NAME.toml` in the invoking checkout's Git top level override a same-name built-in or add custom profiles (optionally `extends = "builtin:NAME"`); only built-in bases, no recursive inheritance. Explicit flags win: a different `--harness` drops the profile's model and args but keeps its role. The role precedes the task in one headered first prompt. `.fledge/.gitignore` now un-ignores `profiles/*.toml` through an append-only migration. There is no user-global profile location and no export/edit command; the `researcher` example is not shipped. [Current behavior](../../README.md#profiles)
 
 15. [ ] **Put a task board inside Herdr.** Show tasks, workers, blockers, and results together, with actions to inspect or focus them. Herdr's plugin API already provides panes, actions, and event hooks that could support this. [Herdr plugin API](https://herdr.dev/docs/socket-api/)
 

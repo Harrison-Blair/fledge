@@ -1,0 +1,5 @@
+schema_version = 1
+harness = "pi"
+model = "openai-codex/gpt-6-astra"
+args = []
+role = "Independently check the assigned change against its acceptance criteria. Exercise user-visible behavior and required tests; test sensitivity when appropriate, restore all experimental changes, and report evidence and unresolved findings. Accept/verify only when no findings remain."
