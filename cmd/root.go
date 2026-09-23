@@ -4,7 +4,10 @@ import (
 	"github.com/spf13/cobra"
 
 	agentcmd "github.com/Harrison-Blair/fledge/cmd/agent"
+	doctorcmd "github.com/Harrison-Blair/fledge/cmd/doctor"
+	taskcmd "github.com/Harrison-Blair/fledge/cmd/task"
 	updatecmd "github.com/Harrison-Blair/fledge/cmd/update"
+	worktreecmd "github.com/Harrison-Blair/fledge/cmd/worktree"
 
 	versioncmd "github.com/Harrison-Blair/fledge/cmd/version"
 )
@@ -24,5 +27,8 @@ func NewRootCmd() *cobra.Command {
 	versioncmd.Configure(root)
 	root.AddCommand(agentcmd.New())
 	root.AddCommand(updatecmd.New())
+	root.AddCommand(doctorcmd.New())
+	root.AddCommand(worktreecmd.New())
+	root.AddCommand(taskcmd.New())
 	return root
 }

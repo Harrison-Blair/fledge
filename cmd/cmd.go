@@ -8,7 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Harrison-Blair/fledge/internal/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/spf13/cobra"
 )
 
@@ -30,17 +31,14 @@ func execute(args []string, in io.Reader, out, errOut io.Writer) error {
 	if err == nil {
 		return nil
 	}
-	var outputFailure *agent.OutputError
-	if errors.As(err, &outputFailure) {
+	if cli.IsRendered(err) {
 		return err
 	}
-	var rendered *agent.ResultError
-	if errors.As(err, &rendered) {
-		return err
-	}
-	if cmd != nil && strings.HasPrefix(cmd.CommandPath(), "fledge agent ") {
-		operation := "agent." + cmd.Name()
-		return agent.Finish(agent.InvalidOutcome(operation, err), out, jsonRequested(cmd, args))
+	for _, group := range []string{"agent", "worktree", "task"} {
+		if cmd != nil && strings.HasPrefix(cmd.CommandPath(), "fledge "+group+" ") {
+			operation := group + "." + cmd.Name()
+			return agent.Finish(agent.InvalidOutcome(operation, err), out, jsonRequested(cmd, args), nil)
+		}
 	}
 	fmt.Fprintln(errOut, "Error:", err)
 	return err

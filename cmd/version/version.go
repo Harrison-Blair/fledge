@@ -4,7 +4,7 @@ package version
 import (
 	"github.com/spf13/cobra"
 
-	internalversion "github.com/Harrison-Blair/fledge/internal/version"
+	internalversion "github.com/Harrison-Blair/fledge/internal/lib/version"
 )
 
 // Configure adds --version and -V to the root command.

@@ -1,0 +1,134 @@
+// Package adopt implements agent adopt: registering an already-running agent
+// with a durable Fledge identity.
+package adopt
+
+import (
+	"context"
+	"fmt"
+	"io"
+
+	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+)
+
+// Options selects the agent to adopt: Pane, or the caller's own pane when
+// empty. Name names an unnamed agent, or must match an existing name.
+type Options struct{ Name, Pane string }
+
+// Result is the agent's record, new or named, and whether adopt named the
+// agent.
+type Result struct {
+	identity.Record
+	Renamed bool `json:"renamed"`
+}
+
+// Run registers the live agent in the selected pane. An unnamed agent whose
+// terminal already has a live record is named and keeps that record, storing
+// the new name. Run never renames a named agent, and refuses one whose
+// terminal already has a live record.
+func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
+	out := libagent.Outcome{Operation: "agent.adopt", Status: "success", Effects: []libagent.Effect{}}
+	target := o.Pane
+	if target == "" {
+		target = c.CallerPane
+	}
+	var err error
+	switch {
+	case target == "":
+		err = libagent.Invalid("--pane is required outside a Herdr pane")
+	case o.Name != "":
+		err = libagent.ValidateName(o.Name)
+	}
+	if err != nil {
+		out.Fail(err, "validation", false)
+		return out
+	}
+	a, err := c.Get(ctx, target)
+	if err != nil {
+		out.Fail(err, "agent.get", false)
+		return out
+	}
+	current := ""
+	if a.Name != nil {
+		current = *a.Name
+	}
+	switch {
+	case current == "" && o.Name == "":
+		err = libagent.Invalid("the agent in %s is unnamed; pass --name", a.PaneID)
+	case current != "" && o.Name != "" && o.Name != current:
+		err = libagent.Invalid("the agent in %s is already named %s", a.PaneID, current)
+	}
+	if err != nil {
+		out.Fail(err, "validation", false)
+		return out
+	}
+	// The store is created only once Herdr and the options allow adoption.
+	store, err := identity.OpenStore(ctx, c.Cwd, &out)
+	if err != nil {
+		out.Fail(err, "state", false)
+		return out
+	}
+	renamed := current == ""
+	var existing *identity.Record
+	if renamed {
+		// Herdr calls never run under the store lock, so look for the
+		// terminal's record before renaming; Register repeats its check under
+		// the lock.
+		if existing, err = registered(store, a); err != nil {
+			out.Fail(err, "state", false)
+			return out
+		}
+		if a, err = rename(ctx, c, a, o.Name); err != nil {
+			out.Fail(err, "agent.rename", true)
+			return out
+		}
+		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "agent_name", ID: a.PaneID})
+	}
+	if existing != nil {
+		rec, err := identity.Rename(store, *existing, a)
+		if err != nil {
+			out.Fail(err, "state", false)
+			return out
+		}
+		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "agent_record", ID: rec.ID})
+		out.Result = Result{Record: rec, Renamed: true}
+		return out
+	}
+	rec, err := identity.Register(ctx, store, c, a, "adopt", nil)
+	if err != nil {
+		out.Fail(err, "state", false)
+		return out
+	}
+	out.Effects = append(out.Effects, libagent.Effect{Action: "created", Kind: "agent_record", ID: rec.ID})
+	out.Result = Result{Record: rec, Renamed: renamed}
+	return out
+}
+
+// registered is replaceable so tests can count adopt's scans of the agent
+// records beyond Register's one.
+var registered = identity.Registered
+
+// rename names the agent a and confirms the same terminal now carries name.
+func rename(ctx context.Context, c libagent.Client, a herdr.AgentDetails, name string) (herdr.AgentDetails, error) {
+	var r herdr.AgentResult
+	err := c.Call(ctx, "agent.rename", map[string]any{"target": a.PaneID, "name": name}, &r)
+	if err == nil && (r.Type != "agent_info" || !libagent.ValidAgentInfo(r.Agent) || r.Agent.TerminalID != a.TerminalID || r.Agent.Name == nil || *r.Agent.Name != name) {
+		err = libagent.Protocol("incomplete or mismatched agent.rename result")
+	}
+	return r.Agent, err
+}
+
+// Render writes a successful adoption.
+func Render(w io.Writer, o libagent.Outcome) error {
+	r, ok := o.Result.(Result)
+	if o.Error != nil || !ok {
+		return nil
+	}
+	name := "-"
+	if r.Name != nil {
+		name = *r.Name
+	}
+	_, err := fmt.Fprintf(w, "Adopted %s (%s) as %s.\n", name, r.Pane, r.ID)
+	return err
+}

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	internalversion "github.com/Harrison-Blair/fledge/internal/version"
+	internalversion "github.com/Harrison-Blair/fledge/internal/lib/version"
 )
 
 func TestHelp(t *testing.T) {

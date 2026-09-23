@@ -1,0 +1,25 @@
+fledge doctor
+
+  herdr_connectivity      ok
+    socket responded to ping
+
+  herdr_compatibility     ok
+    version 0.9.1 · protocol 22 (expected 22)
+
+  harness_installations   ok
+    6 targets, 1 available
+
+  model_discovery         warn
+    pi 0 · codex 0 · claude 0
+    pi: harness not installed
+    codex: harness not installed
+    claude: harness not installed
+
+  configuration           ok
+    HERDR_ENV      1
+    socket         /run/herdr.sock (0600)
+    pane           w1:p2
+    session        main
+    cwd            /work/dir
+
+  4 ok · 1 warn · 0 fail

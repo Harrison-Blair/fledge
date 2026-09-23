@@ -1,0 +1,25 @@
+fledge doctor
+
+  herdr_connectivity      fail
+    ping failed: dial unix /tmp/missing.sock: no such file
+
+  herdr_compatibility     warn
+    protocol unknown: Herdr did not respond to ping
+
+  harness_installations   fail
+    integration.list failed: down
+
+  model_discovery         warn
+    pi 0 · codex 0 · claude 0
+    pi: no models found (availability unknown)
+    codex: no models found (availability unknown)
+    claude: no models found (availability unknown)
+
+  configuration           fail
+    HERDR_ENV      -
+    socket         unset
+    pane           -
+    session        -
+    cwd            /work/dir
+
+  0 ok · 2 warn · 3 fail

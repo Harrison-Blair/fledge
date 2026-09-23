@@ -1,9 +1,8 @@
 # AGENTS.md
 
 > **Note:** This file is the single source of truth for all agent instructions in this
-> repository. `CLAUDE.md` contains only an `@AGENTS.md` import so Claude Code picks up
-> the same instructions. Do not add instructions to `CLAUDE.md` directly; edit this
-> file instead.
+> repository. Claude Code reads it directly, so there is no `CLAUDE.md`; edit this file
+> instead of adding harness-specific instruction files.
 
 ## Project
 
@@ -25,7 +24,7 @@ pull request, which the owner approves. Never commit directly to `main`.
 ## Releases
 
 Stable Git tags (`vMAJOR.MINOR.PATCH`) are the release version source. There is no
-maintained version file. `internal/version.Version()` uses the release value
+maintained version file. `internal/lib/version.Version()` uses the release value
 injected at build time, then Go's embedded module version, then `dev`. Development
 builds retain Go's revision and dirty metadata without runtime Git access. Cobra
 exposes the version through `--version` and `-V`; there is no `version` subcommand
@@ -64,12 +63,20 @@ named `fledge`. `cmd/` is a library package holding the root command and per-sub
 wiring. `NewRootCmd()` builds a fresh command tree; `ExecuteWithArgs()` lets tests
 inject arguments and output without changing process globals.
 
-Every subcommand gets its own folder under `cmd/<name>/` with a `New() *cobra.Command`
-constructor that calls into `internal/`. The immediate parent registers its children.
-`internal/` mirrors that: one folder per capability, plus folders for shared logic.
-Command files hold wiring only; logic and its tests live in `internal/`. Internal
-packages must not import Cobra or `cmd/`. The version flags use
-`cmd/version.Configure()` instead of a standalone command.
+Every subcommand gets its own folder as `cmd/<name>/` or
+`cmd/<parent>/<subcommand>/`, containing thin Cobra wiring: a
+`New() *cobra.Command` constructor that calls into `internal/`. The immediate
+parent registers its children. `internal/` mirrors that command nesting as
+`internal/<name>/` and `internal/<parent>/<subcommand>/`. Each internal command
+leaf owns its options, orchestration, result types, human rendering, and tests.
+Internal parent packages may coordinate their nested components, as `doctor`
+does with `checks`/`report` and `update` with
+`release`/`archive`/`install`/`confirm`; child packages do not import their
+parents. `internal/lib/<capability>/` contains focused shared code used by
+multiple commands or packages; do not create one flat grab-bag lib package and
+do not extract speculative utilities. Internal packages do not import Cobra or
+`cmd/`. The version flags use `cmd/version.Configure()` instead of a standalone
+command.
 
 Use direct functions and explicit dependencies; do not assemble command trees with
 `init` functions or shared command globals. Keep packages flat until a distinct
@@ -80,27 +87,65 @@ responsibility needs a narrow API. Packages with multiple non-test files have a
 
 ### Dogfooding
 
-When working in this repository, use Fledge itself for agent coordination: `fledge agent spawn` to launch agents, `fledge agent list` to discover them, `fledge agent get` to inspect one, and `fledge agent message` to delegate tasks and exchange messages. Treat this as dogfooding: exercise the project CLI in real work and surface bugs or missing capabilities instead of silently bypassing it with another coordination tool.
+When working in this repository, use Fledge for every capability it offers, including
+over the harness's own built-in tools. Treat this as dogfooding: exercise the project
+CLI in real work and surface bugs or missing capabilities instead of silently bypassing
+it with another tool.
+
+| Need | Fledge command | Instead of |
+| --- | --- | --- |
+| Launch a sub-agent | `fledge agent spawn` | Claude's Agent tool, Codex subagents |
+| Track and hand off work between agents | `fledge task create`/`depend`/`assign`/`complete`/`verify`/`cancel`/`list`/`get` | harness todo or task lists |
+| Create, list, or remove a checkout | `fledge worktree create`/`list`/`remove` | `git worktree`, Claude `isolation: "worktree"` |
+| Discover, inspect, read, wait on, interrupt, or stop agents | `fledge agent list`/`get`/`read`/`wait`/`pause`/`stop` | raw `herdr` CLI, harness TaskStop |
+| Retire your finished spawned workers and the checkouts their spawns created | `fledge agent cleanup` | stopping each worker and removing each checkout by hand |
+| Message another agent | `fledge agent message` | Claude's SendMessage, raw `herdr` pane input |
+| Type raw input or keys into an agent (slash commands, dialog answers) | `fledge agent send` | raw `herdr pane send-text`/`send-keys` |
+| Register an already-running agent | `fledge agent adopt` | — |
+| Check the environment | `fledge doctor` | ad hoc probes |
+| Discover models | `fledge agent models` | reading harness config |
+| Update the binary | `fledge update` | manual downloads |
+
+Harness built-ins remain allowed only where Fledge has no equivalent yet, such as
+quick read-only lookups inside a single agent, or where Fledge fails.
 
 Maintain `reference/dogfood/` as the record of dogfooding information for this repository.
 Whenever an agent or one of its subagents hits a Fledge bug, missing capability, or
-workaround, append an entry to `reference/dogfood/friction.md` using its Issue / Summary /
-Reproduction steps format.
+workaround, including any fallback to a harness built-in caused by one, append an entry
+to `reference/dogfood/friction.md` using its Issue / Summary / Reproduction steps format.
 
-Before launching agents, check `fledge agent --help` for the commands needed for
-both the task and cleanup. If the installed binary lacks commands present in this
-checkout, build the current source into a temporary directory and use that binary
-consistently for the task, including cleanup.
+Before using Fledge, check `--help` for the command groups needed for both the task and
+cleanup (`fledge agent`, `task`, `worktree`). If the installed binary lacks commands
+present in this checkout, build the current source into a temporary directory and use
+that binary consistently for the task, including cleanup.
 
-Fledge's `agent spawn`, `get`, `list`, `message`, and `stop` commands connect to Herdr's
-local Unix socket. In Codex's restricted sandbox, request
-`sandbox_permissions: "require_escalated"` on the first invocation of these
-commands and of Herdr session-control commands, with a task-specific justification
-and a narrow command prefix. Do not first run a socket command in the sandbox to
-rediscover the known `connect: operation not permitted` failure. Use the normal
-approval mechanism; these instructions do not override an approval denial or
-authorize unrelated session changes. Help, version, and `agent models` do not
-require Herdr socket access.
+Known workarounds: spawn prompts and messages always start with a sender header, so ask
+a spawned agent in plain words to invoke a skill (a leading slash command will not run);
+pass absolute paths to `--cwd`; see `reference/dogfood/friction.md` for current issues.
+
+Agents in this repository usually run inside a managed Fledge session: a Herdr pane,
+often spawned by an orchestrator and given a Fledge agent record id. Expect messages
+from the orchestrator and other agents. Each starts with a one-line header,
+`ᛉ fledge message from <name> (<pane>) · id m-<hex> · reply: fledge agent message --name <name>`;
+unnamed senders appear as `unnamed agent (<pane>)` and non-agent panes as `pane <pane>`,
+with no reply command. A `fledge task assign` brief adds a line naming the task, its
+title, and `complete with: fledge task complete --id <task> --summary "..."`, and a
+task's creator, when it is another registered agent, receives a `task completed:`
+notification naming `fledge task verify`. Treat these as coordination input: reply with
+the header's reply command (or `--pane <pane>` when the header has no reply command),
+and finish assigned tasks with `fledge task complete`.
+
+Every Fledge `agent` command except `models`, plus
+`task create`/`assign`/`complete`/`verify`, the `worktree` commands, and `doctor`,
+connect to Herdr's local Unix socket (`task create`/`verify` only when run inside a
+Herdr pane). In Codex's restricted sandbox, request
+`sandbox_permissions: "require_escalated"` on the first invocation of these commands and
+of Herdr session-control commands, with a task-specific justification and a narrow
+command prefix. Do not first run a socket command in the sandbox to rediscover the known
+`connect: operation not permitted` failure. Use the normal approval mechanism; these
+instructions do not override an approval denial or authorize unrelated session changes.
+Help, version, `agent models`, `task get`/`list`/`cancel`/`depend`, and `update` do not require
+Herdr socket access.
 
 Name the tab an agent runs in after the agent's own name or role so panes are identifiable at a glance:
 
@@ -108,10 +153,23 @@ Name the tab an agent runs in after the agent's own name or role so panes are id
 fledge agent spawn --name reviewer --harness claude --tab reviewer
 ```
 
-Stop agents when their task is finished instead of leaving idle agents and tabs behind:
+Stop agents when their task is finished instead of leaving idle agents and tabs behind.
+To retire your spawned workers and the checkouts their spawns created, run `fledge agent cleanup`
+(`--dry-run` first to see what it would stop, remove, or hold). To stop one agent:
 
 ```sh
 fledge agent stop --name reviewer
 ```
 
 Agents that are `working`, `blocked`, or `unknown` require `--force`. When acting as an orchestrator, stop only the workers you spawned, and only after their work and any verification or follow-up have been read.
+
+When acting as an orchestrator, run a feature's verifier in that feature's managed
+worktree (`fledge agent spawn --worktree <feature checkout path>`), not in the primary
+checkout, a separate copy, or a temporary directory. The implementer and verifier take
+turns on the shared checkout: the implementer commits and leaves a clean tree before
+verification starts and makes no edits while it runs; the verifier undoes every
+experimental change, such as mutation tests, and confirms `git status` is clean before
+reporting; repairs go back to the implementer through the orchestrator. Verifiers run
+`fledge task verify` only when no findings remain open. If repairs follow a
+verification, the verifier runs `fledge task verify` again after checking them; this
+replaces the earlier verification, so name the checked commit in `--summary`.

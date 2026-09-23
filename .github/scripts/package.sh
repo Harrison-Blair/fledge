@@ -17,7 +17,7 @@ timestamp=$(git show -s --format=%ct HEAD)
 
 for arch in amd64 arm64; do
   CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -buildvcs=true \
-    -ldflags "-s -w -X $module/internal/version.release=$tag" -o "$stage/fledge" .
+    -ldflags "-s -w -X $module/internal/lib/version.release=$tag" -o "$stage/fledge" .
   cp README.md LICENSE "$stage/"
   # Run the archive's binary on a matching Linux build host.
   if [[ "$(go env GOHOSTOS)/$(go env GOHOSTARCH)" == "linux/$arch" ]]; then
