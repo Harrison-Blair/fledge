@@ -35,6 +35,15 @@ type Result struct {
 	Stopped bool `json:"stopped"`
 }
 
+// EffectiveGrace is the caller's grace, or DefaultGrace when none was chosen.
+// Callers size the transport limit from it so the settle wait is not cut off.
+func (o Options) EffectiveGrace() time.Duration {
+	if o.GraceSet {
+		return o.Grace
+	}
+	return DefaultGrace
+}
+
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	out := libagent.Outcome{Operation: "agent.stop", Status: "success", Effects: []libagent.Effect{}}
 	err := o.Target.Validate()
@@ -56,10 +65,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		return out
 	}
 	out.Result = Result{AgentRow: libagent.NewAgentRow(a.Pane)}
-	grace := DefaultGrace
-	if o.GraceSet {
-		grace = o.Grace
-	}
+	grace := o.EffectiveGrace()
 	if a.AgentStatus == "working" && !o.Force && grace > 0 {
 		// Only a settled row from the same terminal (and, for --id, still its
 		// record's agent) replaces the one inspected; any wait failure keeps
