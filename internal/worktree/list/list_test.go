@@ -170,6 +170,7 @@ func s2(v string) *string {
 	}
 	return &v
 }
+
 // liveAgent is a complete agent.list entry for terminal, hosted in pane w1:<terminal>.
 func liveAgent(terminal string) herdr.AgentDetails {
 	p := herdrscript.Pane("w1:"+terminal, "w1", "w1:t1")

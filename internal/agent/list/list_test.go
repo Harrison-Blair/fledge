@@ -25,6 +25,7 @@ func TestListIncludesUnnamed(t *testing.T) {
 		t.Fatal(out)
 	}
 }
+
 // TestListRejectsIncompleteAgentInfo holds agent.list entries to the full
 // AgentInfo shape: pane ids and a status are not enough without a terminal.
 func TestListRejectsIncompleteAgentInfo(t *testing.T) {
