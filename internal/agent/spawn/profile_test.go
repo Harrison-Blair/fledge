@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/profiles"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
@@ -221,4 +222,90 @@ func TestProfileNameIsRecordedOnTheAgentRecord(t *testing.T) {
 	if rec := stored(t, cwd, *r.ID); rec.Profile == nil || *rec.Profile != "reviewer" {
 		t.Fatalf("%+v", rec)
 	}
+}
+
+const readsProfile = "schema_version = 1\nharness = \"claude\"\nreads = [\"present.md\", \"gone.md\"]\n[sections]\nmission = \"Do it.\"\n"
+
+// readsBrief is the brief of the reads profile in root once gone.md is dropped.
+func readsBrief(t *testing.T, root string) string {
+	t.Helper()
+	p, err := profiles.Load(context.Background(), root, "reader")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Reads = []string{"present.md"}
+	return p.Brief()
+}
+
+func writeFile(t *testing.T, dir, name string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// checkSkippedRead asserts a successful spawn skipped only gone.md in dir.
+func checkSkippedRead(t *testing.T, out libagent.Outcome, dir string) {
+	t.Helper()
+	if out.Status != "success" || !out.Result.(*Result).Prompted {
+		t.Fatalf("%+v %+v", out, out.Error)
+	}
+	var skipped []libagent.Effect
+	for _, e := range out.Effects {
+		if e.Action == "skipped" {
+			skipped = append(skipped, e)
+		}
+	}
+	if want := []libagent.Effect{{Action: "skipped", Kind: "read", Path: "gone.md"}}; !reflect.DeepEqual(skipped, want) {
+		t.Fatalf("%+v", out.Effects)
+	}
+	var b strings.Builder
+	if err := Render(&b, out); err != nil {
+		t.Fatal(err)
+	}
+	if line := "skipped read: gone.md (not found in " + dir + ")\n"; strings.Count(b.String(), "skipped read:") != 1 || !strings.Contains(b.String(), line) {
+		t.Fatalf("%q", b.String())
+	}
+}
+
+func TestProfileReadsResolveUnderCallerDirectory(t *testing.T) {
+	root := profileRepo(t, "reader", readsProfile)
+	writeFile(t, root, "present.md")
+	o := profileOptions("reader")
+	o.Prompt, o.PromptSet = "Go.", true
+	s := profileSpawnIn(t, root, "claude", []string{}, header+readsBrief(t, root)+"\n\nGo.")
+	checkSkippedRead(t, s.run(context.Background(), o, nil), root)
+}
+
+func TestProfileReadsResolveUnderCwd(t *testing.T) {
+	root := profileRepo(t, "reader", readsProfile)
+	writeFile(t, root, "gone.md")
+	destination := t.TempDir()
+	writeFile(t, destination, "present.md")
+	o := profileOptions("reader")
+	o.Pane, o.Workspace, o.Cwd = "", "new workspace", destination
+	p := herdrscript.Pane("w2:p1", "w2", "w2:t1")
+	p.AgentStatus = "idle"
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "pane.current", Result: herdr.PaneResult{Type: "pane_current", Pane: herdrscript.Pane("w1:p1", "w1", "w1:t1")}}, call{Method: "workspace.create", Result: herdr.CreatedResult{Type: "workspace_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p}}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), senderCall(), senderCall(), call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": header + readsBrief(t, root)}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
+	s.Cwd = root
+	checkSkippedRead(t, s.run(context.Background(), o, nil), destination)
+}
+
+func TestProfileReadsResolveUnderWorktree(t *testing.T) {
+	root := repository(t)
+	os.MkdirAll(filepath.Join(root, ".fledge", "profiles"), 0755)
+	if err := os.WriteFile(filepath.Join(root, ".fledge", "profiles", "reader.toml"), []byte(readsProfile), 0644); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "gone.md")
+	path := filepath.Join(root, ".fledge", "worktrees", "worker")
+	p := herdrscript.Pane("w2:p1", "w2", "w2:t1")
+	p.AgentStatus = "idle"
+	o := profileOptions("reader")
+	o.Pane, o.Worktree = "", "new"
+	add := checkout(t, root, "worker", path)
+	create := call{Method: "worktree.create", Result: herdr.CreatedResult{Type: "worktree_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p, Worktree: herdr.Worktree{Path: path}}, Before: func() { add(); writeFile(t, path, "present.md") }}
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "worktree.list", Result: newWorktreeListing(root)}, create, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), callerNotAgent(), senderCall(), call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": header + readsBrief(t, root)}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
+	s.Cwd = root
+	checkSkippedRead(t, s.run(context.Background(), o, nil), path)
 }
