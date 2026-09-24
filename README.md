@@ -638,9 +638,9 @@ effect. If the record ends after the rename, the outcome is `partial`: the
 agent is named but the record is unchanged. Success prints
 `Adopted <name> (<pane>) as <id>.`
 
-`get`, `message`, `read`, `wait` (single target only), and `pause` accept
-`--id` in place of `--name` or `--pane`; exactly one of the three is
-required. `stop` accepts repeatable `--id` alongside `--name` and `--pane`. An `--id` lookup follows a moved terminal as above, and fails closed
+`get`, `read`, and `pause` accept `--id` in place of `--name` or `--pane`;
+exactly one of the three is required. `message`, `wait`, and `stop` accept
+repeatable `--id` alongside `--name` and `--pane`. An `--id` lookup follows a moved terminal as above, and fails closed
 with `agent_identity_stale` when the terminal no longer hosts an agent (ending
 the record only if the terminal itself is gone), the record belongs to another
 Herdr session, or the record has ended; an unknown ID fails with
