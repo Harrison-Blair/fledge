@@ -1,0 +1,2 @@
+{"type":"user","isSidechain":true,"timestamp":"2026-01-02T10:29:00.000Z","message":{"role":"user","content":"synthetic sub-agent prompt"}}
+{"type":"assistant","isSidechain":true,"requestId":"req-s","timestamp":"2026-01-02T10:30:00.000Z","message":{"model":"claude-haiku-4-5","role":"assistant","content":[{"type":"text","text":"synthetic"}],"usage":{"input_tokens":50,"cache_creation_input_tokens":5,"cache_read_input_tokens":0,"output_tokens":60}}}

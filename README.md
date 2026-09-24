@@ -1069,6 +1069,11 @@ as a `fail`, not a crash.
 - `internal/lib/harness` is the single source of per-harness facts: the kinds,
   one typed profile per kind that `agent pause`, `agent spawn`, and `agent models`
   read, and the fixed capability rows derived from it. It imports nothing from Fledge.
+- `internal/lib/usage` reads a harness session's measured tokens and
+  harness-recorded cost estimate from claude, codex, and pi session files and
+  `opencode export`, filtered to a time window; missing or unreadable data is
+  `unavailable` with a reason. Windows attribute by time on one session, so
+  concurrent tasks or human chat in the same pane double-count.
 
 New subcommands export `New() *cobra.Command` and are registered by their parent.
 Internal packages do not import Cobra or `cmd/`.
