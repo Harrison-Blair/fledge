@@ -12,7 +12,7 @@ import (
 func New() *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{Use: "profiles [NAME]", Short: "List agent profiles, or show one resolved profile",
-		Long: "List agent profiles, or show one resolved profile with its source, base, launch settings, and role.\n\nBuilt-in profiles (orchestrator, implementer, planner, reviewer, verifier) ship with the\nbinary. Files in .fledge/profiles/<name>.toml at the invoking checkout's Git top level\noverride a same-name built-in or add custom profiles. Listing reads files only; it needs\nno Herdr session and writes nothing.",
+		Long: "List agent profiles, or show one resolved profile with its source, base, launch settings,\nreads, protocol, and the rendered brief a spawn sends.\n\nShowing a profile does not check its reads; agent spawn checks them in the agent's working\ndirectory and reports a missing file as a skipped read.\n\nBuilt-in profiles (orchestrator, planner, researcher, implementer, debugger, integrator,\nreviewer, verifier) ship with the binary. Files in .fledge/profiles/<name>.toml at the\ninvoking checkout's Git top level override a same-name built-in or add custom profiles.\nListing reads files only; it needs no Herdr session and writes nothing.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var options profiles.Options

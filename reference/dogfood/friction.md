@@ -851,6 +851,8 @@ Workaround: spawn Claude workers with
 `fledge agent spawn ... -- --permission-mode bypassPermissions` (with
 `skipDangerousModePermissionPrompt` set, no dialog appears). Fledge has no
 first-class permission-mode option.
+Update: every Claude built-in profile now ships this flag, so `--profile` spawns
+of Claude roles run in bypass mode without the extra `--` arguments.
 
 **Reproduction steps:**
 1. Spawn a Claude agent in auto mode and have it run `fledge agent stop --name <another agent> --force`.
