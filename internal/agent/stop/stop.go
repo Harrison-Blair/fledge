@@ -1,5 +1,3 @@
-// Package stop implements agent stop: tearing down a live agent by closing its
-// pane and ending its Fledge record.
 package stop
 
 import (
@@ -11,6 +9,7 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 )
 
@@ -22,9 +21,12 @@ const (
 	MaxGrace     = time.Minute
 )
 
+// Options selects one or more targets by name, pane, record ID, or filter.
 type Options struct {
-	identity.Target
+	selector.Selection
 	Force bool
+	// DryRun reports what each target's stop would do without changing anything.
+	DryRun bool
 	// Grace bounds the settle wait for a working agent; GraceSet reports that
 	// the caller chose it, otherwise DefaultGrace applies.
 	Grace    time.Duration
@@ -44,9 +46,11 @@ func (o Options) EffectiveGrace() time.Duration {
 	return DefaultGrace
 }
 
+// Run stops the selected agents one after another. A single target keeps its
+// own result; several, or any dry run, report one row per target.
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	out := libagent.Outcome{Operation: "agent.stop", Status: "success", Effects: []libagent.Effect{}}
-	err := o.Target.Validate()
+	err := o.Selection.Validate()
 	if err == nil && o.GraceSet {
 		switch {
 		case o.Force:
@@ -59,7 +63,24 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Fail(err, "validation", false)
 		return out
 	}
-	a, target, rec, err := o.Target.Get(ctx, c)
+	targets, err := o.targets(ctx, c)
+	if err != nil {
+		out.Fail(err, "agent.get", false)
+		return out
+	}
+	switch {
+	case o.DryRun:
+		return plan(ctx, c, o, targets)
+	case len(targets) > 1:
+		return fanOut(ctx, c, o, targets)
+	}
+	return stopOne(ctx, c, o, targets[0])
+}
+
+// stopOne looks up one target afresh and stops it unless the guard refuses.
+func stopOne(ctx context.Context, c libagent.Client, o Options, p pending) libagent.Outcome {
+	out := libagent.Outcome{Operation: "agent.stop", Status: "success", Effects: []libagent.Effect{}}
+	a, target, rec, err := p.get(ctx, c)
 	if err != nil {
 		out.Fail(err, "agent.get", false)
 		return out
@@ -75,8 +96,8 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			out.Result = Result{AgentRow: libagent.NewAgentRow(a.Pane)}
 		}
 	}
-	if status := a.AgentStatus; status != "idle" && status != "done" && !o.Force {
-		out.Fail(libagent.Invalid("agent %s is %s; pass --force to stop it anyway", target, status), "guard", false)
+	if err := o.guard(a, target); err != nil {
+		out.Fail(err, "guard", false)
 		return out
 	}
 	// End the record before closing: an agent stopping its own pane is hung up
@@ -131,8 +152,20 @@ func end(ctx context.Context, c libagent.Client, a herdr.AgentDetails, rec *iden
 	return s, rec.ID, ended, nil
 }
 
-// Render writes a successful stop outcome.
+// guard refuses an agent that is not idle or done unless forced.
+func (o Options) guard(a herdr.AgentDetails, target string) error {
+	if status := a.AgentStatus; status != "idle" && status != "done" && !o.Force {
+		return libagent.Invalid("agent %s is %s; pass --force to stop it anyway", target, status)
+	}
+	return nil
+}
+
+// Render writes a successful stop outcome, or each row of a multi-target stop
+// or dry run.
 func Render(w io.Writer, o libagent.Outcome) error {
+	if f, ok := o.Result.(FanOut); ok {
+		return renderFanOut(w, f)
+	}
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil
