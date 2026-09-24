@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/brief"
+	"github.com/Harrison-Blair/fledge/internal/lib/proposal"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/tasktest"
 )
@@ -18,7 +20,7 @@ func TestTaskHelp(t *testing.T) {
 	if err := ExecuteWithArgs([]string{"task", "--help"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"create", "depend", "assign", "complete", "verify", "cancel", "list", "get"} {
+	for _, name := range []string{"create", "depend", "assign", "complete", "verify", "cancel", "list", "get", "template"} {
 		if !strings.Contains(out.String(), "\n  "+name+" ") {
 			t.Fatalf("%s: %s", name, out.String())
 		}
@@ -29,6 +31,37 @@ func TestTaskHelp(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "never derived from Herdr") {
 		t.Fatal(out.String())
+	}
+}
+
+func TestTaskTemplateOutsideRepository(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("HERDR_SOCKET_PATH", "/nonexistent/herdr.sock")
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"task", "template"}, brief.Skeleton()},
+		{[]string{"task", "template", "--proposal"}, proposal.Skeleton()},
+	} {
+		var out bytes.Buffer
+		if err := ExecuteWithArgs(tc.args, &out); err != nil || out.String() != tc.want {
+			t.Fatalf("%v: %v %q", tc.args, err, out.String())
+		}
+	}
+	var out bytes.Buffer
+	if err := ExecuteWithArgs([]string{"task", "template", "--proposal", "--json"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Operation string            `json:"operation"`
+		Result    map[string]string `json:"result"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil || got.Operation != "task.template" || got.Result["kind"] != "proposal" || got.Result["text"] != proposal.Skeleton() {
+		t.Fatalf("%v %s", err, out.String())
+	}
+	if _, err := os.Stat(".fledge"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("template created state: %v", err)
 	}
 }
 
