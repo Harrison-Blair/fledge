@@ -104,6 +104,7 @@ fledge agent read --pane w2:p3 --source visible --lines 40 --json
 fledge agent wait --name reviewer --timeout 10m
 fledge agent wait --name reviewer --name builder --all --json
 fledge agent wait --name reviewer --pane w2:p3 --any --until done
+fledge agent wait --mine --state working --all --timeout 30m
 fledge agent message --name reviewer --body 'Review the current diff'
 fledge agent message --pane w2:p3 --file task.md
 cat task.md | fledge agent message --name reviewer --file -
@@ -312,10 +313,19 @@ states from `idle`, `working`, `blocked`, `done`, and `unknown`. Without
 `--timeout`, it waits indefinitely with no transport deadline; Ctrl-C cancels
 it. A finite `--timeout` is passed to Herdr and fails with `timeout`. A settled
 state means the agent's turn ended, **not** that its assigned work succeeded.
-`--name` and `--pane` are repeatable and may be mixed; duplicate targets are
-rejected. One target prints `<name> is <status>.` and its JSON result is the
-agent row. Two or more targets need `--all` or `--any`, and each target gets its
-own Herdr wait. `--all` waits for every target; the first target that fails
+`--name`, `--pane`, and `--id` are repeatable and may be mixed; duplicate
+targets are rejected. An `--id` target follows its record's terminal and fails
+closed with `agent_identity_stale` if a different terminal answers. Instead of
+explicit targets, the filter flags `--state`, `--harness`, `--profile`,
+`--task`, `--worktree`, `--registered`, `--mine`, and `--parent` select live
+agents (mixing them with explicit targets is rejected). Filters AND together,
+repeated values of one flag OR together, and the caller is never selected; an
+empty match fails with `no_agents_matched`. Filter matches are reported by
+record ID (by pane when unregistered), and registered matches get the same
+terminal check as `--id`. One target, explicit or matched, prints
+`<name> is <status>.` and its JSON result is the agent row. Two or more
+targets, including several filter matches, need `--all` or `--any`, and each
+target gets its own Herdr wait. `--all` waits for every target; the first target that fails
 ends the wait with that failure and cancels the rest (near-simultaneous
 failures may report `operation_failed`, and a shared `--timeout` can leave a
 mix of timed-out and cancelled rows).

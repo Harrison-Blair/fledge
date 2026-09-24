@@ -6,12 +6,15 @@ import (
 	"encoding/json"
 	"math"
 	"reflect"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
@@ -29,13 +32,18 @@ type reply struct {
 	// after cancelDelay.
 	onCancel    error
 	cancelDelay time.Duration
+	// terminal, when set, replaces the matched agent's terminal id.
+	terminal string
 }
 
 // fanFake serves concurrent agent.wait calls by target and, like the socket
 // client, fails a call whose context ends with an uncertain transport error.
+// agent.list returns live, and agent.get the live agent in the target pane; a
+// wait on a live agent's pane answers with that agent.
 type fanFake struct {
 	t       *testing.T
 	replies map[string]reply
+	live    []herdr.AgentDetails
 	mu      sync.Mutex
 	params  map[string]map[string]any
 }
@@ -55,6 +63,15 @@ func (f *fanFake) Call(ctx context.Context, method string, params any, result an
 	var p map[string]any
 	json.Unmarshal(data, &p)
 	target, _ := p["target"].(string)
+	i := slices.IndexFunc(f.live, func(a herdr.AgentDetails) bool { return a.PaneID == target })
+	switch {
+	case method == "agent.list":
+		b, _ := json.Marshal(map[string]any{"type": "agent_list", "agents": f.live})
+		return json.Unmarshal(b, result)
+	case method == "agent.get" && i >= 0:
+		b, _ := json.Marshal(herdr.AgentResult{Type: "agent_info", Agent: f.live[i]})
+		return json.Unmarshal(b, result)
+	}
 	f.mu.Lock()
 	if _, seen := f.params[target]; seen || method != "agent.wait" {
 		f.mu.Unlock()
@@ -92,7 +109,15 @@ func (f *fanFake) Call(ctx context.Context, method string, params any, result an
 	a := herdrscript.LiveAgent(r.status)
 	name, pane := target, "w1:p-"+target
 	a.Name, a.PaneID = &name, pane
-	b, _ := json.Marshal(herdrscript.Waited(a, r.status))
+	w := herdrscript.Waited(a, r.status)
+	if i >= 0 {
+		w.Agent = f.live[i]
+		w.Agent.AgentStatus = r.status
+	}
+	if r.terminal != "" {
+		w.Agent.TerminalID = r.terminal
+	}
+	b, _ := json.Marshal(w)
 	return json.Unmarshal(b, result)
 }
 
@@ -171,6 +196,14 @@ func TestWaitValidation(t *testing.T) {
 		{Names: []string{"a"}, Timeout: time.Microsecond},
 		{Names: []string{"a"}, Timeout: maxTimeout + 1},
 		{Names: []string{"a"}, Timeout: math.MaxInt64},
+		{IDs: []string{"0000beef", "0000cafe"}},
+		{IDs: []string{"0000beef"}, Names: []string{"a"}},
+		{IDs: []string{"BEEF"}},
+		{IDs: []string{"0000beef", "0000beef"}, All: true},
+		{Names: []string{"a"}, Filter: selector.Filter{Registered: true}},
+		{IDs: []string{"0000beef"}, Filter: selector.Filter{States: []string{"idle"}}},
+		{Filter: selector.Filter{States: []string{"asleep"}}},
+		{Filter: selector.Filter{Registered: true}, All: true, Any: true},
 	} {
 		_, c := newFake(t, nil)
 		out := Run(context.Background(), c, o)
@@ -381,7 +414,7 @@ func TestWaitByIDWaitsOnVerifiedPane(t *testing.T) {
 		herdrscript.Call{Method: "agent.wait", Params: map[string]any{"target": "w1:p3"}, Result: herdrscript.Waited(live.Agent.Pane, "idle")})
 	c.Cwd = identitytest.Repository(t)
 	rec := identitytest.Register(t, c.Cwd, live.Agent)
-	out := Run(context.Background(), c, Options{ID: rec.ID})
+	out := Run(context.Background(), c, Options{IDs: []string{rec.ID}})
 	if out.Error != nil || *out.Result.(libagent.AgentRow).AgentStatus != "idle" {
 		t.Fatalf("%+v", out)
 	}
@@ -394,15 +427,99 @@ func TestWaitByIDFailsClosedWhenTerminalChanges(t *testing.T) {
 	c := herdrscript.Client(t, herdrscript.Call{Method: "agent.get", Result: live}, herdrscript.Call{Method: "agent.wait", Result: replaced})
 	c.Cwd = identitytest.Repository(t)
 	rec := identitytest.Register(t, c.Cwd, live.Agent)
-	if out := Run(context.Background(), c, Options{ID: rec.ID}); out.Error == nil || out.Error.Code != "agent_identity_stale" {
+	if out := Run(context.Background(), c, Options{IDs: []string{rec.ID}}); out.Error == nil || out.Error.Code != "agent_identity_stale" {
 		t.Fatalf("%+v", out)
 	}
 }
 
-func TestWaitIDIsSingleTarget(t *testing.T) {
-	for _, o := range []Options{{ID: "0000beef", Names: []string{"a"}}, {ID: "0000beef", Panes: []string{"p"}, All: true}} {
-		if out := Run(context.Background(), libagent.Client{}, o); out.ExitCode() != 2 {
-			t.Fatalf("%+v", out)
-		}
+// liveAgent is a registered-looking agent in pane with its own terminal.
+func liveAgent(pane, terminal string) herdr.AgentDetails {
+	p := herdrscript.LiveAgent("working")
+	name := "agent-" + pane
+	p.PaneID, p.Name = pane, &name
+	a := herdrscript.Info(p).Agent
+	a.TerminalID = terminal
+	return a
+}
+
+// fleet registers a and b in a fresh repository; c stays unregistered.
+func fleet(t *testing.T, f *fanFake, c *libagent.Client) (idA, idB string) {
+	t.Helper()
+	f.live = []herdr.AgentDetails{liveAgent("w1:p3", "term_a"), liveAgent("w1:p4", "term_b"), liveAgent("w1:p5", "term_c")}
+	c.Cwd = identitytest.Repository(t)
+	return identitytest.Register(t, c.Cwd, f.live[0]).ID, identitytest.Register(t, c.Cwd, f.live[1]).ID
+}
+
+func targets(out libagent.Outcome) []string {
+	var got []string
+	fan, _ := out.Result.(FanOut)
+	for _, r := range fan.Targets {
+		got = append(got, r.Target+"="+r.Outcome)
+	}
+	return got
+}
+
+func TestWaitSeveralIDsWithNames(t *testing.T) {
+	f, c := newFake(t, map[string]reply{"w1:p3": {status: "idle"}, "w1:p4": {status: "done"}, "worker": {status: "idle"}})
+	idA, idB := fleet(t, f, &c)
+	out := Run(context.Background(), c, Options{IDs: []string{idA, idB}, Names: []string{"worker"}, All: true})
+	if want := []string{"worker=matched", idA + "=matched", idB + "=matched"}; out.Error != nil || !reflect.DeepEqual(targets(out), want) {
+		t.Fatalf("%+v %v", out, targets(out))
+	}
+}
+
+func TestWaitIDInFanOutFailsClosed(t *testing.T) {
+	f, c := newFake(t, map[string]reply{"w1:p3": {status: "idle", terminal: "term_new"}, "w1:p4": {status: "idle", delay: 20 * time.Millisecond}})
+	idA, idB := fleet(t, f, &c)
+	out := Run(context.Background(), c, Options{IDs: []string{idA, idB}, Any: true})
+	rows := rowsByTarget(t, out)
+	if out.Error != nil || rows[idA].Error == nil || rows[idA].Error.Code != "agent_identity_stale" || rows[idB].Outcome != "matched" || *out.Result.(FanOut).Winner != idB {
+		t.Fatalf("%+v", out)
+	}
+}
+
+func TestWaitFilterUsesRecordIDsAsTargets(t *testing.T) {
+	f, c := newFake(t, map[string]reply{"w1:p3": {status: "idle"}, "w1:p4": {status: "idle"}})
+	idA, idB := fleet(t, f, &c)
+	out := Run(context.Background(), c, Options{Filter: selector.Filter{Registered: true}, All: true})
+	if want := []string{idA + "=matched", idB + "=matched"}; out.Error != nil || !reflect.DeepEqual(targets(out), want) {
+		t.Fatalf("%+v %v", out, targets(out))
+	}
+}
+
+func TestWaitFilterFailsClosedWhenTerminalChanges(t *testing.T) {
+	f, c := newFake(t, map[string]reply{"w1:p3": {status: "idle", terminal: "term_new"}})
+	idA, _ := fleet(t, f, &c)
+	f.live = f.live[:1]
+	if out := Run(context.Background(), c, Options{Filter: selector.Filter{Registered: true}}); out.Error == nil || out.Error.Code != "agent_identity_stale" {
+		t.Fatalf("%s: %+v", idA, out)
+	}
+}
+
+func TestWaitFilterSingleMatchWaitsLikeSingleTarget(t *testing.T) {
+	f, c := newFake(t, map[string]reply{"w1:p5": {status: "idle"}})
+	fleet(t, f, &c)
+	f.live[2].AgentStatus = "blocked"
+	out := Run(context.Background(), c, Options{Filter: selector.Filter{States: []string{"blocked"}}})
+	if row, ok := out.Result.(libagent.AgentRow); out.Error != nil || !ok || *row.PaneID != "w1:p5" {
+		t.Fatalf("%+v", out)
+	}
+}
+
+func TestWaitFilterSeveralMatchesNeedAllOrAny(t *testing.T) {
+	f, c := newFake(t, nil)
+	fleet(t, f, &c)
+	out := Run(context.Background(), c, Options{Filter: selector.Filter{Registered: true}})
+	if out.ExitCode() != 2 || out.Error.Code != "invalid_input" || out.Error.Phase != "validation" || !strings.Contains(out.Error.Message, "--all or --any") {
+		t.Fatalf("%+v", out)
+	}
+}
+
+func TestWaitFilterNoMatch(t *testing.T) {
+	f, c := newFake(t, nil)
+	fleet(t, f, &c)
+	out := Run(context.Background(), c, Options{Filter: selector.Filter{States: []string{"done"}}})
+	if out.ExitCode() != 1 || out.Status != "rejected" || out.Error.Code != "no_agents_matched" || out.Error.Phase != "selection" || out.Result != nil {
+		t.Fatalf("%+v", out)
 	}
 }
