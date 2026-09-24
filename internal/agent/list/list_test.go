@@ -293,14 +293,14 @@ func TestListSkipsRecordOfDifferentHarness(t *testing.T) {
 }
 
 // fleet is a repository with a registered lead (idle claude, profile lead,
-// worktree /wt/lead) in w1:p3, its registered child (working codex, profile
-// reviewer, owner of task) in w1:p4, and an unregistered stray (idle claude)
+// worktree /wt/lead, owner of leadTask) in w1:p3, its registered child
+// (working codex, profile reviewer, worktree /wt/child, owner of task) in w1:p4, and an unregistered stray (idle claude)
 // in w1:p5.
 type fleet struct {
 	cwd             string
 	agents          []herdr.AgentDetails
 	leadID, childID string
-	task            string
+	task, leadTask  string
 }
 
 func newFleet(t *testing.T) fleet {
@@ -323,10 +323,11 @@ func newFleet(t *testing.T) fleet {
 	if err := s.Update(identity.Kind, f.leadID, &rec, func() error { wt := "/wt/lead"; rec.WorktreePath = &wt; return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Update(identity.Kind, f.childID, &rec, func() error { rec.Parent = &f.leadID; return nil }); err != nil {
+	if err := s.Update(identity.Kind, f.childID, &rec, func() error { wt := "/wt/child"; rec.Parent, rec.WorktreePath = &f.leadID, &wt; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	f.task = tasktest.Seed(t, f.cwd, task.Record{Title: "t", Status: task.Assigned, Owner: &f.childID})
+	f.leadTask = tasktest.Seed(t, f.cwd, task.Record{Title: "l", Status: task.Assigned, Owner: &f.leadID})
 	return f
 }
 
@@ -359,7 +360,10 @@ func TestListFilters(t *testing.T) {
 		{"profile", selector.Filter{Profiles: []string{"reviewer"}}, "w1:p4"},
 		{"profiles or", selector.Filter{Profiles: []string{"lead", "reviewer"}}, "w1:p3 w1:p4"},
 		{"task", selector.Filter{Tasks: []string{f.task}}, "w1:p4"},
+		{"tasks or", selector.Filter{Tasks: []string{f.task, f.leadTask}}, "w1:p3 w1:p4"},
 		{"worktree", selector.Filter{Worktrees: []string{"/wt/lead"}}, "w1:p3"},
+		{"worktrees or", selector.Filter{Worktrees: []string{"/wt/none", "/wt/child"}}, "w1:p4"},
+		{"worktrees or both", selector.Filter{Worktrees: []string{"/wt/lead", "/wt/child"}}, "w1:p3 w1:p4"},
 		{"registered", selector.Filter{Registered: true}, "w1:p3 w1:p4"},
 		{"registered and state", selector.Filter{Registered: true, States: []string{"idle"}}, "w1:p3"},
 		{"harness and state", selector.Filter{Harnesses: []string{"claude"}, States: []string{"working"}}, ""},
