@@ -212,7 +212,7 @@ func TestSpawnWithoutProfileIsUnchanged(t *testing.T) {
 func TestProfileNameIsRecordedOnTheAgentRecord(t *testing.T) {
 	reviewer := builtinProfile(t, "reviewer")
 	cwd := identitytest.Repository(t)
-	s := profileSpawnIn(t, cwd, "pi", []string{"--model", "openai-codex/gpt-6-astra"}, header+reviewer.Role)
+	s := profileSpawnIn(t, cwd, "pi", []string{"--model", "openai-codex/gpt-6-astra"}, header+reviewer.Brief())
 	out := s.run(context.Background(), profileOptions("reviewer"), nil)
 	r := out.Result.(*Result)
 	if out.Status != "success" || !r.Registered {
