@@ -1031,3 +1031,31 @@ what was observed; the exact trigger is not known.
 2. During normal spawn, assign, and message use, run `fledge agent list`.
 3. Observe the NAME column as `-` and messages sent with an unnamed sender header.
 4. Run `fledge agent adopt --name <name>` in that pane to restore the name.
+
+---
+
+**Issue:** Every agent's identity is lost after a machine restart
+
+**Summary:** On 2026-09-23 at about 23:29 EDT the user restarted their machine.
+Herdr came back (process start 23:29:14) with the same workspace and pane IDs
+(for example `wA:p1` and `w19:p1`), and the running agents' panes survived.
+Afterwards `fledge agent list` showed `-` for ID and PARENT for every agent,
+including agents spawned and registered minutes earlier (`impl-b1`, record
+`7bf1f804`, not ended, worktree set). `fledge agent current` in the orchestrator
+pane failed with `caller_unregistered`. The orchestrator's Herdr name was also
+gone, while the `impl-*` panes kept their names. Agent records match live agents
+by terminal (records store `terminal_id`); after the restart none matched.
+`fledge agent adopt --name orchestrator` registered the orchestrator under a new
+record ID (`73f2ff4a`; the old one was `c3c07b6b`). There is no way to reattach
+an existing record, so task records keep stale owner and creator IDs: an owner
+must use `task complete --force`, and completion notifications to the creator's
+old record cannot be delivered. Workaround: workers also report to the
+orchestrator with `fledge agent message`. Related backlog idea:
+`enhancement-ideas.md` #25 "Recover after coordinator interruption".
+
+**Reproduction steps:**
+1. Spawn and register agents, then create and assign tasks.
+2. Restart the machine (or Herdr) so the panes are restored.
+3. Run `fledge agent list` and `fledge agent current`.
+4. Observe no attribution: ID and PARENT are `-`, and `current` fails with `caller_unregistered`.
+5. Run `fledge agent adopt --name <name>` and observe a new record ID, so task ownership no longer matches.
