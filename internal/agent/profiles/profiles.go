@@ -81,7 +81,8 @@ func Render(w io.Writer, o libagent.Outcome) error {
 				if line != "" {
 					line = "    " + line
 				}
-				b.WriteString(line + "\n")
+				b.WriteString(line)
+				b.WriteString("\n")
 			}
 		}
 		_, err := io.WriteString(w, b.String())
