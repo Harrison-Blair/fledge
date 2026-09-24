@@ -988,3 +988,46 @@ window; a 1000-row read showed each reply exactly once. Use a larger `--lines`
 1. Spawn a Claude agent and have it answer a few short prompts, each with a unique token.
 2. Run `fledge agent read --name <agent> --lines 40` and look for the first token's reply line.
 3. Run `fledge agent read --name <agent> --source recent --lines 200` and find it.
+
+---
+
+**Issue:** `task complete` loses the creator notification while the creator's pane is blocked
+
+**Summary:** On 2026-09-23, during a planning session, the orchestrator (agent
+`c3c07b6b`, pane `wA:p1`, Claude Code) created planning tasks `5d6ab497`,
+`9af44645`, and `537c1916` and assigned them to planners `plan-a`, `plan-c`, and
+`plan-d`. Each planner ran `fledge task complete` while the orchestrator's Claude
+pane was showing an interactive question dialog (Claude Code's AskUserQuestion
+UI), which Herdr reports as `blocked`. In all three cases `task complete`
+recorded the completion but returned `partial`: the completion notification to
+the creator failed with `agent_blocked`, and the command states it is never
+retried. Workaround: each planner ran `fledge agent wait` and re-sent the notice
+by hand with `fledge agent message --name orchestrator`. An orchestrator that
+uses a question dialog therefore routinely misses completions unless workers
+resend them.
+
+**Reproduction steps:**
+1. Register a creator pane, then create a task and assign it to a worker.
+2. Put the creator's harness into a blocking dialog, such as Claude Code's AskUserQuestion UI.
+3. From the worker, run `fledge task complete --id <task> --summary "..."`.
+4. Observe `partial` with `agent_blocked` and no later delivery of the notification.
+
+---
+
+**Issue:** The orchestrator pane lost its Herdr agent name mid-session
+
+**Summary:** On 2026-09-23, `fledge agent current` in pane `wA:p1` showed `Name:
+orchestrator` (record `c3c07b6b`). Shortly after, while spawning and messaging
+planners, `fledge agent list` showed the NAME column for `c3c07b6b` as `-`, and
+messages sent from that pane carried the header `unnamed agent (wA:p1)` with no
+reply command. The cause is unknown; it was not investigated. Workaround:
+`fledge agent adopt --name orchestrator` in that pane restored the Herdr name and
+kept the same record ID (output: `Adopted orchestrator (wA:p1) as c3c07b6b.`);
+later messages showed `from orchestrator (wA:p1)`. The reproduction below records
+what was observed; the exact trigger is not known.
+
+**Reproduction steps:**
+1. Register an agent with a name and confirm it with `fledge agent current`.
+2. During normal spawn, assign, and message use, run `fledge agent list`.
+3. Observe the NAME column as `-` and messages sent with an unnamed sender header.
+4. Run `fledge agent adopt --name <name>` in that pane to restore the name.
