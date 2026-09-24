@@ -95,6 +95,9 @@ fledge agent adopt --pane w2:p3 --name builder --json
 fledge agent list --json
 fledge agent list --mine
 fledge agent list --parent 3f9a0c2e --json
+fledge agent list --state idle --state blocked --harness codex
+fledge agent list --registered --profile reviewer --ids
+fledge agent list --task 5b21e0f4 --worktree .fledge/worktrees/feature/task
 fledge agent current
 fledge agent get --name reviewer
 fledge agent get --id 3f9a0c2e
@@ -588,10 +591,24 @@ rather than list partially when any entry of Herdr's agent list lacks a
 required field, such as its terminal ID. Session names come from the
 environment, so these checks are a workflow guard, not a security boundary.
 
-`agent list --parent <id>` keeps only live agents whose record's parent is that
-ID; `--mine` does the same for the caller's own live record. The two are
-mutually exclusive, only direct children are listed, and an empty result prints
-`No child agents.`
+`agent list` filters take effect together: different flags AND, and repeating
+one flag ORs its values. `--state` matches the live Herdr status (`idle`,
+`working`, `blocked`, `done`, or `unknown`) and `--harness` the live harness
+kind. The rest match record fields of this repository's live agent records:
+`--profile` the recorded profile name, `--task <id>` the task's owner (an
+unowned task matches nothing; an unknown one fails with `task_not_found`),
+`--worktree <path>` the recorded worktree path, resolved against the current
+directory, and `--registered` any live record. Herdr's agent list spans every
+repository, so these record filters never match agents registered elsewhere,
+which show `-` in the ID column. `--parent <id>` keeps only live agents whose
+record's parent is that ID; `--mine` does the same for the caller's own live
+record. The two are mutually exclusive and only direct children are listed.
+With any filter an empty result prints `No agents match.`; an unfiltered empty
+listing prints `No live agents.` A record filter fails with the store error when
+the repository's records cannot be read; without a filter the ID, PARENT, and
+PROFILE columns are left empty instead. `--ids` prints one record ID per line
+for the registered matches, skipping unregistered ones, for piping into other
+commands; it is rejected together with `--json`.
 
 `fledge agent current` shows the caller's own live record: its ID, name, pane,
 workspace, harness, worktree, profile, parent, and the tasks it owns in the `assigned`
