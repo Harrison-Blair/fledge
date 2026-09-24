@@ -120,6 +120,8 @@ fledge agent pause --pane w2:p3 --timeout 20s --json
 fledge agent pause --name reviewer --no-wait
 fledge agent stop --name reviewer
 fledge agent stop --pane w2:p3 --force --json
+fledge agent stop --name reviewer --name builder
+fledge agent stop --mine --state idle --dry-run
 fledge agent cleanup --dry-run
 fledge agent cleanup --results-collected --json
 fledge agent models --harness codex --json
@@ -400,9 +402,8 @@ acknowledgements produce `unknown`; failures after acknowledgement are `partial`
 Inspect the agent before retrying an uncertain interruption. Resolving a pane
 cannot prevent its occupant changing before Herdr receives the keys.
 
-`fledge agent stop` stops a live agent by closing its pane. It accepts exactly one
-of `--name`/`--pane`, resolves the agent first, and never closes a pane that does
-not host a known agent. Agents whose status is `working`, `blocked`, or `unknown`
+`fledge agent stop` stops live agents by closing their panes. It resolves each
+agent first and never closes a pane that does not host a known agent. Agents whose status is `working`, `blocked`, or `unknown`
 are refused with exit status 2 unless `--force` is passed; `idle` and `done` agents
 stop without it. A `working` agent is first given up to `--grace` (default 5s,
 0s through 60s) to finish its turn, since a worker often reports just before its
@@ -414,6 +415,40 @@ just before closing the pane, so an agent can stop its own pane. If the pane
 fails to close, stop reopens the record it ended, returning it from the archive;
 it leaves a record another command ended alone and reports a reopen refused
 because the terminal was registered again.
+
+Stop takes the same targets as `agent message`: repeatable `--name`, `--pane`,
+and `--id` flags, which may be mixed, or the `agent list` filter flags, but not
+both. Filter flags AND together and repeating one ORs its values; matches never
+include the caller, and an empty match fails with `no_agents_matched`. An
+explicit target naming the caller is still stopped, as a single stop would, but
+it closes the caller's own pane, so name it last. Duplicate targets are
+rejected. One target gives the single result described above. Several targets
+are handled one after another: each is looked up again when its turn comes (a
+filter match with a record is followed by its record ID; one without must
+still be the same terminal) and stopped under the rules above, with `--force`
+and `--grace` applied to every target. A working agent may therefore wait up to
+`--grace` each, so the worst-case wall time is `--grace` times the number of
+targets. The listing a filter matched is a snapshot, and the per-target guard
+still refuses an agent that started working before stop reached it. The result
+is `{"mode": "fan-out", "targets": [...]}` with one row per target, in target
+order: `target` (the flag value, or the record ID for a filter match, or the
+pane for an unregistered one), `outcome` (`stopped`, `refused` without
+`--force`, or `failed`, including a target that could not be looked up),
+`agent`, and `error`. Stopping continues past refusals and failures; any row
+that is not stopped, or whose record could not be ended, makes the outcome
+`partial` with exit status 1. Effects are those of each stop. Human output
+prints `Stopped N of M agents.` and one line per target.
+
+`--dry-run` changes nothing: it looks up explicit targets, or lists a filter's
+matches, and makes no closing, waiting, or record call. It always returns
+`{"mode": "dry-run", "targets": [...]}`, even for one target, with rows whose
+`outcome` is `stop`, `refuse` (the `error` gives the reason, such as the agent
+state that needs `--force`), or `error` (the target could not be looked up).
+A `working` agent is planned as `refuse`, since stop would first give it
+`--grace` to finish its turn and it may still settle. Refusals exit 0; any
+`error` row makes the outcome `rejected` with exit status 1. Human output
+prints `Dry run: would stop N of M agents.` and one line per target with its
+state.
 
 `fledge agent models` lists coding-agent models discovered locally and does not
 need a Herdr session. It reads the `pi`, `codex`, and `claude` caches under the
@@ -601,9 +636,9 @@ effect. If the record ends after the rename, the outcome is `partial`: the
 agent is named but the record is unchanged. Success prints
 `Adopted <name> (<pane>) as <id>.`
 
-`get`, `message`, `read`, `wait` (single target only), `pause`, and `stop`
-accept `--id` in place of `--name` or `--pane`; exactly one of the three is
-required. An `--id` lookup follows a moved terminal as above, and fails closed
+`get`, `message`, `read`, `wait` (single target only), and `pause` accept
+`--id` in place of `--name` or `--pane`; exactly one of the three is
+required. `stop` accepts repeatable `--id` alongside `--name` and `--pane`. An `--id` lookup follows a moved terminal as above, and fails closed
 with `agent_identity_stale` when the terminal no longer hosts an agent (ending
 the record only if the terminal itself is gone), the record belongs to another
 Herdr session, or the record has ended; an unknown ID fails with

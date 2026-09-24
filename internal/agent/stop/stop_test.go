@@ -13,6 +13,7 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
@@ -24,7 +25,7 @@ var fake = herdrscript.Client
 func TestStopIdleClosesResolvedPane(t *testing.T) {
 	p := herdrscript.LiveAgent("idle")
 	s := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "worker"}, Result: herdrscript.Info(p)}, call{Method: "pane.close", Params: map[string]any{"pane_id": "w1:p3"}, Result: herdrscript.OK()})
-	out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}})
+	out := Run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"worker"}}})
 	if out.Operation != "agent.stop" || out.Status != "success" || out.Error != nil || out.ExitCode() != 0 {
 		t.Fatalf("%+v", out)
 	}
@@ -39,7 +40,7 @@ func TestStopIdleClosesResolvedPane(t *testing.T) {
 func TestStopByPaneTargetsThatPane(t *testing.T) {
 	p := herdrscript.LiveAgent("done")
 	s := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: herdrscript.Info(p)}, call{Method: "pane.close", Params: map[string]any{"pane_id": "w1:p3"}, Result: herdrscript.OK()})
-	out := Run(context.Background(), s, Options{Target: identity.Target{Pane: "w1:p3"}})
+	out := Run(context.Background(), s, Options{Selection: selector.Selection{Panes: []string{"w1:p3"}}})
 	if out.Status != "success" || !out.Result.(Result).Stopped {
 		t.Fatalf("%+v", out)
 	}
@@ -52,7 +53,7 @@ func TestStopBusyRequiresForce(t *testing.T) {
 				calls = append(calls, call{Method: "agent.wait", Err: &herdr.Error{Code: "timeout", Message: "timed out"}})
 			}
 			s := fake(t, calls...)
-			out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}})
+			out := Run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"worker"}}})
 			if out.Status != "rejected" || out.ExitCode() != 2 || out.Error.Code != "invalid_input" || len(out.Effects) != 0 {
 				t.Fatalf("%+v", out)
 			}
@@ -64,28 +65,28 @@ func TestStopBusyRequiresForce(t *testing.T) {
 }
 func TestStopForceClosesBusyAgent(t *testing.T) {
 	s := fake(t, call{Method: "agent.get", Result: herdrscript.Info(herdrscript.LiveAgent("working"))}, call{Method: "pane.close", Params: map[string]any{"pane_id": "w1:p3"}, Result: herdrscript.OK()})
-	out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}, Force: true})
+	out := Run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"worker"}}, Force: true})
 	if out.Status != "success" {
 		t.Fatalf("%+v", out)
 	}
 }
 func TestStopUnknownAgentDoesNotClose(t *testing.T) {
 	s := fake(t, call{Method: "agent.get", Err: &herdr.Error{Code: "agent_not_found", Message: "no such agent"}})
-	out := Run(context.Background(), s, Options{Target: identity.Target{Name: "ghost"}})
+	out := Run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"ghost"}}})
 	if out.Status != "rejected" || out.ExitCode() != 1 || out.Error.Code != "agent_not_found" || out.Error.Phase != "agent.get" {
 		t.Fatalf("%+v", out)
 	}
 }
 func TestStopMalformedAgentInfoDoesNotClose(t *testing.T) {
 	s := fake(t, call{Method: "agent.get", Result: herdrscript.Info(herdrscript.Pane("", "w1", "w1:t2"))})
-	out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}})
+	out := Run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"worker"}}})
 	if out.Status != "rejected" || out.Error.Phase != "agent.get" {
 		t.Fatalf("%+v", out)
 	}
 }
 func TestStopLostCloseIsUnknown(t *testing.T) {
 	s := fake(t, call{Method: "agent.get", Result: herdrscript.Info(herdrscript.LiveAgent("idle"))}, call{Method: "pane.close", Err: &herdr.Error{Code: "transport_error", Message: "lost", Uncertain: true}})
-	out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}})
+	out := Run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"worker"}}})
 	if out.Status != "unknown" || out.Error.Code != "transport_error" || out.Error.Phase != "pane.close" || out.ExitCode() != 1 {
 		t.Fatalf("%+v", out)
 	}
@@ -95,20 +96,24 @@ func TestStopLostCloseIsUnknown(t *testing.T) {
 }
 func TestStopWrongCloseResultIsUnknown(t *testing.T) {
 	s := fake(t, call{Method: "agent.get", Result: herdrscript.Info(herdrscript.LiveAgent("idle"))}, call{Method: "pane.close", Result: map[string]any{"type": "pane_info"}})
-	out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}})
+	out := Run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"worker"}}})
 	if out.Status != "unknown" || out.Error.Phase != "pane.close" {
 		t.Fatalf("%+v", out)
 	}
 }
 func TestStopMissingPaneIsFailure(t *testing.T) {
 	s := fake(t, call{Method: "agent.get", Result: herdrscript.Info(herdrscript.LiveAgent("idle"))}, call{Method: "pane.close", Err: &herdr.Error{Code: "pane_not_found", Message: "gone"}})
-	out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}})
+	out := Run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"worker"}}})
 	if out.Status == "success" || out.ExitCode() != 1 || out.Error.Code != "pane_not_found" || out.Result.(Result).Stopped {
 		t.Fatalf("%+v", out)
 	}
 }
-func TestStopRequiresExactlyOneTarget(t *testing.T) {
-	for name, o := range map[string]Options{"neither": {}, "both": {Target: identity.Target{Name: "worker", Pane: "w1:p3"}}} {
+func TestStopRequiresTargetsOrFilter(t *testing.T) {
+	for name, o := range map[string]Options{
+		"neither":   {},
+		"mixed":     {Selection: selector.Selection{Names: []string{"worker"}, Filter: selector.Filter{States: []string{"idle"}}}},
+		"duplicate": {Selection: selector.Selection{Names: []string{"worker", "worker"}}},
+	} {
 		t.Run(name, func(t *testing.T) {
 			out := Run(context.Background(), fake(t), o)
 			if out.Status != "rejected" || out.ExitCode() != 2 || out.Error.Phase != "validation" {
@@ -120,7 +125,7 @@ func TestStopRequiresExactlyOneTarget(t *testing.T) {
 func TestStopJSONEnvelope(t *testing.T) {
 	s := fake(t, call{Method: "agent.get", Result: herdrscript.Info(herdrscript.LiveAgent("idle"))}, call{Method: "pane.close", Result: herdrscript.OK()})
 	var b bytes.Buffer
-	if err := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}}).Write(&b, true, Render); err != nil {
+	if err := Run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"worker"}}}).Write(&b, true, Render); err != nil {
 		t.Fatal(err)
 	}
 	want := `{"operation":"agent.stop","status":"success","result":{"name":"worker","harness":"claude","agent_status":"idle","workspace_id":"w1","tab_id":"w1:t2","pane_id":"w1:p3","cwd":"/repo","stopped":true},"effects":[{"action":"closed","kind":"pane","id":"w1:p3"}],"error":null}` + "\n"
@@ -166,7 +171,7 @@ func TestStopByIDClosesVerifiedPane(t *testing.T) {
 	s := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live}, call{Method: "pane.close", Params: map[string]any{"pane_id": "w1:p3"}, Result: herdrscript.OK()})
 	s.Cwd = identitytest.Repository(t)
 	rec := identitytest.Register(t, s.Cwd, live.Agent)
-	if out := Run(context.Background(), s, Options{Target: identity.Target{ID: rec.ID}}); out.Status != "success" || !out.Result.(Result).Stopped {
+	if out := Run(context.Background(), s, Options{Selection: selector.Selection{IDs: []string{rec.ID}}}); out.Status != "success" || !out.Result.(Result).Stopped {
 		t.Fatalf("%+v", out)
 	}
 }
@@ -182,7 +187,7 @@ func TestStopByStaleIDDoesNotClose(t *testing.T) {
 			recorded := herdrscript.Info(herdrscript.LiveAgent("idle")).Agent
 			recorded.TerminalID = "term_old"
 			rec := identitytest.Register(t, s.Cwd, recorded)
-			out := Run(context.Background(), s, Options{Target: identity.Target{ID: rec.ID}, Force: true})
+			out := Run(context.Background(), s, Options{Selection: selector.Selection{IDs: []string{rec.ID}}, Force: true})
 			if out.Error == nil || out.Error.Code != "agent_identity_stale" || out.Error.Phase != "identity" || len(out.Effects) != 0 {
 				t.Fatalf("%+v", out)
 			}
@@ -210,8 +215,8 @@ func TestStopEndsAgentRecord(t *testing.T) {
 		get call
 		o   func(id string) Options
 	}{
-		"by name": {call{Method: "agent.get", Params: map[string]any{"target": "worker"}, Result: live}, func(string) Options { return Options{Target: identity.Target{Name: "worker"}} }},
-		"by id":   {call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live}, func(id string) Options { return Options{Target: identity.Target{ID: id}} }},
+		"by name": {call{Method: "agent.get", Params: map[string]any{"target": "worker"}, Result: live}, func(string) Options { return Options{Selection: selector.Selection{Names: []string{"worker"}}} }},
+		"by id":   {call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live}, func(id string) Options { return Options{Selection: selector.Selection{IDs: []string{id}}} }},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := fake(t, tc.get, call{Method: "pane.close", Params: map[string]any{"pane_id": "w1:p3"}, Result: herdrscript.OK()})
@@ -241,7 +246,7 @@ func TestStopEndsRecordBeforeClosingPane(t *testing.T) {
 	s := fake(t, call{Method: "agent.get", Result: live}, call{Method: "pane.close", Result: herdrscript.OK(), Before: func() { endedAtClose = ended(t, cwd, id) }})
 	s.Cwd = identitytest.Repository(t)
 	cwd, id = s.Cwd, identitytest.Register(t, s.Cwd, live.Agent).ID
-	if out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}}); out.Status != "success" || !endedAtClose || !ended(t, cwd, id) {
+	if out := Run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"worker"}}}); out.Status != "success" || !endedAtClose || !ended(t, cwd, id) {
 		t.Fatalf("ended at close %v: %+v", endedAtClose, out)
 	}
 }
@@ -263,7 +268,7 @@ func TestStopWithoutClosingKeepsRecordLive(t *testing.T) {
 			s := fake(t, call{Method: "agent.get", Result: live}, call{Method: "pane.close", Err: tc.err, Before: func() { endedAtClose = ended(t, cwd, id) }})
 			s.Cwd = identitytest.Repository(t)
 			cwd, id = s.Cwd, identitytest.Register(t, s.Cwd, live.Agent).ID
-			out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}})
+			out := Run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"worker"}}})
 			if out.Status != tc.status || out.Error.Phase != "pane.close" || len(out.Effects) != 0 || !endedAtClose || ended(t, cwd, id) || !isLive(t, cwd, id) {
 				t.Fatalf("ended at close %v: %+v", endedAtClose, out)
 			}
@@ -308,7 +313,7 @@ func TestStopFailedCloseKeepsOthersEnd(t *testing.T) {
 		call{Method: "pane.close", Err: &herdr.Error{Code: "internal_error", Message: "refused"}})
 	s.Cwd = identitytest.Repository(t)
 	cwd, id = s.Cwd, identitytest.Register(t, s.Cwd, live.Agent).ID
-	out := Run(context.Background(), s, Options{Target: identity.Target{ID: id}})
+	out := Run(context.Background(), s, Options{Selection: selector.Selection{IDs: []string{id}}})
 	if out.Error == nil || out.Error.Code != "internal_error" || out.Error.Phase != "pane.close" || !ended(t, cwd, id) || isLive(t, cwd, id) {
 		t.Fatalf("%+v %+v", out, out.Error)
 	}
@@ -332,7 +337,7 @@ func TestStopReportsOnlyItsOwnRecordEnd(t *testing.T) {
 		call{Method: "pane.close", Params: map[string]any{"pane_id": "w1:p3"}, Result: herdrscript.OK()})
 	s.Cwd = identitytest.Repository(t)
 	cwd, id = s.Cwd, identitytest.Register(t, s.Cwd, live.Agent).ID
-	out := Run(context.Background(), s, Options{Target: identity.Target{ID: id}})
+	out := Run(context.Background(), s, Options{Selection: selector.Selection{IDs: []string{id}}})
 	want := []libagent.Effect{{Action: "closed", Kind: "pane", ID: "w1:p3"}}
 	if out.Status != "success" || out.Error != nil || !reflect.DeepEqual(out.Effects, want) || !ended(t, cwd, id) {
 		t.Fatalf("%+v %+v", out, out.Error)
@@ -349,7 +354,7 @@ func TestStopFailedCloseReportsRefusedReopen(t *testing.T) {
 	s.Cwd = identitytest.Repository(t)
 	cwd = s.Cwd
 	id := identitytest.Register(t, s.Cwd, live.Agent).ID
-	out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}})
+	out := Run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"worker"}}})
 	if out.Error == nil || out.Error.Code != "internal_error" || out.Error.Phase != "pane.close" || !strings.Contains(out.Error.Message, "refused") ||
 		!strings.Contains(out.Error.Message, "agent_already_registered") || !strings.Contains(out.Error.Message, newID) {
 		t.Fatalf("%+v %+v", out, out.Error)
@@ -368,14 +373,14 @@ func TestStopRecordFailureAfterCloseIsPartial(t *testing.T) {
 		break_ func(t *testing.T, agents string)
 	}{
 		// Live cannot read an undecodable record.
-		"lookup by name": {call{Method: "agent.get", Params: map[string]any{"target": "worker"}, Result: live}, func(string) Options { return Options{Target: identity.Target{Name: "worker"}} },
+		"lookup by name": {call{Method: "agent.get", Params: map[string]any{"target": "worker"}, Result: live}, func(string) Options { return Options{Selection: selector.Selection{Names: []string{"worker"}}} },
 			func(t *testing.T, agents string) {
 				if err := os.WriteFile(filepath.Join(agents, "0000beef.json"), []byte("{"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}},
 		// End cannot write into a read-only record directory.
-		"end by id": {call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live}, func(id string) Options { return Options{Target: identity.Target{ID: id}} },
+		"end by id": {call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live}, func(id string) Options { return Options{Selection: selector.Selection{IDs: []string{id}}} },
 			func(t *testing.T, agents string) {
 				if os.Geteuid() == 0 {
 					t.Skip("root ignores directory permissions")
@@ -409,7 +414,7 @@ func TestStopDoesNotAttributeRecordOfDifferentHarness(t *testing.T) {
 	recorded, codex := live.Agent, "codex"
 	recorded.Agent = &codex
 	rec := identitytest.Register(t, s.Cwd, recorded)
-	out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}})
+	out := Run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"worker"}}})
 	if out.Status != "success" || !reflect.DeepEqual(out.Effects, []libagent.Effect{{Action: "closed", Kind: "pane", ID: "w1:p3"}}) {
 		t.Fatalf("%+v", out)
 	}
@@ -425,7 +430,7 @@ func TestStopWorkingSettlesWithinGrace(t *testing.T) {
 		call{Method: "agent.get", Result: herdrscript.Info(herdrscript.LiveAgent("working"))},
 		call{Method: "agent.wait", Params: map[string]any{"target": "worker", "until": []string{"idle", "done", "blocked"}, "timeout_ms": 5000}, Result: herdrscript.Waited(herdrscript.LiveAgent("working"), "done")},
 		call{Method: "pane.close", Params: map[string]any{"pane_id": "w1:p3"}, Result: herdrscript.OK()})
-	out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}})
+	out := Run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"worker"}}})
 	if out.Status != "success" || !out.Result.(Result).Stopped || *out.Result.(Result).AgentStatus != "done" {
 		t.Fatalf("%+v", out)
 	}
@@ -439,7 +444,7 @@ func TestStopWorkingUnsettledRefuses(t *testing.T) {
 			s := fake(t,
 				call{Method: "agent.get", Result: herdrscript.Info(herdrscript.LiveAgent("working"))},
 				call{Method: "agent.wait", Err: &herdr.Error{Code: code, Message: "failed", Uncertain: code == "transport_error"}})
-			out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}})
+			out := Run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"worker"}}})
 			if out.Status != "rejected" || out.ExitCode() != 2 || out.Error.Phase != "guard" || out.Error.Message != "agent worker is working; pass --force to stop it anyway" || len(out.Effects) != 0 {
 				t.Fatalf("%+v", out)
 			}
@@ -452,7 +457,7 @@ func TestStopWorkingSettledBlockedRefuses(t *testing.T) {
 	s := fake(t,
 		call{Method: "agent.get", Result: herdrscript.Info(herdrscript.LiveAgent("working"))},
 		call{Method: "agent.wait", Result: herdrscript.Waited(herdrscript.LiveAgent("working"), "blocked")})
-	out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}})
+	out := Run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"worker"}}})
 	if out.Status != "rejected" || out.Error.Phase != "guard" || !strings.Contains(out.Error.Message, "is blocked") {
 		t.Fatalf("%+v", out)
 	}
@@ -465,7 +470,7 @@ func TestStopWorkingSettledOtherTerminalRefuses(t *testing.T) {
 	s := fake(t,
 		call{Method: "agent.get", Result: herdrscript.Info(herdrscript.LiveAgent("working"))},
 		call{Method: "agent.wait", Result: other})
-	out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}})
+	out := Run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"worker"}}})
 	if out.Status != "rejected" || out.Error.Phase != "guard" || !strings.Contains(out.Error.Message, "is working") {
 		t.Fatalf("%+v", out)
 	}
@@ -482,7 +487,7 @@ func TestStopByIDSettledRowIsVerified(t *testing.T) {
 		call{Method: "agent.wait", Params: map[string]any{"target": "w1:p3", "until": []string{"idle", "done", "blocked"}, "timeout_ms": 5000}, Result: settled})
 	s.Cwd = identitytest.Repository(t)
 	rec := identitytest.Register(t, s.Cwd, live.Agent)
-	out := Run(context.Background(), s, Options{Target: identity.Target{ID: rec.ID}})
+	out := Run(context.Background(), s, Options{Selection: selector.Selection{IDs: []string{rec.ID}}})
 	if out.Status != "rejected" || out.Error.Phase != "guard" || !strings.Contains(out.Error.Message, "is working") || ended(t, s.Cwd, rec.ID) {
 		t.Fatalf("%+v", out)
 	}
@@ -494,11 +499,11 @@ func TestStopGraceFlag(t *testing.T) {
 		call{Method: "agent.get", Result: herdrscript.Info(herdrscript.LiveAgent("working"))},
 		call{Method: "agent.wait", Params: map[string]any{"target": "worker", "until": []string{"idle", "done", "blocked"}, "timeout_ms": 1500}, Result: herdrscript.Waited(herdrscript.LiveAgent("working"), "idle")},
 		call{Method: "pane.close", Params: map[string]any{"pane_id": "w1:p3"}, Result: herdrscript.OK()})
-	if out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}, Grace: 1500 * time.Millisecond, GraceSet: true}); out.Status != "success" {
+	if out := Run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"worker"}}, Grace: 1500 * time.Millisecond, GraceSet: true}); out.Status != "success" {
 		t.Fatalf("%+v", out)
 	}
 	s = fake(t, call{Method: "agent.get", Result: herdrscript.Info(herdrscript.LiveAgent("working"))})
-	if out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}, GraceSet: true}); out.Status != "rejected" || out.Error.Phase != "guard" {
+	if out := Run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"worker"}}, GraceSet: true}); out.Status != "rejected" || out.Error.Phase != "guard" {
 		t.Fatalf("%+v", out)
 	}
 }
@@ -511,7 +516,7 @@ func TestStopGraceValidation(t *testing.T) {
 		"zero force": {GraceSet: true, Force: true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			o.Target = identity.Target{Name: "worker"}
+			o.Selection = selector.Selection{Names: []string{"worker"}}
 			out := Run(context.Background(), fake(t), o)
 			if out.Status != "rejected" || out.ExitCode() != 2 || out.Error.Phase != "validation" || !strings.Contains(out.Error.Message, "--grace") {
 				t.Fatalf("%+v", out)
@@ -522,7 +527,7 @@ func TestStopGraceValidation(t *testing.T) {
 		call{Method: "agent.get", Result: herdrscript.Info(herdrscript.LiveAgent("working"))},
 		call{Method: "agent.wait", Params: map[string]any{"target": "worker", "until": []string{"idle", "done", "blocked"}, "timeout_ms": 60000}, Result: herdrscript.Waited(herdrscript.LiveAgent("working"), "idle")},
 		call{Method: "pane.close", Result: herdrscript.OK()})
-	if out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}, Grace: time.Minute, GraceSet: true}); out.Status != "success" {
+	if out := Run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"worker"}}, Grace: time.Minute, GraceSet: true}); out.Status != "success" {
 		t.Fatalf("max grace: %+v", out)
 	}
 }
