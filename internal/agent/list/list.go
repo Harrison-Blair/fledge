@@ -18,11 +18,12 @@ type Result struct {
 	filtered bool
 }
 
-// Row is a live agent with its Fledge record ID and that record's parent,
-// each null when unregistered.
+// Row is a live agent with its Fledge record ID and that record's parent and
+// profile, each null when unregistered.
 type Row struct {
-	ID     *string `json:"id"`
-	Parent *string `json:"parent"`
+	ID      *string `json:"id"`
+	Parent  *string `json:"parent"`
+	Profile *string `json:"profile"`
 	libagent.AgentRow
 }
 
@@ -73,7 +74,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	for _, a := range agents {
 		row := Row{AgentRow: libagent.NewAgentRow(a.Pane)}
 		if rec, ok := identity.Attributed(records, a); ok {
-			row.ID, row.Parent = &rec.ID, rec.Parent
+			row.ID, row.Parent, row.Profile = &rec.ID, rec.Parent, rec.Profile
 		}
 		if o.Parent != "" && (row.Parent == nil || *row.Parent != o.Parent) {
 			continue
@@ -84,7 +85,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	return out
 }
 
-// liveRecords loads records for the ID and PARENT columns. Unfiltered
+// liveRecords loads records for the ID, PARENT, and PROFILE columns. Unfiltered
 // listings ignore its error, so an unavailable store only leaves them empty;
 // a missing store is no records.
 func liveRecords(ctx context.Context, cwd string) (map[string]identity.Record, error) {
@@ -110,9 +111,9 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		return err
 	}
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(table, "ID\tPARENT\tNAME\tHARNESS\tSTATUS\tWORKSPACE\tTAB\tPANE\tCWD")
+	fmt.Fprintln(table, "ID\tPARENT\tNAME\tHARNESS\tPROFILE\tSTATUS\tWORKSPACE\tTAB\tPANE\tCWD")
 	for _, a := range r.Agents {
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", libagent.Display(a.ID), libagent.Display(a.Parent), libagent.Display(a.Name), libagent.Display(a.Harness), libagent.Display(a.AgentStatus), libagent.Display(a.WorkspaceID), libagent.Display(a.TabID), libagent.Display(a.PaneID), libagent.Display(a.Cwd))
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", libagent.Display(a.ID), libagent.Display(a.Parent), libagent.Display(a.Name), libagent.Display(a.Harness), libagent.Display(a.Profile), libagent.Display(a.AgentStatus), libagent.Display(a.WorkspaceID), libagent.Display(a.TabID), libagent.Display(a.PaneID), libagent.Display(a.Cwd))
 	}
 	return table.Flush()
 }

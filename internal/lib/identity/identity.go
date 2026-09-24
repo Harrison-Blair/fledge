@@ -31,7 +31,9 @@ const Kind = "agents"
 // record that the agent's spawn created its checkout and from which ref, and
 // WorktreeBranch and WorktreeMarker identify that very checkout, so one
 // recreated later at the same path is not taken for it; records written
-// before they existed read as not created or unidentified.
+// before they existed read as not created or unidentified. Profile names the
+// profile the agent was spawned with; it is null for adopted agents, spawns
+// without a profile, and records written before it existed.
 type Record struct {
 	ID              string  `json:"id"`
 	Name            *string `json:"name"`
@@ -41,6 +43,7 @@ type Record struct {
 	Session         *string `json:"session"`
 	TerminalID      string  `json:"terminal_id"`
 	Parent          *string `json:"parent"`
+	Profile         *string `json:"profile"`
 	RegisteredAt    string  `json:"registered_at"`
 	RegisteredBy    string  `json:"registered_by"`
 	WorktreePath    *string `json:"worktree_path"`
@@ -97,8 +100,8 @@ func Existing(ctx context.Context, cwd string) (*state.Store, error) {
 // terminal, and the create, so concurrent registrations of one terminal yield
 // exactly one live record and the others fail with agent_already_registered
 // naming it. A live record of the terminal left by a different harness ends
-// under the same lock. A nil checkout records none.
-func Register(ctx context.Context, s *state.Store, c libagent.Client, details herdr.AgentDetails, by string, checkout *Checkout) (Record, error) {
+// under the same lock. A nil checkout records none, and a nil profile no profile.
+func Register(ctx context.Context, s *state.Store, c libagent.Client, details herdr.AgentDetails, by string, checkout *Checkout, profile *string) (Record, error) {
 	if details.TerminalID == "" || details.PaneID == "" {
 		return Record{}, fmt.Errorf("cannot register an agent without a pane and terminal id")
 	}
@@ -130,7 +133,7 @@ func Register(ctx context.Context, s *state.Store, c libagent.Client, details he
 		}
 		_, err = tx.Create(Kind, func(id string) any {
 			rec = Record{ID: id, Name: details.Name, Pane: details.PaneID, WorkspaceID: details.WorkspaceID, Harness: details.Agent,
-				Session: session(), TerminalID: details.TerminalID, RegisteredAt: time.Now().UTC().Format(time.RFC3339), RegisteredBy: by, Parent: parent}
+				Session: session(), TerminalID: details.TerminalID, RegisteredAt: time.Now().UTC().Format(time.RFC3339), RegisteredBy: by, Parent: parent, Profile: profile}
 			if checkout != nil {
 				rec.WorktreePath, rec.WorktreeCreated, rec.WorktreeBase = &checkout.Path, checkout.Created, checkout.Base
 				rec.WorktreeBranch, rec.WorktreeMarker = checkout.Branch, checkout.Marker

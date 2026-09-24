@@ -270,9 +270,25 @@ func TestGetByIDShowsRecord(t *testing.T) {
 	if err := out.Write(&b, false, Render); err != nil {
 		t.Fatal(err)
 	}
-	want := fmt.Sprintf("Fledge ID: %s\nParent: -\nRegistered at: %s\nRegistered by: spawn\n", rec.ID, rec.RegisteredAt)
+	want := fmt.Sprintf("Fledge ID: %s\nParent: -\nProfile: -\nRegistered at: %s\nRegistered by: spawn\n", rec.ID, rec.RegisteredAt)
 	if !strings.HasSuffix(b.String(), want) {
 		t.Fatalf("%q", b.String())
+	}
+}
+
+func TestGetShowsRecordProfile(t *testing.T) {
+	live := herdrscript.Info(herdrscript.LiveAgent("idle"))
+	c := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live})
+	c.Cwd = identitytest.Repository(t)
+	rec := identitytest.RegisterProfile(t, c.Cwd, live.Agent, "reviewer")
+	out := Run(context.Background(), c, Options{Target: identity.Target{ID: rec.ID}})
+	var b bytes.Buffer
+	if err := out.Write(&b, false, Render); err != nil || !strings.Contains(b.String(), "\nProfile: reviewer\n") {
+		t.Fatalf("%q %v", b.String(), err)
+	}
+	b.Reset()
+	if err := out.Write(&b, true, Render); err != nil || !strings.Contains(b.String(), `"profile":"reviewer"`) {
+		t.Fatalf("%s %v", b.String(), err)
 	}
 }
 

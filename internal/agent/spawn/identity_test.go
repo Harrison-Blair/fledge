@@ -43,7 +43,7 @@ func TestSpawnRegistersAfterWait(t *testing.T) {
 		t.Fatalf("%+v %+v", out, r)
 	}
 	rec := stored(t, s.Cwd, *r.ID)
-	if rec.TerminalID != "term_x" || rec.Pane != "w1:p1" || rec.RegisteredBy != "spawn" || rec.Parent != nil || rec.WorktreePath != nil {
+	if rec.TerminalID != "term_x" || rec.Pane != "w1:p1" || rec.RegisteredBy != "spawn" || rec.Parent != nil || rec.WorktreePath != nil || rec.Profile != nil {
 		t.Fatalf("%+v", rec)
 	}
 	if last := out.Effects[len(out.Effects)-1]; last != (libagent.Effect{Action: "created", Kind: "agent_record", ID: *r.ID}) {

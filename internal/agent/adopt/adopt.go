@@ -95,7 +95,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Result = Result{Record: rec, Renamed: true}
 		return out
 	}
-	rec, err := identity.Register(ctx, store, c, a, "adopt", nil)
+	rec, err := identity.Register(ctx, store, c, a, "adopt", nil, nil)
 	if err != nil {
 		out.Fail(err, "state", false)
 		return out
