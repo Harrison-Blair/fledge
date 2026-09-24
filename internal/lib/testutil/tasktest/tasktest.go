@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/brief"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
@@ -68,6 +69,16 @@ func Load(t *testing.T, cwd, id string) task.Record {
 		t.Fatal(err)
 	}
 	return r
+}
+
+// Brief is a brief that follows the template, with one line under each
+// section.
+func Brief() string {
+	text := "Preamble line.\n"
+	for _, s := range brief.Sections {
+		text += "\n## " + s + "\n" + s + " text.\n"
+	}
+	return text
 }
 
 // Ptr returns a pointer to v.

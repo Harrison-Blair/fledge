@@ -31,12 +31,12 @@ func TestLifecycleCreateAssignCompleteVerify(t *testing.T) {
 	bossRec := tasktest.Register(t, repo, boss)
 	workerRec := tasktest.Register(t, repo, worker)
 
-	created := create.Run(ctx, tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p1", boss)), create.Options{Title: "Fix it", Body: "do the thing", BodySet: true}, strings.NewReader(""))
+	created := create.Run(ctx, tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p1", boss)), create.Options{Title: "Fix it", Body: tasktest.Brief(), BodySet: true}, strings.NewReader(""))
 	if created.Error != nil {
 		t.Fatalf("create: %+v", created.Error)
 	}
 	id := created.Result.(task.Record).ID
-	want := task.Record{ID: id, Title: "Fix it", Brief: "do the thing", Status: task.Created, CreatedBy: &bossRec.ID}
+	want := task.Record{ID: id, Title: "Fix it", Brief: tasktest.Brief(), Status: task.Created, CreatedBy: &bossRec.ID}
 	r := tasktest.Load(t, repo, id)
 	want.CreatedAt = r.CreatedAt
 	if !reflect.DeepEqual(r, want) || r.CreatedAt == "" {
@@ -190,7 +190,7 @@ func TestConcurrentSubtaskCreateAndParentVerify(t *testing.T) {
 		var created, verified libagent.Outcome
 		var wg sync.WaitGroup
 		wg.Go(func() {
-			created = create.Run(context.Background(), tasktest.Client(t, repo, ""), create.Options{Title: "late", Body: "b", BodySet: true, Parent: parent}, strings.NewReader(""))
+			created = create.Run(context.Background(), tasktest.Client(t, repo, ""), create.Options{Title: "late", Body: "b", BodySet: true, Freeform: true, Parent: parent}, strings.NewReader(""))
 		})
 		wg.Go(func() {
 			verified = Run(context.Background(), tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p1", boss)), Options{ID: parent}, strings.NewReader(""))

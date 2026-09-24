@@ -98,3 +98,29 @@ func TestTaskVerifyFinishedCreatedParentCLI(t *testing.T) {
 		t.Fatalf("%+v", r)
 	}
 }
+
+// task create rejects a brief off the template unless --freeform.
+func TestTaskCreateBriefTemplateCLI(t *testing.T) {
+	t.Chdir(t.TempDir())
+	gitRepo(t)
+	t.Setenv("HERDR_PANE_ID", "")
+	var out bytes.Buffer
+	err := ExecuteWithArgs([]string{"task", "create", "--title", "T", "--body", "one line", "--json"}, &out)
+	var status interface{ ExitCode() int }
+	if !errors.As(err, &status) || status.ExitCode() != 1 {
+		t.Fatalf("wrong exit: %v %s", err, out.String())
+	}
+	var envelope libagent.Outcome
+	if err := json.Unmarshal(out.Bytes(), &envelope); err != nil || envelope.Error == nil || envelope.Error.Code != "task_brief_incomplete" || envelope.Error.Phase != "validation" ||
+		!strings.Contains(envelope.Error.Message, "missing sections: Objective, Acceptance criteria, Scope, Known facts, Deliverables, Constraints") {
+		t.Fatalf("%v %s", err, out.String())
+	}
+	out.Reset()
+	if err := ExecuteWithArgs([]string{"task", "create", "--title", "T", "--body", "one line", "--freeform"}, &out); err != nil || !strings.HasPrefix(out.String(), "Created task ") {
+		t.Fatalf("%v %s", err, out.String())
+	}
+	out.Reset()
+	if err := ExecuteWithArgs([]string{"task", "create", "--help"}, &out); err != nil || !strings.Contains(out.String(), "--freeform") || !strings.Contains(out.String(), "fledge task template") {
+		t.Fatalf("%v %s", err, out.String())
+	}
+}
