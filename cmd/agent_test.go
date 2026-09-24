@@ -12,7 +12,7 @@ import (
 )
 
 func TestAgentHelp(t *testing.T) {
-	for _, args := range [][]string{{"agent", "--help"}, {"agent", "spawn", "--help"}, {"agent", "list", "--help"}, {"agent", "message", "--help"}, {"agent", "models", "--help"}, {"agent", "stop", "--help"}, {"agent", "get", "--help"}, {"agent", "read", "--help"}, {"agent", "wait", "--help"}, {"agent", "adopt", "--help"}, {"agent", "current", "--help"}, {"agent", "send", "--help"}, {"agent", "cleanup", "--help"}} {
+	for _, args := range [][]string{{"agent", "--help"}, {"agent", "spawn", "--help"}, {"agent", "list", "--help"}, {"agent", "message", "--help"}, {"agent", "models", "--help"}, {"agent", "stop", "--help"}, {"agent", "get", "--help"}, {"agent", "read", "--help"}, {"agent", "wait", "--help"}, {"agent", "adopt", "--help"}, {"agent", "current", "--help"}, {"agent", "send", "--help"}, {"agent", "cleanup", "--help"}, {"agent", "capabilities", "--help"}} {
 		var out bytes.Buffer
 		if err := ExecuteWithArgs(args, &out); err != nil {
 			t.Fatal(err)
@@ -20,6 +20,23 @@ func TestAgentHelp(t *testing.T) {
 		if !strings.Contains(out.String(), "Usage:") {
 			t.Fatal(out.String())
 		}
+	}
+}
+
+// TestAgentCapabilitiesOffline runs outside Herdr: without --live no socket is needed.
+func TestAgentCapabilitiesOffline(t *testing.T) {
+	t.Setenv("HERDR_ENV", "")
+	t.Setenv("HERDR_SOCKET_PATH", "")
+	var out bytes.Buffer
+	if err := ExecuteWithArgs([]string{"agent", "capabilities", "--harness", "claude"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "claude") || !strings.Contains(out.String(), "resume") {
+		t.Fatal(out.String())
+	}
+	out.Reset()
+	if err := ExecuteWithArgs([]string{"agent", "capabilities", "--live", "--json"}, &out); err == nil || !strings.Contains(out.String(), `"phase":"integration.list"`) {
+		t.Fatalf("%v %s", err, out.String())
 	}
 }
 func TestAgentJSONValidation(t *testing.T) {
@@ -30,6 +47,8 @@ func TestAgentJSONValidation(t *testing.T) {
 		{"agent", "message", "--name", "a", "--body", "", "--json"},
 		{"agent", "models", "--harness", "nope", "--json"},
 		{"agent", "models", "extra", "--json"},
+		{"agent", "capabilities", "--harness", "nope", "--json"},
+		{"agent", "capabilities", "extra", "--json"},
 		{"agent", "get", "--json"},
 		{"agent", "get", "--name=", "--json"},
 		{"agent", "get", "--pane=", "--json"},
