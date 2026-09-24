@@ -1059,3 +1059,56 @@ orchestrator with `fledge agent message`. Related backlog idea:
 3. Run `fledge agent list` and `fledge agent current`.
 4. Observe no attribution: ID and PARENT are `-`, and `current` fails with `caller_unregistered`.
 5. Run `fledge agent adopt --name <name>` and observe a new record ID, so task ownership no longer matches.
+
+---
+
+**Issue:** Message reply hint omits --body
+
+**Summary:** The header on every received message ends with
+`reply: fledge agent message --name <name>`, which does not show that the text
+must go in `--body` or `--file`. `impl-d4` copied the hint and appended the text
+as a positional argument, and `fledge agent message` failed with `unknown
+command`. Observed once. Workaround: pass the text with `--body "..."` or
+`--file <path>`.
+
+**Reproduction steps:**
+1. Receive a message from a named agent and copy the reply command from its header.
+2. Append the reply text as a positional argument, for example
+   `fledge agent message --name orchestrator "done"`.
+3. Observe the `unknown command` error; the same command with `--body "done"` succeeds.
+
+---
+
+**Issue:** Primary checkout .fledge/tmp/ vanished (cause unknown)
+
+**Summary:** On 2026-09-23 between about 23:30 and 23:41 EDT, the orchestrator's
+`.fledge/tmp/` (plans and working files) disappeared from
+`/home/penguin/source/fledge` while wave-2 agents ran. An investigation found no
+Fledge code or test that removes it: no non-test code calls `RemoveAll` or
+`git clean`, and the tests that touch `.fledge` use per-test roots or
+`t.Chdir(t.TempDir())`. The directory was later recreated, and the plans were
+recovered from agent transcripts. Not reproduced; recorded as unexplained data
+loss. Workaround: keep durable planning artifacts in task records, or commit them.
+
+**Reproduction steps:**
+1. Not reproduced. The directory was present before wave-2 work began and gone
+   by about 23:41 on 2026-09-23, with no known trigger.
+
+---
+
+**Issue:** fledgedir.Ensure append race can duplicate the managed .fledge/.gitignore block
+
+**Summary:** `fledgedir.Ensure` reads the ignore file
+(`internal/lib/fledgedir/fledgedir.go:78-87`) and later appends the missing
+rules with `O_APPEND` (`appendIgnoreRule`, about line 150) without a lock or a
+re-check. Two concurrent calls on a root with no managed `.fledge/.gitignore`
+can both read it as unmanaged and both append the full block. The primary
+checkout's `.fledge/.gitignore` (mtime 2026-09-23 22:31, during parallel spawns)
+contains the 3-line managed block twice. Plausible but not proven as the cause
+of that file. A repeated `Ensure` on an already-managed file does not duplicate
+the block, so the duplicate is harmless to Git but untidy.
+
+**Reproduction steps:**
+1. Use a root with no `.fledge/.gitignore`.
+2. Run two `fledgedir.Ensure` calls on it concurrently.
+3. Observe the managed block appended twice (plausible, not proven).
