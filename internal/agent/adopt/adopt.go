@@ -6,10 +6,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
 )
 
 // Options selects the agent to adopt: Pane, or the caller's own pane when
@@ -92,7 +94,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			return out
 		}
 		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "agent_record", ID: rec.ID})
-		out.Result = Result{Record: rec, Renamed: true}
+		out.Result = Result{Record: observe(store, rec, a, &out), Renamed: true}
 		return out
 	}
 	rec, err := identity.Register(ctx, store, c, a, "adopt", nil, nil)
@@ -101,13 +103,34 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		return out
 	}
 	out.Effects = append(out.Effects, libagent.Effect{Action: "created", Kind: "agent_record", ID: rec.ID})
-	out.Result = Result{Record: rec, Renamed: renamed}
+	out.Result = Result{Record: observe(store, rec, a, &out), Renamed: renamed}
 	return out
 }
 
 // registered is replaceable so tests can count adopt's scans of the agent
 // records beyond Register's one.
 var registered = identity.Registered
+
+// observeSession is replaceable so tests can fail its write.
+var observeSession = identity.ObserveSession
+
+// observe stores a's Herdr-reported session ref on rec and returns the
+// updated record. The agent is already adopted, so a failed write is only a
+// warning effect and rec is returned as it was.
+func observe(s *state.Store, rec identity.Record, a herdr.AgentDetails, out *libagent.Outcome) identity.Record {
+	if a.AgentSession == nil {
+		return rec
+	}
+	updated, changed, err := observeSession(s, rec.ID, *a.AgentSession, time.Now())
+	switch {
+	case err != nil:
+		out.Effects = append(out.Effects, libagent.Effect{Action: "warning", Kind: "native_session", ID: rec.ID})
+		return rec
+	case changed:
+		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "native_session", ID: rec.ID})
+	}
+	return updated
+}
 
 // rename names the agent a and confirms the same terminal now carries name.
 func rename(ctx context.Context, c libagent.Client, a herdr.AgentDetails, name string) (herdr.AgentDetails, error) {

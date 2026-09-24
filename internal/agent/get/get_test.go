@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
@@ -270,7 +271,7 @@ func TestGetByIDShowsRecord(t *testing.T) {
 	if err := out.Write(&b, false, Render); err != nil {
 		t.Fatal(err)
 	}
-	want := fmt.Sprintf("Fledge ID: %s\nParent: -\nProfile: -\nRegistered at: %s\nRegistered by: spawn\n", rec.ID, rec.RegisteredAt)
+	want := fmt.Sprintf("Fledge ID: %s\nParent: -\nProfile: -\nNative session: -\nRegistered at: %s\nRegistered by: spawn\n", rec.ID, rec.RegisteredAt)
 	if !strings.HasSuffix(b.String(), want) {
 		t.Fatalf("%q", b.String())
 	}
@@ -342,4 +343,67 @@ func TestGetByNameEndsRecordOfDifferentHarness(t *testing.T) {
 	if err := s.Get(identity.Kind, rec.ID, &rec); err != nil || rec.EndedAt == nil {
 		t.Fatalf("%+v %v", rec, err)
 	}
+}
+
+func TestGetShowsPersistedNativeSession(t *testing.T) {
+	live := herdrscript.Info(herdrscript.LiveAgent("idle"))
+	c := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live}, call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live})
+	c.Cwd = identitytest.Repository(t)
+	rec := identitytest.Register(t, c.Cwd, live.Agent)
+	out := Run(context.Background(), c, Options{Target: identity.Target{ID: rec.ID}})
+	var b bytes.Buffer
+	if err := out.Write(&b, false, Render); err != nil || !strings.Contains(b.String(), "\nNative session: -\n") {
+		t.Fatalf("%q %v", b.String(), err)
+	}
+	s, err := identity.Existing(context.Background(), c.Cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, harness, kind := "herdr:claude", "claude", "id"
+	for _, v := range []string{"s-old", "s-new"} {
+		if _, _, err := identity.ObserveSession(s, rec.ID, herdr.AgentSession{Source: &source, Agent: &harness, Kind: &kind, Value: &v}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out = Run(context.Background(), c, Options{Target: identity.Target{ID: rec.ID}})
+	b.Reset()
+	if err := out.Write(&b, false, Render); err != nil || !strings.Contains(b.String(), "\nNative session: id s-new\n") {
+		t.Fatalf("%q %v", b.String(), err)
+	}
+	b.Reset()
+	if err := out.Write(&b, true, Render); err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Result struct {
+			Record struct {
+				Native  *identity.NativeSessionRef  `json:"native_session"`
+				History []identity.NativeSessionRef `json:"native_session_history"`
+			} `json:"record"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(b.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if r := doc.Result.Record; r.Native == nil || r.Native.Value != "s-new" || len(r.History) != 1 || r.History[0].Value != "s-old" {
+		t.Fatalf("%s", b.String())
+	}
+}
+
+// agent get only displays a live session ref; it never persists one.
+func TestGetWithReadOnlyStoreWritesNothing(t *testing.T) {
+	live := herdrscript.Info(herdrscript.LiveAgent("idle"))
+	c := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: herdr.AgentResult{Type: "agent_info", Agent: identitytest.WithSession(live.Agent, "s-1")}},
+		call{Method: "agent.get", Params: map[string]any{"target": "worker"}, Result: herdr.AgentResult{Type: "agent_info", Agent: identitytest.WithSession(live.Agent, "s-1")}})
+	c.Cwd = identitytest.Repository(t)
+	rec := identitytest.Register(t, c.Cwd, live.Agent)
+	unchanged := identitytest.ReadOnly(t, c.Cwd, rec.ID)
+	for _, o := range []Options{{Target: identity.Target{ID: rec.ID}}, {Target: identity.Target{Name: "worker"}}} {
+		out := Run(context.Background(), c, o)
+		r, ok := out.Result.(Result)
+		if out.Status != "success" || !ok || r.Record == nil || r.Record.NativeSession != nil || r.AgentSession == nil || *r.AgentSession.Value != "s-1" || len(out.Effects) != 0 {
+			t.Fatalf("%+v %+v", out, out.Error)
+		}
+	}
+	unchanged()
 }

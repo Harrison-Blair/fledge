@@ -433,3 +433,18 @@ func TestListIDs(t *testing.T) {
 		})
 	}
 }
+
+// agent list only displays records; it never persists a live session ref.
+func TestListWithReadOnlyStoreWritesNothing(t *testing.T) {
+	registered := herdrscript.Info(herdrscript.LiveAgent("idle")).Agent
+	c := herdrscript.Client(t, call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": []herdr.AgentDetails{identitytest.WithSession(registered, "s-1")}}})
+	c.Cwd = identitytest.Repository(t)
+	rec := identitytest.Register(t, c.Cwd, registered)
+	unchanged := identitytest.ReadOnly(t, c.Cwd, rec.ID)
+	out := Run(context.Background(), c, Options{})
+	rows := out.Result.(Result).Agents
+	if out.Status != "success" || len(rows) != 1 || rows[0].ID == nil || *rows[0].ID != rec.ID || len(out.Effects) != 0 {
+		t.Fatalf("%+v %+v", out, out.Error)
+	}
+	unchanged()
+}
