@@ -43,6 +43,24 @@ func profileBrief(p profiles.Profile, dir string) (string, []string) {
 	return p.Brief(), missing
 }
 
+// knownReadDir is the directory reads resolve under before placement: an
+// existing --worktree checkout, --cwd, or the caller's directory. A new
+// worktree has none until it is created, so it returns "".
+func knownReadDir(o Options, callerCwd string) string {
+	switch {
+	case o.Worktree == "new":
+		return ""
+	case o.Worktree != "":
+		dir, _ := filepath.Abs(o.Worktree)
+		return dir
+	case filepath.IsAbs(o.Cwd):
+		return o.Cwd
+	case o.Cwd != "":
+		return filepath.Join(callerCwd, o.Cwd)
+	}
+	return callerCwd
+}
+
 // firstPrompt places a profile brief before the task body, separated by a
 // blank line, omitting whichever is absent.
 func firstPrompt(brief, body string) string {

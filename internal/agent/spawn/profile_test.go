@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -308,4 +309,46 @@ func TestProfileReadsResolveUnderWorktree(t *testing.T) {
 	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "worktree.list", Result: newWorktreeListing(root)}, create, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), callerNotAgent(), senderCall(), call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": header + readsBrief(t, root)}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
 	s.Cwd = root
 	checkSkippedRead(t, s.run(context.Background(), o, nil), path)
+}
+
+const readsOnlyProfile = "schema_version = 1\nharness = \"claude\"\nreads = [\"present.md\"]\n"
+
+// A brief made only of reads that are all missing is empty, so --no-wait is
+// allowed and the reads are still reported.
+func TestProfileNoWaitAllowedWhenEveryReadIsMissing(t *testing.T) {
+	o := profileOptions("quiet")
+	o.NoWait = true
+	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p)}, callerNotAgent())
+	s.Cwd = profileRepo(t, "quiet", readsOnlyProfile)
+	out := s.run(context.Background(), o, nil)
+	if out.Status != "success" || out.Result.(*Result).PromptRequested {
+		t.Fatalf("%+v %+v", out, out.Error)
+	}
+	if !slices.Contains(out.Effects, libagent.Effect{Action: "skipped", Kind: "read", Path: "present.md"}) {
+		t.Fatalf("%+v", out.Effects)
+	}
+}
+
+// Reads are checked before placement under an existing --worktree checkout
+// or an absolute --cwd, so a read present only there rejects --no-wait.
+func TestProfileNoWaitRejectedWhenReadIsPresentInTargetDirectory(t *testing.T) {
+	for name, set := range map[string]func(*Options, string){
+		"worktree": func(o *Options, dir string) { o.Worktree = dir },
+		"cwd":      func(o *Options, dir string) { o.Workspace, o.Cwd = "new workspace", dir },
+	} {
+		t.Run(name, func(t *testing.T) {
+			target := t.TempDir()
+			writeFile(t, target, "present.md")
+			o := profileOptions("quiet")
+			o.Pane, o.NoWait = "", true
+			set(&o, target)
+			s := fake(t)
+			s.Cwd = profileRepo(t, "quiet", readsOnlyProfile)
+			out := s.run(context.Background(), o, nil)
+			if out.Status != "rejected" || out.Error.Phase != "validation" || len(out.Effects) != 0 || !strings.Contains(out.Error.Message, "--no-wait") {
+				t.Fatalf("%+v %+v", out, out.Error)
+			}
+		})
+	}
 }
