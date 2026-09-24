@@ -670,7 +670,8 @@ completion is never derived from Herdr idle or done.
 
 ```sh
 fledge task create --title "Fix the parser" --file brief.md   # prints the task ID
-fledge task create --title "Add tests" --body "..." --parent 1a2b3c4d --after 5e6f7a8b
+fledge task create --title "Add tests" --file tests.md --parent 1a2b3c4d --after 5e6f7a8b
+fledge task create --title "Try a probe" --body "one line" --freeform
 fledge task depend --id 9c0d1e2f --after 1a2b3c4d --remove 5e6f7a8b
 fledge task list --ready                                        # created and unblocked
 fledge task assign --id 1a2b3c4d --name worker
@@ -679,6 +680,29 @@ fledge task verify --id 1a2b3c4d --summary "Tests pass"         # run by another
 fledge task list --status completed
 fledge task get --id 1a2b3c4d
 ```
+
+`create` requires the brief to follow the **brief template**: six `## `
+headings, exactly once each and in this order, each followed by content:
+
+- `## Objective` – the outcome wanted, in one paragraph.
+- `## Acceptance criteria` – concrete, testable checks that decide completion.
+- `## Scope` – allowed files or areas, and what is explicitly out.
+- `## Known facts` – established facts the worker would otherwise rediscover,
+  with `file:line` where known.
+- `## Deliverables` – the return contract: evidence to report, findings or
+  decisions to return, what may remain undone.
+- `## Constraints` – rules: authorization, commit policy, who to report to,
+  what to escalate.
+
+Headings match exactly (case-sensitive, trailing whitespace ignored). Text
+before the first heading and `###` sub-headings inside a section are allowed;
+any other `## ` heading is an unknown section. A section holding only blank
+lines or HTML comments on their own lines (`<!-- hint -->`) is empty. A brief
+off the template fails with `task_brief_incomplete` (exit 1, phase
+`validation`) naming the missing, empty, duplicated, unknown, or misordered
+section, before any state is created. `--freeform` skips the check and stores
+the brief as given. Existing records are never re-checked, and `assign`
+delivers the brief text unchanged.
 
 A task moves `created` → `assigned` → `completed` → `verified`; `task cancel
 [--reason TEXT]` ends a `created`, `assigned`, or `completed` task as
