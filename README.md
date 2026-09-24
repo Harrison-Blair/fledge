@@ -955,6 +955,9 @@ as a `fail`, not a crash.
   extract speculative utilities.
 - `internal/lib/version` reports the release tag or Go build metadata through
   `--version` and `-V`, without a maintained version file.
+- `internal/lib/harness` is the single source of per-harness facts: the kinds,
+  one typed profile per kind that `agent pause`, `agent spawn`, and `agent models`
+  read, and the fixed capability rows derived from it. It imports nothing from Fledge.
 
 New subcommands export `New() *cobra.Command` and are registered by their parent.
 Internal packages do not import Cobra or `cmd/`.

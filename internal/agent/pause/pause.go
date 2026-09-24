@@ -9,6 +9,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/harness"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 )
@@ -71,13 +72,8 @@ func (s pauser) run(ctx context.Context, o Options) libagent.Outcome {
 		out.Result = result
 		return out
 	}
-	keys := []string{"esc"}
-	switch *a.Agent {
-	case "amp", "copilot", "opencode", "kilo":
-		keys = []string{"esc", "esc"}
-	case "droid", "grok", "hermes", "mastracode", "qodercli":
-		keys = []string{"ctrl+c"}
-	}
+	profile, _ := harness.Lookup(*a.Agent)
+	keys := profile.InterruptKeys
 	if deadline.Sub(s.Now()) <= 0 {
 		out.Fail(&herdr.Error{Code: "timeout", Message: "pause timeout expired before interrupt"}, "agent.send_keys", false)
 		return out
