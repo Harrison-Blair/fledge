@@ -707,6 +707,7 @@ completion is never derived from Herdr idle or done.
 fledge task create --title "Fix the parser" --file brief.md   # prints the task ID
 fledge task create --title "Add tests" --file tests.md --parent 1a2b3c4d --after 5e6f7a8b
 fledge task create --title "Try a probe" --body "one line" --freeform
+fledge task import --file .fledge/tmp/plans/5d6ab497.toml --dry-run   # see Proposals
 fledge task depend --id 9c0d1e2f --after 1a2b3c4d --remove 5e6f7a8b
 fledge task list --ready                                        # created and unblocked
 fledge task assign --id 1a2b3c4d --name worker
@@ -845,6 +846,92 @@ as the agent commands. JSON results add derived fields: list rows `progress`
 `dependencies` (`id`, `title`, `status`, `cancel_reason`, `satisfied`); verify
 `open_subtasks`; and cancel `unblocked`. `task list`, `task get`, and
 `task depend` never contact Herdr.
+
+### Proposals
+
+A **proposal** is a TOML file describing several tasks at once, typically
+written by a planner and reviewed before dispatch. `fledge task template
+--proposal` prints a skeleton.
+
+```toml
+schema_version = 1
+
+[parent]                     # optional: the task the others are created under
+title = "Task brief templates and decomposition"
+brief = '''
+## Objective
+...
+'''
+
+[[tasks]]
+key = "brief-lib"            # names the task within this file
+title = "Add brief template validation"
+brief = '''
+## Objective
+...
+'''
+after = []                   # local keys or existing 8-hex task ids
+
+[[tasks]]
+key = "import"
+title = "Add task import"
+brief = '''...'''
+after = ["brief-lib"]
+```
+
+`schema_version` must be `1`, and unknown keys anywhere are rejected. There
+must be at least one `[[tasks]]` entry. Each `key` is nonempty, single-line,
+unique, and never an 8-hex task id; each `title` is nonempty and single-line;
+every brief, including the parent's, must follow the brief template (there is
+no freeform import); and each `after` entry names a key in the file or an
+existing task id. Local dependencies must not form a cycle.
+
+```sh
+fledge task import --file plan.toml --dry-run            # validate and preview
+fledge task import --file plan.toml                      # create the tasks
+fledge task import --file - --parent 1a2b3c4d < plan.toml
+```
+
+`task import --file PATH` (`-` for stdin) validates the whole file before it
+opens the state store. Then, under one store lock, it creates the `[parent]`
+(if any) and the tasks in dependency order (file order where dependencies
+allow), resolving each `after` key to the new task's id and setting every task's
+`parent`. `--parent TASK` places the tasks under an existing task instead; it
+must be neither verified nor cancelled, and it conflicts with a `[parent]` in
+the file. `created_by` is the caller, as for `create`. Import never assigns.
+
+`--dry-run` runs the same checks, including that `--parent` and any existing
+`after` ids exist, and prints the tasks in creation order without creating
+anything:
+
+```text
+Would create 2 tasks under 1a2b3c4d:
+  brief-lib  Add brief template validation
+  import     Add task import  (after: brief-lib)
+```
+
+A real run prints `Created task 9c0d1e2f (brief-lib): Add brief template
+validation` per task, preceded by the created parent's own line and followed by
+`Created 2 tasks under parent <id>` when the file had a `[parent]`. The JSON
+result is `{"parent": <id or null>, "tasks": [{"key", "id", "title", "after"}],
+"dry_run": <bool>}`; `id` is null on a dry run, and `after` holds the file's
+entries on a dry run and resolved ids otherwise. Effects list one `created
+task <id>` per record.
+
+A file or schema problem, a `[parent]` with `--parent`, or a missing `--file`
+is invalid input (exit 2, phase `validation`); a brief off the template fails
+with `task_brief_incomplete` (exit 1) naming the task key, as in
+`task "import": ...`. An unknown `--parent` or `after` id fails with
+`task_not_found`, and a verified or cancelled `--parent` with
+`task_invalid_state` (phase `task`); none of these create anything. The store
+keeps one file per record, so a failure partway through a real import leaves
+the earlier records in place; the outcome is then `partial` and its effects
+name them. A dry run never contacts Herdr.
+
+By convention a planner writes its proposal to
+`.fledge/tmp/plans/<task-id>.toml`, named for the planning task it was
+assigned. `.fledge/tmp/` is the agents' scratch directory and is already
+ignored; no Fledge command creates it, and `task import` accepts any path.
 
 ## Worktrees
 
