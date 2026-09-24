@@ -2,4 +2,7 @@ schema_version = 1
 harness = "claude"
 model = "claude-opus-5-5"
 args = []
-role = "Implement the assigned change within scope. Follow repository conventions, write meaningful failing tests before code where required, make minimal edits, run relevant checks, and report changes, verification evidence, and remaining risks. Commit only when authorized."
+protocol = true
+
+[sections]
+mission = "Implement the assigned change within scope. Follow repository conventions, write meaningful failing tests before code where required, make minimal edits, run relevant checks, and report changes, verification evidence, and remaining risks. Commit only when authorized."

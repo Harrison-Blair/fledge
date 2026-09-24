@@ -107,7 +107,7 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 			out.Fail(libagent.Invalid("--harness is required; profile %s sets no harness", p.Name), "validation", false)
 			return out
 		}
-		o, role = applyProfile(o, p), p.Role
+		o, role = applyProfile(o, p), p.Brief()
 		result.Harness = o.Harness
 		result.Profile = &ProfileRef{Name: p.Name, Source: p.Source, Path: p.Path, Base: p.Base}
 	}

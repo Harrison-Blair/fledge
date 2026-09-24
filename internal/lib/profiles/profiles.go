@@ -3,6 +3,7 @@ package profiles
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -21,17 +22,50 @@ var assets embed.FS
 
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 
-// Profile is a resolved launch configuration. Source is "builtin" or "repo";
-// Path names a repository file, and Base the built-in it inherits from.
+// Profile is a resolved launch configuration. Reads lists repository files the
+// agent reads first; Protocol renders the shared Fledge protocol block. Source
+// is "builtin" or "repo"; Path names a repository file, and Base the built-in
+// it inherits from.
 type Profile struct {
-	Name    string   `json:"name"`
-	Harness string   `json:"harness"`
-	Model   string   `json:"model"`
-	Args    []string `json:"args"`
-	Role    string   `json:"role"`
-	Source  string   `json:"source"`
-	Path    *string  `json:"path"`
-	Base    *string  `json:"base"`
+	Name     string   `json:"name"`
+	Harness  string   `json:"harness"`
+	Model    string   `json:"model"`
+	Args     []string `json:"args"`
+	Reads    []string `json:"reads"`
+	Protocol bool     `json:"protocol"`
+	Sections Sections `json:"sections"`
+	Source   string   `json:"source"`
+	Path     *string  `json:"path"`
+	Base     *string  `json:"base"`
+}
+
+// Sections are a profile's brief texts in render order. Protocol is the
+// role's addendum under the shared Fledge protocol block.
+type Sections struct {
+	Mission  string `json:"mission"`
+	Workflow string `json:"workflow"`
+	Always   string `json:"always"`
+	Never    string `json:"never"`
+	Protocol string `json:"protocol"`
+	Report   string `json:"report"`
+}
+
+// field returns the section named by one of sectionNames.
+func (s *Sections) field(name string) *string {
+	return map[string]*string{
+		"mission": &s.Mission, "workflow": &s.Workflow, "always": &s.Always,
+		"never": &s.Never, "protocol": &s.Protocol, "report": &s.Report,
+	}[name]
+}
+
+// MarshalJSON adds the rendered brief, so JSON shows exactly what the
+// profile renders.
+func (p Profile) MarshalJSON() ([]byte, error) {
+	type plain Profile
+	return json.Marshal(struct {
+		plain
+		Brief string `json:"brief"`
+	}{plain(p), p.Brief()})
 }
 
 // builtins decodes the embedded profiles through the same strict decoder as
@@ -48,16 +82,28 @@ func builtins() (map[string]Profile, error) {
 		if err != nil {
 			return nil, err
 		}
-		f, err := decode(data)
-		if err == nil && f.Extends != nil {
-			err = fmt.Errorf("built-in profiles cannot extend")
+		if result[name], err = builtinProfile(name, data); err != nil {
+			return nil, err
 		}
-		if err != nil {
-			return nil, fmt.Errorf("built-in profile %s: %w", name, err)
-		}
-		result[name] = Profile{Name: name, Args: []string{}, Source: "builtin"}.overlay(f)
 	}
 	return result, nil
+}
+
+// builtinProfile decodes one embedded profile. Built-ins cannot extend and
+// must render the protocol block and a mission.
+func builtinProfile(name string, data []byte) (Profile, error) {
+	f, err := decode(data)
+	if err == nil && f.Extends != nil {
+		err = fmt.Errorf("built-in profiles cannot extend")
+	}
+	p := Profile{Name: name, Args: []string{}, Reads: []string{}, Source: "builtin"}.overlay(f)
+	if err == nil && (!p.Protocol || p.Sections.Mission == "") {
+		err = fmt.Errorf("built-in profiles need protocol = true and a mission")
+	}
+	if err != nil {
+		return Profile{}, fmt.Errorf("built-in profile %s: %w", name, err)
+	}
+	return p, nil
 }
 
 // Load resolves one profile for a spawn started in cwd. A repository file in
@@ -155,7 +201,7 @@ func resolve(bases map[string]Profile, name, path string) (Profile, bool, error)
 	} else if _, ok := bases[name]; ok {
 		base = name
 	}
-	p := Profile{Args: []string{}}
+	p := Profile{Args: []string{}, Reads: []string{}}
 	if base != "" {
 		p = bases[base]
 		ref := "builtin:" + base

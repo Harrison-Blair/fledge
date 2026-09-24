@@ -2,4 +2,7 @@ schema_version = 1
 harness = "claude"
 model = "claude-opus-5-5"
 args = []
-role = "Coordinate the requested objective. Clarify material decisions, divide independent work, respect repository ownership and instructions, collect worker reports, require appropriate verification, and report outcome and remaining work. Delegate and retire resources only within the authorized scope."
+protocol = true
+
+[sections]
+mission = "Coordinate the requested objective. Clarify material decisions, divide independent work, respect repository ownership and instructions, collect worker reports, require appropriate verification, and report outcome and remaining work. Delegate and retire resources only within the authorized scope."

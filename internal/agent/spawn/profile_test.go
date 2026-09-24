@@ -74,7 +74,7 @@ func TestProfileSuppliesLaunchSettingsAndPrefixesRoleToPrompt(t *testing.T) {
 	planner := builtinProfile(t, "planner")
 	o := profileOptions("planner")
 	o.Prompt, o.PromptSet = "Plan #14.", true
-	s := profileSpawn(t, "pi", []string{"--model", "openai-codex/gpt-6-astra", "--thinking", "xhigh"}, header+planner.Role+"\n\nPlan #14.")
+	s := profileSpawn(t, "pi", []string{"--model", "openai-codex/gpt-6-astra", "--thinking", "xhigh"}, header+planner.Brief()+"\n\nPlan #14.")
 	out := s.run(context.Background(), o, nil)
 	r := out.Result.(*Result)
 	if out.Status != "success" || !r.Prompted || !r.PromptRequested || r.Harness != "pi" {
@@ -87,7 +87,7 @@ func TestProfileSuppliesLaunchSettingsAndPrefixesRoleToPrompt(t *testing.T) {
 
 func TestProfileRoleAloneIsTheFirstPrompt(t *testing.T) {
 	reviewer := builtinProfile(t, "reviewer")
-	s := profileSpawn(t, "pi", []string{"--model", "openai-codex/gpt-6-astra"}, header+reviewer.Role)
+	s := profileSpawn(t, "pi", []string{"--model", "openai-codex/gpt-6-astra"}, header+reviewer.Brief())
 	out := s.run(context.Background(), profileOptions("reviewer"), nil)
 	if r := out.Result.(*Result); out.Status != "success" || !r.Prompted || !r.PromptRequested {
 		t.Fatalf("%+v", out)
@@ -98,7 +98,7 @@ func TestProfileRoleComposesWithStdinFile(t *testing.T) {
 	reviewer := builtinProfile(t, "reviewer")
 	o := profileOptions("reviewer")
 	o.File, o.FileSet = "-", true
-	s := profileSpawn(t, "pi", []string{"--model", "openai-codex/gpt-6-astra"}, header+reviewer.Role+"\n\nfrom file\n")
+	s := profileSpawn(t, "pi", []string{"--model", "openai-codex/gpt-6-astra"}, header+reviewer.Brief()+"\n\nfrom file\n")
 	if out := s.run(context.Background(), o, strings.NewReader("from file\n")); out.Status != "success" {
 		t.Fatalf("%+v", out)
 	}
@@ -133,7 +133,7 @@ func TestProfilePrecedence(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			o := profileOptions("planner")
 			tc.set(&o)
-			s := profileSpawn(t, tc.kind, tc.args, header+builtinProfile(t, "planner").Role)
+			s := profileSpawn(t, tc.kind, tc.args, header+builtinProfile(t, "planner").Brief())
 			out := s.run(context.Background(), o, nil)
 			if r := out.Result.(*Result); out.Status != "success" || r.Harness != tc.kind {
 				t.Fatalf("%+v", out)
@@ -149,7 +149,7 @@ func TestProfileFailuresRejectBeforeHerdr(t *testing.T) {
 	}{
 		{name: "unknown profile", set: func(o *Options) { o.Profile = "nope" }, want: "unknown profile"},
 		{name: "invalid override", file: "reviewer", content: "schema_version = 1\nmodle = \"x\"\n", want: "modle"},
-		{name: "no harness", file: "scout", content: "schema_version = 1\nrole = \"r\"\n", set: func(o *Options) { o.Profile = "scout" }, want: "--harness"},
+		{name: "no harness", file: "scout", content: "schema_version = 1\n[sections]\nmission = \"r\"\n", set: func(o *Options) { o.Profile = "scout" }, want: "--harness"},
 		{name: "native model conflict", file: "pinned", content: "schema_version = 1\nharness = \"claude\"\nargs = [\"--model\", \"a\"]\n", set: func(o *Options) { o.Profile, o.Model = "pinned", "b" }, want: "conflicts with --model"},
 		{name: "no-wait with role", set: func(o *Options) { o.NoWait = true }, want: "--no-wait"},
 	} {
@@ -175,7 +175,7 @@ func TestProfileNoWaitWithoutRoleIsAllowed(t *testing.T) {
 	o.NoWait = true
 	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
 	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p)}, callerNotAgent())
-	s.Cwd = profileRepo(t, "quiet", "schema_version = 1\nextends = \"builtin:reviewer\"\nrole = \"\"\n")
+	s.Cwd = profileRepo(t, "quiet", "schema_version = 1\nextends = \"builtin:reviewer\"\nprotocol = false\n[sections]\nmission = \"\"\n")
 	if out := s.run(context.Background(), o, nil); out.Status != "success" {
 		t.Fatalf("%+v", out)
 	}
