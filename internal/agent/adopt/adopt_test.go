@@ -60,7 +60,7 @@ func TestAdoptSelfRenamesUnnamedAgent(t *testing.T) {
 		t.Fatalf("%+v", out.Error)
 	}
 	r := out.Result.(Result)
-	if !r.Renamed || *r.Name != "helper" || r.Pane != "old:p1" || r.TerminalID != "term_a" || r.RegisteredBy != "adopt" || r.Parent != nil || r.WorktreePath != nil {
+	if !r.Renamed || *r.Name != "helper" || r.Pane != "old:p1" || r.TerminalID != "term_a" || r.RegisteredBy != "adopt" || r.Parent != nil || r.WorktreePath != nil || r.Profile != nil {
 		t.Fatalf("%+v", r)
 	}
 	s, err := identity.Existing(context.Background(), c.Cwd)
@@ -342,7 +342,7 @@ func seed(t *testing.T, c libagent.Client, name *string) identity.Record {
 	d := agent("w1:p9", name).Agent
 	d.WorkspaceID = "w9"
 	tree := "/repo/.fledge/worktrees/w"
-	rec, err := identity.Register(context.Background(), s, libagent.Client{}, d, "spawn", &identity.Checkout{Path: tree})
+	rec, err := identity.Register(context.Background(), s, libagent.Client{}, d, "spawn", &identity.Checkout{Path: tree}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

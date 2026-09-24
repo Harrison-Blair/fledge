@@ -30,11 +30,22 @@ func Repository(t *testing.T) string {
 // parent, and returns its record.
 func Register(t *testing.T, cwd string, a herdr.AgentDetails) identity.Record {
 	t.Helper()
+	return register(t, cwd, a, nil)
+}
+
+// RegisterProfile records a like Register, as spawned with profile.
+func RegisterProfile(t *testing.T, cwd string, a herdr.AgentDetails, profile string) identity.Record {
+	t.Helper()
+	return register(t, cwd, a, &profile)
+}
+
+func register(t *testing.T, cwd string, a herdr.AgentDetails, profile *string) identity.Record {
+	t.Helper()
 	s, err := identity.OpenStore(context.Background(), cwd, &libagent.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec, err := identity.Register(context.Background(), s, libagent.Client{}, a, "spawn", nil)
+	rec, err := identity.Register(context.Background(), s, libagent.Client{}, a, "spawn", nil, profile)
 	if err != nil {
 		t.Fatal(err)
 	}

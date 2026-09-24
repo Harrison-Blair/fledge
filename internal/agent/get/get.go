@@ -102,7 +102,7 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		}
 	}
 	if rec := r.Record; rec != nil {
-		_, err := fmt.Fprintf(w, "Fledge ID: %s\nParent: %s\nRegistered at: %s\nRegistered by: %s\n", rec.ID, libagent.Display(rec.Parent), rec.RegisteredAt, rec.RegisteredBy)
+		_, err := fmt.Fprintf(w, "Fledge ID: %s\nParent: %s\nProfile: %s\nRegistered at: %s\nRegistered by: %s\n", rec.ID, libagent.Display(rec.Parent), libagent.Display(rec.Profile), rec.RegisteredAt, rec.RegisteredBy)
 		return err
 	}
 	return nil

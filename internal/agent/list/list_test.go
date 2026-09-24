@@ -77,14 +77,14 @@ func TestFailedListSkipsRecords(t *testing.T) {
 }
 func TestHumanOperationResults(t *testing.T) {
 	row := herdrscript.Row()
-	id, parent := "0000beef", "0000cafe"
+	id, parent, profile := "0000beef", "0000cafe", "reviewer"
 	for _, tc := range []struct {
 		name   string
 		result any
 		want   string
 	}{
 		{"empty list", Result{}, "No live agents."},
-		{"list", Result{Agents: []Row{{ID: &id, Parent: &parent, AgentRow: row}, {}}}, "ID PARENT NAME HARNESS STATUS WORKSPACE TAB PANE CWD 0000beef 0000cafe worker claude idle w1 w1:t1 w1:p1 /repo - - - - - - - - -"},
+		{"list", Result{Agents: []Row{{ID: &id, Parent: &parent, Profile: &profile, AgentRow: row}, {}}}, "ID PARENT NAME HARNESS PROFILE STATUS WORKSPACE TAB PANE CWD 0000beef 0000cafe worker claude reviewer idle w1 w1:t1 w1:p1 /repo - - - - - - - - - -"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var b bytes.Buffer
@@ -111,14 +111,15 @@ func TestListMatchesRecordsByTerminal(t *testing.T) {
 	other.AgentStatus, other.TerminalID = "idle", "term_other"
 	c := herdrscript.Client(t, call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": []herdr.AgentDetails{registered, other}}})
 	c.Cwd = identitytest.Repository(t)
-	rec := identitytest.Register(t, c.Cwd, registered)
+	rec := identitytest.RegisterProfile(t, c.Cwd, registered, "reviewer")
 	out := Run(context.Background(), c, Options{})
 	rows := out.Result.(Result).Agents
 	if out.Error != nil || len(rows) != 2 || rows[0].ID == nil || *rows[0].ID != rec.ID || rows[1].ID != nil {
 		t.Fatalf("%+v", out)
 	}
 	var b bytes.Buffer
-	if err := out.Write(&b, true, Render); err != nil || !strings.Contains(b.String(), `"id":"`+rec.ID+`"`) || !strings.Contains(b.String(), `"id":null`) {
+	if err := out.Write(&b, true, Render); err != nil || !strings.Contains(b.String(), `"id":"`+rec.ID+`"`) || !strings.Contains(b.String(), `"id":null`) ||
+		!strings.Contains(b.String(), `"profile":"reviewer"`) || !strings.Contains(b.String(), `"profile":null`) {
 		t.Fatalf("%s %v", b.String(), err)
 	}
 }

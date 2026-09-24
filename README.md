@@ -462,7 +462,9 @@ worktrees fail until you run `git config core.worktree <primary checkout path>`
 once. Bare repositories, including their linked worktrees, have no primary
 checkout and are not supported. A record holds an 8-hex `id`, the agent's name,
 pane, workspace, harness, Herdr session (`HERDR_SESSION`), Herdr `terminal_id`,
-`parent`, `registered_at`, `registered_by` (`spawn` or `adopt`),
+`parent`, `profile` (the name of the profile `agent spawn --profile` used; null
+for adopted agents, spawns without a profile, and records written before the
+field existed), `registered_at`, `registered_by` (`spawn` or `adopt`),
 `worktree_path`, `worktree_created`, `worktree_base`, `worktree_branch`,
 `worktree_marker`, and `ended_at`.
 `worktree_created` is true only when the agent's spawn created its checkout
@@ -536,9 +538,10 @@ with `agent_identity_stale` when the terminal no longer hosts an agent (ending
 the record only if the terminal itself is gone), the record belongs to another
 Herdr session, or the record has ended; an unknown ID fails with
 `agent_record_not_found`. `agent get` shows the record (Fledge ID, parent,
-registration time and source) whenever the live agent has one, and JSON adds
-`record`. `agent list` adds `ID` and `PARENT` columns (`-` when unregistered or
-parentless) and `id` and `parent` fields; it fails with `protocol_error`
+profile, registration time and source) whenever the live agent has one, and JSON adds
+`record`. `agent list` adds `ID` and `PARENT` columns and a `PROFILE` column
+after `HARNESS` (`-` when unregistered, parentless, or spawned without a
+profile) and `id`, `parent`, and `profile` fields; it fails with `protocol_error`
 rather than list partially when any entry of Herdr's agent list lacks a
 required field, such as its terminal ID. Session names come from the
 environment, so these checks are a workflow guard, not a security boundary.
@@ -549,7 +552,7 @@ mutually exclusive, only direct children are listed, and an empty result prints
 `No child agents.`
 
 `fledge agent current` shows the caller's own live record: its ID, name, pane,
-workspace, harness, worktree, parent, and the tasks it owns in the `assigned`
+workspace, harness, worktree, profile, parent, and the tasks it owns in the `assigned`
 state, oldest first. The parent's name is the name recorded on the parent's
 record, shown while that record exists; it can differ from the parent's live
 Herdr name. JSON flattens the record into `result` and adds `parent_name` and

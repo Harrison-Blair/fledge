@@ -12,6 +12,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/profiles"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
 
 func builtinProfile(t *testing.T, name string) profiles.Profile {
@@ -205,5 +206,19 @@ func TestSpawnWithoutProfileIsUnchanged(t *testing.T) {
 	}
 	if !reflect.DeepEqual(out.Result.(*Result).Harness, "claude") {
 		t.Fatal(out.Result)
+	}
+}
+
+func TestProfileNameIsRecordedOnTheAgentRecord(t *testing.T) {
+	reviewer := builtinProfile(t, "reviewer")
+	cwd := identitytest.Repository(t)
+	s := profileSpawnIn(t, cwd, "pi", []string{"--model", "openai-codex/gpt-6-astra"}, header+reviewer.Role)
+	out := s.run(context.Background(), profileOptions("reviewer"), nil)
+	r := out.Result.(*Result)
+	if out.Status != "success" || !r.Registered {
+		t.Fatalf("%+v", out)
+	}
+	if rec := stored(t, cwd, *r.ID); rec.Profile == nil || *rec.Profile != "reviewer" {
+		t.Fatalf("%+v", rec)
 	}
 }
