@@ -111,6 +111,8 @@ fledge agent wait --mine --state working --all --timeout 30m
 fledge agent message --name reviewer --body 'Review the current diff'
 fledge agent message --pane w2:p3 --file task.md
 cat task.md | fledge agent message --name reviewer --file -
+fledge agent message --name reviewer --name builder --body 'Rebase on dev'
+fledge agent message --mine --state idle --file update.md --json
 fledge agent send --name reviewer --text '/model claude-haiku-4-5-20251001' --key enter
 fledge agent send --name reviewer --key down --key enter
 fledge agent pause --name reviewer
@@ -236,11 +238,34 @@ command string. For example:
 fledge agent spawn --name reviewer --harness claude --args=--permission-mode --args=plan
 ```
 
-List includes unnamed agents and agents launched outside Fledge. Message accepts
-exactly one of `--name`/`--pane` and one of `--body`/`--file`; it preserves newlines
+List includes unnamed agents and agents launched outside Fledge. Message takes
+one or more targets and exactly one of `--body`/`--file`; it preserves newlines
 and rejects empty or invalid UTF-8 content. Success acknowledges **submission**,
 without waiting for the agent to begin or finish. Blocked agents require the
 user to handle their approval dialog.
+
+Targets are repeatable `--name`, `--pane`, and `--id` flags, which may be mixed,
+or the filter flags `agent list` uses (`--state`, `--harness`, `--profile`,
+`--task`, `--worktree`, `--registered`, `--mine`, `--parent`), but not both.
+Filter flags AND together and repeating one ORs its values; matches never include
+the caller, and an empty match fails with `no_agents_matched`. An explicit
+target naming the caller is still messaged. Duplicate targets are rejected. One
+resolved target gives the single result described here. Several targets are all
+resolved first, so a lookup failure is `rejected` with nothing sent; then each
+gets the same sender header and message ID, one after another, with `--confirm`
+and `--timeout` applied to each. The result is
+`{"mode": "fan-out", "targets": [...]}` with one row per target, in target
+order: `target` (the flag value, or the record ID for a filter match, or the
+pane for an unregistered one), `outcome`, `message_id` (`null` when not sent),
+`agent`, and `error`. Outcomes are `submitted`, `confirmed`, `already_working`,
+`unconfirmed` (submitted, but activity was not confirmed), `unknown` (may have
+been submitted), and `rejected` (not sent). Delivery continues past failures;
+any failed row makes the outcome `partial` with exit status 1, and human output
+prints one line per target. For example, to tell every worker on a task:
+
+```sh
+fledge agent message --task 3f9a0c2e --body 'The API now returns 404 for missing tasks'
+```
 
 `--confirm` also waits, up to `--timeout` (default 10s; valid only with
 `--confirm`), for Herdr to observe the agent become active after submission. A
