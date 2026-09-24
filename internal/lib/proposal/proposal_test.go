@@ -2,6 +2,7 @@ package proposal
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -52,31 +53,44 @@ func TestDecodeWithoutParent(t *testing.T) {
 	}
 }
 
+func TestDecodeInlineTasks(t *testing.T) {
+	src := header + "tasks = [{ key = \"a\", title = \"A\", brief = " + strconv.Quote(valid()) + " }]\n"
+	p, err := Decode([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Tasks) != 1 || p.Tasks[0].Key != "a" {
+		t.Fatalf("tasks = %+v", p.Tasks)
+	}
+}
+
 func TestDecodeRejects(t *testing.T) {
 	good := task("a", "")
 	for label, tc := range map[string]struct{ src, want string }{
-		"syntax":             {header + "tasks = [", "toml"},
-		"missing version":    {good, "schema_version is required"},
-		"unsupported":        {"schema_version = 2\n" + good, "unsupported schema_version 2"},
-		"unknown top":        {header + "extra = 1\n" + good, `unknown key "extra"`},
-		"case variant top":   {"Schema_Version = 1\n" + good, `unknown key "Schema_Version"`},
-		"unknown parent":     {header + "[parent]\ntitle = \"E\"\nbrief = '''\n" + valid() + "'''\nowner = \"x\"\n\n" + good, `unknown key "owner" in [parent]`},
-		"unknown task":       {header + strings.Replace(good, "after = []", "after = []\nowner = \"x\"", 1), `task "a": unknown key "owner"`},
-		"no tasks":           {header, "at least one [[tasks]]"},
-		"empty key":          {header + task("", ""), "key is required"},
-		"multi-line key":     {header + strings.Replace(good, `key = "a"`, `key = "a\nb"`, 1), "key must be a single line"},
-		"duplicate key":      {header + good + good, `task "a": duplicate key`},
-		"id-shaped key":      {header + task("0123abcd", ""), `task "0123abcd": key must not look like a task id`},
-		"empty title":        {header + strings.Replace(good, `title = "Do a"`, `title = ""`, 1), `task "a": title is required`},
-		"multi-line title":   {header + strings.Replace(good, `title = "Do a"`, `title = "Do\na"`, 1), `task "a": title must be a single line`},
-		"bad brief":          {header + strings.Replace(good, "## Scope\n", "", 1), `task "a": task_brief_incomplete: brief is missing sections: Scope`},
-		"empty brief":        {header + strings.Replace(good, "brief = '''\n"+valid()+"'''\n", "", 1), `task "a": task_brief_incomplete: brief is missing sections`},
-		"parent title":       {header + "[parent]\ntitle = \"E\\nF\"\nbrief = '''\n" + valid() + "'''\n\n" + good, "parent: title must be a single line"},
-		"parent brief":       {header + "[parent]\ntitle = \"E\"\nbrief = \"x\"\n\n" + good, "parent: task_brief_incomplete: brief is missing sections"},
-		"unknown after":      {header + task("a", `"zzz"`), `task "a": after names unknown key "zzz"`},
-		"self cycle":         {header + task("a", `"a"`), "cycle: a → a"},
-		"cycle":              {header + task("a", `"b"`) + task("b", `"a"`), "cycle: a → b → a"},
-		"cycle behind chain": {header + task("x", "") + task("a", `"x", "c"`) + task("b", `"a"`) + task("c", `"b"`), "cycle: a → c → b → a"},
+		"syntax":                {header + "tasks = [", "toml"},
+		"missing version":       {good, "schema_version is required"},
+		"unsupported":           {"schema_version = 2\n" + good, "unsupported schema_version 2"},
+		"unknown top":           {header + "extra = 1\n" + good, `unknown key "extra"`},
+		"case variant top":      {"Schema_Version = 1\n" + good, `unknown key "Schema_Version"`},
+		"unknown parent":        {header + "[parent]\ntitle = \"E\"\nbrief = '''\n" + valid() + "'''\nowner = \"x\"\n\n" + good, `unknown key "owner" in [parent]`},
+		"unknown task":          {header + strings.Replace(good, "after = []", "after = []\nowner = \"x\"", 1), `task "a": unknown key "owner"`},
+		"unknown inline task":   {header + "tasks = [{ key = \"a\", title = \"A\", brief = " + strconv.Quote(valid()) + ", extra = true }]\n", `task "a": unknown key "extra"`},
+		"unknown inline parent": {header + "parent = { title = \"E\", brief = " + strconv.Quote(valid()) + ", owner = \"x\" }\n" + good, `unknown key "owner" in [parent]`},
+		"no tasks":              {header, "at least one [[tasks]]"},
+		"empty key":             {header + task("", ""), "key is required"},
+		"multi-line key":        {header + strings.Replace(good, `key = "a"`, `key = "a\nb"`, 1), "key must be a single line"},
+		"duplicate key":         {header + good + good, `task "a": duplicate key`},
+		"id-shaped key":         {header + task("0123abcd", ""), `task "0123abcd": key must not look like a task id`},
+		"empty title":           {header + strings.Replace(good, `title = "Do a"`, `title = ""`, 1), `task "a": title is required`},
+		"multi-line title":      {header + strings.Replace(good, `title = "Do a"`, `title = "Do\na"`, 1), `task "a": title must be a single line`},
+		"bad brief":             {header + strings.Replace(good, "## Scope\n", "", 1), `task "a": task_brief_incomplete: brief is missing sections: Scope`},
+		"empty brief":           {header + strings.Replace(good, "brief = '''\n"+valid()+"'''\n", "", 1), `task "a": task_brief_incomplete: brief is missing sections`},
+		"parent title":          {header + "[parent]\ntitle = \"E\\nF\"\nbrief = '''\n" + valid() + "'''\n\n" + good, "parent: title must be a single line"},
+		"parent brief":          {header + "[parent]\ntitle = \"E\"\nbrief = \"x\"\n\n" + good, "parent: task_brief_incomplete: brief is missing sections"},
+		"unknown after":         {header + task("a", `"zzz"`), `task "a": after names unknown key "zzz"`},
+		"self cycle":            {header + task("a", `"a"`), "cycle: a → a"},
+		"cycle":                 {header + task("a", `"b"`) + task("b", `"a"`), "cycle: a → b → a"},
+		"cycle behind chain":    {header + task("x", "") + task("a", `"x", "c"`) + task("b", `"a"`) + task("c", `"b"`), "cycle: a → c → b → a"},
 	} {
 		_, err := Decode([]byte(tc.src))
 		if err == nil || !strings.Contains(err.Error(), tc.want) {

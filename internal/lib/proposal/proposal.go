@@ -125,7 +125,18 @@ func checkKeys(raw map[string]any) error {
 			}
 		}
 	}
-	tasks, _ := raw["tasks"].([]map[string]any)
+	// [[tasks]] decodes as []map[string]any, an inline array as []any.
+	var tasks []map[string]any
+	switch v := raw["tasks"].(type) {
+	case []map[string]any:
+		tasks = v
+	case []any:
+		for _, t := range v {
+			if m, ok := t.(map[string]any); ok {
+				tasks = append(tasks, m)
+			}
+		}
+	}
 	for i, t := range tasks {
 		for k := range t {
 			if !slices.Contains(taskKeys, k) {
