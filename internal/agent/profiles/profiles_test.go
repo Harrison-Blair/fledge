@@ -38,15 +38,15 @@ func TestListShowsBuiltinsOutsideGit(t *testing.T) {
 		Operation string
 		Result    struct {
 			Profiles []struct {
-				Name, Source, Role string
-				Args               []string
+				Name, Source, Brief string
+				Args                []string
 			}
 		}
 	}
 	if err := json.Unmarshal([]byte(render(t, out, true)), &envelope); err != nil {
 		t.Fatal(err)
 	}
-	if envelope.Operation != "agent.profiles" || len(envelope.Result.Profiles) != 5 || envelope.Result.Profiles[2].Name != "planner" || envelope.Result.Profiles[2].Args[0] != "--thinking" || envelope.Result.Profiles[2].Role == "" {
+	if envelope.Operation != "agent.profiles" || len(envelope.Result.Profiles) != 5 || envelope.Result.Profiles[2].Name != "planner" || envelope.Result.Profiles[2].Args[0] != "--thinking" || envelope.Result.Profiles[2].Brief == "" {
 		t.Fatalf("%+v", envelope)
 	}
 }
@@ -56,10 +56,10 @@ func TestShowPrintsResolvedProfileAndProvenance(t *testing.T) {
 	exec.Command("git", "-C", root, "init", "-q").Run()
 	path := filepath.Join(root, ".fledge", "profiles", "go-review.toml")
 	os.MkdirAll(filepath.Dir(path), 0755)
-	os.WriteFile(path, []byte("schema_version = 1\nextends = \"builtin:planner\"\nrole_append = \"Mind Go.\"\n"), 0644)
+	os.WriteFile(path, []byte("schema_version = 1\nextends = \"builtin:planner\"\n[sections_append]\nmission = \"Mind Go.\"\n"), 0644)
 	out := Run(context.Background(), root, Options{Name: "go-review"})
 	got := render(t, out, false)
-	for _, want := range []string{"Profile go-review\n", "  source: " + path + "\n", "  extends: builtin:planner\n", "  harness: pi\n", "  model: openai-codex/gpt-6-astra\n", "  args: \"--thinking\" \"xhigh\"\n", "  role:\n    Investigate", "\n\n    Mind Go.\n"} {
+	for _, want := range []string{"Profile go-review\n", "  source: " + path + "\n", "  extends: builtin:planner\n", "  harness: pi\n", "  model: openai-codex/gpt-6-astra\n", "  args: \"--thinking\" \"xhigh\"\n", "  role:\n    ## Mission\n    Investigate", "\n\n    Mind Go.\n"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in\n%s", want, got)
 		}

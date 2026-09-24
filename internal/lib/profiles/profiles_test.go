@@ -2,6 +2,7 @@ package profiles
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -78,10 +79,10 @@ func TestBuiltinsShipFiveRolesWithDefaults(t *testing.T) {
 		if p.Source != "builtin" || p.Path != nil || p.Base != nil {
 			t.Fatalf("provenance: %+v", p)
 		}
-		if strings.TrimSpace(p.Role) == "" || roles[p.Role] {
-			t.Fatalf("role not distinct: %q", p.Role)
+		if strings.TrimSpace(p.Sections.Mission) == "" || roles[p.Sections.Mission] || !p.Protocol {
+			t.Fatalf("mission not distinct or protocol off: %+v", p)
 		}
-		roles[p.Role] = true
+		roles[p.Sections.Mission] = true
 		if p.Harness == "codex" {
 			t.Fatalf("%s uses the codex harness; codex models go through pi", p.Name)
 		}
@@ -91,21 +92,21 @@ func TestBuiltinsShipFiveRolesWithDefaults(t *testing.T) {
 			}
 		}
 	}
-	if !strings.Contains(builtin(t, "reviewer").Role, "without editing") || !strings.Contains(builtin(t, "planner").Role, "read-only") {
+	if !strings.Contains(builtin(t, "reviewer").Sections.Mission, "without editing") || !strings.Contains(builtin(t, "planner").Sections.Mission, "read-only") {
 		t.Fatal("role briefs lost their distinguishing text")
 	}
 }
 
 func TestSameNameFileOverlaysItsBuiltin(t *testing.T) {
 	root := repository(t)
-	path := write(t, root, "reviewer", "schema_version = 1\nmodel = \"other\"\nrole_append = \"Focus on Go.\"\n")
+	path := write(t, root, "reviewer", "schema_version = 1\nmodel = \"other\"\n[sections_append]\nmission = \"Focus on Go.\"\n")
 	base := builtin(t, "reviewer")
 	p := load(t, root, "reviewer")
 	if p.Harness != "pi" || p.Model != "other" || !reflect.DeepEqual(p.Args, []string{}) {
 		t.Fatalf("%+v", p)
 	}
-	if p.Role != base.Role+"\n\nFocus on Go." {
-		t.Fatalf("%q", p.Role)
+	if p.Sections.Mission != base.Sections.Mission+"\n\nFocus on Go." || !p.Protocol {
+		t.Fatalf("%+v", p)
 	}
 	if p.Source != "repo" || p.Path == nil || *p.Path != path || p.Base == nil || *p.Base != "builtin:reviewer" {
 		t.Fatalf("provenance: %+v", p)
@@ -116,15 +117,15 @@ func TestOmittedFieldsInheritAndEmptyValuesClear(t *testing.T) {
 	root := repository(t)
 	write(t, root, "planner", "schema_version = 1\n")
 	base := builtin(t, "planner")
-	if got := load(t, root, "planner"); got.Harness != base.Harness || got.Model != base.Model || !reflect.DeepEqual(got.Args, base.Args) || got.Role != base.Role {
+	if got := load(t, root, "planner"); got.Harness != base.Harness || got.Model != base.Model || !reflect.DeepEqual(got.Args, base.Args) || got.Sections != base.Sections || got.Protocol != base.Protocol {
 		t.Fatalf("omitted fields lost: %+v", got)
 	}
-	write(t, root, "planner", "schema_version = 1\nargs = []\nmodel = \"\"\nrole = \"\"\n")
-	if got := load(t, root, "planner"); got.Harness != "pi" || got.Model != "" || !reflect.DeepEqual(got.Args, []string{}) || got.Role != "" {
+	write(t, root, "planner", "schema_version = 1\nargs = []\nmodel = \"\"\nprotocol = false\n[sections]\nmission = \"\"\n")
+	if got := load(t, root, "planner"); got.Harness != "pi" || got.Model != "" || !reflect.DeepEqual(got.Args, []string{}) || got.Sections.Mission != "" || got.Protocol || got.Brief() != "" {
 		t.Fatalf("empty values did not clear: %+v", got)
 	}
-	write(t, root, "planner", "schema_version = 1\nargs = [\"--x\"]\nrole = \"Replacement.\"\n")
-	if got := load(t, root, "planner"); !reflect.DeepEqual(got.Args, []string{"--x"}) || got.Role != "Replacement." {
+	write(t, root, "planner", "schema_version = 1\nargs = [\"--x\"]\n[sections]\nmission = \"Replacement.\"\n")
+	if got := load(t, root, "planner"); !reflect.DeepEqual(got.Args, []string{"--x"}) || got.Sections.Mission != "Replacement." || !got.Protocol {
 		t.Fatalf("replacement: %+v", got)
 	}
 }
@@ -133,22 +134,22 @@ func TestCustomProfilesExtendABuiltinOrStandAlone(t *testing.T) {
 	root := repository(t)
 	write(t, root, "go-review", "schema_version = 1\nextends = \"builtin:reviewer\"\nharness = \"claude\"\nmodel = \"sonnet\"\n")
 	p := load(t, root, "go-review")
-	if p.Harness != "claude" || p.Model != "sonnet" || p.Role != builtin(t, "reviewer").Role || *p.Base != "builtin:reviewer" {
+	if p.Harness != "claude" || p.Model != "sonnet" || p.Sections != builtin(t, "reviewer").Sections || !p.Protocol || *p.Base != "builtin:reviewer" {
 		t.Fatalf("%+v", p)
 	}
 	// An explicit base replaces the same-name default.
 	write(t, root, "verifier", "schema_version = 1\nextends = \"builtin:planner\"\n")
-	if p := load(t, root, "verifier"); !reflect.DeepEqual(p.Args, []string{"--thinking", "xhigh"}) || p.Role != builtin(t, "planner").Role || *p.Base != "builtin:planner" {
+	if p := load(t, root, "verifier"); !reflect.DeepEqual(p.Args, []string{"--thinking", "xhigh"}) || p.Sections != builtin(t, "planner").Sections || *p.Base != "builtin:planner" {
 		t.Fatalf("%+v", p)
 	}
-	write(t, root, "scout", "schema_version = 1\nrole = \"Explore.\"\n")
+	write(t, root, "scout", "schema_version = 1\n[sections]\nmission = \"Explore.\"\n")
 	p = load(t, root, "scout")
-	if p.Harness != "" || p.Model != "" || !reflect.DeepEqual(p.Args, []string{}) || p.Role != "Explore." || p.Base != nil || p.Source != "repo" {
+	if p.Harness != "" || p.Model != "" || !reflect.DeepEqual(p.Args, []string{}) || p.Sections != (Sections{Mission: "Explore."}) || p.Protocol || !reflect.DeepEqual(p.Reads, []string{}) || p.Base != nil || p.Source != "repo" {
 		t.Fatalf("%+v", p)
 	}
-	write(t, root, "solo", "schema_version = 1\nrole_append = \"Only this.\"\n")
-	if p := load(t, root, "solo"); p.Role != "Only this." {
-		t.Fatalf("%q", p.Role)
+	write(t, root, "solo", "schema_version = 1\n[sections_append]\nnever = \"Only this.\"\n")
+	if p := load(t, root, "solo"); p.Sections != (Sections{Never: "Only this."}) {
+		t.Fatalf("%+v", p.Sections)
 	}
 }
 
@@ -162,12 +163,29 @@ func TestInvalidProfilesFailWithoutFallback(t *testing.T) {
 		{"case-variant schema_version", "reviewer", "Schema_Version = 1\n", "Schema_Version"},
 		{"wrong type", "reviewer", "schema_version = 1\nargs = \"--x\"\n", "args"},
 		{"syntax", "reviewer", "schema_version = \n", "reviewer.toml"},
-		{"role and append", "reviewer", "schema_version = 1\nrole = \"a\"\nrole_append = \"b\"\n", "role_append"},
+		{"removed role", "reviewer", "schema_version = 1\nrole = \"a\"\n", "role was replaced by [sections]"},
+		{"removed role_append", "reviewer", "schema_version = 1\nrole_append = \"a\"\n", "[sections]"},
+		{"unknown section", "reviewer", "schema_version = 1\n[sections]\nmision = \"a\"\n", "mision"},
+		{"unknown appended section", "reviewer", "schema_version = 1\n[sections_append]\nnotes = \"a\"\n", "notes"},
+		{"case-variant section", "reviewer", "schema_version = 1\n[sections]\nMission = \"a\"\n", "Mission"},
+		{"case-variant sections table", "reviewer", "schema_version = 1\n[Sections]\nmission = \"a\"\n", "Sections"},
+		{"section in both tables", "reviewer", "schema_version = 1\n[sections]\nnever = \"a\"\n[sections_append]\nnever = \"b\"\n", "never"},
+		{"section wrong type", "reviewer", "schema_version = 1\nsections = \"a\"\n", "sections"},
+		{"appended section wrong type", "reviewer", "schema_version = 1\nsections_append = [\"a\"]\n", "sections_append"},
+		{"section value wrong type", "reviewer", "schema_version = 1\n[sections]\nmission = 1\n", "mission"},
+		{"absolute read", "reviewer", "schema_version = 1\nreads = [\"/etc/passwd\"]\n", "reads"},
+		{"parent read", "reviewer", "schema_version = 1\nreads = [\"../x.md\"]\n", "reads"},
+		{"inner parent read", "reviewer", "schema_version = 1\nreads = [\"docs/../../x.md\"]\n", "reads"},
+		{"nul read", "reviewer", "schema_version = 1\nreads = [\"a\\u0000\"]\n", "NUL"},
+		{"nul section", "reviewer", "schema_version = 1\n[sections]\nreport = \"a\\u0000\"\n", "NUL"},
+		{"nul appended section", "reviewer", "schema_version = 1\n[sections_append]\nreport = \"a\\u0000\"\n", "NUL"},
+		{"protocol wrong type", "reviewer", "schema_version = 1\nprotocol = \"yes\"\n", "protocol"},
 		{"unknown base", "custom", "schema_version = 1\nextends = \"builtin:nope\"\n", "extends"},
 		{"repo base", "custom", "schema_version = 1\nextends = \"reviewer\"\n", "extends"},
 		{"unknown harness", "reviewer", "schema_version = 1\nharness = \"nope\"\n", "harness"},
 		{"empty harness", "reviewer", "schema_version = 1\nharness = \"\"\n", "harness"},
-		{"nul", "reviewer", "schema_version = 1\nrole = \"a\\u0000b\"\n", "NUL"},
+		{"nul", "reviewer", "schema_version = 1\nmodel = \"a\\u0000b\"\n", "NUL"},
+		{"invalid utf-8 section", "reviewer", "schema_version = 1\n[sections]\nmission = \"a\xffb\"\n", "reviewer.toml"},
 		{"nul arg", "reviewer", "schema_version = 1\nargs = [\"a\\u0000\"]\n", "NUL"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -240,5 +258,101 @@ func TestListMergesRepoProfilesByName(t *testing.T) {
 	}
 	if !slices.Equal(names, []string{"alpha", "implementer", "orchestrator", "planner", "reviewer", "verifier"}) {
 		t.Fatal(names)
+	}
+}
+
+func TestSectionsAppendReadsAndProtocolOverlay(t *testing.T) {
+	root := repository(t)
+	write(t, root, "base", "schema_version = 1\nprotocol = true\nreads = [\"AGENTS.md\", \"docs/guide.md\"]\n[sections]\nmission = \"Do it.\"\nnever = \"Push.\"\n")
+	p := load(t, root, "base")
+	if !p.Protocol || !reflect.DeepEqual(p.Reads, []string{"AGENTS.md", "docs/guide.md"}) || p.Sections != (Sections{Mission: "Do it.", Never: "Push."}) {
+		t.Fatalf("%+v", p)
+	}
+	write(t, root, "reviewer", "schema_version = 1\nreads = []\n[sections]\nreport = \"Findings.\"\n[sections_append]\nmission = \"Also Go.\"\nalways = \"Cite.\"\n")
+	base := builtin(t, "reviewer")
+	p = load(t, root, "reviewer")
+	want := base.Sections
+	want.Report, want.Mission, want.Always = "Findings.", base.Sections.Mission+"\n\nAlso Go.", "Cite."
+	if p.Sections != want || !reflect.DeepEqual(p.Reads, []string{}) || !p.Protocol {
+		t.Fatalf("%+v", p)
+	}
+	write(t, root, "reviewer", "schema_version = 1\nprotocol = false\n")
+	if p := load(t, root, "reviewer"); p.Protocol || p.Sections != base.Sections {
+		t.Fatalf("%+v", p)
+	}
+}
+
+func TestBriefRendersPresentPartsInFixedOrder(t *testing.T) {
+	p := Profile{
+		Reads:    []string{"AGENTS.md", "README.md"},
+		Protocol: true,
+		Sections: Sections{Mission: "M.", Workflow: "W.", Always: "A.", Never: "N.", Protocol: "P.", Report: "R."},
+	}
+	want := "## Mission\nM.\n\n## Read first\nRead these files in your working directory before starting: `AGENTS.md`, `README.md`.\n\n" +
+		"## Workflow\nW.\n\n## Always\nA.\n\n## Never\nN.\n\n## Fledge protocol\n" + strings.Trim(shared, "\n") + "\n\nP.\n\n## Report\nR."
+	if got := p.Brief(); got != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+	if !strings.Contains(shared, "fledge agent current") {
+		t.Fatalf("shared block not embedded: %q", shared)
+	}
+	if got := (Profile{Sections: Sections{Workflow: "W.", Protocol: "P."}}).Brief(); got != "## Workflow\nW.\n\n## Fledge protocol\nP." {
+		t.Fatalf("%q", got)
+	}
+	if got := (Profile{Protocol: true}).Brief(); got != "## Fledge protocol\n"+strings.Trim(shared, "\n") {
+		t.Fatalf("%q", got)
+	}
+	if got := (Profile{Reads: []string{}}).Brief(); got != "" {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestSectionMarkdownSurvivesTOMLByteForByte(t *testing.T) {
+	root := repository(t)
+	text := "- Run `fledge task list --json` first.\n- Pass `--flag` exactly; use `a*b` and C:\\dir.\n  1. Nested `code`."
+	write(t, root, "md", "schema_version = 1\n[sections]\nworkflow = \"\"\"\n"+strings.ReplaceAll(text, "\\", "\\\\")+"\n\"\"\"\n")
+	p := load(t, root, "md")
+	if p.Sections.Workflow != text+"\n" {
+		t.Fatalf("%q", p.Sections.Workflow)
+	}
+	if got := p.Brief(); got != "## Workflow\n"+text {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestProfileJSONCarriesSectionsReadsProtocolAndBrief(t *testing.T) {
+	p := builtin(t, "reviewer")
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got["role"]; ok {
+		t.Fatalf("role still present: %s", b)
+	}
+	sections, _ := got["sections"].(map[string]any)
+	if sections["mission"] != p.Sections.Mission || len(sections) != 6 || got["protocol"] != true || got["brief"] != p.Brief() || got["brief"] == "" {
+		t.Fatalf("%s", b)
+	}
+	if reads, ok := got["reads"].([]any); !ok || len(reads) != len(p.Reads) {
+		t.Fatalf("reads: %s", b)
+	}
+}
+
+func TestBuiltinsRequireProtocolAndMission(t *testing.T) {
+	for name, content := range map[string]string{
+		"no protocol": "schema_version = 1\n[sections]\nmission = \"M.\"\n",
+		"no mission":  "schema_version = 1\nprotocol = true\n[sections]\nnever = \"N.\"\n",
+		"extends":     "schema_version = 1\nextends = \"builtin:reviewer\"\nprotocol = true\n[sections]\nmission = \"M.\"\n",
+	} {
+		if p, err := builtinProfile("x", []byte(content)); err == nil {
+			t.Fatalf("%s accepted: %+v", name, p)
+		}
+	}
+	if _, err := builtinProfile("x", []byte("schema_version = 1\nprotocol = true\n[sections]\nmission = \"M.\"\n")); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -247,7 +247,7 @@ func TestSpawnReadinessPollFailure(t *testing.T) {
 // Every first-prompt source is submitted exactly once, after the gate, with
 // one sender header.
 func TestSpawnFirstPromptSourcesSubmitOnceAfterReadiness(t *testing.T) {
-	reviewer := builtinProfile(t, "reviewer").Role
+	reviewer := builtinProfile(t, "reviewer").Brief()
 	for _, tc := range []struct {
 		name, in, text string
 		set            func(*Options)

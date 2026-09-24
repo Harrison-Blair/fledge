@@ -73,11 +73,11 @@ func Render(w io.Writer, o libagent.Outcome) error {
 			args = append(args, strconv.Quote(a))
 		}
 		fmt.Fprintf(&b, "  harness: %s\n  model: %s\n  args: %s\n", orDash(p.Harness), orDash(p.Model), orDash(strings.Join(args, " ")))
-		if p.Role == "" {
+		if p.Brief() == "" {
 			b.WriteString("  role: -\n")
 		} else {
 			b.WriteString("  role:\n")
-			for _, line := range strings.Split(p.Role, "\n") {
+			for _, line := range strings.Split(p.Brief(), "\n") {
 				if line != "" {
 					line = "    " + line
 				}

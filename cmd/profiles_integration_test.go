@@ -13,13 +13,13 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/profiles"
 )
 
-func builtinRole(t *testing.T, name string) string {
+func builtinProfile(t *testing.T, name string) profiles.Profile {
 	t.Helper()
 	p, err := profiles.Load(context.Background(), t.TempDir(), name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return p.Role
+	return p
 }
 
 func startArgs(t *testing.T, c rpcCall) (string, []string) {
@@ -47,7 +47,7 @@ func TestSpawnProfileFlagSetsLaunchAndOneHeaderedPrompt(t *testing.T) {
 	if kind, args := startArgs(t, calls[1]); kind != "pi" || !reflect.DeepEqual(args, []string{"--model", "openai-codex/gpt-6-astra"}) {
 		t.Fatalf("%s %q", kind, args)
 	}
-	if calls[3].Method != "agent.prompt" || !headered(t, calls[3], builtinRole(t, "reviewer")+"\n\nreview this") {
+	if calls[3].Method != "agent.prompt" || !headered(t, calls[3], builtinProfile(t, "reviewer").Brief()+"\n\nreview this") {
 		t.Fatalf("%s", calls[3].Params)
 	}
 	var envelope struct {
@@ -80,7 +80,7 @@ func TestSpawnProfileExplicitNativeTokensReplaceProfileArgs(t *testing.T) {
 	if kind, args := startArgs(t, calls[1]); kind != "pi" || !reflect.DeepEqual(args, []string{"--model", "openai-codex/gpt-6-astra", "--search", "--native"}) {
 		t.Fatalf("%s %q", kind, args)
 	}
-	if !headered(t, calls[3], builtinRole(t, "planner")) {
+	if !headered(t, calls[3], builtinProfile(t, "planner").Brief()) {
 		t.Fatalf("%s", calls[3].Params)
 	}
 	if !strings.Contains(out.String(), "  profile: planner (built-in)\n") {
@@ -93,7 +93,7 @@ func TestSpawnProfileReadsInvokingRepositoryOverride(t *testing.T) {
 	l := newSocket(t)
 	gitRepo(t)
 	os.MkdirAll(filepath.Join(".fledge", "profiles"), 0755)
-	os.WriteFile(filepath.Join(".fledge", "profiles", "reviewer.toml"), []byte("schema_version = 1\nharness = \"claude\"\nmodel = \"sonnet\"\nrole = \"Local role.\"\n"), 0644)
+	os.WriteFile(filepath.Join(".fledge", "profiles", "reviewer.toml"), []byte("schema_version = 1\nharness = \"claude\"\nmodel = \"sonnet\"\nprotocol = false\n[sections]\nmission = \"Local role.\"\n"), 0644)
 	done := serveRPCs(l, snapshotResult(), startedResult("claude"), readyAs("claude"), promptedResult())
 	var out bytes.Buffer
 	if err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--profile", "reviewer", "--pane", "w1:p1", "--prompt", "go"}, &out); err != nil {
@@ -103,7 +103,7 @@ func TestSpawnProfileReadsInvokingRepositoryOverride(t *testing.T) {
 	if kind, args := startArgs(t, calls[1]); kind != "claude" || !reflect.DeepEqual(args, []string{"--model", "sonnet"}) {
 		t.Fatalf("%s %q", kind, args)
 	}
-	if !headered(t, calls[3], "Local role.\n\ngo") {
+	if !headered(t, calls[3], "## Mission\nLocal role.\n\ngo") {
 		t.Fatalf("%s", calls[3].Params)
 	}
 }
@@ -137,7 +137,7 @@ func TestProfilesCommandNeedsNoSocketOrRepository(t *testing.T) {
 		t.Fatal(err, out.String())
 	}
 	out.Reset()
-	if err := ExecuteWithArgs([]string{"agent", "profiles", "verifier"}, &out); err != nil || !strings.Contains(out.String(), "Profile verifier\n  source: built-in\n") || !strings.Contains(out.String(), "    "+builtinRole(t, "verifier")) {
+	if err := ExecuteWithArgs([]string{"agent", "profiles", "verifier"}, &out); err != nil || !strings.Contains(out.String(), "Profile verifier\n  source: built-in\n") || !strings.Contains(out.String(), "    ## Mission\n    "+builtinProfile(t, "verifier").Sections.Mission+"\n") {
 		t.Fatal(err, out.String())
 	}
 	out.Reset()

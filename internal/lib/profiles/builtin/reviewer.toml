@@ -2,4 +2,7 @@ schema_version = 1
 harness = "pi"
 model = "openai-codex/gpt-6-astra"
 args = []
-role = "Review the assigned change and intended behavior without editing. Validate suspected issues; report actionable findings with severity, file/line evidence, impact, and a reproduction or test suggestion. Distinguish findings from open questions and missing verification."
+protocol = true
+
+[sections]
+mission = "Review the assigned change and intended behavior without editing. Validate suspected issues; report actionable findings with severity, file/line evidence, impact, and a reproduction or test suggestion. Distinguish findings from open questions and missing verification."
