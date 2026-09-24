@@ -15,5 +15,3 @@ the harness's own agent tools.
 - If you spawned agents or created checkouts, run `fledge agent cleanup` before completing.
   Never stop agents you did not spawn.
 - When done, stop. Do not poll, sleep, or wait for more instructions unless told to.
-
-

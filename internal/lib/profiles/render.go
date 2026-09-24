@@ -11,8 +11,7 @@ import (
 var shared string
 
 // Brief renders the profile as Markdown: one H2 block per non-empty part in
-// a fixed order, joined by blank lines. Leading and trailing newlines of each
-// text are dropped; everything else is kept byte for byte.
+// a fixed order, separated by blank lines. Texts render byte for byte.
 func (p Profile) Brief() string {
 	reads := ""
 	if len(p.Reads) > 0 {
@@ -37,13 +36,28 @@ func (p Profile) Brief() string {
 	} {
 		var texts []string
 		for _, t := range part.texts {
-			if t = strings.Trim(t, "\n"); t != "" {
+			if t != "" {
 				texts = append(texts, t)
 			}
 		}
 		if len(texts) > 0 {
-			blocks = append(blocks, "## "+part.heading+"\n"+strings.Join(texts, "\n\n"))
+			blocks = append(blocks, "## "+part.heading+"\n"+paragraphs(texts))
 		}
 	}
-	return strings.Join(blocks, "\n\n")
+	return paragraphs(blocks)
+}
+
+// paragraphs joins texts with a blank line, adding only the newlines a text
+// does not already end with.
+func paragraphs(texts []string) string {
+	var b strings.Builder
+	for i, t := range texts {
+		if i > 0 && strings.HasSuffix(texts[i-1], "\n") {
+			b.WriteString("\n")
+		} else if i > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(t)
+	}
+	return b.String()
 }

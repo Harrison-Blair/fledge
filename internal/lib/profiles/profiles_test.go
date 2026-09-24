@@ -289,17 +289,17 @@ func TestBriefRendersPresentPartsInFixedOrder(t *testing.T) {
 		Sections: Sections{Mission: "M.", Workflow: "W.", Always: "A.", Never: "N.", Protocol: "P.", Report: "R."},
 	}
 	want := "## Mission\nM.\n\n## Read first\nRead these files in your working directory before starting: `AGENTS.md`, `README.md`.\n\n" +
-		"## Workflow\nW.\n\n## Always\nA.\n\n## Never\nN.\n\n## Fledge protocol\n" + strings.Trim(shared, "\n") + "\n\nP.\n\n## Report\nR."
+		"## Workflow\nW.\n\n## Always\nA.\n\n## Never\nN.\n\n## Fledge protocol\n" + shared + "\nP.\n\n## Report\nR."
 	if got := p.Brief(); got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
 	}
-	if !strings.Contains(shared, "fledge agent current") {
+	if !strings.Contains(shared, "fledge agent current") || !strings.HasSuffix(shared, ".\n") {
 		t.Fatalf("shared block not embedded: %q", shared)
 	}
 	if got := (Profile{Sections: Sections{Workflow: "W.", Protocol: "P."}}).Brief(); got != "## Workflow\nW.\n\n## Fledge protocol\nP." {
 		t.Fatalf("%q", got)
 	}
-	if got := (Profile{Protocol: true}).Brief(); got != "## Fledge protocol\n"+strings.Trim(shared, "\n") {
+	if got := (Profile{Protocol: true}).Brief(); got != "## Fledge protocol\n"+shared {
 		t.Fatalf("%q", got)
 	}
 	if got := (Profile{Reads: []string{}}).Brief(); got != "" {
@@ -315,8 +315,35 @@ func TestSectionMarkdownSurvivesTOMLByteForByte(t *testing.T) {
 	if p.Sections.Workflow != text+"\n" {
 		t.Fatalf("%q", p.Sections.Workflow)
 	}
-	if got := p.Brief(); got != "## Workflow\n"+text {
+	if got := p.Brief(); got != "## Workflow\n"+text+"\n" {
 		t.Fatalf("%q", got)
+	}
+}
+
+// Section text renders exactly as decoded; joins add only the newlines that
+// separate blocks by one blank line.
+func TestBriefKeepsSectionTextExact(t *testing.T) {
+	p := Profile{Sections: Sections{Mission: "\n  M.\n", Workflow: "W.", Never: "N.\n\n", Report: "R.\n"}}
+	want := "## Mission\n\n  M.\n\n## Workflow\nW.\n\n## Never\nN.\n\n\n## Report\nR.\n"
+	if got := p.Brief(); got != want {
+		t.Fatalf("got %q\nwant %q", got, want)
+	}
+}
+
+func TestReadsOverlayReplacesAndClears(t *testing.T) {
+	base := Profile{Reads: []string{"AGENTS.md", "README.md"}}
+	for content, want := range map[string][]string{
+		"schema_version = 1\n":                          {"AGENTS.md", "README.md"},
+		"schema_version = 1\nreads = [\"docs/x.md\"]\n": {"docs/x.md"},
+		"schema_version = 1\nreads = []\n":              {},
+	} {
+		f, err := decode([]byte(content))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := base.overlay(f).Reads; !reflect.DeepEqual(got, want) {
+			t.Fatalf("%q: %#v want %#v", content, got, want)
+		}
 	}
 }
 
