@@ -11,8 +11,12 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/selector"
+	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/tasktest"
 )
 
 type call = herdrscript.Call
@@ -181,7 +185,7 @@ func TestListParentFilter(t *testing.T) {
 	} {
 		c := herdrscript.Client(t, l.listCall())
 		c.Cwd = l.cwd
-		out := Run(context.Background(), c, Options{Parent: tc.parent})
+		out := Run(context.Background(), c, Options{Filter: selector.Filter{Parent: tc.parent}})
 		if got := ids(out.Result.(Result).Agents); out.Error != nil || strings.Join(got, " ") != strings.Join(tc.want, " ") {
 			t.Fatalf("--parent %s: got %v want %v (%+v)", tc.parent, got, tc.want, out.Error)
 		}
@@ -192,7 +196,7 @@ func TestListParentFilterWithoutState(t *testing.T) {
 	a := herdrscript.Info(herdrscript.LiveAgent("idle")).Agent
 	c := herdrscript.Client(t, call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": []herdr.AgentDetails{a}}})
 	c.Cwd = identitytest.Repository(t)
-	out := Run(context.Background(), c, Options{Parent: "0000beef"})
+	out := Run(context.Background(), c, Options{Filter: selector.Filter{Parent: "0000beef"}})
 	if out.Error != nil || len(out.Result.(Result).Agents) != 0 {
 		t.Fatalf("%+v", out)
 	}
@@ -207,7 +211,7 @@ func TestListMine(t *testing.T) {
 	caller.Agent.AgentStatus, caller.Agent.TerminalID = "working", "term_parent"
 	c := herdrscript.Client(t, call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: caller}, l.listCall())
 	c.Cwd = l.cwd
-	out := Run(context.Background(), c, Options{Mine: true})
+	out := Run(context.Background(), c, Options{Filter: selector.Filter{Mine: true}})
 	want := []string{l.childID + "<" + l.parentID}
 	if got := ids(out.Result.(Result).Agents); out.Error != nil || strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("got %v want %v (%+v)", got, want, out.Error)
@@ -232,7 +236,7 @@ func TestListMineRequiresRegisteredCaller(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := herdrscript.Client(t, tc.calls...)
 			c.Cwd, c.CallerPane = tc.cwd, tc.pane
-			out := Run(context.Background(), c, Options{Mine: true})
+			out := Run(context.Background(), c, Options{Filter: selector.Filter{Mine: true}})
 			if out.ExitCode() != 1 || out.Error.Code != "caller_unregistered" || out.Error.Phase != "identity" || !strings.Contains(out.Error.Message, "fledge agent adopt") {
 				t.Fatalf("%+v", out.Error)
 			}
@@ -241,7 +245,7 @@ func TestListMineRequiresRegisteredCaller(t *testing.T) {
 }
 
 func TestListRejectsInvalidLineageFilters(t *testing.T) {
-	for _, o := range []Options{{Parent: "BEEF"}, {Parent: "0000beef", Mine: true}} {
+	for _, o := range []Options{{Filter: selector.Filter{Parent: "BEEF"}}, {Filter: selector.Filter{Parent: "0000beef", Mine: true}}} {
 		out := Run(context.Background(), herdrscript.Client(t), o)
 		if out.ExitCode() != 2 || out.Error.Phase != "validation" {
 			t.Fatalf("%+v: %+v", o, out)
@@ -254,7 +258,7 @@ func TestListFilterFailsOnUnreadableStore(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(l.cwd, ".fledge", "state", "agents", l.childID+".json"), []byte("{"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for _, o := range []Options{{}, {Parent: l.parentID}} {
+	for _, o := range []Options{{}, {Filter: selector.Filter{Parent: l.parentID}}} {
 		c := herdrscript.Client(t, l.listCall())
 		c.Cwd = l.cwd
 		out := Run(context.Background(), c, o)
@@ -264,12 +268,12 @@ func TestListFilterFailsOnUnreadableStore(t *testing.T) {
 	}
 }
 
-func TestFilteredEmptyListNamesChildren(t *testing.T) {
+func TestFilteredEmptyListSaysNoMatch(t *testing.T) {
 	l := newLineage(t)
 	c := herdrscript.Client(t, l.listCall())
 	c.Cwd = l.cwd
 	var b bytes.Buffer
-	if err := Run(context.Background(), c, Options{Parent: l.childID}).Write(&b, false, Render); err != nil || b.String() != "No child agents.\n" {
+	if err := Run(context.Background(), c, Options{Filter: selector.Filter{Parent: l.childID}}).Write(&b, false, Render); err != nil || b.String() != "No agents match.\n" {
 		t.Fatalf("%q %v", b.String(), err)
 	}
 }
@@ -285,5 +289,143 @@ func TestListSkipsRecordOfDifferentHarness(t *testing.T) {
 	out := Run(context.Background(), c, Options{})
 	if rows := out.Result.(Result).Agents; out.Error != nil || len(rows) != 1 || rows[0].ID != nil {
 		t.Fatalf("%+v", out)
+	}
+}
+
+// fleet is a repository with a registered lead (idle claude, profile lead,
+// worktree /wt/lead) in w1:p3, its registered child (working codex, profile
+// reviewer, owner of task) in w1:p4, and an unregistered stray (idle claude)
+// in w1:p5.
+type fleet struct {
+	cwd             string
+	agents          []herdr.AgentDetails
+	leadID, childID string
+	task            string
+}
+
+func newFleet(t *testing.T) fleet {
+	t.Helper()
+	agent := func(pane, terminal, status, harness string) herdr.AgentDetails {
+		a := herdrscript.Info(herdrscript.Pane(pane, "w1", "w1:t1")).Agent
+		a.TerminalID, a.AgentStatus, a.Agent = terminal, status, &harness
+		return a
+	}
+	f := fleet{cwd: identitytest.Repository(t)}
+	lead, child := agent("w1:p3", "term_lead", "idle", "claude"), agent("w1:p4", "term_child", "working", "codex")
+	f.agents = []herdr.AgentDetails{lead, child, agent("w1:p5", "term_stray", "idle", "claude")}
+	f.leadID = identitytest.RegisterProfile(t, f.cwd, lead, "lead").ID
+	f.childID = identitytest.RegisterProfile(t, f.cwd, child, "reviewer").ID
+	s, err := identity.Existing(context.Background(), f.cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rec identity.Record
+	if err := s.Update(identity.Kind, f.leadID, &rec, func() error { wt := "/wt/lead"; rec.WorktreePath = &wt; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Update(identity.Kind, f.childID, &rec, func() error { rec.Parent = &f.leadID; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	f.task = tasktest.Seed(t, f.cwd, task.Record{Title: "t", Status: task.Assigned, Owner: &f.childID})
+	return f
+}
+
+func (f fleet) run(t *testing.T, o Options) libagent.Outcome {
+	c := herdrscript.Client(t, call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": f.agents}})
+	c.Cwd = f.cwd
+	return Run(context.Background(), c, o)
+}
+
+func panes(rows []Row) string {
+	var out []string
+	for _, r := range rows {
+		out = append(out, libagent.Display(r.PaneID))
+	}
+	return strings.Join(out, " ")
+}
+
+// TestListFilters ANDs flags together and ORs repeated values of one flag.
+func TestListFilters(t *testing.T) {
+	f := newFleet(t)
+	for _, tc := range []struct {
+		name   string
+		filter selector.Filter
+		want   string
+	}{
+		{"state", selector.Filter{States: []string{"idle"}}, "w1:p3 w1:p5"},
+		{"states or", selector.Filter{States: []string{"working", "idle"}}, "w1:p3 w1:p4 w1:p5"},
+		{"harness", selector.Filter{Harnesses: []string{"codex"}}, "w1:p4"},
+		{"harnesses or", selector.Filter{Harnesses: []string{"codex", "claude"}}, "w1:p3 w1:p4 w1:p5"},
+		{"profile", selector.Filter{Profiles: []string{"reviewer"}}, "w1:p4"},
+		{"profiles or", selector.Filter{Profiles: []string{"lead", "reviewer"}}, "w1:p3 w1:p4"},
+		{"task", selector.Filter{Tasks: []string{f.task}}, "w1:p4"},
+		{"worktree", selector.Filter{Worktrees: []string{"/wt/lead"}}, "w1:p3"},
+		{"registered", selector.Filter{Registered: true}, "w1:p3 w1:p4"},
+		{"registered and state", selector.Filter{Registered: true, States: []string{"idle"}}, "w1:p3"},
+		{"harness and state", selector.Filter{Harnesses: []string{"claude"}, States: []string{"working"}}, ""},
+		{"parent and profile", selector.Filter{Parent: f.leadID, Profiles: []string{"reviewer"}}, "w1:p4"},
+		{"parent and other profile", selector.Filter{Parent: f.leadID, Profiles: []string{"lead"}}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := f.run(t, Options{Filter: tc.filter})
+			if out.Error != nil {
+				t.Fatalf("%+v", out.Error)
+			}
+			if got := panes(out.Result.(Result).Agents); got != tc.want {
+				t.Fatalf("got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestListRejectsInvalidFilters(t *testing.T) {
+	for _, o := range []Options{
+		{Filter: selector.Filter{States: []string{"asleep"}}},
+		{Filter: selector.Filter{Harnesses: []string{"nope"}}},
+		{Filter: selector.Filter{Tasks: []string{"BEEF"}}},
+		{Filter: selector.Filter{Profiles: []string{" "}}},
+		{IDs: true, JSON: true},
+	} {
+		out := Run(context.Background(), herdrscript.Client(t), o)
+		if out.ExitCode() != 2 || out.Error.Phase != "validation" {
+			t.Fatalf("%+v: %+v", o, out)
+		}
+	}
+}
+
+func TestListFilterEmptyWording(t *testing.T) {
+	f := newFleet(t)
+	for _, tc := range []struct {
+		o    Options
+		want string
+	}{
+		{Options{Filter: selector.Filter{States: []string{"blocked"}}}, "No agents match.\n"},
+		{Options{Filter: selector.Filter{Harnesses: []string{"pi"}}}, "No agents match.\n"},
+	} {
+		var b bytes.Buffer
+		if err := f.run(t, tc.o).Write(&b, false, Render); err != nil || b.String() != tc.want {
+			t.Fatalf("%+v: %q %v", tc.o, b.String(), err)
+		}
+	}
+}
+
+// TestListIDs prints one record id per registered match and skips the rest.
+func TestListIDs(t *testing.T) {
+	f := newFleet(t)
+	for _, tc := range []struct {
+		name   string
+		filter selector.Filter
+		want   string
+	}{
+		{"all", selector.Filter{}, f.leadID + "\n" + f.childID + "\n"},
+		{"filtered", selector.Filter{States: []string{"idle"}}, f.leadID + "\n"},
+		{"none", selector.Filter{States: []string{"blocked"}}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var b bytes.Buffer
+			if err := f.run(t, Options{Filter: tc.filter, IDs: true}).Write(&b, false, Render); err != nil || b.String() != tc.want {
+				t.Fatalf("got %q want %q (%v)", b.String(), tc.want, err)
+			}
+		})
 	}
 }
