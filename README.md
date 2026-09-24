@@ -756,6 +756,7 @@ pane closing. Owners and verifiers are Fledge agent record IDs (see
 completion is never derived from Herdr idle or done.
 
 ```sh
+fledge task template > brief.md                               # fill in, then create
 fledge task create --title "Fix the parser" --file brief.md   # prints the task ID
 fledge task create --title "Add tests" --file tests.md --parent 1a2b3c4d --after 5e6f7a8b
 fledge task create --title "Try a probe" --body "one line" --freeform
@@ -768,6 +769,8 @@ fledge task verify --id 1a2b3c4d --summary "Tests pass"         # run by another
 fledge task list --status completed
 fledge task get --id 1a2b3c4d
 ```
+
+### Briefs
 
 `create` requires the brief to follow the **brief template**: six `## `
 headings, exactly once each and in this order, each followed by content:
@@ -791,6 +794,18 @@ off the template fails with `task_brief_incomplete` (exit 1, phase
 section, before any state is created. `--freeform` skips the check and stores
 the brief as given. Existing records are never re-checked, and `assign`
 delivers the brief text unchanged.
+
+Run `fledge task template` for the brief skeleton and fill it in, rather than
+writing the headings from memory: the command is the source of truth for the
+template. It prints the six headings, each followed by an HTML comment hint,
+so an unfilled skeleton fails `create` with `task_brief_incomplete`.
+`--proposal` prints a proposal skeleton instead: `schema_version`, a `[parent]`,
+and one example `[[tasks]]` entry, each brief being the brief skeleton.
+`--json` returns `kind` (`brief` or `proposal`) and `text` in the outcome
+envelope. `task template` never contacts Herdr or reads task state, so it
+works outside a repository.
+
+### Lifecycle
 
 A task moves `created` → `assigned` → `completed` → `verified`; `task cancel
 [--reason TEXT]` ends a `created`, `assigned`, or `completed` task as
@@ -896,8 +911,8 @@ its `recipient`, `message_id`, optional `pane`, `delivered_at`, `error`, and
 as the agent commands. JSON results add derived fields: list rows `progress`
 (`verified`, `total`, `cancelled`, or null) and `waiting`; get `progress` and
 `dependencies` (`id`, `title`, `status`, `cancel_reason`, `satisfied`); verify
-`open_subtasks`; and cancel `unblocked`. `task list`, `task get`, and
-`task depend` never contact Herdr.
+`open_subtasks`; cancel `unblocked`; and template `kind` and `text`. `task
+list`, `task get`, `task depend`, and `task template` never contact Herdr.
 
 ### Proposals
 
