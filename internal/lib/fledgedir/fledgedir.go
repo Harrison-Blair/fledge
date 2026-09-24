@@ -1,5 +1,5 @@
-// Package fledgedir locates and prepares the managed .fledge directory in a
-// repository's primary checkout.
+// Package fledgedir locates a repository's primary checkout and prepares the
+// managed .fledge directory in it or in a checkout Fledge creates.
 package fledgedir
 
 import (

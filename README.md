@@ -448,9 +448,13 @@ adds `profile` (`name`, `source`, `path`, `base`).
 `*`, `!/profiles/`, `!/profiles/*.toml`, so profile files can be committed. The
 next command that prepares `.fledge`, such as agent registration or managed
 worktree creation, appends any missing rules to an existing file and preserves
-its contents. A linked worktree has no `.fledge/.gitignore`, so root ignore
-rules apply there; an allowlist-style root `.gitignore` must allow
-`.fledge/profiles/*.toml` to add profile files from a linked worktree.
+its contents. A checkout Fledge creates (`agent spawn --worktree new` or
+`worktree create`) gets its own `.fledge/.gitignore` with the same rules, so
+scratch files such as `.fledge/tmp/` stay out of its `git status` even under an
+allowlist-style root `.gitignore`; if that write fails, the checkout stays and
+the outcome is partial. Opening an existing checkout writes nothing, so a linked
+worktree Fledge did not create has no `.fledge/.gitignore` and root ignore rules
+apply there.
 
 ### Identity
 
@@ -816,8 +820,8 @@ effort: when Herdr's agent list is unavailable, or any of its entries lacks a
 required field such as its terminal ID, every row shows no owner.
 
 `create` makes a managed checkout at `.fledge/worktrees/<branch>` on a new branch
-and opens it as a workspace without starting an agent. An existing branch is
-refused.
+and opens it as a workspace without starting an agent, then writes the checkout's
+managed [`.fledge/.gitignore`](#profiles). An existing branch is refused.
 
 `remove` takes exactly one of `--path` or `--branch` and keeps the branch. An open
 checkout is removed through Herdr, which also closes its workspace; a closed one
