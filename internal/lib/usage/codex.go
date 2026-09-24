@@ -66,11 +66,14 @@ func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error
 			}
 		case "token_usage_record":
 			var p struct {
-				ResponseID string     `json:"response_id"`
-				Usage      codexUsage `json:"usage"`
+				ResponseID string      `json:"response_id"`
+				Usage      *codexUsage `json:"usage"`
 			}
 			if err := json.Unmarshal(l.Payload, &p); err != nil {
 				return err
+			}
+			if p.Usage == nil {
+				return errMissingUsage
 			}
 			t.records++
 			if p.ResponseID != "" && seen[p.ResponseID] {
@@ -82,18 +85,22 @@ func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error
 			var p struct {
 				Type string `json:"type"`
 				Info *struct {
-					Total codexUsage `json:"total_token_usage"`
+					Total *codexUsage `json:"total_token_usage"`
 				} `json:"info"`
 			}
 			if err := json.Unmarshal(l.Payload, &p); err != nil {
 				return err
 			}
+			// Codex writes a null info before any usage exists.
 			if p.Type != "token_count" || p.Info == nil {
 				return nil
 			}
+			if p.Info.Total == nil {
+				return errMissingUsage
+			}
 			t.records++
 			sawTotal = true
-			total := p.Info.Total
+			total := *p.Info.Total
 			switch {
 			case w.From != nil && l.Timestamp != nil && l.Timestamp.Before(*w.From):
 				before = &total

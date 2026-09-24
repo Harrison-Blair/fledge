@@ -134,7 +134,7 @@ func TestReadMalformedLinesAreCountedAndValidLinesSummed(t *testing.T) {
 	s := Read(context.Background(), Discovery{Run: noRun(t)}, "pi", Ref{Kind: "path", Value: path}, Window{})
 	assertBasis(t, s, Measured)
 	assertTokens(t, s.Tokens, Tokens{Input: 11, Output: 22, CacheRead: 3, CacheWrite: 4})
-	if !strings.Contains(s.Reason, "2 malformed lines") {
+	if !strings.Contains(s.Reason, "2 malformed entries") {
 		t.Fatalf("reason %q", s.Reason)
 	}
 }
@@ -144,7 +144,7 @@ func TestReadOnlyMalformedLinesIsUnavailable(t *testing.T) {
 	write(t, path, "{broken\nalso broken\n")
 	s := Read(context.Background(), Discovery{Run: noRun(t)}, "pi", Ref{Kind: "path", Value: path}, Window{})
 	assertBasis(t, s, Unavailable)
-	if !strings.Contains(s.Reason, "2 malformed lines") {
+	if !strings.Contains(s.Reason, "2 malformed entries") {
 		t.Fatalf("reason %q", s.Reason)
 	}
 }
@@ -451,5 +451,98 @@ func TestOpencodeEmptySessionIsMeasuredZero(t *testing.T) {
 	assertBasis(t, s, Measured)
 	if s.Tokens != (Tokens{}) || s.Cost == nil || s.Cost.Amount != 0 {
 		t.Fatalf("%+v", s)
+	}
+}
+
+// readFile reads content as a kind's session file.
+func readFile(t *testing.T, kind, content string) Summary {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	write(t, path, content)
+	return Read(context.Background(), Discovery{Run: noRun(t)}, kind, Ref{Kind: "path", Value: path}, Window{})
+}
+
+const (
+	codexMeta   = `{"type":"session_meta","payload":{"id":"c"}}` + "\n"
+	codexRecord = `{"type":"token_usage_record","timestamp":"2026-01-02T10:00:05Z","payload":{"response_id":"ok","usage":{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":3,"reasoning_output_tokens":0}}}` + "\n"
+	claudeValid = `{"type":"assistant","requestId":"ok","timestamp":"2026-01-02T10:00:00Z","message":{"model":"m","usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":3}}}` + "\n"
+	piHeader    = `{"type":"session","version":3,"id":"p"}` + "\n"
+	piValid     = `{"type":"message","timestamp":"2026-01-03T10:00:05Z","message":{"role":"assistant","model":"m","provider":"p","usage":{"input":10,"output":3,"cacheRead":0,"cacheWrite":0,"reasoning":0,"cost":{"total":0.1}}}}` + "\n"
+)
+
+// Absent or null usage on a relevant record is malformed, never a zero measurement.
+func TestMissingOrNullUsageIsMalformed(t *testing.T) {
+	cases := []struct {
+		name, kind, header, valid string
+		bad                       []string
+	}{
+		{"codex record", "codex", codexMeta, codexRecord, []string{
+			`{"type":"token_usage_record","timestamp":"2026-01-02T10:00:05Z","payload":{"response_id":"r","usage":null}}`,
+			`{"type":"token_usage_record","timestamp":"2026-01-02T10:00:05Z","payload":{"response_id":"r"}}`,
+		}},
+		{"codex token_count", "codex", codexMeta, "", []string{
+			`{"type":"event_msg","timestamp":"2026-01-02T10:00:05Z","payload":{"type":"token_count","info":{}}}`,
+			`{"type":"event_msg","timestamp":"2026-01-02T10:00:05Z","payload":{"type":"token_count","info":{"total_token_usage":null}}}`,
+		}},
+		{"claude", "claude", "", claudeValid, []string{
+			`{"type":"assistant","requestId":"r","sessionId":"s","timestamp":"2026-01-02T10:00:00Z","message":{"model":"m"}}`,
+			`{"type":"assistant","requestId":"r","sessionId":"s","timestamp":"2026-01-02T10:00:00Z","message":{"model":"m","usage":null}}`,
+		}},
+		{"pi", "pi", piHeader, piValid, []string{
+			`{"type":"message","timestamp":"2026-01-03T10:00:05Z","message":{"role":"assistant","model":"m","provider":"p"}}`,
+			`{"type":"message","timestamp":"2026-01-03T10:00:05Z","message":{"role":"assistant","model":"m","provider":"p","usage":null}}`,
+		}},
+	}
+	for _, c := range cases {
+		for _, bad := range c.bad {
+			s := readFile(t, c.kind, c.header+bad+"\n")
+			if s.Basis != Unavailable || strings.Contains(s.Reason, "token_count") {
+				t.Errorf("%s alone %s: basis %q reason %q turns %d", c.name, bad, s.Basis, s.Reason, s.Turns)
+			}
+			if c.valid == "" {
+				continue
+			}
+			s = readFile(t, c.kind, c.header+c.valid+bad+"\n")
+			if s.Basis != Measured || s.Turns != 1 || s.Tokens.Input != 10 || !strings.Contains(s.Reason, "1 malformed entries") {
+				t.Errorf("%s mixed %s: %+v", c.name, bad, s)
+			}
+		}
+	}
+}
+
+func TestExplicitZeroUsageAndNullCodexInfoAreMeasured(t *testing.T) {
+	for kind, content := range map[string]string{
+		"codex":  codexMeta + `{"type":"token_usage_record","timestamp":"2026-01-02T10:00:05Z","payload":{"response_id":"r","usage":{"input_tokens":0,"output_tokens":0}}}` + "\n",
+		"claude": `{"type":"assistant","requestId":"r","timestamp":"2026-01-02T10:00:00Z","message":{"model":"m","usage":{"input_tokens":0,"output_tokens":0}}}` + "\n",
+		"pi":     piHeader + `{"type":"message","timestamp":"2026-01-03T10:00:05Z","message":{"role":"assistant","model":"m","usage":{"input":0,"output":0}}}` + "\n",
+	} {
+		s := readFile(t, kind, content)
+		if s.Basis != Measured || s.Turns != 1 || s.Reason != "" {
+			t.Errorf("%s: %+v", kind, s)
+		}
+	}
+	// Codex writes token_count with a null info before any usage exists.
+	s := readFile(t, "codex", codexMeta+`{"type":"event_msg","timestamp":"2026-01-02T10:00:05Z","payload":{"type":"token_count","info":null}}`+"\n")
+	if s.Basis != Measured || s.Reason != "" || s.Tokens != (Tokens{}) {
+		t.Errorf("null info: %+v", s)
+	}
+}
+
+func TestOpencodeMissingOrNullTokensIsMalformed(t *testing.T) {
+	const valid = `{"info":{"role":"assistant","modelID":"m","providerID":"p","cost":0.25,"tokens":{"input":10,"output":3,"reasoning":0,"cache":{"read":0,"write":0}},"time":{"created":1767434405000}}}`
+	for _, bad := range []string{
+		`{"info":{"role":"assistant","modelID":"m","cost":0.5,"time":{"created":1767434405000}}}`,
+		`{"info":{"role":"assistant","modelID":"m","cost":0.5,"tokens":null,"time":{"created":1767434405000}}}`,
+	} {
+		r := &fakeRunner{outputs: map[string]string{"opencode export s": `{"info":{"id":"s"},"messages":[` + bad + `]}`}}
+		s := Read(context.Background(), Discovery{Run: r.run}, "opencode", Ref{Kind: "id", Value: "s"}, Window{})
+		if s.Basis != Unavailable || s.Cost != nil {
+			t.Errorf("alone %s: %+v", bad, s)
+		}
+		r = &fakeRunner{outputs: map[string]string{"opencode export s": `{"info":{"id":"s"},"messages":[` + valid + `,` + bad + `]}`}}
+		s = Read(context.Background(), Discovery{Run: r.run}, "opencode", Ref{Kind: "id", Value: "s"}, Window{})
+		if s.Basis != Measured || s.Turns != 1 || s.Tokens.Input != 10 || s.Cost == nil || s.Cost.Amount != 0.25 || !strings.Contains(s.Reason, "1 malformed entries") {
+			t.Errorf("mixed %s: %+v", bad, s)
+		}
 	}
 }

@@ -45,8 +45,11 @@ func readPi(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error) {
 			return nil
 		}
 		var l piLine
-		if err := json.Unmarshal(line, &l); err != nil || l.Message.Role != "assistant" || l.Message.Usage == nil {
+		if err := json.Unmarshal(line, &l); err != nil || l.Message.Role != "assistant" {
 			return err
+		}
+		if l.Message.Usage == nil {
+			return errMissingUsage
 		}
 		t.records++
 		u := l.Message.Usage

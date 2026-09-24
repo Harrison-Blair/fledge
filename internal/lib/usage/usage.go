@@ -252,17 +252,20 @@ func (t *tally) summary(s Summary) Summary {
 	s.First, s.Last, s.Subagents, s.Sources = t.first, t.last, t.subagents, t.sources
 	s.Basis, s.Reason = Measured, t.note
 	if t.malformed > 0 {
-		s.Reason = joinReason(s.Reason, fmt.Sprintf("%d malformed lines of %d skipped", t.malformed, t.lines))
+		s.Reason = joinReason(s.Reason, fmt.Sprintf("%d malformed entries of %d skipped", t.malformed, t.lines))
 	}
 	return s
 }
 
-// check rejects a session file whose malformed lines leave no readable usage
+// errMissingUsage marks a relevant record whose usage is absent or null.
+var errMissingUsage = errors.New("usage missing")
+
+// check rejects a session file whose malformed entries leave no readable usage
 // record, or that lacks the harness's session marker, so unreadable usage is
 // never reported as a measured zero.
 func (t *tally) check(path, kind string) error {
 	if t.malformed > 0 && t.records == 0 {
-		return fmt.Errorf("%d malformed lines of %d and no readable usage records in %s", t.malformed, t.lines, path)
+		return fmt.Errorf("%d malformed entries of %d and no readable usage records in %s", t.malformed, t.lines, path)
 	}
 	if !t.recognized {
 		return fmt.Errorf("%s is not a recognized %s session file", path, kind)
@@ -277,8 +280,8 @@ func joinReason(a, b string) string {
 	return a + "; " + b
 }
 
-// scanLines calls parse for each non-blank line of path; a parse error counts
-// the line as malformed and skips it.
+// scanLines calls parse for each non-blank line of path; a parse error,
+// including errMissingUsage, counts the line as malformed and skips it.
 func (t *tally) scanLines(path string, parse func([]byte) error) error {
 	f, err := os.Open(path)
 	if err != nil {

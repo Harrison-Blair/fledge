@@ -69,8 +69,11 @@ func readClaudeFile(path string, w Window) (*tally, error) {
 			return nil
 		}
 		var l claudeLine
-		if err := json.Unmarshal(line, &l); err != nil || l.Message.Usage == nil || l.Message.Model == "<synthetic>" {
+		if err := json.Unmarshal(line, &l); err != nil || l.Message.Model == "<synthetic>" {
 			return err
+		}
+		if l.Message.Usage == nil {
+			return errMissingUsage
 		}
 		t.records++
 		u := l.Message.Usage
