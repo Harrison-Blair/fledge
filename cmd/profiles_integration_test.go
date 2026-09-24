@@ -19,6 +19,9 @@ func builtinProfile(t *testing.T, name string) profiles.Profile {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Spawn drops reads missing from the target directory, and these tests
+	// spawn where none of the built-in reads exist.
+	p.Reads = nil
 	return p
 }
 
