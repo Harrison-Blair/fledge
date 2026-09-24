@@ -343,6 +343,10 @@ func TestOpencodeReadsExportAndNeverTheDatabase(t *testing.T) {
 	if !reflect.DeepEqual(s.Sources, []string{"opencode export oc-1"}) {
 		t.Fatalf("sources %q", s.Sources)
 	}
+	// User messages carry no tokens and are not usage records.
+	if s.Reason != "" {
+		t.Fatalf("reason %q", s.Reason)
+	}
 }
 
 func TestOpencodeWindow(t *testing.T) {
