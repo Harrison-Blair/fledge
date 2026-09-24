@@ -6,9 +6,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
+	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/profiles"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
@@ -220,5 +222,133 @@ func TestProfileNameIsRecordedOnTheAgentRecord(t *testing.T) {
 	}
 	if rec := stored(t, cwd, *r.ID); rec.Profile == nil || *rec.Profile != "reviewer" {
 		t.Fatalf("%+v", rec)
+	}
+}
+
+const readsProfile = "schema_version = 1\nharness = \"claude\"\nreads = [\"present.md\", \"gone.md\"]\n[sections]\nmission = \"Do it.\"\n"
+
+// readsBrief is the brief of the reads profile in root once gone.md is dropped.
+func readsBrief(t *testing.T, root string) string {
+	t.Helper()
+	p, err := profiles.Load(context.Background(), root, "reader")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Reads = []string{"present.md"}
+	return p.Brief()
+}
+
+func writeFile(t *testing.T, dir, name string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// checkSkippedRead asserts a successful spawn skipped only gone.md in dir.
+func checkSkippedRead(t *testing.T, out libagent.Outcome, dir string) {
+	t.Helper()
+	if out.Status != "success" || !out.Result.(*Result).Prompted {
+		t.Fatalf("%+v %+v", out, out.Error)
+	}
+	var skipped []libagent.Effect
+	for _, e := range out.Effects {
+		if e.Action == "skipped" {
+			skipped = append(skipped, e)
+		}
+	}
+	if want := []libagent.Effect{{Action: "skipped", Kind: "read", Path: "gone.md"}}; !reflect.DeepEqual(skipped, want) {
+		t.Fatalf("%+v", out.Effects)
+	}
+	var b strings.Builder
+	if err := Render(&b, out); err != nil {
+		t.Fatal(err)
+	}
+	if line := "skipped read: gone.md (not found in " + dir + ")\n"; strings.Count(b.String(), "skipped read:") != 1 || !strings.Contains(b.String(), line) {
+		t.Fatalf("%q", b.String())
+	}
+}
+
+func TestProfileReadsResolveUnderCallerDirectory(t *testing.T) {
+	root := profileRepo(t, "reader", readsProfile)
+	writeFile(t, root, "present.md")
+	o := profileOptions("reader")
+	o.Prompt, o.PromptSet = "Go.", true
+	s := profileSpawnIn(t, root, "claude", []string{}, header+readsBrief(t, root)+"\n\nGo.")
+	checkSkippedRead(t, s.run(context.Background(), o, nil), root)
+}
+
+func TestProfileReadsResolveUnderCwd(t *testing.T) {
+	root := profileRepo(t, "reader", readsProfile)
+	writeFile(t, root, "gone.md")
+	destination := t.TempDir()
+	writeFile(t, destination, "present.md")
+	o := profileOptions("reader")
+	o.Pane, o.Workspace, o.Cwd = "", "new workspace", destination
+	p := herdrscript.Pane("w2:p1", "w2", "w2:t1")
+	p.AgentStatus = "idle"
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "pane.current", Result: herdr.PaneResult{Type: "pane_current", Pane: herdrscript.Pane("w1:p1", "w1", "w1:t1")}}, call{Method: "workspace.create", Result: herdr.CreatedResult{Type: "workspace_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p}}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), senderCall(), senderCall(), call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": header + readsBrief(t, root)}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
+	s.Cwd = root
+	checkSkippedRead(t, s.run(context.Background(), o, nil), destination)
+}
+
+func TestProfileReadsResolveUnderWorktree(t *testing.T) {
+	root := repository(t)
+	os.MkdirAll(filepath.Join(root, ".fledge", "profiles"), 0755)
+	if err := os.WriteFile(filepath.Join(root, ".fledge", "profiles", "reader.toml"), []byte(readsProfile), 0644); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "gone.md")
+	path := filepath.Join(root, ".fledge", "worktrees", "worker")
+	p := herdrscript.Pane("w2:p1", "w2", "w2:t1")
+	p.AgentStatus = "idle"
+	o := profileOptions("reader")
+	o.Pane, o.Worktree = "", "new"
+	add := checkout(t, root, "worker", path)
+	create := call{Method: "worktree.create", Result: herdr.CreatedResult{Type: "worktree_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p, Worktree: herdr.Worktree{Path: path}}, Before: func() { add(); writeFile(t, path, "present.md") }}
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "worktree.list", Result: newWorktreeListing(root)}, create, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), callerNotAgent(), senderCall(), call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": header + readsBrief(t, root)}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
+	s.Cwd = root
+	checkSkippedRead(t, s.run(context.Background(), o, nil), path)
+}
+
+const readsOnlyProfile = "schema_version = 1\nharness = \"claude\"\nreads = [\"present.md\"]\n"
+
+// A brief made only of reads that are all missing is empty, so --no-wait is
+// allowed and the reads are still reported.
+func TestProfileNoWaitAllowedWhenEveryReadIsMissing(t *testing.T) {
+	o := profileOptions("quiet")
+	o.NoWait = true
+	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p)}, callerNotAgent())
+	s.Cwd = profileRepo(t, "quiet", readsOnlyProfile)
+	out := s.run(context.Background(), o, nil)
+	if out.Status != "success" || out.Result.(*Result).PromptRequested {
+		t.Fatalf("%+v %+v", out, out.Error)
+	}
+	if !slices.Contains(out.Effects, libagent.Effect{Action: "skipped", Kind: "read", Path: "present.md"}) {
+		t.Fatalf("%+v", out.Effects)
+	}
+}
+
+// Reads are checked before placement under an existing --worktree checkout
+// or an absolute --cwd, so a read present only there rejects --no-wait.
+func TestProfileNoWaitRejectedWhenReadIsPresentInTargetDirectory(t *testing.T) {
+	for name, set := range map[string]func(*Options, string){
+		"worktree": func(o *Options, dir string) { o.Worktree = dir },
+		"cwd":      func(o *Options, dir string) { o.Workspace, o.Cwd = "new workspace", dir },
+	} {
+		t.Run(name, func(t *testing.T) {
+			target := t.TempDir()
+			writeFile(t, target, "present.md")
+			o := profileOptions("quiet")
+			o.Pane, o.NoWait = "", true
+			set(&o, target)
+			s := fake(t)
+			s.Cwd = profileRepo(t, "quiet", readsOnlyProfile)
+			out := s.run(context.Background(), o, nil)
+			if out.Status != "rejected" || out.Error.Phase != "validation" || len(out.Effects) != 0 || !strings.Contains(out.Error.Message, "--no-wait") {
+				t.Fatalf("%+v %+v", out, out.Error)
+			}
+		})
 	}
 }
