@@ -119,6 +119,10 @@ cleanup (`fledge agent`, `task`, `worktree`). If the installed binary lacks comm
 present in this checkout, build the current source into a temporary directory and use
 that binary consistently for the task, including cleanup.
 
+Agent scratch files inside the repository go under `.fledge/tmp/` (gitignored), and
+proposals under `.fledge/tmp/plans/`. Briefs for `fledge task create` follow the
+template printed by `fledge task template`; use `--freeform` only for throwaway tasks.
+
 Known workarounds: spawn prompts and messages always start with a sender header, so ask
 a spawned agent in plain words to invoke a skill (a leading slash command will not run);
 pass absolute paths to `--cwd`; see `reference/dogfood/friction.md` for current issues.

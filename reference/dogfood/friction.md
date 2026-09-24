@@ -1129,3 +1129,51 @@ quota-limited provider.
 1. Spawn a `pi` agent on a provider with no remaining quota.
 2. Send it a prompt and let it fail with the provider error.
 3. Run `fledge agent list` or `fledge agent wait` and observe the agent reported as done.
+
+---
+
+**Issue:** Markdown scratch files under `.fledge/tmp/` appear untracked in some worktrees
+
+**Summary:** In a linked worktree with no `.fledge/.gitignore` (one created before
+managed worktrees received that file), the root allowlist `.gitignore` applies to
+`.fledge/tmp/`. Its `!*.md` rule re-admits Markdown files there, so
+`.fledge/tmp/plan-brief.md` showed as `??` in `git status`. `.toml` proposals stayed
+ignored (`.gitignore:2:*`). Observed once, 2026-09-24, while dogfooding the planner
+(task A5) in `feat/planner-docs`. Workaround: write scratch Markdown elsewhere, or
+delete it before committing.
+
+**Reproduction steps:**
+1. Use a linked worktree of this repository that has no `.fledge/.gitignore`.
+2. Write `.fledge/tmp/note.md`.
+3. Run `git status --short -uall` and observe `?? .fledge/tmp/note.md`.
+
+---
+
+**Issue:** Spawned agents use the installed `fledge`, not the checkout build
+
+**Summary:** When the installed binary lacks commands from this checkout (here
+`task template` and `task import`), AGENTS.md says to build a temporary binary and use
+it consistently. A spawned agent still runs `fledge` from `PATH`, and `--env` applies
+only to ordinary shells, so the planner could not reach the new commands by default.
+Workaround: name the temporary binary's absolute path in the brief. Observed
+2026-09-24 in the A5 planner dogfood.
+
+**Reproduction steps:**
+1. Build the checkout to `.fledge/tmp/bin/fledge` while an older `fledge` is on `PATH`.
+2. Spawn a `pi` agent with that binary and `--profile planner`.
+3. The agent's `fledge task template --proposal` resolves to the older binary and fails.
+
+---
+
+**Issue:** Planner role conflicts with the completion report file
+
+**Summary:** The built-in planner role allows only the proposal file as a write, but
+its Fledge protocol section says to finish with `fledge task complete --file
+<report>`. The planner resolved this by passing the proposal TOML itself as the
+report, prefixed with a comment block. The completion notification therefore carried
+the whole proposal. Observed once, 2026-09-24, A5 planner dogfood (task 6adf25eb).
+
+**Reproduction steps:**
+1. Spawn `--profile planner` and assign it a planning task.
+2. Let it finish.
+3. Run `fledge task get --id <task>` and observe that the result is the proposal file.

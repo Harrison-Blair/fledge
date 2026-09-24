@@ -520,7 +520,9 @@ scratch files such as `.fledge/tmp/` stay out of its `git status` even under an
 allowlist-style root `.gitignore`; if that write fails, the checkout stays and
 the outcome is partial. Opening an existing checkout writes nothing, so a linked
 worktree Fledge did not create has no `.fledge/.gitignore` and root ignore rules
-apply there.
+apply there. `.fledge/tmp/` is the agents' scratch directory: the leading `*`
+in `.fledge/.gitignore` already ignores it, and proposals conventionally go
+under `.fledge/tmp/plans/` (see [Proposals](#proposals)).
 
 ### Identity
 

@@ -108,7 +108,11 @@ A checked item means its main capability is implemented; accompanying notes reco
 
 20. [ ] **Separate task attempts.** Preserve each attempt's worker, outcome, and artifacts when a task fails or is retried.
 
-21. [ ] **Task brief templates.** Standardize the information workers need: objective, constraints, allowed scope, deliverables, and acceptance criteria.
+21. [x] **Task brief templates.** Standardize the information workers need: objective, constraints, allowed scope, deliverables, and acceptance criteria.
+
+    **Implemented:** [3d736d6](https://github.com/Harrison-Blair/fledge/commit/3d736d63f610149fdd5eca221bf003a9afe60baa) (`task template` added in [489a5af](https://github.com/Harrison-Blair/fledge/commit/489a5afd45de6272e9e2028723e9ba12c6098e46), 2026-09-24) · **Author:** Harrison-Blair · **Author date:** 2026-09-23
+
+    **Implementation decisions and remaining gaps:** The template is a text convention, not new record fields: a brief stays one string with six required `## ` sections (Objective, Acceptance criteria, Scope, Known facts, Deliverables, Constraints), each once, in order, and nonempty. `task create` enforces it by default and fails with `task_brief_incomplete` naming the problem section; `--freeform` opts out for throwaway tasks. `fledge task template` prints the skeleton and is the source of truth for the headings. Briefs are validated only at creation: existing records are never re-checked, and `assign` delivers the text unchanged. Sections are not stored as structured per-section fields, and size estimates are not a record field. [Current behavior](../../README.md#briefs)
 
 22. [ ] **Cancellation that reaches dependent work.** Cancel an assignment and identify which children or downstream tasks should stop, continue, or require reconsideration.
 
@@ -302,7 +306,11 @@ A checked item means its main capability is implemented; accompanying notes reco
 
 These ideas are worth exploring after the basic delegation loop is dependable.
 
-100. [ ] **Assisted task decomposition.** Propose a task breakdown, dependencies, and acceptance criteria from a broad request, for review before dispatch.
+100. [x] **Assisted task decomposition.** Propose a task breakdown, dependencies, and acceptance criteria from a broad request, for review before dispatch.
+
+     **Implemented:** [f76610c](https://github.com/Harrison-Blair/fledge/commit/f76610cd53f8996e84602ac628e34a1ffdb02ecf) (proposal format in [aa933d6](https://github.com/Harrison-Blair/fledge/commit/aa933d6199c4d9f5bb7bf9fe9a32cda97f214047), 2026-09-23; `task template --proposal` in [489a5af](https://github.com/Harrison-Blair/fledge/commit/489a5afd45de6272e9e2028723e9ba12c6098e46); planner role in [7dd39e2](https://github.com/Harrison-Blair/fledge/commit/7dd39e250f1b88eeed763f32a7e96700159bdd85)) · **Author:** Harrison-Blair · **Author date:** 2026-09-24
+
+     **Implementation decisions and remaining gaps:** A planner (`--profile planner`) writes a TOML proposal, conventionally under `.fledge/tmp/plans/` (gitignored scratch), with an optional `[parent]` and keyed `[[tasks]]` whose `after` entries name local keys or existing task ids; every brief must follow the template. It self-checks with `fledge task import --dry-run` and completes its task naming the file; a human or orchestrator reviews it and runs the real `task import`, which creates the parent and tasks in dependency order under one store lock. Import never assigns. There is no `fledge task plan` spawn-and-import wrapper, and nothing cleans `.fledge/tmp/` (`agent cleanup` does not touch it). A failure partway through a real import leaves earlier records (outcome `partial`); there is no rollback. Size estimates live only in brief text, not a record field. [Current behavior](../../README.md#proposals)
 
 101. [ ] **Routing informed by past results.** Suggest a harness, model, or role based on measured performance on similar tasks.
 
