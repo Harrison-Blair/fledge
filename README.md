@@ -117,6 +117,7 @@ fledge agent stop --pane w2:p3 --force --json
 fledge agent cleanup --dry-run
 fledge agent cleanup --results-collected --json
 fledge agent models --harness codex --json
+fledge agent capabilities --harness claude --live
 ```
 
 Spawn requires a unique live `--name` and a `--harness`, which a
@@ -383,6 +384,33 @@ harness kinds are not yet supported. Rows are sorted by harness then model, and
 `MODEL` is the value to pass to `--model`. `--harness` limits output to one
 documented kind; an unsupported or uninstalled kind yields an empty list, and a
 missing file, unreadable cache, or failing command silently contributes no rows.
+
+### Capabilities
+
+`fledge agent capabilities` reports, for every documented harness kind in
+registry order, which operations Fledge can rely on. `--harness` limits it to one
+kind. The report comes from Fledge's harness registry and needs no Herdr session:
+
+```text
+HARNESS  CAPABILITY       LEVEL   EVIDENCE
+claude   interrupt        fledge  esc
+claude   model_select     fledge  spawn passes --model
+claude   model_discovery  fledge  cache: ~/.claude/cache/model-catalog
+claude   resume           native  --resume <session-id>
+claude   session_ref      fledge  Herdr hook reports id and transcript path at SessionStart
+claude   lifecycle_hooks  native  Herdr integration target exists
+claude   usage_tokens     fledge  transcript
+claude   usage_cost       none    transcript records no cost
+```
+
+Levels: `fledge` means Fledge implements or uses it; `native` means the harness
+or Herdr provides it natively; `none` means it is not available; `unknown` means
+it has not been checked. `--live` makes one `integration.list` call and adds two
+facts per kind as Herdr reports them: `available` (the harness binary is on
+`PATH`) and `hook_state` (`current`, `outdated`, or `not_installed`). A kind Herdr
+has no integration target for shows `-` in the table and `"live": null` in JSON.
+`--json` emits `{"harnesses":[{"kind","capabilities":[{"name","level","evidence"}],"live"}]}`
+as the outcome's result.
 
 ### Profiles
 

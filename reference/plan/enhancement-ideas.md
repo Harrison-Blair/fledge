@@ -148,7 +148,9 @@ A checked item means its main capability is implemented; accompanying notes reco
 
 35. [ ] **Maintain a small reusable worker pool.** Keep selected agents ready for repeated tasks, with an explicit choice between reusing context and starting fresh.
 
-36. [ ] **Expose harness capabilities.** Report which harnesses support resume, interruption, structured results, lifecycle hooks, and other operations.
+36. [x] **Expose harness capabilities.** Report which harnesses support resume, interruption, structured results, lifecycle hooks, and other operations.
+
+   **Implemented:** `fledge agent capabilities` (`--harness`, `--live`, `--json`) · **Author:** Harrison-Blair · **Author date:** 2026-09-23. The `structured_results` row was dropped: no harness returns structured results to Fledge today, so it would read `none` for every kind and add no information.
 
 37. [ ] **Explain model discovery.** Show where model entries came from, when they were last observed, and whether discovery failed. A cached model name should not imply confirmed availability.
 
