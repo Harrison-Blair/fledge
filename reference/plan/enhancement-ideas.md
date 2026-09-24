@@ -172,6 +172,8 @@ A checked item means its main capability is implemented; accompanying notes reco
 
 44. [ ] **Broadcast to a selected group.** Send a changed requirement to every worker on a task, with individual delivery outcomes.
 
+    **Existing support:** `agent message` accepts repeatable `--name`/`--pane`/`--id` targets or the `agent list` filter flags (`--task`, `--mine`, `--state`, and others) and delivers the same message, with one sender header and message ID, to each target in turn, reporting a fan-out row per target with its own outcome and message ID; any failed row makes the outcome `partial`. This covers the broadcast, so this item can be checked off, or narrowed to anything the fan-out lacks, such as delivery that is queued until each worker's turn ends (#43). [Current behavior](../../README.md#agents)
+
 45. [ ] **Generate handoff briefs.** Capture current progress, important files, decisions, failed approaches, and remaining work before transferring an assignment.
 
 46. [ ] **Package relevant context.** Assemble the task brief, repository instructions, selected files, and supporting references into a bounded input package.
