@@ -1112,3 +1112,20 @@ the block, so the duplicate is harmless to Git but untidy.
 1. Use a root with no `.fledge/.gitignore`.
 2. Run two `fledgedir.Ensure` calls on it concurrently.
 3. Observe the managed block appended twice (plausible, not proven).
+
+---
+
+**Issue:** Agent status reports done after provider failure
+
+**Summary:** Two `pi` verifiers running `opencode-go/kimi-k3` hit `402 Insufficient
+account funds` (the 5-hour usage window was exhausted) and stopped with `Retry
+failed after 3 attempts`. `fledge agent list` and `fledge agent wait` reported
+both as done, indistinguishable from a finished verification. The orchestrator
+only noticed by reading the pane. Observed twice. Workaround: read the pane
+(`fledge agent read`) before trusting a done status from a `pi` agent on a
+quota-limited provider.
+
+**Reproduction steps:**
+1. Spawn a `pi` agent on a provider with no remaining quota.
+2. Send it a prompt and let it fail with the provider error.
+3. Run `fledge agent list` or `fledge agent wait` and observe the agent reported as done.
