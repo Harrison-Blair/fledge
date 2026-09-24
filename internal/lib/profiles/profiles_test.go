@@ -52,48 +52,60 @@ func load(t *testing.T, cwd, name string) Profile {
 }
 func builtin(t *testing.T, name string) Profile { return load(t, t.TempDir(), name) }
 
-func TestBuiltinsShipFiveRolesWithDefaults(t *testing.T) {
+// Built-ins ship the settled routing, reads, and section texts. Claude
+// built-ins deliberately ship permission-bypassing args (plan decision D6),
+// replacing the earlier assertion that no built-in changes permissions.
+func TestBuiltinsShipEightRolesWithDefaults(t *testing.T) {
 	list, err := List(context.Background(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+	bypass := []string{"--permission-mode", "bypassPermissions"}
+	both := []string{"AGENTS.md", "README.md"}
+	agents := []string{"AGENTS.md"}
 	want := []struct {
 		name, harness, model string
-		args                 []string
+		args, reads          []string
 	}{
-		{"implementer", "claude", "claude-opus-5-5", []string{}},
-		{"orchestrator", "claude", "claude-opus-5-5", []string{}},
-		{"planner", "pi", "openai-codex/gpt-6-astra", []string{"--thinking", "xhigh"}},
-		{"reviewer", "pi", "openai-codex/gpt-6-astra", []string{}},
-		{"verifier", "pi", "openai-codex/gpt-6-astra", []string{}},
+		{"debugger", "claude", "claude-opus-5-5", bypass, agents},
+		{"implementer", "claude", "claude-opus-5-5", bypass, agents},
+		{"integrator", "claude", "claude-opus-5-5", bypass, agents},
+		{"orchestrator", "claude", "claude-opus-5-5", bypass, both},
+		{"planner", "pi", "openai-codex/gpt-6-astra", []string{"--thinking", "xhigh"}, both},
+		{"researcher", "claude", "claude-opus-5-5", bypass, agents},
+		{"reviewer", "pi", "openai-codex/gpt-6-astra", []string{}, agents},
+		{"verifier", "pi", "openai-codex/gpt-6-astra", []string{}, agents},
 	}
 	if len(list) != len(want) {
 		t.Fatalf("%+v", list)
 	}
-	roles := map[string]bool{}
+	missions := map[string]bool{}
 	for i, w := range want {
 		p := list[i]
-		if p.Name != w.name || p.Harness != w.harness || p.Model != w.model || !reflect.DeepEqual(p.Args, w.args) {
+		if p.Name != w.name || p.Harness != w.harness || p.Model != w.model || !reflect.DeepEqual(p.Args, w.args) || !reflect.DeepEqual(p.Reads, w.reads) {
 			t.Fatalf("%d: %+v want %+v", i, p, w)
 		}
 		if p.Source != "builtin" || p.Path != nil || p.Base != nil {
 			t.Fatalf("provenance: %+v", p)
 		}
-		if strings.TrimSpace(p.Sections.Mission) == "" || roles[p.Sections.Mission] || !p.Protocol {
+		if strings.TrimSpace(p.Sections.Mission) == "" || missions[p.Sections.Mission] || !p.Protocol {
 			t.Fatalf("mission not distinct or protocol off: %+v", p)
 		}
-		roles[p.Sections.Mission] = true
+		missions[p.Sections.Mission] = true
 		if p.Harness == "codex" {
 			t.Fatalf("%s uses the codex harness; codex models go through pi", p.Name)
 		}
-		for _, a := range p.Args {
-			if strings.Contains(strings.ToLower(a), "permission") || strings.Contains(a, "bypass") || strings.Contains(a, "dangerous") || strings.Contains(a, "yolo") || strings.Contains(a, "sandbox") {
-				t.Fatalf("%s ships permission-changing args %q", p.Name, p.Args)
-			}
-		}
 	}
-	if !strings.Contains(builtin(t, "reviewer").Sections.Mission, "without editing") || !strings.Contains(builtin(t, "planner").Sections.Mission, "read-only") {
-		t.Fatal("role briefs lost their distinguishing text")
+	for _, c := range []struct{ name, section, text, phrase string }{
+		{"verifier", "workflow", builtin(t, "verifier").Sections.Workflow, "fledge task verify"},
+		{"reviewer", "never", builtin(t, "reviewer").Sections.Never, "Edit files"},
+		{"planner", "workflow", builtin(t, "planner").Sections.Workflow, "fledge task import --dry-run"},
+		{"integrator", "never", builtin(t, "integrator").Sections.Never, "main"},
+		{"implementer", "protocol", builtin(t, "implementer").Sections.Protocol, "Do not run `fledge task complete`"},
+	} {
+		if !strings.Contains(c.text, c.phrase) {
+			t.Fatalf("%s %s lost %q: %q", c.name, c.section, c.phrase, c.text)
+		}
 	}
 }
 
@@ -120,8 +132,8 @@ func TestOmittedFieldsInheritAndEmptyValuesClear(t *testing.T) {
 	if got := load(t, root, "planner"); got.Harness != base.Harness || got.Model != base.Model || !reflect.DeepEqual(got.Args, base.Args) || got.Sections != base.Sections || got.Protocol != base.Protocol {
 		t.Fatalf("omitted fields lost: %+v", got)
 	}
-	write(t, root, "planner", "schema_version = 1\nargs = []\nmodel = \"\"\nprotocol = false\n[sections]\nmission = \"\"\n")
-	if got := load(t, root, "planner"); got.Harness != "pi" || got.Model != "" || !reflect.DeepEqual(got.Args, []string{}) || got.Sections.Mission != "" || got.Protocol || got.Brief() != "" {
+	write(t, root, "planner", "schema_version = 1\nargs = []\nreads = []\nmodel = \"\"\nprotocol = false\n[sections]\nmission = \"\"\nworkflow = \"\"\nalways = \"\"\nnever = \"\"\nreport = \"\"\n")
+	if got := load(t, root, "planner"); got.Harness != "pi" || got.Model != "" || !reflect.DeepEqual(got.Args, []string{}) || !reflect.DeepEqual(got.Reads, []string{}) || got.Sections != (Sections{}) || got.Protocol || got.Brief() != "" {
 		t.Fatalf("empty values did not clear: %+v", got)
 	}
 	write(t, root, "planner", "schema_version = 1\nargs = [\"--x\"]\n[sections]\nmission = \"Replacement.\"\n")
@@ -256,7 +268,7 @@ func TestListMergesRepoProfilesByName(t *testing.T) {
 			t.Fatalf("%+v", p)
 		}
 	}
-	if !slices.Equal(names, []string{"alpha", "implementer", "orchestrator", "planner", "reviewer", "verifier"}) {
+	if !slices.Equal(names, []string{"alpha", "debugger", "implementer", "integrator", "orchestrator", "planner", "researcher", "reviewer", "verifier"}) {
 		t.Fatal(names)
 	}
 }

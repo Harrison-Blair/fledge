@@ -93,7 +93,7 @@ func TestSpawnProfileReadsInvokingRepositoryOverride(t *testing.T) {
 	l := newSocket(t)
 	gitRepo(t)
 	os.MkdirAll(filepath.Join(".fledge", "profiles"), 0755)
-	os.WriteFile(filepath.Join(".fledge", "profiles", "reviewer.toml"), []byte("schema_version = 1\nharness = \"claude\"\nmodel = \"sonnet\"\nprotocol = false\n[sections]\nmission = \"Local role.\"\n"), 0644)
+	os.WriteFile(filepath.Join(".fledge", "profiles", "reviewer.toml"), []byte("schema_version = 1\nharness = \"claude\"\nmodel = \"sonnet\"\nprotocol = false\nreads = []\n[sections]\nmission = \"Local role.\"\nworkflow = \"\"\nnever = \"\"\nreport = \"\"\n"), 0644)
 	done := serveRPCs(l, snapshotResult(), startedResult("claude"), readyAs("claude"), promptedResult())
 	var out bytes.Buffer
 	if err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--profile", "reviewer", "--pane", "w1:p1", "--prompt", "go"}, &out); err != nil {
@@ -133,11 +133,11 @@ func TestProfilesCommandNeedsNoSocketOrRepository(t *testing.T) {
 		Status string
 		Result struct{ Profiles []struct{ Name string } }
 	}
-	if err := json.Unmarshal(out.Bytes(), &envelope); err != nil || envelope.Status != "success" || len(envelope.Result.Profiles) != 5 {
+	if err := json.Unmarshal(out.Bytes(), &envelope); err != nil || envelope.Status != "success" || len(envelope.Result.Profiles) != 8 {
 		t.Fatal(err, out.String())
 	}
 	out.Reset()
-	if err := ExecuteWithArgs([]string{"agent", "profiles", "verifier"}, &out); err != nil || !strings.Contains(out.String(), "Profile verifier\n  source: built-in\n") || !strings.Contains(out.String(), "    ## Mission\n    "+builtinProfile(t, "verifier").Sections.Mission+"\n") {
+	if err := ExecuteWithArgs([]string{"agent", "profiles", "verifier"}, &out); err != nil || !strings.Contains(out.String(), "Profile verifier\n  source: built-in\n") || !strings.Contains(out.String(), "    ## Mission\n    "+strings.ReplaceAll(builtinProfile(t, "verifier").Sections.Mission, "\n", "\n    ")+"\n") {
 		t.Fatal(err, out.String())
 	}
 	out.Reset()

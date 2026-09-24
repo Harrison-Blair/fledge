@@ -175,7 +175,7 @@ func TestProfileNoWaitWithoutRoleIsAllowed(t *testing.T) {
 	o.NoWait = true
 	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
 	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p)}, callerNotAgent())
-	s.Cwd = profileRepo(t, "quiet", "schema_version = 1\nextends = \"builtin:reviewer\"\nprotocol = false\n[sections]\nmission = \"\"\n")
+	s.Cwd = profileRepo(t, "quiet", "schema_version = 1\nextends = \"builtin:reviewer\"\nprotocol = false\nreads = []\n[sections]\nmission = \"\"\nworkflow = \"\"\nnever = \"\"\nreport = \"\"\n")
 	if out := s.run(context.Background(), o, nil); out.Status != "success" {
 		t.Fatalf("%+v", out)
 	}
