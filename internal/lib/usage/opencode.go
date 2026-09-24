@@ -11,7 +11,8 @@ import (
 const opencodeTimeout = 30 * time.Second
 
 type opencodeExport struct {
-	Messages []struct {
+	Info     *json.RawMessage `json:"info"`
+	Messages *[]struct {
 		Info struct {
 			Role       string  `json:"role"`
 			ModelID    string  `json:"modelID"`
@@ -50,8 +51,11 @@ func readOpencode(ctx context.Context, d Discovery, ref Ref, w Window) (*tally, 
 	if err := json.Unmarshal(out, &export); err != nil {
 		return nil, fmt.Errorf("%s output is not the observed export shape: %w", source, err)
 	}
+	if export.Info == nil || export.Messages == nil {
+		return nil, fmt.Errorf("%s output lacks info and messages; not the observed export shape", source)
+	}
 	t := &tally{cost: &Cost{Currency: "USD", Basis: "estimate", Source: "opencode"}, sources: []string{source}}
-	for _, m := range export.Messages {
+	for _, m := range *export.Messages {
 		i := m.Info
 		if i.Role != "assistant" {
 			continue

@@ -58,15 +58,21 @@ func readClaudeFile(path string, w Window) (*tally, error) {
 	var responses []response
 	err := t.scanLines(path, func(line []byte) error {
 		var head struct {
-			Type string `json:"type"`
+			Type      string `json:"type"`
+			SessionID string `json:"sessionId"`
 		}
-		if err := json.Unmarshal(line, &head); err != nil || head.Type != "assistant" {
+		if err := json.Unmarshal(line, &head); err != nil {
 			return err
+		}
+		t.recognized = t.recognized || head.SessionID != "" || head.Type == "user" || head.Type == "assistant"
+		if head.Type != "assistant" {
+			return nil
 		}
 		var l claudeLine
 		if err := json.Unmarshal(line, &l); err != nil || l.Message.Usage == nil || l.Message.Model == "<synthetic>" {
 			return err
 		}
+		t.records++
 		u := l.Message.Usage
 		r := response{at: l.Timestamp, model: l.Message.Model, tokens: Tokens{Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite}}
 		if i, ok := byRequest[l.RequestID]; ok && l.RequestID != "" {
@@ -77,6 +83,9 @@ func readClaudeFile(path string, w Window) (*tally, error) {
 		responses = append(responses, r)
 		return nil
 	})
+	if err == nil {
+		err = t.check(path, "claude")
+	}
 	if err != nil {
 		return nil, err
 	}

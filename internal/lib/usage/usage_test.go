@@ -124,7 +124,8 @@ func TestReadMissingFileIsUnavailable(t *testing.T) {
 
 func TestReadMalformedLinesAreCountedAndValidLinesSummed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
-	write(t, path, `{"type":"message","timestamp":"2026-01-03T10:00:05.000Z","message":{"role":"assistant","model":"m","provider":"p","usage":{"input":1,"output":2,"cacheRead":3,"cacheWrite":4,"reasoning":0,"cost":{"total":0.5}}}}
+	write(t, path, `{"type":"session","version":3,"id":"s"}
+{"type":"message","timestamp":"2026-01-03T10:00:05.000Z","message":{"role":"assistant","model":"m","provider":"p","usage":{"input":1,"output":2,"cacheRead":3,"cacheWrite":4,"reasoning":0,"cost":{"total":0.5}}}}
 {not json
 {"type":"message","timestamp":"2026-01-03T10:00:06.000Z","message":{"role":"assistant","usage":{"input":"many"}}}
 
@@ -371,5 +372,84 @@ func TestClaudeSkipsSyntheticMessages(t *testing.T) {
 	s := Read(context.Background(), Discovery{Run: noRun(t)}, "claude", Ref{Kind: "path", Value: path}, Window{})
 	if s.Turns != 1 || !reflect.DeepEqual(s.Models, []string{"claude-opus-5"}) {
 		t.Fatalf("turns %d models %q", s.Turns, s.Models)
+	}
+}
+
+func TestUnrecognizedOrUnreadableSessionIsUnavailable(t *testing.T) {
+	for name, content := range map[string]string{
+		"empty object":             "{}\n",
+		"metadata masks malformed": "{\"type\":\"session\"}\n{broken\n",
+		"foreign type only":        "{\"type\":\"other\",\"payload\":{}}\n",
+	} {
+		for _, kind := range []string{"claude", "codex", "pi"} {
+			path := filepath.Join(t.TempDir(), "s.jsonl")
+			write(t, path, content)
+			s := Read(context.Background(), Discovery{Run: noRun(t)}, kind, Ref{Kind: "path", Value: path}, Window{})
+			if s.Basis != Unavailable || s.Reason == "" {
+				t.Errorf("%s %s: basis %q reason %q", name, kind, s.Basis, s.Reason)
+			}
+			if strings.Contains(s.Reason, "token_count") {
+				t.Errorf("%s %s: claims a token_count fallback: %q", name, kind, s.Reason)
+			}
+		}
+	}
+}
+
+func TestClaudeUnrecognizedSubagentFileIsUnavailable(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s.jsonl")
+	write(t, path, `{"type":"assistant","requestId":"r","timestamp":"2026-01-02T10:00:00.000Z","message":{"model":"m","usage":{"input_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":2}}}
+`)
+	write(t, filepath.Join(dir, "s", "subagents", "agent-x.jsonl"), "{}\n")
+	s := Read(context.Background(), Discovery{Run: noRun(t)}, "claude", Ref{Kind: "path", Value: path}, Window{})
+	assertBasis(t, s, Unavailable)
+}
+
+func TestValidSessionWithoutResponsesIsMeasuredZero(t *testing.T) {
+	late := window("2030-01-01T00:00:00Z", "2030-01-02T00:00:00Z")
+	d := fixture(t)
+	for kind, ref := range map[string]Ref{
+		"claude": {Kind: "id", Value: "sess-1", Cwd: "/home/user/proj.x/app"},
+		"codex":  {Kind: "id", Value: "cdx-1"},
+		"pi":     {Kind: "id", Value: "pi-1"},
+	} {
+		s := Read(context.Background(), d, kind, ref, late)
+		if s.Basis != Measured || s.Tokens != (Tokens{}) || s.Turns != 0 {
+			t.Errorf("%s: %+v", kind, s)
+		}
+	}
+	// A session that has not answered yet is a successful zero read.
+	for kind, content := range map[string]string{
+		"claude": `{"type":"user","timestamp":"2026-01-02T10:00:00.000Z","message":{"role":"user","content":"hi"}}` + "\n",
+		// Claude writes metadata-only transcripts, each line naming the session, before any prompt.
+		"claude-stub": `{"type":"mode","mode":"default","sessionId":"s"}` + "\n" + `{"type":"last-prompt","leafUuid":"u","sessionId":"s"}` + "\n",
+		"codex":       `{"timestamp":"2026-01-02T10:00:00.000Z","type":"session_meta","payload":{"session_id":"c","id":"c"}}` + "\n",
+		"pi":          `{"type":"session","version":3,"id":"p","timestamp":"2026-01-03T10:00:00.000Z"}` + "\n",
+	} {
+		path := filepath.Join(t.TempDir(), "s.jsonl")
+		write(t, path, content)
+		s := Read(context.Background(), Discovery{Run: noRun(t)}, strings.TrimSuffix(kind, "-stub"), Ref{Kind: "path", Value: path}, Window{})
+		if s.Basis != Measured || s.Tokens != (Tokens{}) || s.Reason != "" {
+			t.Errorf("%s header only: %+v", kind, s)
+		}
+	}
+}
+
+func TestOpencodeRejectsUnrecognizedExport(t *testing.T) {
+	for _, out := range []string{`{"error":"session missing"}`, `{}`, `{"info":{"id":"oc-1"}}`, `{"messages":[]}`, `[]`} {
+		r := &fakeRunner{outputs: map[string]string{"opencode export oc-1": out}}
+		s := Read(context.Background(), Discovery{Run: r.run}, "opencode", Ref{Kind: "id", Value: "oc-1"}, Window{})
+		if s.Basis != Unavailable || s.Cost != nil {
+			t.Errorf("%s: %+v", out, s)
+		}
+	}
+}
+
+func TestOpencodeEmptySessionIsMeasuredZero(t *testing.T) {
+	r := &fakeRunner{outputs: map[string]string{"opencode export oc-1": `{"info":{"id":"oc-1"},"messages":[]}`}}
+	s := Read(context.Background(), Discovery{Run: r.run}, "opencode", Ref{Kind: "id", Value: "oc-1"}, Window{})
+	assertBasis(t, s, Measured)
+	if s.Tokens != (Tokens{}) || s.Cost == nil || s.Cost.Amount != 0 {
+		t.Fatalf("%+v", s)
 	}
 }

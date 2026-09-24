@@ -185,17 +185,19 @@ type response struct {
 
 // tally accumulates the responses a reader keeps.
 type tally struct {
-	tokens    Tokens
-	subagents *Tokens
-	cost      *Cost
-	models    []string
-	turns     int
-	first     *time.Time
-	last      *time.Time
-	sources   []string
-	lines     int
-	malformed int
-	note      string
+	tokens     Tokens
+	subagents  *Tokens
+	cost       *Cost
+	models     []string
+	turns      int
+	first      *time.Time
+	last       *time.Time
+	sources    []string
+	lines      int
+	malformed  int
+	recognized bool // saw the harness's session marker
+	records    int  // usage records parsed, before window filtering
+	note       string
 }
 
 // add counts r when it falls inside w.
@@ -251,11 +253,21 @@ func (t *tally) summary(s Summary) Summary {
 	s.Basis, s.Reason = Measured, t.note
 	if t.malformed > 0 {
 		s.Reason = joinReason(s.Reason, fmt.Sprintf("%d malformed lines of %d skipped", t.malformed, t.lines))
-		if t.malformed == t.lines {
-			s.Basis = Unavailable
-		}
 	}
 	return s
+}
+
+// check rejects a session file whose malformed lines leave no readable usage
+// record, or that lacks the harness's session marker, so unreadable usage is
+// never reported as a measured zero.
+func (t *tally) check(path, kind string) error {
+	if t.malformed > 0 && t.records == 0 {
+		return fmt.Errorf("%d malformed lines of %d and no readable usage records in %s", t.malformed, t.lines, path)
+	}
+	if !t.recognized {
+		return fmt.Errorf("%s is not a recognized %s session file", path, kind)
+	}
+	return nil
 }
 
 func joinReason(a, b string) string {

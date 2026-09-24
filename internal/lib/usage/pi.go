@@ -37,13 +37,18 @@ func readPi(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error) {
 		var head struct {
 			Type string `json:"type"`
 		}
-		if err := json.Unmarshal(line, &head); err != nil || head.Type != "message" {
+		if err := json.Unmarshal(line, &head); err != nil {
 			return err
+		}
+		t.recognized = t.recognized || head.Type == "session"
+		if head.Type != "message" {
+			return nil
 		}
 		var l piLine
 		if err := json.Unmarshal(line, &l); err != nil || l.Message.Role != "assistant" || l.Message.Usage == nil {
 			return err
 		}
+		t.records++
 		u := l.Message.Usage
 		model := l.Message.Model
 		if l.Message.Provider != "" && model != "" {
@@ -53,6 +58,9 @@ func readPi(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error) {
 			tokens: Tokens{Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite, Reasoning: u.Reasoning}})
 		return nil
 	})
+	if err == nil {
+		err = t.check(path, "pi")
+	}
 	if err != nil {
 		return nil, err
 	}

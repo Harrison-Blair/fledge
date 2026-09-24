@@ -44,12 +44,15 @@ func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error
 	var model string
 	var fallbackModels []string
 	var before, inside *codexUsage
+	var sawTotal bool
 	err = t.scanLines(path, func(line []byte) error {
 		var l codexLine
 		if err := json.Unmarshal(line, &l); err != nil {
 			return err
 		}
 		switch l.Type {
+		case "session_meta":
+			t.recognized = true
 		case "turn_context":
 			var p struct {
 				Model string `json:"model"`
@@ -69,6 +72,7 @@ func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error
 			if err := json.Unmarshal(l.Payload, &p); err != nil {
 				return err
 			}
+			t.records++
 			if p.ResponseID != "" && seen[p.ResponseID] {
 				return nil
 			}
@@ -87,6 +91,8 @@ func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error
 			if p.Type != "token_count" || p.Info == nil {
 				return nil
 			}
+			t.records++
+			sawTotal = true
 			total := p.Info.Total
 			switch {
 			case w.From != nil && l.Timestamp != nil && l.Timestamp.Before(*w.From):
@@ -97,10 +103,13 @@ func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error
 		}
 		return nil
 	})
+	if err == nil {
+		err = t.check(path, "codex")
+	}
 	if err != nil {
 		return nil, err
 	}
-	if len(seen) == 0 {
+	if len(seen) == 0 && sawTotal {
 		t.note = "no token_usage_record entries; totals from the last token_count total_token_usage"
 		if inside != nil {
 			if before != nil {
