@@ -92,6 +92,8 @@ fledge agent profiles
 fledge agent profiles reviewer --json
 fledge agent adopt --name helper
 fledge agent adopt --pane w2:p3 --name builder --json
+fledge agent rename --to orchestrator
+fledge agent rename --name builder --to reviewer --json
 fledge agent list --json
 fledge agent list --mine
 fledge agent list --parent 3f9a0c2e --json
@@ -135,7 +137,9 @@ case-sensitively: missing destination names are created, ambiguous names fail,
 and an existing tab receives a fresh split. New containers reuse their initial
 children. `--workspace-id` and `--tab-id` select existing IDs instead of names.
 `--pane` uses an existing shell and excludes other placement, cwd, env, and split
-flags. `--label` and `--focus` still apply to that pane.
+flags. `--label` and `--focus` still apply to that pane. The pane label defaults to
+`--name`, and a tab spawn creates (a new tab, or the first tab of a new workspace or
+worktree workspace) is labeled `--tab`, else `--name`; an existing tab keeps its label.
 
 Running `fledge agent spawn` with no flags or native arguments, with stdin and
 stdout both on a terminal, prompts for the harness, model (from local discovery,
@@ -635,8 +639,20 @@ already has a live record, such as one whose Herdr name was lost, is named
 through Herdr and keeps that record: the same ID, parent, and registration,
 with the new name and its current pane stored and an `updated` `agent_record`
 effect. If the record ends after the rename, the outcome is `partial`: the
-agent is named but the record is unchanged. Success prints
+agent is named but the record is unchanged. Naming an agent also labels its
+pane, and its tab when the pane is the only one there, as
+`agent rename` does. Success prints
 `Adopted <name> (<pane>) as <id>.`
+
+`fledge agent rename --to NAME` renames a live agent: the caller's own without
+`--name`, `--pane`, or `--id`. Herdr renames it (`agent_name_taken` and
+`agent_launch_pending` are reported as is), then its live record, if any, stores
+the new name under the same ID, so task ownership and `--id` lookups carry
+over. The pane label becomes the new name, and so does the tab label when the
+pane is alone in its tab (`pane_label` and `tab` effects); a tab shared with
+other panes keeps its label. An agent already named `NAME` is only relabeled.
+Messages addressed to the old name, including earlier reply headers, no longer
+reach the agent. Success prints `Renamed <old> to <new> (<pane>).`
 
 `get`, `message`, `read`, `wait` (single target only), and `pause` accept
 `--id` in place of `--name` or `--pane`; exactly one of the three is

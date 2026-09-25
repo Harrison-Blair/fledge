@@ -12,7 +12,7 @@ import (
 )
 
 func TestAgentHelp(t *testing.T) {
-	for _, args := range [][]string{{"agent", "--help"}, {"agent", "spawn", "--help"}, {"agent", "list", "--help"}, {"agent", "message", "--help"}, {"agent", "models", "--help"}, {"agent", "stop", "--help"}, {"agent", "get", "--help"}, {"agent", "read", "--help"}, {"agent", "wait", "--help"}, {"agent", "adopt", "--help"}, {"agent", "current", "--help"}, {"agent", "send", "--help"}, {"agent", "cleanup", "--help"}, {"agent", "capabilities", "--help"}} {
+	for _, args := range [][]string{{"agent", "--help"}, {"agent", "spawn", "--help"}, {"agent", "list", "--help"}, {"agent", "message", "--help"}, {"agent", "models", "--help"}, {"agent", "stop", "--help"}, {"agent", "get", "--help"}, {"agent", "read", "--help"}, {"agent", "wait", "--help"}, {"agent", "adopt", "--help"}, {"agent", "current", "--help"}, {"agent", "send", "--help"}, {"agent", "cleanup", "--help"}, {"agent", "capabilities", "--help"}, {"agent", "rename", "--help"}} {
 		var out bytes.Buffer
 		if err := ExecuteWithArgs(args, &out); err != nil {
 			t.Fatal(err)
@@ -71,6 +71,10 @@ func TestAgentJSONValidation(t *testing.T) {
 		{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "p", "--cwd=", "--json"},
 		{"agent", "adopt", "--pane", "p", "--name", "Bad", "--json"},
 		{"agent", "adopt", "extra", "--json"},
+		{"agent", "rename", "--json"},
+		{"agent", "rename", "--to", "Bad", "--json"},
+		{"agent", "rename", "--name", "a", "--pane", "p", "--to", "b", "--json"},
+		{"agent", "rename", "extra", "--to", "b", "--json"},
 		{"agent", "get", "--name", "a", "--id", "0000beef", "--json"},
 		{"agent", "message", "--name", "a", "--name", "a", "--body", "x", "--json"},
 		{"agent", "message", "--name", "a", "--state", "idle", "--body", "x", "--json"},
@@ -113,7 +117,7 @@ func TestAgentGroupHelpListsSubcommands(t *testing.T) {
 	if err := ExecuteWithArgs([]string{"agent", "--help"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"stop", "get", "read", "wait", "adopt", "current", "cleanup"} {
+	for _, name := range []string{"stop", "get", "read", "wait", "adopt", "rename", "current", "cleanup"} {
 		if !strings.Contains(out.String(), "\n  "+name+" ") {
 			t.Fatalf("%s: %s", name, out.String())
 		}
@@ -171,7 +175,7 @@ func TestRecordIDFlagHelp(t *testing.T) {
 		}
 	}
 	walk(NewRootCmd())
-	if found != 8 {
-		t.Fatalf("found %d record ID flags, want 8", found)
+	if found != 9 {
+		t.Fatalf("found %d record ID flags, want 9", found)
 	}
 }
