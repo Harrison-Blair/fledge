@@ -293,18 +293,21 @@ func samePane(a, b herdr.Pane) bool {
 	return a.PaneID == b.PaneID && a.WorkspaceID == b.WorkspaceID && a.TabID == b.TabID
 }
 func (s *spawner) customizePane(ctx context.Context, o Options, p herdr.Pane, out *libagent.Outcome) error {
-	if o.Label != "" {
-		var r herdr.PaneResult
-		err := s.Call(ctx, "pane.rename", map[string]any{"pane_id": p.PaneID, "label": o.Label}, &r)
-		if err == nil && (r.Type != "pane_info" || !samePane(r.Pane, p)) {
-			err = libagent.Protocol("incomplete or mismatched pane.rename result")
-		}
-		if err != nil {
-			out.Fail(err, "pane.rename", true)
-			return err
-		}
-		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "pane_label", ID: p.PaneID})
+	// The pane takes --label, else the agent's name.
+	label := o.Label
+	if label == "" {
+		label = o.Name
 	}
+	var renamed herdr.PaneResult
+	err := s.Call(ctx, "pane.rename", map[string]any{"pane_id": p.PaneID, "label": label}, &renamed)
+	if err == nil && (renamed.Type != "pane_info" || !samePane(renamed.Pane, p)) {
+		err = libagent.Protocol("incomplete or mismatched pane.rename result")
+	}
+	if err != nil {
+		out.Fail(err, "pane.rename", true)
+		return err
+	}
+	out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "pane_label", ID: p.PaneID})
 	if o.Focus {
 		var r herdr.PaneResult
 		err := s.Call(ctx, "pane.focus", map[string]any{"pane_id": p.PaneID}, &r)
