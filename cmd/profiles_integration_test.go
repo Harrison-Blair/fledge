@@ -40,18 +40,18 @@ func startArgs(t *testing.T, c rpcCall) (string, []string) {
 func TestSpawnProfileFlagSetsLaunchAndOneHeaderedPrompt(t *testing.T) {
 	t.Setenv("HERDR_PANE_ID", "")
 	l := newSocket(t)
-	done := serveRPCs(l, snapshotResult(), startedResult("pi"), readyAs("pi"), promptedResult())
+	done := serveRPCs(l, snapshotResult(), labeledResult(), startedResult("pi"), readyAs("pi"), promptedResult())
 	var out bytes.Buffer
 	err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--profile", "reviewer", "--pane", "w1:p1", "--prompt", "review this", "--json"}, &out)
 	if err != nil {
 		t.Fatal(err, out.String())
 	}
-	calls := waitCalls(t, l, done, 4)
-	if kind, args := startArgs(t, calls[1]); kind != "pi" || !reflect.DeepEqual(args, []string{"--model", "openai-codex/gpt-6-astra"}) {
+	calls := waitCalls(t, l, done, 5)
+	if kind, args := startArgs(t, calls[2]); kind != "pi" || !reflect.DeepEqual(args, []string{"--model", "openai-codex/gpt-6-astra"}) {
 		t.Fatalf("%s %q", kind, args)
 	}
-	if calls[3].Method != "agent.prompt" || !headered(t, calls[3], builtinProfile(t, "reviewer").Brief()+"\n\nreview this") {
-		t.Fatalf("%s", calls[3].Params)
+	if calls[4].Method != "agent.prompt" || !headered(t, calls[4], builtinProfile(t, "reviewer").Brief()+"\n\nreview this") {
+		t.Fatalf("%s", calls[4].Params)
 	}
 	var envelope struct {
 		Status string
@@ -73,18 +73,18 @@ func TestSpawnProfileFlagSetsLaunchAndOneHeaderedPrompt(t *testing.T) {
 func TestSpawnProfileExplicitNativeTokensReplaceProfileArgs(t *testing.T) {
 	t.Setenv("HERDR_PANE_ID", "")
 	l := newSocket(t)
-	done := serveRPCs(l, snapshotResult(), startedResult("pi"), readyAs("pi"), promptedResult())
+	done := serveRPCs(l, snapshotResult(), labeledResult(), startedResult("pi"), readyAs("pi"), promptedResult())
 	var out bytes.Buffer
 	err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--profile", "planner", "--pane", "w1:p1", "--args=--search", "--", "--native"}, &out)
 	if err != nil {
 		t.Fatal(err, out.String())
 	}
-	calls := waitCalls(t, l, done, 4)
-	if kind, args := startArgs(t, calls[1]); kind != "pi" || !reflect.DeepEqual(args, []string{"--model", "openai-codex/gpt-6-astra", "--search", "--native"}) {
+	calls := waitCalls(t, l, done, 5)
+	if kind, args := startArgs(t, calls[2]); kind != "pi" || !reflect.DeepEqual(args, []string{"--model", "openai-codex/gpt-6-astra", "--search", "--native"}) {
 		t.Fatalf("%s %q", kind, args)
 	}
-	if !headered(t, calls[3], builtinProfile(t, "planner").Brief()) {
-		t.Fatalf("%s", calls[3].Params)
+	if !headered(t, calls[4], builtinProfile(t, "planner").Brief()) {
+		t.Fatalf("%s", calls[4].Params)
 	}
 	if !strings.Contains(out.String(), "  profile: planner (built-in)\n") {
 		t.Fatal(out.String())
@@ -97,17 +97,17 @@ func TestSpawnProfileReadsInvokingRepositoryOverride(t *testing.T) {
 	gitRepo(t)
 	os.MkdirAll(filepath.Join(".fledge", "profiles"), 0755)
 	os.WriteFile(filepath.Join(".fledge", "profiles", "reviewer.toml"), []byte("schema_version = 1\nharness = \"claude\"\nmodel = \"sonnet\"\nprotocol = false\nreads = []\n[sections]\nmission = \"Local role.\"\nworkflow = \"\"\nnever = \"\"\nreport = \"\"\n"), 0644)
-	done := serveRPCs(l, snapshotResult(), startedResult("claude"), readyAs("claude"), promptedResult())
+	done := serveRPCs(l, snapshotResult(), labeledResult(), startedResult("claude"), readyAs("claude"), promptedResult())
 	var out bytes.Buffer
 	if err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--profile", "reviewer", "--pane", "w1:p1", "--prompt", "go"}, &out); err != nil {
 		t.Fatal(err, out.String())
 	}
-	calls := waitCalls(t, l, done, 4)
-	if kind, args := startArgs(t, calls[1]); kind != "claude" || !reflect.DeepEqual(args, []string{"--model", "sonnet"}) {
+	calls := waitCalls(t, l, done, 5)
+	if kind, args := startArgs(t, calls[2]); kind != "claude" || !reflect.DeepEqual(args, []string{"--model", "sonnet"}) {
 		t.Fatalf("%s %q", kind, args)
 	}
-	if !headered(t, calls[3], "## Mission\nLocal role.\n\ngo") {
-		t.Fatalf("%s", calls[3].Params)
+	if !headered(t, calls[4], "## Mission\nLocal role.\n\ngo") {
+		t.Fatalf("%s", calls[4].Params)
 	}
 }
 
