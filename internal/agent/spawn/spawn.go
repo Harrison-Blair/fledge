@@ -114,13 +114,7 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 	}
 	args, err := o.Validate()
 	if err == nil && o.NoWait && brief != "" {
-		q := *profile
-		if o.Pane != "" {
-			// An existing pane's directory is known only from the snapshot,
-			// where its reads are checked.
-			q.Reads = nil
-		}
-		err = noWaitBrief(q, knownReadDir(o, s.Cwd))
+		err = libagent.Invalid("--no-wait cannot be combined with a profile brief, which is sent as the first prompt")
 	}
 	if err != nil {
 		out.Fail(err, "validation", false)
@@ -145,18 +139,6 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 	for _, a := range snapshot.Agents {
 		if a.Name != nil && *a.Name == o.Name {
 			out.Fail(libagent.Invalid("agent name %q is already in use", o.Name), "preflight", false)
-			return out
-		}
-	}
-	if o.NoWait && brief != "" && o.Pane != "" {
-		dir := knownReadDir(o, s.Cwd)
-		for _, p := range snapshot.Panes {
-			if p.PaneID == o.Pane && p.Cwd != nil && *p.Cwd != "" {
-				dir = *p.Cwd
-			}
-		}
-		if err = noWaitBrief(*profile, dir); err != nil {
-			out.Fail(err, "validation", false)
 			return out
 		}
 	}

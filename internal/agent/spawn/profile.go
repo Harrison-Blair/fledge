@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/profiles"
 )
 
@@ -42,37 +41,6 @@ func profileBrief(p profiles.Profile, dir string) (string, []string) {
 	}
 	p.Reads = present
 	return p.Brief(), missing
-}
-
-// noWaitBrief rejects --no-wait when p's brief, with reads checked under dir,
-// is nonempty; an unknown dir ("") keeps every read.
-func noWaitBrief(p profiles.Profile, dir string) error {
-	brief := p.Brief()
-	if dir != "" {
-		brief, _ = profileBrief(p, dir)
-	}
-	if brief != "" {
-		return libagent.Invalid("--no-wait cannot be combined with a profile brief, which is sent as the first prompt")
-	}
-	return nil
-}
-
-// knownReadDir is the directory reads resolve under before placement: an
-// existing --worktree checkout, --cwd, or the caller's directory. A new
-// worktree has none until it is created, so it returns "".
-func knownReadDir(o Options, callerCwd string) string {
-	switch {
-	case o.Worktree == "new":
-		return ""
-	case o.Worktree != "":
-		dir, _ := filepath.Abs(o.Worktree)
-		return dir
-	case filepath.IsAbs(o.Cwd):
-		return o.Cwd
-	case o.Cwd != "":
-		return filepath.Join(callerCwd, o.Cwd)
-	}
-	return callerCwd
 }
 
 // firstPrompt places a profile brief before the task body, separated by a
