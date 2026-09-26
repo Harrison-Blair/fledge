@@ -8,12 +8,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/lib/harness"
+	"github.com/Harrison-Blair/fledge/internal/lib/harnessenv"
 )
 
 // Basis values for a Summary.
@@ -37,6 +38,23 @@ func (t *Tokens) add(o Tokens) {
 	t.CacheRead += o.CacheRead
 	t.CacheWrite += o.CacheWrite
 	t.Reasoning += o.Reasoning
+}
+
+// Count renders a token count with a k or M suffix, rounded: 12, 1.2k, 96k,
+// 410k, 2.3M.
+func Count(n int64) string {
+	f := float64(n)
+	switch {
+	case n < 1000:
+		return fmt.Sprint(n)
+	case n < 99_950:
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", f/1e3), ".0") + "k"
+	case n < 999_500:
+		return fmt.Sprintf("%.0fk", f/1e3)
+	case n < 99_950_000:
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", f/1e6), ".0") + "M"
+	}
+	return fmt.Sprintf("%.0fM", f/1e6)
 }
 
 // Cost is a harness-recorded cost; Basis is always "estimate".
@@ -87,24 +105,11 @@ func (w Window) contains(ts *time.Time) bool {
 	return (w.From == nil || !ts.Before(*w.From)) && (w.To == nil || !ts.After(*w.To))
 }
 
-// Runner executes a harness command and returns its standard output.
-type Runner func(ctx context.Context, name string, args ...string) ([]byte, error)
-
 // Discovery reads session stores under Home and runs harness commands through Run.
-type Discovery struct {
-	Home string
-	Run  Runner
-}
+type Discovery harnessenv.Env
 
 // LocalDiscovery reads the real home directory and executes real harness commands.
-func LocalDiscovery() Discovery {
-	home, _ := os.UserHomeDir()
-	return Discovery{Home: home, Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		command := exec.CommandContext(ctx, name, args...)
-		command.Stderr = io.Discard
-		return command.Output()
-	}}
-}
+func LocalDiscovery() Discovery { return Discovery(harnessenv.Local()) }
 
 type reader func(ctx context.Context, d Discovery, ref Ref, w Window) (*tally, error)
 
@@ -158,10 +163,13 @@ func Locate(d Discovery, kind string, ref Ref) (string, error) {
 	switch kind {
 	case "claude":
 		if ref.Cwd != "" {
-			return filepath.Join(d.Home, ".claude", "projects", claudeSlug(ref.Cwd), ref.Value+".jsonl"), nil
+			path := filepath.Join(d.Home, ".claude", "projects", claudeSlug(ref.Cwd), ref.Value+".jsonl")
+			if _, err := os.Stat(path); err == nil {
+				return path, nil
+			}
 		}
-		// Without the session cwd, as for an ended agent, any project may
-		// hold it, but only one may.
+		// Without the session cwd, as for an ended agent, or when its slug
+		// names no transcript, any project may hold it, but only one may.
 		pattern = filepath.Join(d.Home, ".claude", "projects", "*", ref.Value+".jsonl")
 	case "codex":
 		pattern = filepath.Join(d.Home, ".codex", "sessions", "*", "*", "*", "rollout-*-"+ref.Value+".jsonl")

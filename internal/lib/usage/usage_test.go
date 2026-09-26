@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Harrison-Blair/fledge/internal/lib/harnessenv"
 )
 
 type fakeRunner struct {
@@ -30,7 +32,7 @@ func (f *fakeRunner) run(ctx context.Context, name string, args ...string) ([]by
 }
 
 // noRun fails the test if a file-based reader executes a command.
-func noRun(t *testing.T) Runner {
+func noRun(t *testing.T) harnessenv.Runner {
 	return func(context.Context, string, ...string) ([]byte, error) {
 		t.Fatal("file readers must not run commands")
 		return nil, nil
@@ -193,6 +195,25 @@ func TestClaudeIDResolvesThroughCwdSlug(t *testing.T) {
 	want := filepath.Join(d.Home, ".claude", "projects", "-home-user-proj-x-app", "sess-1.jsonl")
 	if got != want {
 		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+// Claude Code 2026-09 named the project of
+// ".../probe_dir with space+plus~t@x" "...-probe-dir-with-space-plus-t-x":
+// every character but an ASCII letter or digit becomes '-'.
+func TestClaudeSlugReplacesEveryNonAlphanumeric(t *testing.T) {
+	if got, want := claudeSlug("/home/u/.x/probe_dir with space+plus~t@x"), "-home-u--x-probe-dir-with-space-plus-t-x"; got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+// A cwd whose slug names no transcript falls back to the search of every
+// project, since the slug is Claude's to choose.
+func TestClaudeIDWithCwdFallsBackToAnyProjectSlug(t *testing.T) {
+	d := fixture(t)
+	got, err := Locate(d, "claude", Ref{Kind: "id", Value: "sess-1", Cwd: "/elsewhere"})
+	if want := filepath.Join(d.Home, ".claude", "projects", "-home-user-proj-x-app", "sess-1.jsonl"); err != nil || got != want {
+		t.Fatalf("got %q (%v) want %q", got, err, want)
 	}
 }
 
@@ -582,6 +603,15 @@ func TestOpencodeMissingOrNullTokensIsMalformed(t *testing.T) {
 		s = Read(context.Background(), Discovery{Run: r.run}, "opencode", Ref{Kind: "id", Value: "s"}, Window{})
 		if s.Basis != Measured || s.Turns != 1 || s.Tokens.Input != 10 || s.Cost == nil || s.Cost.Amount != 0.25 || !strings.Contains(s.Reason, "1 malformed entries") {
 			t.Errorf("mixed %s: %+v", bad, s)
+		}
+	}
+}
+
+// Count rounds, so 99,960 is 100k, not 99.9k.
+func TestCount(t *testing.T) {
+	for n, want := range map[int64]string{0: "0", 999: "999", 1000: "1k", 1250: "1.2k", 34000: "34k", 99960: "100k", 410_400: "410k", 999999: "1M", 1000000: "1M", 2500000: "2.5M", 12345678: "12.3M"} {
+		if got := Count(n); got != want {
+			t.Errorf("Count(%d) = %q, want %q", n, got, want)
 		}
 	}
 }

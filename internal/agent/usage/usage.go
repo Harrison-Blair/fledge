@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -91,8 +90,9 @@ func resolve(ctx context.Context, c libagent.Client, sel selector.Selection) ([]
 		a, pane, rec, err := identity.Target{ID: id}.Get(ctx, c)
 		var remote *herdr.Error
 		if errors.As(err, &remote) && remote.Code == "agent_identity_stale" {
-			rec, err = stored(ctx, c.Cwd, id)
-			a, pane = herdr.AgentDetails{}, rec.Pane
+			if rec, err = stored(ctx, c.Cwd, id); err == nil {
+				a, pane = herdr.AgentDetails{}, rec.Pane
+			}
 		}
 		if err != nil {
 			return nil, err
@@ -205,7 +205,7 @@ func Render(w io.Writer, o libagent.Outcome) error {
 			cells := []string{libagent.Display(a.Name), dash(a.Harness), dash(strings.Join(a.Models, ","))}
 			if a.Basis == libusage.Measured {
 				t := a.Tokens
-				cells = append(cells, strconv.Itoa(a.Turns), count(t.Input), count(t.Output), count(t.CacheRead), count(t.CacheWrite))
+				cells = append(cells, strconv.Itoa(a.Turns), libusage.Count(t.Input), libusage.Count(t.Output), libusage.Count(t.CacheRead), libusage.Count(t.CacheWrite))
 			} else {
 				cells = append(cells, "-", "-", "-", "-", "-")
 			}
@@ -241,16 +241,4 @@ func dash(s string) string {
 		return "-"
 	}
 	return s
-}
-
-// count abbreviates n with a k or M suffix, truncated to one decimal.
-func count(n int64) string {
-	unit, suffix := 1.0, ""
-	switch {
-	case n >= 1_000_000:
-		unit, suffix = 1e6, "M"
-	case n >= 1000:
-		unit, suffix = 1e3, "k"
-	}
-	return strconv.FormatFloat(math.Floor(float64(n)/unit*10)/10, 'f', -1, 64) + suffix
 }

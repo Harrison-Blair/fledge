@@ -186,7 +186,7 @@ func snapshot(b *strings.Builder, label string, u *task.UsageSnapshot) {
 	}
 	t := u.Tokens
 	fmt.Fprintf(b, "  %s: %s, %d turns, in %s out %s cache-r %s cache-w %s, cost %s, %s\n",
-		label, elapsed, u.Turns, count(t.Input), count(t.Output), count(t.CacheRead), count(t.CacheWrite), cost, basis)
+		label, elapsed, u.Turns, usage.Count(t.Input), usage.Count(t.Output), usage.Count(t.CacheRead), usage.Count(t.CacheWrite), cost, basis)
 }
 
 // duration renders seconds as 1h02m, 5m12s, or 40s.
@@ -198,20 +198,4 @@ func duration(s int64) string {
 		return fmt.Sprintf("%dm%02ds", s/60, s%60)
 	}
 	return fmt.Sprintf("%ds", s)
-}
-
-// count renders a token count with a k or M suffix: 12, 1.2k, 96k, 410k, 2.3M.
-func count(n int64) string {
-	f := float64(n)
-	switch {
-	case n < 1000:
-		return fmt.Sprint(n)
-	case n < 99_950:
-		return strings.TrimSuffix(fmt.Sprintf("%.1f", f/1e3), ".0") + "k"
-	case n < 999_500:
-		return fmt.Sprintf("%.0fk", f/1e3)
-	case n < 99_950_000:
-		return strings.TrimSuffix(fmt.Sprintf("%.1f", f/1e6), ".0") + "M"
-	}
-	return fmt.Sprintf("%.0fM", f/1e6)
 }
