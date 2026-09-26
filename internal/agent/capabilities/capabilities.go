@@ -58,7 +58,11 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			return out
 		}
 		for _, in := range list.Integrations {
-			live[in.Target] = &Live{Available: in.Available, HookState: in.State}
+			kind := in.Target
+			if kind == "antigravity_cli" {
+				kind = "agy" // Herdr's target name for the agy harness.
+			}
+			live[kind] = &Live{Available: in.Available, HookState: in.State}
 		}
 	}
 	r := Result{Harnesses: []Harness{}, live: o.Live}

@@ -622,8 +622,9 @@ harness, and keeps the brief. `--model` replaces the model, and `--args` or
 tokens after `--` replace the args (a native model option in the effective args
 still conflicts with `--model`). The brief is sent before the task from
 `--prompt`/`--file`, separated by a blank line, in one first prompt with one
-sender header; a brief alone is sent by itself, so `--no-wait` is rejected when
-the profile renders a non-empty brief. Human output names the profile and its
+sender header; a brief alone is sent by itself, so `--no-wait` is rejected
+before any Herdr call when the profile has a brief, including any `reads`,
+whether or not the files exist. Human output names the profile and its
 source, and JSON adds `profile` (`name`, `source`, `path`, `base`).
 
 `.fledge/.gitignore` keeps everything else in `.fledge` ignored and ends with

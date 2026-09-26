@@ -114,11 +114,6 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 	}
 	args, err := o.Validate()
 	if err == nil && o.NoWait && brief != "" {
-		if dir := knownReadDir(o, s.Cwd); dir != "" {
-			brief, _ = profileBrief(*profile, dir)
-		}
-	}
-	if err == nil && o.NoWait && brief != "" {
 		err = libagent.Invalid("--no-wait cannot be combined with a profile brief, which is sent as the first prompt")
 	}
 	if err != nil {
@@ -164,6 +159,8 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 	if profile != nil {
 		result.readDir = s.Cwd
 		switch {
+		case result.Cwd != nil && *result.Cwd != "":
+			result.readDir = *result.Cwd
 		case result.WorktreePath != nil:
 			result.readDir = *result.WorktreePath
 		case o.Cwd != "":
