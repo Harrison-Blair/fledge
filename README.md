@@ -599,7 +599,7 @@ Sections are `mission`, `workflow`, `always`, `never`, `protocol`, and
 the inherited value (a stand-alone profile defaults to `false`), a `[sections]`
 entry replaces that section, and a `[sections_append]` entry adds a paragraph to
 the inherited section or sets it when empty; one section cannot appear in both
-tables. `reads` entries must be relative paths without `..` segments. Unknown
+tables. `reads` entries must be nonempty relative paths without `..` segments. Unknown
 keys (including the retired `role`), unknown sections, wrong types, unknown
 bases or schema versions, and invalid names fail before Herdr is contacted; an
 invalid override never falls back to its built-in. Fledge never rewrites these
@@ -938,7 +938,7 @@ headings, exactly once each and in this order, each followed by content:
 
 Headings match exactly (case-sensitive, trailing whitespace ignored). Text
 before the first heading and `###` sub-headings inside a section are allowed;
-any other `## ` heading is an unknown section. A section holding only blank
+any other `## ` heading outside a fenced code block is an unknown section. A section holding only blank
 lines or HTML comments on their own lines (`<!-- hint -->`) is empty. A brief
 off the template fails with `task_brief_incomplete` (exit 1, phase
 `validation`) naming the missing, empty, duplicated, unknown, or misordered

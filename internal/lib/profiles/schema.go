@@ -94,6 +94,9 @@ func decode(data []byte) (file, error) {
 	}
 	if f.Reads != nil {
 		for _, r := range *f.Reads {
+			if strings.TrimSpace(r) == "" {
+				return f, fmt.Errorf("reads entries must not be empty")
+			}
 			if path.IsAbs(r) || slices.Contains(strings.Split(r, "/"), "..") {
 				return f, fmt.Errorf("reads entry %q must be a relative path without .. segments", r)
 			}
