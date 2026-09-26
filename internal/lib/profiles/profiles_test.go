@@ -100,6 +100,10 @@ func TestBuiltinsShipEightRolesWithDefaults(t *testing.T) {
 		{"verifier", "workflow", builtin(t, "verifier").Sections.Workflow, "fledge task verify"},
 		{"reviewer", "never", builtin(t, "reviewer").Sections.Never, "Edit files"},
 		{"planner", "workflow", builtin(t, "planner").Sections.Workflow, "fledge task import --dry-run"},
+		{"planner", "workflow", builtin(t, "planner").Sections.Workflow, "a short Markdown report under `.fledge/tmp/plans/`"},
+		{"planner", "workflow", builtin(t, "planner").Sections.Workflow, "`.fledge/tmp/plans/<task-id>.toml` (your own task id)"},
+		{"planner", "workflow", builtin(t, "planner").Sections.Workflow, "Never run the real import; the orchestrator imports."},
+		{"planner", "workflow", builtin(t, "planner").Sections.Workflow, "`fledge task complete --file <report>`"},
 		{"integrator", "never", builtin(t, "integrator").Sections.Never, "main"},
 		{"implementer", "protocol", builtin(t, "implementer").Sections.Protocol, "Do not run `fledge task complete`"},
 	} {
