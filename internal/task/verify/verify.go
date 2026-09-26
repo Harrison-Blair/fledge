@@ -125,7 +125,7 @@ func recordUsage(ctx context.Context, c libagent.Client, s *state.Store, out *li
 		notes = append(notes, "task was never completed; window starts at created_at")
 	}
 	if caller != nil {
-		rec := task.Observe(s, observeSession, *caller, live, out)
+		rec := task.Observe(s, observeSession, *caller, live, time.Now(), out)
 		caller = &rec
 	} else {
 		notes = append(notes, "the verifier is not a registered agent")

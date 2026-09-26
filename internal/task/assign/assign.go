@@ -9,6 +9,7 @@ import (
 	"io"
 	"reflect"
 	"strings"
+	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
@@ -114,7 +115,7 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) li
 	}
 	out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "task", ID: r.ID})
 	out.Result = Result{Record: r, OwnerName: owner.Name}
-	task.Observe(s, observeSession, *owner, &a, &out)
+	task.Observe(s, observeSession, *owner, &a, time.Now(), &out)
 	body := fmt.Sprintf("task: %s · title: %s · complete with: fledge task complete --id %s --summary \"...\"\n%s", r.ID, r.Title, r.ID, r.Brief)
 	assignedAt := r.AssignedAt
 	if r, ok := task.Deliver(ctx, c, s, &out, o.ID, a.PaneID, messageID, body, func(r *task.Record) (*task.Attempt, error) {
