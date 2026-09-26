@@ -62,7 +62,10 @@ func TestShowPrintsResolvedProfileAndProvenance(t *testing.T) {
 	os.WriteFile(path, []byte("schema_version = 1\nextends = \"builtin:planner\"\n[sections_append]\nmission = \"Mind Go.\"\n"), 0644)
 	out := Run(context.Background(), root, Options{Name: "go-review"})
 	got := render(t, out, false)
-	for _, want := range []string{"Profile go-review\n", "  source: " + path + "\n", "  extends: builtin:planner\n", "  harness: pi\n", "  model: openai-codex/gpt-6-astra\n", "  args: \"--thinking\" \"xhigh\"\n", "  role:\n    ## Mission\n    Turn a broad request", "\n\n    Mind Go.\n"} {
+	if strings.Contains(got, "role:") {
+		t.Fatalf("still labels the brief role:\n%s", got)
+	}
+	for _, want := range []string{"Profile go-review\n", "  source: " + path + "\n", "  extends: builtin:planner\n", "  harness: pi\n", "  model: openai-codex/gpt-6-astra\n", "  args: \"--thinking\" \"xhigh\"\n", "  reads: \"AGENTS.md\" \"README.md\"\n  protocol: true\n  brief:\n    ## Mission\n    Turn a broad request", "\n\n    Mind Go.\n", "\n    ## Fledge protocol\n"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in\n%s", want, got)
 		}
@@ -83,7 +86,7 @@ func TestShowUnsetFieldsAndBuiltinSource(t *testing.T) {
 	os.MkdirAll(filepath.Dir(path), 0755)
 	os.WriteFile(path, []byte("schema_version = 1\n"), 0644)
 	got := render(t, Run(context.Background(), root, Options{Name: "scout"}), false)
-	for _, want := range []string{"  harness: -\n", "  model: -\n", "  args: -\n", "  role: -\n"} {
+	for _, want := range []string{"  harness: -\n", "  model: -\n", "  args: -\n", "  reads: -\n", "  protocol: false\n", "  brief: -\n"} {
 		if !strings.Contains(got, want) || strings.Contains(got, "extends") {
 			t.Fatalf("missing %q in\n%s", want, got)
 		}

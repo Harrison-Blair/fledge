@@ -488,27 +488,36 @@ as the outcome's result.
 ### Profiles
 
 A profile is a named launch configuration: harness, model, native arguments, and
-a role brief. `fledge agent spawn --profile NAME` applies one. Five built-ins
-ship inside the binary and update with it; they are never copied into a
-repository:
+a brief. `fledge agent spawn --profile NAME` applies one. Eight built-ins ship
+inside the binary and update with it; they are never copied into a repository.
+Every Claude built-in launches with `--permission-mode bypassPermissions`, so
+those agents run without permission prompts: they can edit files and run
+commands without asking. A repository override that sets `args = []` removes
+the flag.
 
 | Profile | Harness | Model | Args |
 | --- | --- | --- | --- |
-| `orchestrator` | `claude` | `claude-opus-5-5` | none |
-| `implementer` | `claude` | `claude-opus-5-5` | none |
+| `orchestrator` | `claude` | `claude-opus-5-5` | `--permission-mode bypassPermissions` |
 | `planner` | `pi` | `openai-codex/gpt-6-astra` | `--thinking xhigh` |
+| `researcher` | `claude` | `claude-opus-5-5` | `--permission-mode bypassPermissions` |
+| `implementer` | `claude` | `claude-opus-5-5` | `--permission-mode bypassPermissions` |
+| `debugger` | `claude` | `claude-opus-5-5` | `--permission-mode bypassPermissions` |
+| `integrator` | `claude` | `claude-opus-5-5` | `--permission-mode bypassPermissions` |
 | `reviewer` | `pi` | `openai-codex/gpt-6-astra` | none |
 | `verifier` | `pi` | `openai-codex/gpt-6-astra` | none |
 
-Codex models run through the `pi` harness; no built-in uses `codex`. Built-ins
-set no permission-mode arguments. Their roles are ordinary first-prompt
-instructions, subordinate to the task and repository instructions; they grant no
-permissions and change no task state.
+Codex models run through the `pi` harness; no built-in uses `codex`. A brief is
+an ordinary first-prompt instruction, subordinate to the task and repository
+instructions; it grants no permissions and changes no task state. Every built-in
+sets `protocol = true`; the orchestrator and planner read `AGENTS.md` and
+`README.md`, the others `AGENTS.md`.
 
 `fledge agent profiles` lists the effective profiles with their source, and
 `fledge agent profiles NAME` shows one resolved profile: source, built-in base,
-harness, model, args, and full role. Both accept `--json`, need no Herdr session,
-work outside Git (built-ins only), and write nothing.
+harness, model, args, reads, protocol, and the rendered brief exactly as a spawn
+would send it, before reads are checked. Both accept `--json` (the profile adds
+`sections`, `reads`, `protocol`, and `brief`), need no Herdr session, work
+outside Git (built-ins only), and write nothing.
 
 Repository profiles live in `.fledge/profiles/NAME.toml` at the Git top level of
 the checkout Fledge is invoked from, so a linked worktree uses its own branch's
@@ -523,27 +532,48 @@ extends = "builtin:reviewer"      # optional; only built-in bases
 harness = "claude"
 model = "sonnet"
 args = ["--permission-mode", "plan"]   # exact tokens, never shell text
-role_append = "Focus on this repository's Go conventions."
-# role = "Full replacement brief"       # instead of role_append
+reads = ["AGENTS.md", "docs/style.md"] # relative to the agent's working directory
+protocol = true                   # include the shared Fledge protocol block
+
+[sections]                        # replace a section ("" clears it)
+report = "Findings with file:line, most severe first."
+
+[sections_append]                 # add a paragraph to the inherited section
+always = "Focus on this repository's Go conventions."
 ```
 
-Only fields present in the file apply. Scalars replace the base, `args` replaces
-the whole list (`[]` clears it), `role` replaces the role (`""` clears it), and
-`role_append` adds a paragraph to the inherited role; `role` and `role_append`
-cannot both be set. Unknown keys, wrong types, unknown bases or schema versions,
-and invalid names fail before Herdr is contacted; an invalid override never falls
-back to its built-in. Fledge never rewrites these files. Inherited built-in role
-text follows binary upgrades; set `role` to pin it.
+Sections are `mission`, `workflow`, `always`, `never`, `protocol`, and
+`report`. Only fields present in the file apply. Scalars replace the base,
+`args` and `reads` replace the whole list (`[]` clears it), `protocol` replaces
+the inherited value (a stand-alone profile defaults to `false`), a `[sections]`
+entry replaces that section, and a `[sections_append]` entry adds a paragraph to
+the inherited section or sets it when empty; one section cannot appear in both
+tables. `reads` entries must be relative paths without `..` segments. Unknown
+keys (including the retired `role`), unknown sections, wrong types, unknown
+bases or schema versions, and invalid names fail before Herdr is contacted; an
+invalid override never falls back to its built-in. Fledge never rewrites these
+files. Inherited built-in section text follows binary upgrades; set the section
+in `[sections]` to pin it.
+
+The brief is Markdown with one `##` block per non-empty part, in this order:
+Mission, Read first (one line naming the `reads` files), Workflow, Always,
+Never, Fledge protocol (the shared block when `protocol = true`, then the
+`protocol` section), and Report. Empty parts are omitted. `reads` are
+instructions only; the harness does not enforce them. At spawn, each read is
+checked in the agent's working directory (the new or opened checkout for
+`--worktree`); a missing file is left out of the Read first line, reported as a
+`skipped` `read` effect and a `skipped read: PATH (not found in DIR)` line, and
+the spawn still succeeds.
 
 On spawn, explicit flags win. `--harness` matching the profile keeps everything;
 a different `--harness` drops the profile's model and args, which belong to its
-harness, and keeps the role. `--model` replaces the model, and `--args` or
+harness, and keeps the brief. `--model` replaces the model, and `--args` or
 tokens after `--` replace the args (a native model option in the effective args
-still conflicts with `--model`). The role is sent before the task from
+still conflicts with `--model`). The brief is sent before the task from
 `--prompt`/`--file`, separated by a blank line, in one first prompt with one
-sender header; a role alone is sent by itself, so `--no-wait` is rejected when
-the profile has a role. Human output names the profile and its source, and JSON
-adds `profile` (`name`, `source`, `path`, `base`).
+sender header; a brief alone is sent by itself, so `--no-wait` is rejected when
+the profile renders a non-empty brief. Human output names the profile and its
+source, and JSON adds `profile` (`name`, `source`, `path`, `base`).
 
 `.fledge/.gitignore` keeps everything else in `.fledge` ignored and ends with
 `*`, `!/profiles/`, `!/profiles/*.toml`, so profile files can be committed. The

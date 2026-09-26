@@ -68,15 +68,11 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		if p.Base != nil {
 			fmt.Fprintf(&b, "  extends: %s\n", *p.Base)
 		}
-		args := []string{}
-		for _, a := range p.Args {
-			args = append(args, strconv.Quote(a))
-		}
-		fmt.Fprintf(&b, "  harness: %s\n  model: %s\n  args: %s\n", orDash(p.Harness), orDash(p.Model), orDash(strings.Join(args, " ")))
+		fmt.Fprintf(&b, "  harness: %s\n  model: %s\n  args: %s\n  reads: %s\n  protocol: %t\n", orDash(p.Harness), orDash(p.Model), quoted(p.Args), quoted(p.Reads), p.Protocol)
 		if p.Brief() == "" {
-			b.WriteString("  role: -\n")
+			b.WriteString("  brief: -\n")
 		} else {
-			b.WriteString("  role:\n")
+			b.WriteString("  brief:\n")
 			for _, line := range strings.Split(p.Brief(), "\n") {
 				if line != "" {
 					line = "    " + line
@@ -96,6 +92,14 @@ func source(p libprofiles.Profile) string {
 		return *p.Path
 	}
 	return "built-in"
+}
+
+func quoted(values []string) string {
+	q := []string{}
+	for _, v := range values {
+		q = append(q, strconv.Quote(v))
+	}
+	return orDash(strings.Join(q, " "))
 }
 
 func orDash(s string) string {
