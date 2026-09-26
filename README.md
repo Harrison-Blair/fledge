@@ -127,6 +127,8 @@ fledge agent cleanup --dry-run
 fledge agent cleanup --results-collected --json
 fledge agent models --harness codex --json
 fledge agent capabilities --harness claude --live
+fledge agent usage --name reviewer
+fledge agent usage --mine --json
 ```
 
 Spawn requires a unique live `--name` and a `--harness`, which a
@@ -485,6 +487,50 @@ facts per kind as Herdr reports them: `available` (the harness binary is on
 has no integration target for shows `-` in the table and `"live": null` in JSON.
 `--json` emits `{"harnesses":[{"kind","capabilities":[{"name","level","evidence"}],"live"}]}`
 as the outcome's result.
+
+### Usage
+
+`fledge agent usage` reports each selected agent's whole-session usage, read
+from the harness's own session store. It takes the same selection as `stop` and
+`message`: repeatable `--name`, `--pane`, or `--id`, or the filter flags
+`--mine`, `--parent`, `--state`, `--harness`, `--profile`, `--task`,
+`--worktree`, and `--registered`, never both; a filter that matches nothing
+fails with `no_agents_matched`.
+
+```text
+NAME      HARNESS  MODELS           TURNS  INPUT  OUTPUT  CACHE-R  CACHE-W  COST         ELAPSED  BASIS
+reviewer  claude   claude-opus-5-5  20     40     28.6k   1.7M     105.1k   -            4m20s    measured
+builder   pi       model-one        14     1.2k   34k     2.5M     10       $0.61 (est)  1h2m5s   measured
+helper    cursor   -                -      -      -       -        -        -            12m0s    unavailable (no native session ref observed)
+```
+
+Each agent's harness and native session ref come from the live agent when
+present, else from its record's `native_session`, so `--id` also reports an
+agent that has ended. `ELAPSED` runs from registration to the record's end, or
+to now; an agent without a record shows `-`. Counts use `k` and `M` suffixes and
+absent values show `-`.
+
+- `measured`: tokens were counted from the harness's session store. Harness
+  sub-agents are included in the totals.
+- estimate: `COST` is only a cost the harness itself recorded, such as pi's
+  price table or opencode, shown as `(est)`. Fledge has no price table, so
+  harnesses that record no cost show `-`.
+- `unavailable`: usage could not be read, and the reason follows, for example
+  no session ref, a harness without a usage reader, or an unreadable store.
+
+Session refs are captured only by commands that already write state: spawn,
+adopt, `agent usage` itself, and `task assign`, `complete`, and `verify`. An
+agent observed live here has its ref recorded (a failed write is a `warning`
+`native_session` effect); an ended agent spawned before the ref capture shipped
+reports `unavailable`. Usage is attributed by session, so an agent that works
+several tasks or chats with a human in the same pane counts all of it.
+
+`--json` emits `{"agents":[...]}` as the outcome's result, one object per agent
+with `agent_id`, `name`, `pane`, and `elapsed_seconds`, plus `harness`,
+`session_kind`, `session_value`, `models`, `turns`, `tokens` (`input`,
+`output`, `cache_read`, `cache_write`, `reasoning`), `cost` (`amount`,
+`currency`, `basis`, `source`, or null), `first`, `last`, `subagents` (the
+sub-agent share of `tokens`, or null), `basis`, `reason`, and `sources`.
 
 ### Profiles
 

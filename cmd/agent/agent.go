@@ -16,12 +16,13 @@ import (
 	"github.com/Harrison-Blair/fledge/cmd/agent/send"
 	"github.com/Harrison-Blair/fledge/cmd/agent/spawn"
 	"github.com/Harrison-Blair/fledge/cmd/agent/stop"
+	"github.com/Harrison-Blair/fledge/cmd/agent/usage"
 	"github.com/Harrison-Blair/fledge/cmd/agent/wait"
 	"github.com/spf13/cobra"
 )
 
 func New() *cobra.Command {
-	cmd := &cobra.Command{Use: "agent", Short: "Launch, adopt, list, inspect, identify the caller, message, send input to, pause, stop, read, wait for, clean up, discover models for, report capabilities of, and list launch profiles for Herdr agents", Args: cobra.NoArgs}
-	cmd.AddCommand(spawn.New(), adopt.New(), list.New(), get.New(), current.New(), message.New(), send.New(), pause.New(), stop.New(), cleanup.New(), models.New(), capabilities.New(), profiles.New(), read.New(), wait.New())
+	cmd := &cobra.Command{Use: "agent", Short: "Launch, adopt, list, inspect, identify the caller, message, send input to, pause, stop, read, wait for, clean up, report usage of, discover models for, report capabilities of, and list launch profiles for Herdr agents", Args: cobra.NoArgs}
+	cmd.AddCommand(spawn.New(), adopt.New(), list.New(), get.New(), current.New(), message.New(), send.New(), pause.New(), stop.New(), cleanup.New(), models.New(), capabilities.New(), profiles.New(), read.New(), wait.New(), usage.New())
 	return cmd
 }
