@@ -8,7 +8,7 @@
 // Input excludes cache reads and writes; codex counts reasoning inside
 // Output, while opencode reports it separately.
 //
-// usage.go holds the types, Locate, Read, and the shared tally;
+// usage.go holds the types, Count, Locate, Read, and the shared tally;
 // claude.go reads transcripts and sub-agent transcripts, deduplicated by requestId;
 // codex.go reads rollouts' token_usage_record entries, falling back to token_count totals;
 // pi.go reads session messages and pi's price-table cost;

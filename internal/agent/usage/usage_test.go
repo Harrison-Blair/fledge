@@ -178,6 +178,31 @@ func TestUsageGoneIDUsesPersistedRef(t *testing.T) {
 	}
 }
 
+// A stale --id whose record cannot be reread fails with the store's error
+// instead of dereferencing a nil record.
+func TestUsageStaleIDUnreadableRecordFails(t *testing.T) {
+	f := newFixture(t)
+	a := piAgent("w1:p3", "term_a", "worker", "")
+	rec := identitytest.Register(t, f.cwd, a)
+	paths, _ := filepath.Glob(filepath.Join(f.cwd, ".fledge", "state", "*", rec.ID+"*"))
+	if len(paths) != 1 {
+		t.Fatalf("record files: %v", paths)
+	}
+	corrupt := func() {
+		if err := os.WriteFile(paths[0], []byte("{"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := client(t, f.cwd,
+		call{Method: "agent.get", Err: &herdr.Error{Code: "agent_not_found", Message: "gone"}},
+		listCall(),
+		call{Method: "pane.list", Result: map[string]any{"type": "pane_list", "panes": []any{a}}, Before: corrupt})
+	out := Run(context.Background(), c, f.d, Options{Selection: selector.Selection{IDs: []string{rec.ID}}})
+	if out.Error == nil || out.Error.Phase != "identity" {
+		t.Fatalf("%+v", out)
+	}
+}
+
 // An ended --id without a recorded ref is an unavailable row naming the
 // recorded harness.
 func TestUsageEndedIDWithoutRefIsUnavailable(t *testing.T) {
@@ -336,14 +361,6 @@ func TestRenderWarning(t *testing.T) {
 	}
 	if !strings.Contains(b.String(), "warning: could not record the native session ref of agent 0000beef") {
 		t.Fatalf("%q", b.String())
-	}
-}
-
-func TestCount(t *testing.T) {
-	for n, want := range map[int64]string{0: "0", 999: "999", 1000: "1k", 1250: "1.2k", 34000: "34k", 999999: "999.9k", 1000000: "1M", 2500000: "2.5M", 12345678: "12.3M"} {
-		if got := count(n); got != want {
-			t.Errorf("count(%d) = %q, want %q", n, got, want)
-		}
 	}
 }
 

@@ -6,11 +6,18 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 )
 
-// claudeSlug is claude's project directory name for cwd.
+// claudeSlug is claude's project directory name for cwd: every character but
+// an ASCII letter or digit becomes '-'.
 func claudeSlug(cwd string) string {
-	return strings.NewReplacer("/", "-", ".", "-").Replace(cwd)
+	return strings.Map(func(r rune) rune {
+		if r < 0x80 && (unicode.IsLetter(r) || unicode.IsDigit(r)) {
+			return r
+		}
+		return '-'
+	}, cwd)
 }
 
 type claudeLine struct {

@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/lib/harness"
@@ -37,6 +38,23 @@ func (t *Tokens) add(o Tokens) {
 	t.CacheRead += o.CacheRead
 	t.CacheWrite += o.CacheWrite
 	t.Reasoning += o.Reasoning
+}
+
+// Count renders a token count with a k or M suffix, rounded: 12, 1.2k, 96k,
+// 410k, 2.3M.
+func Count(n int64) string {
+	f := float64(n)
+	switch {
+	case n < 1000:
+		return fmt.Sprint(n)
+	case n < 99_950:
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", f/1e3), ".0") + "k"
+	case n < 999_500:
+		return fmt.Sprintf("%.0fk", f/1e3)
+	case n < 99_950_000:
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", f/1e6), ".0") + "M"
+	}
+	return fmt.Sprintf("%.0fM", f/1e6)
 }
 
 // Cost is a harness-recorded cost; Basis is always "estimate".
@@ -158,10 +176,13 @@ func Locate(d Discovery, kind string, ref Ref) (string, error) {
 	switch kind {
 	case "claude":
 		if ref.Cwd != "" {
-			return filepath.Join(d.Home, ".claude", "projects", claudeSlug(ref.Cwd), ref.Value+".jsonl"), nil
+			path := filepath.Join(d.Home, ".claude", "projects", claudeSlug(ref.Cwd), ref.Value+".jsonl")
+			if _, err := os.Stat(path); err == nil {
+				return path, nil
+			}
 		}
-		// Without the session cwd, as for an ended agent, any project may
-		// hold it, but only one may.
+		// Without the session cwd, as for an ended agent, or when its slug
+		// names no transcript, any project may hold it, but only one may.
 		pattern = filepath.Join(d.Home, ".claude", "projects", "*", ref.Value+".jsonl")
 	case "codex":
 		pattern = filepath.Join(d.Home, ".codex", "sessions", "*", "*", "*", "rollout-*-"+ref.Value+".jsonl")
