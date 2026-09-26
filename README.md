@@ -97,6 +97,7 @@ fledge agent list --mine
 fledge agent list --parent 3f9a0c2e --json
 fledge agent list --state idle --state blocked --harness codex
 fledge agent list --registered --profile reviewer --ids
+fledge agent list --registered --profile reviewer --ids | xargs -I{} fledge agent message --id {} --body 'Rebase on dev'
 fledge agent list --task 5b21e0f4 --worktree .fledge/worktrees/feature/task
 fledge agent current
 fledge agent get --name reviewer
@@ -638,7 +639,7 @@ effect. If the record ends after the rename, the outcome is `partial`: the
 agent is named but the record is unchanged. Success prints
 `Adopted <name> (<pane>) as <id>.`
 
-`get`, `read`, and `pause` accept `--id` in place of `--name` or `--pane`;
+`get`, `read`, `send`, and `pause` accept `--id` in place of `--name` or `--pane`;
 exactly one of the three is required. `message`, `wait`, and `stop` accept
 repeatable `--id` alongside `--name` and `--pane`. An `--id` lookup follows a moved terminal as above, and fails closed
 with `agent_identity_stale` when the terminal no longer hosts an agent (ending
