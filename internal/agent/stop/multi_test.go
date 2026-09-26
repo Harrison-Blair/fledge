@@ -290,6 +290,45 @@ func TestStopDryRunByIDLeavesRecordUnchanged(t *testing.T) {
 	}
 }
 
+// A dry run by record id fails with the code a real stop would: an unknown
+// id is agent_record_not_found, an ended record agent_identity_stale.
+func TestStopDryRunByIDReportsRealStopCodes(t *testing.T) {
+	recorded := withTerminal(agentIn("w1:p3", "worker", "idle"), "term_old")
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T) (cwd, id string)
+		code  string
+	}{
+		{"no store", func(t *testing.T) (string, string) { return identitytest.Repository(t), "deadbeef" }, "agent_record_not_found"},
+		{"unknown id", func(t *testing.T) (string, string) {
+			cwd := identitytest.Repository(t)
+			identitytest.Register(t, cwd, recorded)
+			return cwd, "deadbeef"
+		}, "agent_record_not_found"},
+		{"ended", func(t *testing.T) (string, string) {
+			cwd := identitytest.Repository(t)
+			rec := identitytest.Register(t, cwd, recorded)
+			store, err := identity.Existing(context.Background(), cwd)
+			if err != nil || identity.End(store, rec.ID) != nil {
+				t.Fatal(err)
+			}
+			return cwd, rec.ID
+		}, "agent_identity_stale"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cwd, id := tc.setup(t)
+			s := libagent.Client{API: byMethod{"agent.list": listCall([]herdr.AgentDetails{}...)}, CallerPane: "old:p1", Cwd: cwd}
+			out := Run(context.Background(), s, Options{Selection: selector.Selection{IDs: []string{id}}, DryRun: true})
+			if got := rows(t, out, "dry-run"); got != id+"=error/-" {
+				t.Fatalf("got %q", got)
+			}
+			if e := out.Result.(FanOut).Targets[0].Error; e.Code != tc.code || e.Phase != "identity" {
+				t.Fatalf("got %+v, want code %s at phase identity", e, tc.code)
+			}
+		})
+	}
+}
+
 // closes serves agent.get from agents by target and notes each closed pane.
 type closes struct {
 	agents map[string]herdr.Pane

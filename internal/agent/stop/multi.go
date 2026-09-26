@@ -2,6 +2,7 @@ package stop
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -11,6 +12,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
 )
 
 // FanOut reports a multi-target stop (mode fan-out) or any dry run (mode
@@ -80,12 +82,27 @@ func (p pending) get(ctx context.Context, c libagent.Client) (herdr.AgentDetails
 	return a, target, rec, err
 }
 
-// peek looks up p as get does, but only reads: a record id is found among the
-// registered agents Herdr lists, so its record is neither ended nor moved.
+// peek looks up p as get does, but only reads: a record id is read from the
+// store and found among the registered agents Herdr lists, so its record is
+// neither ended nor moved. An unknown id fails as get's does.
 func (p pending) peek(ctx context.Context, c libagent.Client) (herdr.AgentDetails, string, error) {
 	if p.target.ID == "" {
 		a, target, _, err := p.get(ctx, c)
 		return a, target, err
+	}
+	s, err := identity.Existing(ctx, c.Cwd)
+	if err != nil {
+		return herdr.AgentDetails{}, "", libagent.AtPhase("identity", err)
+	}
+	var missing *state.NotFoundError
+	if s != nil {
+		err = s.Get(identity.Kind, p.target.ID, &identity.Record{})
+	}
+	if s == nil || errors.As(err, &missing) {
+		return herdr.AgentDetails{}, "", libagent.AtPhase("identity", &herdr.Error{Code: "agent_record_not_found", Message: fmt.Sprintf("no agent record with id %s", p.target.ID)})
+	}
+	if err != nil {
+		return herdr.AgentDetails{}, "", err
 	}
 	matches, err := selector.Resolve(ctx, c, selector.Filter{Registered: true})
 	if err != nil {
