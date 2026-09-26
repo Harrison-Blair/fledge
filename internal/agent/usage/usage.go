@@ -17,6 +17,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
+	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	libusage "github.com/Harrison-Blair/fledge/internal/lib/usage"
 )
 
@@ -124,7 +125,8 @@ func row(ctx context.Context, s *state.Store, d libusage.Discovery, t selector.T
 		}
 	}
 	if live && rec != nil && a.AgentSession != nil {
-		rec = observe(s, *rec, *a.AgentSession, out)
+		observed := task.Observe(s, identity.ObserveSession, *rec, &a, now(), out)
+		rec = &observed
 	}
 	r := Row{Pane: libagent.Pointer(t.Pane)}
 	var kind string
@@ -153,20 +155,6 @@ func row(ctx context.Context, s *state.Store, d libusage.Discovery, t selector.T
 	}
 	r.Summary = libusage.Read(ctx, d, kind, *ref, libusage.Window{})
 	return r
-}
-
-// observe persists session on rec and returns the updated record, or rec as
-// it was when the write fails, which is only a warning.
-func observe(s *state.Store, rec identity.Record, session herdr.AgentSession, out *libagent.Outcome) *identity.Record {
-	updated, changed, err := identity.ObserveSession(s, rec.ID, session, now())
-	switch {
-	case err != nil:
-		out.Effects = append(out.Effects, libagent.Effect{Action: "warning", Kind: "native_session", ID: rec.ID})
-		return &rec
-	case changed:
-		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "native_session", ID: rec.ID})
-	}
-	return &updated
 }
 
 // elapsed is the time from registration to the end, or to now while live.

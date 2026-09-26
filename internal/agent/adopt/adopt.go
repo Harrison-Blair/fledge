@@ -9,9 +9,8 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
-	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
-	"github.com/Harrison-Blair/fledge/internal/lib/state"
+	"github.com/Harrison-Blair/fledge/internal/lib/task"
 )
 
 // Options selects the agent to adopt: Pane, or the caller's own pane when
@@ -95,7 +94,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			return out
 		}
 		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "agent_record", ID: rec.ID})
-		out.Result = Result{Record: observe(store, rec, a, &out), Renamed: true}
+		out.Result = Result{Record: task.Observe(store, observeSession, rec, &a, time.Now(), &out), Renamed: true}
 	} else {
 		rec, err := identity.Register(ctx, store, c, a, "adopt", nil, nil)
 		if err != nil {
@@ -103,7 +102,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			return out
 		}
 		out.Effects = append(out.Effects, libagent.Effect{Action: "created", Kind: "agent_record", ID: rec.ID})
-		out.Result = Result{Record: observe(store, rec, a, &out), Renamed: renamed}
+		out.Result = Result{Record: task.Observe(store, observeSession, rec, &a, time.Now(), &out), Renamed: renamed}
 	}
 	if renamed {
 		// Label records its own failure on out.
@@ -116,26 +115,9 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 // records beyond Register's one.
 var registered = identity.Registered
 
-// observeSession is replaceable so tests can fail its write.
-var observeSession = identity.ObserveSession
-
-// observe stores a's Herdr-reported session ref on rec and returns the
-// updated record. The agent is already adopted, so a failed write is only a
-// warning effect and rec is returned as it was.
-func observe(s *state.Store, rec identity.Record, a herdr.AgentDetails, out *libagent.Outcome) identity.Record {
-	if a.AgentSession == nil {
-		return rec
-	}
-	updated, changed, err := observeSession(s, rec.ID, *a.AgentSession, time.Now())
-	switch {
-	case err != nil:
-		out.Effects = append(out.Effects, libagent.Effect{Action: "warning", Kind: "native_session", ID: rec.ID})
-		return rec
-	case changed:
-		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "native_session", ID: rec.ID})
-	}
-	return updated
-}
+// observeSession is replaceable so tests can fail its write. The agent is
+// already adopted, so a failed write is only a warning effect.
+var observeSession task.Observer = identity.ObserveSession
 
 // Render writes a successful adoption.
 func Render(w io.Writer, o libagent.Outcome) error {

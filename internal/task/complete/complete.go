@@ -118,7 +118,7 @@ func recordUsage(ctx context.Context, c libagent.Client, s *state.Store, out *li
 	var worker *identity.Record
 	switch {
 	case caller != nil && r.Owner != nil && *r.Owner == caller.ID:
-		rec := task.Observe(s, observeSession, *caller, live, out)
+		rec := task.Observe(s, observeSession, *caller, live, time.Now(), out)
 		worker = &rec
 	case r.Owner == nil:
 		notes = append(notes, "task has no owner")

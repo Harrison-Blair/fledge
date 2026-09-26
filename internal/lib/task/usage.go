@@ -125,14 +125,14 @@ func CollectUsage(ctx context.Context, read Reader, agent *identity.Record, live
 // Observer is identity.ObserveSession, replaceable in tests.
 type Observer func(s *state.Store, id string, session herdr.AgentSession, now time.Time) (identity.Record, bool, error)
 
-// Observe stores live's session ref on rec through observe and returns the
-// updated record. It is best effort: a failed write is a warning effect and
-// rec is returned as it was.
-func Observe(s *state.Store, observe Observer, rec identity.Record, live *herdr.AgentDetails, out *libagent.Outcome) identity.Record {
+// Observe stores live's session ref on rec through observe, as seen at now,
+// and returns the updated record. It is best effort: a failed write is a
+// warning effect and rec is returned as it was.
+func Observe(s *state.Store, observe Observer, rec identity.Record, live *herdr.AgentDetails, now time.Time, out *libagent.Outcome) identity.Record {
 	if live == nil || live.AgentSession == nil {
 		return rec
 	}
-	updated, changed, err := observe(s, rec.ID, *live.AgentSession, time.Now())
+	updated, changed, err := observe(s, rec.ID, *live.AgentSession, now)
 	switch {
 	case err != nil:
 		out.Effects = append(out.Effects, libagent.Effect{Action: "warning", Kind: "native_session", ID: rec.ID})
