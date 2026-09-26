@@ -31,7 +31,12 @@ const Kind = "agents"
 // record that the agent's spawn created its checkout and from which ref, and
 // WorktreeBranch and WorktreeMarker identify that very checkout, so one
 // recreated later at the same path is not taken for it; records written
-// before they existed read as not created or unidentified.
+// before they existed read as not created or unidentified. Profile names the
+// profile the agent was spawned with; it is null for adopted agents, spawns
+// without a profile, and records written before it existed. NativeSession is
+// the harness's own session ref as Herdr last reported it to a command that
+// writes state (see ObserveSession), and NativeSessionHistory the refs it
+// replaced, newest last; both are null until one is observed.
 type Record struct {
 	ID              string  `json:"id"`
 	Name            *string `json:"name"`
@@ -41,6 +46,7 @@ type Record struct {
 	Session         *string `json:"session"`
 	TerminalID      string  `json:"terminal_id"`
 	Parent          *string `json:"parent"`
+	Profile         *string `json:"profile"`
 	RegisteredAt    string  `json:"registered_at"`
 	RegisteredBy    string  `json:"registered_by"`
 	WorktreePath    *string `json:"worktree_path"`
@@ -49,7 +55,23 @@ type Record struct {
 	WorktreeBranch  *string `json:"worktree_branch"`
 	WorktreeMarker  *string `json:"worktree_marker"`
 	EndedAt         *string `json:"ended_at"`
+
+	NativeSession        *NativeSessionRef  `json:"native_session"`
+	NativeSessionHistory []NativeSessionRef `json:"native_session_history"`
 }
+
+// NativeSessionRef is a Herdr-reported harness session ref and when Fledge
+// observed it. Harness is the agent Herdr named with the ref.
+type NativeSessionRef struct {
+	Source     string `json:"source"`
+	Harness    string `json:"harness"`
+	Kind       string `json:"kind"`
+	Value      string `json:"value"`
+	ObservedAt string `json:"observed_at"`
+}
+
+// nativeSessionHistoryCap bounds NativeSessionHistory.
+const nativeSessionHistoryCap = 8
 
 // Checkout is the checkout an agent was placed in. Created records that the
 // agent's spawn created it, from Base when that is known, rather than opening
@@ -97,8 +119,8 @@ func Existing(ctx context.Context, cwd string) (*state.Store, error) {
 // terminal, and the create, so concurrent registrations of one terminal yield
 // exactly one live record and the others fail with agent_already_registered
 // naming it. A live record of the terminal left by a different harness ends
-// under the same lock. A nil checkout records none.
-func Register(ctx context.Context, s *state.Store, c libagent.Client, details herdr.AgentDetails, by string, checkout *Checkout) (Record, error) {
+// under the same lock. A nil checkout records none, and a nil profile no profile.
+func Register(ctx context.Context, s *state.Store, c libagent.Client, details herdr.AgentDetails, by string, checkout *Checkout, profile *string) (Record, error) {
 	if details.TerminalID == "" || details.PaneID == "" {
 		return Record{}, fmt.Errorf("cannot register an agent without a pane and terminal id")
 	}
@@ -130,7 +152,7 @@ func Register(ctx context.Context, s *state.Store, c libagent.Client, details he
 		}
 		_, err = tx.Create(Kind, func(id string) any {
 			rec = Record{ID: id, Name: details.Name, Pane: details.PaneID, WorkspaceID: details.WorkspaceID, Harness: details.Agent,
-				Session: session(), TerminalID: details.TerminalID, RegisteredAt: time.Now().UTC().Format(time.RFC3339), RegisteredBy: by, Parent: parent}
+				Session: session(), TerminalID: details.TerminalID, RegisteredAt: time.Now().UTC().Format(time.RFC3339), RegisteredBy: by, Parent: parent, Profile: profile}
 			if checkout != nil {
 				rec.WorktreePath, rec.WorktreeCreated, rec.WorktreeBase = &checkout.Path, checkout.Created, checkout.Base
 				rec.WorktreeBranch, rec.WorktreeMarker = checkout.Branch, checkout.Marker
@@ -191,19 +213,26 @@ func alreadyRegistered(a herdr.AgentDetails, existing Record) error {
 // caller outside Herdr, or whose pane hosts no agent, has none; any other
 // lookup failure is returned.
 func Caller(ctx context.Context, s *state.Store, c libagent.Client) (*Record, error) {
+	rec, _, err := CallerAgent(ctx, s, c)
+	return rec, err
+}
+
+// CallerAgent is Caller that also returns the caller's live agent, which is
+// nil exactly when the record is.
+func CallerAgent(ctx context.Context, s *state.Store, c libagent.Client) (*Record, *herdr.AgentDetails, error) {
 	caller, err := callerAgent(ctx, c)
 	if err != nil || caller == nil {
-		return nil, err
+		return nil, nil, err
 	}
 	rec, err := Match(s, *caller)
 	if err != nil || rec == nil {
-		return nil, err
+		return nil, nil, err
 	}
 	moved, err := Relocate(s, *rec, *caller)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return &moved, nil
+	return &moved, caller, nil
 }
 
 // callerAgent fetches the agent in the caller's pane, or nil for a caller
@@ -363,6 +392,42 @@ func Reopen(s *state.Store, id string) error {
 		rec.EndedAt = nil
 		return tx.Put(Kind, id, rec)
 	})
+}
+
+// ObserveSession stores session, a live agent's Herdr-reported session ref, on
+// record id: as the first ref when the record has none, or as the new current
+// ref when its value differs, moving the old one to the history (newest last,
+// capped). It returns the record and whether it wrote; an equal value, or a
+// session without a value, writes nothing. Only commands that already write
+// state call it.
+func ObserveSession(s *state.Store, id string, session herdr.AgentSession, now time.Time) (Record, bool, error) {
+	var rec Record
+	if session.Value == nil || *session.Value == "" {
+		return rec, false, s.Get(Kind, id, &rec)
+	}
+	var changed bool
+	err := s.Exclusive(func(tx *state.Tx) error {
+		if err := tx.Get(Kind, id, &rec); err != nil {
+			return err
+		}
+		if rec.NativeSession != nil && rec.NativeSession.Value == *session.Value {
+			return nil
+		}
+		if old := rec.NativeSession; old != nil {
+			rec.NativeSessionHistory = append(rec.NativeSessionHistory, *old)
+			rec.NativeSessionHistory = rec.NativeSessionHistory[max(0, len(rec.NativeSessionHistory)-nativeSessionHistoryCap):]
+		}
+		deref := func(p *string) string {
+			if p == nil {
+				return ""
+			}
+			return *p
+		}
+		rec.NativeSession = &NativeSessionRef{Source: deref(session.Source), Harness: deref(session.Agent), Kind: deref(session.Kind), Value: *session.Value, ObservedAt: now.UTC().Format(time.RFC3339)}
+		changed = true
+		return tx.Put(Kind, id, rec)
+	})
+	return rec, changed, err
 }
 
 // Match returns the live record of a's terminal, or nil when none exists. A

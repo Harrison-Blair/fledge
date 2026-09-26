@@ -3,16 +3,23 @@ package complete
 import (
 	"bytes"
 	"context"
+	"errors"
+	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/tasktest"
+	"github.com/Harrison-Blair/fledge/internal/lib/usage"
 )
 
 var (
@@ -320,4 +327,145 @@ func TestNotificationNotRecordedAfterChange(t *testing.T) {
 	if err := out.Write(&b, false, Render); err != nil || !strings.HasSuffix(b.String(), "\nTask "+id+" is completed; the notification outcome could not be recorded.\n") {
 		t.Fatalf("%q %v", b.String(), err)
 	}
+}
+
+// Tests never read real harness stores unless they inject a reader.
+func TestMain(m *testing.M) {
+	readUsage = func(context.Context, string, usage.Ref, usage.Window) usage.Summary {
+		return usage.Summary{Basis: usage.Unavailable, Reason: "no reader injected"}
+	}
+	os.Exit(m.Run())
+}
+
+// inject replaces the usage reader for one test and returns its calls.
+func inject(t *testing.T, s usage.Summary) *[]usage.Ref {
+	t.Helper()
+	old := readUsage
+	t.Cleanup(func() { readUsage = old })
+	refs := &[]usage.Ref{}
+	readUsage = func(_ context.Context, kind string, ref usage.Ref, w usage.Window) usage.Summary {
+		*refs = append(*refs, ref)
+		return s
+	}
+	return refs
+}
+
+func withSession(a herdr.AgentResult, value string) herdr.AgentResult {
+	a.Agent = identitytest.WithSession(a.Agent, value)
+	return a
+}
+
+func TestCompletionRecordsWorkerUsageAndSessionRef(t *testing.T) {
+	refs := inject(t, usage.Summary{Turns: 14, Tokens: usage.Tokens{Input: 1200, Output: 18400}, Models: []string{"claude-opus-5"}, Basis: usage.Measured})
+	repo := identitytest.Repository(t)
+	owner := tasktest.Register(t, repo, worker)
+	assignedAt := "2026-09-23T10:00:00Z"
+	id := tasktest.Seed(t, repo, task.Record{Title: "t", Status: task.Assigned, Owner: &owner.ID, CreatedAt: "2026-09-23T09:00:00Z", AssignedAt: &assignedAt})
+	out := Run(context.Background(), tasktest.Client(t, repo, "w1:p3", tasktest.Get("w1:p3", withSession(worker, "sess-1"))), Options{ID: id, Summary: "done", SummarySet: true}, strings.NewReader(""))
+	r := tasktest.Load(t, repo, id)
+	if out.Error != nil || r.Status != task.Completed || !reflect.DeepEqual(out.Result, r) {
+		t.Fatalf("%+v %+v", out.Error, r)
+	}
+	if len(*refs) != 1 || (*refs)[0].Value != "sess-1" || (*refs)[0].Kind != "id" {
+		t.Fatalf("reader refs %+v", *refs)
+	}
+	w := r.Usage.Worker
+	if w == nil || r.Usage.Verifier != nil || *w.AgentID != owner.ID || *w.Harness != "claude" || *w.Session != (task.UsageSession{Kind: "id", Value: "sess-1"}) ||
+		w.Window != (task.UsageWindow{From: assignedAt, To: *r.CompletedAt}) || w.Turns != 14 || w.Basis != usage.Measured || w.Reason != nil || w.CollectedAt == "" {
+		t.Fatalf("%+v", w)
+	}
+	if rec := loadAgent(t, repo, owner.ID); rec.NativeSession == nil || rec.NativeSession.Value != "sess-1" {
+		t.Fatalf("session ref not captured: %+v", rec.NativeSession)
+	}
+	if !slices.Contains(out.Effects, libagent.Effect{Action: "updated", Kind: "native_session", ID: owner.ID}) {
+		t.Fatalf("%+v", out.Effects)
+	}
+}
+
+// A failing reader, a failing session write, or an unassigned window never
+// stops completion; each is recorded on the snapshot or as a warning.
+func TestCompletionSucceedsWhenUsageCollectionFails(t *testing.T) {
+	inject(t, usage.Summary{Basis: usage.Unavailable, Reason: "no claude session file for id sess-1"})
+	old := observeSession
+	t.Cleanup(func() { observeSession = old })
+	observeSession = func(*state.Store, string, herdr.AgentSession, time.Time) (identity.Record, bool, error) {
+		return identity.Record{}, false, errors.New("read-only store")
+	}
+	repo := identitytest.Repository(t)
+	owner := tasktest.Register(t, repo, worker)
+	id := tasktest.Seed(t, repo, task.Record{Title: "t", Status: task.Assigned, Owner: &owner.ID, CreatedAt: "2026-09-23T09:00:00Z"})
+	out := Run(context.Background(), tasktest.Client(t, repo, "w1:p3", tasktest.Get("w1:p3", withSession(worker, "sess-1"))), Options{ID: id, Summary: "done", SummarySet: true}, strings.NewReader(""))
+	r := tasktest.Load(t, repo, id)
+	if out.Error != nil || out.Status != "success" || r.Status != task.Completed {
+		t.Fatalf("%+v %+v", out.Error, r)
+	}
+	if !slices.Contains(out.Effects, libagent.Effect{Action: "warning", Kind: "native_session", ID: owner.ID}) {
+		t.Fatalf("%+v", out.Effects)
+	}
+	w := r.Usage.Worker
+	want := "task was never assigned; window starts at created_at; no claude session file for id sess-1"
+	if w == nil || w.Basis != usage.Unavailable || w.Reason == nil || *w.Reason != want || w.Window.From != "2026-09-23T09:00:00Z" || w.Session.Value != "sess-1" {
+		t.Fatalf("%+v %v", w, w.Reason)
+	}
+}
+
+// A forced completion on the owner's behalf snapshots the owner from its
+// persisted ref, and says so.
+func TestForcedCompletionSnapshotsTheOwner(t *testing.T) {
+	refs := inject(t, usage.Summary{Basis: usage.Measured})
+	repo, id := setup(t, task.Assigned)
+	owner := *tasktest.Load(t, repo, id).Owner
+	if _, _, err := identity.ObserveSession(mustStore(t, repo), owner, *identitytest.WithSession(herdr.AgentDetails{}, "persisted").AgentSession, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for label, c := range map[string]libagent.Client{
+		"other agent": tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p1", boss)),
+		"outside":     tasktest.Client(t, repo, ""),
+	} {
+		t.Run(label, func(t *testing.T) {
+			if _, err := task.Update(mustStore(t, repo), id, func(r *task.Record) error { r.Status, r.Usage = task.Assigned, nil; return nil }); err != nil {
+				t.Fatal(err)
+			}
+			*refs = nil
+			out := Run(context.Background(), c, Options{ID: id, Summary: "x", SummarySet: true, Force: true}, strings.NewReader(""))
+			w := tasktest.Load(t, repo, id).Usage.Worker
+			if out.Error != nil || w == nil || *w.AgentID != owner || w.Session.Value != "persisted" || len(*refs) != 1 || w.Reason == nil || !strings.Contains(*w.Reason, "completed with --force by ") || !strings.Contains(*w.Reason, "on the owner's behalf") {
+				t.Fatalf("%+v %+v %+v", out.Error, w, *refs)
+			}
+		})
+	}
+}
+
+// An owner without any session ref, completing from outside Herdr, is unavailable.
+func TestCompletionOutsideHerdrWithoutRefIsUnavailable(t *testing.T) {
+	refs := inject(t, usage.Summary{Basis: usage.Measured})
+	repo, id := setup(t, task.Assigned)
+	out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{ID: id, Summary: "x", SummarySet: true, Force: true}, strings.NewReader(""))
+	r := tasktest.Load(t, repo, id)
+	if out.Error != nil || r.Status != task.Completed || len(*refs) != 0 || r.Usage.Worker.Basis != usage.Unavailable || !strings.HasSuffix(*r.Usage.Worker.Reason, "no native session ref observed") {
+		t.Fatalf("%+v %+v", out.Error, r.Usage.Worker)
+	}
+}
+
+// A worker snapshot already on the record is never replaced.
+func TestWorkerSnapshotIsWrittenOnce(t *testing.T) {
+	inject(t, usage.Summary{Basis: usage.Measured, Turns: 2})
+	repo := identitytest.Repository(t)
+	owner := tasktest.Register(t, repo, worker)
+	earlier := &task.UsageSnapshot{Basis: usage.Measured, Turns: 1}
+	id := tasktest.Seed(t, repo, task.Record{Title: "t", Status: task.Assigned, Owner: &owner.ID, Usage: &task.Usage{Worker: earlier}})
+	out := Run(context.Background(), tasktest.Client(t, repo, "w1:p3", tasktest.Get("w1:p3", worker)), Options{ID: id, Summary: "done", SummarySet: true}, strings.NewReader(""))
+	r := tasktest.Load(t, repo, id)
+	if out.Error != nil || r.Status != task.Completed || !reflect.DeepEqual(r.Usage.Worker, earlier) {
+		t.Fatalf("%+v %+v", out.Error, r.Usage.Worker)
+	}
+}
+
+func loadAgent(t *testing.T, repo, id string) identity.Record {
+	t.Helper()
+	var rec identity.Record
+	if err := mustStore(t, repo).Get(identity.Kind, id, &rec); err != nil {
+		t.Fatal(err)
+	}
+	return rec
 }

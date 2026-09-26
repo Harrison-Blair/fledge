@@ -6,10 +6,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
-	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/task"
 )
 
 // Options selects the agent to adopt: Pane, or the caller's own pane when
@@ -25,7 +26,8 @@ type Result struct {
 
 // Run registers the live agent in the selected pane. An unnamed agent whose
 // terminal already has a live record is named and keeps that record, storing
-// the new name. Run never renames a named agent, and refuses one whose
+// the new name. Naming an agent also labels its pane, and its tab when the
+// pane is alone there. Run never renames a named agent, and refuses one whose
 // terminal already has a live record.
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	out := libagent.Outcome{Operation: "agent.adopt", Status: "success", Effects: []libagent.Effect{}}
@@ -79,7 +81,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			out.Fail(err, "state", false)
 			return out
 		}
-		if a, err = rename(ctx, c, a, o.Name); err != nil {
+		if a, err = c.Rename(ctx, a, o.Name); err != nil {
 			out.Fail(err, "agent.rename", true)
 			return out
 		}
@@ -92,16 +94,20 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			return out
 		}
 		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "agent_record", ID: rec.ID})
-		out.Result = Result{Record: rec, Renamed: true}
-		return out
+		out.Result = Result{Record: task.Observe(store, observeSession, rec, &a, time.Now(), &out), Renamed: true}
+	} else {
+		rec, err := identity.Register(ctx, store, c, a, "adopt", nil, nil)
+		if err != nil {
+			out.Fail(err, "state", false)
+			return out
+		}
+		out.Effects = append(out.Effects, libagent.Effect{Action: "created", Kind: "agent_record", ID: rec.ID})
+		out.Result = Result{Record: task.Observe(store, observeSession, rec, &a, time.Now(), &out), Renamed: renamed}
 	}
-	rec, err := identity.Register(ctx, store, c, a, "adopt", nil)
-	if err != nil {
-		out.Fail(err, "state", false)
-		return out
+	if renamed {
+		// Label records its own failure on out.
+		_ = c.Label(ctx, a.Pane, o.Name, &out)
 	}
-	out.Effects = append(out.Effects, libagent.Effect{Action: "created", Kind: "agent_record", ID: rec.ID})
-	out.Result = Result{Record: rec, Renamed: renamed}
 	return out
 }
 
@@ -109,15 +115,9 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 // records beyond Register's one.
 var registered = identity.Registered
 
-// rename names the agent a and confirms the same terminal now carries name.
-func rename(ctx context.Context, c libagent.Client, a herdr.AgentDetails, name string) (herdr.AgentDetails, error) {
-	var r herdr.AgentResult
-	err := c.Call(ctx, "agent.rename", map[string]any{"target": a.PaneID, "name": name}, &r)
-	if err == nil && (r.Type != "agent_info" || !libagent.ValidAgentInfo(r.Agent) || r.Agent.TerminalID != a.TerminalID || r.Agent.Name == nil || *r.Agent.Name != name) {
-		err = libagent.Protocol("incomplete or mismatched agent.rename result")
-	}
-	return r.Agent, err
-}
+// observeSession is replaceable so tests can fail its write. The agent is
+// already adopted, so a failed write is only a warning effect.
+var observeSession task.Observer = identity.ObserveSession
 
 // Render writes a successful adoption.
 func Render(w io.Writer, o libagent.Outcome) error {

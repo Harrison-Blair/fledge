@@ -5,9 +5,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/worktree"
@@ -33,6 +35,16 @@ func branchOf(t *testing.T, root string) string {
 	return strings.TrimSpace(string(b))
 }
 
+// checkout stands in for Herdr creating the linked checkout as worktree.create
+// is served.
+func checkout(t *testing.T, root, branch, path string) func() {
+	return func() {
+		if b, err := exec.Command("git", "-C", root, "worktree", "add", "-q", "-b", branch, path).CombinedOutput(); err != nil {
+			t.Fatalf("%v %s", err, b)
+		}
+	}
+}
+
 func newWorktreeListing(root string) herdr.WorktreeListResult {
 	return herdr.WorktreeListResult{Type: "worktree_list", Source: struct {
 		RepoRoot string `json:"repo_root"`
@@ -48,7 +60,7 @@ func TestNewWorktreeRecordsExplicitBase(t *testing.T) {
 	o := validOptions()
 	o.Worktree = "new"
 	o.Base = "dev"
-	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "worktree.list", Result: newWorktreeListing(root)}, call{Method: "worktree.create", Params: map[string]any{"cwd": root, "branch": "worker", "base": "dev", "path": path, "focus": false}, Result: herdr.CreatedResult{Type: "worktree_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p, Worktree: herdr.Worktree{Path: path}}}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), callerNotAgent())
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "worktree.list", Result: newWorktreeListing(root)}, call{Method: "worktree.create", Params: map[string]any{"cwd": root, "branch": "worker", "base": "dev", "path": path, "focus": false}, Result: herdr.CreatedResult{Type: "worktree_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p, Worktree: herdr.Worktree{Path: path}}, Before: checkout(t, root, "worker", path)}, namedTab(p), labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), callerNotAgent())
 	s.Cwd = root
 	out := s.run(context.Background(), o, nil)
 	if out.Status != "success" {
@@ -73,7 +85,7 @@ func TestNewWorktreeRecordsCheckoutIdentity(t *testing.T) {
 			t.Fatalf("%v %s", err, b)
 		}
 	}
-	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "worktree.list", Result: newWorktreeListing(root)}, create, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), callerNotAgent())
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "worktree.list", Result: newWorktreeListing(root)}, create, namedTab(p), labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), callerNotAgent())
 	s.Cwd = root
 	out := s.run(context.Background(), o, nil)
 	if out.Status != "success" {
@@ -97,7 +109,7 @@ func TestNewWorktreeFromDetachedPrimarySendsNoBase(t *testing.T) {
 	p := herdrscript.Pane("w2:p1", "w2", "w2:t1")
 	o := validOptions()
 	o.Worktree = "new"
-	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "worktree.list", Result: newWorktreeListing(root)}, call{Method: "worktree.create", Params: map[string]any{"cwd": root, "branch": "worker", "path": path, "focus": false}, Result: herdr.CreatedResult{Type: "worktree_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p, Worktree: herdr.Worktree{Path: path}}}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), callerNotAgent())
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "worktree.list", Result: newWorktreeListing(root)}, call{Method: "worktree.create", Params: map[string]any{"cwd": root, "branch": "worker", "path": path, "focus": false}, Result: herdr.CreatedResult{Type: "worktree_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p, Worktree: herdr.Worktree{Path: path}}, Before: checkout(t, root, "worker", path)}, namedTab(p), labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), callerNotAgent())
 	s.Cwd = root
 	out := s.run(context.Background(), o, nil)
 	if out.Status != "success" {
@@ -118,7 +130,7 @@ func TestOpenedWorktreeRecordsNoCreation(t *testing.T) {
 	o := validOptions()
 	o.Worktree = path
 	o.Cwd = root
-	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "worktree.list", Result: newWorktreeListing(root)}, call{Method: "worktree.open", Result: herdr.CreatedResult{Type: "worktree_opened", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p, Worktree: herdr.Worktree{Path: path}, AlreadyOpen: &opened}}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), callerNotAgent())
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "worktree.list", Result: newWorktreeListing(root)}, call{Method: "worktree.open", Result: herdr.CreatedResult{Type: "worktree_opened", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p, Worktree: herdr.Worktree{Path: path}, AlreadyOpen: &opened}}, namedTab(p), labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), callerNotAgent())
 	s.Cwd = root
 	out := s.run(context.Background(), o, nil)
 	if out.Status != "success" {
@@ -140,7 +152,7 @@ func TestWorktreeOpenUsesPathSourceAndCreatesTabWhenAlreadyOpen(t *testing.T) {
 	o.Worktree = path
 	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "worktree.list", Params: map[string]any{"cwd": path}, Result: herdr.WorktreeListResult{Type: "worktree_list", Source: struct {
 		RepoRoot string `json:"repo_root"`
-	}{RepoRoot: path}, Worktrees: []herdr.Worktree{}}}, call{Method: "worktree.open", Params: map[string]any{"cwd": path, "path": path, "focus": false}, Result: herdr.CreatedResult{Type: "worktree_opened", Workspace: herdr.Workspace{ID: "w1"}, Tab: herdr.Tab{ID: "w1:t1", WorkspaceID: "w1"}, RootPane: old, Worktree: herdr.Worktree{Path: path}, AlreadyOpen: &open}}, call{Method: "tab.create", Params: map[string]any{"workspace_id": "w1", "cwd": path, "focus": false}, Result: herdr.CreatedResult{Type: "tab_created", Tab: herdr.Tab{ID: "w1:t2", WorkspaceID: "w1"}, RootPane: p}}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"))
+	}{RepoRoot: path}, Worktrees: []herdr.Worktree{}}}, call{Method: "worktree.open", Params: map[string]any{"cwd": path, "path": path, "focus": false}, Result: herdr.CreatedResult{Type: "worktree_opened", Workspace: herdr.Workspace{ID: "w1"}, Tab: herdr.Tab{ID: "w1:t1", WorkspaceID: "w1"}, RootPane: old, Worktree: herdr.Worktree{Path: path}, AlreadyOpen: &open}}, call{Method: "tab.create", Params: map[string]any{"label": "worker", "workspace_id": "w1", "cwd": path, "focus": false}, Result: herdr.CreatedResult{Type: "tab_created", Tab: herdr.Tab{ID: "w1:t2", WorkspaceID: "w1"}, RootPane: p}}, labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"))
 	out := s.run(context.Background(), o, nil)
 	if out.Status != "success" {
 		t.Fatalf("%+v", out)
@@ -165,7 +177,7 @@ func TestWorktreeCreateExplicitSourceAndManagedPrimary(t *testing.T) {
 	o.Cwd = "/must-not-be-used"
 	o.Branch = "feature/topic"
 	o.Base = "HEAD"
-	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "worktree.list", Params: map[string]any{"workspace_id": "w1"}, Result: listing}, call{Method: "worktree.create", Params: map[string]any{"workspace_id": "w1", "branch": "feature/topic", "base": "HEAD", "path": path, "focus": false}, Result: herdr.CreatedResult{Type: "worktree_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p, Worktree: herdr.Worktree{Path: path}}}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"))
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "worktree.list", Params: map[string]any{"workspace_id": "w1"}, Result: listing}, call{Method: "worktree.create", Params: map[string]any{"workspace_id": "w1", "branch": "feature/topic", "base": "HEAD", "path": path, "focus": false}, Result: herdr.CreatedResult{Type: "worktree_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p, Worktree: herdr.Worktree{Path: path}}, Before: checkout(t, root, "feature/topic", path)}, namedTab(p), labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"))
 	s.Cwd = filepath.Join(root, "linked-checkout")
 	out := s.run(context.Background(), o, nil)
 	if out.Status != "success" {
@@ -186,7 +198,7 @@ func TestWorktreeNewSourceUsesResolvedRelativeCwd(t *testing.T) {
 	o.Cwd = filepath.Base(root)
 	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "worktree.list", Params: map[string]any{"cwd": root}, Result: herdr.WorktreeListResult{Type: "worktree_list", Source: struct {
 		RepoRoot string `json:"repo_root"`
-	}{RepoRoot: root}, Worktrees: []herdr.Worktree{}}}, call{Method: "worktree.create", Params: map[string]any{"cwd": root, "branch": "worker", "base": branchOf(t, root), "path": path, "focus": false}, Result: herdr.CreatedResult{Type: "worktree_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p, Worktree: herdr.Worktree{Path: path}}}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"))
+	}{RepoRoot: root}, Worktrees: []herdr.Worktree{}}}, call{Method: "worktree.create", Params: map[string]any{"cwd": root, "branch": "worker", "base": branchOf(t, root), "path": path, "focus": false}, Result: herdr.CreatedResult{Type: "worktree_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p, Worktree: herdr.Worktree{Path: path}}, Before: checkout(t, root, "worker", path)}, namedTab(p), labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"))
 	s.Cwd = callerCwd
 	out := s.run(context.Background(), o, nil)
 	if out.Status != "success" {
@@ -224,7 +236,7 @@ func TestNewWorktreeFromLinkedCheckoutUsesPrimaryRoot(t *testing.T) {
 	o.Worktree = "new"
 	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "worktree.list", Params: map[string]any{"cwd": linked}, Result: herdr.WorktreeListResult{Type: "worktree_list", Source: struct {
 		RepoRoot string `json:"repo_root"`
-	}{RepoRoot: root}, Worktrees: []herdr.Worktree{}}}, call{Method: "worktree.create", Params: map[string]any{"cwd": root, "branch": "worker", "base": branchOf(t, root), "path": path, "focus": false}, Result: herdr.CreatedResult{Type: "worktree_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p, Worktree: herdr.Worktree{Path: path}}}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), callerNotAgent())
+	}{RepoRoot: root}, Worktrees: []herdr.Worktree{}}}, call{Method: "worktree.create", Params: map[string]any{"cwd": root, "branch": "worker", "base": branchOf(t, root), "path": path, "focus": false}, Result: herdr.CreatedResult{Type: "worktree_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p, Worktree: herdr.Worktree{Path: path}}, Before: checkout(t, root, "worker", path)}, namedTab(p), labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), callerNotAgent())
 	s.Cwd = linked
 	out := s.run(context.Background(), o, nil)
 	if out.Status != "success" {
@@ -251,8 +263,68 @@ func TestNewlyOpenedWorktreeRenamesOnlyInitialTab(t *testing.T) {
 	o.Tab = "tasks"
 	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "worktree.list", Params: map[string]any{"cwd": path}, Result: herdr.WorktreeListResult{Type: "worktree_list", Source: struct {
 		RepoRoot string `json:"repo_root"`
-	}{RepoRoot: path}, Worktrees: []herdr.Worktree{}}}, call{Method: "worktree.open", Params: map[string]any{"cwd": path, "path": path, "focus": false}, Result: herdr.CreatedResult{Type: "worktree_opened", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2", Label: "1"}, RootPane: p, Worktree: herdr.Worktree{Path: path}, AlreadyOpen: &opened}}, call{Method: "tab.rename", Params: map[string]any{"tab_id": "w2:t1", "label": "tasks"}, Result: herdr.TabResult{Type: "tab_info", Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2", Label: "tasks"}}}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"))
+	}{RepoRoot: path}, Worktrees: []herdr.Worktree{}}}, call{Method: "worktree.open", Params: map[string]any{"cwd": path, "path": path, "focus": false}, Result: herdr.CreatedResult{Type: "worktree_opened", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2", Label: "1"}, RootPane: p, Worktree: herdr.Worktree{Path: path}, AlreadyOpen: &opened}}, call{Method: "tab.rename", Params: map[string]any{"tab_id": "w2:t1", "label": "tasks"}, Result: herdr.TabResult{Type: "tab_info", Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2", Label: "tasks"}}}, labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"))
 	if out := s.run(context.Background(), o, nil); out.Status != "success" {
 		t.Fatal(out)
+	}
+	// Opening an existing checkout writes nothing into it.
+	if _, err := os.Stat(filepath.Join(path, ".fledge")); !os.IsNotExist(err) {
+		t.Fatal("wrote managed paths into an opened checkout")
+	}
+}
+
+// A created checkout gets the managed .fledge/.gitignore, reported as effects.
+func TestNewWorktreeGetsManagedIgnore(t *testing.T) {
+	root := repository(t)
+	path := filepath.Join(root, ".fledge", "worktrees", "worker")
+	p := herdrscript.Pane("w2:p1", "w2", "w2:t1")
+	o := validOptions()
+	o.Worktree = "new"
+	create := call{Method: "worktree.create", Result: herdr.CreatedResult{Type: "worktree_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p, Worktree: herdr.Worktree{Path: path}}, Before: checkout(t, root, "worker", path)}
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "worktree.list", Result: newWorktreeListing(root)}, create, namedTab(p), labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), callerNotAgent())
+	s.Cwd = root
+	out := s.run(context.Background(), o, nil)
+	if out.Status != "success" {
+		t.Fatal(out)
+	}
+	ignore := filepath.Join(path, ".fledge", ".gitignore")
+	if b, err := os.ReadFile(ignore); err != nil || string(b) != "*\n!/profiles/\n!/profiles/*.toml\n" {
+		t.Fatalf("%q %v", b, err)
+	}
+	want := []libagent.Effect{{Action: "created", Kind: "worktree", Path: path}, {Action: "created", Kind: "directory", Path: filepath.Join(path, ".fledge")}, {Action: "created", Kind: "file", Path: ignore}}
+	for i, e := range out.Effects {
+		if e == want[0] {
+			if len(out.Effects) < i+3 || !slices.Equal(out.Effects[i:i+3], want) {
+				t.Fatalf("%+v", out.Effects)
+			}
+			return
+		}
+	}
+	t.Fatalf("%+v", out.Effects)
+}
+
+// A created checkout that cannot take the managed ignore file stops the spawn
+// as partial, keeping the created checkout and workspace in the effects.
+func TestNewWorktreeIgnoreFailureIsPartial(t *testing.T) {
+	root := repository(t)
+	path := filepath.Join(root, ".fledge", "worktrees", "worker")
+	p := herdrscript.Pane("w2:p1", "w2", "w2:t1")
+	o := validOptions()
+	o.Worktree = "new"
+	add := checkout(t, root, "worker", path)
+	create := call{Method: "worktree.create", Result: herdr.CreatedResult{Type: "worktree_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p, Worktree: herdr.Worktree{Path: path}}, Before: func() {
+		add()
+		if err := os.WriteFile(filepath.Join(path, ".fledge"), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}}
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "worktree.list", Result: newWorktreeListing(root)}, create)
+	s.Cwd = root
+	out := s.run(context.Background(), o, nil)
+	if out.Status != "partial" || out.Error == nil || out.Error.Phase != "worktree.ignore" || !strings.Contains(out.Error.Message, path) {
+		t.Fatalf("%+v %+v", out, out.Error)
+	}
+	if !slices.Contains(out.Effects, libagent.Effect{Action: "created", Kind: "worktree", Path: path}) || !slices.Contains(out.Effects, libagent.Effect{Action: "created", Kind: "workspace", ID: "w2"}) {
+		t.Fatalf("%+v", out.Effects)
 	}
 }

@@ -6,6 +6,7 @@
 // input.go reads inline, file, or stdin text;
 // harness.go holds canonical harness membership;
 // name.go holds the agent-name rule;
+// label.go renames an agent and labels its pane and, when alone, its tab;
 // header.go attributes delivered prompts to their sender;
 // prompt_wait.go adds agent.prompt with a wait for confirmed activity.
 package agent

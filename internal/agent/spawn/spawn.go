@@ -96,7 +96,8 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Outcome {
 	result := &Result{Name: o.Name, Harness: o.Harness}
 	out := libagent.Outcome{Operation: "agent.spawn", Status: "success", Result: result, Effects: []libagent.Effect{}}
-	role := ""
+	var profile *profiles.Profile
+	brief := ""
 	if o.Profile != "" {
 		p, err := profiles.Load(ctx, s.Cwd, o.Profile)
 		if err != nil {
@@ -107,13 +108,13 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 			out.Fail(libagent.Invalid("--harness is required; profile %s sets no harness", p.Name), "validation", false)
 			return out
 		}
-		o, role = applyProfile(o, p), p.Role
+		o, profile, brief = applyProfile(o, p), &p, p.Brief()
 		result.Harness = o.Harness
 		result.Profile = &ProfileRef{Name: p.Name, Source: p.Source, Path: p.Path, Base: p.Base}
 	}
 	args, err := o.Validate()
-	if err == nil && o.NoWait && role != "" {
-		err = libagent.Invalid("--no-wait cannot be combined with a profile role, which is sent as the first prompt")
+	if err == nil && o.NoWait && brief != "" {
+		err = libagent.Invalid("--no-wait cannot be combined with a profile brief, which is sent as the first prompt")
 	}
 	if err != nil {
 		out.Fail(err, "validation", false)
@@ -124,10 +125,9 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 		out.Fail(err, "validation", false)
 		return out
 	}
-	prompt := firstPrompt(role, body)
-	// The effective first prompt, including any profile role, is the only
-	// input to PromptRequested.
-	result.PromptRequested = prompt != ""
+	// The effective first prompt, including any profile brief, is the only
+	// input to PromptRequested; it is final once reads are checked.
+	result.PromptRequested = firstPrompt(brief, body) != ""
 	if o.Cwd != "" && !filepath.IsAbs(o.Cwd) {
 		o.Cwd = filepath.Join(s.Cwd, o.Cwd)
 	}
@@ -155,6 +155,21 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 		return out
 	}
 	setPlacement(result, p)
+	var skipped []string
+	if profile != nil {
+		result.readDir = s.Cwd
+		switch {
+		case result.Cwd != nil && *result.Cwd != "":
+			result.readDir = *result.Cwd
+		case result.WorktreePath != nil:
+			result.readDir = *result.WorktreePath
+		case o.Cwd != "":
+			result.readDir = o.Cwd
+		}
+		brief, skipped = profileBrief(*profile, result.readDir)
+	}
+	prompt := firstPrompt(brief, body)
+	result.PromptRequested = prompt != ""
 	if err = s.customizePane(ctx, o, p, &out); err != nil {
 		return out
 	}
@@ -178,6 +193,11 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 	result.AgentStatus = libagent.Pointer(r.Agent.AgentStatus)
 	result.Argv = r.Argv
 	out.Effects = append(out.Effects, libagent.Effect{Action: "started", Kind: "agent", ID: r.Agent.PaneID})
+	// Skipped reads are reported once the launch is a mutation, so they never
+	// turn an otherwise rejected spawn into a partial one.
+	for _, path := range skipped {
+		out.Effects = append(out.Effects, libagent.Effect{Action: "skipped", Kind: "read", Path: path})
+	}
 	if o.NoWait {
 		s.register(b.ctx, withHarness(r.Agent, o.Harness), &out)
 		return out
@@ -270,18 +290,21 @@ func samePane(a, b herdr.Pane) bool {
 	return a.PaneID == b.PaneID && a.WorkspaceID == b.WorkspaceID && a.TabID == b.TabID
 }
 func (s *spawner) customizePane(ctx context.Context, o Options, p herdr.Pane, out *libagent.Outcome) error {
-	if o.Label != "" {
-		var r herdr.PaneResult
-		err := s.Call(ctx, "pane.rename", map[string]any{"pane_id": p.PaneID, "label": o.Label}, &r)
-		if err == nil && (r.Type != "pane_info" || !samePane(r.Pane, p)) {
-			err = libagent.Protocol("incomplete or mismatched pane.rename result")
-		}
-		if err != nil {
-			out.Fail(err, "pane.rename", true)
-			return err
-		}
-		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "pane_label", ID: p.PaneID})
+	// The pane takes --label, else the agent's name.
+	label := o.Label
+	if label == "" {
+		label = o.Name
 	}
+	var renamed herdr.PaneResult
+	err := s.Call(ctx, "pane.rename", map[string]any{"pane_id": p.PaneID, "label": label}, &renamed)
+	if err == nil && (renamed.Type != "pane_info" || !samePane(renamed.Pane, p)) {
+		err = libagent.Protocol("incomplete or mismatched pane.rename result")
+	}
+	if err != nil {
+		out.Fail(err, "pane.rename", true)
+		return err
+	}
+	out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "pane_label", ID: p.PaneID})
 	if o.Focus {
 		var r herdr.PaneResult
 		err := s.Call(ctx, "pane.focus", map[string]any{"pane_id": p.PaneID}, &r)

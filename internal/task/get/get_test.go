@@ -10,6 +10,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/tasktest"
+	"github.com/Harrison-Blair/fledge/internal/lib/usage"
 )
 
 func TestGetShowsFullRecord(t *testing.T) {
@@ -119,5 +120,38 @@ func TestGetShowsPrerequisiteStates(t *testing.T) {
 	line := "after: " + v + " (verified), " + c + " (cancelled: superseded), " + bare + " (cancelled), " + open + " (assigned, waiting)\n"
 	if !strings.Contains(b.String(), "owner: -\n"+line+"created: ") || !strings.Contains(b.String(), "assigned: 2026-01-01T00:01:00Z (forced; unmet then: "+open+")\n") {
 		t.Fatalf("%q", b.String())
+	}
+}
+
+func TestGetShowsUsage(t *testing.T) {
+	repo := identitytest.Repository(t)
+	p := tasktest.Ptr[string]
+	worker := &task.UsageSnapshot{AgentID: p("aaaaaaaa"), ElapsedSeconds: 3725, Turns: 14, Basis: usage.Measured,
+		Tokens: usage.Tokens{Input: 1234, Output: 18420, CacheRead: 410_300, CacheWrite: 96_000}}
+	verifier := &task.UsageSnapshot{ElapsedSeconds: 312, Turns: 3, Basis: usage.Measured, Reason: p("fallback to totals"),
+		Tokens: usage.Tokens{Input: 12, Output: 2_345_678, CacheRead: 999_999}, Cost: &usage.Cost{Amount: 0.614, Currency: "USD", Basis: "estimate"}}
+	id := tasktest.Seed(t, repo, task.Record{Title: "T", Status: task.Verified, CreatedAt: "2026-01-01T00:00:00Z", Usage: &task.Usage{Worker: worker, Verifier: verifier}})
+	out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{ID: id})
+	var b bytes.Buffer
+	if err := out.Write(&b, false, Render); err != nil {
+		t.Fatal(err)
+	}
+	want := "usage:\n" +
+		"  worker: 1h02m, 14 turns, in 1.2k out 18.4k cache-r 410k cache-w 96k, cost -, measured\n" +
+		"  verifier: 5m12s, 3 turns, in 12 out 2.3M cache-r 1M cache-w 0, cost $0.61 (est), measured (fallback to totals)\n"
+	if !strings.HasSuffix(b.String(), want) {
+		t.Fatalf("%q\nwant suffix %q", b.String(), want)
+	}
+	b.Reset()
+	if err := out.Write(&b, true, Render); err != nil || !strings.Contains(b.String(), `"usage":{"worker":{"agent_id":"aaaaaaaa",`) {
+		t.Fatalf("%s %v", b.String(), err)
+	}
+
+	unavailable := &task.UsageSnapshot{ElapsedSeconds: 40, Basis: usage.Unavailable, Reason: p("no native session ref observed")}
+	id = tasktest.Seed(t, repo, task.Record{Title: "T", Status: task.Completed, CreatedAt: "2026-01-01T00:00:00Z", Usage: &task.Usage{Worker: unavailable}})
+	b.Reset()
+	Run(context.Background(), tasktest.Client(t, repo, ""), Options{ID: id}).Write(&b, false, Render)
+	if want := "usage:\n  worker: 40s, unavailable (no native session ref observed)\n"; !strings.HasSuffix(b.String(), want) {
+		t.Fatalf("%q\nwant suffix %q", b.String(), want)
 	}
 }

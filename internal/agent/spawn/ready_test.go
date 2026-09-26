@@ -40,7 +40,7 @@ func getCall(r herdr.AgentResult) call {
 func gatedSpawn(t *testing.T, wait herdr.AgentResult, rest ...call) (*spawner, *pollClock) {
 	t.Helper()
 	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
-	calls := append([]call{{Method: "session.snapshot", Result: snapshot()}, {Method: "agent.start", Result: started(p)}, {Method: "agent.wait", Result: wait}}, rest...)
+	calls := append([]call{{Method: "session.snapshot", Result: snapshot()}, labeled(p), {Method: "agent.start", Result: started(p)}, {Method: "agent.wait", Result: wait}}, rest...)
 	s := fake(t, calls...)
 	clock := &pollClock{movableClock: movableClock{t: time.Unix(0, 0)}}
 	s.Now, s.Wait = clock.now, clock.wait
@@ -130,7 +130,7 @@ func TestSpawnReadinessBudgetExhaustionIsPartialTimeout(t *testing.T) {
 	o.Prompt, o.PromptSet = "hi", true
 	pending := launching(p, "idle", nil, flag(true))
 	clock := &pollClock{movableClock: movableClock{t: time.Unix(0, 0)}}
-	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p), Before: func() { clock.advance(2800 * time.Millisecond) }}, call{Method: "agent.wait", Params: map[string]any{"target": "worker", "timeout_ms": 201}, Result: pending}, getCall(pending), getCall(pending), getCall(pending))
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, labeled(p), call{Method: "agent.start", Result: started(p), Before: func() { clock.advance(2800 * time.Millisecond) }}, call{Method: "agent.wait", Params: map[string]any{"target": "worker", "timeout_ms": 201}, Result: pending}, getCall(pending), getCall(pending), getCall(pending))
 	s.Now, s.Wait = clock.now, clock.wait
 	s.Cwd = identitytest.Repository(t)
 	out := s.run(context.Background(), o, nil)
@@ -149,7 +149,7 @@ func TestSpawnReadinessBudgetExhaustionIsPartialTimeout(t *testing.T) {
 // Cancellation during a readiness pause ends the spawn without another poll.
 func TestSpawnReadinessHonorsCancellation(t *testing.T) {
 	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
-	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p)}, call{Method: "agent.wait", Result: launching(p, "idle", nil, flag(true))})
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, labeled(p), call{Method: "agent.start", Result: started(p)}, call{Method: "agent.wait", Result: launching(p, "idle", nil, flag(true))})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	w := &recordedWaits{cancel: cancel}
@@ -247,7 +247,7 @@ func TestSpawnReadinessPollFailure(t *testing.T) {
 // Every first-prompt source is submitted exactly once, after the gate, with
 // one sender header.
 func TestSpawnFirstPromptSourcesSubmitOnceAfterReadiness(t *testing.T) {
-	reviewer := builtinProfile(t, "reviewer").Role
+	reviewer := builtinProfile(t, "reviewer").Brief()
 	for _, tc := range []struct {
 		name, in, text string
 		set            func(*Options)

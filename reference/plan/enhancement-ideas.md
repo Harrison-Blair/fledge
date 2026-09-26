@@ -84,7 +84,7 @@ A checked item means its main capability is implemented; accompanying notes reco
 
    **Implemented:** [4f39c9c](https://github.com/Harrison-Blair/fledge/commit/4f39c9c9ffb1dc2b3d392e1f08d2c25fd77a61c1) · **Author:** Harrison-Blair · **Author date:** 2026-09-22
 
-   **Implementation decisions and remaining gaps:** `agent spawn --profile NAME` applies a harness, model, native args, and role; `agent profiles [NAME]` lists or shows them without Herdr. Five built-ins (`orchestrator`, `implementer`, `planner`, `reviewer`, `verifier`) are embedded TOML in the binary with owner-chosen harness and model defaults (Codex models through the `pi` harness, never `codex`) and no permission-mode args; they update with the binary and are never copied into repositories. Repository files at `.fledge/profiles/NAME.toml` in the invoking checkout's Git top level override a same-name built-in or add custom profiles (optionally `extends = "builtin:NAME"`); only built-in bases, no recursive inheritance. Explicit flags win: a different `--harness` drops the profile's model and args but keeps its role. The role precedes the task in one headered first prompt. `.fledge/.gitignore` now un-ignores `profiles/*.toml` through an append-only migration. There is no user-global profile location and no export/edit command; the `researcher` example is not shipped. [Current behavior](../../README.md#profiles)
+   **Implementation decisions and remaining gaps:** `agent spawn --profile NAME` applies a harness, model, native args, and a rendered brief; `agent profiles [NAME]` lists or shows them (including reads, protocol, and the brief) without Herdr. Eight built-ins (`orchestrator`, `planner`, `researcher`, `implementer`, `debugger`, `integrator`, `reviewer`, `verifier`) are embedded TOML in the binary with owner-chosen harness and model defaults (Codex models through the `pi` harness, never `codex`); they update with the binary and are never copied into repositories. Every Claude built-in ships `args = ["--permission-mode", "bypassPermissions"]`, an accepted safety tradeoff stated in the README; a repository override with `args = []` removes it. The single `role` string was replaced in place (still `schema_version = 1`) by `[sections]`/`[sections_append]` (mission, workflow, always, never, protocol, report), a `reads` list of repo-relative files, and `protocol = true`, which renders a shared Fledge protocol block before the role's protocol addendum. The brief is Markdown with fixed-order `##` blocks; at spawn a missing read is skipped and reported, never failing the spawn, and reads are instructions only. Repository files at `.fledge/profiles/NAME.toml` in the invoking checkout's Git top level override a same-name built-in or add custom profiles (optionally `extends = "builtin:NAME"`); only built-in bases, no recursive inheritance. Explicit flags win: a different `--harness` drops the profile's model and args but keeps its brief. The brief precedes the task in one headered first prompt. `.fledge/.gitignore` now un-ignores `profiles/*.toml` through an append-only migration. There is no user-global profile location, no `reads_append`, and no export/edit command. [Current behavior](../../README.md#profiles)
 
 15. [ ] **Put a task board inside Herdr.** Show tasks, workers, blockers, and results together, with actions to inspect or focus them. Herdr's plugin API already provides panes, actions, and event hooks that could support this. [Herdr plugin API](https://herdr.dev/docs/socket-api/)
 
@@ -108,7 +108,11 @@ A checked item means its main capability is implemented; accompanying notes reco
 
 20. [ ] **Separate task attempts.** Preserve each attempt's worker, outcome, and artifacts when a task fails or is retried.
 
-21. [ ] **Task brief templates.** Standardize the information workers need: objective, constraints, allowed scope, deliverables, and acceptance criteria.
+21. [x] **Task brief templates.** Standardize the information workers need: objective, constraints, allowed scope, deliverables, and acceptance criteria.
+
+    **Implemented:** [3d736d6](https://github.com/Harrison-Blair/fledge/commit/3d736d63f610149fdd5eca221bf003a9afe60baa) (`task template` added in [489a5af](https://github.com/Harrison-Blair/fledge/commit/489a5afd45de6272e9e2028723e9ba12c6098e46), 2026-09-24) · **Author:** Harrison-Blair · **Author date:** 2026-09-23
+
+    **Implementation decisions and remaining gaps:** The template is a text convention, not new record fields: a brief stays one string with six required `## ` sections (Objective, Acceptance criteria, Scope, Known facts, Deliverables, Constraints), each once, in order, and nonempty. `task create` enforces it by default and fails with `task_brief_incomplete` naming the problem section; `--freeform` opts out for throwaway tasks. `fledge task template` prints the skeleton and is the source of truth for the headings. Briefs are validated only at creation: existing records are never re-checked, and `assign` delivers the text unchanged. Sections are not stored as structured per-section fields, and size estimates are not a record field. [Current behavior](../../README.md#briefs)
 
 22. [ ] **Cancellation that reaches dependent work.** Cancel an assignment and identify which children or downstream tasks should stop, continue, or require reconsideration.
 
@@ -130,15 +134,21 @@ A checked item means its main capability is implemented; accompanying notes reco
 
     **Implementation decisions and remaining gaps:** `agent current` shows the caller's own live record: ID, name, pane, workspace, harness, worktree path, parent ID and the parent's recorded name, plus the tasks it owns in the `assigned` state. It fails with `caller_unregistered` when the caller's pane hosts no registered agent. Workspace is reported as an id, not a resolved name, and there is no list of the caller's own children (use `agent list --mine`). [Current behavior](../../README.md#identity)
 
-29. [ ] **Filter and select agents.** Find workers by project, owner, role, harness, task, or state, and reuse those selections in other commands.
+29. [x] **Filter and select agents.** Find workers by project, owner, role, harness, task, or state, and reuse those selections in other commands.
+
+    **Implemented:** [8ade42f](https://github.com/Harrison-Blair/fledge/commit/8ade42f67726d7858d30e2a23d412b38245ef190) (profile record in [7bc6b40](https://github.com/Harrison-Blair/fledge/commit/7bc6b40e72f8ffb1bf82432128f4f53c5cfd128b), selector in [22f2da8](https://github.com/Harrison-Blair/fledge/commit/22f2da87a473ad3fd1546813b461b1cd66a61462), `wait` in [53abe10](https://github.com/Harrison-Blair/fledge/commit/53abe10bc57957e47c5e7ca1fe212654920e837f), `list` in [2e4cea0](https://github.com/Harrison-Blair/fledge/commit/2e4cea02c089168b888aee8f6e91296ded8403d8), `message` in [ddd0df7](https://github.com/Harrison-Blair/fledge/commit/ddd0df7fe1b02cceb0205c43f09e6150d65827da), 2026-09-24) · **Author:** Harrison-Blair · **Author date:** 2026-09-23
+
+    **Implementation decisions and remaining gaps:** One shared selector gives `agent list`, `wait`, `message`, and `stop` the same filter flags: `--state`, `--harness`, `--profile`, `--task`, `--worktree`, `--registered`, `--mine`, and `--parent`. Different flags AND together and repeating one ORs its values. "Role" is the spawn profile name, now stored on the agent record; "project" is this repository's record store (`--registered`, optionally narrowed by `--worktree`). `--state` and `--harness` match live Herdr data and the other filters match records, so record filters never match agents registered in another repository. `agent list --ids` prints record IDs for piping. The action commands also accept repeatable `--id`, `--name`, and `--pane` targets and report one row per target. Filter matches exclude the caller, an empty match fails with `no_agents_matched`, and any failed row makes the outcome `partial`. `stop` adds `--dry-run`, applies `--force` and `--grace` to every target, and stops targets one after another, so it can take up to grace × targets. `get`, `read`, `send`, and `pause` stay single-target. Deferred: a `--cwd PATH` prefix filter on the live pane cwd, selector narrowing on `cleanup`, `adopt --profile` labelling, saved named selections, name globbing or prefix matching, and parallel multi-target stop. [Current behavior](../../README.md#identity)
 
 30. [x] **Adopt manually launched agents.** Give an existing agent a Fledge identity and assignment without requiring it to be restarted.
 
     **Implemented:** [75ec269](https://github.com/Harrison-Blair/fledge/commit/75ec26936e8eb964f16dbe627db028d6f493cca3) · **Author:** Harrison-Blair · **Author date:** 2026-09-22
 
-    **Implementation decisions and remaining gaps:** `agent adopt` registers an already-running agent in the caller's own pane, or in `--pane`; an unnamed agent needs `--name` (a named agent keeps its name, and a different `--name` is refused), and a named agent whose terminal already has a live record is refused with `agent_already_registered`. An unnamed agent whose terminal already has a live record, such as one whose Herdr name was lost, is named through Herdr and keeps that record's ID. Adoption gives the agent a Fledge identity but does not itself deliver an assignment; use `agent message` or `task assign` afterward. [Current behavior](../../README.md#identity)
+    **Implementation decisions and remaining gaps:** `agent adopt` registers an already-running agent in the caller's own pane, or in `--pane`; an unnamed agent needs `--name` (a named agent keeps its name, and a different `--name` is refused), and a named agent whose terminal already has a live record is refused with `agent_already_registered`. An unnamed agent whose terminal already has a live record, such as one whose Herdr name was lost, is named through Herdr and keeps that record's ID. Adoption gives the agent a Fledge identity but does not itself deliver an assignment; use `agent message` or `task assign` afterward. `agent rename --to NAME` renames an agent that already has a name, keeping its record and ID; naming through either command also labels the agent's pane and, when the pane is alone in its tab, the tab. [Current behavior](../../README.md#identity)
 
 31. [ ] **Resume native conversations.** Preserve harness session references and expose resume operations where supported, with clear capability reporting.
+
+    **Existing support:** the harness registry (`internal/lib/harness`) records each harness's resume template (for example `claude --resume <session-id>`), reported by `agent capabilities`, and agent records persist the Herdr-reported native session ref as `native_session` with a short history, captured by spawn, adopt, and `task assign`/`complete`/`verify`. No command resumes a conversation yet. [Current behavior](../../README.md#identity)
 
 32. [ ] **Move work between harnesses.** Transfer the task, artifacts, and a handoff summary when switching tools or models; native conversation state may not be portable.
 
@@ -148,13 +158,19 @@ A checked item means its main capability is implemented; accompanying notes reco
 
 35. [ ] **Maintain a small reusable worker pool.** Keep selected agents ready for repeated tasks, with an explicit choice between reusing context and starting fresh.
 
-36. [ ] **Expose harness capabilities.** Report which harnesses support resume, interruption, structured results, lifecycle hooks, and other operations.
+36. [x] **Expose harness capabilities.** Report which harnesses support resume, interruption, structured results, lifecycle hooks, and other operations.
+
+   **Implemented:** `fledge agent capabilities` (`--harness`, `--live`, `--json`) · **Author:** Harrison-Blair · **Author date:** 2026-09-23. The `structured_results` row was dropped: no harness returns structured results to Fledge today, so it would read `none` for every kind and add no information.
 
 37. [ ] **Explain model discovery.** Show where model entries came from, when they were last observed, and whether discovery failed. A cached model name should not imply confirmed availability.
 
-38. [ ] **Measure usage per task.** Collect elapsed time, tokens, and cost where available, distinguishing measurements from estimates.
+38. [x] **Measure usage per task.** Collect elapsed time, tokens, and cost where available, distinguishing measurements from estimates.
+
+    **Implemented:** `task complete` and `task verify` record `usage.worker` and `usage.verifier` snapshots, shown by `task get` · **Author:** Harrison-Blair · **Author date:** 2026-09-25. Tokens are measured from the harness's session store over the task's window (`assigned_at`→`completed_at`, `completed_at`→`verified_at`); cost appears only when the harness records it and is labelled an estimate, with no Fledge price table and no qmeter integration. Collection runs after the state change in a separate write and never fails the command; missing data is `basis: unavailable` with a reason. Remaining gap: attribution is by time window on one session, so concurrent tasks or human chat in the same pane double-count. [Current behavior](../../README.md#usage-snapshots)
 
 39. [ ] **Apply budgets.** Limit time, spending, or attempts per task or project. State clearly whether a limit is enforced by the runtime or merely communicated to a worker.
+
+    **Existing support:** the per-task usage snapshot (#38) is the measurement side of budgets: `task get --json` reports each task's worker and verifier `elapsed_seconds`, tokens, turns, and harness-recorded cost estimate. Nothing enforces or communicates a limit yet. [Current behavior](../../README.md#usage-snapshots)
 
 ## Communication and shared context
 
@@ -169,6 +185,8 @@ A checked item means its main capability is implemented; accompanying notes reco
 43. [ ] **Queue follow-up prompts.** Offer "send after the current turn" so routine follow-ups do not accidentally steer active work.
 
 44. [ ] **Broadcast to a selected group.** Send a changed requirement to every worker on a task, with individual delivery outcomes.
+
+    **Existing support:** `agent message` accepts repeatable `--name`/`--pane`/`--id` targets or the `agent list` filter flags (`--task`, `--mine`, `--state`, and others) and delivers the same message, with one sender header and message ID, to each target in turn, reporting a fan-out row per target with its own outcome and message ID; any failed row makes the outcome `partial`. This covers the broadcast, so this item can be checked off, or narrowed to anything the fan-out lacks, such as delivery that is queued until each worker's turn ends (#43). [Current behavior](../../README.md#agents)
 
 45. [ ] **Generate handoff briefs.** Capture current progress, important files, decisions, failed approaches, and remaining work before transferring an assignment.
 
@@ -298,7 +316,11 @@ A checked item means its main capability is implemented; accompanying notes reco
 
 These ideas are worth exploring after the basic delegation loop is dependable.
 
-100. [ ] **Assisted task decomposition.** Propose a task breakdown, dependencies, and acceptance criteria from a broad request, for review before dispatch.
+100. [x] **Assisted task decomposition.** Propose a task breakdown, dependencies, and acceptance criteria from a broad request, for review before dispatch.
+
+     **Implemented:** [f76610c](https://github.com/Harrison-Blair/fledge/commit/f76610cd53f8996e84602ac628e34a1ffdb02ecf) (proposal format in [aa933d6](https://github.com/Harrison-Blair/fledge/commit/aa933d6199c4d9f5bb7bf9fe9a32cda97f214047), 2026-09-23; `task template --proposal` in [489a5af](https://github.com/Harrison-Blair/fledge/commit/489a5afd45de6272e9e2028723e9ba12c6098e46); planner role in [7dd39e2](https://github.com/Harrison-Blair/fledge/commit/7dd39e250f1b88eeed763f32a7e96700159bdd85)) · **Author:** Harrison-Blair · **Author date:** 2026-09-24
+
+     **Implementation decisions and remaining gaps:** A planner (`--profile planner`) writes a TOML proposal, conventionally under `.fledge/tmp/plans/` (gitignored scratch), with an optional `[parent]` and keyed `[[tasks]]` whose `after` entries name local keys or existing task ids; every brief must follow the template. It self-checks with `fledge task import --dry-run` and completes its task naming the file; a human or orchestrator reviews it and runs the real `task import`, which creates the parent and tasks in dependency order under one store lock. Import never assigns. There is no `fledge task plan` spawn-and-import wrapper, and nothing cleans `.fledge/tmp/` (`agent cleanup` does not touch it). A failure partway through a real import leaves earlier records (outcome `partial`); there is no rollback. Size estimates live only in brief text, not a record field. [Current behavior](../../README.md#proposals)
 
 101. [ ] **Routing informed by past results.** Suggest a harness, model, or role based on measured performance on similar tasks.
 

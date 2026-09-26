@@ -851,6 +851,8 @@ Workaround: spawn Claude workers with
 `fledge agent spawn ... -- --permission-mode bypassPermissions` (with
 `skipDangerousModePermissionPrompt` set, no dialog appears). Fledge has no
 first-class permission-mode option.
+Update: every Claude built-in profile now ships this flag, so `--profile` spawns
+of Claude roles run in bypass mode without the extra `--` arguments.
 
 **Reproduction steps:**
 1. Spawn a Claude agent in auto mode and have it run `fledge agent stop --name <another agent> --force`.
@@ -988,3 +990,241 @@ window; a 1000-row read showed each reply exactly once. Use a larger `--lines`
 1. Spawn a Claude agent and have it answer a few short prompts, each with a unique token.
 2. Run `fledge agent read --name <agent> --lines 40` and look for the first token's reply line.
 3. Run `fledge agent read --name <agent> --source recent --lines 200` and find it.
+
+---
+
+**Issue:** `task complete` loses the creator notification while the creator's pane is blocked
+
+**Summary:** On 2026-09-23, during a planning session, the orchestrator (agent
+`c3c07b6b`, pane `wA:p1`, Claude Code) created planning tasks `5d6ab497`,
+`9af44645`, and `537c1916` and assigned them to planners `plan-a`, `plan-c`, and
+`plan-d`. Each planner ran `fledge task complete` while the orchestrator's Claude
+pane was showing an interactive question dialog (Claude Code's AskUserQuestion
+UI), which Herdr reports as `blocked`. In all three cases `task complete`
+recorded the completion but returned `partial`: the completion notification to
+the creator failed with `agent_blocked`, and the command states it is never
+retried. Workaround: each planner ran `fledge agent wait` and re-sent the notice
+by hand with `fledge agent message --name orchestrator`. An orchestrator that
+uses a question dialog therefore routinely misses completions unless workers
+resend them.
+
+**Reproduction steps:**
+1. Register a creator pane, then create a task and assign it to a worker.
+2. Put the creator's harness into a blocking dialog, such as Claude Code's AskUserQuestion UI.
+3. From the worker, run `fledge task complete --id <task> --summary "..."`.
+4. Observe `partial` with `agent_blocked` and no later delivery of the notification.
+
+---
+
+**Issue:** The orchestrator pane lost its Herdr agent name mid-session
+
+**Summary:** On 2026-09-23, `fledge agent current` in pane `wA:p1` showed `Name:
+orchestrator` (record `c3c07b6b`). Shortly after, while spawning and messaging
+planners, `fledge agent list` showed the NAME column for `c3c07b6b` as `-`, and
+messages sent from that pane carried the header `unnamed agent (wA:p1)` with no
+reply command. The cause is unknown; it was not investigated. Workaround:
+`fledge agent adopt --name orchestrator` in that pane restored the Herdr name and
+kept the same record ID (output: `Adopted orchestrator (wA:p1) as c3c07b6b.`);
+later messages showed `from orchestrator (wA:p1)`. The reproduction below records
+what was observed; the exact trigger is not known.
+
+**Reproduction steps:**
+1. Register an agent with a name and confirm it with `fledge agent current`.
+2. During normal spawn, assign, and message use, run `fledge agent list`.
+3. Observe the NAME column as `-` and messages sent with an unnamed sender header.
+4. Run `fledge agent adopt --name <name>` in that pane to restore the name.
+
+---
+
+**Issue:** Every agent's identity is lost after a machine restart
+
+**Summary:** On 2026-09-23 at about 23:29 EDT the user restarted their machine.
+Herdr came back (process start 23:29:14) with the same workspace and pane IDs
+(for example `wA:p1` and `w19:p1`), and the running agents' panes survived.
+Afterwards `fledge agent list` showed `-` for ID and PARENT for every agent,
+including agents spawned and registered minutes earlier (`impl-b1`, record
+`7bf1f804`, not ended, worktree set). `fledge agent current` in the orchestrator
+pane failed with `caller_unregistered`. The orchestrator's Herdr name was also
+gone, while the `impl-*` panes kept their names. Agent records match live agents
+by terminal (records store `terminal_id`); after the restart none matched.
+`fledge agent adopt --name orchestrator` registered the orchestrator under a new
+record ID (`73f2ff4a`; the old one was `c3c07b6b`). There is no way to reattach
+an existing record, so task records keep stale owner and creator IDs: an owner
+must use `task complete --force`, and completion notifications to the creator's
+old record cannot be delivered. Workaround: workers also report to the
+orchestrator with `fledge agent message`. Related backlog idea:
+`enhancement-ideas.md` #25 "Recover after coordinator interruption".
+
+**Reproduction steps:**
+1. Spawn and register agents, then create and assign tasks.
+2. Restart the machine (or Herdr) so the panes are restored.
+3. Run `fledge agent list` and `fledge agent current`.
+4. Observe no attribution: ID and PARENT are `-`, and `current` fails with `caller_unregistered`.
+5. Run `fledge agent adopt --name <name>` and observe a new record ID, so task ownership no longer matches.
+
+---
+
+**Issue:** Message reply hint omits --body
+
+**Summary:** The header on every received message ends with
+`reply: fledge agent message --name <name>`, which does not show that the text
+must go in `--body` or `--file`. `impl-d4` copied the hint and appended the text
+as a positional argument, and `fledge agent message` failed with `unknown
+command`. Observed once. Workaround: pass the text with `--body "..."` or
+`--file <path>`.
+
+**Reproduction steps:**
+1. Receive a message from a named agent and copy the reply command from its header.
+2. Append the reply text as a positional argument, for example
+   `fledge agent message --name orchestrator "done"`.
+3. Observe the `unknown command` error; the same command with `--body "done"` succeeds.
+
+---
+
+**Issue:** Primary checkout .fledge/tmp/ vanished (cause unknown)
+
+**Summary:** On 2026-09-23 between about 23:30 and 23:41 EDT, the orchestrator's
+`.fledge/tmp/` (plans and working files) disappeared from
+`/home/penguin/source/fledge` while wave-2 agents ran. An investigation found no
+Fledge code or test that removes it: no non-test code calls `RemoveAll` or
+`git clean`, and the tests that touch `.fledge` use per-test roots or
+`t.Chdir(t.TempDir())`. The directory was later recreated, and the plans were
+recovered from agent transcripts. Not reproduced; recorded as unexplained data
+loss. Workaround: keep durable planning artifacts in task records, or commit them.
+
+**Reproduction steps:**
+1. Not reproduced. The directory was present before wave-2 work began and gone
+   by about 23:41 on 2026-09-23, with no known trigger.
+
+---
+
+**Issue:** fledgedir.Ensure append race can duplicate the managed .fledge/.gitignore block
+
+**Summary:** `fledgedir.Ensure` reads the ignore file
+(`internal/lib/fledgedir/fledgedir.go:78-87`) and later appends the missing
+rules with `O_APPEND` (`appendIgnoreRule`, about line 150) without a lock or a
+re-check. Two concurrent calls on a root with no managed `.fledge/.gitignore`
+can both read it as unmanaged and both append the full block. The primary
+checkout's `.fledge/.gitignore` (mtime 2026-09-23 22:31, during parallel spawns)
+contains the 3-line managed block twice. Plausible but not proven as the cause
+of that file. A repeated `Ensure` on an already-managed file does not duplicate
+the block, so the duplicate is harmless to Git but untidy.
+
+**Reproduction steps:**
+1. Use a root with no `.fledge/.gitignore`.
+2. Run two `fledgedir.Ensure` calls on it concurrently.
+3. Observe the managed block appended twice (plausible, not proven).
+
+---
+
+**Issue:** Agent status reports done after provider failure
+
+**Summary:** Two `pi` verifiers running `opencode-go/kimi-k3` hit `402 Insufficient
+account funds` (the 5-hour usage window was exhausted) and stopped with `Retry
+failed after 3 attempts`. `fledge agent list` and `fledge agent wait` reported
+both as done, indistinguishable from a finished verification. The orchestrator
+only noticed by reading the pane. Observed twice. Workaround: read the pane
+(`fledge agent read`) before trusting a done status from a `pi` agent on a
+quota-limited provider.
+
+**Reproduction steps:**
+1. Spawn a `pi` agent on a provider with no remaining quota.
+2. Send it a prompt and let it fail with the provider error.
+3. Run `fledge agent list` or `fledge agent wait` and observe the agent reported as done.
+
+---
+
+**Issue:** Markdown scratch files under `.fledge/tmp/` appear untracked in some worktrees
+
+**Summary:** In a linked worktree with no `.fledge/.gitignore` (one created before
+managed worktrees received that file), the root allowlist `.gitignore` applies to
+`.fledge/tmp/`. Its `!*.md` rule re-admits Markdown files there, so
+`.fledge/tmp/plan-brief.md` showed as `??` in `git status`. `.toml` proposals stayed
+ignored (`.gitignore:2:*`). Observed once, 2026-09-24, while dogfooding the planner
+(task A5) in `feat/planner-docs`. Workaround: write scratch Markdown elsewhere, or
+delete it before committing.
+
+**Reproduction steps:**
+1. Use a linked worktree of this repository that has no `.fledge/.gitignore`.
+2. Write `.fledge/tmp/note.md`.
+3. Run `git status --short -uall` and observe `?? .fledge/tmp/note.md`.
+
+---
+
+**Issue:** Spawned agents use the installed `fledge`, not the checkout build
+
+**Summary:** When the installed binary lacks commands from this checkout (here
+`task template` and `task import`), AGENTS.md says to build a temporary binary and use
+it consistently. A spawned agent still runs `fledge` from `PATH`, and `--env` applies
+only to ordinary shells, so the planner could not reach the new commands by default.
+Workaround: name the temporary binary's absolute path in the brief. Observed
+2026-09-24 in the A5 planner dogfood.
+
+**Reproduction steps:**
+1. Build the checkout to `.fledge/tmp/bin/fledge` while an older `fledge` is on `PATH`.
+2. Spawn a `pi` agent with that binary and `--profile planner`.
+3. The agent's `fledge task template --proposal` resolves to the older binary and fails.
+
+---
+
+**Issue:** Planner role conflicts with the completion report file
+
+**Summary:** The built-in planner role allows only the proposal file as a write, but
+its Fledge protocol section says to finish with `fledge task complete --file
+<report>`. The planner resolved this by passing the proposal TOML itself as the
+report, prefixed with a comment block. The completion notification therefore carried
+the whole proposal. Observed once, 2026-09-24, A5 planner dogfood (task 6adf25eb).
+
+**Reproduction steps:**
+1. Spawn `--profile planner` and assign it a planning task.
+2. Let it finish.
+3. Run `fledge task get --id <task>` and observe that the result is the proposal file.
+
+---
+
+**Issue:** No Fledge command shows an agent's pane or tab label
+
+**Summary:** While verifying `agent rename` live, the only way to confirm the pane and
+tab labels was raw `herdr pane get` and `herdr tab get`: `agent get` and `agent list`
+report the agent name, pane, and tab IDs, but not the pane label, the tab label, or how
+many panes share the tab. Observed 2026-09-24 on `feat/agent-rename`.
+
+**Reproduction steps:**
+1. Spawn an agent, then run `fledge agent rename --name <agent> --to <new>`.
+2. Run `fledge agent get --name <new> --json` and observe no pane or tab label field.
+3. Fall back to `herdr tab get <tab_id>` to see the tab label and `pane_count`.
+
+---
+
+**Issue:** No way to close a parent task when its subtasks are verified
+
+**Summary:** Parent tasks created only to group subtasks stay `created` after all
+their subtasks are verified. `fledge task complete` accepts only `assigned` tasks,
+so closing a grouping parent through `complete` means assigning it to an agent
+(delivering a brief that agent must ignore), completing it, and verifying it by
+hand. This was done for four parents (`36a299ff`, `e2740794`, `c5c266ce`,
+`3ea2ac5e`) after their subtasks were verified and merged. Completing them also
+printed `its creator was not notified` because the creator's record predates a
+machine restart. Note: the current source lets `task verify` close a finished
+`created` or `assigned` parent directly (README Lifecycle;
+`internal/task/verify/verify.go:152`); whether the binary in use during this work
+included that was not checked, so the friction may be limited to `complete` and
+to the ordering that requires an assignee.
+
+**Reproduction steps:**
+1. `fledge task create` a parent task, then create subtasks under it with `--parent`.
+2. Complete and verify every subtask.
+3. Run `fledge task complete --id <parent>` and observe it is refused because the parent is not `assigned`.
+4. Assign the parent to an agent, complete it, and verify it to close it.
+
+---
+
+**Issue:** `agent usage --name` reports the selector name in its JSON `pane` field
+
+**Summary:** On 2026-09-26, both baseline `d563d4f` and session-observe commit `8999cbf` reported `pane: "verify-5"` for `agent usage --name verify-5 --json`, but `pane: "w2E:p2"` for the same agent selected by pane. Both identify agent `824dba3f`. This predates the observe refactor. `internal/lib/selector/selection.go:75` retains the target string, and `internal/agent/usage/usage.go:131` uses that string for the reported pane. Workaround: select by `--pane` when a real pane ID is needed.
+
+**Reproduction steps:**
+1. With a named live registered agent, run `fledge agent usage --name <name> --json`.
+2. Observe `.result.agents[0].pane` equals the agent name rather than its Herdr pane ID.
+3. Run `fledge agent usage --pane <actual-pane-id> --json`; the same agent now reports the actual pane ID.
+4. Repeat with a binary built from `d563d4f`; the behavior is identical.

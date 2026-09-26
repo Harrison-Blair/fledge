@@ -46,21 +46,31 @@ func agent(pane string, name *string) herdr.AgentResult {
 	return r
 }
 func named(s string) *string { return &s }
-func notFound() error        { return &herdr.Error{Code: "agent_not_found", Message: "no agent"} }
+
+// labels are the requests that label pane, alone in tab, as helper.
+func labels(pane, tab string) []call {
+	one := 1
+	return []call{
+		{Method: "pane.rename", Params: map[string]any{"pane_id": pane, "label": "helper"}, Result: herdr.PaneResult{Type: "pane_info", Pane: herdrscript.Pane(pane, "w1", tab)}},
+		{Method: "tab.get", Params: map[string]any{"tab_id": tab}, Result: herdr.TabResult{Type: "tab_info", Tab: herdr.Tab{ID: tab, WorkspaceID: "w1", Label: "1", PaneCount: &one}}},
+		{Method: "tab.rename", Params: map[string]any{"tab_id": tab, "label": "helper"}, Result: herdr.TabResult{Type: "tab_info", Tab: herdr.Tab{ID: tab, WorkspaceID: "w1", Label: "helper", PaneCount: &one}}},
+	}
+}
+func notFound() error { return &herdr.Error{Code: "agent_not_found", Message: "no agent"} }
 
 func TestAdoptSelfRenamesUnnamedAgent(t *testing.T) {
 	t.Setenv("HERDR_SESSION", "dev")
-	c := client(t,
-		call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: agent("old:p1", nil)},
-		call{Method: "agent.rename", Params: map[string]any{"target": "old:p1", "name": "helper"}, Result: agent("old:p1", named("helper"))},
-		call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: agent("old:p1", named("helper"))},
-	)
+	c := client(t, append([]call{
+		{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: agent("old:p1", nil)},
+		{Method: "agent.rename", Params: map[string]any{"target": "old:p1", "name": "helper"}, Result: agent("old:p1", named("helper"))},
+		{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: agent("old:p1", named("helper"))},
+	}, labels("old:p1", "w1:t2")...)...)
 	out := Run(context.Background(), c, Options{Name: "helper"})
 	if out.Status != "success" || out.Error != nil {
 		t.Fatalf("%+v", out.Error)
 	}
 	r := out.Result.(Result)
-	if !r.Renamed || *r.Name != "helper" || r.Pane != "old:p1" || r.TerminalID != "term_a" || r.RegisteredBy != "adopt" || r.Parent != nil || r.WorktreePath != nil {
+	if !r.Renamed || *r.Name != "helper" || r.Pane != "old:p1" || r.TerminalID != "term_a" || r.RegisteredBy != "adopt" || r.Parent != nil || r.WorktreePath != nil || r.Profile != nil {
 		t.Fatalf("%+v", r)
 	}
 	s, err := identity.Existing(context.Background(), c.Cwd)
@@ -71,8 +81,8 @@ func TestAdoptSelfRenamesUnnamedAgent(t *testing.T) {
 	if err := s.Get(identity.Kind, r.ID, &stored); err != nil || !reflect.DeepEqual(stored, r.Record) {
 		t.Fatalf("%+v %v", stored, err)
 	}
-	last := out.Effects[len(out.Effects)-2:]
-	if !reflect.DeepEqual(last, []libagent.Effect{{Action: "updated", Kind: "agent_name", ID: "old:p1"}, {Action: "created", Kind: "agent_record", ID: r.ID}}) {
+	last := out.Effects[len(out.Effects)-4:]
+	if !reflect.DeepEqual(last, []libagent.Effect{{Action: "updated", Kind: "agent_name", ID: "old:p1"}, {Action: "created", Kind: "agent_record", ID: r.ID}, {Action: "updated", Kind: "pane_label", ID: "old:p1"}, {Action: "updated", Kind: "tab", ID: "w1:t2"}}) {
 		t.Fatalf("%+v", out.Effects)
 	}
 	var b bytes.Buffer
@@ -317,11 +327,11 @@ func TestAdoptScansOnceUnlessItMustRenameFirst(t *testing.T) {
 		t.Fatalf("adopting a named agent scanned %d extra times, want 0", *n)
 	}
 	*n = 0
-	c = client(t,
-		call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: agent("old:p1", nil)},
-		call{Method: "agent.rename", Params: map[string]any{"target": "old:p1", "name": "helper"}, Result: agent("old:p1", named("helper"))},
-		call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: agent("old:p1", named("helper"))},
-	)
+	c = client(t, append([]call{
+		{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: agent("old:p1", nil)},
+		{Method: "agent.rename", Params: map[string]any{"target": "old:p1", "name": "helper"}, Result: agent("old:p1", named("helper"))},
+		{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: agent("old:p1", named("helper"))},
+	}, labels("old:p1", "w1:t2")...)...)
 	if out := Run(context.Background(), c, Options{Name: "helper"}); out.Error != nil {
 		t.Fatalf("%+v", out.Error)
 	}
@@ -342,7 +352,7 @@ func seed(t *testing.T, c libagent.Client, name *string) identity.Record {
 	d := agent("w1:p9", name).Agent
 	d.WorkspaceID = "w9"
 	tree := "/repo/.fledge/worktrees/w"
-	rec, err := identity.Register(context.Background(), s, libagent.Client{}, d, "spawn", &identity.Checkout{Path: tree})
+	rec, err := identity.Register(context.Background(), s, libagent.Client{}, d, "spawn", &identity.Checkout{Path: tree}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,10 +386,10 @@ func TestAdoptNamesRegisteredUnnamedAgentKeepingRecord(t *testing.T) {
 	t.Setenv("HERDR_SESSION", "dev")
 	for label, former := range map[string]*string{"lost name": named("worker"), "never named": nil} {
 		t.Run(label, func(t *testing.T) {
-			c := client(t,
-				call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: agent("w1:p3", nil)},
-				call{Method: "agent.rename", Params: map[string]any{"target": "w1:p3", "name": "helper"}, Result: agent("w1:p3", named("helper"))},
-			)
+			c := client(t, append([]call{
+				{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: agent("w1:p3", nil)},
+				{Method: "agent.rename", Params: map[string]any{"target": "w1:p3", "name": "helper"}, Result: agent("w1:p3", named("helper"))},
+			}, labels("w1:p3", "w1:t2")...)...)
 			existing := seed(t, c, former)
 			out := Run(context.Background(), c, Options{Pane: "w1:p3", Name: "helper"})
 			if out.Status != "success" || out.Error != nil {
@@ -394,7 +404,7 @@ func TestAdoptNamesRegisteredUnnamedAgentKeepingRecord(t *testing.T) {
 			if got := stored(t, c, existing.ID); !reflect.DeepEqual(got, want) {
 				t.Fatalf("%+v", got)
 			}
-			if !reflect.DeepEqual(out.Effects, []libagent.Effect{{Action: "updated", Kind: "agent_name", ID: "w1:p3"}, {Action: "updated", Kind: "agent_record", ID: existing.ID}}) {
+			if !reflect.DeepEqual(out.Effects, []libagent.Effect{{Action: "updated", Kind: "agent_name", ID: "w1:p3"}, {Action: "updated", Kind: "agent_record", ID: existing.ID}, {Action: "updated", Kind: "pane_label", ID: "w1:p3"}, {Action: "updated", Kind: "tab", ID: "w1:t2"}}) {
 				t.Fatalf("%+v", out.Effects)
 			}
 			var b bytes.Buffer
@@ -469,5 +479,76 @@ func TestAdoptRenamedButRecordEndedIsPartial(t *testing.T) {
 	var got identity.Record
 	if err := s.Get(identity.Kind, existing.ID, &got); err != nil || got.EndedAt == nil || *got.Name != "worker" || got.Pane != "w1:p9" {
 		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+// withSession is the live agent in pane carrying a claude session ref.
+func withSession(pane string, name *string) herdr.AgentResult {
+	r := agent(pane, name)
+	source, harness, kind, value := "herdr:claude", "claude", "id", "s-1"
+	r.Agent.AgentSession = &herdr.AgentSession{Source: &source, Agent: &harness, Kind: &kind, Value: &value}
+	return r
+}
+
+func TestAdoptRecordsNativeSession(t *testing.T) {
+	c := client(t,
+		call{Method: "agent.get", Result: withSession("w1:p3", named("worker"))},
+		call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Err: notFound()},
+	)
+	out := Run(context.Background(), c, Options{Pane: "w1:p3"})
+	r := out.Result.(Result)
+	if out.Error != nil || r.NativeSession == nil || r.NativeSession.Kind != "id" || r.NativeSession.Value != "s-1" || r.NativeSession.Harness != "claude" {
+		t.Fatalf("%+v %+v", out.Error, r.NativeSession)
+	}
+	s, err := identity.Existing(context.Background(), c.Cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored identity.Record
+	if err := s.Get(identity.Kind, r.ID, &stored); err != nil || !reflect.DeepEqual(stored, r.Record) {
+		t.Fatalf("%+v %v", stored, err)
+	}
+	if last := out.Effects[len(out.Effects)-1]; last != (libagent.Effect{Action: "updated", Kind: "native_session", ID: r.ID}) {
+		t.Fatalf("%+v", out.Effects)
+	}
+}
+
+func TestAdoptNamingRegisteredAgentRecordsNativeSession(t *testing.T) {
+	c := client(t, append([]call{
+		{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: agent("w1:p3", nil)},
+		{Method: "agent.rename", Params: map[string]any{"target": "w1:p3", "name": "helper"}, Result: withSession("w1:p3", named("helper"))},
+	}, labels("w1:p3", "w1:t2")...)...)
+	s, err := identity.OpenStore(context.Background(), c.Cwd, &libagent.Outcome{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := identity.Register(context.Background(), s, libagent.Client{}, agent("w1:p3", nil).Agent, "spawn", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := Run(context.Background(), c, Options{Pane: "w1:p3", Name: "helper"})
+	r := out.Result.(Result)
+	if out.Error != nil || r.ID != rec.ID || r.NativeSession == nil || r.NativeSession.Value != "s-1" {
+		t.Fatalf("%+v %+v", out.Error, r)
+	}
+}
+
+func TestAdoptSessionWriteFailureIsWarning(t *testing.T) {
+	restore := observeSession
+	t.Cleanup(func() { observeSession = restore })
+	observeSession = func(*state.Store, string, herdr.AgentSession, time.Time) (identity.Record, bool, error) {
+		return identity.Record{}, false, fmt.Errorf("disk full")
+	}
+	c := client(t,
+		call{Method: "agent.get", Result: withSession("w1:p3", named("worker"))},
+		call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Err: notFound()},
+	)
+	out := Run(context.Background(), c, Options{Pane: "w1:p3"})
+	r := out.Result.(Result)
+	if out.Status != "success" || out.Error != nil || out.ExitCode() != 0 || r.NativeSession != nil {
+		t.Fatalf("%+v %+v", out, out.Error)
+	}
+	if last := out.Effects[len(out.Effects)-1]; last != (libagent.Effect{Action: "warning", Kind: "native_session", ID: r.ID}) {
+		t.Fatalf("%+v", out.Effects)
 	}
 }

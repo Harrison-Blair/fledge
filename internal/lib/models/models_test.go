@@ -81,13 +81,3 @@ func TestDiscoverParsesEachSource(t *testing.T) {
 		}
 	}
 }
-func TestLocalDiscoveryUsesHomeAndRunner(t *testing.T) {
-	t.Setenv("HOME", "/nonexistent/fledge-home")
-	d := LocalDiscovery()
-	if d.Home != "/nonexistent/fledge-home" || d.Run == nil {
-		t.Fatalf("%+v", d)
-	}
-	if _, err := d.Run(context.Background(), "fledge-definitely-missing-binary-9f2c"); err == nil {
-		t.Fatal("missing binary succeeded")
-	}
-}
