@@ -75,6 +75,16 @@ func TestLiveAddsIntegrationFacts(t *testing.T) {
 	}
 }
 
+// Herdr names agy's integration target antigravity_cli.
+func TestLiveMapsAgyToAntigravityTarget(t *testing.T) {
+	list := herdr.IntegrationListResult{Type: "integration_list", Integrations: []herdr.IntegrationInfo{{Target: "antigravity_cli", Label: "antigravity-cli", Command: "agy", Available: true, State: "current"}}}
+	out := Run(context.Background(), herdrscript.Client(t, call{Method: "integration.list", Result: list}), Options{Harness: "agy", Live: true})
+	r := out.Result.(Result)
+	if len(r.Harnesses) != 1 || r.Harnesses[0].Live == nil || *r.Harnesses[0].Live != (Live{Available: true, HookState: "current"}) {
+		t.Fatalf("%+v", r.Harnesses)
+	}
+}
+
 func TestLiveFailures(t *testing.T) {
 	for _, tc := range []struct {
 		name string

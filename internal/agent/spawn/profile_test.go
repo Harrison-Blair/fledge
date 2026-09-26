@@ -281,6 +281,24 @@ func TestProfileReadsResolveUnderCallerDirectory(t *testing.T) {
 	checkSkippedRead(t, s.run(context.Background(), o, nil), root)
 }
 
+// An existing --pane may sit in another directory than the caller's; reads
+// resolve under the pane's own working directory.
+func TestProfileReadsResolveUnderPaneCwd(t *testing.T) {
+	root := profileRepo(t, "reader", readsProfile)
+	writeFile(t, root, "gone.md")
+	dir := t.TempDir()
+	writeFile(t, dir, "present.md")
+	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
+	p.Cwd = &dir
+	snap := snapshot()
+	snap.Snapshot.Panes = []herdr.Pane{p}
+	p.AgentStatus = "idle"
+	o := profileOptions("reader")
+	s := fake(t, call{Method: "session.snapshot", Result: snap}, labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), senderCall(), senderCall(), call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": header + readsBrief(t, root)}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
+	s.Cwd = root
+	checkSkippedRead(t, s.run(context.Background(), o, nil), dir)
+}
+
 func TestProfileReadsResolveUnderCwd(t *testing.T) {
 	root := profileRepo(t, "reader", readsProfile)
 	writeFile(t, root, "gone.md")

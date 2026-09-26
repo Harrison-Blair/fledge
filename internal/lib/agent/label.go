@@ -43,8 +43,9 @@ func (c Client) Label(ctx context.Context, p herdr.Pane, name string, out *Outco
 	if *tab.Tab.PaneCount != 1 || tab.Tab.Label == name {
 		return nil
 	}
-	err = c.Call(ctx, "tab.rename", map[string]any{"tab_id": p.TabID, "label": name}, &tab)
-	if err == nil && (tab.Type != "tab_info" || tab.Tab.ID != p.TabID) {
+	var renamed herdr.TabResult
+	err = c.Call(ctx, "tab.rename", map[string]any{"tab_id": p.TabID, "label": name}, &renamed)
+	if err == nil && (renamed.Type != "tab_info" || renamed.Tab.ID != p.TabID) {
 		err = Protocol("incomplete or mismatched tab.rename result")
 	}
 	if err != nil {

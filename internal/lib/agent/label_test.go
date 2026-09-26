@@ -69,3 +69,21 @@ func TestLabelRejectsTabWithoutPaneCount(t *testing.T) {
 		t.Fatalf("%v %+v %+v", err, out.Error, out)
 	}
 }
+
+// A tab.rename reply without a tab must not borrow tab.get's tab.
+func TestLabelRejectsTabRenameWithoutTab(t *testing.T) {
+	var calls []string
+	api := labelAPI(t, ptr(1), "1", &calls)
+	c := Client{API: apiFunc(func(method string, params any) (any, error) {
+		r, err := api(method, params)
+		if method == "tab.rename" {
+			return map[string]any{"type": "tab_info"}, err
+		}
+		return r, err
+	})}
+	out := Outcome{Status: "success", Effects: []Effect{}}
+	err := c.Label(context.Background(), herdr.Pane{PaneID: "w1:p2", WorkspaceID: "w1", TabID: "w1:t1"}, "reviewer", &out)
+	if err == nil || out.Error == nil || out.Error.Phase != "tab.rename" || out.Error.Code != "protocol_error" || len(out.Effects) != 1 {
+		t.Fatalf("%v %+v %+v", err, out.Error, out)
+	}
+}

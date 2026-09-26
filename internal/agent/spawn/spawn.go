@@ -164,6 +164,8 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 	if profile != nil {
 		result.readDir = s.Cwd
 		switch {
+		case result.Cwd != nil && *result.Cwd != "":
+			result.readDir = *result.Cwd
 		case result.WorktreePath != nil:
 			result.readDir = *result.WorktreePath
 		case o.Cwd != "":
