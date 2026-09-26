@@ -36,7 +36,10 @@ func fanOut(ctx context.Context, c libagent.Client, o Options, targets []selecto
 	result := FanOut{Mode: "fan-out", Targets: []Row{}}
 	var failures, codes []string
 	for _, t := range targets {
-		one := deliver(ctx, c, o, t, text, id, sender)
+		one := reread(ctx, c, o, &t, id, sender)
+		if one.Error == nil {
+			one = deliver(ctx, c, o, t, text, id, sender)
+		}
 		out.Effects = append(out.Effects, one.Effects...)
 		r := one.Result.(Result)
 		row := Row{Target: t.Label, Outcome: rowOutcome(one.Status, r), Agent: &r.AgentRow, Error: one.Error}
@@ -60,6 +63,24 @@ func fanOut(ctx context.Context, c libagent.Client, o Options, targets []selecto
 		out.Status = "partial"
 		out.Error = &libagent.Failure{Code: code, Message: fmt.Sprintf("%d of %d targets failed: %s", len(failures), len(targets), strings.Join(failures, ", ")), Phase: "agent.prompt"}
 	}
+	return out
+}
+
+// reread refreshes t's status just before a confirmed message goes to it, as
+// earlier targets' deliveries give it time to change; the already-working
+// decision needs the status at sending. A failed read rejects the target.
+func reread(ctx context.Context, c libagent.Client, o Options, t *selector.Target, id string, sender *libagent.Sender) libagent.Outcome {
+	out := libagent.Outcome{Operation: "agent.message", Status: "success", Effects: []libagent.Effect{}}
+	if !o.Confirm {
+		return out
+	}
+	a, err := c.Get(ctx, t.Pane)
+	if err != nil {
+		out.Result = Result{AgentRow: libagent.NewAgentRow(t.Agent.Pane), MessageID: id, Sender: sender, Confirmed: new(bool)}
+		out.Fail(err, "agent.get", false)
+		return out
+	}
+	t.Agent = a
 	return out
 }
 

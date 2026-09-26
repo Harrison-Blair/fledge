@@ -114,7 +114,8 @@ func TestFanOutConfirmAppliesPerTarget(t *testing.T) {
 		return c
 	}
 	s := fake(t, getCall("a", a), getCall("b", b), getCall("c", a), senderCall(),
-		confirm("a", a, "working", nil), confirm("b", b, "working", nil), confirm("c", a, "", &herdr.Error{Code: "agent_prompt_stalled", Message: "no activity"}))
+		getCall("a", a), confirm("a", a, "working", nil), getCall("b", b), confirm("b", b, "working", nil),
+		getCall("c", a), confirm("c", a, "", &herdr.Error{Code: "agent_prompt_stalled", Message: "no activity"}))
 	o := names("a", "b", "c")
 	o.Confirm, o.Timeout = true, 5*time.Second
 	out := run(context.Background(), s, o, nil, "m-0a1b2c")
@@ -123,6 +124,73 @@ func TestFanOutConfirmAppliesPerTarget(t *testing.T) {
 	}
 	if out.Status != "partial" || out.Error.Code != "agent_prompt_stalled" || len(out.Effects) != 3 {
 		t.Fatalf("%+v", out)
+	}
+}
+
+// liveHerdr answers agent.get with each target's status at that moment and
+// agent.prompt with working, first running the prompt's effect on the others.
+type liveHerdr struct {
+	panes, statuses map[string]string
+	effects         map[string]func(statuses map[string]string)
+}
+
+func (h liveHerdr) Call(_ context.Context, method string, params, result any) error {
+	target := params.(map[string]any)["target"].(string)
+	if target == "old:p1" {
+		b, _ := json.Marshal(senderCall().Result)
+		return json.Unmarshal(b, result)
+	}
+	var r herdr.AgentResult
+	switch method {
+	case "agent.get":
+		r = herdrscript.Info(livePane(h.panes[target], h.statuses[target]))
+	case "agent.prompt":
+		if effect := h.effects[target]; effect != nil {
+			effect(h.statuses)
+		}
+		h.statuses[target] = "working"
+		r = herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: livePane(h.panes[target], "working")}}
+	}
+	b, _ := json.Marshal(r)
+	return json.Unmarshal(b, result)
+}
+
+// Each target's already-working decision uses its status read just before
+// its own message, not the status from the lookup before any was sent.
+func TestFanOutConfirmReadsEachStatusBeforeSending(t *testing.T) {
+	for _, tc := range []struct{ name, before, during, want string }{
+		{"became busy", "idle", "working", "already_working"},
+		{"went idle", "working", "idle", "confirmed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := liveHerdr{panes: map[string]string{"a": "w1:p1", "b": "w1:p2"}, statuses: map[string]string{"a": "idle", "b": tc.before},
+				effects: map[string]func(map[string]string){"a": func(s map[string]string) { s["b"] = tc.during }}}
+			o := names("a", "b")
+			o.Confirm, o.Timeout = true, 5*time.Second
+			out := run(context.Background(), libagent.Client{API: h, CallerPane: "old:p1", Cwd: t.TempDir()}, o, nil, "m-0a1b2c")
+			if got, want := rows(t, out), "a=confirmed/m-0a1b2c/w1:p1 b="+tc.want+"/m-0a1b2c/w1:p2"; got != want {
+				t.Fatalf("got %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// A target whose status cannot be reread before its confirmed message is not
+// messaged; the others still are.
+func TestFanOutConfirmRereadFailureRejectsTarget(t *testing.T) {
+	a, b := livePane("w1:p1", "idle"), livePane("w1:p2", "idle")
+	confirm := promptCall("b", livePane("w1:p2", "working"), nil)
+	confirm.Params["wait"] = map[string]any{"until": []string{"working", "done", "idle", "blocked"}, "timeout_ms": 5000}
+	s := fake(t, getCall("a", a), getCall("b", b), senderCall(),
+		call{Method: "agent.get", Params: map[string]any{"target": "a"}, Err: &herdr.Error{Code: "agent_not_found", Message: "gone"}}, getCall("b", b), confirm)
+	o := names("a", "b")
+	o.Confirm, o.Timeout = true, 5*time.Second
+	out := run(context.Background(), s, o, nil, "m-0a1b2c")
+	if got, want := rows(t, out), "a=rejected/-/w1:p1 b=confirmed/m-0a1b2c/w1:p2"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if row := out.Result.(FanOut).Targets[0]; out.Status != "partial" || row.Error.Code != "agent_not_found" || row.Error.Phase != "agent.get" || len(out.Effects) != 1 {
+		t.Fatalf("%+v %+v", out, row.Error)
 	}
 }
 
