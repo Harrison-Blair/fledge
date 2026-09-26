@@ -1193,3 +1193,26 @@ many panes share the tab. Observed 2026-09-24 on `feat/agent-rename`.
 1. Spawn an agent, then run `fledge agent rename --name <agent> --to <new>`.
 2. Run `fledge agent get --name <new> --json` and observe no pane or tab label field.
 3. Fall back to `herdr tab get <tab_id>` to see the tab label and `pane_count`.
+
+---
+
+**Issue:** No way to close a parent task when its subtasks are verified
+
+**Summary:** Parent tasks created only to group subtasks stay `created` after all
+their subtasks are verified. `fledge task complete` accepts only `assigned` tasks,
+so closing a grouping parent through `complete` means assigning it to an agent
+(delivering a brief that agent must ignore), completing it, and verifying it by
+hand. This was done for four parents (`36a299ff`, `e2740794`, `c5c266ce`,
+`3ea2ac5e`) after their subtasks were verified and merged. Completing them also
+printed `its creator was not notified` because the creator's record predates a
+machine restart. Note: the current source lets `task verify` close a finished
+`created` or `assigned` parent directly (README Lifecycle;
+`internal/task/verify/verify.go:152`); whether the binary in use during this work
+included that was not checked, so the friction may be limited to `complete` and
+to the ordering that requires an assignee.
+
+**Reproduction steps:**
+1. `fledge task create` a parent task, then create subtasks under it with `--parent`.
+2. Complete and verify every subtask.
+3. Run `fledge task complete --id <parent>` and observe it is refused because the parent is not `assigned`.
+4. Assign the parent to an agent, complete it, and verify it to close it.
