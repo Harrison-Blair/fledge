@@ -3,13 +3,17 @@ package assign
 import (
 	"bytes"
 	"context"
+	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
@@ -310,5 +314,48 @@ func TestAssignDeliveryNotRecordedAfterReassignment(t *testing.T) {
 	d := tasktest.Load(t, repo, id).Delivery
 	if out.Status != "partial" || out.Error == nil || out.Error.Code != "task_state_changed" || out.Error.Phase != "task" || d.MessageID != "m-ffffff" || d.DeliveredAt != nil || d.Error != nil {
 		t.Fatalf("%+v %+v %+v", out, out.Error, d)
+	}
+}
+
+// Assignment captures the owner's live session ref, best effort.
+func TestAssignCapturesOwnerSessionRef(t *testing.T) {
+	failing := func(*state.Store, string, herdr.AgentSession, time.Time) (identity.Record, bool, error) {
+		return identity.Record{}, false, errors.New("read-only store")
+	}
+	for label, observe := range map[string]task.Observer{"stored": identity.ObserveSession, "failing store": failing} {
+		t.Run(label, func(t *testing.T) {
+			old := observeSession
+			t.Cleanup(func() { observeSession = old })
+			observeSession = observe
+			repo := identitytest.Repository(t)
+			owner := tasktest.Register(t, repo, worker)
+			id := seed(t, repo)
+			live := worker
+			live.Agent = identitytest.WithSession(live.Agent, "sess-1")
+			c := tasktest.Client(t, repo, "w1:p1",
+				tasktest.Get("worker", live),
+				tasktest.Get("w1:p1", boss),
+				call{Method: "agent.prompt", Params: map[string]any{"target": "w1:p3", "text": brief(id)}, Result: prompted(worker)},
+			)
+			out := run(context.Background(), c, Options{Agent: identity.Target{Name: "worker"}, ID: id}, "m-0a1b2c")
+			if r := tasktest.Load(t, repo, id); out.Error != nil || out.Status != "success" || r.Status != task.Assigned || r.Delivery.DeliveredAt == nil {
+				t.Fatalf("%+v %+v", out.Error, r)
+			}
+			var rec identity.Record
+			s, err := task.Existing(context.Background(), repo)
+			if err == nil {
+				err = s.Get(identity.Kind, owner.ID, &rec)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			action, stored := "updated", rec.NativeSession != nil && rec.NativeSession.Value == "sess-1"
+			if label == "failing store" {
+				action, stored = "warning", rec.NativeSession == nil
+			}
+			if !stored || !slices.Contains(out.Effects, libagent.Effect{Action: action, Kind: "native_session", ID: owner.ID}) {
+				t.Fatalf("%+v %+v", rec.NativeSession, out.Effects)
+			}
+		})
 	}
 }

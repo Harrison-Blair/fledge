@@ -10,6 +10,7 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
+	"github.com/Harrison-Blair/fledge/internal/lib/usage"
 )
 
 type Options struct{ ID string }
@@ -65,7 +66,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 }
 
 // Render writes the task as labelled lines, omitting steps not yet reached,
-// followed by its indented texts.
+// followed by its usage snapshots and indented texts.
 func Render(w io.Writer, o libagent.Outcome) error {
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
@@ -139,6 +140,11 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		}
 		fmt.Fprintf(&b, "cancelled: %s%s\n", *r.CancelledAt, reason)
 	}
+	if u := r.Usage; u != nil {
+		b.WriteString("usage:\n")
+		snapshot(&b, "worker", u.Worker)
+		snapshot(&b, "verifier", u.Verifier)
+	}
 	text(&b, "brief", &r.Brief)
 	text(&b, "result", r.Result)
 	text(&b, "verification note", r.VerificationNote)
@@ -154,4 +160,58 @@ func text(b *strings.Builder, label string, s *string) {
 	for _, line := range strings.Split(strings.TrimRight(*s, "\n"), "\n") {
 		fmt.Fprintf(b, "  %s\n", line)
 	}
+}
+
+// snapshot writes one usage line: elapsed time, then counts, cost, and basis,
+// or only the basis when usage is unavailable. The reason follows the basis.
+func snapshot(b *strings.Builder, label string, u *task.UsageSnapshot) {
+	if u == nil {
+		return
+	}
+	basis := u.Basis
+	if u.Reason != nil {
+		basis += " (" + *u.Reason + ")"
+	}
+	elapsed := duration(u.ElapsedSeconds)
+	if u.Basis == usage.Unavailable {
+		fmt.Fprintf(b, "  %s: %s, %s\n", label, elapsed, basis)
+		return
+	}
+	cost := "-"
+	if c := u.Cost; c != nil {
+		cost = fmt.Sprintf("%.2f %s (est)", c.Amount, c.Currency)
+		if c.Currency == "USD" || c.Currency == "" {
+			cost = fmt.Sprintf("$%.2f (est)", c.Amount)
+		}
+	}
+	t := u.Tokens
+	fmt.Fprintf(b, "  %s: %s, %d turns, in %s out %s cache-r %s cache-w %s, cost %s, %s\n",
+		label, elapsed, u.Turns, count(t.Input), count(t.Output), count(t.CacheRead), count(t.CacheWrite), cost, basis)
+}
+
+// duration renders seconds as 1h02m, 5m12s, or 40s.
+func duration(s int64) string {
+	switch {
+	case s >= 3600:
+		return fmt.Sprintf("%dh%02dm", s/3600, s%3600/60)
+	case s >= 60:
+		return fmt.Sprintf("%dm%02ds", s/60, s%60)
+	}
+	return fmt.Sprintf("%ds", s)
+}
+
+// count renders a token count with a k or M suffix: 12, 1.2k, 96k, 410k, 2.3M.
+func count(n int64) string {
+	f := float64(n)
+	switch {
+	case n < 1000:
+		return fmt.Sprint(n)
+	case n < 99_950:
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", f/1e3), ".0") + "k"
+	case n < 999_500:
+		return fmt.Sprintf("%.0fk", f/1e3)
+	case n < 99_950_000:
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", f/1e6), ".0") + "M"
+	}
+	return fmt.Sprintf("%.0fM", f/1e6)
 }

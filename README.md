@@ -632,7 +632,8 @@ first time a command that already writes state observes it; when a later
 observation carries a different `value`, the old ref moves to
 `native_session_history` (newest last, at most 8) and the new one becomes
 current, and an equal value changes nothing. Spawn (once startup settles, or at
-launch with `--no-wait`) and adopt capture it; a failed write leaves the command
+launch with `--no-wait`), adopt, and `task assign`, `complete`, and `verify`
+(for the owner or verifier they touch) capture it; a failed write leaves the command
 successful with a `warning` `native_session` effect, and a capture that changed
 the record adds an `updated` `native_session` effect. `agent get`, `list`, and
 `wait` never capture it; they only show what Herdr or the record already holds.
@@ -1002,14 +1003,56 @@ its subtasks, and a subtask is not a prerequisite of its parent.
   tasks whose prerequisites are all satisfied. Filters combine. `get --id TASK`
   prints the full record with its parent, subtask progress, and each
   prerequisite's state, for example
-  `after: 1a2b3c4d (verified), 5e6f7a8b (cancelled: superseded), 9c0d1e2f (assigned, waiting)`.
+  `after: 1a2b3c4d (verified), 5e6f7a8b (cancelled: superseded), 9c0d1e2f (assigned, waiting)`,
+  and a `usage:` block once usage is recorded (see [Usage snapshots](#usage-snapshots)).
+
+### Usage snapshots
+
+`complete` and `verify` record a usage snapshot on the task after their state
+change is committed, in a separate write, so collecting usage never fails or
+delays the transition: `usage.worker` is written once, at completion, and
+`usage.verifier` at each verification, replacing the previous one. `task get`
+shows them:
+
+```text
+usage:
+  worker: 1h02m, 14 turns, in 1.2k out 18.4k cache-r 410k cache-w 96k, cost -, measured
+  verifier: 5m12s, 3 turns, in 840 out 2.1k cache-r 88k cache-w 12k, cost $0.04 (est), measured
+```
+
+The worker is the owner completing its task; for a `--force` completion on
+another agent's behalf it is still the owner, read from its persisted session
+ref, and `reason` says so. The verifier is the caller; an unregistered one is
+`unavailable`. The window runs from `assigned_at` to `completed_at` for the
+worker (from `created_at`, with a reason, when the task was never assigned)
+and from `completed_at` to `verified_at` for the verifier (from `created_at`
+for a parent verified without completing). `elapsed_seconds` is that window's
+length, from the task timestamps. The harness and native session ref come
+from the agent's live Herdr details, else from its record's `native_session`
+(see [Identity](#identity)); `assign`, `complete`, and `verify` store the live
+ref they see on the owner's or verifier's record, best effort, and a failed
+write is a `warning` effect. Tokens are measured from the harness's own
+session store (see `internal/lib/usage`); cost appears only when the harness
+records one and is labelled `(est)`: Fledge keeps no price table and does not
+integrate qmeter. A missing ref, an unsupported harness, or unreadable data
+records `basis: unavailable` with a `reason`; a failed snapshot write is a
+`warning` effect and the command still succeeds.
+
+Attribution is by time window on the agent's session: an agent that works two
+tasks at once, or chats with a human in the same pane, is counted in each
+overlapping window.
 
 Each record holds `id`, `title`, `brief`, `parent`, `after`, `owner`, `status`,
 `result`, `verifier`, `verification_note`, `forced`, `cancel_reason`,
 `created_at`, `created_by`, `assigned_at`, `unmet_at_assign`, `completed_at`,
-`completion_notification`, `verified_at`, `cancelled_at`, and `delivery`.
-Records written before subtasks and dependencies load with a null `parent`,
-`after`, and `unmet_at_assign`. A completion notification records
+`completion_notification`, `verified_at`, `cancelled_at`, `delivery`, and
+`usage`. Records written before subtasks and dependencies load with a null
+`parent`, `after`, and `unmet_at_assign`, and those written before usage
+snapshots with a null `usage`. Each snapshot holds `agent_id`, `harness`,
+`session` (`kind`, `value`), `window` (`from`, `to`), `elapsed_seconds`,
+`tokens` (`input`, `output`, `cache_read`, `cache_write`, `reasoning`), `cost`
+(null, or `amount`, `currency`, `basis: estimate`, `source`), `models`,
+`turns`, `basis` (`measured` or `unavailable`), `reason`, and `collected_at`. A completion notification records
 its `recipient`, `message_id`, optional `pane`, `delivered_at`, `error`, and
 `uncertain` state. Every command supports `--json` with the same outcome envelope
 as the agent commands. JSON results add derived fields: list rows `progress`
