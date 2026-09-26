@@ -4,9 +4,17 @@ package identitytest
 
 import (
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
@@ -64,4 +72,91 @@ func RegisterChild(t *testing.T, cwd string, a herdr.AgentDetails, parent string
 		t.Fatal(err)
 	}
 	return rec
+}
+
+// WithSession returns a carrying a Herdr-reported claude session ref value.
+func WithSession(a herdr.AgentDetails, value string) herdr.AgentDetails {
+	source, harness, kind := "herdr:claude", "claude", "id"
+	a.AgentSession = &herdr.AgentSession{Source: &source, Agent: &harness, Kind: &kind, Value: &value}
+	return a
+}
+
+// ReadOnly makes the state store of the repository at cwd refuse every write
+// and returns a check that fails t unless the store is byte for byte as it
+// was. It confirms the store refuses a session write to record id, so it
+// skips when permissions are not enforced, as for root.
+func ReadOnly(t *testing.T, cwd, id string) func() {
+	t.Helper()
+	root := filepath.Join(cwd, ".fledge", "state")
+	snapshot := func() map[string]string {
+		files := map[string]string{}
+		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			b, err := os.ReadFile(path)
+			files[path] = string(b)
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return files
+	}
+	chmod := func(dirMode, fileMode fs.FileMode) {
+		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return os.Chmod(path, dirMode)
+			}
+			return os.Chmod(path, fileMode)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := snapshot()
+	chmod(0o555, 0o444)
+	t.Cleanup(func() { chmod(0o755, 0o644) })
+	s, err := identity.Existing(context.Background(), cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := identity.ObserveSession(s, id, *WithSession(herdr.AgentDetails{}, "probe").AgentSession, time.Now()); err == nil {
+		t.Skip("the state store accepted a write despite read-only permissions")
+	}
+	return func() {
+		t.Helper()
+		if after := snapshot(); !reflect.DeepEqual(before, after) {
+			t.Fatalf("the state store changed:\nbefore %v\nafter  %v", before, after)
+		}
+	}
+}
+
+// NoObserveSession fails t when a non-test Go file of the package in the
+// current directory refers to ObserveSession, for read-only commands that
+// must never persist a session ref, even best effort.
+func NoObserveSession(t *testing.T) {
+	t.Helper()
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(token.NewFileSet(), name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "ObserveSession" {
+				t.Errorf("%s refers to ObserveSession", name)
+			}
+			return true
+		})
+	}
 }

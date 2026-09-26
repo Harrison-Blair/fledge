@@ -3,13 +3,16 @@ package spawn
 import (
 	"bytes"
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
@@ -180,5 +183,61 @@ func TestSpawnDoesNotRegisterUnconfirmedStartup(t *testing.T) {
 	out := s.run(context.Background(), o, nil)
 	if r := out.Result.(*Result); r.Registered || r.ID != nil {
 		t.Fatalf("%+v", r)
+	}
+}
+
+// sessionWait is waitCall with the ready agent carrying a claude session ref.
+func sessionWait(p herdr.Pane) call {
+	w := waitCall("worker", p, "idle")
+	r := w.Result.(herdr.AgentResult)
+	source, harness, kind, value := "herdr:claude", "claude", "id", "s-1"
+	r.Agent.AgentSession = &herdr.AgentSession{Source: &source, Agent: &harness, Kind: &kind, Value: &value}
+	w.Result = r
+	return w
+}
+
+func TestSpawnRecordsNativeSessionAfterReadiness(t *testing.T) {
+	o := validOptions()
+	o.Pane = "w1:p1"
+	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p)}, sessionWait(p), callerNotAgent())
+	s.Cwd = identitytest.Repository(t)
+	now := time.Date(2026, 9, 24, 5, 0, 0, 0, time.UTC)
+	s.Now = func() time.Time { return now }
+	out := s.run(context.Background(), o, nil)
+	r := out.Result.(*Result)
+	if out.Status != "success" || !r.Registered {
+		t.Fatalf("%+v %+v", out, r)
+	}
+	want := identity.NativeSessionRef{Source: "herdr:claude", Harness: "claude", Kind: "id", Value: "s-1", ObservedAt: "2026-09-24T05:00:00Z"}
+	if rec := stored(t, s.Cwd, *r.ID); rec.NativeSession == nil || *rec.NativeSession != want {
+		t.Fatalf("%+v", rec.NativeSession)
+	}
+	if last := out.Effects[len(out.Effects)-1]; last != (libagent.Effect{Action: "updated", Kind: "native_session", ID: *r.ID}) {
+		t.Fatalf("%+v", out.Effects)
+	}
+}
+
+func TestSpawnSessionWriteFailureIsWarning(t *testing.T) {
+	restore := observeSession
+	t.Cleanup(func() { observeSession = restore })
+	observeSession = func(*state.Store, string, herdr.AgentSession, time.Time) (identity.Record, bool, error) {
+		return identity.Record{}, false, errors.New("disk full")
+	}
+	o := validOptions()
+	o.Pane = "w1:p1"
+	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p)}, sessionWait(p), callerNotAgent())
+	s.Cwd = identitytest.Repository(t)
+	out := s.run(context.Background(), o, nil)
+	r := out.Result.(*Result)
+	if out.Status != "success" || out.Error != nil || !r.Registered || r.RegistrationError != nil {
+		t.Fatalf("%+v %+v", out, r)
+	}
+	if last := out.Effects[len(out.Effects)-1]; last != (libagent.Effect{Action: "warning", Kind: "native_session", ID: *r.ID}) {
+		t.Fatalf("%+v", out.Effects)
+	}
+	if rec := stored(t, s.Cwd, *r.ID); rec.NativeSession != nil {
+		t.Fatalf("%+v", rec.NativeSession)
 	}
 }

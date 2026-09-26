@@ -1079,3 +1079,95 @@ func TestRecordWithoutProfileDecodesNull(t *testing.T) {
 		t.Fatalf("%+v %v", rec, err)
 	}
 }
+
+func nativeSession(value string) herdr.AgentSession {
+	source, harness, kind := "herdr:claude", "claude", "id"
+	return herdr.AgentSession{Source: &source, Agent: &harness, Kind: &kind, Value: &value}
+}
+
+func TestRecordWithoutNativeSessionReadsNil(t *testing.T) {
+	var rec Record
+	if err := json.Unmarshal([]byte(`{"id":"0000beef","pane":"w1:p1"}`), &rec); err != nil {
+		t.Fatal(err)
+	}
+	if rec.NativeSession != nil || rec.NativeSessionHistory != nil {
+		t.Fatalf("%+v", rec)
+	}
+}
+
+func TestObserveSessionWritesFirstRef(t *testing.T) {
+	c := client(t)
+	s := store(t, c)
+	rec := registered(t, c, details("w1:p3", "term_a"))
+	now := time.Date(2026, 9, 24, 5, 0, 0, 0, time.UTC)
+	_, changed, err := ObserveSession(s, rec.ID, nativeSession("s-1"), now)
+	if err != nil || !changed {
+		t.Fatalf("%v %v", changed, err)
+	}
+	if err := s.Get(Kind, rec.ID, &rec); err != nil {
+		t.Fatal(err)
+	}
+	want := NativeSessionRef{Source: "herdr:claude", Harness: "claude", Kind: "id", Value: "s-1", ObservedAt: "2026-09-24T05:00:00Z"}
+	if rec.NativeSession == nil || *rec.NativeSession != want || rec.NativeSessionHistory != nil {
+		t.Fatalf("%+v %+v", rec.NativeSession, rec.NativeSessionHistory)
+	}
+}
+
+func TestObserveSessionEqualValueIsNoOp(t *testing.T) {
+	c := client(t)
+	s := store(t, c)
+	rec := registered(t, c, details("w1:p3", "term_a"))
+	now := time.Date(2026, 9, 24, 5, 0, 0, 0, time.UTC)
+	if _, _, err := ObserveSession(s, rec.ID, nativeSession("s-1"), now); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(c.Cwd, ".fledge", "state", Kind, rec.ID+".json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, changed, err := ObserveSession(s, rec.ID, nativeSession("s-1"), now.Add(time.Hour))
+	after, _ := os.ReadFile(path)
+	if err != nil || changed || !bytes.Equal(before, after) {
+		t.Fatalf("%v %v\n%s\n%s", changed, err, before, after)
+	}
+}
+
+func TestObserveSessionChangeMovesOldRefToCappedHistory(t *testing.T) {
+	c := client(t)
+	s := store(t, c)
+	rec := registered(t, c, details("w1:p3", "term_a"))
+	start := time.Date(2026, 9, 24, 5, 0, 0, 0, time.UTC)
+	for i := range 11 {
+		_, changed, err := ObserveSession(s, rec.ID, nativeSession(fmt.Sprintf("s-%d", i)), start.Add(time.Duration(i)*time.Minute))
+		if err != nil || !changed {
+			t.Fatalf("%d: %v %v", i, changed, err)
+		}
+	}
+	if err := s.Get(Kind, rec.ID, &rec); err != nil {
+		t.Fatal(err)
+	}
+	if rec.NativeSession == nil || rec.NativeSession.Value != "s-10" || len(rec.NativeSessionHistory) != 8 {
+		t.Fatalf("%+v %+v", rec.NativeSession, rec.NativeSessionHistory)
+	}
+	for i, h := range rec.NativeSessionHistory {
+		if want := fmt.Sprintf("s-%d", i+2); h.Value != want || h.ObservedAt != start.Add(time.Duration(i+2)*time.Minute).Format(time.RFC3339) {
+			t.Fatalf("history[%d] = %+v, want %s", i, h, want)
+		}
+	}
+}
+
+func TestObserveSessionWithoutValueWritesNothing(t *testing.T) {
+	c := client(t)
+	s := store(t, c)
+	rec := registered(t, c, details("w1:p3", "term_a"))
+	path := filepath.Join(c.Cwd, ".fledge", "state", Kind, rec.ID+".json")
+	before, _ := os.ReadFile(path)
+	for _, session := range []herdr.AgentSession{{}, nativeSession("")} {
+		_, changed, err := ObserveSession(s, rec.ID, session, time.Now())
+		after, _ := os.ReadFile(path)
+		if err != nil || changed || !bytes.Equal(before, after) {
+			t.Fatalf("%+v: %v %v", session, changed, err)
+		}
+	}
+}

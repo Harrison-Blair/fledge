@@ -523,3 +523,24 @@ func TestWaitFilterNoMatch(t *testing.T) {
 		t.Fatalf("%+v", out)
 	}
 }
+
+// agent wait never persists a live session ref.
+func TestWaitWithReadOnlyStoreWritesNothing(t *testing.T) {
+	live := herdrscript.Info(herdrscript.LiveAgent("working"))
+	live.Agent = identitytest.WithSession(live.Agent, "s-1")
+	waited := herdrscript.Waited(live.Agent.Pane, "idle")
+	waited.Agent = identitytest.WithSession(waited.Agent, "s-1")
+	c := herdrscript.Client(t, herdrscript.Call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live},
+		herdrscript.Call{Method: "agent.wait", Params: map[string]any{"target": "w1:p3"}, Result: waited})
+	c.Cwd = identitytest.Repository(t)
+	rec := identitytest.Register(t, c.Cwd, live.Agent)
+	unchanged := identitytest.ReadOnly(t, c.Cwd, rec.ID)
+	out := Run(context.Background(), c, Options{IDs: []string{rec.ID}})
+	if out.Status != "success" || *out.Result.(libagent.AgentRow).AgentStatus != "idle" || len(out.Effects) != 0 {
+		t.Fatalf("%+v %+v", out, out.Error)
+	}
+	unchanged()
+}
+
+// The read-only test proves no write succeeds; this proves none is attempted.
+func TestNeverObservesSession(t *testing.T) { identitytest.NoObserveSession(t) }

@@ -604,7 +604,7 @@ pane, workspace, harness, Herdr session (`HERDR_SESSION`), Herdr `terminal_id`,
 for adopted agents, spawns without a profile, and records written before the
 field existed), `registered_at`, `registered_by` (`spawn` or `adopt`),
 `worktree_path`, `worktree_created`, `worktree_base`, `worktree_branch`,
-`worktree_marker`, and `ended_at`.
+`worktree_marker`, `ended_at`, `native_session`, and `native_session_history`.
 `worktree_created` is true only when the agent's spawn created its checkout
 (`--worktree new`), not when it opened an existing one; `worktree_base` is the
 ref that checkout was created from, as spawn passed it to Herdr: `--base` as
@@ -620,6 +620,25 @@ unidentified. The parent is the caller's live record when the
 caller's pane hosts a registered terminal; otherwise it is null. Records are
 never deleted: an ended record moves to `.fledge/state/agents/archive/`, where
 lookups by ID still find it but scans for live agents no longer read it.
+
+`native_session` is the harness's own session ref (`source`, `harness`, `kind`,
+`value`, `observed_at`) as Herdr reports it in `agent_session`, so later
+commands can find the agent's session after its pane is gone. It is stored the
+first time a command that already writes state observes it; when a later
+observation carries a different `value`, the old ref moves to
+`native_session_history` (newest last, at most 8) and the new one becomes
+current, and an equal value changes nothing. Spawn (once startup settles, or at
+launch with `--no-wait`) and adopt capture it; a failed write leaves the command
+successful with a `warning` `native_session` effect, and a capture that changed
+the record adds an `updated` `native_session` effect. `agent get`, `list`, and
+`wait` never capture it; they only show what Herdr or the record already holds.
+Both fields are null until a ref is observed, including in records written
+before they existed, so an agent spawned before this field shipped, or whose
+harness reported its session only after spawn readiness, has no persisted ref
+until a capturing command touches it. Herdr reports a claude or codex session
+ref only at the harness's `SessionStart`, so a harness restarted or resumed in
+the same pane can leave a stale ref until its hook fires again; the history
+records a change but cannot force one.
 
 The terminal is a record's identity and the pane only locates it. Herdr gives a
 pane moved across workspaces a new ID but keeps its terminal, so when a lookup
@@ -676,7 +695,8 @@ with `agent_identity_stale` when the terminal no longer hosts an agent (ending
 the record only if the terminal itself is gone), the record belongs to another
 Herdr session, or the record has ended; an unknown ID fails with
 `agent_record_not_found`. `agent get` shows the record (Fledge ID, parent,
-profile, registration time and source) whenever the live agent has one, and JSON adds
+profile, persisted native session as `Native session: <kind> <value>` or `-`,
+registration time and source) whenever the live agent has one, and JSON adds
 `record`. `agent list` adds `ID` and `PARENT` columns and a `PROFILE` column
 after `HARNESS` (`-` when unregistered, parentless, or spawned without a
 profile) and `id`, `parent`, and `profile` fields; it fails with `protocol_error`

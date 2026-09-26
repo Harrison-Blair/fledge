@@ -471,3 +471,74 @@ func TestAdoptRenamedButRecordEndedIsPartial(t *testing.T) {
 		t.Fatalf("%+v %v", got, err)
 	}
 }
+
+// withSession is the live agent in pane carrying a claude session ref.
+func withSession(pane string, name *string) herdr.AgentResult {
+	r := agent(pane, name)
+	source, harness, kind, value := "herdr:claude", "claude", "id", "s-1"
+	r.Agent.AgentSession = &herdr.AgentSession{Source: &source, Agent: &harness, Kind: &kind, Value: &value}
+	return r
+}
+
+func TestAdoptRecordsNativeSession(t *testing.T) {
+	c := client(t,
+		call{Method: "agent.get", Result: withSession("w1:p3", named("worker"))},
+		call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Err: notFound()},
+	)
+	out := Run(context.Background(), c, Options{Pane: "w1:p3"})
+	r := out.Result.(Result)
+	if out.Error != nil || r.NativeSession == nil || r.NativeSession.Kind != "id" || r.NativeSession.Value != "s-1" || r.NativeSession.Harness != "claude" {
+		t.Fatalf("%+v %+v", out.Error, r.NativeSession)
+	}
+	s, err := identity.Existing(context.Background(), c.Cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored identity.Record
+	if err := s.Get(identity.Kind, r.ID, &stored); err != nil || !reflect.DeepEqual(stored, r.Record) {
+		t.Fatalf("%+v %v", stored, err)
+	}
+	if last := out.Effects[len(out.Effects)-1]; last != (libagent.Effect{Action: "updated", Kind: "native_session", ID: r.ID}) {
+		t.Fatalf("%+v", out.Effects)
+	}
+}
+
+func TestAdoptNamingRegisteredAgentRecordsNativeSession(t *testing.T) {
+	c := client(t,
+		call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: agent("w1:p3", nil)},
+		call{Method: "agent.rename", Params: map[string]any{"target": "w1:p3", "name": "helper"}, Result: withSession("w1:p3", named("helper"))},
+	)
+	s, err := identity.OpenStore(context.Background(), c.Cwd, &libagent.Outcome{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := identity.Register(context.Background(), s, libagent.Client{}, agent("w1:p3", nil).Agent, "spawn", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := Run(context.Background(), c, Options{Pane: "w1:p3", Name: "helper"})
+	r := out.Result.(Result)
+	if out.Error != nil || r.ID != rec.ID || r.NativeSession == nil || r.NativeSession.Value != "s-1" {
+		t.Fatalf("%+v %+v", out.Error, r)
+	}
+}
+
+func TestAdoptSessionWriteFailureIsWarning(t *testing.T) {
+	restore := observeSession
+	t.Cleanup(func() { observeSession = restore })
+	observeSession = func(*state.Store, string, herdr.AgentSession, time.Time) (identity.Record, bool, error) {
+		return identity.Record{}, false, fmt.Errorf("disk full")
+	}
+	c := client(t,
+		call{Method: "agent.get", Result: withSession("w1:p3", named("worker"))},
+		call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Err: notFound()},
+	)
+	out := Run(context.Background(), c, Options{Pane: "w1:p3"})
+	r := out.Result.(Result)
+	if out.Status != "success" || out.Error != nil || out.ExitCode() != 0 || r.NativeSession != nil {
+		t.Fatalf("%+v %+v", out, out.Error)
+	}
+	if last := out.Effects[len(out.Effects)-1]; last != (libagent.Effect{Action: "warning", Kind: "native_session", ID: r.ID}) {
+		t.Fatalf("%+v", out.Effects)
+	}
+}
