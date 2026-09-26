@@ -193,6 +193,41 @@ func TestUsageEndedIDWithoutRefIsUnavailable(t *testing.T) {
 	}
 }
 
+// claudeTranscript is one claude response of 3 input and 4 output tokens.
+const claudeTranscript = `{"type":"user","sessionId":"cl-1","cwd":"/work/app","timestamp":"2026-01-02T09:59:00.000Z","message":{"role":"user","content":"hi"}}
+{"type":"assistant","sessionId":"cl-1","requestId":"r1","timestamp":"2026-01-02T10:00:00.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":3,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":4}}}
+`
+
+// A claude agent measured while live, by an id ref and its live cwd, stays
+// measured by --id after it ends, though its record holds no worktree.
+func TestUsageEndedClaudeIDWithoutWorktreeIsMeasured(t *testing.T) {
+	f := newFixture(t)
+	transcript := filepath.Join(f.d.Home, ".claude", "projects", "-work-app", "cl-1.jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(transcript, []byte(claudeTranscript), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := piAgent("w1:p3", "term_a", "worker", "")
+	harness, cwd := "claude", "/work/app"
+	a.Agent, a.Cwd = &harness, &cwd
+	a = identitytest.WithSession(a, "cl-1")
+	rec := identitytest.Register(t, f.cwd, a)
+	live := rows(t, Run(context.Background(), client(t, f.cwd, listCall(a)), f.d, Options{Selection: selector.Selection{Filter: selector.Filter{Registered: true}}}))
+	if len(live) != 1 || live[0].Basis != libusage.Measured || live[0].Tokens.Output != 4 {
+		t.Fatalf("live: %+v", live)
+	}
+	s, _ := identity.Existing(context.Background(), f.cwd)
+	if err := identity.End(s, rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	ended := rows(t, Run(context.Background(), client(t, f.cwd), f.d, Options{Selection: selector.Selection{IDs: []string{rec.ID}}}))
+	if len(ended) != 1 || ended[0].Basis != libusage.Measured || ended[0].Tokens.Output != 4 || ended[0].Harness != "claude" {
+		t.Fatalf("ended: %+v", ended)
+	}
+}
+
 // An unknown --id fails the same way the other selector commands do.
 func TestUsageUnknownIDFails(t *testing.T) {
 	f := newFixture(t)

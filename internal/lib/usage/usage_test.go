@@ -194,8 +194,43 @@ func TestClaudeIDResolvesThroughCwdSlug(t *testing.T) {
 	if got != want {
 		t.Fatalf("got %q want %q", got, want)
 	}
-	if _, err := Locate(d, "claude", Ref{Kind: "id", Value: "sess-1"}); err == nil {
-		t.Fatal("an id ref without a cwd cannot resolve a claude project")
+}
+
+// An id ref without a cwd, as for an ended agent, resolves under any project
+// slug when exactly one transcript has that id, sub-agents included.
+func TestClaudeIDWithoutCwdResolvesUnderAnyProjectSlug(t *testing.T) {
+	d := fixture(t)
+	got, err := Locate(d, "claude", Ref{Kind: "id", Value: "sess-1"})
+	if want := filepath.Join(d.Home, ".claude", "projects", "-home-user-proj-x-app", "sess-1.jsonl"); err != nil || got != want {
+		t.Fatalf("got %q (%v) want %q", got, err, want)
+	}
+	s := Read(context.Background(), d, "claude", Ref{Kind: "id", Value: "sess-1"}, Window{})
+	assertBasis(t, s, Measured)
+	assertTokens(t, s.Tokens, Tokens{Input: 64, Output: 73, CacheRead: 300, CacheWrite: 25})
+	if s.Subagents == nil {
+		t.Fatal("no sub-agent totals")
+	}
+}
+
+func TestClaudeIDWithoutCwdMissingIsUnavailable(t *testing.T) {
+	s := Read(context.Background(), fixture(t), "claude", Ref{Kind: "id", Value: "sess-none"}, Window{})
+	assertBasis(t, s, Unavailable)
+	if !strings.Contains(s.Reason, "no claude session file for id sess-none") {
+		t.Fatalf("reason %q", s.Reason)
+	}
+}
+
+// Two projects holding the same session id cannot be told apart without a cwd.
+func TestClaudeIDWithoutCwdAmbiguousIsUnavailable(t *testing.T) {
+	d := Discovery{Home: t.TempDir(), Run: noRun(t)}
+	line := `{"type":"assistant","sessionId":"dup","requestId":"r","timestamp":"2026-01-02T10:00:00.000Z","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1}}}` + "\n"
+	for _, slug := range []string{"-a", "-b"} {
+		write(t, filepath.Join(d.Home, ".claude", "projects", slug, "dup.jsonl"), line)
+	}
+	s := Read(context.Background(), d, "claude", Ref{Kind: "id", Value: "dup"}, Window{})
+	assertBasis(t, s, Unavailable)
+	if !strings.Contains(s.Reason, "ambiguous") || !strings.Contains(s.Reason, "2 claude session files") {
+		t.Fatalf("reason %q", s.Reason)
 	}
 }
 
