@@ -7,18 +7,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/harness"
+	"github.com/Harrison-Blair/fledge/internal/lib/harnessenv"
 )
-
-// Runner executes a harness command and returns its standard output.
-type Runner func(ctx context.Context, name string, args ...string) ([]byte, error)
 
 // Row is one discovered model; Name is nil when the source has no display name.
 type Row struct {
@@ -28,20 +24,10 @@ type Row struct {
 }
 
 // Discovery locates models from harness caches under Home and harness commands run through Run.
-type Discovery struct {
-	Home string
-	Run  Runner
-}
+type Discovery harnessenv.Env
 
 // LocalDiscovery reads the real home directory and executes real harness commands.
-func LocalDiscovery() Discovery {
-	home, _ := os.UserHomeDir()
-	return Discovery{Home: home, Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		command := exec.CommandContext(ctx, name, args...)
-		command.Stderr = io.Discard
-		return command.Output()
-	}}
-}
+func LocalDiscovery() Discovery { return Discovery(harnessenv.Local()) }
 
 // modelSource discovers one harness's models; any error yields no rows for that harness.
 // Whether a kind has a source, and whether it only reads cache files, comes from

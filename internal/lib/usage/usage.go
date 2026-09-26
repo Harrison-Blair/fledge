@@ -8,13 +8,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/lib/harness"
+	"github.com/Harrison-Blair/fledge/internal/lib/harnessenv"
 )
 
 // Basis values for a Summary.
@@ -105,24 +105,11 @@ func (w Window) contains(ts *time.Time) bool {
 	return (w.From == nil || !ts.Before(*w.From)) && (w.To == nil || !ts.After(*w.To))
 }
 
-// Runner executes a harness command and returns its standard output.
-type Runner func(ctx context.Context, name string, args ...string) ([]byte, error)
-
 // Discovery reads session stores under Home and runs harness commands through Run.
-type Discovery struct {
-	Home string
-	Run  Runner
-}
+type Discovery harnessenv.Env
 
 // LocalDiscovery reads the real home directory and executes real harness commands.
-func LocalDiscovery() Discovery {
-	home, _ := os.UserHomeDir()
-	return Discovery{Home: home, Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		command := exec.CommandContext(ctx, name, args...)
-		command.Stderr = io.Discard
-		return command.Output()
-	}}
-}
+func LocalDiscovery() Discovery { return Discovery(harnessenv.Local()) }
 
 type reader func(ctx context.Context, d Discovery, ref Ref, w Window) (*tally, error)
 

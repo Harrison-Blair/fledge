@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Harrison-Blair/fledge/internal/lib/harnessenv"
 )
 
 type fakeRunner struct {
@@ -30,7 +32,7 @@ func (f *fakeRunner) run(ctx context.Context, name string, args ...string) ([]by
 }
 
 // noRun fails the test if a file-based reader executes a command.
-func noRun(t *testing.T) Runner {
+func noRun(t *testing.T) harnessenv.Runner {
 	return func(context.Context, string, ...string) ([]byte, error) {
 		t.Fatal("file readers must not run commands")
 		return nil, nil
