@@ -102,6 +102,7 @@ it with another tool.
 | Message another agent | `fledge agent message` | Claude's SendMessage, raw `herdr` pane input |
 | Type raw input or keys into an agent (slash commands, dialog answers) | `fledge agent send` | raw `herdr pane send-text`/`send-keys` |
 | Register an already-running agent | `fledge agent adopt` | — |
+| Rename an agent, relabeling its pane and its own tab | `fledge agent rename` | raw `herdr agent`/`pane`/`tab rename` |
 | Check the environment | `fledge doctor` | ad hoc probes |
 | Discover models | `fledge agent models` | reading harness config |
 | Update the binary | `fledge update` | manual downloads |
@@ -151,10 +152,14 @@ instructions do not override an approval denial or authorize unrelated session c
 Help, version, `agent models`, `task get`/`list`/`cancel`/`depend`, and `update` do not require
 Herdr socket access.
 
-Name the tab an agent runs in after the agent's own name or role so panes are identifiable at a glance:
+Agent names label panes and tabs so they are identifiable at a glance. Spawn labels the
+agent's pane, and any tab it creates, with `--name`; pass `--tab` only to choose a different
+tab. An agent started by hand, such as an orchestrator, names itself, which relabels its
+pane and, when alone there, its tab:
 
 ```sh
-fledge agent spawn --name reviewer --harness claude --tab reviewer
+fledge agent adopt --name orchestrator    # unnamed and unregistered
+fledge agent rename --to orchestrator     # already named
 ```
 
 Stop agents when their task is finished instead of leaving idle agents and tabs behind.

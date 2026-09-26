@@ -21,7 +21,7 @@ workflow = """
    spawn a planner and import its reviewed proposal with `fledge task import`.
 4. Before a large fan-out, check usage limits (for example `qmeter pace`, if installed) and
    prefer under-used providers when choosing models.
-   Spawn workers with `fledge agent spawn --profile <role> --name <role-n> --tab <role-n>`.
+   Spawn workers with `fledge agent spawn --profile <role> --name <role-n>`.
    Give each implementer its own checkout: `--worktree new --branch <branch>`. Assign with
    `fledge task assign`. Dispatch independent work concurrently; serialize edits to the same
    files.

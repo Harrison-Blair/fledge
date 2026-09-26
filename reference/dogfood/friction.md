@@ -1179,3 +1179,17 @@ the whole proposal. Observed once, 2026-09-24, A5 planner dogfood (task 6adf25eb
 1. Spawn `--profile planner` and assign it a planning task.
 2. Let it finish.
 3. Run `fledge task get --id <task>` and observe that the result is the proposal file.
+
+---
+
+**Issue:** No Fledge command shows an agent's pane or tab label
+
+**Summary:** While verifying `agent rename` live, the only way to confirm the pane and
+tab labels was raw `herdr pane get` and `herdr tab get`: `agent get` and `agent list`
+report the agent name, pane, and tab IDs, but not the pane label, the tab label, or how
+many panes share the tab. Observed 2026-09-24 on `feat/agent-rename`.
+
+**Reproduction steps:**
+1. Spawn an agent, then run `fledge agent rename --name <agent> --to <new>`.
+2. Run `fledge agent get --name <new> --json` and observe no pane or tab label field.
+3. Fall back to `herdr tab get <tab_id>` to see the tab label and `pane_count`.

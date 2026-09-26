@@ -51,6 +51,7 @@ type Tab struct {
 	ID          string `json:"tab_id"`
 	WorkspaceID string `json:"workspace_id"`
 	Label       string `json:"label"`
+	PaneCount   *int   `json:"pane_count"`
 }
 type Layout struct {
 	TabID         string `json:"tab_id"`

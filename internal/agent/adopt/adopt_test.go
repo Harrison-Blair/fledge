@@ -46,15 +46,25 @@ func agent(pane string, name *string) herdr.AgentResult {
 	return r
 }
 func named(s string) *string { return &s }
-func notFound() error        { return &herdr.Error{Code: "agent_not_found", Message: "no agent"} }
+
+// labels are the requests that label pane, alone in tab, as helper.
+func labels(pane, tab string) []call {
+	one := 1
+	return []call{
+		{Method: "pane.rename", Params: map[string]any{"pane_id": pane, "label": "helper"}, Result: herdr.PaneResult{Type: "pane_info", Pane: herdrscript.Pane(pane, "w1", tab)}},
+		{Method: "tab.get", Params: map[string]any{"tab_id": tab}, Result: herdr.TabResult{Type: "tab_info", Tab: herdr.Tab{ID: tab, WorkspaceID: "w1", Label: "1", PaneCount: &one}}},
+		{Method: "tab.rename", Params: map[string]any{"tab_id": tab, "label": "helper"}, Result: herdr.TabResult{Type: "tab_info", Tab: herdr.Tab{ID: tab, WorkspaceID: "w1", Label: "helper", PaneCount: &one}}},
+	}
+}
+func notFound() error { return &herdr.Error{Code: "agent_not_found", Message: "no agent"} }
 
 func TestAdoptSelfRenamesUnnamedAgent(t *testing.T) {
 	t.Setenv("HERDR_SESSION", "dev")
-	c := client(t,
-		call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: agent("old:p1", nil)},
-		call{Method: "agent.rename", Params: map[string]any{"target": "old:p1", "name": "helper"}, Result: agent("old:p1", named("helper"))},
-		call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: agent("old:p1", named("helper"))},
-	)
+	c := client(t, append([]call{
+		{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: agent("old:p1", nil)},
+		{Method: "agent.rename", Params: map[string]any{"target": "old:p1", "name": "helper"}, Result: agent("old:p1", named("helper"))},
+		{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: agent("old:p1", named("helper"))},
+	}, labels("old:p1", "w1:t2")...)...)
 	out := Run(context.Background(), c, Options{Name: "helper"})
 	if out.Status != "success" || out.Error != nil {
 		t.Fatalf("%+v", out.Error)
@@ -71,8 +81,8 @@ func TestAdoptSelfRenamesUnnamedAgent(t *testing.T) {
 	if err := s.Get(identity.Kind, r.ID, &stored); err != nil || !reflect.DeepEqual(stored, r.Record) {
 		t.Fatalf("%+v %v", stored, err)
 	}
-	last := out.Effects[len(out.Effects)-2:]
-	if !reflect.DeepEqual(last, []libagent.Effect{{Action: "updated", Kind: "agent_name", ID: "old:p1"}, {Action: "created", Kind: "agent_record", ID: r.ID}}) {
+	last := out.Effects[len(out.Effects)-4:]
+	if !reflect.DeepEqual(last, []libagent.Effect{{Action: "updated", Kind: "agent_name", ID: "old:p1"}, {Action: "created", Kind: "agent_record", ID: r.ID}, {Action: "updated", Kind: "pane_label", ID: "old:p1"}, {Action: "updated", Kind: "tab", ID: "w1:t2"}}) {
 		t.Fatalf("%+v", out.Effects)
 	}
 	var b bytes.Buffer
@@ -317,11 +327,11 @@ func TestAdoptScansOnceUnlessItMustRenameFirst(t *testing.T) {
 		t.Fatalf("adopting a named agent scanned %d extra times, want 0", *n)
 	}
 	*n = 0
-	c = client(t,
-		call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: agent("old:p1", nil)},
-		call{Method: "agent.rename", Params: map[string]any{"target": "old:p1", "name": "helper"}, Result: agent("old:p1", named("helper"))},
-		call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: agent("old:p1", named("helper"))},
-	)
+	c = client(t, append([]call{
+		{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: agent("old:p1", nil)},
+		{Method: "agent.rename", Params: map[string]any{"target": "old:p1", "name": "helper"}, Result: agent("old:p1", named("helper"))},
+		{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: agent("old:p1", named("helper"))},
+	}, labels("old:p1", "w1:t2")...)...)
 	if out := Run(context.Background(), c, Options{Name: "helper"}); out.Error != nil {
 		t.Fatalf("%+v", out.Error)
 	}
@@ -376,10 +386,10 @@ func TestAdoptNamesRegisteredUnnamedAgentKeepingRecord(t *testing.T) {
 	t.Setenv("HERDR_SESSION", "dev")
 	for label, former := range map[string]*string{"lost name": named("worker"), "never named": nil} {
 		t.Run(label, func(t *testing.T) {
-			c := client(t,
-				call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: agent("w1:p3", nil)},
-				call{Method: "agent.rename", Params: map[string]any{"target": "w1:p3", "name": "helper"}, Result: agent("w1:p3", named("helper"))},
-			)
+			c := client(t, append([]call{
+				{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: agent("w1:p3", nil)},
+				{Method: "agent.rename", Params: map[string]any{"target": "w1:p3", "name": "helper"}, Result: agent("w1:p3", named("helper"))},
+			}, labels("w1:p3", "w1:t2")...)...)
 			existing := seed(t, c, former)
 			out := Run(context.Background(), c, Options{Pane: "w1:p3", Name: "helper"})
 			if out.Status != "success" || out.Error != nil {
@@ -394,7 +404,7 @@ func TestAdoptNamesRegisteredUnnamedAgentKeepingRecord(t *testing.T) {
 			if got := stored(t, c, existing.ID); !reflect.DeepEqual(got, want) {
 				t.Fatalf("%+v", got)
 			}
-			if !reflect.DeepEqual(out.Effects, []libagent.Effect{{Action: "updated", Kind: "agent_name", ID: "w1:p3"}, {Action: "updated", Kind: "agent_record", ID: existing.ID}}) {
+			if !reflect.DeepEqual(out.Effects, []libagent.Effect{{Action: "updated", Kind: "agent_name", ID: "w1:p3"}, {Action: "updated", Kind: "agent_record", ID: existing.ID}, {Action: "updated", Kind: "pane_label", ID: "w1:p3"}, {Action: "updated", Kind: "tab", ID: "w1:t2"}}) {
 				t.Fatalf("%+v", out.Effects)
 			}
 			var b bytes.Buffer
