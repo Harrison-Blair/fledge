@@ -79,8 +79,13 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 
 // stopOne looks up one target afresh and stops it unless the guard refuses.
 func stopOne(ctx context.Context, c libagent.Client, o Options, p pending) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.stop", Status: "success", Effects: []libagent.Effect{}}
 	a, target, rec, err := p.get(ctx, c)
+	return stopFound(ctx, c, o, a, target, rec, err)
+}
+
+// stopFound stops the agent a lookup found, or reports the lookup's error.
+func stopFound(ctx context.Context, c libagent.Client, o Options, a herdr.AgentDetails, target string, rec *identity.Record, err error) libagent.Outcome {
+	out := libagent.Outcome{Operation: "agent.stop", Status: "success", Effects: []libagent.Effect{}}
 	if err != nil {
 		out.Fail(err, "agent.get", false)
 		return out

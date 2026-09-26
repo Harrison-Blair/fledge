@@ -132,11 +132,13 @@ func plan(ctx context.Context, c libagent.Client, o Options, targets []pending) 
 }
 
 // fanOut stops each target in turn, continuing past refusals and failures.
+// The caller's own pane is stopped last, as closing it ends this process;
+// rows keep target order.
 func fanOut(ctx context.Context, c libagent.Client, o Options, targets []pending) libagent.Outcome {
 	out := libagent.Outcome{Operation: "agent.stop", Status: "success", Effects: []libagent.Effect{}}
-	result := FanOut{Mode: "fan-out", Targets: []Row{}}
-	for _, p := range targets {
-		one := stopOne(ctx, c, o, p)
+	result := FanOut{Mode: "fan-out", Targets: make([]Row, len(targets))}
+	report := func(i int, one libagent.Outcome) {
+		p := targets[i]
 		out.Effects = append(out.Effects, one.Effects...)
 		row := Row{Target: p.label, Outcome: "failed", Error: one.Error}
 		if r, ok := one.Result.(Result); ok {
@@ -151,7 +153,19 @@ func fanOut(ctx context.Context, c libagent.Client, o Options, targets []pending
 		if row.Outcome == "failed" && one.Error.Phase == "guard" {
 			row.Outcome = "refused"
 		}
-		result.Targets = append(result.Targets, row)
+		result.Targets[i] = row
+	}
+	var last []func()
+	for i, p := range targets {
+		a, target, rec, err := p.get(ctx, c)
+		if err == nil && c.CallerPane != "" && a.PaneID == c.CallerPane {
+			last = append(last, func() { report(i, stopFound(ctx, c, o, a, target, rec, nil)) })
+			continue
+		}
+		report(i, stopFound(ctx, c, o, a, target, rec, err))
+	}
+	for _, stop := range last {
+		stop()
 	}
 	out.Result = result
 	summarize(&out, result.Targets, func(r Row) bool { return r.Error != nil }, "partial", "not stopped cleanly")

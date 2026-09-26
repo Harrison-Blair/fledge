@@ -290,6 +290,49 @@ func TestStopDryRunByIDLeavesRecordUnchanged(t *testing.T) {
 	}
 }
 
+// closes serves agent.get from agents by target and notes each closed pane.
+type closes struct {
+	agents map[string]herdr.Pane
+	panes  []string
+}
+
+func (c *closes) Call(_ context.Context, method string, params, result any) error {
+	p := params.(map[string]any)
+	var r any = herdrscript.OK()
+	if method == "agent.get" {
+		r = herdrscript.Info(c.agents[p["target"].(string)])
+	} else {
+		c.panes = append(c.panes, p["pane_id"].(string))
+	}
+	data, _ := json.Marshal(r)
+	return json.Unmarshal(data, result)
+}
+
+// The caller's own pane, however it is named, is stopped after every other
+// target: closing it ends this process. Rows keep target order.
+func TestStopCallerTargetIsStoppedLast(t *testing.T) {
+	me, a := agentIn("old:p1", "me", "idle"), agentIn("w1:p1", "a", "idle")
+	for _, tc := range []struct {
+		name string
+		o    Options
+		rows string
+	}{
+		{"by name", names("me", "a"), "me=stopped/old:p1 a=stopped/w1:p1"},
+		{"by pane", Options{Selection: selector.Selection{Panes: []string{"old:p1", "w1:p1"}}}, "old:p1=stopped/old:p1 w1:p1=stopped/w1:p1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := &closes{agents: map[string]herdr.Pane{"me": me, "a": a, "old:p1": me, "w1:p1": a}}
+			out := Run(context.Background(), libagent.Client{API: api, CallerPane: "old:p1", Cwd: t.TempDir()}, tc.o)
+			if got := strings.Join(api.panes, " "); got != "w1:p1 old:p1" {
+				t.Fatalf("closed %q, want the caller's pane last", got)
+			}
+			if got := rows(t, out, "fan-out"); got != tc.rows || out.Status != "success" {
+				t.Fatalf("got %q (%+v), want %q", got, out, tc.rows)
+			}
+		})
+	}
+}
+
 func TestStopFilterExcludesCaller(t *testing.T) {
 	caller, a, b := agentIn("old:p1", "me", "idle"), agentIn("w1:p1", "a", "idle"), agentIn("w1:p2", "b", "idle")
 	s := fake(t, listCall(withTerminal(a, "term_x"), withTerminal(caller, "term_me"), withTerminal(b, "term_x")),
