@@ -86,13 +86,18 @@ func Validate(text string) error {
 }
 
 // fence returns the run of three or more backticks or tildes that opens line,
-// after at most three spaces of indent, or "" when line is not a fence.
+// after at most three spaces of indent, or "" when line is not a fence. As in
+// CommonMark, a backtick run followed by another backtick is not a fence.
 func fence(line string) string {
 	trimmed := strings.TrimLeft(line, " ")
 	if len(line)-len(trimmed) > 3 || !strings.HasPrefix(trimmed, "```") && !strings.HasPrefix(trimmed, "~~~") {
 		return ""
 	}
-	return trimmed[:len(trimmed)-len(strings.TrimLeft(trimmed, trimmed[:1]))]
+	info := strings.TrimLeft(trimmed, trimmed[:1])
+	if trimmed[0] == '`' && strings.Contains(info, "`") {
+		return ""
+	}
+	return trimmed[:len(trimmed)-len(info)]
 }
 
 // comment reports whether line is a single HTML comment and nothing else.
