@@ -11,6 +11,7 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
@@ -236,6 +237,57 @@ func TestStopDryRunKeepsRecords(t *testing.T) {
 		t.Fatalf("%+v", out)
 	}
 	readOnly(t, r)
+}
+
+// byMethod answers each Herdr method the same way however often it is called.
+type byMethod map[string]call
+
+func (b byMethod) Call(_ context.Context, method string, _, result any) error {
+	c, ok := b[method]
+	if !ok {
+		return &herdr.Error{Code: "unexpected", Message: method}
+	}
+	if c.Err != nil {
+		return c.Err
+	}
+	data, _ := json.Marshal(c.Result)
+	return json.Unmarshal(data, result)
+}
+
+// A dry run by record id neither ends a record whose terminal is gone nor
+// moves one whose terminal now runs in another pane.
+func TestStopDryRunByIDLeavesRecordUnchanged(t *testing.T) {
+	recorded := withTerminal(agentIn("w1:p3", "worker", "idle"), "term_old")
+	other := withTerminal(agentIn("w1:p3", "other", "idle"), "term_new")
+	moved := withTerminal(agentIn("w1:p5", "worker", "idle"), "term_old")
+	for _, tc := range []struct {
+		name string
+		api  byMethod
+		want string
+	}{
+		{"gone", byMethod{"agent.get": {Err: &herdr.Error{Code: "agent_not_found", Message: "gone"}}, "agent.list": listCall([]herdr.AgentDetails{}...), "pane.list": {Result: map[string]any{"type": "pane_list", "panes": []any{}}}}, "error/-"},
+		{"moved", byMethod{"agent.get": {Result: herdr.AgentResult{Type: "agent_info", Agent: other}}, "agent.list": listCall(other, moved)}, "stop/w1:p5"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := libagent.Client{API: tc.api, CallerPane: "old:p1", Cwd: identitytest.Repository(t)}
+			rec := identitytest.Register(t, s.Cwd, recorded)
+			o := Options{Selection: selector.Selection{IDs: []string{rec.ID}}, DryRun: true}
+			if got, want := rows(t, Run(context.Background(), s, o), "dry-run"), rec.ID+"="+tc.want; got != want {
+				t.Fatalf("got %q, want %q", got, want)
+			}
+			store, err := identity.Existing(context.Background(), s.Cwd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var after identity.Record
+			if err := store.Get(identity.Kind, rec.ID, &after); err != nil {
+				t.Fatal(err)
+			}
+			if after.EndedAt != nil || after.Pane != rec.Pane {
+				t.Fatalf("dry run changed the record: ended %v, pane %s (was %s)", after.EndedAt, after.Pane, rec.Pane)
+			}
+		})
+	}
 }
 
 func TestStopFilterExcludesCaller(t *testing.T) {

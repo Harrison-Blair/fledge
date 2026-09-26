@@ -10,6 +10,7 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 )
 
 // FanOut reports a multi-target stop (mode fan-out) or any dry run (mode
@@ -79,8 +80,27 @@ func (p pending) get(ctx context.Context, c libagent.Client) (herdr.AgentDetails
 	return a, target, rec, err
 }
 
+// peek looks up p as get does, but only reads: a record id is found among the
+// registered agents Herdr lists, so its record is neither ended nor moved.
+func (p pending) peek(ctx context.Context, c libagent.Client) (herdr.AgentDetails, string, error) {
+	if p.target.ID == "" {
+		a, target, _, err := p.get(ctx, c)
+		return a, target, err
+	}
+	matches, err := selector.Resolve(ctx, c, selector.Filter{Registered: true})
+	if err != nil {
+		return herdr.AgentDetails{}, "", err
+	}
+	for _, m := range matches {
+		if m.Record.ID == p.target.ID {
+			return m.Agent, m.Agent.PaneID, nil
+		}
+	}
+	return herdr.AgentDetails{}, "", libagent.AtPhase("identity", &herdr.Error{Code: "agent_identity_stale", Message: fmt.Sprintf("agent record %s has no live agent in this Herdr session", p.target.ID)})
+}
+
 // plan reports what stopping each target would do. It only reads: explicit
-// targets are looked up, filter matches come from the listing.
+// targets are looked up without writing, filter matches come from the listing.
 func plan(ctx context.Context, c libagent.Client, o Options, targets []pending) libagent.Outcome {
 	out := libagent.Outcome{Operation: "agent.stop", Status: "success", Effects: []libagent.Effect{}}
 	result := FanOut{Mode: "dry-run", Targets: []Row{}}
@@ -91,7 +111,7 @@ func plan(ctx context.Context, c libagent.Client, o Options, targets []pending) 
 		var err error
 		if p.match != nil {
 			a, target = *p.match, p.match.PaneID
-		} else if a, target, _, err = p.target.Get(ctx, c); err != nil {
+		} else if a, target, err = p.peek(ctx, c); err != nil {
 			row.Outcome, row.Error = "error", failure(err, "agent.get")
 		}
 		if err == nil {
