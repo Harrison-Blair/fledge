@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
@@ -46,7 +47,8 @@ type Result struct {
 // order under one store lock. An existing Parent must be neither verified
 // nor cancelled and every existing prerequisite id must exist; a dry run
 // checks the same without creating anything. The creator is the caller's
-// live agent record, or null when the caller is unregistered.
+// live agent record, or null when the caller is unregistered. Repeated
+// prerequisites are stored once.
 func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libagent.Outcome {
 	out := libagent.Outcome{Operation: "task.import", Status: "success", Effects: []libagent.Effect{}}
 	p, order, err := validate(o, in)
@@ -65,6 +67,9 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 	for _, t := range order {
 		after := []string{}
 		for _, dep := range t.After {
+			if slices.Contains(after, dep) {
+				continue
+			}
 			after = append(after, dep)
 			// Keys never look like ids, so an id names an existing task.
 			if state.ValidID(dep) {
@@ -129,7 +134,9 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 				if id, ok := ids[dep]; ok {
 					dep = id
 				}
-				after = append(after, dep)
+				if !slices.Contains(after, dep) {
+					after = append(after, dep)
+				}
 			}
 			id, err := create(task.Record{Title: t.Title, Brief: t.Brief, Parent: r.Parent, After: after})
 			if err != nil {

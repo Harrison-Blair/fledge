@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/proposal"
 )
 
 func git(t *testing.T, args ...string) {
@@ -103,7 +104,7 @@ func TestBuiltinsShipEightRolesWithDefaults(t *testing.T) {
 		{"planner", "workflow", builtin(t, "planner").Sections.Workflow, "a short Markdown report under `.fledge/tmp/plans/`"},
 		{"planner", "workflow", builtin(t, "planner").Sections.Workflow, "`.fledge/tmp/plans/<task-id>.toml` (your own task id)"},
 		{"planner", "workflow", builtin(t, "planner").Sections.Workflow, "Never run the real import; the orchestrator imports."},
-		{"planner", "workflow", builtin(t, "planner").Sections.Workflow, "`fledge task complete --file <report>`"},
+		{"planner", "workflow", builtin(t, "planner").Sections.Workflow, "`fledge task complete --id <task-id> --file <report>`"},
 		{"integrator", "never", builtin(t, "integrator").Sections.Never, "main"},
 		{"implementer", "protocol", builtin(t, "implementer").Sections.Protocol, "Do not run `fledge task complete`"},
 	} {
@@ -192,6 +193,8 @@ func TestInvalidProfilesFailWithoutFallback(t *testing.T) {
 		{"absolute read", "reviewer", "schema_version = 1\nreads = [\"/etc/passwd\"]\n", "reads"},
 		{"parent read", "reviewer", "schema_version = 1\nreads = [\"../x.md\"]\n", "reads"},
 		{"inner parent read", "reviewer", "schema_version = 1\nreads = [\"docs/../../x.md\"]\n", "reads"},
+		{"empty read", "reviewer", "schema_version = 1\nreads = [\"\"]\n", "reads"},
+		{"blank read", "reviewer", "schema_version = 1\nreads = [\"AGENTS.md\", \" \\t\"]\n", "reads"},
 		{"nul read", "reviewer", "schema_version = 1\nreads = [\"a\\u0000\"]\n", "NUL"},
 		{"nul section", "reviewer", "schema_version = 1\n[sections]\nreport = \"a\\u0000\"\n", "NUL"},
 		{"nul appended section", "reviewer", "schema_version = 1\n[sections_append]\nreport = \"a\\u0000\"\n", "NUL"},
@@ -397,5 +400,29 @@ func TestBuiltinsRequireProtocolAndMission(t *testing.T) {
 	}
 	if _, err := builtinProfile("x", []byte("schema_version = 1\nprotocol = true\n[sections]\nmission = \"M.\"\n")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestBuiltinBriefsMatchTaskCommands keeps built-in briefs runnable: every
+// quoted `fledge task complete` invocation names its task, and the planner
+// asks for nothing the proposal format would reject.
+func TestBuiltinBriefsMatchTaskCommands(t *testing.T) {
+	list, err := List(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range list {
+		for _, quoted := range strings.Split(p.Brief(), "`")[1:] {
+			if args, ok := strings.CutPrefix(quoted, "fledge task complete "); ok && !strings.Contains(args, "--id ") {
+				t.Errorf("%s: %q lacks --id", p.Name, quoted)
+			}
+		}
+	}
+	planner := builtin(t, "planner").Brief()
+	if strings.Contains(planner, "size") {
+		t.Errorf("planner asks for a size, which proposals reject: %s", planner)
+	}
+	if _, err := proposal.Decode([]byte(proposal.Skeleton() + "size = \"S\"\n")); err == nil || !strings.Contains(err.Error(), `unknown key "size"`) {
+		t.Error("proposals accept a size key; the planner check above is stale")
 	}
 }

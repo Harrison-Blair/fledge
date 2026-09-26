@@ -235,3 +235,22 @@ func TestImportReadsStdin(t *testing.T) {
 		t.Fatalf("%+v", out.Error)
 	}
 }
+
+func TestImportStoresRepeatedPrerequisitesOnce(t *testing.T) {
+	repo := identitytest.Repository(t)
+	research := tasktest.Seed(t, repo, task.Record{Title: "research", Status: task.Assigned})
+	body := "schema_version = 1\n" + taskTOML("b", "Second", "a", "a", research, research) + taskTOML("a", "First")
+	dry := Run(context.Background(), tasktest.Client(t, repo, ""), Options{File: write(t, body), FileSet: true, DryRun: true}, strings.NewReader(""))
+	if dry.Error != nil || !reflect.DeepEqual(dry.Result.(Result).Tasks[1].After, []string{"a", research}) {
+		t.Fatalf("%+v %+v", dry.Error, dry.Result)
+	}
+	out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{File: write(t, body), FileSet: true}, strings.NewReader(""))
+	if out.Error != nil {
+		t.Fatalf("%+v", out.Error)
+	}
+	r := out.Result.(Result)
+	want := []string{*r.Tasks[0].ID, research}
+	if !reflect.DeepEqual(r.Tasks[1].After, want) || !reflect.DeepEqual(tasktest.Load(t, repo, *r.Tasks[1].ID).After, want) {
+		t.Fatalf("%+v %+v", r.Tasks[1].After, tasktest.Load(t, repo, *r.Tasks[1].ID).After)
+	}
+}

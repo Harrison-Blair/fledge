@@ -42,6 +42,10 @@ func TestValidateAccepts(t *testing.T) {
 		"inline comment":    strings.Replace(build(full()...), "text for Scope", "<!-- hint --> real text", 1),
 		"between comments":  strings.Replace(build(full()...), "text for Scope", "<!-- a --> text <!-- b -->", 1),
 		"comment plus text": strings.Replace(build(full()...), "text for Scope", "<!-- hint -->\nreal text", 1),
+		"backtick fence":    strings.Replace(build(full()...), "text for Known facts", "README:\n```md\n## Usage\n## Scope\n```", 1),
+		"tilde fence":       strings.Replace(build(full()...), "text for Known facts", "README:\n~~~\n## Usage\n```\n## Usage\n~~~", 1),
+		"long fence":        strings.Replace(build(full()...), "text for Known facts", "README:\n````\n```\n## Usage\n````", 1),
+		"inline span":       strings.Replace(build(full()...), "text for Known facts", "```inline code```", 1),
 	} {
 		if err := Validate(text); err != nil {
 			t.Errorf("%s: %v", label, err)
@@ -62,6 +66,8 @@ func TestValidateRejects(t *testing.T) {
 		"duplicate":    {build(append(append([]string{}, pairs...), "Scope", "again")...), "brief section Scope is duplicated"},
 		"order":        {build(append(append(append([]string{}, pairs[:2]...), pairs[4:6]...), append(append([]string{}, pairs[2:4]...), pairs[6:]...)...)...), "brief sections are out of order: Scope before Acceptance criteria"},
 		"skeleton":     {Skeleton(), "brief section Objective is empty"},
+		"after span":   {build(pairs...) + "```inline code```\n## Notes\nx\n", "brief has unknown section Notes"},
+		"after fence":  {strings.Replace(build(pairs...), "text for Known facts", "```\n## Usage\n```\n## Notes", 1), "brief has unknown section Notes"},
 	} {
 		err := Validate(c.text)
 		var coded *herdr.Error

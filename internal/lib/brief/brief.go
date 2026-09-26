@@ -37,13 +37,19 @@ func Skeleton() string {
 
 // Validate reports whether text follows the template: each section heading
 // exactly once, in order, with content other than blank lines and HTML
-// comments on their own lines. Text before the first heading is allowed.
+// comments on their own lines. Text before the first heading is allowed, and
+// heading-like lines inside fenced code blocks are content.
 func Validate(text string) error {
 	var seen []string
+	var open string
 	filled := map[string]bool{}
 	for line := range strings.Lines(text) {
 		line = strings.TrimRight(line, " \t\r\n")
-		if name, ok := strings.CutPrefix(line, "## "); ok {
+		if marker := fence(line); open == "" && marker != "" {
+			open = marker
+		} else if open != "" && strings.HasPrefix(marker, open) && strings.TrimSpace(line) == marker {
+			open = ""
+		} else if name, ok := strings.CutPrefix(line, "## "); ok && open == "" {
 			if !slices.Contains(Sections, name) {
 				return incomplete("brief has unknown section %s", name)
 			}
@@ -77,6 +83,21 @@ func Validate(text string) error {
 		}
 	}
 	return nil
+}
+
+// fence returns the run of three or more backticks or tildes that opens line,
+// after at most three spaces of indent, or "" when line is not a fence. As in
+// CommonMark, a backtick run followed by another backtick is not a fence.
+func fence(line string) string {
+	trimmed := strings.TrimLeft(line, " ")
+	if len(line)-len(trimmed) > 3 || !strings.HasPrefix(trimmed, "```") && !strings.HasPrefix(trimmed, "~~~") {
+		return ""
+	}
+	info := strings.TrimLeft(trimmed, trimmed[:1])
+	if trimmed[0] == '`' && strings.Contains(info, "`") {
+		return ""
+	}
+	return trimmed[:len(trimmed)-len(info)]
 }
 
 // comment reports whether line is a single HTML comment and nothing else.
