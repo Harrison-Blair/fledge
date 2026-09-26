@@ -4,11 +4,15 @@ package identitytest
 
 import (
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,5 +132,31 @@ func ReadOnly(t *testing.T, cwd, id string) func() {
 		if after := snapshot(); !reflect.DeepEqual(before, after) {
 			t.Fatalf("the state store changed:\nbefore %v\nafter  %v", before, after)
 		}
+	}
+}
+
+// NoObserveSession fails t when a non-test Go file of the package in the
+// current directory refers to ObserveSession, for read-only commands that
+// must never persist a session ref, even best effort.
+func NoObserveSession(t *testing.T) {
+	t.Helper()
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(token.NewFileSet(), name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "ObserveSession" {
+				t.Errorf("%s refers to ObserveSession", name)
+			}
+			return true
+		})
 	}
 }

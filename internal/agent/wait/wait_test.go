@@ -541,3 +541,6 @@ func TestWaitWithReadOnlyStoreWritesNothing(t *testing.T) {
 	}
 	unchanged()
 }
+
+// The read-only test proves no write succeeds; this proves none is attempted.
+func TestNeverObservesSession(t *testing.T) { identitytest.NoObserveSession(t) }
