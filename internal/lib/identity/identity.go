@@ -213,19 +213,26 @@ func alreadyRegistered(a herdr.AgentDetails, existing Record) error {
 // caller outside Herdr, or whose pane hosts no agent, has none; any other
 // lookup failure is returned.
 func Caller(ctx context.Context, s *state.Store, c libagent.Client) (*Record, error) {
+	rec, _, err := CallerAgent(ctx, s, c)
+	return rec, err
+}
+
+// CallerAgent is Caller that also returns the caller's live agent, which is
+// nil exactly when the record is.
+func CallerAgent(ctx context.Context, s *state.Store, c libagent.Client) (*Record, *herdr.AgentDetails, error) {
 	caller, err := callerAgent(ctx, c)
 	if err != nil || caller == nil {
-		return nil, err
+		return nil, nil, err
 	}
 	rec, err := Match(s, *caller)
 	if err != nil || rec == nil {
-		return nil, err
+		return nil, nil, err
 	}
 	moved, err := Relocate(s, *rec, *caller)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return &moved, nil
+	return &moved, caller, nil
 }
 
 // callerAgent fetches the agent in the caller's pane, or nil for a caller

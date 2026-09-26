@@ -148,6 +148,8 @@ A checked item means its main capability is implemented; accompanying notes reco
 
 31. [ ] **Resume native conversations.** Preserve harness session references and expose resume operations where supported, with clear capability reporting.
 
+    **Existing support:** the harness registry (`internal/lib/harness`) records each harness's resume template (for example `claude --resume <session-id>`), reported by `agent capabilities`, and agent records persist the Herdr-reported native session ref as `native_session` with a short history, captured by spawn, adopt, and `task assign`/`complete`/`verify`. No command resumes a conversation yet. [Current behavior](../../README.md#identity)
+
 32. [ ] **Move work between harnesses.** Transfer the task, artifacts, and a handoff summary when switching tools or models; native conversation state may not be portable.
 
 33. [ ] **Retire an agent after its current task.** Mark a worker to finish, report its result, and exit without accepting more work.
@@ -162,9 +164,13 @@ A checked item means its main capability is implemented; accompanying notes reco
 
 37. [ ] **Explain model discovery.** Show where model entries came from, when they were last observed, and whether discovery failed. A cached model name should not imply confirmed availability.
 
-38. [ ] **Measure usage per task.** Collect elapsed time, tokens, and cost where available, distinguishing measurements from estimates.
+38. [x] **Measure usage per task.** Collect elapsed time, tokens, and cost where available, distinguishing measurements from estimates.
+
+    **Implemented:** `task complete` and `task verify` record `usage.worker` and `usage.verifier` snapshots, shown by `task get` · **Author:** Harrison-Blair · **Author date:** 2026-09-25. Tokens are measured from the harness's session store over the task's window (`assigned_at`→`completed_at`, `completed_at`→`verified_at`); cost appears only when the harness records it and is labelled an estimate, with no Fledge price table and no qmeter integration. Collection runs after the state change in a separate write and never fails the command; missing data is `basis: unavailable` with a reason. Remaining gap: attribution is by time window on one session, so concurrent tasks or human chat in the same pane double-count. [Current behavior](../../README.md#usage-snapshots)
 
 39. [ ] **Apply budgets.** Limit time, spending, or attempts per task or project. State clearly whether a limit is enforced by the runtime or merely communicated to a worker.
+
+    **Existing support:** the per-task usage snapshot (#38) is the measurement side of budgets: `task get --json` reports each task's worker and verifier `elapsed_seconds`, tokens, turns, and harness-recorded cost estimate. Nothing enforces or communicates a limit yet. [Current behavior](../../README.md#usage-snapshots)
 
 ## Communication and shared context
 
