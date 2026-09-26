@@ -156,6 +156,7 @@ func TestAgentOutputFailureNotReclassified(t *testing.T) {
 }
 
 // Record ID flags describe lookups by terminal, which follow a moved pane.
+// agent usage reports an ended agent from its record instead of failing.
 func TestRecordIDFlagHelp(t *testing.T) {
 	var walk func(c *cobra.Command)
 	found := 0
@@ -166,7 +167,11 @@ func TestRecordIDFlagHelp(t *testing.T) {
 				continue
 			}
 			found++
-			if !strings.Contains(f.Usage, "follows its terminal to a new pane; fails if the terminal is gone") {
+			want := "follows its terminal to a new pane; fails if the terminal is gone"
+			if c.CommandPath() == "fledge agent usage" {
+				want = "follows its terminal to a new pane; reports from the record if the agent has ended"
+			}
+			if !strings.Contains(f.Usage, want) {
 				t.Errorf("%s --%s: %q", c.CommandPath(), name, f.Usage)
 			}
 		}

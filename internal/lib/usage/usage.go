@@ -157,10 +157,12 @@ func Locate(d Discovery, kind string, ref Ref) (string, error) {
 	var pattern string
 	switch kind {
 	case "claude":
-		if ref.Cwd == "" {
-			return "", errors.New("claude id ref needs the session cwd")
+		if ref.Cwd != "" {
+			return filepath.Join(d.Home, ".claude", "projects", claudeSlug(ref.Cwd), ref.Value+".jsonl"), nil
 		}
-		return filepath.Join(d.Home, ".claude", "projects", claudeSlug(ref.Cwd), ref.Value+".jsonl"), nil
+		// Without the session cwd, as for an ended agent, any project may
+		// hold it, but only one may.
+		pattern = filepath.Join(d.Home, ".claude", "projects", "*", ref.Value+".jsonl")
 	case "codex":
 		pattern = filepath.Join(d.Home, ".codex", "sessions", "*", "*", "*", "rollout-*-"+ref.Value+".jsonl")
 	case "pi":
@@ -171,6 +173,9 @@ func Locate(d Discovery, kind string, ref Ref) (string, error) {
 	matches, _ := filepath.Glob(pattern)
 	if len(matches) == 0 {
 		return "", fmt.Errorf("no %s session file for id %s", kind, ref.Value)
+	}
+	if kind == "claude" && len(matches) > 1 {
+		return "", fmt.Errorf("claude session id %s is ambiguous without its cwd: %d claude session files match", ref.Value, len(matches))
 	}
 	return matches[0], nil
 }
