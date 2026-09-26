@@ -514,10 +514,10 @@ func TestAdoptRecordsNativeSession(t *testing.T) {
 }
 
 func TestAdoptNamingRegisteredAgentRecordsNativeSession(t *testing.T) {
-	c := client(t,
-		call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: agent("w1:p3", nil)},
-		call{Method: "agent.rename", Params: map[string]any{"target": "w1:p3", "name": "helper"}, Result: withSession("w1:p3", named("helper"))},
-	)
+	c := client(t, append([]call{
+		{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: agent("w1:p3", nil)},
+		{Method: "agent.rename", Params: map[string]any{"target": "w1:p3", "name": "helper"}, Result: withSession("w1:p3", named("helper"))},
+	}, labels("w1:p3", "w1:t2")...)...)
 	s, err := identity.OpenStore(context.Background(), c.Cwd, &libagent.Outcome{})
 	if err != nil {
 		t.Fatal(err)

@@ -200,7 +200,7 @@ func TestSpawnRecordsNativeSessionAfterReadiness(t *testing.T) {
 	o := validOptions()
 	o.Pane = "w1:p1"
 	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
-	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p)}, sessionWait(p), callerNotAgent())
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, labeled(p), call{Method: "agent.start", Result: started(p)}, sessionWait(p), callerNotAgent())
 	s.Cwd = identitytest.Repository(t)
 	now := time.Date(2026, 9, 24, 5, 0, 0, 0, time.UTC)
 	s.Now = func() time.Time { return now }
@@ -227,7 +227,7 @@ func TestSpawnSessionWriteFailureIsWarning(t *testing.T) {
 	o := validOptions()
 	o.Pane = "w1:p1"
 	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
-	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p)}, sessionWait(p), callerNotAgent())
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, labeled(p), call{Method: "agent.start", Result: started(p)}, sessionWait(p), callerNotAgent())
 	s.Cwd = identitytest.Repository(t)
 	out := s.run(context.Background(), o, nil)
 	r := out.Result.(*Result)
