@@ -180,7 +180,7 @@ func TestRecordIDFlagHelp(t *testing.T) {
 		}
 	}
 	walk(NewRootCmd())
-	if found != 9 {
-		t.Fatalf("found %d record ID flags, want 9", found)
+	if found != 10 {
+		t.Fatalf("found %d record ID flags, want 10", found)
 	}
 }
