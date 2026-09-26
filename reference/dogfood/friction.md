@@ -1216,3 +1216,15 @@ to the ordering that requires an assignee.
 2. Complete and verify every subtask.
 3. Run `fledge task complete --id <parent>` and observe it is refused because the parent is not `assigned`.
 4. Assign the parent to an agent, complete it, and verify it to close it.
+
+---
+
+**Issue:** `agent usage --name` reports the selector name in its JSON `pane` field
+
+**Summary:** On 2026-09-26, both baseline `d563d4f` and session-observe commit `8999cbf` reported `pane: "verify-5"` for `agent usage --name verify-5 --json`, but `pane: "w2E:p2"` for the same agent selected by pane. Both identify agent `824dba3f`. This predates the observe refactor. `internal/lib/selector/selection.go:75` retains the target string, and `internal/agent/usage/usage.go:131` uses that string for the reported pane. Workaround: select by `--pane` when a real pane ID is needed.
+
+**Reproduction steps:**
+1. With a named live registered agent, run `fledge agent usage --name <name> --json`.
+2. Observe `.result.agents[0].pane` equals the agent name rather than its Herdr pane ID.
+3. Run `fledge agent usage --pane <actual-pane-id> --json`; the same agent now reports the actual pane ID.
+4. Repeat with a binary built from `d563d4f`; the behavior is identical.
