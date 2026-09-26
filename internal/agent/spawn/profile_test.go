@@ -373,3 +373,46 @@ func TestProfileNoWaitRejectedWhenReadIsPresentInTargetDirectory(t *testing.T) {
 		})
 	}
 }
+
+// paneIn is a snapshot whose only pane, w1:p1, sits in dir.
+func paneIn(dir string) herdr.SnapshotResult {
+	snap := snapshot()
+	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
+	p.Cwd = &dir
+	snap.Snapshot.Panes = []herdr.Pane{p}
+	return snap
+}
+
+// For --pane, --no-wait checks reads under the pane's cwd from the snapshot,
+// so a read present only there rejects the spawn before launch.
+func TestProfileNoWaitRejectedWhenReadIsPresentInPaneCwd(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "present.md")
+	o := profileOptions("quiet")
+	o.NoWait = true
+	s := fake(t, call{Method: "session.snapshot", Result: paneIn(dir)})
+	s.Cwd = profileRepo(t, "quiet", readsOnlyProfile)
+	out := s.run(context.Background(), o, nil)
+	if out.Status != "rejected" || out.Error.Phase != "validation" || len(out.Effects) != 0 || !strings.Contains(out.Error.Message, "--no-wait") {
+		t.Fatalf("%+v %+v", out, out.Error)
+	}
+}
+
+// A read present only in the caller's directory does not block --no-wait
+// into a pane elsewhere; it is reported as skipped.
+func TestProfileNoWaitAllowedWhenReadIsOnlyInCallerDirectory(t *testing.T) {
+	o := profileOptions("quiet")
+	o.NoWait = true
+	dir := t.TempDir()
+	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
+	s := fake(t, call{Method: "session.snapshot", Result: paneIn(dir)}, labeled(p), call{Method: "agent.start", Result: started(p)}, callerNotAgent())
+	s.Cwd = profileRepo(t, "quiet", readsOnlyProfile)
+	writeFile(t, s.Cwd, "present.md")
+	out := s.run(context.Background(), o, nil)
+	if out.Status != "success" || out.Result.(*Result).PromptRequested {
+		t.Fatalf("%+v %+v", out, out.Error)
+	}
+	if !slices.Contains(out.Effects, libagent.Effect{Action: "skipped", Kind: "read", Path: "present.md"}) {
+		t.Fatalf("%+v", out.Effects)
+	}
+}

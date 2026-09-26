@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 
+	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/profiles"
 )
 
@@ -41,6 +42,19 @@ func profileBrief(p profiles.Profile, dir string) (string, []string) {
 	}
 	p.Reads = present
 	return p.Brief(), missing
+}
+
+// noWaitBrief rejects --no-wait when p's brief, with reads checked under dir,
+// is nonempty; an unknown dir ("") keeps every read.
+func noWaitBrief(p profiles.Profile, dir string) error {
+	brief := p.Brief()
+	if dir != "" {
+		brief, _ = profileBrief(p, dir)
+	}
+	if brief != "" {
+		return libagent.Invalid("--no-wait cannot be combined with a profile brief, which is sent as the first prompt")
+	}
+	return nil
 }
 
 // knownReadDir is the directory reads resolve under before placement: an
