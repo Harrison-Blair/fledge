@@ -11,6 +11,7 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
@@ -236,6 +237,139 @@ func TestStopDryRunKeepsRecords(t *testing.T) {
 		t.Fatalf("%+v", out)
 	}
 	readOnly(t, r)
+}
+
+// byMethod answers each Herdr method the same way however often it is called.
+type byMethod map[string]call
+
+func (b byMethod) Call(_ context.Context, method string, _, result any) error {
+	c, ok := b[method]
+	if !ok {
+		return &herdr.Error{Code: "unexpected", Message: method}
+	}
+	if c.Err != nil {
+		return c.Err
+	}
+	data, _ := json.Marshal(c.Result)
+	return json.Unmarshal(data, result)
+}
+
+// A dry run by record id neither ends a record whose terminal is gone nor
+// moves one whose terminal now runs in another pane.
+func TestStopDryRunByIDLeavesRecordUnchanged(t *testing.T) {
+	recorded := withTerminal(agentIn("w1:p3", "worker", "idle"), "term_old")
+	other := withTerminal(agentIn("w1:p3", "other", "idle"), "term_new")
+	moved := withTerminal(agentIn("w1:p5", "worker", "idle"), "term_old")
+	for _, tc := range []struct {
+		name string
+		api  byMethod
+		want string
+	}{
+		{"gone", byMethod{"agent.get": {Err: &herdr.Error{Code: "agent_not_found", Message: "gone"}}, "agent.list": listCall([]herdr.AgentDetails{}...), "pane.list": {Result: map[string]any{"type": "pane_list", "panes": []any{}}}}, "error/-"},
+		{"moved", byMethod{"agent.get": {Result: herdr.AgentResult{Type: "agent_info", Agent: other}}, "agent.list": listCall(other, moved)}, "stop/w1:p5"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := libagent.Client{API: tc.api, CallerPane: "old:p1", Cwd: identitytest.Repository(t)}
+			rec := identitytest.Register(t, s.Cwd, recorded)
+			o := Options{Selection: selector.Selection{IDs: []string{rec.ID}}, DryRun: true}
+			if got, want := rows(t, Run(context.Background(), s, o), "dry-run"), rec.ID+"="+tc.want; got != want {
+				t.Fatalf("got %q, want %q", got, want)
+			}
+			store, err := identity.Existing(context.Background(), s.Cwd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var after identity.Record
+			if err := store.Get(identity.Kind, rec.ID, &after); err != nil {
+				t.Fatal(err)
+			}
+			if after.EndedAt != nil || after.Pane != rec.Pane {
+				t.Fatalf("dry run changed the record: ended %v, pane %s (was %s)", after.EndedAt, after.Pane, rec.Pane)
+			}
+		})
+	}
+}
+
+// A dry run by record id fails with the code a real stop would: an unknown
+// id is agent_record_not_found, an ended record agent_identity_stale.
+func TestStopDryRunByIDReportsRealStopCodes(t *testing.T) {
+	recorded := withTerminal(agentIn("w1:p3", "worker", "idle"), "term_old")
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T) (cwd, id string)
+		code  string
+	}{
+		{"no store", func(t *testing.T) (string, string) { return identitytest.Repository(t), "deadbeef" }, "agent_record_not_found"},
+		{"unknown id", func(t *testing.T) (string, string) {
+			cwd := identitytest.Repository(t)
+			identitytest.Register(t, cwd, recorded)
+			return cwd, "deadbeef"
+		}, "agent_record_not_found"},
+		{"ended", func(t *testing.T) (string, string) {
+			cwd := identitytest.Repository(t)
+			rec := identitytest.Register(t, cwd, recorded)
+			store, err := identity.Existing(context.Background(), cwd)
+			if err != nil || identity.End(store, rec.ID) != nil {
+				t.Fatal(err)
+			}
+			return cwd, rec.ID
+		}, "agent_identity_stale"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cwd, id := tc.setup(t)
+			s := libagent.Client{API: byMethod{"agent.list": listCall([]herdr.AgentDetails{}...)}, CallerPane: "old:p1", Cwd: cwd}
+			out := Run(context.Background(), s, Options{Selection: selector.Selection{IDs: []string{id}}, DryRun: true})
+			if got := rows(t, out, "dry-run"); got != id+"=error/-" {
+				t.Fatalf("got %q", got)
+			}
+			if e := out.Result.(FanOut).Targets[0].Error; e.Code != tc.code || e.Phase != "identity" {
+				t.Fatalf("got %+v, want code %s at phase identity", e, tc.code)
+			}
+		})
+	}
+}
+
+// closes serves agent.get from agents by target and notes each closed pane.
+type closes struct {
+	agents map[string]herdr.Pane
+	panes  []string
+}
+
+func (c *closes) Call(_ context.Context, method string, params, result any) error {
+	p := params.(map[string]any)
+	var r any = herdrscript.OK()
+	if method == "agent.get" {
+		r = herdrscript.Info(c.agents[p["target"].(string)])
+	} else {
+		c.panes = append(c.panes, p["pane_id"].(string))
+	}
+	data, _ := json.Marshal(r)
+	return json.Unmarshal(data, result)
+}
+
+// The caller's own pane, however it is named, is stopped after every other
+// target: closing it ends this process. Rows keep target order.
+func TestStopCallerTargetIsStoppedLast(t *testing.T) {
+	me, a := agentIn("old:p1", "me", "idle"), agentIn("w1:p1", "a", "idle")
+	for _, tc := range []struct {
+		name string
+		o    Options
+		rows string
+	}{
+		{"by name", names("me", "a"), "me=stopped/old:p1 a=stopped/w1:p1"},
+		{"by pane", Options{Selection: selector.Selection{Panes: []string{"old:p1", "w1:p1"}}}, "old:p1=stopped/old:p1 w1:p1=stopped/w1:p1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := &closes{agents: map[string]herdr.Pane{"me": me, "a": a, "old:p1": me, "w1:p1": a}}
+			out := Run(context.Background(), libagent.Client{API: api, CallerPane: "old:p1", Cwd: t.TempDir()}, tc.o)
+			if got := strings.Join(api.panes, " "); got != "w1:p1 old:p1" {
+				t.Fatalf("closed %q, want the caller's pane last", got)
+			}
+			if got := rows(t, out, "fan-out"); got != tc.rows || out.Status != "success" {
+				t.Fatalf("got %q (%+v), want %q", got, out, tc.rows)
+			}
+		})
+	}
 }
 
 func TestStopFilterExcludesCaller(t *testing.T) {

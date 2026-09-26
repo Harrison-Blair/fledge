@@ -2,6 +2,7 @@ package stop
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -10,6 +11,8 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/selector"
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
 )
 
 // FanOut reports a multi-target stop (mode fan-out) or any dry run (mode
@@ -79,8 +82,42 @@ func (p pending) get(ctx context.Context, c libagent.Client) (herdr.AgentDetails
 	return a, target, rec, err
 }
 
+// peek looks up p as get does, but only reads: a record id is read from the
+// store and found among the registered agents Herdr lists, so its record is
+// neither ended nor moved. An unknown id fails as get's does.
+func (p pending) peek(ctx context.Context, c libagent.Client) (herdr.AgentDetails, string, error) {
+	if p.target.ID == "" {
+		a, target, _, err := p.get(ctx, c)
+		return a, target, err
+	}
+	s, err := identity.Existing(ctx, c.Cwd)
+	if err != nil {
+		return herdr.AgentDetails{}, "", libagent.AtPhase("identity", err)
+	}
+	var missing *state.NotFoundError
+	if s != nil {
+		err = s.Get(identity.Kind, p.target.ID, &identity.Record{})
+	}
+	if s == nil || errors.As(err, &missing) {
+		return herdr.AgentDetails{}, "", libagent.AtPhase("identity", &herdr.Error{Code: "agent_record_not_found", Message: fmt.Sprintf("no agent record with id %s", p.target.ID)})
+	}
+	if err != nil {
+		return herdr.AgentDetails{}, "", err
+	}
+	matches, err := selector.Resolve(ctx, c, selector.Filter{Registered: true})
+	if err != nil {
+		return herdr.AgentDetails{}, "", err
+	}
+	for _, m := range matches {
+		if m.Record.ID == p.target.ID {
+			return m.Agent, m.Agent.PaneID, nil
+		}
+	}
+	return herdr.AgentDetails{}, "", libagent.AtPhase("identity", &herdr.Error{Code: "agent_identity_stale", Message: fmt.Sprintf("agent record %s has no live agent in this Herdr session", p.target.ID)})
+}
+
 // plan reports what stopping each target would do. It only reads: explicit
-// targets are looked up, filter matches come from the listing.
+// targets are looked up without writing, filter matches come from the listing.
 func plan(ctx context.Context, c libagent.Client, o Options, targets []pending) libagent.Outcome {
 	out := libagent.Outcome{Operation: "agent.stop", Status: "success", Effects: []libagent.Effect{}}
 	result := FanOut{Mode: "dry-run", Targets: []Row{}}
@@ -91,7 +128,7 @@ func plan(ctx context.Context, c libagent.Client, o Options, targets []pending) 
 		var err error
 		if p.match != nil {
 			a, target = *p.match, p.match.PaneID
-		} else if a, target, _, err = p.target.Get(ctx, c); err != nil {
+		} else if a, target, err = p.peek(ctx, c); err != nil {
 			row.Outcome, row.Error = "error", failure(err, "agent.get")
 		}
 		if err == nil {
@@ -112,11 +149,13 @@ func plan(ctx context.Context, c libagent.Client, o Options, targets []pending) 
 }
 
 // fanOut stops each target in turn, continuing past refusals and failures.
+// The caller's own pane is stopped last, as closing it ends this process;
+// rows keep target order.
 func fanOut(ctx context.Context, c libagent.Client, o Options, targets []pending) libagent.Outcome {
 	out := libagent.Outcome{Operation: "agent.stop", Status: "success", Effects: []libagent.Effect{}}
-	result := FanOut{Mode: "fan-out", Targets: []Row{}}
-	for _, p := range targets {
-		one := stopOne(ctx, c, o, p)
+	result := FanOut{Mode: "fan-out", Targets: make([]Row, len(targets))}
+	report := func(i int, one libagent.Outcome) {
+		p := targets[i]
 		out.Effects = append(out.Effects, one.Effects...)
 		row := Row{Target: p.label, Outcome: "failed", Error: one.Error}
 		if r, ok := one.Result.(Result); ok {
@@ -131,7 +170,19 @@ func fanOut(ctx context.Context, c libagent.Client, o Options, targets []pending
 		if row.Outcome == "failed" && one.Error.Phase == "guard" {
 			row.Outcome = "refused"
 		}
-		result.Targets = append(result.Targets, row)
+		result.Targets[i] = row
+	}
+	var last []func()
+	for i, p := range targets {
+		a, target, rec, err := p.get(ctx, c)
+		if err == nil && c.CallerPane != "" && a.PaneID == c.CallerPane {
+			last = append(last, func() { report(i, stopFound(ctx, c, o, a, target, rec, nil)) })
+			continue
+		}
+		report(i, stopFound(ctx, c, o, a, target, rec, err))
+	}
+	for _, stop := range last {
+		stop()
 	}
 	out.Result = result
 	summarize(&out, result.Targets, func(r Row) bool { return r.Error != nil }, "partial", "not stopped cleanly")
