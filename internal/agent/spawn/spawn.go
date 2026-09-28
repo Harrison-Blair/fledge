@@ -166,7 +166,7 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 		case o.Cwd != "":
 			result.readDir = o.Cwd
 		}
-		brief, skipped = profileBrief(*profile, result.readDir)
+		brief, skipped = profileBrief(ctx, *profile, result.readDir)
 	}
 	prompt := firstPrompt(brief, body)
 	result.PromptRequested = prompt != ""

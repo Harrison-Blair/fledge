@@ -34,7 +34,7 @@ func execute(args []string, in io.Reader, out, errOut io.Writer) error {
 	if cli.IsRendered(err) {
 		return err
 	}
-	for _, group := range []string{"agent", "worktree", "task"} {
+	for _, group := range []string{"agent", "worktree", "task", "memory"} {
 		if cmd != nil && strings.HasPrefix(cmd.CommandPath(), "fledge "+group+" ") {
 			operation := group + "." + cmd.Name()
 			return agent.Finish(agent.InvalidOutcome(operation, err), out, jsonRequested(cmd, args), nil)

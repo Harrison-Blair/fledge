@@ -103,6 +103,7 @@ it with another tool.
 | Type raw input or keys into an agent (slash commands, dialog answers) | `fledge agent send` | raw `herdr pane send-text`/`send-keys` |
 | Register an already-running agent | `fledge agent adopt` | — |
 | Rename an agent, relabeling its pane and its own tab | `fledge agent rename` | raw `herdr agent`/`pane`/`tab rename` |
+| Record or recall durable project facts | `fledge memory add`/`list`/`get`/`remove` | harness-native memory |
 | Check the environment | `fledge doctor` | ad hoc probes |
 | Discover models | `fledge agent models` | reading harness config |
 | Update the binary | `fledge update` | manual downloads |
@@ -182,3 +183,13 @@ reporting; repairs go back to the implementer through the orchestrator. Verifier
 `fledge task verify` only when no findings remain open. If repairs follow a
 verification, the verifier runs `fledge task verify` again after checking them; this
 replaces the earlier verification, so name the checked commit in `--summary`.
+
+### Memory
+
+Repository memories in `.fledge/memories/`, managed with `fledge memory`, are the
+store for durable, non-obvious facts about this project, Fledge, and Herdr: one fact
+per memory, shared by every checkout and injected into profile-spawned briefs. Check
+`fledge memory list` before rediscovering something, and record new facts with
+`fledge memory add`. Harness-native memory is for the user's personal preferences
+only. Do not store task progress or anything the code, Git history, or this file
+already records.

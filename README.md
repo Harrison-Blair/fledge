@@ -616,6 +616,14 @@ checked in the agent's working directory (the new or opened checkout for
 `skipped` `read` effect and a `skipped read: PATH (not found in DIR)` line, and
 the spawn still succeeds.
 
+A brief with `protocol = true` ends with a `## Project memory` block read at
+spawn time from the agent's working directory: the [memory](#memory) index of
+that repository's primary checkout with a pointer to `fledge memory get`, or
+`No project memories yet.` when there are none or the directory is outside any
+repository. An unreadable memory file puts the error in the block instead; it
+never fails the spawn. `fledge agent profiles NAME` shows the brief without
+this block.
+
 On spawn, explicit flags win. `--harness` matching the profile keeps everything;
 a different `--harness` drops the profile's model and args, which belong to its
 harness, and keeps the brief. `--model` replaces the model, and `--args` or
@@ -1194,6 +1202,55 @@ By convention a planner writes its proposal to
 assigned. `.fledge/tmp/` is the agents' scratch directory and is already
 ignored; no Fledge command creates it, and `task import` accepts any path.
 
+## Memory
+
+Memories are durable, non-obvious facts about the project, Fledge, or Herdr that
+agents share across sessions. Each is one Markdown file in `.fledge/memories/`
+under the repository's primary checkout, so every linked worktree reads and
+writes the same memories; `.fledge/.gitignore` keeps them untracked. Memory
+commands never contact Herdr, so they work outside a Herdr pane.
+
+```sh
+fledge memory add --name herdr-socket --type project \
+  --description "Herdr commands need socket access in sandboxes" --file note.md
+fledge memory list                  # one index line per memory, by name
+fledge memory list --type feedback
+fledge memory get --name herdr-socket
+fledge memory remove --name herdr-socket
+```
+
+A memory file has `name`, `description`, and `type` frontmatter, then a
+nonempty Markdown body:
+
+```markdown
+---
+name: herdr-socket
+description: Herdr commands need socket access in sandboxes
+type: project
+---
+
+Every `fledge agent` command except `models` connects to Herdr's socket.
+```
+
+The name is a kebab-case slug of lowercase letters and digits, at most 64
+characters, and is the file's basename. The description is one line. The type is
+`user`, `feedback`, `project`, or `reference`. `add` takes the body from
+`--body`, or from `--file` (`-` for stdin); invalid input fails with
+`invalid_input` (exit 2) before anything is written, and an existing name fails
+with `memory_exists` rather than being replaced: remove it first. `get` prints
+the file; `get` and `remove` fail with `memory_not_found` for an unknown name.
+
+`MEMORY.md` beside the memories is the index, one `- [name](name.md) —
+description` line per memory ordered by name, with no frontmatter. `add` and
+`remove` regenerate it from the memory files under the state lock, so
+concurrent writers never lose a line; never edit it by hand. `list` prints the
+same lines, or `No memories.`. A malformed memory file fails `list`, and
+fails `add` and `remove` before they change any file, naming the file; fix or
+delete it to continue. All four commands accept `--json`; `list`
+returns `memories` (`name`, `description`, `type`) and `get` the memory with
+its `body`. Profile spawns inject the index into the worker's brief (see
+[Profiles](#profiles)).
+
 ## Worktrees
 
 Worktree commands run inside Herdr like agent commands, use the same `--json`
@@ -1365,6 +1422,8 @@ as a `fail`, not a crash.
 - `internal/lib/harness` is the single source of per-harness facts: the kinds,
   one typed profile per kind that `agent pause`, `agent spawn`, and `agent models`
   read, and the fixed capability rows derived from it. It imports nothing from Fledge.
+- `internal/lib/memory` stores memory files and their generated index for the
+  `memory` commands and the spawn brief.
 - `internal/lib/usage` reads a harness session's measured tokens and
   harness-recorded cost estimate from claude, codex, and pi session files and
   `opencode export`, filtered to a time window; missing or unreadable data is

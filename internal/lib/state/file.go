@@ -66,15 +66,15 @@ func lock(path string) (func(), error) {
 	return func() { f.Close() }, nil
 }
 
-// writeReplace atomically replaces path with data.
-func writeReplace(path string, data []byte) error {
+// WriteReplace atomically replaces path with data.
+func WriteReplace(path string, data []byte) error {
 	return writeTemp(path, data, os.Rename)
 }
 
-// writeExclusive atomically creates path with data, failing with fs.ErrExist
+// WriteExclusive atomically creates path with data, failing with fs.ErrExist
 // when path already exists. Linking a complete temp file means readers never
 // observe a partially written record.
-func writeExclusive(path string, data []byte) error {
+func WriteExclusive(path string, data []byte) error {
 	return writeTemp(path, data, os.Link)
 }
 

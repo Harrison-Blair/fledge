@@ -25,6 +25,9 @@ func builtinProfile(t *testing.T, name string) profiles.Profile {
 	return p
 }
 
+// noMemories ends a protocol brief spawned outside any repository.
+const noMemories = "\n\n## Project memory\nNo project memories yet."
+
 func startArgs(t *testing.T, c rpcCall) (string, []string) {
 	t.Helper()
 	var params struct {
@@ -50,7 +53,7 @@ func TestSpawnProfileFlagSetsLaunchAndOneHeaderedPrompt(t *testing.T) {
 	if kind, args := startArgs(t, calls[2]); kind != "pi" || !reflect.DeepEqual(args, []string{"--model", "openai-codex/gpt-6-astra"}) {
 		t.Fatalf("%s %q", kind, args)
 	}
-	if calls[4].Method != "agent.prompt" || !headered(t, calls[4], builtinProfile(t, "reviewer").Brief()+"\n\nreview this") {
+	if calls[4].Method != "agent.prompt" || !headered(t, calls[4], builtinProfile(t, "reviewer").Brief()+noMemories+"\n\nreview this") {
 		t.Fatalf("%s", calls[4].Params)
 	}
 	var envelope struct {
@@ -83,7 +86,7 @@ func TestSpawnProfileExplicitNativeTokensReplaceProfileArgs(t *testing.T) {
 	if kind, args := startArgs(t, calls[2]); kind != "pi" || !reflect.DeepEqual(args, []string{"--model", "openai-codex/gpt-6-astra", "--search", "--native"}) {
 		t.Fatalf("%s %q", kind, args)
 	}
-	if !headered(t, calls[4], builtinProfile(t, "planner").Brief()) {
+	if !headered(t, calls[4], builtinProfile(t, "planner").Brief()+noMemories) {
 		t.Fatalf("%s", calls[4].Params)
 	}
 	if !strings.Contains(out.String(), "  profile: planner (built-in)\n") {

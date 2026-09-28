@@ -19,7 +19,11 @@ type call = herdrscript.Call
 
 func fake(t *testing.T, calls ...call) *spawner {
 	t.Helper()
-	return &spawner{Client: herdrscript.Client(t, calls...), Now: func() time.Time { return time.Unix(0, 0) }, NewID: func() string { return "m-0a1b2c" }}
+	c := herdrscript.Client(t, calls...)
+	// A directory outside any repository keeps profile, registration, and
+	// memory lookups away from the repository running the tests.
+	c.Cwd = t.TempDir()
+	return &spawner{Client: c, Now: func() time.Time { return time.Unix(0, 0) }, NewID: func() string { return "m-0a1b2c" }}
 }
 func snapshot() herdr.SnapshotResult {
 	return herdr.SnapshotResult{Type: "session_snapshot", Snapshot: &herdr.Snapshot{Workspaces: []herdr.Workspace{{ID: "w1", Label: "main"}}, Tabs: []herdr.Tab{{ID: "w1:t1", WorkspaceID: "w1", Label: "build"}}, Panes: []herdr.Pane{herdrscript.Pane("w1:p1", "w1", "w1:t1")}, Layouts: []herdr.Layout{{TabID: "w1:t1", WorkspaceID: "w1", FocusedPaneID: "w1:p1"}}, Agents: []herdr.Pane{}}}
