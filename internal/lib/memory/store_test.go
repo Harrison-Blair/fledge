@@ -228,3 +228,47 @@ func TestRemoveUnknownNameFails(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// snapshot maps every file name in dir to its content.
+func snapshot(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{}
+	for _, e := range entries {
+		files[e.Name()] = readFile(t, filepath.Join(dir, e.Name()))
+	}
+	return files
+}
+
+// A malformed memory file rejects add and remove before either changes any
+// file, naming the malformed file.
+func TestMalformedMemoryRejectsWritesWithoutMutation(t *testing.T) {
+	root := identitytest.Repository(t)
+	add(t, root, Memory{Name: "first", Description: "First fact", Type: "user", Body: "x\n"})
+	dir := filepath.Join(root, ".fledge", "memories")
+	if err := os.WriteFile(filepath.Join(dir, "broken.md"), []byte("no frontmatter\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshot(t, dir)
+	for name, write := range map[string]func(*libagent.Outcome) error{
+		"add":    func(out *libagent.Outcome) error { return Add(context.Background(), root, valid(), out) },
+		"remove": func(out *libagent.Outcome) error { return Remove(context.Background(), root, "first", out) },
+	} {
+		out := libagent.Outcome{}
+		err := write(&out)
+		if err == nil || !strings.Contains(err.Error(), "broken.md") {
+			t.Errorf("%s: %v", name, err)
+		}
+		for _, e := range out.Effects {
+			if e.Kind == "memory" || e.Path == filepath.Join(dir, IndexName) {
+				t.Errorf("%s: reported %+v", name, e)
+			}
+		}
+		if after := snapshot(t, dir); !reflect.DeepEqual(after, before) {
+			t.Errorf("%s changed files:\n%v\nwant %v", name, after, before)
+		}
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
@@ -80,12 +81,12 @@ func read(dir, name string) (Memory, error) {
 // Add validates m and stores it as a new memory in the primary checkout,
 // failing with memory_exists rather than replacing one. The write and the
 // index regeneration share the state store lock, so concurrent adds never
-// lose index lines.
+// lose index lines. A malformed existing memory fails Add before any write.
 func Add(ctx context.Context, cwd string, m Memory, out *libagent.Outcome) error {
 	if err := Validate(m); err != nil {
 		return err
 	}
-	return locked(ctx, cwd, out, func(dir string) error {
+	return locked(ctx, cwd, out, func(dir string, ms []Memory) error {
 		path := filepath.Join(dir, m.Name+".md")
 		err := state.WriteExclusive(path, Format(m))
 		if errors.Is(err, fs.ErrExist) {
@@ -95,17 +96,17 @@ func Add(ctx context.Context, cwd string, m Memory, out *libagent.Outcome) error
 			return err
 		}
 		out.Effects = append(out.Effects, libagent.Effect{Action: "created", Kind: "memory", Path: path})
-		return writeIndex(dir, out)
+		return writeIndex(dir, append(ms, m), out)
 	})
 }
 
 // Remove deletes the memory named name and regenerates the index under the
-// state store lock.
+// state store lock. A malformed existing memory fails Remove before any write.
 func Remove(ctx context.Context, cwd, name string, out *libagent.Outcome) error {
 	if err := ValidateName(name); err != nil {
 		return err
 	}
-	return locked(ctx, cwd, out, func(dir string) error {
+	return locked(ctx, cwd, out, func(dir string, ms []Memory) error {
 		path := filepath.Join(dir, name+".md")
 		err := os.Remove(path)
 		if errors.Is(err, fs.ErrNotExist) {
@@ -115,13 +116,14 @@ func Remove(ctx context.Context, cwd, name string, out *libagent.Outcome) error 
 			return err
 		}
 		out.Effects = append(out.Effects, libagent.Effect{Action: "removed", Kind: "memory", Path: path})
-		return writeIndex(dir, out)
+		return writeIndex(dir, slices.DeleteFunc(ms, func(m Memory) bool { return m.Name == name }), out)
 	})
 }
 
-// locked prepares the primary checkout's .fledge and memories directories and
-// runs fn with the memories directory while holding the state store lock.
-func locked(ctx context.Context, cwd string, out *libagent.Outcome, fn func(dir string) error) error {
+// locked prepares the primary checkout's .fledge and memories directories and,
+// holding the state store lock, reads every memory and runs fn with the
+// directory and those memories. A malformed memory fails before fn runs.
+func locked(ctx context.Context, cwd string, out *libagent.Outcome, fn func(dir string, ms []Memory) error) error {
 	root, err := fledgedir.Root(ctx, cwd)
 	if err != nil {
 		return err
@@ -138,19 +140,21 @@ func locked(ctx context.Context, cwd string, out *libagent.Outcome, fn func(dir 
 	if err := fledgedir.MakeParents(root, dir, out); err != nil {
 		return err
 	}
-	return s.Exclusive(func(*state.Tx) error { return fn(dir) })
+	return s.Exclusive(func(*state.Tx) error {
+		ms, err := List(dir)
+		if err != nil {
+			return err
+		}
+		return fn(dir, ms)
+	})
 }
 
-// indexStep runs between writeIndex's listing and its write so tests can
-// widen the window a concurrent writer would race through without the lock.
+// indexStep runs before writeIndex's write so tests can widen the window a
+// concurrent writer would race through without the lock.
 var indexStep = func() {}
 
-// writeIndex regenerates the index from the memory files in dir.
-func writeIndex(dir string, out *libagent.Outcome) error {
-	ms, err := List(dir)
-	if err != nil {
-		return err
-	}
+// writeIndex writes the index of ms, the memories now in dir.
+func writeIndex(dir string, ms []Memory, out *libagent.Outcome) error {
 	indexStep()
 	path := filepath.Join(dir, IndexName)
 	if err := state.WriteReplace(path, []byte(Index(ms))); err != nil {

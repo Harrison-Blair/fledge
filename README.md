@@ -1244,8 +1244,9 @@ the file; `get` and `remove` fail with `memory_not_found` for an unknown name.
 description` line per memory ordered by name, with no frontmatter. `add` and
 `remove` regenerate it from the memory files under the state lock, so
 concurrent writers never lose a line; never edit it by hand. `list` prints the
-same lines, or `No memories.`. A malformed memory file fails `list` and every
-regeneration, naming the file. All four commands accept `--json`; `list`
+same lines, or `No memories.`. A malformed memory file fails `list`, and
+fails `add` and `remove` before they change any file, naming the file; fix or
+delete it to continue. All four commands accept `--json`; `list`
 returns `memories` (`name`, `description`, `type`) and `get` the memory with
 its `body`. Profile spawns inject the index into the worker's brief (see
 [Profiles](#profiles)).
