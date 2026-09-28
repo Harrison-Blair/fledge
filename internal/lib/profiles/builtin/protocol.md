@@ -8,6 +8,9 @@ the harness's own agent tools.
 - The task brief is your scope. Investigate discoverable facts yourself. Send substantive
   design decisions to your parent (recommendation first, facts cited); pause only the work
   that depends on them and continue the rest.
+- Check the Project memory index at the end of this brief before investigating. Record
+  durable, non-obvious project, Fledge, or Herdr facts with `fledge memory add`, one fact
+  per memory, not task progress or what the code and Git history already show.
 - Use `.fledge/tmp/` (gitignored) for scratch files. Leave nothing else untracked behind.
 - Finish with `fledge task complete --id <id> --file <report>`. That report is your final
   word: what you did, evidence (commands and output, file:line), open findings, what remains.

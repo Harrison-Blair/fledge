@@ -11,6 +11,7 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/memory"
 	"github.com/Harrison-Blair/fledge/internal/lib/profiles"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
@@ -78,7 +79,7 @@ func TestProfileSuppliesLaunchSettingsAndPrefixesRoleToPrompt(t *testing.T) {
 	planner := builtinProfile(t, "planner")
 	o := profileOptions("planner")
 	o.Prompt, o.PromptSet = "Plan #14.", true
-	s := profileSpawn(t, "pi", []string{"--model", "openai-codex/gpt-6-astra", "--thinking", "xhigh"}, header+planner.Brief()+"\n\nPlan #14.")
+	s := profileSpawn(t, "pi", []string{"--model", "openai-codex/gpt-6-astra", "--thinking", "xhigh"}, header+planner.Brief()+noMemories+"\n\nPlan #14.")
 	out := s.run(context.Background(), o, nil)
 	r := out.Result.(*Result)
 	if out.Status != "success" || !r.Prompted || !r.PromptRequested || r.Harness != "pi" {
@@ -91,7 +92,7 @@ func TestProfileSuppliesLaunchSettingsAndPrefixesRoleToPrompt(t *testing.T) {
 
 func TestProfileRoleAloneIsTheFirstPrompt(t *testing.T) {
 	reviewer := builtinProfile(t, "reviewer")
-	s := profileSpawn(t, "pi", []string{"--model", "openai-codex/gpt-6-astra"}, header+reviewer.Brief())
+	s := profileSpawn(t, "pi", []string{"--model", "openai-codex/gpt-6-astra"}, header+reviewer.Brief()+noMemories)
 	out := s.run(context.Background(), profileOptions("reviewer"), nil)
 	if r := out.Result.(*Result); out.Status != "success" || !r.Prompted || !r.PromptRequested {
 		t.Fatalf("%+v", out)
@@ -102,7 +103,7 @@ func TestProfileRoleComposesWithStdinFile(t *testing.T) {
 	reviewer := builtinProfile(t, "reviewer")
 	o := profileOptions("reviewer")
 	o.File, o.FileSet = "-", true
-	s := profileSpawn(t, "pi", []string{"--model", "openai-codex/gpt-6-astra"}, header+reviewer.Brief()+"\n\nfrom file\n")
+	s := profileSpawn(t, "pi", []string{"--model", "openai-codex/gpt-6-astra"}, header+reviewer.Brief()+noMemories+"\n\nfrom file\n")
 	if out := s.run(context.Background(), o, strings.NewReader("from file\n")); out.Status != "success" {
 		t.Fatalf("%+v", out)
 	}
@@ -137,7 +138,7 @@ func TestProfilePrecedence(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			o := profileOptions("planner")
 			tc.set(&o)
-			s := profileSpawn(t, tc.kind, tc.args, header+builtinProfile(t, "planner").Brief())
+			s := profileSpawn(t, tc.kind, tc.args, header+builtinProfile(t, "planner").Brief()+noMemories)
 			out := s.run(context.Background(), o, nil)
 			if r := out.Result.(*Result); out.Status != "success" || r.Harness != tc.kind {
 				t.Fatalf("%+v", out)
@@ -216,7 +217,7 @@ func TestSpawnWithoutProfileIsUnchanged(t *testing.T) {
 func TestProfileNameIsRecordedOnTheAgentRecord(t *testing.T) {
 	reviewer := builtinProfile(t, "reviewer")
 	cwd := identitytest.Repository(t)
-	s := profileSpawnIn(t, cwd, "pi", []string{"--model", "openai-codex/gpt-6-astra"}, header+reviewer.Brief())
+	s := profileSpawnIn(t, cwd, "pi", []string{"--model", "openai-codex/gpt-6-astra"}, header+reviewer.Brief()+noMemories)
 	out := s.run(context.Background(), profileOptions("reviewer"), nil)
 	r := out.Result.(*Result)
 	if out.Status != "success" || !r.Registered {
@@ -367,5 +368,68 @@ func TestProfileNoWaitRejectedWithReads(t *testing.T) {
 				t.Fatalf("%+v %+v", out, out.Error)
 			}
 		})
+	}
+}
+
+// noMemories is the Project memory block of a protocol brief spawned where
+// the repository has no memories, or outside any repository.
+const noMemories = "\n\n## Project memory\nNo project memories yet."
+
+func addMemory(t *testing.T, cwd string, m memory.Memory) {
+	t.Helper()
+	if err := memory.Add(context.Background(), cwd, m, &libagent.Outcome{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProtocolProfileBriefEndsWithProjectMemoryIndex(t *testing.T) {
+	reviewer := builtinProfile(t, "reviewer")
+	cwd := identitytest.Repository(t)
+	addMemory(t, cwd, memory.Memory{Name: "herdr-socket", Description: "Herdr commands need socket access", Type: "project", Body: "b"})
+	addMemory(t, cwd, memory.Memory{Name: "alpha", Description: "First fact", Type: "user", Body: "a"})
+	want := header + reviewer.Brief() + "\n\n## Project memory\nRead one in full with `fledge memory get --name <name>`.\n\n" +
+		"- [alpha](alpha.md) — First fact\n- [herdr-socket](herdr-socket.md) — Herdr commands need socket access\n\nReview it."
+	s := profileSpawnIn(t, cwd, "pi", []string{"--model", "openai-codex/gpt-6-astra"}, want)
+	o := profileOptions("reviewer")
+	o.Prompt, o.PromptSet = "Review it.", true
+	if out := s.run(context.Background(), o, nil); out.Status != "success" {
+		t.Fatalf("%+v %+v", out, out.Error)
+	}
+}
+
+func TestProtocolProfileBriefNotesMissingMemories(t *testing.T) {
+	reviewer := builtinProfile(t, "reviewer")
+	cwd := identitytest.Repository(t)
+	s := profileSpawnIn(t, cwd, "pi", []string{"--model", "openai-codex/gpt-6-astra"}, header+reviewer.Brief()+noMemories)
+	if out := s.run(context.Background(), profileOptions("reviewer"), nil); out.Status != "success" {
+		t.Fatalf("%+v %+v", out, out.Error)
+	}
+	if _, err := os.Stat(filepath.Join(cwd, ".fledge", "memories")); !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+}
+
+// A worker placed in a linked checkout sees the primary checkout's memories.
+func TestMemoryBriefReadsPrimaryCheckoutFromLinkedCheckout(t *testing.T) {
+	root := repository(t)
+	linked := filepath.Join(root, ".fledge", "worktrees", "feat")
+	if b, err := exec.Command("git", "-C", root, "worktree", "add", "-q", "-b", "feat", linked).CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, b)
+	}
+	addMemory(t, root, memory.Memory{Name: "alpha", Description: "First fact", Type: "user", Body: "a"})
+	want := "## Project memory\nRead one in full with `fledge memory get --name <name>`.\n\n- [alpha](alpha.md) — First fact"
+	if got := memoryBrief(context.Background(), linked); got != want {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestMemoryBriefReportsUnreadableMemories(t *testing.T) {
+	root := repository(t)
+	addMemory(t, root, memory.Memory{Name: "alpha", Description: "First fact", Type: "user", Body: "a"})
+	if err := os.WriteFile(filepath.Join(root, ".fledge", "memories", "broken.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := memoryBrief(context.Background(), root); !strings.HasPrefix(got, "## Project memory\nProject memory could not be read: ") || !strings.Contains(got, "broken.md") {
+		t.Fatalf("%q", got)
 	}
 }

@@ -426,3 +426,13 @@ func TestBuiltinBriefsMatchTaskCommands(t *testing.T) {
 		t.Error("proposals accept a size key; the planner check above is stale")
 	}
 }
+
+// The shared protocol points workers at the injected memory index and at
+// recording durable facts with the memory commands.
+func TestSharedProtocolDirectsWorkersToProjectMemory(t *testing.T) {
+	for _, want := range []string{"Project memory", "`fledge memory add`"} {
+		if !strings.Contains(shared, want) {
+			t.Errorf("protocol lacks %q:\n%s", want, shared)
+		}
+	}
+}

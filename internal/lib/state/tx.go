@@ -38,7 +38,7 @@ func (tx *Tx) Put(kind, id string, v any) error {
 	if err != nil {
 		return fmt.Errorf("state: encode %s: %w", path, err)
 	}
-	return writeReplace(path, data)
+	return WriteReplace(path, data)
 }
 
 // Archive moves record id out of List's view into the archive, keeping it

@@ -108,7 +108,7 @@ func (s *Store) Create(kind string, build func(id string) any) (string, error) {
 			return "", fmt.Errorf("state: encode %s record %s: %w", kind, id, err)
 		}
 		path := filepath.Join(dir, id+recordSuffix)
-		err = writeExclusive(path, data)
+		err = WriteExclusive(path, data)
 		if errors.Is(err, fs.ErrExist) {
 			continue
 		}
