@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/brief"
+	"github.com/Harrison-Blair/fledge/internal/lib/proposal"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/tasktest"
 )
@@ -18,7 +20,7 @@ func TestTaskHelp(t *testing.T) {
 	if err := ExecuteWithArgs([]string{"task", "--help"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"create", "depend", "assign", "complete", "verify", "cancel", "list", "get"} {
+	for _, name := range []string{"create", "import", "depend", "assign", "complete", "verify", "cancel", "list", "get", "template"} {
 		if !strings.Contains(out.String(), "\n  "+name+" ") {
 			t.Fatalf("%s: %s", name, out.String())
 		}
@@ -29,6 +31,37 @@ func TestTaskHelp(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "never derived from Herdr") {
 		t.Fatal(out.String())
+	}
+}
+
+func TestTaskTemplateOutsideRepository(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("HERDR_SOCKET_PATH", "/nonexistent/herdr.sock")
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"task", "template"}, brief.Skeleton()},
+		{[]string{"task", "template", "--proposal"}, proposal.Skeleton()},
+	} {
+		var out bytes.Buffer
+		if err := ExecuteWithArgs(tc.args, &out); err != nil || out.String() != tc.want {
+			t.Fatalf("%v: %v %q", tc.args, err, out.String())
+		}
+	}
+	var out bytes.Buffer
+	if err := ExecuteWithArgs([]string{"task", "template", "--proposal", "--json"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Operation string            `json:"operation"`
+		Result    map[string]string `json:"result"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil || got.Operation != "task.template" || got.Result["kind"] != "proposal" || got.Result["text"] != proposal.Skeleton() {
+		t.Fatalf("%v %s", err, out.String())
+	}
+	if _, err := os.Stat(".fledge"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("template created state: %v", err)
 	}
 }
 
@@ -50,6 +83,8 @@ func TestTaskJSONValidation(t *testing.T) {
 		{"task", "depend", "--id", "0123abcd", "--json"},
 		{"task", "depend", "--id", "0123abcd", "--after", "nope", "--json"},
 		{"task", "create", "--title", "t", "--body", "b", "--after", "nope", "--json"},
+		{"task", "import", "--json"},
+		{"task", "import", "--file", "-", "--parent", "goal", "--json"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			var out bytes.Buffer
@@ -96,5 +131,87 @@ func TestTaskVerifyFinishedCreatedParentCLI(t *testing.T) {
 	}
 	if r := tasktest.Load(t, repo, id); r.Status != task.Verified || r.Forced || *r.VerificationNote != "grouping done" {
 		t.Fatalf("%+v", r)
+	}
+}
+
+// task create rejects a brief off the template unless --freeform.
+func TestTaskCreateBriefTemplateCLI(t *testing.T) {
+	t.Chdir(t.TempDir())
+	gitRepo(t)
+	t.Setenv("HERDR_PANE_ID", "")
+	var out bytes.Buffer
+	err := ExecuteWithArgs([]string{"task", "create", "--title", "T", "--body", "one line", "--json"}, &out)
+	var status interface{ ExitCode() int }
+	if !errors.As(err, &status) || status.ExitCode() != 1 {
+		t.Fatalf("wrong exit: %v %s", err, out.String())
+	}
+	var envelope libagent.Outcome
+	if err := json.Unmarshal(out.Bytes(), &envelope); err != nil || envelope.Error == nil || envelope.Error.Code != "task_brief_incomplete" || envelope.Error.Phase != "validation" ||
+		!strings.Contains(envelope.Error.Message, "missing sections: Objective, Acceptance criteria, Scope, Known facts, Deliverables, Constraints") {
+		t.Fatalf("%v %s", err, out.String())
+	}
+	out.Reset()
+	if err := ExecuteWithArgs([]string{"task", "create", "--title", "T", "--body", "one line", "--freeform"}, &out); err != nil || !strings.HasPrefix(out.String(), "Created task ") {
+		t.Fatalf("%v %s", err, out.String())
+	}
+	out.Reset()
+	if err := ExecuteWithArgs([]string{"task", "create", "--help"}, &out); err != nil || !strings.Contains(out.String(), "--freeform") || !strings.Contains(out.String(), "fledge task template") {
+		t.Fatalf("%v %s", err, out.String())
+	}
+}
+
+// task import creates dependent tasks that task get shows waiting.
+func TestTaskImportCLI(t *testing.T) {
+	t.Chdir(t.TempDir())
+	gitRepo(t)
+	t.Setenv("HERDR_PANE_ID", "")
+	brief := tasktest.Brief()
+	proposal := "schema_version = 1\n[parent]\ntitle = \"Goal\"\nbrief = '''\n" + brief + "'''\n" +
+		"[[tasks]]\nkey = \"second\"\ntitle = \"Second\"\nafter = [\"first\"]\nbrief = '''\n" + brief + "'''\n" +
+		"[[tasks]]\nkey = \"first\"\ntitle = \"First\"\nbrief = '''\n" + brief + "'''\n"
+	if err := os.WriteFile("plan.toml", []byte(proposal), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := ExecuteWithArgs([]string{"task", "import", "--file", "plan.toml", "--dry-run"}, &out); err != nil ||
+		out.String() != "Would create parent task: Goal\nWould create 2 tasks under it:\n  first   First\n  second  Second  (after: first)\n" {
+		t.Fatalf("%v %q", err, out.String())
+	}
+	if _, err := os.Stat(".fledge"); err == nil {
+		t.Fatal("dry run created state")
+	}
+	out.Reset()
+	if err := ExecuteWithArgs([]string{"task", "import", "--file", "plan.toml", "--json"}, &out); err != nil {
+		t.Fatalf("%v %s", err, out.String())
+	}
+	var envelope struct {
+		Status string
+		Result struct {
+			Parent string
+			Tasks  []struct{ ID string }
+		}
+		Effects []libagent.Effect
+	}
+	if err := json.Unmarshal(out.Bytes(), &envelope); err != nil || envelope.Status != "success" || len(envelope.Result.Tasks) != 2 {
+		t.Fatalf("%v %s", err, out.String())
+	}
+	first, second := envelope.Result.Tasks[0].ID, envelope.Result.Tasks[1].ID
+	var created []string
+	for _, e := range envelope.Effects {
+		if e.Action == "created" && e.Kind == "task" {
+			created = append(created, e.ID)
+		}
+	}
+	if strings.Join(created, " ") != envelope.Result.Parent+" "+first+" "+second {
+		t.Fatal(out.String())
+	}
+	out.Reset()
+	if err := ExecuteWithArgs([]string{"task", "get", "--id", second}, &out); err != nil ||
+		!strings.Contains(out.String(), "parent: "+envelope.Result.Parent+"\n") || !strings.Contains(out.String(), "after: "+first+" (created, waiting)\n") {
+		t.Fatalf("%v %s", err, out.String())
+	}
+	out.Reset()
+	if err := ExecuteWithArgs([]string{"task", "import", "--help"}, &out); err != nil || !strings.Contains(out.String(), ".fledge/tmp/plans/") || !strings.Contains(out.String(), "fledge task template --proposal") {
+		t.Fatalf("%v %s", err, out.String())
 	}
 }

@@ -12,7 +12,7 @@ import (
 )
 
 func TestAgentHelp(t *testing.T) {
-	for _, args := range [][]string{{"agent", "--help"}, {"agent", "spawn", "--help"}, {"agent", "list", "--help"}, {"agent", "message", "--help"}, {"agent", "models", "--help"}, {"agent", "stop", "--help"}, {"agent", "get", "--help"}, {"agent", "read", "--help"}, {"agent", "wait", "--help"}, {"agent", "adopt", "--help"}, {"agent", "current", "--help"}, {"agent", "send", "--help"}, {"agent", "cleanup", "--help"}} {
+	for _, args := range [][]string{{"agent", "--help"}, {"agent", "spawn", "--help"}, {"agent", "list", "--help"}, {"agent", "message", "--help"}, {"agent", "models", "--help"}, {"agent", "stop", "--help"}, {"agent", "get", "--help"}, {"agent", "read", "--help"}, {"agent", "wait", "--help"}, {"agent", "adopt", "--help"}, {"agent", "current", "--help"}, {"agent", "send", "--help"}, {"agent", "cleanup", "--help"}, {"agent", "capabilities", "--help"}, {"agent", "rename", "--help"}} {
 		var out bytes.Buffer
 		if err := ExecuteWithArgs(args, &out); err != nil {
 			t.Fatal(err)
@@ -20,6 +20,23 @@ func TestAgentHelp(t *testing.T) {
 		if !strings.Contains(out.String(), "Usage:") {
 			t.Fatal(out.String())
 		}
+	}
+}
+
+// TestAgentCapabilitiesOffline runs outside Herdr: without --live no socket is needed.
+func TestAgentCapabilitiesOffline(t *testing.T) {
+	t.Setenv("HERDR_ENV", "")
+	t.Setenv("HERDR_SOCKET_PATH", "")
+	var out bytes.Buffer
+	if err := ExecuteWithArgs([]string{"agent", "capabilities", "--harness", "claude"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "claude") || !strings.Contains(out.String(), "resume") {
+		t.Fatal(out.String())
+	}
+	out.Reset()
+	if err := ExecuteWithArgs([]string{"agent", "capabilities", "--live", "--json"}, &out); err == nil || !strings.Contains(out.String(), `"phase":"integration.list"`) {
+		t.Fatalf("%v %s", err, out.String())
 	}
 }
 func TestAgentJSONValidation(t *testing.T) {
@@ -30,13 +47,15 @@ func TestAgentJSONValidation(t *testing.T) {
 		{"agent", "message", "--name", "a", "--body", "", "--json"},
 		{"agent", "models", "--harness", "nope", "--json"},
 		{"agent", "models", "extra", "--json"},
+		{"agent", "capabilities", "--harness", "nope", "--json"},
+		{"agent", "capabilities", "extra", "--json"},
 		{"agent", "get", "--json"},
 		{"agent", "get", "--name=", "--json"},
 		{"agent", "get", "--pane=", "--json"},
 		{"agent", "get", "--name", "a", "--pane", "p", "--json"},
 		{"agent", "get", "extra", "--json"},
 		{"agent", "stop", "--json"},
-		{"agent", "stop", "--name", "a", "--pane", "p", "--json"},
+		{"agent", "stop", "--name", "a", "--name", "a", "--json"},
 		{"agent", "stop", "extra", "--json"},
 		{"agent", "read", "--json"},
 		{"agent", "read", "--name", "a", "--source", "recent_unwrapped", "--json"},
@@ -52,9 +71,18 @@ func TestAgentJSONValidation(t *testing.T) {
 		{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "p", "--cwd=", "--json"},
 		{"agent", "adopt", "--pane", "p", "--name", "Bad", "--json"},
 		{"agent", "adopt", "extra", "--json"},
+		{"agent", "rename", "--json"},
+		{"agent", "rename", "--to", "Bad", "--json"},
+		{"agent", "rename", "--name", "a", "--pane", "p", "--to", "b", "--json"},
+		{"agent", "rename", "extra", "--to", "b", "--json"},
 		{"agent", "get", "--name", "a", "--id", "0000beef", "--json"},
-		{"agent", "message", "--pane", "p", "--id", "0000beef", "--body", "x", "--json"},
-		{"agent", "stop", "--name", "a", "--id", "0000beef", "--json"},
+		{"agent", "message", "--name", "a", "--name", "a", "--body", "x", "--json"},
+		{"agent", "message", "--name", "a", "--state", "idle", "--body", "x", "--json"},
+		{"agent", "message", "--state", "asleep", "--body", "x", "--json"},
+		{"agent", "message", "--id", "BEEF", "--body", "x", "--json"},
+		{"agent", "stop", "--name", "a", "--state", "idle", "--json"},
+		{"agent", "stop", "--state", "asleep", "--dry-run", "--json"},
+		{"agent", "stop", "--id", "BEEF", "--json"},
 		{"agent", "read", "--pane", "p", "--id", "0000beef", "--json"},
 		{"agent", "pause", "--name", "a", "--id", "0000beef", "--json"},
 		{"agent", "wait", "--name", "a", "--id", "0000beef", "--json"},
@@ -89,7 +117,7 @@ func TestAgentGroupHelpListsSubcommands(t *testing.T) {
 	if err := ExecuteWithArgs([]string{"agent", "--help"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"stop", "get", "read", "wait", "adopt", "current", "cleanup"} {
+	for _, name := range []string{"stop", "get", "read", "wait", "adopt", "rename", "current", "cleanup"} {
 		if !strings.Contains(out.String(), "\n  "+name+" ") {
 			t.Fatalf("%s: %s", name, out.String())
 		}
@@ -128,6 +156,7 @@ func TestAgentOutputFailureNotReclassified(t *testing.T) {
 }
 
 // Record ID flags describe lookups by terminal, which follow a moved pane.
+// agent usage reports an ended agent from its record instead of failing.
 func TestRecordIDFlagHelp(t *testing.T) {
 	var walk func(c *cobra.Command)
 	found := 0
@@ -138,7 +167,11 @@ func TestRecordIDFlagHelp(t *testing.T) {
 				continue
 			}
 			found++
-			if !strings.Contains(f.Usage, "follows its terminal to a new pane; fails if the terminal is gone") {
+			want := "follows its terminal to a new pane; fails if the terminal is gone"
+			if c.CommandPath() == "fledge agent usage" {
+				want = "follows its terminal to a new pane; reports from the record if the agent has ended"
+			}
+			if !strings.Contains(f.Usage, want) {
 				t.Errorf("%s --%s: %q", c.CommandPath(), name, f.Usage)
 			}
 		}
@@ -147,7 +180,7 @@ func TestRecordIDFlagHelp(t *testing.T) {
 		}
 	}
 	walk(NewRootCmd())
-	if found != 8 {
-		t.Fatalf("found %d record ID flags, want 8", found)
+	if found != 10 {
+		t.Fatalf("found %d record ID flags, want 10", found)
 	}
 }

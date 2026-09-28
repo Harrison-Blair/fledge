@@ -70,3 +70,40 @@ func TestStopInvalidGraceIsRejectedBeforeHerdr(t *testing.T) {
 		})
 	}
 }
+
+// Repeated --name flags stop each agent in turn; one refusal makes the
+// outcome partial with exit status 1.
+func TestStopSeveralNamesExitsPartial(t *testing.T) {
+	l := newSocket(t)
+	done := serveRPCs(l, stopAgent("idle"), map[string]any{"type": "ok"}, stopAgent("blocked"))
+	var out bytes.Buffer
+	err := ExecuteWithArgs([]string{"agent", "stop", "--name", "a", "--name", "b"}, &out)
+	calls := waitCalls(t, l, done, 3)
+	var status interface{ ExitCode() int }
+	if !errors.As(err, &status) || status.ExitCode() != 1 || calls[1].Method != "pane.close" || calls[2].Method != "agent.get" || paramsField(t, calls[2], "target") != "b" {
+		t.Fatalf("%v %+v", err, calls)
+	}
+	for _, want := range []string{"Stopped 1 of 2 agents.", "  stopped  a (w1:p1)", "  refused  b (w1:p1): agent b is blocked"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q in %q", want, out.String())
+		}
+	}
+}
+
+// --dry-run only looks targets up and exits zero when every target resolves.
+func TestStopDryRunOnlyLooksUp(t *testing.T) {
+	l := newSocket(t)
+	// A spare reply lets a stray mutating call be served and counted.
+	done := serveRPCs(l, stopAgent("idle"), stopAgent("working"), map[string]any{"type": "ok"})
+	var out bytes.Buffer
+	if err := ExecuteWithArgs([]string{"agent", "stop", "--name", "a", "--pane", "w1:p1", "--dry-run"}, &out); err != nil {
+		t.Fatal(err, out.String())
+	}
+	calls := waitCalls(t, l, done, 2)
+	if calls[0].Method != "agent.get" || calls[1].Method != "agent.get" {
+		t.Fatalf("%+v", calls)
+	}
+	if !strings.HasPrefix(out.String(), "Dry run: would stop 1 of 2 agents.\n  stop    a (w1:p1, idle)\n  refuse  w1:p1 (w1:p1, working): agent w1:p1 is working") {
+		t.Fatalf("%q", out.String())
+	}
+}

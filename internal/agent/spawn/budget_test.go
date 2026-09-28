@@ -57,31 +57,31 @@ func TestSpawnBudgetRejectsLateReplies(t *testing.T) {
 		calls       func(late func()) []call
 	}{
 		{"start ack", "agent.wait", false, false, func(late func()) []call {
-			return []call{{Method: "agent.start", Result: started(p), Before: late}}
+			return []call{labeled(p), {Method: "agent.start", Result: started(p), Before: late}}
 		}},
 		{"lifecycle wait", "agent.wait", false, false, func(late func()) []call {
-			return []call{{Method: "agent.start", Result: started(p)}, {Method: "agent.wait", Result: ready, Before: late}}
+			return []call{labeled(p), {Method: "agent.start", Result: started(p)}, {Method: "agent.wait", Result: ready, Before: late}}
 		}},
 		{"readiness poll", "agent.wait", false, false, func(late func()) []call {
 			poll := getCall(ready)
 			poll.Before = late
-			return []call{{Method: "agent.start", Result: started(p)}, {Method: "agent.wait", Result: launching(p, "idle", nil, flag(true))}, poll}
+			return []call{labeled(p), {Method: "agent.start", Result: started(p)}, {Method: "agent.wait", Result: launching(p, "idle", nil, flag(true))}, poll}
 		}},
 		{"lifecycle wait cut off", "agent.wait", false, false, func(late func()) []call {
-			return []call{{Method: "agent.start", Result: started(p)}, {Method: "agent.wait", Err: cutOff(), Before: late}}
+			return []call{labeled(p), {Method: "agent.start", Result: started(p)}, {Method: "agent.wait", Err: cutOff(), Before: late}}
 		}},
 		{"readiness poll cut off", "agent.wait", false, false, func(late func()) []call {
-			return []call{{Method: "agent.start", Result: started(p)}, {Method: "agent.wait", Result: launching(p, "idle", nil, flag(true))}, {Method: "agent.get", Err: cutOff(), Before: late}}
+			return []call{labeled(p), {Method: "agent.start", Result: started(p)}, {Method: "agent.wait", Result: launching(p, "idle", nil, flag(true))}, {Method: "agent.get", Err: cutOff(), Before: late}}
 		}},
 		{"registration", "agent.prompt", true, true, func(late func()) []call {
 			lookup := callerNotAgent()
 			lookup.Before = late
-			return []call{{Method: "agent.start", Result: started(p)}, {Method: "agent.wait", Result: ready}, lookup}
+			return []call{labeled(p), {Method: "agent.start", Result: started(p)}, {Method: "agent.wait", Result: ready}, lookup}
 		}},
 		{"sender lookup", "agent.prompt", false, false, func(late func()) []call {
 			sender := senderCall()
 			sender.Before = late
-			return []call{{Method: "agent.start", Result: started(p)}, {Method: "agent.wait", Result: ready}, sender}
+			return []call{labeled(p), {Method: "agent.start", Result: started(p)}, {Method: "agent.wait", Result: ready}, sender}
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -118,7 +118,7 @@ func TestSpawnBudgetKeepsLateRegistrationWithoutPrompt(t *testing.T) {
 	s := lateSpawn(t, func(late func()) []call {
 		lookup := callerNotAgent()
 		lookup.Before = late
-		return []call{{Method: "agent.start", Result: started(p)}, {Method: "agent.wait", Result: launching(p, "idle", flag(true), nil)}, lookup}
+		return []call{labeled(p), {Method: "agent.start", Result: started(p)}, {Method: "agent.wait", Result: launching(p, "idle", flag(true), nil)}, lookup}
 	})
 	s.Cwd = identitytest.Repository(t)
 	o := budgetOptions()
@@ -133,7 +133,7 @@ func TestSpawnBudgetKeepsLateRegistrationWithoutPrompt(t *testing.T) {
 func TestSpawnBudgetLostPromptAckIsUnknown(t *testing.T) {
 	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
 	s := lateSpawn(t, func(late func()) []call {
-		return []call{{Method: "agent.start", Result: started(p)}, {Method: "agent.wait", Result: launching(p, "idle", flag(true), nil)}, senderCall(),
+		return []call{labeled(p), {Method: "agent.start", Result: started(p)}, {Method: "agent.wait", Result: launching(p, "idle", flag(true), nil)}, senderCall(),
 			{Method: "agent.prompt", Err: cutOff(), Before: late}}
 	})
 	out := s.run(context.Background(), budgetOptions(), nil)
@@ -162,7 +162,7 @@ func (d *deadlines) Call(ctx context.Context, method string, params, result any)
 // --timeout deadline, so a late reply is cut off instead of awaited.
 func TestSpawnBudgetBoundsEveryRequestFromStart(t *testing.T) {
 	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
-	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p)}, call{Method: "agent.wait", Result: launching(p, "idle", nil, flag(true))}, getCall(launching(p, "idle", flag(true), nil)), senderCall(), call{Method: "agent.prompt", Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: launching(p, "working", flag(true), nil).Agent.Pane}}})
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, labeled(p), call{Method: "agent.start", Result: started(p)}, call{Method: "agent.wait", Result: launching(p, "idle", nil, flag(true))}, getCall(launching(p, "idle", flag(true), nil)), senderCall(), call{Method: "agent.prompt", Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: launching(p, "working", flag(true), nil).Agent.Pane}}})
 	s.Wait = func(context.Context, time.Duration) error { return nil }
 	d := &deadlines{inner: s.API, seen: map[string][]time.Time{}}
 	s.API = d

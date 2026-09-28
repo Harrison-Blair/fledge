@@ -7,6 +7,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/agent/stop"
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/worktree/remove"
 )
@@ -99,7 +100,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			w.Outcome, w.Reason = "skipped", &r
 			continue
 		}
-		w.Outcome, w.Reason = record(stop.Run(ctx, c, stop.Options{Target: identity.Target{ID: w.ID}}))
+		w.Outcome, w.Reason = record(stop.Run(ctx, c, stop.Options{Selection: selector.Selection{IDs: []string{w.ID}}}))
 		stopped[w.ID] = w.Outcome == "done"
 	}
 	for i := range p.Checkouts {

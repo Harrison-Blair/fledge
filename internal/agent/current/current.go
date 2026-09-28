@@ -91,7 +91,7 @@ func Render(w io.Writer, o libagent.Outcome) error {
 	}
 	for _, f := range []struct{ label, value string }{
 		{"Fledge ID", r.ID}, {"Name", libagent.Display(r.Name)}, {"Pane", r.Pane}, {"Workspace ID", r.WorkspaceID},
-		{"Harness", libagent.Display(r.Harness)}, {"Worktree", libagent.Display(r.WorktreePath)}, {"Parent", parent},
+		{"Harness", libagent.Display(r.Harness)}, {"Worktree", libagent.Display(r.WorktreePath)}, {"Profile", libagent.Display(r.Profile)}, {"Parent", parent},
 	} {
 		if _, err := fmt.Fprintf(w, "%s: %s\n", f.label, f.value); err != nil {
 			return err

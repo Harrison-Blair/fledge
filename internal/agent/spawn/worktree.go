@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/fledgedir"
 	"github.com/Harrison-Blair/fledge/internal/lib/gitstatus"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
@@ -105,6 +106,13 @@ func (s *spawner) worktreePlacement(ctx context.Context, o Options, snap *herdr.
 	if !alreadyOpen {
 		if method == "worktree.create" {
 			out.Effects = append(out.Effects, libagent.Effect{Action: "created", Kind: "worktree", Path: path})
+			// Herdr cannot undo the checkout, so a failure here is partial.
+			if _, err = fledgedir.Ensure(path, out); err != nil {
+				recordCreated(out, r, true)
+				err = fmt.Errorf("prepare .fledge in new worktree %s: %w", path, err)
+				out.Fail(err, "worktree.ignore", false)
+				return herdr.Pane{}, err
+			}
 			s.checkout.Created, s.checkout.Base, s.checkout.Branch = true, base, &branch
 			// Mark this checkout so cleanup can tell it from a later one at
 			// the same path. Unmarked, cleanup only reports it.

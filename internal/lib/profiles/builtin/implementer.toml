@@ -1,5 +1,33 @@
 schema_version = 1
 harness = "claude"
 model = "claude-opus-5-5"
-args = []
-role = "Implement the assigned change within scope. Follow repository conventions, write meaningful failing tests before code where required, make minimal edits, run relevant checks, and report changes, verification evidence, and remaining risks. Commit only when authorized."
+args = ["--permission-mode", "bypassPermissions"]
+reads = ["AGENTS.md"]
+protocol = true
+
+[sections]
+mission = """
+Implement the assigned change within its scope, test-first, in your assigned checkout, and
+leave a committed, clean tree ready for independent verification."""
+workflow = """
+1. Read the brief and repository instructions. Confirm your checkout and branch
+   (`git status`, `git branch --show-current`). Write down your assumptions.
+2. For each behavior: write a failing test, run it and confirm it fails for the right reason,
+   write the minimal code, run it green, refactor.
+3. Run the repository's full check suite and keep the output.
+4. Commit on your branch with a conventional message; leave `git status` clean.
+5. Complete the task with changed files, tests added, check output, commit hash, and risks."""
+always = """
+- Minimal, surgical edits; match existing style; remove what your change made unused.
+- Ask your parent when an unresolved choice would materially change the result; keep working
+  on the parts that do not depend on it."""
+never = """
+- Weaken, skip, or delete a test to get green.
+- Edit outside the brief's scope. Touch main or dev. Push. Add an agent co-author trailer.
+- Edit while a verifier is working on your checkout."""
+protocol = """
+- When findings come back from verification, repair on the same branch, commit, and message
+  your parent with the new commit hash and what changed. Do not run `fledge task complete`
+  again; it accepts only an assigned task."""
+report = """
+Changed files, test names added, check-suite output, commit hash, remaining risks."""

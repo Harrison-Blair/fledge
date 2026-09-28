@@ -1,4 +1,3 @@
-// Package message implements agent message: acknowledged prompt submission.
 package message
 
 import (
@@ -10,11 +9,12 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
-	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 )
 
+// Options selects one or more targets by name, pane, record ID, or filter.
 type Options struct {
-	identity.Target
+	selector.Selection
 	Body, File       string
 	BodySet, FileSet bool
 	// Confirm waits up to Timeout for observed activity after submission.
@@ -31,49 +31,56 @@ type Result struct {
 	AlreadyWorking bool             `json:"already_working,omitempty"`
 }
 
-func (o Options) read(in io.Reader) (identity.Target, string, error) {
-	target := o.Target
-	if err := target.Validate(); err != nil {
-		return target, "", err
+func (o Options) read(in io.Reader) (string, error) {
+	if err := o.Selection.Validate(); err != nil {
+		return "", err
 	}
 	if o.TimeoutSet && !o.Confirm {
-		return target, "", libagent.Invalid("--timeout requires --confirm")
+		return "", libagent.Invalid("--timeout requires --confirm")
 	}
 	if o.Confirm && o.Timeout < time.Millisecond {
-		return target, "", libagent.Invalid("--timeout must be at least 1ms")
+		return "", libagent.Invalid("--timeout must be at least 1ms")
 	}
-	text, err := libagent.ReadText(in, libagent.TextInput{Body: o.Body, BodyFlag: "body", BodySet: o.BodySet, File: o.File, FileFlag: "file", FileSet: o.FileSet, Required: true, Noun: "message"})
-	if err != nil {
-		return target, "", err
-	}
-	return target, text, nil
+	return libagent.ReadText(in, libagent.TextInput{Body: o.Body, BodyFlag: "body", BodySet: o.BodySet, File: o.File, FileFlag: "file", FileSet: o.FileSet, Required: true, Noun: "message"})
 }
 
 // Run submits a message, prefixed with a sender header, without waiting for
-// the agent to finish its turn.
+// the agent to finish its turn. Several targets receive the same header and
+// message ID, one after another; a single target's result is unchanged.
 func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libagent.Outcome {
 	return run(ctx, c, o, in, libagent.NewMessageID())
 }
 func run(ctx context.Context, c libagent.Client, o Options, in io.Reader, id string) libagent.Outcome {
 	out := libagent.Outcome{Operation: "agent.message", Status: "success", Effects: []libagent.Effect{}}
-	selected, text, err := o.read(in)
+	text, err := o.read(in)
 	if err != nil {
 		out.Fail(err, "validation", false)
 		return out
 	}
-	a, target, _, err := selected.Get(ctx, c)
+	targets, err := o.Selection.Targets(ctx, c)
 	if err != nil {
 		out.Fail(err, "agent.get", false)
 		return out
 	}
 	sender := libagent.ResolveSender(ctx, c)
-	result := Result{AgentRow: libagent.NewAgentRow(a.Pane), MessageID: id, Sender: &sender}
+	text = libagent.WithHeader(id, sender, text)
+	if len(targets) > 1 {
+		return fanOut(ctx, c, o, targets, text, id, &sender)
+	}
+	return deliver(ctx, c, o, targets[0], text, id, &sender)
+}
+
+// deliver submits text, which already carries its header, to one target.
+func deliver(ctx context.Context, c libagent.Client, o Options, t selector.Target, text, id string, sender *libagent.Sender) libagent.Outcome {
+	out := libagent.Outcome{Operation: "agent.message", Status: "success", Effects: []libagent.Effect{}}
+	a, target := t.Agent, t.Pane
+	result := Result{AgentRow: libagent.NewAgentRow(a.Pane), MessageID: id, Sender: sender}
 	if o.Confirm {
 		result.Confirmed = new(bool)
 	}
 	out.Result = result
-	text = libagent.WithHeader(id, sender, text)
 	var agent herdr.AgentDetails
+	var err error
 	if o.Confirm {
 		agent, err = c.PromptConfirm(ctx, target, text, o.Timeout)
 	} else {
@@ -128,6 +135,9 @@ func confirmFailure(out *libagent.Outcome, err error, pane string) {
 // Render writes a message outcome, adding a no-resend hint when a confirmed
 // message may have been, or was, submitted without confirmed activity.
 func Render(w io.Writer, o libagent.Outcome) error {
+	if f, ok := o.Result.(FanOut); ok {
+		return renderFanOut(w, f)
+	}
 	r, ok := o.Result.(Result)
 	if !ok {
 		return nil

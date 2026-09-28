@@ -176,10 +176,18 @@ func recordCreated(out *libagent.Outcome, r herdr.CreatedResult, workspace bool)
 		setPlacement(out.Result.(*Result), r.RootPane)
 	}
 }
+
+// tabLabel labels a tab spawn creates: --tab, else the agent's name.
+func (o Options) tabLabel() string {
+	if o.Tab != "" {
+		return o.Tab
+	}
+	return o.Name
+}
 func (s *spawner) initialTab(ctx context.Context, o Options, r herdr.CreatedResult, out *libagent.Outcome) (herdr.Pane, error) {
-	if o.Tab != "" && r.Tab.Label != o.Tab {
+	if label := o.tabLabel(); r.Tab.Label != label {
 		var renamed herdr.TabResult
-		err := s.Call(ctx, "tab.rename", map[string]any{"tab_id": r.Tab.ID, "label": o.Tab}, &renamed)
+		err := s.Call(ctx, "tab.rename", map[string]any{"tab_id": r.Tab.ID, "label": label}, &renamed)
 		if err == nil && (renamed.Type != "tab_info" || renamed.Tab.ID != r.Tab.ID || renamed.Tab.WorkspaceID != r.Tab.WorkspaceID) {
 			err = libagent.Protocol("incomplete tab.rename result")
 		}
@@ -206,9 +214,7 @@ func (s *spawner) placeInWorkspace(ctx context.Context, o Options, ws string, sn
 	params := shellParams(o)
 	params["workspace_id"] = ws
 	if selected == nil {
-		if o.Tab != "" {
-			params["label"] = o.Tab
-		}
+		params["label"] = o.tabLabel()
 		var r herdr.CreatedResult
 		err = s.Call(ctx, "tab.create", params, &r)
 		if err == nil {

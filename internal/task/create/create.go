@@ -11,25 +11,27 @@ import (
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/brief"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 )
 
 type Options struct {
-	Title, Body, File, Parent string
-	After                     []string
-	BodySet, FileSet          bool
+	Title, Body, File, Parent  string
+	After                      []string
+	BodySet, FileSet, Freeform bool
 }
 
-// Run stores a new task. The creator is the caller's live agent record, or
+// Run stores a new task. The brief must follow the brief template unless
+// Freeform is set. The creator is the caller's live agent record, or
 // null when the caller is unregistered. A Parent must exist and be neither
 // verified nor cancelled, and every After prerequisite must exist; both are
 // checked and the task stored under one store lock. Repeated prerequisites
 // are stored once.
 func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libagent.Outcome {
 	out := libagent.Outcome{Operation: "task.create", Status: "success", Effects: []libagent.Effect{}}
-	var brief string
+	var text string
 	var after []string
 	var err error
 	for _, id := range o.After {
@@ -47,7 +49,10 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 	case o.Title == "" || strings.ContainsAny(o.Title, "\r\n"):
 		err = libagent.Invalid("--title must be nonempty and a single line")
 	default:
-		brief, err = libagent.ReadText(in, libagent.TextInput{Body: o.Body, BodyFlag: "body", BodySet: o.BodySet, File: o.File, FileFlag: "file", FileSet: o.FileSet, Required: true, Noun: "brief"})
+		text, err = libagent.ReadText(in, libagent.TextInput{Body: o.Body, BodyFlag: "body", BodySet: o.BodySet, File: o.File, FileFlag: "file", FileSet: o.FileSet, Required: true, Noun: "brief"})
+		if err == nil && !o.Freeform {
+			err = brief.Validate(text)
+		}
 	}
 	if err != nil {
 		out.Fail(err, "validation", false)
@@ -83,7 +88,7 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 			}
 		}
 		_, err := tx.Create(task.Kind, func(id string) any {
-			r = task.Record{ID: id, Title: o.Title, Brief: brief, After: after, Status: task.Created, CreatedAt: *task.Now()}
+			r = task.Record{ID: id, Title: o.Title, Brief: text, After: after, Status: task.Created, CreatedAt: *task.Now()}
 			if o.Parent != "" {
 				r.Parent = &o.Parent
 			}

@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/harness"
 )
 
 // Options are the user-supplied launch and placement settings.
@@ -77,15 +78,16 @@ func modelArguments(kind, model string, args []string) ([]string, error) {
 	if model == "" {
 		return result, nil
 	}
-	if slices.Contains([]string{"kiro", "amp", "muse", "mastracode", "qodercli"}, kind) {
+	profile, _ := harness.Lookup(kind)
+	policy := profile.Model
+	if policy.Flag == "" {
 		return nil, libagent.Invalid("--model is not verified for %s; pass native arguments explicitly", kind)
 	}
-	short := slices.Contains(strings.Fields("codex gemini cline opencode kimi droid grok hermes kilo qwen letta maki"), kind)
 	for i, arg := range args {
 		if arg == "--" {
 			break
 		}
-		if arg == "--model" || strings.HasPrefix(arg, "--model=") || short && strings.HasPrefix(arg, "-m") {
+		if arg == "--model" || strings.HasPrefix(arg, "--model=") || policy.ShortConflict && strings.HasPrefix(arg, "-m") {
 			return nil, libagent.Invalid("native model option conflicts with --model")
 		}
 		if kind == "codex" {
@@ -107,12 +109,8 @@ func modelArguments(kind, model string, args []string) ([]string, error) {
 			}
 		}
 	}
-	prefix := []string{"--model", model}
-	if kind == "hermes" {
-		prefix = append([]string{"chat"}, prefix...)
-		if len(result) > 0 && result[0] == "chat" {
-			result = result[1:]
-		}
+	if slices.Equal(result[:min(len(policy.Prefix), len(result))], policy.Prefix) {
+		result = result[len(policy.Prefix):]
 	}
-	return append(prefix, result...), nil
+	return append(append(policy.Prefix, policy.Flag, model), result...), nil
 }

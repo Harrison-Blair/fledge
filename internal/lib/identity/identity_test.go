@@ -1,7 +1,9 @@
 package identity
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -75,7 +77,7 @@ func TestRegisterRecordsAgentWithoutParent(t *testing.T) {
 	tree := "/repo/.fledge/worktrees/w"
 	before := time.Now().Add(-time.Second)
 	base := "dev"
-	rec, err := Register(context.Background(), s, c, details("w1:p3", "term_a"), "spawn", &Checkout{Path: tree, Created: true, Base: &base})
+	rec, err := Register(context.Background(), s, c, details("w1:p3", "term_a"), "spawn", &Checkout{Path: tree, Created: true, Base: &base}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,11 +102,11 @@ func TestRegisterParentIsCallersLiveRecord(t *testing.T) {
 	c := client(t, call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Err: notFound()},
 		call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: info(parent)})
 	s := store(t, c)
-	p, err := Register(context.Background(), s, c, parent, "adopt", nil)
+	p, err := Register(context.Background(), s, c, parent, "adopt", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	child, err := Register(context.Background(), s, c, details("w1:p3", "term_child"), "spawn", nil)
+	child, err := Register(context.Background(), s, c, details("w1:p3", "term_child"), "spawn", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,10 +121,10 @@ func TestRegisterParentNullWhenCallerRecordIsStale(t *testing.T) {
 	c := client(t, call{Method: "agent.get", Err: notFound()},
 		call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: info(details("old:p1", "term_new"))})
 	s := store(t, c)
-	if _, err := Register(context.Background(), s, c, details("old:p1", "term_old"), "adopt", nil); err != nil {
+	if _, err := Register(context.Background(), s, c, details("old:p1", "term_old"), "adopt", nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	child, err := Register(context.Background(), s, c, details("w1:p3", "term_child"), "spawn", nil)
+	child, err := Register(context.Background(), s, c, details("w1:p3", "term_child"), "spawn", nil, nil)
 	if err != nil || child.Parent != nil {
 		t.Fatalf("%+v %v", child, err)
 	}
@@ -130,7 +132,7 @@ func TestRegisterParentNullWhenCallerRecordIsStale(t *testing.T) {
 
 func TestRegisterRequiresTerminalID(t *testing.T) {
 	c := client(t)
-	if _, err := Register(context.Background(), store(t, c), c, details("w1:p3", ""), "spawn", nil); err == nil {
+	if _, err := Register(context.Background(), store(t, c), c, details("w1:p3", ""), "spawn", nil, nil); err == nil {
 		t.Fatal("registered an agent without a terminal id")
 	}
 }
@@ -159,7 +161,7 @@ func TestOpenStoreCreatesIgnoredStateDirectory(t *testing.T) {
 func registered(t *testing.T, c libagent.Client, d herdr.AgentDetails) Record {
 	t.Helper()
 	c.CallerPane = ""
-	rec, err := Register(context.Background(), store(t, c), c, d, "spawn", nil)
+	rec, err := Register(context.Background(), store(t, c), c, d, "spawn", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,11 +424,11 @@ func TestCallerFollowsMovedTerminal(t *testing.T) {
 	c := client(t, call{Method: "agent.get", Err: notFound()},
 		call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: info(moved("old:p1", "old", "term_parent"))})
 	s := store(t, c)
-	parent, err := Register(context.Background(), s, c, details("w1:p9", "term_parent"), "adopt", nil)
+	parent, err := Register(context.Background(), s, c, details("w1:p9", "term_parent"), "adopt", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	child, err := Register(context.Background(), s, c, details("w1:p3", "term_child"), "spawn", nil)
+	child, err := Register(context.Background(), s, c, details("w1:p3", "term_child"), "spawn", nil, nil)
 	if err != nil || child.Parent == nil || *child.Parent != parent.ID {
 		t.Fatalf("%+v %v", child, err)
 	}
@@ -439,7 +441,7 @@ func TestCallerFollowsMovedTerminal(t *testing.T) {
 func TestRegisterRefusesTerminalWithLiveRecord(t *testing.T) {
 	c := client(t)
 	first := registered(t, c, details("w1:p3", "term_a"))
-	_, err := Register(context.Background(), store(t, c), libagent.Client{}, details("w1:p3", "term_a"), "spawn", nil)
+	_, err := Register(context.Background(), store(t, c), libagent.Client{}, details("w1:p3", "term_a"), "spawn", nil, nil)
 	var remote *herdr.Error
 	if !errors.As(err, &remote) || remote.Code != "agent_already_registered" || !strings.Contains(remote.Message, first.ID) {
 		t.Fatalf("%v", err)
@@ -483,7 +485,7 @@ func TestCallerPropagatesLookupFailures(t *testing.T) {
 			if rec != nil || err == nil {
 				t.Fatalf("%+v %v", rec, err)
 			}
-			if _, err := Register(context.Background(), store(t, c), c, details("w1:p3", "term_a"), "spawn", nil); err == nil {
+			if _, err := Register(context.Background(), store(t, c), c, details("w1:p3", "term_a"), "spawn", nil, nil); err == nil {
 				t.Fatal("registered without a provable parent lookup")
 			}
 		})
@@ -628,7 +630,7 @@ func TestRegisterReplacesRecordOfDifferentHarness(t *testing.T) {
 	if rec, err := Registered(s, now); err != nil || rec != nil {
 		t.Fatalf("%+v %v", rec, err)
 	}
-	rec, err := Register(context.Background(), s, libagent.Client{}, now, "adopt", nil)
+	rec, err := Register(context.Background(), s, libagent.Client{}, now, "adopt", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -682,7 +684,7 @@ func TestRegisterScansRecordsOnce(t *testing.T) {
 	parent := registered(t, c, caller)
 	old := registered(t, c, running(details("w1:p3", "term_a"), "codex"))
 	n := countScans(t)
-	rec, err := Register(context.Background(), s, c, running(details("w1:p3", "term_a"), "claude"), "adopt", nil)
+	rec, err := Register(context.Background(), s, c, running(details("w1:p3", "term_a"), "claude"), "adopt", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -713,7 +715,7 @@ func TestConcurrentRegistrationsAcrossHarnessesLeaveOneLiveRecord(t *testing.T) 
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				_, err := Register(context.Background(), s, libagent.Client{}, running(details("w1:p3", terminal), harness), "adopt", nil)
+				_, err := Register(context.Background(), s, libagent.Client{}, running(details("w1:p3", terminal), harness), "adopt", nil, nil)
 				if err != nil && code(err) != "agent_already_registered" {
 					errs <- err
 				}
@@ -939,7 +941,7 @@ func TestRenameUpdatesNameAndLocationKeepingRecord(t *testing.T) {
 			d.Name = stored
 			tree := "/repo/.fledge/worktrees/w"
 			c.CallerPane = ""
-			rec, err := Register(context.Background(), store(t, c), c, d, "spawn", &Checkout{Path: tree})
+			rec, err := Register(context.Background(), store(t, c), c, d, "spawn", &Checkout{Path: tree}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1015,7 +1017,7 @@ func TestChildrenIncludesEndedRecordsOfOneParent(t *testing.T) {
 	s := store(t, c)
 	register := func(terminal string, parent *string) Record {
 		t.Helper()
-		rec, err := Register(context.Background(), s, c, details("w1:"+terminal, terminal), "spawn", nil)
+		rec, err := Register(context.Background(), s, c, details("w1:"+terminal, terminal), "spawn", nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1046,5 +1048,126 @@ func TestChildrenIncludesEndedRecordsOfOneParent(t *testing.T) {
 	}
 	if got, err := Children(nil, parent.ID); err != nil || len(got) != 0 {
 		t.Fatalf("Children of a nil store = %v, %v", got, err)
+	}
+}
+
+func TestRegisterRecordsProfileAfterParent(t *testing.T) {
+	c := client(t, call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Err: notFound()})
+	s := store(t, c)
+	profile := "reviewer"
+	rec, err := Register(context.Background(), s, c, details("w1:p3", "term_a"), "spawn", nil, &profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored Record
+	if err := s.Get(Kind, rec.ID, &stored); err != nil || stored.Profile == nil || *stored.Profile != "reviewer" {
+		t.Fatalf("%+v %v", stored, err)
+	}
+	b, err := json.Marshal(stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, q, r := bytes.Index(b, []byte(`"parent":`)), bytes.Index(b, []byte(`"profile":"reviewer"`)), bytes.Index(b, []byte(`"registered_at":`)); p < 0 || q < p || r < q {
+		t.Fatalf("%s", b)
+	}
+}
+
+func TestRecordWithoutProfileDecodesNull(t *testing.T) {
+	var rec Record
+	old := `{"id":"0000abcd","name":"worker","pane":"w1:p1","workspace_id":"w1","harness":"claude","session":null,"terminal_id":"term_a","parent":null,"registered_at":"2026-01-01T00:00:00Z","registered_by":"spawn","worktree_path":null,"ended_at":null}`
+	if err := json.Unmarshal([]byte(old), &rec); err != nil || rec.Profile != nil || rec.ID != "0000abcd" {
+		t.Fatalf("%+v %v", rec, err)
+	}
+}
+
+func nativeSession(value string) herdr.AgentSession {
+	source, harness, kind := "herdr:claude", "claude", "id"
+	return herdr.AgentSession{Source: &source, Agent: &harness, Kind: &kind, Value: &value}
+}
+
+func TestRecordWithoutNativeSessionReadsNil(t *testing.T) {
+	var rec Record
+	if err := json.Unmarshal([]byte(`{"id":"0000beef","pane":"w1:p1"}`), &rec); err != nil {
+		t.Fatal(err)
+	}
+	if rec.NativeSession != nil || rec.NativeSessionHistory != nil {
+		t.Fatalf("%+v", rec)
+	}
+}
+
+func TestObserveSessionWritesFirstRef(t *testing.T) {
+	c := client(t)
+	s := store(t, c)
+	rec := registered(t, c, details("w1:p3", "term_a"))
+	now := time.Date(2026, 9, 24, 5, 0, 0, 0, time.UTC)
+	_, changed, err := ObserveSession(s, rec.ID, nativeSession("s-1"), now)
+	if err != nil || !changed {
+		t.Fatalf("%v %v", changed, err)
+	}
+	if err := s.Get(Kind, rec.ID, &rec); err != nil {
+		t.Fatal(err)
+	}
+	want := NativeSessionRef{Source: "herdr:claude", Harness: "claude", Kind: "id", Value: "s-1", ObservedAt: "2026-09-24T05:00:00Z"}
+	if rec.NativeSession == nil || *rec.NativeSession != want || rec.NativeSessionHistory != nil {
+		t.Fatalf("%+v %+v", rec.NativeSession, rec.NativeSessionHistory)
+	}
+}
+
+func TestObserveSessionEqualValueIsNoOp(t *testing.T) {
+	c := client(t)
+	s := store(t, c)
+	rec := registered(t, c, details("w1:p3", "term_a"))
+	now := time.Date(2026, 9, 24, 5, 0, 0, 0, time.UTC)
+	if _, _, err := ObserveSession(s, rec.ID, nativeSession("s-1"), now); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(c.Cwd, ".fledge", "state", Kind, rec.ID+".json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, changed, err := ObserveSession(s, rec.ID, nativeSession("s-1"), now.Add(time.Hour))
+	after, _ := os.ReadFile(path)
+	if err != nil || changed || !bytes.Equal(before, after) {
+		t.Fatalf("%v %v\n%s\n%s", changed, err, before, after)
+	}
+}
+
+func TestObserveSessionChangeMovesOldRefToCappedHistory(t *testing.T) {
+	c := client(t)
+	s := store(t, c)
+	rec := registered(t, c, details("w1:p3", "term_a"))
+	start := time.Date(2026, 9, 24, 5, 0, 0, 0, time.UTC)
+	for i := range 11 {
+		_, changed, err := ObserveSession(s, rec.ID, nativeSession(fmt.Sprintf("s-%d", i)), start.Add(time.Duration(i)*time.Minute))
+		if err != nil || !changed {
+			t.Fatalf("%d: %v %v", i, changed, err)
+		}
+	}
+	if err := s.Get(Kind, rec.ID, &rec); err != nil {
+		t.Fatal(err)
+	}
+	if rec.NativeSession == nil || rec.NativeSession.Value != "s-10" || len(rec.NativeSessionHistory) != 8 {
+		t.Fatalf("%+v %+v", rec.NativeSession, rec.NativeSessionHistory)
+	}
+	for i, h := range rec.NativeSessionHistory {
+		if want := fmt.Sprintf("s-%d", i+2); h.Value != want || h.ObservedAt != start.Add(time.Duration(i+2)*time.Minute).Format(time.RFC3339) {
+			t.Fatalf("history[%d] = %+v, want %s", i, h, want)
+		}
+	}
+}
+
+func TestObserveSessionWithoutValueWritesNothing(t *testing.T) {
+	c := client(t)
+	s := store(t, c)
+	rec := registered(t, c, details("w1:p3", "term_a"))
+	path := filepath.Join(c.Cwd, ".fledge", "state", Kind, rec.ID+".json")
+	before, _ := os.ReadFile(path)
+	for _, session := range []herdr.AgentSession{{}, nativeSession("")} {
+		_, changed, err := ObserveSession(s, rec.ID, session, time.Now())
+		after, _ := os.ReadFile(path)
+		if err != nil || changed || !bytes.Equal(before, after) {
+			t.Fatalf("%+v: %v %v", session, changed, err)
+		}
 	}
 }

@@ -26,9 +26,12 @@ func TestListShowsBuiltinsOutsideGit(t *testing.T) {
 		t.Fatalf("%+v", out)
 	}
 	want := "NAME          HARNESS  MODEL                     SOURCE\n" +
+		"debugger      claude   claude-opus-5-5           built-in\n" +
 		"implementer   claude   claude-opus-5-5           built-in\n" +
+		"integrator    claude   claude-opus-5-5           built-in\n" +
 		"orchestrator  claude   claude-opus-5-5           built-in\n" +
 		"planner       pi       openai-codex/gpt-6-astra  built-in\n" +
+		"researcher    claude   claude-opus-5-5           built-in\n" +
 		"reviewer      pi       openai-codex/gpt-6-astra  built-in\n" +
 		"verifier      pi       openai-codex/gpt-6-astra  built-in\n"
 	if got := render(t, out, false); got != want {
@@ -38,15 +41,15 @@ func TestListShowsBuiltinsOutsideGit(t *testing.T) {
 		Operation string
 		Result    struct {
 			Profiles []struct {
-				Name, Source, Role string
-				Args               []string
+				Name, Source, Brief string
+				Args                []string
 			}
 		}
 	}
 	if err := json.Unmarshal([]byte(render(t, out, true)), &envelope); err != nil {
 		t.Fatal(err)
 	}
-	if envelope.Operation != "agent.profiles" || len(envelope.Result.Profiles) != 5 || envelope.Result.Profiles[2].Name != "planner" || envelope.Result.Profiles[2].Args[0] != "--thinking" || envelope.Result.Profiles[2].Role == "" {
+	if envelope.Operation != "agent.profiles" || len(envelope.Result.Profiles) != 8 || envelope.Result.Profiles[4].Name != "planner" || envelope.Result.Profiles[4].Args[0] != "--thinking" || envelope.Result.Profiles[4].Brief == "" {
 		t.Fatalf("%+v", envelope)
 	}
 }
@@ -56,10 +59,13 @@ func TestShowPrintsResolvedProfileAndProvenance(t *testing.T) {
 	exec.Command("git", "-C", root, "init", "-q").Run()
 	path := filepath.Join(root, ".fledge", "profiles", "go-review.toml")
 	os.MkdirAll(filepath.Dir(path), 0755)
-	os.WriteFile(path, []byte("schema_version = 1\nextends = \"builtin:planner\"\nrole_append = \"Mind Go.\"\n"), 0644)
+	os.WriteFile(path, []byte("schema_version = 1\nextends = \"builtin:planner\"\n[sections_append]\nmission = \"Mind Go.\"\n"), 0644)
 	out := Run(context.Background(), root, Options{Name: "go-review"})
 	got := render(t, out, false)
-	for _, want := range []string{"Profile go-review\n", "  source: " + path + "\n", "  extends: builtin:planner\n", "  harness: pi\n", "  model: openai-codex/gpt-6-astra\n", "  args: \"--thinking\" \"xhigh\"\n", "  role:\n    Investigate", "\n\n    Mind Go.\n"} {
+	if strings.Contains(got, "role:") {
+		t.Fatalf("still labels the brief role:\n%s", got)
+	}
+	for _, want := range []string{"Profile go-review\n", "  source: " + path + "\n", "  extends: builtin:planner\n", "  harness: pi\n", "  model: openai-codex/gpt-6-astra\n", "  args: \"--thinking\" \"xhigh\"\n", "  reads: \"AGENTS.md\" \"README.md\"\n  protocol: true\n  brief:\n    ## Mission\n    Turn a broad request", "\n\n    Mind Go.\n", "\n    ## Fledge protocol\n"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in\n%s", want, got)
 		}
@@ -80,7 +86,7 @@ func TestShowUnsetFieldsAndBuiltinSource(t *testing.T) {
 	os.MkdirAll(filepath.Dir(path), 0755)
 	os.WriteFile(path, []byte("schema_version = 1\n"), 0644)
 	got := render(t, Run(context.Background(), root, Options{Name: "scout"}), false)
-	for _, want := range []string{"  harness: -\n", "  model: -\n", "  args: -\n", "  role: -\n"} {
+	for _, want := range []string{"  harness: -\n", "  model: -\n", "  args: -\n", "  reads: -\n", "  protocol: false\n", "  brief: -\n"} {
 		if !strings.Contains(got, want) || strings.Contains(got, "extends") {
 			t.Fatalf("missing %q in\n%s", want, got)
 		}

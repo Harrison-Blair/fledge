@@ -90,7 +90,7 @@ func (r repo) register(t *testing.T, a herdr.AgentDetails, parent *string, by st
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec, err := identity.Register(context.Background(), st, libagent.Client{}, a, by, checkout)
+	rec, err := identity.Register(context.Background(), st, libagent.Client{}, a, by, checkout, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -129,5 +130,35 @@ func TestAnyJSONWritesNoProgress(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(stdout.String()), &out); err != nil || out.Result.Winner != "b" || stderr.String() != "" {
 		t.Fatalf("%v: stdout %q, stderr %q", err, stdout.String(), stderr.String())
+	}
+}
+
+// TestSelectionFlagsAreBound passes two --id values, which alone need --all
+// or --any, and with each filter flag must be rejected as mixing selections.
+func TestSelectionFlagsAreBound(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{nil, "--all or --any"},
+		{[]string{"--state", "idle"}, "mutually exclusive"},
+		{[]string{"--harness", "claude"}, "mutually exclusive"},
+		{[]string{"--profile", "reviewer"}, "mutually exclusive"},
+		{[]string{"--task", "0000beef"}, "mutually exclusive"},
+		{[]string{"--worktree", "/wt"}, "mutually exclusive"},
+		{[]string{"--registered"}, "mutually exclusive"},
+		{[]string{"--mine"}, "mutually exclusive"},
+		{[]string{"--parent", "0000beef"}, "mutually exclusive"},
+	} {
+		stdout, stderr := &signalWriter{}, &signalWriter{}
+		err := <-run(append([]string{"--id", "0000beef", "--id", "0000cafe", "--json"}, tc.args...), stdout, stderr)
+		var out struct {
+			Error struct {
+				Code, Message string
+			} `json:"error"`
+		}
+		if json.Unmarshal([]byte(stdout.String()), &out); err == nil || out.Error.Code != "invalid_input" || !strings.Contains(out.Error.Message, tc.want) {
+			t.Fatalf("%v: %v: stdout %q, stderr %q", tc.args, err, stdout.String(), stderr.String())
+		}
 	}
 }

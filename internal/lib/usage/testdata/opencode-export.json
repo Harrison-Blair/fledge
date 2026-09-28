@@ -1,0 +1,6 @@
+{"info":{"id":"oc-1","title":"synthetic","tokens":{"input":110,"output":22},"cost":0.03,"time":{"created":1767434400000,"updated":1767435000000}},
+ "messages":[
+  {"info":{"id":"m1","role":"user","time":{"created":1767434400000}},"parts":[]},
+  {"info":{"id":"m2","role":"assistant","modelID":"model-one","providerID":"prov-a","cost":0.02,"tokens":{"input":100,"output":20,"reasoning":5,"cache":{"read":300,"write":10}},"time":{"created":1767434405000,"completed":1767434406000}},"parts":[]},
+  {"info":{"id":"m3","role":"assistant","modelID":"model-two","providerID":"prov-b","cost":0.01,"tokens":{"input":10,"output":2,"reasoning":0,"cache":{"read":0,"write":0}},"time":{"created":1767435000000,"completed":1767435001000}},"parts":[]}
+ ]}

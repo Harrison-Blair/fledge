@@ -10,7 +10,7 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
-	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
@@ -26,7 +26,7 @@ func TestMessagePreservesContentAndDoesNotWait(t *testing.T) {
 	promptPane := herdrscript.Pane("w1:p1", "w1", "w1:t1")
 	promptPane.AgentStatus, promptPane.Cwd = "working", &promptCwd
 	s := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "worker"}, Result: herdrscript.Info(lookupPane)}, senderCall(), call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": header + "hello\nworld\n"}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: promptPane}}})
-	out := run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}, File: "-", FileSet: true}, strings.NewReader("hello\nworld\n"), "m-0a1b2c")
+	out := run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"worker"}}, File: "-", FileSet: true}, strings.NewReader("hello\nworld\n"), "m-0a1b2c")
 	result, ok := out.Result.(Result)
 	if out.Status != "success" || !ok || !result.Submitted || result.Cwd == nil || *result.Cwd != promptCwd {
 		t.Fatalf("%+v", out)
@@ -51,7 +51,7 @@ func TestRunGeneratesMessageID(t *testing.T) {
 	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
 	p.AgentStatus = "idle"
 	s := fake(t, call{Method: "agent.get", Result: herdrscript.Info(p)}, senderCall(), call{Method: "agent.prompt", Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
-	out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}, Body: "hi", BodySet: true}, strings.NewReader(""))
+	out := Run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"worker"}}, Body: "hi", BodySet: true}, strings.NewReader(""))
 	if r, ok := out.Result.(Result); !ok || !regexp.MustCompile(`^m-[0-9a-f]{6}$`).MatchString(r.MessageID) {
 		t.Fatalf("%+v", out)
 	}
@@ -61,7 +61,7 @@ func TestAttributionFailureDoesNotFailSend(t *testing.T) {
 	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
 	p.AgentStatus = "idle"
 	s := fake(t, call{Method: "agent.get", Result: herdrscript.Info(p)}, call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Err: &herdr.Error{Code: "timeout", Message: "slow"}}, call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": "ᛉ fledge message from unknown sender · id m-0a1b2c\nhi"}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
-	out := run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}, Body: "hi", BodySet: true}, strings.NewReader(""), "m-0a1b2c")
+	out := run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"worker"}}, Body: "hi", BodySet: true}, strings.NewReader(""), "m-0a1b2c")
 	r, ok := out.Result.(Result)
 	if out.Status != "success" || !ok || r.Sender.Kind != "unknown" || r.Sender.Error == nil || *r.Sender.Error != "timeout: slow" {
 		t.Fatalf("%+v", out)
@@ -69,15 +69,15 @@ func TestAttributionFailureDoesNotFailSend(t *testing.T) {
 }
 func TestInvalidMessageBeforeAPI(t *testing.T) {
 	s := fake(t)
-	out := Run(context.Background(), s, Options{Target: identity.Target{Name: "a"}, BodySet: true}, strings.NewReader(""))
+	out := Run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"a"}}, BodySet: true}, strings.NewReader(""))
 	if out.Status != "rejected" || out.ExitCode() != 2 || out.Error.Message != "message must be nonempty UTF-8" {
 		t.Fatal(out)
 	}
 }
 func TestMessageRequiresExactlyOneOfBodyOrFile(t *testing.T) {
 	for _, o := range []Options{
-		{Target: identity.Target{Name: "a"}},
-		{Target: identity.Target{Name: "a"}, Body: "hi", BodySet: true, File: "-", FileSet: true},
+		{Selection: selector.Selection{Names: []string{"a"}}},
+		{Selection: selector.Selection{Names: []string{"a"}}, Body: "hi", BodySet: true, File: "-", FileSet: true},
 	} {
 		s := fake(t)
 		out := Run(context.Background(), s, o, strings.NewReader(""))
@@ -88,7 +88,7 @@ func TestMessageRequiresExactlyOneOfBodyOrFile(t *testing.T) {
 }
 func TestUnreadableMessageIsRuntimeFailure(t *testing.T) {
 	s := fake(t)
-	out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}, File: "/does/not/exist", FileSet: true}, strings.NewReader(""))
+	out := Run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"worker"}}, File: "/does/not/exist", FileSet: true}, strings.NewReader(""))
 	if out.ExitCode() != 1 || !strings.HasPrefix(out.Error.Message, "read message: ") {
 		t.Fatalf("%+v", out)
 	}
@@ -97,7 +97,7 @@ func TestMessageBlockedIsRejectedWithoutMutation(t *testing.T) {
 	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
 	p.AgentStatus = "blocked"
 	s := fake(t, call{Method: "agent.get", Result: herdrscript.Info(p)}, senderCall(), call{Method: "agent.prompt", Err: &herdr.Error{Code: "agent_blocked", Message: "approval"}})
-	out := Run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}, Body: "hello", BodySet: true}, strings.NewReader(""))
+	out := Run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"worker"}}, Body: "hello", BodySet: true}, strings.NewReader(""))
 	if out.Status != "rejected" || out.Error.Code != "agent_blocked" {
 		t.Fatal(out)
 	}
@@ -131,7 +131,7 @@ func TestMessageByIDPromptsVerifiedPane(t *testing.T) {
 		call{Method: "agent.prompt", Params: map[string]any{"target": "w1:p3", "text": header + "hi"}, Result: prompted})
 	s.Cwd = identitytest.Repository(t)
 	rec := identitytest.Register(t, s.Cwd, live.Agent)
-	out := run(context.Background(), s, Options{Target: identity.Target{ID: rec.ID}, Body: "hi", BodySet: true}, nil, "m-0a1b2c")
+	out := run(context.Background(), s, Options{Selection: selector.Selection{IDs: []string{rec.ID}}, Body: "hi", BodySet: true}, nil, "m-0a1b2c")
 	if out.Status != "success" || !out.Result.(Result).Submitted {
 		t.Fatalf("%+v", out)
 	}
@@ -144,15 +144,15 @@ func TestMessageByStaleIDDoesNotPrompt(t *testing.T) {
 	recorded := live.Agent
 	recorded.TerminalID = "term_old"
 	rec := identitytest.Register(t, s.Cwd, recorded)
-	out := run(context.Background(), s, Options{Target: identity.Target{ID: rec.ID}, Body: "hi", BodySet: true}, nil, "m-0a1b2c")
+	out := run(context.Background(), s, Options{Selection: selector.Selection{IDs: []string{rec.ID}}, Body: "hi", BodySet: true}, nil, "m-0a1b2c")
 	if out.Error == nil || out.Error.Code != "agent_identity_stale" || len(out.Effects) != 0 {
 		t.Fatalf("%+v", out)
 	}
 }
 
-func TestMessageIDExcludesName(t *testing.T) {
-	out := run(context.Background(), fake(t), Options{Target: identity.Target{Name: "worker", ID: "0000beef"}, Body: "hi", BodySet: true}, nil, "m-0a1b2c")
-	if out.ExitCode() != 2 || out.Error.Phase != "validation" {
+func TestMessageExplicitTargetsExcludeFilters(t *testing.T) {
+	out := run(context.Background(), fake(t), Options{Selection: selector.Selection{Names: []string{"worker"}, Filter: selector.Filter{States: []string{"idle"}}}, Body: "hi", BodySet: true}, nil, "m-0a1b2c")
+	if out.Status != "rejected" || out.ExitCode() != 2 || out.Error.Phase != "validation" {
 		t.Fatalf("%+v", out)
 	}
 }
@@ -166,7 +166,7 @@ func confirmRun(t *testing.T, before string, result any, err error) libagent.Out
 	wait := map[string]any{"until": []string{"working", "done", "idle", "blocked"}, "timeout_ms": 10000}
 	s := fake(t, call{Method: "agent.get", Result: herdrscript.Info(p)}, senderCall(),
 		call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": header + "hi", "wait": wait}, Result: result, Err: err})
-	return run(context.Background(), s, Options{Target: identity.Target{Name: "worker"}, Body: "hi", BodySet: true, Confirm: true, Timeout: 10 * time.Second}, nil, "m-0a1b2c")
+	return run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"worker"}}, Body: "hi", BodySet: true, Confirm: true, Timeout: 10 * time.Second}, nil, "m-0a1b2c")
 }
 
 func prompted(status string) herdr.AgentResult {
@@ -236,9 +236,9 @@ func TestConfirmPreInputRefusalsAreRejected(t *testing.T) {
 
 func TestConfirmTimeoutValidation(t *testing.T) {
 	for _, o := range []Options{
-		{Target: identity.Target{Name: "worker"}, Body: "hi", BodySet: true, Confirm: true, Timeout: 0, TimeoutSet: true},
-		{Target: identity.Target{Name: "worker"}, Body: "hi", BodySet: true, Confirm: true, Timeout: 500 * time.Microsecond, TimeoutSet: true},
-		{Target: identity.Target{Name: "worker"}, Body: "hi", BodySet: true, Timeout: time.Second, TimeoutSet: true},
+		{Selection: selector.Selection{Names: []string{"worker"}}, Body: "hi", BodySet: true, Confirm: true, Timeout: 0, TimeoutSet: true},
+		{Selection: selector.Selection{Names: []string{"worker"}}, Body: "hi", BodySet: true, Confirm: true, Timeout: 500 * time.Microsecond, TimeoutSet: true},
+		{Selection: selector.Selection{Names: []string{"worker"}}, Body: "hi", BodySet: true, Timeout: time.Second, TimeoutSet: true},
 	} {
 		out := Run(context.Background(), fake(t), o, nil)
 		if out.Status != "rejected" || out.ExitCode() != 2 || out.Error.Phase != "validation" {

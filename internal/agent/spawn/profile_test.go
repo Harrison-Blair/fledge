@@ -9,9 +9,11 @@ import (
 	"strings"
 	"testing"
 
+	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/profiles"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
 
 func builtinProfile(t *testing.T, name string) profiles.Profile {
@@ -20,6 +22,9 @@ func builtinProfile(t *testing.T, name string) profiles.Profile {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Spawn drops reads missing from the target directory, and these tests
+	// spawn where none of the built-in reads exist.
+	p.Reads = nil
 	return p
 }
 
@@ -55,7 +60,7 @@ func profileSpawn(t *testing.T, kind string, args []string, text string) *spawne
 func profileSpawnIn(t *testing.T, cwd, kind string, args []string, text string) *spawner {
 	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
 	p.AgentStatus = "idle"
-	calls := []call{{Method: "session.snapshot", Result: snapshot()}, {Method: "agent.start", Params: map[string]any{"name": "worker", "kind": kind, "pane_id": "w1:p1", "args": args, "timeout_ms": 30000}, Result: started(p)}, waitCall("worker", p, "idle")}
+	calls := []call{{Method: "session.snapshot", Result: snapshot()}, labeled(p), {Method: "agent.start", Params: map[string]any{"name": "worker", "kind": kind, "pane_id": "w1:p1", "args": args, "timeout_ms": 30000}, Result: started(p)}, waitCall("worker", p, "idle")}
 	if cwd != "" {
 		calls = append(calls, senderCall())
 	}
@@ -73,7 +78,7 @@ func TestProfileSuppliesLaunchSettingsAndPrefixesRoleToPrompt(t *testing.T) {
 	planner := builtinProfile(t, "planner")
 	o := profileOptions("planner")
 	o.Prompt, o.PromptSet = "Plan #14.", true
-	s := profileSpawn(t, "pi", []string{"--model", "openai-codex/gpt-6-astra", "--thinking", "xhigh"}, header+planner.Role+"\n\nPlan #14.")
+	s := profileSpawn(t, "pi", []string{"--model", "openai-codex/gpt-6-astra", "--thinking", "xhigh"}, header+planner.Brief()+"\n\nPlan #14.")
 	out := s.run(context.Background(), o, nil)
 	r := out.Result.(*Result)
 	if out.Status != "success" || !r.Prompted || !r.PromptRequested || r.Harness != "pi" {
@@ -86,7 +91,7 @@ func TestProfileSuppliesLaunchSettingsAndPrefixesRoleToPrompt(t *testing.T) {
 
 func TestProfileRoleAloneIsTheFirstPrompt(t *testing.T) {
 	reviewer := builtinProfile(t, "reviewer")
-	s := profileSpawn(t, "pi", []string{"--model", "openai-codex/gpt-6-astra"}, header+reviewer.Role)
+	s := profileSpawn(t, "pi", []string{"--model", "openai-codex/gpt-6-astra"}, header+reviewer.Brief())
 	out := s.run(context.Background(), profileOptions("reviewer"), nil)
 	if r := out.Result.(*Result); out.Status != "success" || !r.Prompted || !r.PromptRequested {
 		t.Fatalf("%+v", out)
@@ -97,7 +102,7 @@ func TestProfileRoleComposesWithStdinFile(t *testing.T) {
 	reviewer := builtinProfile(t, "reviewer")
 	o := profileOptions("reviewer")
 	o.File, o.FileSet = "-", true
-	s := profileSpawn(t, "pi", []string{"--model", "openai-codex/gpt-6-astra"}, header+reviewer.Role+"\n\nfrom file\n")
+	s := profileSpawn(t, "pi", []string{"--model", "openai-codex/gpt-6-astra"}, header+reviewer.Brief()+"\n\nfrom file\n")
 	if out := s.run(context.Background(), o, strings.NewReader("from file\n")); out.Status != "success" {
 		t.Fatalf("%+v", out)
 	}
@@ -132,7 +137,7 @@ func TestProfilePrecedence(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			o := profileOptions("planner")
 			tc.set(&o)
-			s := profileSpawn(t, tc.kind, tc.args, header+builtinProfile(t, "planner").Role)
+			s := profileSpawn(t, tc.kind, tc.args, header+builtinProfile(t, "planner").Brief())
 			out := s.run(context.Background(), o, nil)
 			if r := out.Result.(*Result); out.Status != "success" || r.Harness != tc.kind {
 				t.Fatalf("%+v", out)
@@ -148,7 +153,7 @@ func TestProfileFailuresRejectBeforeHerdr(t *testing.T) {
 	}{
 		{name: "unknown profile", set: func(o *Options) { o.Profile = "nope" }, want: "unknown profile"},
 		{name: "invalid override", file: "reviewer", content: "schema_version = 1\nmodle = \"x\"\n", want: "modle"},
-		{name: "no harness", file: "scout", content: "schema_version = 1\nrole = \"r\"\n", set: func(o *Options) { o.Profile = "scout" }, want: "--harness"},
+		{name: "no harness", file: "scout", content: "schema_version = 1\n[sections]\nmission = \"r\"\n", set: func(o *Options) { o.Profile = "scout" }, want: "--harness"},
 		{name: "native model conflict", file: "pinned", content: "schema_version = 1\nharness = \"claude\"\nargs = [\"--model\", \"a\"]\n", set: func(o *Options) { o.Profile, o.Model = "pinned", "b" }, want: "conflicts with --model"},
 		{name: "no-wait with role", set: func(o *Options) { o.NoWait = true }, want: "--no-wait"},
 	} {
@@ -173,8 +178,8 @@ func TestProfileNoWaitWithoutRoleIsAllowed(t *testing.T) {
 	o := profileOptions("quiet")
 	o.NoWait = true
 	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
-	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "agent.start", Result: started(p)}, callerNotAgent())
-	s.Cwd = profileRepo(t, "quiet", "schema_version = 1\nextends = \"builtin:reviewer\"\nrole = \"\"\n")
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, labeled(p), call{Method: "agent.start", Result: started(p)}, callerNotAgent())
+	s.Cwd = profileRepo(t, "quiet", "schema_version = 1\nextends = \"builtin:reviewer\"\nprotocol = false\nreads = []\n[sections]\nmission = \"\"\nworkflow = \"\"\nnever = \"\"\nreport = \"\"\n")
 	if out := s.run(context.Background(), o, nil); out.Status != "success" {
 		t.Fatalf("%+v", out)
 	}
@@ -188,7 +193,7 @@ func TestProfileComesFromInvokingCheckoutNotCwd(t *testing.T) {
 	o.Pane, o.Workspace, o.Cwd = "", "new workspace", destination
 	p := herdrscript.Pane("w2:p1", "w2", "w2:t1")
 	p.AgentStatus = "idle"
-	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "pane.current", Result: herdr.PaneResult{Type: "pane_current", Pane: herdrscript.Pane("w1:p1", "w1", "w1:t1")}}, call{Method: "workspace.create", Result: herdr.CreatedResult{Type: "workspace_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p}}, call{Method: "agent.start", Params: map[string]any{"name": "worker", "kind": "pi", "pane_id": "w2:p1", "args": []string{"--model", "invoking"}, "timeout_ms": 30000}, Result: started(p)}, waitCall("worker", p, "idle"), senderCall(), senderCall(), call{Method: "agent.prompt", Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "pane.current", Result: herdr.PaneResult{Type: "pane_current", Pane: herdrscript.Pane("w1:p1", "w1", "w1:t1")}}, call{Method: "workspace.create", Result: herdr.CreatedResult{Type: "workspace_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p}}, namedTab(p), labeled(p), call{Method: "agent.start", Params: map[string]any{"name": "worker", "kind": "pi", "pane_id": "w2:p1", "args": []string{"--model", "invoking"}, "timeout_ms": 30000}, Result: started(p)}, waitCall("worker", p, "idle"), senderCall(), senderCall(), call{Method: "agent.prompt", Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
 	s.Cwd = invoking
 	if out := s.run(context.Background(), o, nil); out.Status != "success" {
 		t.Fatalf("%+v %+v", out, out.Error)
@@ -205,5 +210,162 @@ func TestSpawnWithoutProfileIsUnchanged(t *testing.T) {
 	}
 	if !reflect.DeepEqual(out.Result.(*Result).Harness, "claude") {
 		t.Fatal(out.Result)
+	}
+}
+
+func TestProfileNameIsRecordedOnTheAgentRecord(t *testing.T) {
+	reviewer := builtinProfile(t, "reviewer")
+	cwd := identitytest.Repository(t)
+	s := profileSpawnIn(t, cwd, "pi", []string{"--model", "openai-codex/gpt-6-astra"}, header+reviewer.Brief())
+	out := s.run(context.Background(), profileOptions("reviewer"), nil)
+	r := out.Result.(*Result)
+	if out.Status != "success" || !r.Registered {
+		t.Fatalf("%+v", out)
+	}
+	if rec := stored(t, cwd, *r.ID); rec.Profile == nil || *rec.Profile != "reviewer" {
+		t.Fatalf("%+v", rec)
+	}
+}
+
+const readsProfile = "schema_version = 1\nharness = \"claude\"\nreads = [\"present.md\", \"gone.md\"]\n[sections]\nmission = \"Do it.\"\n"
+
+// readsBrief is the brief of the reads profile in root once gone.md is dropped.
+func readsBrief(t *testing.T, root string) string {
+	t.Helper()
+	p, err := profiles.Load(context.Background(), root, "reader")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Reads = []string{"present.md"}
+	return p.Brief()
+}
+
+func writeFile(t *testing.T, dir, name string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// checkSkippedRead asserts a successful spawn skipped only gone.md in dir.
+func checkSkippedRead(t *testing.T, out libagent.Outcome, dir string) {
+	t.Helper()
+	if out.Status != "success" || !out.Result.(*Result).Prompted {
+		t.Fatalf("%+v %+v", out, out.Error)
+	}
+	var skipped []libagent.Effect
+	for _, e := range out.Effects {
+		if e.Action == "skipped" {
+			skipped = append(skipped, e)
+		}
+	}
+	if want := []libagent.Effect{{Action: "skipped", Kind: "read", Path: "gone.md"}}; !reflect.DeepEqual(skipped, want) {
+		t.Fatalf("%+v", out.Effects)
+	}
+	var b strings.Builder
+	if err := Render(&b, out); err != nil {
+		t.Fatal(err)
+	}
+	if line := "skipped read: gone.md (not found in " + dir + ")\n"; strings.Count(b.String(), "skipped read:") != 1 || !strings.Contains(b.String(), line) {
+		t.Fatalf("%q", b.String())
+	}
+}
+
+func TestProfileReadsResolveUnderCallerDirectory(t *testing.T) {
+	root := profileRepo(t, "reader", readsProfile)
+	writeFile(t, root, "present.md")
+	o := profileOptions("reader")
+	o.Prompt, o.PromptSet = "Go.", true
+	s := profileSpawnIn(t, root, "claude", []string{}, header+readsBrief(t, root)+"\n\nGo.")
+	checkSkippedRead(t, s.run(context.Background(), o, nil), root)
+}
+
+// An existing --pane may sit in another directory than the caller's; reads
+// resolve under the pane's own working directory.
+func TestProfileReadsResolveUnderPaneCwd(t *testing.T) {
+	root := profileRepo(t, "reader", readsProfile)
+	writeFile(t, root, "gone.md")
+	dir := t.TempDir()
+	writeFile(t, dir, "present.md")
+	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
+	p.Cwd = &dir
+	snap := snapshot()
+	snap.Snapshot.Panes = []herdr.Pane{p}
+	p.AgentStatus = "idle"
+	o := profileOptions("reader")
+	s := fake(t, call{Method: "session.snapshot", Result: snap}, labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), senderCall(), senderCall(), call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": header + readsBrief(t, root)}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
+	s.Cwd = root
+	checkSkippedRead(t, s.run(context.Background(), o, nil), dir)
+}
+
+func TestProfileReadsResolveUnderCwd(t *testing.T) {
+	root := profileRepo(t, "reader", readsProfile)
+	writeFile(t, root, "gone.md")
+	destination := t.TempDir()
+	writeFile(t, destination, "present.md")
+	o := profileOptions("reader")
+	o.Pane, o.Workspace, o.Cwd = "", "new workspace", destination
+	p := herdrscript.Pane("w2:p1", "w2", "w2:t1")
+	p.AgentStatus = "idle"
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "pane.current", Result: herdr.PaneResult{Type: "pane_current", Pane: herdrscript.Pane("w1:p1", "w1", "w1:t1")}}, call{Method: "workspace.create", Result: herdr.CreatedResult{Type: "workspace_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p}}, namedTab(p), labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), senderCall(), senderCall(), call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": header + readsBrief(t, root)}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
+	s.Cwd = root
+	checkSkippedRead(t, s.run(context.Background(), o, nil), destination)
+}
+
+func TestProfileReadsResolveUnderWorktree(t *testing.T) {
+	root := repository(t)
+	os.MkdirAll(filepath.Join(root, ".fledge", "profiles"), 0755)
+	if err := os.WriteFile(filepath.Join(root, ".fledge", "profiles", "reader.toml"), []byte(readsProfile), 0644); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "gone.md")
+	path := filepath.Join(root, ".fledge", "worktrees", "worker")
+	p := herdrscript.Pane("w2:p1", "w2", "w2:t1")
+	p.AgentStatus = "idle"
+	o := profileOptions("reader")
+	o.Pane, o.Worktree = "", "new"
+	add := checkout(t, root, "worker", path)
+	create := call{Method: "worktree.create", Result: herdr.CreatedResult{Type: "worktree_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p, Worktree: herdr.Worktree{Path: path}}, Before: func() { add(); writeFile(t, path, "present.md") }}
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "worktree.list", Result: newWorktreeListing(root)}, create, namedTab(p), labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), callerNotAgent(), senderCall(), call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": header + readsBrief(t, root)}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
+	s.Cwd = root
+	checkSkippedRead(t, s.run(context.Background(), o, nil), path)
+}
+
+const readsOnlyProfile = "schema_version = 1\nharness = \"claude\"\nreads = [\"present.md\"]\n"
+
+// A profile with reads always has a brief to send, so --no-wait is rejected
+// before any Herdr call wherever the read files are and whatever the placement.
+func TestProfileNoWaitRejectedWithReads(t *testing.T) {
+	for name, tc := range map[string]struct {
+		set     func(o *Options, target string)
+		inRoot  bool
+		inOther bool
+	}{
+		"pane, read in caller dir":     {set: func(*Options, string) {}, inRoot: true},
+		"pane, read elsewhere":         {set: func(*Options, string) {}, inOther: true},
+		"pane, read nowhere":           {set: func(*Options, string) {}},
+		"worktree, read there":         {set: func(o *Options, dir string) { o.Pane, o.Worktree = "", dir }, inOther: true},
+		"cwd, read there":              {set: func(o *Options, dir string) { o.Pane, o.Workspace, o.Cwd = "", "new workspace", dir }, inOther: true},
+		"new workspace, no cwd":        {set: func(o *Options, _ string) { o.Pane, o.Workspace = "", "new workspace" }},
+		"workspace id, cwd not exists": {set: func(o *Options, dir string) { o.Pane, o.WorkspaceID, o.Cwd = "", "w1", filepath.Join(dir, "missing") }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			other := t.TempDir()
+			o := profileOptions("quiet")
+			o.NoWait = true
+			tc.set(&o, other)
+			s := fake(t)
+			s.Cwd = profileRepo(t, "quiet", readsOnlyProfile)
+			if tc.inRoot {
+				writeFile(t, s.Cwd, "present.md")
+			}
+			if tc.inOther {
+				writeFile(t, other, "present.md")
+			}
+			out := s.run(context.Background(), o, nil)
+			if out.Status != "rejected" || out.Error.Phase != "validation" || len(out.Effects) != 0 || !strings.Contains(out.Error.Message, "--no-wait") {
+				t.Fatalf("%+v %+v", out, out.Error)
+			}
+		})
 	}
 }

@@ -56,7 +56,7 @@ func TestCurrentShowsRecordParentAndAssignedTasks(t *testing.T) {
 	if err := json.Unmarshal(b.Bytes(), &envelope); err != nil {
 		t.Fatal(err)
 	}
-	for field, want := range map[string]any{"id": rec.ID, "name": "worker", "pane": "old:p1", "workspace_id": "w1", "harness": "claude", "worktree_path": nil, "parent": parent.ID, "parent_name": "orchestrator"} {
+	for field, want := range map[string]any{"id": rec.ID, "name": "worker", "pane": "old:p1", "workspace_id": "w1", "harness": "claude", "worktree_path": nil, "profile": nil, "parent": parent.ID, "parent_name": "orchestrator"} {
 		if got := envelope.Result[field]; !reflect.DeepEqual(got, want) {
 			t.Fatalf("%s: got %v want %v in %s", field, got, want, b.String())
 		}
@@ -68,10 +68,25 @@ func TestCurrentShowsRecordParentAndAssignedTasks(t *testing.T) {
 	if err := out.Write(&b, false, Render); err != nil {
 		t.Fatal(err)
 	}
-	for _, line := range []string{"Fledge ID: " + rec.ID, "Name: worker", "Pane: old:p1", "Workspace ID: w1", "Harness: claude", "Worktree: -", "Parent: " + parent.ID + " (orchestrator)", "Assigned tasks:", "  " + r.Tasks[0].ID + "  first", "  " + r.Tasks[1].ID + "  second"} {
+	for _, line := range []string{"Fledge ID: " + rec.ID, "Name: worker", "Pane: old:p1", "Workspace ID: w1", "Harness: claude", "Worktree: -", "Profile: -", "Parent: " + parent.ID + " (orchestrator)", "Assigned tasks:", "  " + r.Tasks[0].ID + "  first", "  " + r.Tasks[1].ID + "  second"} {
 		if !strings.Contains(b.String(), line+"\n") {
 			t.Fatalf("missing %q in\n%s", line, b.String())
 		}
+	}
+}
+
+func TestCurrentShowsProfile(t *testing.T) {
+	cwd := identitytest.Repository(t)
+	me := tasktest.Agent("old:p1", "term_me", "worker")
+	identitytest.RegisterProfile(t, cwd, me.Agent, "reviewer")
+	out := Run(context.Background(), tasktest.Client(t, cwd, "old:p1", tasktest.Get("old:p1", me)))
+	var b bytes.Buffer
+	if err := out.Write(&b, false, Render); err != nil || !strings.Contains(b.String(), "\nProfile: reviewer\n") {
+		t.Fatalf("%q %v", b.String(), err)
+	}
+	b.Reset()
+	if err := out.Write(&b, true, Render); err != nil || !strings.Contains(b.String(), `"profile":"reviewer"`) {
+		t.Fatalf("%s %v", b.String(), err)
 	}
 }
 

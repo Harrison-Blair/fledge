@@ -60,6 +60,9 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		libagent.Effect{Action: "created", Kind: "worktree", Path: r.Worktree.Path},
 		libagent.Effect{Action: "created", Kind: "workspace", ID: r.Workspace.ID})
 	out.Result = Result{Path: r.Worktree.Path, Branch: o.Branch, WorkspaceID: r.Workspace.ID}
+	if _, err = fledgedir.Ensure(r.Worktree.Path, &out); err != nil {
+		out.Fail(fmt.Errorf("prepare .fledge in new worktree %s: %w", r.Worktree.Path, err), "worktree.ignore", false)
+	}
 	return out
 }
 

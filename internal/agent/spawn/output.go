@@ -31,6 +31,8 @@ type Result struct {
 	MessageID         *string          `json:"message_id"`
 	Sender            *libagent.Sender `json:"sender"`
 	Profile           *ProfileRef      `json:"profile"`
+	// readDir is the directory a profile's reads were checked under.
+	readDir string
 }
 
 // ProfileRef names the profile a spawn used and where it came from: source
@@ -105,6 +107,13 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		}
 		if _, err := fmt.Fprintf(w, "  profile: %s (%s)\n", p.Name, source); err != nil {
 			return err
+		}
+	}
+	for _, e := range o.Effects {
+		if e.Action == "skipped" && e.Kind == "read" {
+			if _, err := fmt.Fprintf(w, "  skipped read: %s (not found in %s)\n", e.Path, r.readDir); err != nil {
+				return err
+			}
 		}
 	}
 	if r.Prompted {

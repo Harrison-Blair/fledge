@@ -7,17 +7,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/harness"
+	"github.com/Harrison-Blair/fledge/internal/lib/harnessenv"
 )
-
-// Runner executes a harness command and returns its standard output.
-type Runner func(ctx context.Context, name string, args ...string) ([]byte, error)
 
 // Row is one discovered model; Name is nil when the source has no display name.
 type Row struct {
@@ -27,65 +24,56 @@ type Row struct {
 }
 
 // Discovery locates models from harness caches under Home and harness commands run through Run.
-type Discovery struct {
-	Home string
-	Run  Runner
-}
+type Discovery harnessenv.Env
 
 // LocalDiscovery reads the real home directory and executes real harness commands.
-func LocalDiscovery() Discovery {
-	home, _ := os.UserHomeDir()
-	return Discovery{Home: home, Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		command := exec.CommandContext(ctx, name, args...)
-		command.Stderr = io.Discard
-		return command.Output()
-	}}
-}
+func LocalDiscovery() Discovery { return Discovery(harnessenv.Local()) }
 
 // modelSource discovers one harness's models; any error yields no rows for that harness.
-// readOnly marks sources that only read local cache files and never execute a command.
+// Whether a kind has a source, and whether it only reads cache files, comes from
+// its harness profile's Discovery.
 type modelSource struct {
-	kind     string
-	readOnly bool
-	list     func(context.Context, Discovery) ([]Row, error)
+	kind string
+	list func(context.Context, Discovery) ([]Row, error)
 }
 
 var modelSources = []modelSource{
-	{"pi", true, piModels},
-	{"codex", true, codexModels},
-	{"claude", true, claudeModels},
-	{"opencode", false, opencodeModels},
-	{"cursor", false, cursorModels},
+	{"pi", piModels},
+	{"codex", codexModels},
+	{"claude", claudeModels},
+	{"opencode", opencodeModels},
+	{"cursor", cursorModels},
 }
 
-// ModelHarnesses lists the harness kinds that have a local model source, in
-// discovery order. The result is a fresh slice the caller may modify.
-func ModelHarnesses() []string {
-	kinds := make([]string, len(modelSources))
-	for i, s := range modelSources {
-		kinds[i] = s.kind
-	}
-	return kinds
-}
-
-// ReadOnlyModelHarnesses lists the harness kinds whose local model source only
-// reads cache files, executing no command. The result is a fresh slice.
-func ReadOnlyModelHarnesses() []string {
+// sourcesWhere returns, in discovery order, the kinds whose profile Discovery matches.
+func sourcesWhere(match func(harness.DiscoveryKind) bool) []string {
 	var kinds []string
 	for _, s := range modelSources {
-		if s.readOnly {
+		if p, _ := harness.Lookup(s.kind); match(p.Discovery) {
 			kinds = append(kinds, s.kind)
 		}
 	}
 	return kinds
 }
 
+// ModelHarnesses lists the harness kinds that have a local model source, in
+// discovery order. The result is a fresh slice the caller may modify.
+func ModelHarnesses() []string {
+	return sourcesWhere(func(d harness.DiscoveryKind) bool { return d != harness.DiscoveryNone })
+}
+
+// ReadOnlyModelHarnesses lists the harness kinds whose local model source only
+// reads cache files, executing no command. The result is a fresh slice.
+func ReadOnlyModelHarnesses() []string {
+	return sourcesWhere(func(d harness.DiscoveryKind) bool { return d == harness.DiscoveryCache })
+}
+
 // Discover returns one harness kind's locally discovered rows and its source
 // error, letting callers tell a missing harness apart from a broken cache. An
 // unknown kind is an error.
-func (d Discovery) Discover(ctx context.Context, harness string) ([]Row, error) {
+func (d Discovery) Discover(ctx context.Context, kind string) ([]Row, error) {
 	for _, source := range modelSources {
-		if source.kind != harness {
+		if source.kind != kind {
 			continue
 		}
 		rows, err := source.list(ctx, d)
@@ -97,7 +85,7 @@ func (d Discovery) Discover(ctx context.Context, harness string) ([]Row, error) 
 		}
 		return rows, nil
 	}
-	return nil, fmt.Errorf("harness %q has no local model source", harness)
+	return nil, fmt.Errorf("harness %q has no local model source", kind)
 }
 
 func readJSON(path string, v any) error {
