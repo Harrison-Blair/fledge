@@ -11,12 +11,14 @@ import (
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/brief"
+	"github.com/Harrison-Blair/fledge/internal/lib/proposal"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/tasktest"
 )
 
-// taskTOML is one [[tasks]] entry with a template brief.
+// taskTOML is one [[tasks]] entry with a brief on the advisory template.
 func taskTOML(key, title string, after ...string) string {
 	quoted := []string{}
 	for _, a := range after {
@@ -212,12 +214,13 @@ func TestImportValidatesBeforeStore(t *testing.T) {
 		exit    int
 		message string
 	}{
-		"no file":        {Options{}, "invalid_input", 2, "--file is required"},
-		"bad toml":       {Options{File: write(t, "schema_version = "), FileSet: true}, "invalid_input", 2, ""},
-		"unknown key":    {Options{File: write(t, "schema_version = 1\nextra = 1\n"+taskTOML("a", "A")), FileSet: true}, "invalid_input", 2, `unknown key "extra"`},
-		"cycle":          {Options{File: write(t, "schema_version = 1\n"+taskTOML("a", "A", "b")+taskTOML("b", "B", "a")), FileSet: true}, "invalid_input", 2, "dependency cycle"},
-		"no version":     {Options{File: write(t, taskTOML("a", "A")), FileSet: true}, "invalid_input", 2, "schema_version is required"},
-		"brief template": {Options{File: write(t, "schema_version = 1\n"+taskTOML("a", "A")+"\n[[tasks]]\nkey = \"import\"\ntitle = \"I\"\nbrief = \"one line\"\n"), FileSet: true}, "task_brief_incomplete", 1, `task "import": `},
+		"no file":     {Options{}, "invalid_input", 2, "--file is required"},
+		"bad toml":    {Options{File: write(t, "schema_version = "), FileSet: true}, "invalid_input", 2, ""},
+		"unknown key": {Options{File: write(t, "schema_version = 1\nextra = 1\n"+taskTOML("a", "A")), FileSet: true}, "invalid_input", 2, `unknown key "extra"`},
+		"cycle":       {Options{File: write(t, "schema_version = 1\n"+taskTOML("a", "A", "b")+taskTOML("b", "B", "a")), FileSet: true}, "invalid_input", 2, "dependency cycle"},
+		"no version":  {Options{File: write(t, taskTOML("a", "A")), FileSet: true}, "invalid_input", 2, "schema_version is required"},
+		"blank brief": {Options{File: write(t, "schema_version = 1\n"+taskTOML("a", "A")+"\n[[tasks]]\nkey = \"import\"\ntitle = \"I\"\nbrief = \"\\u3000\"\n"), FileSet: true}, "invalid_input", 2, `task "import": brief must not be blank`},
+		"NUL brief":   {Options{File: write(t, "schema_version = 1\n[parent]\ntitle = \"P\"\nbrief = \"\\u0000\"\n"+taskTOML("a", "A")), FileSet: true}, "invalid_input", 2, "parent: brief must not contain NUL"},
 	} {
 		out := Run(context.Background(), libagent.Client{Cwd: dir}, tc.o, strings.NewReader(""))
 		if out.Error == nil || out.Error.Code != tc.code || out.Error.Phase != "validation" || out.ExitCode() != tc.exit || !strings.Contains(out.Error.Message, tc.message) {
@@ -226,6 +229,24 @@ func TestImportValidatesBeforeStore(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".fledge")); err == nil {
 		t.Fatal("state created")
+	}
+}
+
+// Plain briefs and the unfilled proposal skeleton import, stored verbatim.
+func TestImportAcceptsAnyNonblankBrief(t *testing.T) {
+	repo := identitytest.Repository(t)
+	src := "schema_version = 1\n[parent]\ntitle = \"P\"\nbrief = \"  one line\\n\"\n[[tasks]]\nkey = \"a\"\ntitle = \"A\"\nbrief = \"\\u3000x\"\n"
+	for label, text := range map[string]string{"plain": src, "skeleton": proposal.Skeleton()} {
+		out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{File: write(t, text), FileSet: true}, strings.NewReader(""))
+		if out.Error != nil {
+			t.Fatalf("%s: %+v", label, out.Error)
+		}
+		r := out.Result.(Result)
+		p, a := tasktest.Load(t, repo, *r.Parent), tasktest.Load(t, repo, *r.Tasks[0].ID)
+		want := map[string][2]string{"plain": {"  one line\n", "\u3000x"}, "skeleton": {brief.Skeleton(), brief.Skeleton()}}[label]
+		if p.Brief != want[0] || a.Brief != want[1] {
+			t.Fatalf("%s: %q %q", label, p.Brief, a.Brief)
+		}
 	}
 }
 

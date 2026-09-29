@@ -5,26 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 )
-
-// build joins headings and bodies into a brief: each pair is a heading name
-// and the text under it.
-func build(pairs ...string) string {
-	var b strings.Builder
-	for i := 0; i < len(pairs); i += 2 {
-		b.WriteString("## " + pairs[i] + "\n" + pairs[i+1] + "\n\n")
-	}
-	return b.String()
-}
-
-func full() []string {
-	var pairs []string
-	for _, s := range Sections {
-		pairs = append(pairs, s, "text for "+s)
-	}
-	return pairs
-}
 
 func TestSections(t *testing.T) {
 	want := []string{"Objective", "Acceptance criteria", "Scope", "Known facts", "Deliverables", "Constraints"}
@@ -33,19 +15,18 @@ func TestSections(t *testing.T) {
 	}
 }
 
+// Any nonblank, NUL-free UTF-8 text is a brief; the template is advisory.
 func TestValidateAccepts(t *testing.T) {
 	for label, text := range map[string]string{
-		"plain":             build(full()...),
-		"preamble":          "Title line\n\nsome preamble\n" + build(full()...),
-		"subheadings":       strings.Replace(build(full()...), "text for Scope", "### Allowed\nfiles\n### Out\nnone", 1),
-		"trailing ws":       strings.Replace(build(full()...), "## Objective\n", "## Objective  \t\r\n", 1),
-		"inline comment":    strings.Replace(build(full()...), "text for Scope", "<!-- hint --> real text", 1),
-		"between comments":  strings.Replace(build(full()...), "text for Scope", "<!-- a --> text <!-- b -->", 1),
-		"comment plus text": strings.Replace(build(full()...), "text for Scope", "<!-- hint -->\nreal text", 1),
-		"backtick fence":    strings.Replace(build(full()...), "text for Known facts", "README:\n```md\n## Usage\n## Scope\n```", 1),
-		"tilde fence":       strings.Replace(build(full()...), "text for Known facts", "README:\n~~~\n## Usage\n```\n## Usage\n~~~", 1),
-		"long fence":        strings.Replace(build(full()...), "text for Known facts", "README:\n````\n```\n## Usage\n````", 1),
-		"inline span":       strings.Replace(build(full()...), "text for Known facts", "```inline code```", 1),
+		"one line":        "one line",
+		"skeleton":        Skeleton(),
+		"single rune":     "x",
+		"padded":          "  \n\tpadded text\n\n",
+		"off template":    "## Notes\nanything\n## Scope\n",
+		"unicode":         "résumé → 完成",
+		"space-led rune":  "　x ",
+		"comment only":    "<!-- hint -->",
+		"control not NUL": "a\x01b",
 	} {
 		if err := Validate(text); err != nil {
 			t.Errorf("%s: %v", label, err)
@@ -54,24 +35,18 @@ func TestValidateAccepts(t *testing.T) {
 }
 
 func TestValidateRejects(t *testing.T) {
-	pairs := full()
 	for label, c := range map[string]struct{ text, message string }{
-		"one line":     {"one line", "brief is missing sections: Objective, Acceptance criteria, Scope, Known facts, Deliverables, Constraints"},
-		"missing":      {build(append(append([]string{}, pairs[:4]...), pairs[6:10]...)...), "brief is missing sections: Scope, Constraints"},
-		"empty":        {strings.Replace(build(pairs...), "text for Objective", "  \n\t", 1), "brief section Objective is empty"},
-		"comment only": {strings.Replace(build(pairs...), "text for Objective", "<!-- what outcome is wanted -->\n  <!-- more -->  ", 1), "brief section Objective is empty"},
-		"last empty":   {strings.Replace(build(pairs...), "text for Constraints", "", 1), "brief section Constraints is empty"},
-		"unknown":      {build(append(append([]string{}, pairs...), "Notes", "x")...), "brief has unknown section Notes"},
-		"case":         {strings.Replace(build(pairs...), "## Scope", "## scope", 1), "brief has unknown section scope"},
-		"duplicate":    {build(append(append([]string{}, pairs...), "Scope", "again")...), "brief section Scope is duplicated"},
-		"order":        {build(append(append(append([]string{}, pairs[:2]...), pairs[4:6]...), append(append([]string{}, pairs[2:4]...), pairs[6:]...)...)...), "brief sections are out of order: Scope before Acceptance criteria"},
-		"skeleton":     {Skeleton(), "brief section Objective is empty"},
-		"after span":   {build(pairs...) + "```inline code```\n## Notes\nx\n", "brief has unknown section Notes"},
-		"after fence":  {strings.Replace(build(pairs...), "text for Known facts", "```\n## Usage\n```\n## Notes", 1), "brief has unknown section Notes"},
+		"empty":           {"", "brief must not be blank"},
+		"ascii blank":     {" \t\r\n\v\f", "brief must not be blank"},
+		"unicode blank":   {"  　\u0085 \n", "brief must not be blank"},
+		"NUL":             {"a\x00b", "brief must not contain NUL"},
+		"only NUL":        {"\x00", "brief must not contain NUL"},
+		"invalid UTF-8":   {"ok \xff", "brief must be valid UTF-8"},
+		"surrogate bytes": {"\xed\xa0\x80", "brief must be valid UTF-8"},
 	} {
 		err := Validate(c.text)
-		var coded *herdr.Error
-		if !errors.As(err, &coded) || coded.Code != "task_brief_incomplete" || coded.Message != c.message {
+		var input *libagent.InputError
+		if !errors.As(err, &input) || input.Message != c.message {
 			t.Errorf("%s: %v", label, err)
 		}
 	}
@@ -90,8 +65,5 @@ func TestSkeletonHasEveryHeadingWithAHint(t *testing.T) {
 	}
 	if strings.Join(headings, "|") != strings.Join(Sections, "|") {
 		t.Fatal(Skeleton())
-	}
-	if err := Validate(strings.ReplaceAll(Skeleton(), "-->", "-->\nfilled")); err != nil {
-		t.Fatalf("filled skeleton: %v", err)
 	}
 }

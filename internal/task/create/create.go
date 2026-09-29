@@ -18,13 +18,13 @@ import (
 )
 
 type Options struct {
-	Title, Body, File, Parent  string
-	After                      []string
-	BodySet, FileSet, Freeform bool
+	Title, Body, File, Parent string
+	After                     []string
+	BodySet, FileSet          bool
 }
 
-// Run stores a new task. The brief must follow the brief template unless
-// Freeform is set. The creator is the caller's live agent record, or
+// Run stores a new task. The brief is any nonblank, NUL-free UTF-8 text,
+// stored exactly as given. The creator is the caller's live agent record, or
 // null when the caller is unregistered. A Parent must exist and be neither
 // verified nor cancelled, and every After prerequisite must exist; both are
 // checked and the task stored under one store lock. Repeated prerequisites
@@ -50,7 +50,7 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 		err = libagent.Invalid("--title must be nonempty and a single line")
 	default:
 		text, err = libagent.ReadText(in, libagent.TextInput{Body: o.Body, BodyFlag: "body", BodySet: o.BodySet, File: o.File, FileFlag: "file", FileSet: o.FileSet, Required: true, Noun: "brief"})
-		if err == nil && !o.Freeform {
+		if err == nil {
 			err = brief.Validate(text)
 		}
 	}

@@ -1,6 +1,6 @@
 // Package proposal owns the task proposal file: a TOML list of tasks with
-// template briefs and local dependencies, its strict validation, a creation
-// order, and a printable skeleton.
+// briefs and local dependencies, its strict validation, a creation order, and
+// a printable skeleton.
 package proposal
 
 import (
@@ -150,7 +150,7 @@ func checkKeys(raw map[string]any) error {
 	return nil
 }
 
-// checkText validates a title and its template brief.
+// checkText validates a title and its decoded brief.
 func checkText(title, text string) error {
 	if title == "" {
 		return fmt.Errorf("title is required")
@@ -209,7 +209,7 @@ func (p Proposal) Order() ([]Task, error) {
 }
 
 // Skeleton is an unfilled proposal: a parent and one task whose briefs are
-// the brief skeleton. It decodes structurally but fails brief validation.
+// the advisory brief skeleton. It decodes as a valid proposal.
 func Skeleton() string {
 	return fmt.Sprintf(`schema_version = 1
 

@@ -13,7 +13,6 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
-	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 )
 
@@ -38,9 +37,8 @@ type Result struct {
 // direct subtask must be verified or cancelled, unless Force is set; the
 // verifier and whether Force was used are recorded. A repeat verification
 // replaces the previous verifier, note, time, and Force flag, keeping only the
-// latest. The verifier's usage since completion is then recorded, replacing
-// any earlier verifier snapshot. This is a workflow guard, not a security
-// boundary.
+// latest. A registered verifier's live session ref is then stored. This is
+// a workflow guard, not a security boundary.
 func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libagent.Outcome {
 	out := libagent.Outcome{Operation: "task.verify", Status: "success", Effects: []libagent.Effect{}}
 	err := task.ValidateID(o.ID)
@@ -108,45 +106,11 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 		return out
 	}
 	out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "task", ID: r.ID})
-	out.Result = Result{Record: recordUsage(ctx, c, s, &out, r, caller, live), OpenSubtasks: open}
-	return out
-}
-
-// recordUsage snapshots the verifier's usage from completion to this
-// verification, replacing any earlier verifier snapshot. It runs after the
-// verification is committed, in a separate write, so it never fails it: a
-// failed write is a warning effect.
-func recordUsage(ctx context.Context, c libagent.Client, s *state.Store, out *libagent.Outcome, r task.Record, caller *identity.Record, live *herdr.AgentDetails) task.Record {
-	var notes []string
-	from := r.CreatedAt
-	if r.CompletedAt != nil {
-		from = *r.CompletedAt
-	} else {
-		notes = append(notes, "task was never completed; window starts at created_at")
-	}
 	if caller != nil {
-		rec := task.Observe(s, observeSession, *caller, live, time.Now(), out)
-		caller = &rec
-	} else {
-		notes = append(notes, "the verifier is not a registered agent")
+		task.Observe(s, observeSession, *caller, live, time.Now(), &out)
 	}
-	snapshot := task.CollectUsage(ctx, readUsage, caller, live, c.Cwd, from, *r.VerifiedAt, time.Now(), notes...)
-	verifiedAt := *r.VerifiedAt
-	stored, err := task.Update(s, r.ID, func(r *task.Record) error {
-		if r.VerifiedAt == nil || *r.VerifiedAt != verifiedAt {
-			return &herdr.Error{Code: "task_state_changed", Message: fmt.Sprintf("task %s was verified again before its usage could be recorded", r.ID)}
-		}
-		if r.Usage == nil {
-			r.Usage = &task.Usage{}
-		}
-		r.Usage.Verifier = snapshot
-		return nil
-	})
-	if err != nil {
-		out.Effects = append(out.Effects, libagent.Effect{Action: "warning", Kind: "usage", ID: r.ID})
-		return r
-	}
-	return stored
+	out.Result = Result{Record: r, OpenSubtasks: open}
+	return out
 }
 
 // requireVerifiable accepts a completed or verified task, or a created or
@@ -185,9 +149,5 @@ func Render(w io.Writer, o libagent.Outcome) error {
 	return err
 }
 
-// readUsage and observeSession are replaceable so tests can inject a reader
-// and fail the session write.
-var (
-	readUsage      task.Reader   = task.LocalReader
-	observeSession task.Observer = identity.ObserveSession
-)
+// observeSession is replaceable so tests can fail the session write.
+var observeSession task.Observer = identity.ObserveSession

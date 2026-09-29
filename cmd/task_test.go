@@ -32,6 +32,11 @@ func TestTaskHelp(t *testing.T) {
 	if !strings.Contains(out.String(), "never derived from Herdr") {
 		t.Fatal(out.String())
 	}
+	// The brief template is advisory: any nonblank brief is accepted.
+	help := strings.Join(strings.Fields(out.String()), " ")
+	if !strings.Contains(help, "A brief is any nonblank UTF-8 text without NUL") || !strings.Contains(help, "task template prints an optional six-heading skeleton") || strings.Contains(help, "Briefs follow") {
+		t.Fatal(out.String())
+	}
 }
 
 func TestTaskTemplateOutsideRepository(t *testing.T) {
@@ -134,28 +139,49 @@ func TestTaskVerifyFinishedCreatedParentCLI(t *testing.T) {
 	}
 }
 
-// task create rejects a brief off the template unless --freeform.
-func TestTaskCreateBriefTemplateCLI(t *testing.T) {
+// task create takes any nonblank brief, rejects a blank one and the removed
+// --freeform flag before touching state, and calls the template optional.
+func TestTaskCreateBriefCLI(t *testing.T) {
 	t.Chdir(t.TempDir())
 	gitRepo(t)
 	t.Setenv("HERDR_PANE_ID", "")
+	for _, tc := range []struct {
+		args    []string
+		message string
+	}{
+		{[]string{"task", "create", "--title", "T", "--body", " \u3000\n", "--json"}, "brief must not be blank"},
+		{[]string{"task", "create", "--title", "T", "--body", "one line", "--freeform", "--json"}, "unknown flag: --freeform"},
+	} {
+		var out bytes.Buffer
+		err := ExecuteWithArgs(tc.args, &out)
+		var status interface{ ExitCode() int }
+		if !errors.As(err, &status) || status.ExitCode() != 2 {
+			t.Fatalf("%v: wrong exit: %v %s", tc.args, err, out.String())
+		}
+		var envelope libagent.Outcome
+		if err := json.Unmarshal(out.Bytes(), &envelope); err != nil || envelope.Status != "rejected" || envelope.Error == nil || envelope.Error.Code != "invalid_input" || !strings.Contains(envelope.Error.Message, tc.message) {
+			t.Fatalf("%v: %v %s", tc.args, err, out.String())
+		}
+		if _, err := os.Stat(".fledge"); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%v: state created: %v", tc.args, err)
+		}
+	}
+	for _, body := range []string{"one line", brief.Skeleton()} {
+		var out bytes.Buffer
+		if err := ExecuteWithArgs([]string{"task", "create", "--title", "T", "--body", body, "--json"}, &out); err != nil {
+			t.Fatalf("%v %s", err, out.String())
+		}
+		var envelope struct{ Result task.Record }
+		if err := json.Unmarshal(out.Bytes(), &envelope); err != nil || tasktest.Load(t, ".", envelope.Result.ID).Brief != body {
+			t.Fatalf("%v %s", err, out.String())
+		}
+	}
 	var out bytes.Buffer
-	err := ExecuteWithArgs([]string{"task", "create", "--title", "T", "--body", "one line", "--json"}, &out)
-	var status interface{ ExitCode() int }
-	if !errors.As(err, &status) || status.ExitCode() != 1 {
-		t.Fatalf("wrong exit: %v %s", err, out.String())
-	}
-	var envelope libagent.Outcome
-	if err := json.Unmarshal(out.Bytes(), &envelope); err != nil || envelope.Error == nil || envelope.Error.Code != "task_brief_incomplete" || envelope.Error.Phase != "validation" ||
-		!strings.Contains(envelope.Error.Message, "missing sections: Objective, Acceptance criteria, Scope, Known facts, Deliverables, Constraints") {
+	if err := ExecuteWithArgs([]string{"task", "create", "--help"}, &out); err != nil || strings.Contains(out.String(), "freeform") || !strings.Contains(out.String(), "fledge task template") {
 		t.Fatalf("%v %s", err, out.String())
 	}
 	out.Reset()
-	if err := ExecuteWithArgs([]string{"task", "create", "--title", "T", "--body", "one line", "--freeform"}, &out); err != nil || !strings.HasPrefix(out.String(), "Created task ") {
-		t.Fatalf("%v %s", err, out.String())
-	}
-	out.Reset()
-	if err := ExecuteWithArgs([]string{"task", "create", "--help"}, &out); err != nil || !strings.Contains(out.String(), "--freeform") || !strings.Contains(out.String(), "fledge task template") {
+	if err := ExecuteWithArgs([]string{"task", "template", "--help"}, &out); err != nil || strings.Contains(out.String(), "required") || !strings.Contains(out.String(), "optional") {
 		t.Fatalf("%v %s", err, out.String())
 	}
 }

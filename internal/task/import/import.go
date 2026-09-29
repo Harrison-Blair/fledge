@@ -4,14 +4,12 @@ package taskimport
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"slices"
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
-	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/proposal"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
@@ -159,8 +157,7 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 }
 
 // validate reads and decodes the proposal and checks the flags against it.
-// File and schema problems are input errors; a brief off the template keeps
-// its task_brief_incomplete code.
+// Every problem is an input error.
 func validate(o Options, in io.Reader) (proposal.Proposal, []proposal.Task, error) {
 	switch {
 	case !o.FileSet:
@@ -174,11 +171,7 @@ func validate(o Options, in io.Reader) (proposal.Proposal, []proposal.Task, erro
 	}
 	p, err := proposal.Decode([]byte(text))
 	if err != nil {
-		var coded *herdr.Error
-		if !errors.As(err, &coded) {
-			err = libagent.Invalid("%v", err)
-		}
-		return proposal.Proposal{}, nil, err
+		return proposal.Proposal{}, nil, libagent.Invalid("%v", err)
 	}
 	if p.Parent != nil && o.Parent != "" {
 		return proposal.Proposal{}, nil, libagent.Invalid("--parent conflicts with the file's [parent]; use one")
