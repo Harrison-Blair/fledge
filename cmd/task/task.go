@@ -17,7 +17,7 @@ import (
 
 func New() *cobra.Command {
 	cmd := &cobra.Command{Use: "task", Short: "Create, import, order, assign, complete, verify, cancel, list, and inspect durable tasks, and print brief templates", Args: cobra.NoArgs,
-		Long: "Create, import, order, assign, complete, verify, cancel, list, and inspect durable tasks.\n\nA task moves created → assigned → completed → verified, and can be cancelled\nbefore it is verified. A task may be a subtask of a parent task and may run after\nprerequisite tasks. Records live in .fledge/state/tasks under the repository's\nprimary checkout and outlive their agents' panes. Owners and verifiers are Fledge\nagent record ids. Task status changes only through these commands; completion is\nnever derived from Herdr idle or done.\n\nBriefs follow a six-heading template; task template prints it."}
+		Long: "Create, import, order, assign, complete, verify, cancel, list, and inspect durable tasks.\n\nA task moves created → assigned → completed → verified, and can be cancelled\nbefore it is verified. A task may be a subtask of a parent task and may run after\nprerequisite tasks. Records live in .fledge/state/tasks under the repository's\nprimary checkout and outlive their agents' panes. Owners and verifiers are Fledge\nagent record ids. Task status changes only through these commands; completion is\nnever derived from Herdr idle or done.\n\nA brief is any nonblank UTF-8 text without NUL; task template prints an optional\nsix-heading skeleton to start from."}
 	cmd.AddCommand(create.New(), importcmd.New(), depend.New(), assign.New(), complete.New(), verify.New(), cancel.New(), list.New(), get.New(), template.New())
 	return cmd
 }

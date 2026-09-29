@@ -32,6 +32,11 @@ func TestTaskHelp(t *testing.T) {
 	if !strings.Contains(out.String(), "never derived from Herdr") {
 		t.Fatal(out.String())
 	}
+	// The brief template is advisory: any nonblank brief is accepted.
+	help := strings.Join(strings.Fields(out.String()), " ")
+	if !strings.Contains(help, "A brief is any nonblank UTF-8 text without NUL") || !strings.Contains(help, "task template prints an optional six-heading skeleton") || strings.Contains(help, "Briefs follow") {
+		t.Fatal(out.String())
+	}
 }
 
 func TestTaskTemplateOutsideRepository(t *testing.T) {
