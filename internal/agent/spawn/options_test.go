@@ -7,7 +7,7 @@ import (
 )
 
 func validOptions() Options {
-	return Options{Name: "worker", Harness: "claude", Timeout: 30 * time.Second, Direction: "right"}
+	return Options{Name: "worker", Harness: "claude", Timeout: 30 * time.Second}
 }
 func TestSpawnValidation(t *testing.T) {
 	for _, tc := range []struct {
@@ -19,11 +19,12 @@ func TestSpawnValidation(t *testing.T) {
 		{"harness", func(o *Options) { o.Harness = "nope" }},
 		{"timeout", func(o *Options) { o.Timeout = 3000 * time.Millisecond }},
 		{"workspace selectors", func(o *Options) { o.Workspace = "a"; o.WorkspaceID = "w1" }},
-		{"pane direction", func(o *Options) { o.Pane = "p"; o.DirectionSet = true }},
+		{"pane tab", func(o *Options) { o.Pane = "p"; o.Tab = "t" }},
+		{"pane cwd", func(o *Options) { o.Pane = "p"; o.Cwd = "/x" }},
+		{"pane env", func(o *Options) { o.Pane = "p"; o.Env = []string{"K=V"} }},
 		{"worktree env", func(o *Options) { o.Worktree = "new"; o.Env = []string{"K=V"} }},
 		{"branch ordinary", func(o *Options) { o.Branch = "x" }},
 		{"bad env", func(o *Options) { o.Env = []string{"bad"} }},
-		{"bad ratio", func(o *Options) { r := 2.0; o.Ratio = &r }},
 		{"no-wait with prompt", func(o *Options) { o.NoWait = true; o.PromptSet = true }},
 		{"no-wait with file", func(o *Options) { o.NoWait = true; o.FileSet = true }},
 	} {

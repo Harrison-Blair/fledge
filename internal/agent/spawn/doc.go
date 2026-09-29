@@ -2,7 +2,7 @@
 // options.go validates flags and native model arguments; spawn.go runs startup, retries, and the first prompt;
 // ready.go bounds startup by --timeout and holds the first prompt until Herdr admits input from the started agent;
 // profile.go places a profile's brief, ending with the destination's project memory index, before the task prompt;
-// placement.go resolves and creates the destination pane; worktree.go places agents in new or existing checkouts;
+// placement.go resolves the destination workspace and creates a new tab, or reuses --pane; worktree.go places agents in new or existing checkouts;
 // identity.go registers the started agent's Fledge record;
-// output.go renders results and startup recovery hints; picker.go prompts for options when spawn runs interactively with no flags.
+// output.go renders results and startup recovery hints.
 package spawn

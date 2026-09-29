@@ -22,7 +22,6 @@ type Result struct {
 	Cwd               *string          `json:"cwd"`
 	Argv              []string         `json:"argv"`
 	WorktreePath      *string          `json:"worktree_path"`
-	Split             bool             `json:"split"`
 	ID                *string          `json:"id"`
 	Registered        bool             `json:"registered"`
 	RegistrationError *string          `json:"registration_error"`

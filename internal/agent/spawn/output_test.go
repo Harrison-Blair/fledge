@@ -2,6 +2,7 @@ package spawn
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -50,6 +51,22 @@ func TestSpawnJSONIncludesPromptedField(t *testing.T) {
 	}
 	if !strings.Contains(b.String(), `"prompted":true,"prompt_requested":false`) || !strings.Contains(b.String(), `"message_id":null,"sender":null`) {
 		t.Fatalf("%q", b.String())
+	}
+}
+
+// Spawn JSON keeps actual placement IDs and has no split key.
+func TestSpawnJSONHasPlacementIDsAndNoSplitKey(t *testing.T) {
+	ws, tab, pane := "w1", "w1:t2", "w1:p2"
+	b, err := json.Marshal(&Result{Name: "worker", Harness: "claude", WorkspaceID: &ws, TabID: &tab, PaneID: &pane})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got["split"]; ok || got["workspace_id"] != ws || got["tab_id"] != tab || got["pane_id"] != pane {
+		t.Fatalf("%s", b)
 	}
 }
 

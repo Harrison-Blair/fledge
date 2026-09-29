@@ -35,46 +35,6 @@ func workspace(snap *herdr.Snapshot, name, id string) (string, error) {
 	}
 	return "", nil
 }
-func tab(snap *herdr.Snapshot, ws, name, id string) (*herdr.Tab, error) {
-	matches := []herdr.Tab{}
-	for _, t := range snap.Tabs {
-		if id != "" && t.ID == id {
-			if ws != "" && ws != t.WorkspaceID {
-				return nil, libagent.Invalid("tab %s does not belong to workspace %s", id, ws)
-			}
-			return &t, nil
-		}
-		if id == "" && t.WorkspaceID == ws && t.Label == name {
-			matches = append(matches, t)
-		}
-	}
-	if id != "" {
-		return nil, libagent.Invalid("tab ID %q does not exist", id)
-	}
-	if len(matches) > 1 {
-		ids := []string{}
-		for _, t := range matches {
-			ids = append(ids, t.ID)
-		}
-		return nil, libagent.Invalid("tab name %q is ambiguous: %s", name, strings.Join(ids, ", "))
-	}
-	if len(matches) == 1 {
-		return &matches[0], nil
-	}
-	return nil, nil
-}
-func anchor(snap *herdr.Snapshot, t herdr.Tab) (string, error) {
-	for _, l := range snap.Layouts {
-		if l.TabID == t.ID && l.WorkspaceID == t.WorkspaceID {
-			for _, p := range snap.Panes {
-				if p.PaneID == l.FocusedPaneID && p.TabID == t.ID && p.WorkspaceID == t.WorkspaceID {
-					return p.PaneID, nil
-				}
-			}
-		}
-	}
-	return "", libagent.Protocol("selected tab has no valid focused pane in snapshot")
-}
 func (s *spawner) caller(ctx context.Context) (herdr.Pane, error) {
 	if s.CallerPane == "" {
 		return herdr.Pane{}, libagent.Invalid("implicit placement requires HERDR_PANE_ID; provide an explicit target")
@@ -115,16 +75,6 @@ func (s *spawner) ordinaryPlacement(ctx context.Context, o Options, snap *herdr.
 	if err != nil {
 		return herdr.Pane{}, err
 	}
-	if o.TabID != "" {
-		t, err := tab(snap, ws, "", o.TabID)
-		if err != nil {
-			return herdr.Pane{}, err
-		}
-		if o.Workspace != "" && ws == "" {
-			return herdr.Pane{}, libagent.Invalid("workspace %q does not own selected tab", o.Workspace)
-		}
-		ws = t.WorkspaceID
-	}
 	createWorkspace := o.Workspace != "" && ws == ""
 	source := ""
 	if ws == "" && (!createWorkspace || s.CallerPane != "") {
@@ -159,7 +109,7 @@ func (s *spawner) ordinaryPlacement(ctx context.Context, o Options, snap *herdr.
 		}
 		return s.initialTab(ctx, o, r, out)
 	}
-	return s.placeInWorkspace(ctx, o, ws, snap, out)
+	return s.newTab(ctx, o, ws, out)
 }
 func validCreated(r herdr.CreatedResult, workspace bool) bool {
 	return libagent.ValidPane(r.RootPane) && r.Tab.ID == r.RootPane.TabID && r.Tab.WorkspaceID == r.RootPane.WorkspaceID && (!workspace || r.Workspace.ID == r.RootPane.WorkspaceID)
@@ -199,59 +149,26 @@ func (s *spawner) initialTab(ctx context.Context, o Options, r herdr.CreatedResu
 	}
 	return r.RootPane, nil
 }
-func (s *spawner) placeInWorkspace(ctx context.Context, o Options, ws string, snap *herdr.Snapshot, out *libagent.Outcome) (herdr.Pane, error) {
+
+// newTab creates a tab labeled --tab, else the agent's name, in workspace
+// ws. Labels need not be unique; spawn never reuses or splits a tab.
+func (s *spawner) newTab(ctx context.Context, o Options, ws string, out *libagent.Outcome) (herdr.Pane, error) {
 	if ws == "" {
 		return herdr.Pane{}, fmt.Errorf("destination workspace could not be resolved")
 	}
-	var selected *herdr.Tab
-	var err error
-	if o.Tab != "" || o.TabID != "" {
-		selected, err = tab(snap, ws, o.Tab, o.TabID)
-		if err != nil {
-			return herdr.Pane{}, err
-		}
-	}
 	params := shellParams(o)
 	params["workspace_id"] = ws
-	if selected == nil {
-		params["label"] = o.tabLabel()
-		var r herdr.CreatedResult
-		err = s.Call(ctx, "tab.create", params, &r)
-		if err == nil {
-			recordCreated(out, r, false)
-			if r.Type != "tab_created" || !validCreated(r, false) || r.Tab.WorkspaceID != ws {
-				err = libagent.Protocol("incomplete tab.create result")
-			}
-		}
-		if err != nil {
-			out.Fail(err, "tab.create", true)
-		}
-		return r.RootPane, err
-	}
-	target, err := anchor(snap, *selected)
-	if err != nil {
-		return herdr.Pane{}, err
-	}
-	params["target_pane_id"] = target
-	params["direction"] = o.Direction
-	if o.Ratio != nil {
-		params["ratio"] = *o.Ratio
-	}
-	var r herdr.PaneResult
-	err = s.Call(ctx, "pane.split", params, &r)
+	params["label"] = o.tabLabel()
+	var r herdr.CreatedResult
+	err := s.Call(ctx, "tab.create", params, &r)
 	if err == nil {
-		if r.Pane.PaneID != "" {
-			out.Effects = append(out.Effects, libagent.Effect{Action: "created", Kind: "pane", ID: r.Pane.PaneID})
-			setPlacement(out.Result.(*Result), r.Pane)
-		}
-		if r.Type != "pane_info" || !libagent.ValidPane(r.Pane) || r.Pane.TabID != selected.ID || r.Pane.WorkspaceID != ws {
-			err = libagent.Protocol("incomplete pane.split result")
+		recordCreated(out, r, false)
+		if r.Type != "tab_created" || !validCreated(r, false) || r.Tab.WorkspaceID != ws {
+			err = libagent.Protocol("incomplete tab.create result")
 		}
 	}
 	if err != nil {
-		out.Fail(err, "pane.split", true)
-	} else {
-		out.Result.(*Result).Split = true
+		out.Fail(err, "tab.create", true)
 	}
-	return r.Pane, err
+	return r.RootPane, err
 }

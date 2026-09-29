@@ -64,17 +64,49 @@ func TestDefaultSpawnUsesResolvedCallerAndPolicy(t *testing.T) {
 		t.Fatalf("%+v", out)
 	}
 }
-func TestExistingTabSplitsItsOwnFocusedPane(t *testing.T) {
-	p := herdrscript.Pane("w1:p2", "w1", "w1:t1")
+
+// A --tab label that matches an existing tab still creates a new tab; spawn
+// never splits a pane.
+func TestExistingTabLabelCreatesNewTab(t *testing.T) {
+	p := herdrscript.Pane("w1:p2", "w1", "w1:t2")
 	o := validOptions()
 	o.Workspace = "main"
 	o.Tab = "build"
 	o.Label = "worker pane"
 	o.Focus = true
-	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "pane.split", Params: map[string]any{"workspace_id": "w1", "target_pane_id": "w1:p1", "direction": "right", "focus": false}, Result: herdr.PaneResult{Type: "pane_info", Pane: p}}, call{Method: "pane.rename", Params: map[string]any{"pane_id": "w1:p2", "label": "worker pane"}, Result: herdr.PaneResult{Type: "pane_info", Pane: p}}, call{Method: "pane.focus", Params: map[string]any{"pane_id": "w1:p2"}, Result: herdr.PaneResult{Type: "pane_info", Pane: p}}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"))
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "tab.create", Params: map[string]any{"workspace_id": "w1", "label": "build", "focus": false}, Result: herdr.CreatedResult{Type: "tab_created", Tab: herdr.Tab{ID: "w1:t2", WorkspaceID: "w1", Label: "build"}, RootPane: p}}, call{Method: "pane.rename", Params: map[string]any{"pane_id": "w1:p2", "label": "worker pane"}, Result: herdr.PaneResult{Type: "pane_info", Pane: p}}, call{Method: "pane.focus", Params: map[string]any{"pane_id": "w1:p2"}, Result: herdr.PaneResult{Type: "pane_info", Pane: p}}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"))
 	out := s.run(context.Background(), o, nil)
-	if out.Status != "success" || !out.Result.(*Result).Split {
+	if out.Status != "success" || !slices.Contains(out.Effects, libagent.Effect{Action: "created", Kind: "tab", ID: "w1:t2"}) {
 		t.Fatalf("%+v", out)
+	}
+	if r := out.Result.(*Result); *r.TabID != "w1:t2" || *r.PaneID != "w1:p2" || *r.WorkspaceID != "w1" {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// A workspace selected by ID gets a new tab carrying --cwd and --env.
+func TestSelectedWorkspaceTabGetsCwdAndEnv(t *testing.T) {
+	p := herdrscript.Pane("w1:p2", "w1", "w1:t2")
+	o := validOptions()
+	o.WorkspaceID, o.Cwd, o.Env = "w1", "/chosen", []string{"K=a=b"}
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "tab.create", Params: map[string]any{"workspace_id": "w1", "label": "worker", "cwd": "/chosen", "env": map[string]string{"K": "a=b"}, "focus": false}, Result: herdr.CreatedResult{Type: "tab_created", Tab: herdr.Tab{ID: "w1:t2", WorkspaceID: "w1", Label: "worker"}, RootPane: p}}, labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"))
+	if out := s.run(context.Background(), o, nil); out.Status != "success" {
+		t.Fatalf("%+v %+v", out, out.Error)
+	}
+}
+
+// Duplicate tab labels are allowed: several matching tabs, and a tab without
+// a focused pane, neither reject nor split.
+func TestDuplicateTabLabelsStillCreateNewTab(t *testing.T) {
+	snap := snapshot()
+	snap.Snapshot.Tabs = append(snap.Snapshot.Tabs, herdr.Tab{ID: "w1:t3", WorkspaceID: "w1", Label: "build"})
+	snap.Snapshot.Layouts = []herdr.Layout{}
+	p := herdrscript.Pane("w1:p2", "w1", "w1:t4")
+	o := validOptions()
+	o.Tab = "build"
+	s := fake(t, call{Method: "session.snapshot", Result: snap}, call{Method: "pane.current", Result: herdr.PaneResult{Type: "pane_current", Pane: herdrscript.Pane("w1:p1", "w1", "w1:t1")}}, call{Method: "tab.create", Params: map[string]any{"workspace_id": "w1", "label": "build", "focus": false}, Result: herdr.CreatedResult{Type: "tab_created", Tab: herdr.Tab{ID: "w1:t4", WorkspaceID: "w1", Label: "build"}, RootPane: p}}, labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"))
+	if out := s.run(context.Background(), o, nil); out.Status != "success" {
+		t.Fatalf("%+v %+v", out, out.Error)
 	}
 }
 func TestDuplicateNameDoesNotMutate(t *testing.T) {
@@ -166,7 +198,7 @@ func TestRelativeCwdResolvesAgainstCallerDirectory(t *testing.T) {
 	}
 }
 func TestSelectorFailuresDoNotMutate(t *testing.T) {
-	for _, kind := range []string{"ambiguous workspace", "ambiguous tab", "wrong owner", "missing source", "missing anchor"} {
+	for _, kind := range []string{"ambiguous workspace", "missing workspace id", "missing source"} {
 		t.Run(kind, func(t *testing.T) {
 			snap := snapshot()
 			o := validOptions()
@@ -174,18 +206,11 @@ func TestSelectorFailuresDoNotMutate(t *testing.T) {
 			switch kind {
 			case "ambiguous workspace":
 				snap.Snapshot.Workspaces = append(snap.Snapshot.Workspaces, herdr.Workspace{ID: "w2", Label: "main"})
-			case "ambiguous tab":
-				o.Tab = "build"
-				snap.Snapshot.Tabs = append(snap.Snapshot.Tabs, herdr.Tab{ID: "w1:t2", WorkspaceID: "w1", Label: "build"})
-			case "wrong owner":
-				o.TabID = "w2:t1"
-				snap.Snapshot.Tabs = append(snap.Snapshot.Tabs, herdr.Tab{ID: "w2:t1", WorkspaceID: "w2", Label: "build"})
+			case "missing workspace id":
+				o.Workspace, o.WorkspaceID = "", "w9"
 			case "missing source":
 				o.Workspace = "missing"
 				o.Worktree = "new"
-			case "missing anchor":
-				o.Tab = "build"
-				snap.Snapshot.Layouts = []herdr.Layout{}
 			}
 			s := fake(t, call{Method: "session.snapshot", Result: snap})
 			out := s.run(context.Background(), o, nil)
@@ -283,25 +308,27 @@ func (w *recordedWaits) wait(ctx context.Context, d time.Duration) error {
 	return nil
 }
 func busy() error { return &herdr.Error{Code: "agent_pane_busy", Message: "shell not ready"} }
-func splitCalls(t *testing.T, starts ...call) (*spawner, *recordedWaits) {
+
+// tabCalls scripts placement in a new tab of workspace main, then starts.
+func tabCalls(t *testing.T, starts ...call) (*spawner, *recordedWaits) {
 	t.Helper()
-	p := herdrscript.Pane("w1:p2", "w1", "w1:t1")
-	calls := []call{{Method: "session.snapshot", Result: snapshot()}, {Method: "pane.split", Result: herdr.PaneResult{Type: "pane_info", Pane: p}}, labeled(p)}
+	p := herdrscript.Pane("w1:p2", "w1", "w1:t2")
+	calls := []call{{Method: "session.snapshot", Result: snapshot()}, {Method: "tab.create", Result: herdr.CreatedResult{Type: "tab_created", Tab: herdr.Tab{ID: "w1:t2", WorkspaceID: "w1", Label: "build"}, RootPane: p}}, labeled(p)}
 	s := fake(t, append(calls, starts...)...)
 	w := &recordedWaits{}
 	s.Wait = w.wait
 	return s, w
 }
-func splitOptions() Options {
+func tabOptions() Options {
 	o := validOptions()
 	o.Workspace = "main"
 	o.Tab = "build"
 	return o
 }
 func TestSpawnRetriesBusyPaneOnce(t *testing.T) {
-	p := herdrscript.Pane("w1:p2", "w1", "w1:t1")
-	s, w := splitCalls(t, call{Method: "agent.start", Params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w1:p2", "args": []string{}, "timeout_ms": 30000}, Err: busy()}, call{Method: "agent.start", Params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w1:p2", "args": []string{}, "timeout_ms": 30000}, Result: started(p)}, waitCall("worker", p, "idle"))
-	out := s.run(context.Background(), splitOptions(), nil)
+	p := herdrscript.Pane("w1:p2", "w1", "w1:t2")
+	s, w := tabCalls(t, call{Method: "agent.start", Params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w1:p2", "args": []string{}, "timeout_ms": 30000}, Err: busy()}, call{Method: "agent.start", Params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w1:p2", "args": []string{}, "timeout_ms": 30000}, Result: started(p)}, waitCall("worker", p, "idle"))
+	out := s.run(context.Background(), tabOptions(), nil)
 	if out.Status != "success" || out.Error != nil {
 		t.Fatalf("%+v", out)
 	}
@@ -317,8 +344,8 @@ func TestSpawnBusyExhaustionIsPartial(t *testing.T) {
 	for i := 0; i < 7; i++ {
 		starts = append(starts, call{Method: "agent.start", Err: busy()})
 	}
-	s, w := splitCalls(t, starts...)
-	out := s.run(context.Background(), splitOptions(), nil)
+	s, w := tabCalls(t, starts...)
+	out := s.run(context.Background(), tabOptions(), nil)
 	if out.Status != "partial" || out.Error == nil || out.Error.Phase != "agent.start" || out.Error.Code != "agent_pane_busy" {
 		t.Fatalf("%+v", out)
 	}
@@ -326,7 +353,7 @@ func TestSpawnBusyExhaustionIsPartial(t *testing.T) {
 	if !reflect.DeepEqual(w.delays, want) {
 		t.Fatalf("waits %v want %v", w.delays, want)
 	}
-	if !reflect.DeepEqual(out.Effects, []libagent.Effect{{Action: "created", Kind: "pane", ID: "w1:p2"}, {Action: "updated", Kind: "pane_label", ID: "w1:p2"}}) || *out.Result.(*Result).PaneID != "w1:p2" {
+	if !reflect.DeepEqual(out.Effects, []libagent.Effect{{Action: "created", Kind: "tab", ID: "w1:t2"}, {Action: "created", Kind: "pane", ID: "w1:p2"}, {Action: "updated", Kind: "pane_label", ID: "w1:p2"}}) || *out.Result.(*Result).PaneID != "w1:p2" {
 		t.Fatalf("resources changed: %+v", out)
 	}
 }
@@ -341,8 +368,8 @@ func TestSpawnDoesNotRetryOtherErrors(t *testing.T) {
 		{"protocol", call{Method: "agent.start", Result: herdr.AgentResult{Type: "wrong"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, w := splitCalls(t, tc.call)
-			out := s.run(context.Background(), splitOptions(), nil)
+			s, w := tabCalls(t, tc.call)
+			out := s.run(context.Background(), tabOptions(), nil)
 			if out.Error == nil || out.Error.Phase != "agent.start" || len(w.delays) != 0 {
 				t.Fatalf("%+v waits %v", out, w.delays)
 			}
@@ -350,11 +377,11 @@ func TestSpawnDoesNotRetryOtherErrors(t *testing.T) {
 	}
 }
 func TestSpawnBusyRetryHonorsCancellation(t *testing.T) {
-	s, w := splitCalls(t, call{Method: "agent.start", Err: busy()})
+	s, w := tabCalls(t, call{Method: "agent.start", Err: busy()})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	w.cancel = cancel
-	out := s.run(ctx, splitOptions(), nil)
+	out := s.run(ctx, tabOptions(), nil)
 	if out.Status != "partial" || out.Error == nil || out.Error.Phase != "agent.start" || out.Error.Code != "agent_pane_busy" {
 		t.Fatalf("%+v", out)
 	}
@@ -805,15 +832,6 @@ func TestSpawnNamesNewWorkspaceInitialTab(t *testing.T) {
 	o.Workspace = "new workspace"
 	p := herdrscript.Pane("w2:p1", "w2", "w2:t1")
 	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "pane.current", Result: herdr.PaneResult{Type: "pane_current", Pane: herdrscript.Pane("w1:p1", "w1", "w1:t1")}}, call{Method: "workspace.create", Result: herdr.CreatedResult{Type: "workspace_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2", Label: "1"}, RootPane: p}}, call{Method: "tab.rename", Params: map[string]any{"tab_id": "w2:t1", "label": "worker"}, Result: herdr.TabResult{Type: "tab_info", Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2", Label: "worker"}}}, call{Method: "pane.rename", Params: map[string]any{"pane_id": "w2:p1", "label": "worker"}, Result: herdr.PaneResult{Type: "pane_info", Pane: p}}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"))
-	if out := s.run(context.Background(), o, nil); out.Status != "success" {
-		t.Fatalf("%+v", out)
-	}
-}
-func TestSpawnSplitKeepsExistingTabLabel(t *testing.T) {
-	p := herdrscript.Pane("w1:p2", "w1", "w1:t1")
-	o := validOptions()
-	o.Tab = "build"
-	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "pane.current", Result: herdr.PaneResult{Type: "pane_current", Pane: herdrscript.Pane("w1:p1", "w1", "w1:t1")}}, call{Method: "pane.split", Result: herdr.PaneResult{Type: "pane_info", Pane: p}}, call{Method: "pane.rename", Params: map[string]any{"pane_id": "w1:p2", "label": "worker"}, Result: herdr.PaneResult{Type: "pane_info", Pane: p}}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"))
 	if out := s.run(context.Background(), o, nil); out.Status != "success" {
 		t.Fatalf("%+v", out)
 	}
