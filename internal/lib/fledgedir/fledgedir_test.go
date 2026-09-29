@@ -349,7 +349,7 @@ func TestRootRejectsLinkedWorktreeOfBareRepository(t *testing.T) {
 	}
 }
 
-const managedBlock = "*\n!/profiles/\n!/profiles/*.toml\n"
+const managedBlock = "*\n!/profiles/\n!/profiles/*.md\n"
 
 // ignored reports whether git ignores path, relative to root.
 func ignored(t *testing.T, root, path string) bool {
@@ -362,15 +362,17 @@ func ignored(t *testing.T, root, path string) bool {
 	return err == nil
 }
 
-// Profile TOML files are trackable while state, managed checkouts, the ignore
-// file itself, and anything else under .fledge stay ignored, whether Ensure
-// creates the file, migrates a legacy "*" file, or appends after user rules.
+// Profile Markdown files are trackable while state, scratch, memories,
+// managed checkouts, the ignore file itself, and anything else under .fledge
+// stay ignored, whether Ensure creates the file, migrates a legacy "*" file or
+// the TOML-era block, or appends after user rules, keeping existing lines.
 func TestEnsureLeavesOnlyProfileFilesTrackable(t *testing.T) {
 	for _, tc := range []struct{ name, existing, want string }{
 		{"fresh", "", managedBlock},
 		{"legacy", "*\n", managedBlock},
 		{"legacy with user rules", "# mine\n!keep\n*\n", "# mine\n!keep\n" + managedBlock},
 		{"user rules after star", "*\n!keep", "*\n!keep\n" + managedBlock},
+		{"toml-era block", "# mine\n*\n!/profiles/\n!/profiles/*.toml\n", "# mine\n*\n!/profiles/\n!/profiles/*.toml\n" + managedBlock},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := repository(t)
@@ -388,16 +390,20 @@ func TestEnsureLeavesOnlyProfileFilesTrackable(t *testing.T) {
 				t.Fatalf("%q want %q", b, tc.want)
 			}
 			for path, want := range map[string]bool{
-				".fledge/profiles/reviewer.toml":    false,
+				".fledge/profiles/reviewer.md":      false,
+				".fledge/profiles/reviewer.toml":    true,
 				".fledge/.gitignore":                true,
+				".fledge/tmp/plans/plan.md":         true,
+				".fledge/memories/alpha.md":         true,
+				".fledge/worktrees/profiles/x.md":   true,
 				".fledge/state/agents/a.json":       true,
 				".fledge/state/lock":                true,
 				".fledge/worktrees/feat/x/file.go":  true,
 				".fledge/worktrees/profiles/x.toml": true,
-				".fledge/profiles/notes.md":         true,
-				".fledge/profiles/sub/x.toml":       true,
+				".fledge/profiles/notes.txt":        true,
+				".fledge/profiles/sub/x.md":         true,
 				".fledge/state/profiles/x.toml":     true,
-				".fledge/other.toml":                true,
+				".fledge/other.md":                  true,
 			} {
 				if got := ignored(t, root, path); got != want {
 					t.Errorf("%s ignored = %v, want %v", path, got, want)

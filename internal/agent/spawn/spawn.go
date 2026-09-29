@@ -104,13 +104,12 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 			out.Fail(err, "validation", false)
 			return out
 		}
-		if o.Harness == "" && p.Harness == "" {
-			out.Fail(libagent.Invalid("--harness is required; profile %s sets no harness", p.Name), "validation", false)
+		if o.Harness == "" {
+			out.Fail(libagent.Invalid("--harness is required; profiles supply only a brief"), "validation", false)
 			return out
 		}
-		o, profile, brief = applyProfile(o, p), &p, p.Brief()
-		result.Harness = o.Harness
-		result.Profile = &ProfileRef{Name: p.Name, Source: p.Source, Path: p.Path, Base: p.Base}
+		profile, brief = &p, p.Brief()
+		result.Profile = &ProfileRef{Name: p.Name, Source: p.Source, Path: p.Path}
 	}
 	args, err := o.Validate()
 	if err == nil && o.NoWait && brief != "" {
@@ -126,7 +125,7 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 		return out
 	}
 	// The effective first prompt, including any profile brief, is the only
-	// input to PromptRequested; it is final once reads are checked.
+	// input to PromptRequested.
 	result.PromptRequested = firstPrompt(brief, body) != ""
 	if o.Cwd != "" && !filepath.IsAbs(o.Cwd) {
 		o.Cwd = filepath.Join(s.Cwd, o.Cwd)
@@ -155,21 +154,20 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 		return out
 	}
 	setPlacement(result, p)
-	var skipped []string
 	if profile != nil {
-		result.readDir = s.Cwd
+		// The memory index comes from where the agent was placed.
+		dir := s.Cwd
 		switch {
 		case result.Cwd != nil && *result.Cwd != "":
-			result.readDir = *result.Cwd
+			dir = *result.Cwd
 		case result.WorktreePath != nil:
-			result.readDir = *result.WorktreePath
+			dir = *result.WorktreePath
 		case o.Cwd != "":
-			result.readDir = o.Cwd
+			dir = o.Cwd
 		}
-		brief, skipped = profileBrief(ctx, *profile, result.readDir)
+		brief = profileBrief(ctx, *profile, dir)
 	}
 	prompt := firstPrompt(brief, body)
-	result.PromptRequested = prompt != ""
 	if err = s.customizePane(ctx, o, p, &out); err != nil {
 		return out
 	}
@@ -193,11 +191,6 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 	result.AgentStatus = libagent.Pointer(r.Agent.AgentStatus)
 	result.Argv = r.Argv
 	out.Effects = append(out.Effects, libagent.Effect{Action: "started", Kind: "agent", ID: r.Agent.PaneID})
-	// Skipped reads are reported once the launch is a mutation, so they never
-	// turn an otherwise rejected spawn into a partial one.
-	for _, path := range skipped {
-		out.Effects = append(out.Effects, libagent.Effect{Action: "skipped", Kind: "read", Path: path})
-	}
 	if o.NoWait {
 		s.register(b.ctx, withHarness(r.Agent, o.Harness), &out)
 		return out

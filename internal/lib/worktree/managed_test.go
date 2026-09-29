@@ -36,7 +36,7 @@ func TestManagedWorktreePreparation(t *testing.T) {
 		t.Fatal(path)
 	}
 	b, _ := os.ReadFile(filepath.Join(root, ".fledge", ".gitignore"))
-	if string(b) != "# retained\n!keep\n*\n!/profiles/\n!/profiles/*.toml\n" {
+	if string(b) != "# retained\n!keep\n*\n!/profiles/\n!/profiles/*.md\n" {
 		t.Fatalf("%q", b)
 	}
 	if b, _ = os.ReadFile(filepath.Join(managed, ".gitignore")); string(b) != "# legacy" {
@@ -101,7 +101,7 @@ func TestIgnoreWithoutNewline(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(filepath.Join(path, ".gitignore"))
-	if string(b) != "# preserve\n*\n!/profiles/\n!/profiles/*.toml\n" {
+	if string(b) != "# preserve\n*\n!/profiles/\n!/profiles/*.md\n" {
 		t.Fatalf("%q", b)
 	}
 }

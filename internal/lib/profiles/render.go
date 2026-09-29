@@ -5,59 +5,17 @@ import (
 	"strings"
 )
 
-// shared is the Fledge protocol block every protocol profile renders.
+// shared is the Fledge protocol block every profile's brief ends with.
 //
 //go:embed builtin/protocol.md
 var shared string
 
-// Brief renders the profile as Markdown: one H2 block per non-empty part in
-// a fixed order, separated by blank lines. Texts render byte for byte.
+// Brief renders the role text byte for byte, then the shared Fledge protocol
+// block, separated by one blank line.
 func (p Profile) Brief() string {
-	reads := ""
-	if len(p.Reads) > 0 {
-		reads = "Read these files in your working directory before starting: `" + strings.Join(p.Reads, "`, `") + "`."
+	sep := "\n\n"
+	if strings.HasSuffix(p.Role, "\n") {
+		sep = "\n"
 	}
-	protocol := []string{p.Sections.Protocol}
-	if p.Protocol {
-		protocol = []string{shared, p.Sections.Protocol}
-	}
-	var blocks []string
-	for _, part := range []struct {
-		heading string
-		texts   []string
-	}{
-		{"Mission", []string{p.Sections.Mission}},
-		{"Read first", []string{reads}},
-		{"Workflow", []string{p.Sections.Workflow}},
-		{"Always", []string{p.Sections.Always}},
-		{"Never", []string{p.Sections.Never}},
-		{"Fledge protocol", protocol},
-		{"Report", []string{p.Sections.Report}},
-	} {
-		var texts []string
-		for _, t := range part.texts {
-			if t != "" {
-				texts = append(texts, t)
-			}
-		}
-		if len(texts) > 0 {
-			blocks = append(blocks, "## "+part.heading+"\n"+paragraphs(texts))
-		}
-	}
-	return paragraphs(blocks)
-}
-
-// paragraphs joins texts with a blank line, adding only the newlines a text
-// does not already end with.
-func paragraphs(texts []string) string {
-	var b strings.Builder
-	for i, t := range texts {
-		if i > 0 && strings.HasSuffix(texts[i-1], "\n") {
-			b.WriteString("\n")
-		} else if i > 0 {
-			b.WriteString("\n\n")
-		}
-		b.WriteString(t)
-	}
-	return b.String()
+	return p.Role + sep + "## Fledge protocol\n" + shared
 }

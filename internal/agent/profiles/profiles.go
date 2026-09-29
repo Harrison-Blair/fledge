@@ -1,12 +1,11 @@
-// Package profiles implements agent profiles: listing effective launch
-// profiles or showing one resolved profile, without contacting Herdr.
+// Package profiles implements agent profiles: listing effective role
+// profiles or showing one profile's brief, without contacting Herdr.
 package profiles
 
 import (
 	"context"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 	"text/tabwriter"
 
@@ -48,7 +47,7 @@ func Run(ctx context.Context, cwd string, o Options) libagent.Outcome {
 	return out
 }
 
-// Render writes a profile table, or one profile's resolved settings.
+// Render writes a profile table, or one profile's source and brief.
 func Render(w io.Writer, o libagent.Outcome) error {
 	if o.Error != nil {
 		return nil
@@ -56,30 +55,21 @@ func Render(w io.Writer, o libagent.Outcome) error {
 	switch r := o.Result.(type) {
 	case ListResult:
 		table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(table, "NAME\tHARNESS\tMODEL\tSOURCE")
+		fmt.Fprintln(table, "NAME\tSOURCE")
 		for _, p := range r.Profiles {
-			fmt.Fprintf(table, "%s\t%s\t%s\t%s\n", p.Name, orDash(p.Harness), orDash(p.Model), source(p))
+			fmt.Fprintf(table, "%s\t%s\n", p.Name, source(p))
 		}
 		return table.Flush()
 	case ShowResult:
 		p := r.Profile
 		var b strings.Builder
-		fmt.Fprintf(&b, "Profile %s\n  source: %s\n", p.Name, source(p))
-		if p.Base != nil {
-			fmt.Fprintf(&b, "  extends: %s\n", *p.Base)
-		}
-		fmt.Fprintf(&b, "  harness: %s\n  model: %s\n  args: %s\n  reads: %s\n  protocol: %t\n", orDash(p.Harness), orDash(p.Model), quoted(p.Args), quoted(p.Reads), p.Protocol)
-		if p.Brief() == "" {
-			b.WriteString("  brief: -\n")
-		} else {
-			b.WriteString("  brief:\n")
-			for _, line := range strings.Split(p.Brief(), "\n") {
-				if line != "" {
-					line = "    " + line
-				}
-				b.WriteString(line)
-				b.WriteString("\n")
+		fmt.Fprintf(&b, "Profile %s\n  source: %s\n  brief:\n", p.Name, source(p))
+		for _, line := range strings.Split(p.Brief(), "\n") {
+			if line != "" {
+				line = "    " + line
 			}
+			b.WriteString(line)
+			b.WriteString("\n")
 		}
 		_, err := io.WriteString(w, b.String())
 		return err
@@ -92,19 +82,4 @@ func source(p libprofiles.Profile) string {
 		return *p.Path
 	}
 	return "built-in"
-}
-
-func quoted(values []string) string {
-	q := []string{}
-	for _, v := range values {
-		q = append(q, strconv.Quote(v))
-	}
-	return orDash(strings.Join(q, " "))
-}
-
-func orDash(s string) string {
-	if s == "" {
-		return "-"
-	}
-	return s
 }

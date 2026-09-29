@@ -31,18 +31,14 @@ type Result struct {
 	MessageID         *string          `json:"message_id"`
 	Sender            *libagent.Sender `json:"sender"`
 	Profile           *ProfileRef      `json:"profile"`
-	// readDir is the directory a profile's reads were checked under.
-	readDir string
 }
 
 // ProfileRef names the profile a spawn used and where it came from: source
-// is "builtin" or "repo", path the repository file, and base the built-in it
-// inherits from.
+// is "builtin" or "repo", and path the repository file.
 type ProfileRef struct {
 	Name   string  `json:"name"`
 	Source string  `json:"source"`
 	Path   *string `json:"path"`
-	Base   *string `json:"base"`
 }
 
 // Render writes a successful spawn, or startup recovery hints by pane after
@@ -102,18 +98,8 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		if p.Path != nil {
 			source = *p.Path
 		}
-		if p.Base != nil {
-			source += ", extends " + *p.Base
-		}
 		if _, err := fmt.Fprintf(w, "  profile: %s (%s)\n", p.Name, source); err != nil {
 			return err
-		}
-	}
-	for _, e := range o.Effects {
-		if e.Action == "skipped" && e.Kind == "read" {
-			if _, err := fmt.Fprintf(w, "  skipped read: %s (not found in %s)\n", e.Path, r.readDir); err != nil {
-				return err
-			}
 		}
 	}
 	if r.Prompted {

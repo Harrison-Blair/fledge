@@ -173,14 +173,13 @@ func TestPromptFailureNotCalledUnsubmitted(t *testing.T) {
 }
 
 func TestHumanSpawnNamesProfileSource(t *testing.T) {
-	path, base := "/repo/.fledge/profiles/go-review.toml", "builtin:reviewer"
+	path := "/repo/.fledge/profiles/go-review.md"
 	for _, tc := range []struct {
 		profile *ProfileRef
 		want    string
 	}{
 		{&ProfileRef{Name: "reviewer", Source: "builtin"}, "  profile: reviewer (built-in)\n"},
-		{&ProfileRef{Name: "go-review", Source: "repo", Path: &path, Base: &base}, "  profile: go-review (" + path + ", extends builtin:reviewer)\n"},
-		{&ProfileRef{Name: "scout", Source: "repo", Path: &path}, "  profile: scout (" + path + ")\n"},
+		{&ProfileRef{Name: "go-review", Source: "repo", Path: &path}, "  profile: go-review (" + path + ")\n"},
 		{nil, ""},
 	} {
 		out := libagent.Outcome{Status: "success", Result: &Result{Name: "worker", Harness: "claude", Profile: tc.profile}}
