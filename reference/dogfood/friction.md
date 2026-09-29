@@ -1228,3 +1228,51 @@ to the ordering that requires an assignee.
 2. Observe `.result.agents[0].pane` equals the agent name rather than its Herdr pane ID.
 3. Run `fledge agent usage --pane <actual-pane-id> --json`; the same agent now reports the actual pane ID.
 4. Repeat with a binary built from `d563d4f`; the behavior is identical.
+
+
+---
+
+**Issue:** Built-in orchestrator profile still prescribes the resolved pi first-prompt retry workaround
+
+**Summary:** During the adversarial feature review on 2026-09-29 at `33c6301`, `internal/lib/profiles/builtin/orchestrator.toml:49-51` still tells agents that pi usually rejects its first prompt and to resend the brief after a short pause. The current readiness gate in `internal/agent/spawn/ready.go:39-50` waits for settled, interactive readiness with launch no longer pending; this log already records that fix on 2026-09-23. Both pi reviewer spawns in this review accepted their first prompt successfully without a retry. This is stale embedded workflow guidance, not a newly reproduced startup failure. Following it mechanically could duplicate an assignment. The review followed the actual spawn outcome and did not resend successful prompts.
+
+**Reproduction steps:**
+1. Run `fledge agent profiles orchestrator` on a binary built from `33c6301` and inspect its Fledge protocol section.
+2. Observe the instruction to resend a pi brief after a short pause because the first prompt usually fails.
+3. Compare `internal/agent/spawn/ready.go:39-50` and the resolved pi readiness entry in this log; a successful current spawn already waits for readiness and reports prompt submission.
+
+
+---
+
+**Issue:** Feature-review history analysis required a direct scan of archived agent records
+
+**Summary:** During the 2026-09-29 adversarial review at `33c6301`, the defender needed historical harness/profile/parentage counts. `agent list` exposes live agents, including a `--registered` filter, but offers no bulk archive query. The reviewer therefore read `.fledge/state/agents` and its archive directly with Python. This is a missing history-inspection capability, not a live orchestration failure; the review does not establish that adding a new command is worth its maintenance cost. Task history has an existing supported route, `fledge task list --json`, which the coordinator used for cross-checking.
+
+**Reproduction steps:**
+1. Run `fledge agent list --help` and inspect its filters; none selects ended/archived records.
+2. Try to count harnesses or profiles across past workers, including closed panes, using the live list.
+3. Observe that the historical records require a filesystem scan to aggregate; read them without modifying state.
+
+
+---
+
+**Issue:** Completing a task from a long report injects the entire report into its creator's active context
+
+**Summary:** In the 2026-09-29 adversarial review at `33c6301`, the defender completed task `70deefe7` with a roughly 20 KB Markdown report via `task complete --file`. Its completion notification delivered the whole report into the coordinator's active turn, alongside a verification hint. `internal/task/complete/complete.go:92` unconditionally appends the complete result to the notification. Delivery succeeded; the friction is context volume and unsolicited report formatting during ongoing work, not data loss. This run deliberately used full reports as durable task results, so the observed size reflects that choice. Short completion summaries with an artifact path avoid the volume today, but leave the task record dependent on that external artifact. No notification behavior was changed in this review.
+
+**Reproduction steps:**
+1. Assign a task from a registered coordinator to another registered agent.
+2. Have the worker complete it with `fledge task complete --id <task> --file <long-report.md>`.
+3. Observe the full report, not a short completion notice, arrive in the creator's active conversation; compare the notification construction at `internal/task/complete/complete.go:92`.
+
+
+---
+
+**Issue:** Task-group help retained mandatory-template wording after briefs became advisory
+
+**Summary:** Independent verification of task simplification commit `383d52a` on 2026-09-29 found that a temporary built binary's `task --help` still said briefs follow a six-heading template, while create and template help described the approved advisory behavior. The implementation was withheld from acceptance. Repair `424045c` updates the parent help and adds a regression assertion; its author demonstrated failure with the old wording and passing checks after restoration. Independent re-verification `5a5a4365` confirmed the old-wording regression test fails, the repaired help is advisory, and formatting/vet/race checks pass; the fix is accepted at `424045c`.
+
+**Reproduction steps:**
+1. Build a temporary binary from `383d52a` and run `task --help`.
+2. Observe “Briefs follow a six-heading template” in the parent command's help.
+3. Compare `task create --help` and `task template --help`, which already describe optional structure and ordinary nonblank briefs.
