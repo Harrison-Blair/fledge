@@ -253,6 +253,25 @@ func TestNewWorktreeFromLinkedCheckoutUsesPrimaryRoot(t *testing.T) {
 		t.Fatal("created managed paths inside linked checkout")
 	}
 }
+
+// An already-open worktree whose workspace has a tab with the --tab label
+// still gets a new tab, with no preflight of that label.
+func TestAlreadyOpenWorktreeWithMatchingTabLabelCreatesTab(t *testing.T) {
+	path := t.TempDir()
+	snap := snapshot()
+	snap.Snapshot.Layouts = []herdr.Layout{}
+	p := herdrscript.Pane("w1:p2", "w1", "w1:t2")
+	open := true
+	ws := "w1"
+	o := validOptions()
+	o.Worktree, o.Tab = path, "build"
+	s := fake(t, call{Method: "session.snapshot", Result: snap}, call{Method: "worktree.list", Params: map[string]any{"cwd": path}, Result: herdr.WorktreeListResult{Type: "worktree_list", Source: struct {
+		RepoRoot string `json:"repo_root"`
+	}{RepoRoot: path}, Worktrees: []herdr.Worktree{{Path: path, OpenWorkspaceID: &ws}}}}, call{Method: "worktree.open", Params: map[string]any{"cwd": path, "path": path, "focus": false}, Result: herdr.CreatedResult{Type: "worktree_opened", Workspace: herdr.Workspace{ID: "w1"}, Tab: herdr.Tab{ID: "w1:t1", WorkspaceID: "w1"}, RootPane: herdrscript.Pane("w1:p1", "w1", "w1:t1"), Worktree: herdr.Worktree{Path: path}, AlreadyOpen: &open}}, call{Method: "tab.create", Params: map[string]any{"label": "build", "workspace_id": "w1", "cwd": path, "focus": false}, Result: herdr.CreatedResult{Type: "tab_created", Tab: herdr.Tab{ID: "w1:t2", WorkspaceID: "w1", Label: "build"}, RootPane: p}}, labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"))
+	if out := s.run(context.Background(), o, nil); out.Status != "success" || !slices.Contains(out.Effects, libagent.Effect{Action: "reused", Kind: "workspace", ID: "w1"}) {
+		t.Fatalf("%+v %+v", out, out.Error)
+	}
+}
 func TestNewlyOpenedWorktreeRenamesOnlyInitialTab(t *testing.T) {
 	path := t.TempDir()
 	p := herdrscript.Pane("w2:p1", "w2", "w2:t1")
@@ -288,7 +307,7 @@ func TestNewWorktreeGetsManagedIgnore(t *testing.T) {
 		t.Fatal(out)
 	}
 	ignore := filepath.Join(path, ".fledge", ".gitignore")
-	if b, err := os.ReadFile(ignore); err != nil || string(b) != "*\n!/profiles/\n!/profiles/*.toml\n" {
+	if b, err := os.ReadFile(ignore); err != nil || string(b) != "*\n!/profiles/\n!/profiles/*.md\n" {
 		t.Fatalf("%q %v", b, err)
 	}
 	want := []libagent.Effect{{Action: "created", Kind: "worktree", Path: path}, {Action: "created", Kind: "directory", Path: filepath.Join(path, ".fledge")}, {Action: "created", Kind: "file", Path: ignore}}

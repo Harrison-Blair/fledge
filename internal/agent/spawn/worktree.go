@@ -61,20 +61,6 @@ func (s *spawner) worktreePlacement(ctx context.Context, o Options, snap *herdr.
 		if err != nil {
 			return herdr.Pane{}, err
 		}
-		// Resolve known named-tab conflicts before opening a workspace.
-		for _, w := range listing.Worktrees {
-			if filepath.Clean(w.Path) == path && w.OpenWorkspaceID != nil && o.Tab != "" {
-				t, err := tab(snap, *w.OpenWorkspaceID, o.Tab, "")
-				if err != nil {
-					return herdr.Pane{}, err
-				}
-				if t != nil {
-					if _, err = anchor(snap, *t); err != nil {
-						return herdr.Pane{}, err
-					}
-				}
-			}
-		}
 	}
 	out.Result.(*Result).WorktreePath = &path
 	var r herdr.CreatedResult
@@ -124,5 +110,5 @@ func (s *spawner) worktreePlacement(ctx context.Context, o Options, snap *herdr.
 		return s.initialTab(ctx, o, r, out)
 	}
 	out.Effects = append(out.Effects, libagent.Effect{Action: "reused", Kind: "workspace", ID: r.Workspace.ID})
-	return s.placeInWorkspace(ctx, o, r.Workspace.ID, snap, out)
+	return s.newTab(ctx, o, r.Workspace.ID, out)
 }

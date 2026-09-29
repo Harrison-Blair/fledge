@@ -101,7 +101,7 @@ func TestCreatedCheckoutIgnoresFledgeScratch(t *testing.T) {
 		t.Fatalf("%+v", out)
 	}
 	ignore := filepath.Join(path, ".fledge", ".gitignore")
-	if b, err := os.ReadFile(ignore); err != nil || string(b) != "*\n!/profiles/\n!/profiles/*.toml\n" {
+	if b, err := os.ReadFile(ignore); err != nil || string(b) != "*\n!/profiles/\n!/profiles/*.md\n" {
 		t.Fatalf("%q %v", b, err)
 	}
 	n := len(out.Effects)
@@ -120,13 +120,13 @@ func TestCreatedCheckoutIgnoresFledgeScratch(t *testing.T) {
 		t.Fatalf("status %q", s)
 	}
 	git(t, path, "check-ignore", "-q", ".fledge/tmp/report.md")
-	if err := os.WriteFile(filepath.Join(path, ".fledge", "profiles", "p.toml"), []byte("x"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(path, ".fledge", "profiles", "p.md"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if s := git(t, path, "status", "--short", "--untracked-files=all"); s != "?? .fledge/profiles/p.toml\n" {
+	if s := git(t, path, "status", "--short", "--untracked-files=all"); s != "?? .fledge/profiles/p.md\n" {
 		t.Fatalf("status %q", s)
 	}
-	git(t, path, "add", ".fledge/profiles/p.toml")
+	git(t, path, "add", ".fledge/profiles/p.md")
 }
 
 // A checkout Herdr created that cannot take the managed ignore file leaves a

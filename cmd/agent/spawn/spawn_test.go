@@ -24,8 +24,18 @@ func TestNoFlagsWithoutTerminalKeepsValidationError(t *testing.T) {
 	}
 }
 
-func TestLongHelpMentionsInteractiveMode(t *testing.T) {
-	if !strings.Contains(New().Long, "interactive") {
-		t.Fatal(New().Long)
+// Spawn has no interactive mode and no split placement flags.
+func TestSpawnHasNoInteractiveModeOrSplitFlags(t *testing.T) {
+	cmd := New()
+	if strings.Contains(cmd.Long, "interactive terminal") || strings.Contains(strings.ToLower(cmd.Long), "split") {
+		t.Fatal(cmd.Long)
+	}
+	for _, name := range []string{"tab-id", "direction", "ratio"} {
+		if cmd.Flags().Lookup(name) != nil {
+			t.Errorf("--%s still defined", name)
+		}
+	}
+	if tab := cmd.Flags().Lookup("tab"); tab == nil || !strings.Contains(tab.Usage, "new tab") {
+		t.Fatalf("%+v", tab)
 	}
 }

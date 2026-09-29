@@ -66,7 +66,7 @@ func Root(ctx context.Context, cwd string) (string, error) {
 }
 
 // Ensure creates root/.fledge with a .gitignore whose final rules are the
-// managed block, which ignores everything except profile TOML files, then
+// managed block, which ignores everything except profile Markdown files, then
 // verifies git ignores its contents. It validates everything before writing,
 // only appends to an existing ignore file, and records each mutation on out.
 func Ensure(root string, out *libagent.Outcome) (string, error) {
@@ -158,7 +158,7 @@ func MakeParents(root, parent string, out *libagent.Outcome) error {
 }
 
 // managedRules ignore everything in .fledge except versioned profile files.
-var managedRules = []string{"*", "!/profiles/", "!/profiles/*.toml"}
+var managedRules = []string{"*", "!/profiles/", "!/profiles/*.md"}
 
 // missingRules returns the managed rules to append so that content ends with
 // the managed block. A legacy file ending in "*" needs only the exceptions.
