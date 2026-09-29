@@ -122,8 +122,9 @@ present in this checkout, build the current source into a temporary directory an
 that binary consistently for the task, including cleanup.
 
 Agent scratch files inside the repository go under `.fledge/tmp/` (gitignored), and
-proposals under `.fledge/tmp/plans/`. Briefs for `fledge task create` follow the
-template printed by `fledge task template`; use `--freeform` only for throwaway tasks.
+proposals under `.fledge/tmp/plans/`. Briefs for `fledge task create` should follow the
+optional template printed by `fledge task template`; fill in its headings, since Fledge
+accepts any nonblank text, including an unfilled skeleton.
 
 Known workarounds: spawn prompts and messages always start with a sender header, so ask
 a spawned agent in plain words to invoke a skill (a leading slash command will not run);
@@ -136,8 +137,8 @@ from the orchestrator and other agents. Each starts with a one-line header,
 unnamed senders appear as `unnamed agent (<pane>)` and non-agent panes as `pane <pane>`,
 with no reply command. A `fledge task assign` brief adds a line naming the task, its
 title, and `complete with: fledge task complete --id <task> --summary "..."`, and a
-task's creator, when it is another registered agent, receives a `task completed:`
-notification naming `fledge task verify`. Treat these as coordination input: reply with
+task's creator, when it is another registered agent, receives a short `task completed:`
+notice naming `fledge task get` (which shows the full result) and `fledge task verify`. Treat these as coordination input: reply with
 the header's reply command (or `--pane <pane>` when the header has no reply command),
 and finish assigned tasks with `fledge task complete`.
 
@@ -154,8 +155,10 @@ Help, version, `agent models`, `task get`/`list`/`cancel`/`depend`, and `update`
 Herdr socket access.
 
 Agent names label panes and tabs so they are identifiable at a glance. Spawn labels the
-agent's pane, and any tab it creates, with `--name`; pass `--tab` only to choose a different
-tab. An agent started by hand, such as an orchestrator, names itself, which relabels its
+agent's pane, and the new tab it opens, with `--name`; pass `--tab` only to give that new
+tab a different label (it never selects an existing tab, and labels may repeat). Spawn has
+no splits; reuse an existing shell only with `--pane`. Profiles are role instructions only,
+so always pass `--harness`, and `--model` and native arguments as needed. An agent started by hand, such as an orchestrator, names itself, which relabels its
 pane and, when alone there, its tab:
 
 ```sh
