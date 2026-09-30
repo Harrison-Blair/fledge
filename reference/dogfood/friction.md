@@ -1276,3 +1276,14 @@ to the ordering that requires an assignee.
 1. Build a temporary binary from `383d52a` and run `task --help`.
 2. Observe “Briefs follow a six-heading template” in the parent command's help.
 3. Compare `task create --help` and `task template --help`, which already describe optional structure and ordinary nonblank briefs.
+
+---
+
+**Issue:** Task-board lifecycle tests need owned PTYs; Bubble Tea Kill during startup can race its renderer initialization
+
+**Summary:** During task-board implementation on 2026-09-29, Fledge had no command to allocate a raw PTY for terminal-attribute assertions. Tests therefore allocate and close their own `/dev/ptmx` pair, and the live smoke uses a Python-owned PTY with the candidate Fledge binary. No unrelated pane is changed. An initial runtime-failure fixture called Bubble Tea v2.0.10 `Program.Kill` as soon as raw mode was observed, before the first frame; this triggered `fatal error: sync: unlock of unlocked mutex` where `startRenderer` resets the `sync.Once` used by `stopRenderer`. Waiting for a rendered frame avoided that startup race, but race-detector stress exposed cancelreader teardown races both with `Kill` and with direct program-context cancellation. The final runtime fixture injects an actual terminal read error after rendering. Production never calls `Kill` and routes external cancellation through a graceful quit message, while cancelling board IO immediately; this lets Bubble Tea wait for its input reader before closing it.
+
+**Reproduction steps:**
+1. Start Bubble Tea v2.0.10 on an owned PTY and poll its terminal attributes from a second goroutine.
+2. Call `Program.Kill` immediately when canonical mode becomes disabled, before the first render.
+3. Observe the startup renderer race. Also stress direct context cancellation with the race detector to observe reader-close races. Test actual input-read failures after rendering and route external cancellation through graceful quit.

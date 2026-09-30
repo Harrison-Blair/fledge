@@ -1096,12 +1096,43 @@ records that hold snapshots. Each snapshot holds `agent_id`, `harness`,
 (null, or `amount`, `currency`, `basis: estimate`, `source`), `models`,
 `turns`, `basis` (`measured` or `unavailable`), `reason`, and `collected_at`. A completion notification records
 its `recipient`, `message_id`, optional `pane`, `delivered_at`, `error`, and
-`uncertain` state. Every command supports `--json` with the same outcome envelope
+`uncertain` state. Every noninteractive task command supports `--json` with the same outcome envelope
 as the agent commands. JSON results add derived fields: list rows `progress`
 (`verified`, `total`, `cancelled`, or null) and `waiting`; get `progress` and
 `dependencies` (`id`, `title`, `status`, `cancel_reason`, `satisfied`); verify
 `open_subtasks`; cancel `unblocked`; and template `kind` and `text`. `task
 list`, `task get`, `task depend`, and `task template` never contact Herdr.
+
+### Task board
+
+`fledge task board` opens a read-only keyboard outline in the current terminal.
+Run it in a normal Herdr terminal tab to keep the board alongside your workers.
+It shows active tasks and their ancestors, including terminal parents with active
+children. Roots and siblings stay oldest first. Parent progress counts direct
+children; it never changes the parent's stored state. Created leaves are ready
+or waiting on prerequisites; completed tasks await verification. Worker activity
+is shown separately from task state.
+
+Use arrows to select and expand/collapse the outline. Enter opens scrollable
+full-screen details below 100 columns, or focuses the side panel at wider sizes.
+Tab switches wide panels, Escape returns to the outline, and arrows scroll the
+details. `h` toggles history, `r` refreshes, and `q` or Ctrl-C exits. Details include
+briefs, results, dependencies, verification notes, delivery errors and timestamps.
+Selection, expansion choices and scroll positions survive ordinary refreshes.
+
+The board refreshes every two seconds. Task and worker failures are marked
+independently; the last good snapshot stays visible. `g` visits the selected
+worker after rechecking its current owner, terminal and pane. Visiting marks the
+worker's Herdr output seen, leaves the board running in its own tab, and never
+updates task or identity records. Navigation is disabled while worker observation
+is stale or unavailable. Revalidation and focusing are not atomic; a changed
+identity in the focus response is reported without an automatic retry.
+
+Input and output must both be terminals (otherwise exit 2). A genuine initial
+task read error exits 1; an uninitialized repository displays an empty board
+without creating state. Inspection also works outside Herdr, with worker activity
+unavailable. There is no board JSON mode or editing/assignment/verification UI.
+Managed worktrees share the primary checkout's task state.
 
 ### Proposals
 

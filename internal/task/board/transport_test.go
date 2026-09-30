@@ -1,0 +1,81 @@
+package board
+
+import (
+	"bufio"
+	"context"
+	"net"
+	"path/filepath"
+	"testing"
+	"time"
+
+	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
+)
+
+func peer(t *testing.T, reply string) string {
+	t.Helper()
+	socket := filepath.Join(t.TempDir(), "s")
+	l, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done); l.Close() })
+	go func() {
+		conn, err := l.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = bufio.NewReader(conn).ReadBytes('\n')
+		if reply == "hold" {
+			<-done
+		} else if reply != "close" {
+			_, _ = conn.Write([]byte(reply + "\n"))
+		}
+	}()
+	return socket
+}
+func TestLoadActualTransportDeadlineAndBrokenReplies(t *testing.T) {
+	for _, reply := range []string{"hold", "close", "{", `{"id":"fledge","result":{"type":"agent_list","agents":null}}`, `{"id":"other","result":{"type":"agent_list","agents":[]}}`} {
+		t.Run(reply, func(t *testing.T) {
+			c := libagent.Client{Cwd: identitytest.Repository(t), API: herdr.Client{Socket: peer(t, reply), Timeout: 20 * time.Second}}
+			start := time.Now()
+			out := Load(context.Background(), c, Workers)
+			if out.Err == nil {
+				t.Fatal("broken peer accepted")
+			}
+			elapsed := time.Since(start)
+			if reply == "hold" && (elapsed < 4500*time.Millisecond || elapsed > 7*time.Second) {
+				t.Fatalf("total deadline elapsed %v", elapsed)
+			}
+		})
+	}
+}
+func TestQuitCancelsInFlightObservationWithoutBlockingInput(t *testing.T) {
+	m := boardModel(t)
+	started, finished := make(chan struct{}), make(chan struct{})
+	m.client.API = apiFunc(func(ctx context.Context, _ string, _, _ any) error {
+		close(started)
+		<-ctx.Done()
+		close(finished)
+		return ctx.Err()
+	})
+	cmd := m.refresh(Workers, false)
+	go cmd()
+	<-started
+	if m.refresh(Workers, false) != nil {
+		t.Fatal("overlapping refresh")
+	}
+	start := time.Now()
+	key(m, "q")
+	if time.Since(start) > 100*time.Millisecond {
+		t.Fatal("quit blocked on IO")
+	}
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("request not cancelled")
+	}
+}
