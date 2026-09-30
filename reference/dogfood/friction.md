@@ -1287,3 +1287,14 @@ to the ordering that requires an assignee.
 1. Start Bubble Tea v2.0.10 on an owned PTY and poll its terminal attributes from a second goroutine.
 2. Call `Program.Kill` immediately when canonical mode becomes disabled, before the first render.
 3. Observe the startup renderer race. Also stress direct context cancellation with the race detector to observe reader-close races. Test actual input-read failures after rendering and route external cancellation through graceful quit.
+
+---
+
+**Issue:** Independent task-board rendering checks need a terminal emulator that Fledge does not provide
+
+**Summary:** The independent task-board verifiers at `3fe3783` and `8d54ba0` used private `tmux -L` servers to inspect rendered terminal cells, drive key sequences and resize an owned terminal. Fledge can read and send to an existing agent pane, but cannot create a standalone terminal-emulator fixture. These checks ran the candidate Fledge binary against throwaway task stores and the live Herdr daemon; worker focus checks targeted only the verifier's own worker. Every private server was stopped, and no unrelated Herdr pane was changed. Evidence is preserved under `.fledge/tmp/task-board-evidence/`.
+
+**Reproduction steps:**
+1. Verify the board's rendered wide/narrow layouts, selection, scrolling and terminal restoration without disturbing an existing agent pane.
+2. Observe that Fledge has no standalone terminal-emulator fixture command; use an isolated `tmux -L` server and the candidate `fledge task board` binary.
+3. Send keys and resize that private terminal, inspect its rendered cells, then stop the private server after verification.
