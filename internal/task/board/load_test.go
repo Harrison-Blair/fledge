@@ -115,7 +115,7 @@ func TestRefreshHasTotalDeadline(t *testing.T) {
 }
 
 func TestFocusOwnerRevalidatesAndChecksResponse(t *testing.T) {
-	for _, mode := range []string{"ok", "terminal", "pane", "type", "incomplete", "reused", "missing", "changed"} {
+	for _, mode := range []string{"ok", "terminal", "pane", "type", "incomplete", "reused", "missing", "changed", "harness"} {
 		t.Run(mode, func(t *testing.T) {
 			cwd := identitytest.Repository(t)
 			a := tasktest.Agent("w1:p1", "term", "worker")
@@ -141,6 +141,8 @@ func TestFocusOwnerRevalidatesAndChecksResponse(t *testing.T) {
 				focused.Type = "wrong"
 			case "incomplete":
 				focused.Agent.Revision = nil
+			case "harness":
+				focused.Agent.Agent = tasktest.Ptr("codex")
 			}
 			calls := []herdrscript.Call{{Method: "agent.list", Result: herdr.AgentListResult{Type: "agent_list", Agents: []herdr.AgentDetails{listed}}}}
 			if mode != "reused" && mode != "missing" && mode != "changed" {
