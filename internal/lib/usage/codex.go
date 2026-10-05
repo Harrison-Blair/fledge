@@ -34,7 +34,9 @@ func (u codexUsage) minus(o codexUsage) codexUsage {
 // readCodex sums token_usage_record entries deduplicated by response_id.
 // Cumulative token_count totals before the first valid record (all of them in
 // a rollout without records) count as the last one inside the window minus the
-// last one before it; totals after that first record are ignored.
+// last one before it; totals after that first record are ignored. In a fork,
+// whose first session_meta names a parent_thread_id, totals before the first
+// turn_context are the parent's: they are a baseline, never usage.
 func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error) {
 	path, err := Locate(d, "codex", ref)
 	if err != nil {
@@ -45,7 +47,7 @@ func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error
 	var model string
 	var fallbackModels []string
 	var before, inside *codexUsage
-	var sawTotal, transitioned bool
+	var sawMeta, inherited, sawTotal, transitioned bool
 	err = t.scanLines(path, func(line []byte) error {
 		var l codexLine
 		if err := json.Unmarshal(line, &l); err != nil {
@@ -54,6 +56,15 @@ func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error
 		switch l.Type {
 		case "session_meta":
 			t.recognized = true
+			if sawMeta {
+				return nil
+			}
+			sawMeta = true
+			// Undecodable optional metadata leaves the rollout unmarked.
+			var p struct {
+				ParentThreadID string `json:"parent_thread_id"`
+			}
+			inherited = json.Unmarshal(l.Payload, &p) == nil && p.ParentThreadID != ""
 		case "turn_context":
 			var p struct {
 				Model string `json:"model"`
@@ -62,6 +73,7 @@ func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error
 				return err
 			}
 			model = p.Model
+			inherited = false
 			if !transitioned && w.contains(l.Timestamp) && model != "" {
 				fallbackModels = append(fallbackModels, model)
 			}
@@ -104,8 +116,12 @@ func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error
 			if transitioned {
 				return nil
 			}
-			sawTotal = true
 			total := *p.Info.Total
+			if inherited {
+				before = &total
+				return nil
+			}
+			sawTotal = true
 			switch {
 			case w.From != nil && l.Timestamp != nil && l.Timestamp.Before(*w.From):
 				before = &total
