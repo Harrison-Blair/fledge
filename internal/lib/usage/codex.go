@@ -3,9 +3,14 @@ package usage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"time"
 )
+
+// errAmbiguousCodex reports local totals followed by a fork's inherited total,
+// whose histories cannot be reconciled.
+var errAmbiguousCodex = errors.New("codex usage is ambiguous: local token totals precede the inherited parent total")
 
 type codexLine struct {
 	Timestamp *time.Time      `json:"timestamp"`
@@ -31,9 +36,13 @@ func (u codexUsage) minus(o codexUsage) codexUsage {
 	return codexUsage{u.Input - o.Input, u.Cached - o.Cached, u.CacheWrite - o.CacheWrite, u.Output - o.Output, u.Reasoning - o.Reasoning}
 }
 
-// readCodex sums token_usage_record entries deduplicated by response_id. A
-// rollout without them falls back to cumulative token_count totals: the last
-// one inside the window minus the last one before it.
+// readCodex sums token_usage_record entries deduplicated by response_id.
+// Cumulative token_count totals before the first valid record (all of them in
+// a rollout without records) count as the last one inside the window minus the
+// last one before it; totals after that first record are ignored. In a fork,
+// whose first session_meta names a parent_thread_id, totals before the first
+// valid turn_context are the parent's: they are a baseline, never usage. A
+// local total followed by such an inherited total makes usage unavailable.
 func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error) {
 	path, err := Locate(d, "codex", ref)
 	if err != nil {
@@ -44,7 +53,7 @@ func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error
 	var model string
 	var fallbackModels []string
 	var before, inside *codexUsage
-	var sawTotal bool
+	var sawMeta, sawContext, inherited, sawTotal, transitioned, ambiguous bool
 	err = t.scanLines(path, func(line []byte) error {
 		var l codexLine
 		if err := json.Unmarshal(line, &l); err != nil {
@@ -53,6 +62,15 @@ func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error
 		switch l.Type {
 		case "session_meta":
 			t.recognized = true
+			if sawMeta {
+				return nil
+			}
+			sawMeta = true
+			// Undecodable optional metadata leaves the rollout unmarked.
+			var p struct {
+				ParentThreadID string `json:"parent_thread_id"`
+			}
+			inherited = !sawContext && json.Unmarshal(l.Payload, &p) == nil && p.ParentThreadID != ""
 		case "turn_context":
 			var p struct {
 				Model string `json:"model"`
@@ -61,7 +79,8 @@ func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error
 				return err
 			}
 			model = p.Model
-			if w.contains(l.Timestamp) && model != "" {
+			sawContext, inherited = true, false
+			if !transitioned && w.contains(l.Timestamp) && model != "" {
 				fallbackModels = append(fallbackModels, model)
 			}
 		case "token_usage_record":
@@ -76,6 +95,7 @@ func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error
 				return errMissingUsage
 			}
 			t.records++
+			transitioned = true
 			if p.ResponseID != "" && seen[p.ResponseID] {
 				return nil
 			}
@@ -99,8 +119,16 @@ func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error
 				return errMissingUsage
 			}
 			t.records++
-			sawTotal = true
+			if transitioned {
+				return nil
+			}
 			total := *p.Info.Total
+			if inherited {
+				ambiguous = ambiguous || sawTotal
+				before = &total
+				return nil
+			}
+			sawTotal = true
 			switch {
 			case w.From != nil && l.Timestamp != nil && l.Timestamp.Before(*w.From):
 				before = &total
@@ -116,18 +144,28 @@ func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error
 	if err != nil {
 		return nil, err
 	}
-	if len(seen) == 0 && sawTotal {
-		t.note = "no token_usage_record entries; totals from the last token_count total_token_usage"
-		if inside != nil {
-			if before != nil {
-				*inside = inside.minus(*before)
-			}
-			t.tokens = inside.tokens()
+	if ambiguous {
+		return nil, errAmbiguousCodex
+	}
+	if !sawTotal || transitioned && inside == nil {
+		return t, nil
+	}
+	t.note = "no token_usage_record entries; totals from the last token_count total_token_usage"
+	if transitioned {
+		t.note = "includes token_count total_token_usage from before the first token_usage_record"
+	}
+	if inside != nil {
+		if before != nil {
+			*inside = inside.minus(*before)
 		}
-		for _, m := range fallbackModels {
-			if !slices.Contains(t.models, m) {
-				t.models = append(t.models, m)
-			}
+		t.tokens.add(inside.tokens())
+	}
+	// Legacy models precede the token_usage_record models.
+	models := t.models
+	t.models = nil
+	for _, m := range append(fallbackModels, models...) {
+		if !slices.Contains(t.models, m) {
+			t.models = append(t.models, m)
 		}
 	}
 	return t, nil
