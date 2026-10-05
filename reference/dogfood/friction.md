@@ -1298,3 +1298,25 @@ to the ordering that requires an assignee.
 1. Verify the board's rendered wide/narrow layouts, selection, scrolling and terminal restoration without disturbing an existing agent pane.
 2. Observe that Fledge has no standalone terminal-emulator fixture command; use an isolated `tmux -L` server and the candidate `fledge task board` binary.
 3. Send keys and resize that private terminal, inspect its rendered cells, then stop the private server after verification.
+
+---
+
+**Issue:** Stale inherited Herdr pane ID prevents Fledge caller registration while doctor reports healthy
+
+**Summary:** During the 2026-10-04 review-repair orchestration, the Codex tool environment exported `HERDR_PANE_ID=w2N:p3`, but the active conversation was hosted in `w2E:p1`. Both `agent adopt` and `agent rename` failed with `agent_not_found`; `fledge doctor` reported five healthy checks without validating the caller pane. The orchestrator used `agent list`, `agent get`, and `agent read` to confirm that `w2E:p1` displayed this conversation, then ran Fledge commands with `HERDR_PANE_ID=w2E:p1`. Registration and renaming succeeded. This records an environment workaround; no caller-discovery behavior was changed in this repair.
+
+**Reproduction steps:**
+1. Run Fledge in a tool environment whose `HERDR_PANE_ID` names a pane that no longer hosts the active agent.
+2. Run `fledge doctor --json`, then `fledge agent adopt --name orchestrator --json`; observe healthy checks but `agent_not_found` for the stale pane.
+3. Use `fledge agent list` and `agent read --pane <candidate>` to confirm the actual conversation pane before using `HERDR_PANE_ID=<confirmed-pane>` for coordination commands.
+
+---
+
+**Issue:** Initial mixed-format Codex usage repair counted a fork's inherited startup total as local usage
+
+**Summary:** Independent verification of the attempted legacy-prefix repair at `1d65042` used an actual Codex 0.154.0 guardian rollout. Its metadata identifies a parent thread; a leading compacted record and inherited cumulative total precede the first local turn context and newer response record. Treating every early total as legacy usage inflated reported input from 350,807 to 707,805 and cache reads from 1,924,608 to 5,207,808. The verifier rejected the attempt despite passing synthetic tests and required a fork-baseline regression. The user delegated the classification choice and allowed compatibility changes if needed. The repair workflow distinguishes explicit inherited startup totals from genuine local legacy usage; source and verification task records retain the rejected attempt and subsequent evidence.
+
+**Reproduction steps:**
+1. Construct a modern-only rollout with parent-thread metadata, a startup compacted entry, an inherited `token_count` total of 100, then a local turn context, a `token_usage_record` of 50, and a cumulative total of 150.
+2. Read it with the attempted repair at `1d65042`; observe 150 reported input tokens rather than the fork's 50 local tokens.
+3. Verify the corrected inherited-baseline handling against both a sanitized fork fixture and the private real rollout; retain the unmarked legacy-prefix regression and all existing window/deduplication checks.
