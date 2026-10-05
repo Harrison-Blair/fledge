@@ -389,3 +389,94 @@ func TestJSONFields(t *testing.T) {
 		}
 	}
 }
+
+// jsonPanes is the raw pane field of each --json row, as serialized.
+func jsonPanes(t *testing.T, out libagent.Outcome) []string {
+	t.Helper()
+	var b bytes.Buffer
+	if err := out.Write(&b, true, Render); err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Result struct {
+			Agents []struct {
+				Pane json.RawMessage `json:"pane"`
+			} `json:"agents"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(b.Bytes(), &decoded); err != nil {
+		t.Fatalf("%v %s", err, b.String())
+	}
+	panes := make([]string, len(decoded.Result.Agents))
+	for i, a := range decoded.Result.Agents {
+		panes[i] = string(a.Pane)
+	}
+	return panes
+}
+
+// A live agent's --json pane is its resolved pane ID however it was selected,
+// never the selector text.
+func TestUsageLiveJSONPaneIsResolvedPaneID(t *testing.T) {
+	f := newFixture(t)
+	a := piAgent("w1:p3", "term_a", "worker", f.session)
+	rec := identitytest.Register(t, f.cwd, a)
+	for _, tc := range []struct {
+		name  string
+		calls []call
+		sel   selector.Selection
+	}{
+		{"name", []call{getCall("worker", a)}, selector.Selection{Names: []string{"worker"}}},
+		{"pane", []call{getCall("w1:p3", a)}, selector.Selection{Panes: []string{"w1:p3"}}},
+		{"id", []call{getCall("w1:p3", a)}, selector.Selection{IDs: []string{rec.ID}}},
+		{"filter", []call{listCall(a)}, selector.Selection{Filter: selector.Filter{Harnesses: []string{"pi"}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := Run(context.Background(), client(t, f.cwd, tc.calls...), f.d, Options{Selection: tc.sel})
+			if got := rows(t, out); len(got) != 1 || got[0].Basis != libusage.Measured || got[0].AgentID == nil || *got[0].AgentID != rec.ID || *got[0].Name != "worker" {
+				t.Fatalf("%+v", got)
+			}
+			if panes := jsonPanes(t, out); len(panes) != 1 || panes[0] != `"w1:p3"` {
+				t.Fatalf("pane: %v", panes)
+			}
+		})
+	}
+}
+
+// An ended or stale --id reports its recorded pane.
+func TestUsageHistoricalJSONPaneIsRecordPane(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		calls func(a herdr.AgentDetails) []call
+	}{
+		{"ended", func(herdr.AgentDetails) []call { return nil }},
+		{"stale", func(a herdr.AgentDetails) []call {
+			return []call{
+				{Method: "agent.get", Err: &herdr.Error{Code: "agent_not_found", Message: "gone"}},
+				listCall(),
+				{Method: "pane.list", Result: map[string]any{"type": "pane_list", "panes": []any{a}}},
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			a := piAgent("w1:p3", "term_a", "worker", f.session)
+			rec := identitytest.Register(t, f.cwd, a)
+			s, _ := identity.Existing(context.Background(), f.cwd)
+			if _, _, err := identity.ObserveSession(s, rec.ID, *a.AgentSession, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			if tc.name == "ended" {
+				if err := identity.End(s, rec.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			out := Run(context.Background(), client(t, f.cwd, tc.calls(a)...), f.d, Options{Selection: selector.Selection{IDs: []string{rec.ID}}})
+			if got := rows(t, out); len(got) != 1 || got[0].Basis != libusage.Measured || got[0].AgentID == nil || *got[0].AgentID != rec.ID || got[0].ElapsedSeconds == nil {
+				t.Fatalf("%+v", got)
+			}
+			if panes := jsonPanes(t, out); len(panes) != 1 || panes[0] != `"w1:p3"` {
+				t.Fatalf("pane: %v", panes)
+			}
+		})
+	}
+}

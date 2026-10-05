@@ -128,10 +128,13 @@ func row(ctx context.Context, s *state.Store, d libusage.Discovery, t selector.T
 		observed := task.Observe(s, identity.ObserveSession, *rec, &a, now(), out)
 		rec = &observed
 	}
-	r := Row{Pane: libagent.Pointer(t.Pane)}
+	var r Row
 	var kind string
 	var ref *libusage.Ref
+	// t.Pane is the address used to reach the agent, a name for --name; the
+	// row reports the resolved pane instead.
 	if live {
+		r.Pane = libagent.Pointer(a.PaneID)
 		r.Name, kind = a.Name, deref(a.Agent)
 		if as := a.AgentSession; as != nil && deref(as.Value) != "" {
 			ref = &libusage.Ref{Kind: deref(as.Kind), Value: *as.Value, Cwd: deref(a.Cwd)}
@@ -140,6 +143,7 @@ func row(ctx context.Context, s *state.Store, d libusage.Discovery, t selector.T
 	if rec != nil {
 		r.AgentID, r.ElapsedSeconds = &rec.ID, elapsed(*rec)
 		if !live {
+			r.Pane = libagent.Pointer(rec.Pane)
 			r.Name, kind = rec.Name, deref(rec.Harness)
 		}
 		if ns := rec.NativeSession; ref == nil && ns != nil {
