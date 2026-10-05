@@ -58,7 +58,7 @@ func settled(p herdr.Pane, status string) herdr.AgentResult {
 }
 func TestDefaultSpawnUsesResolvedCallerAndPolicy(t *testing.T) {
 	p := herdrscript.Pane("w1:p2", "w1", "w1:t2")
-	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "pane.current", Params: map[string]any{"caller_pane_id": "old:p1"}, Result: herdr.PaneResult{Type: "pane_current", Pane: herdrscript.Pane("w1:p1", "w1", "w1:t1")}}, call{Method: "tab.create", Params: map[string]any{"label": "worker", "workspace_id": "w1", "focus": false}, Result: herdr.CreatedResult{Type: "tab_created", Tab: herdr.Tab{ID: "w1:t2", WorkspaceID: "w1"}, RootPane: p}}, labeled(p), call{Method: "agent.start", Params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w1:p2", "args": []string{}, "timeout_ms": 30000}, Result: started(p)}, waitCall("worker", p, "idle"))
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "pane.current", Params: map[string]any{"caller_pane_id": "old:p1"}, Result: herdr.PaneResult{Type: "pane_current", Pane: herdrscript.Pane("w1:p1", "w1", "w1:t1")}}, call{Method: "tab.create", Params: map[string]any{"label": "worker", "workspace_id": "w1", "focus": false}, Result: herdr.CreatedResult{Type: "tab_created", Tab: herdr.Tab{ID: "w1:t2", WorkspaceID: "w1"}, RootPane: p}}, labeled(p), call{Method: "agent.start", Params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w1:p2", "args": []string{"--permission-mode", "bypassPermissions"}, "timeout_ms": 30000}, Result: started(p)}, waitCall("worker", p, "idle"))
 	out := s.run(context.Background(), validOptions(), nil)
 	if out.Status != "success" {
 		t.Fatalf("%+v", out)
@@ -327,7 +327,7 @@ func tabOptions() Options {
 }
 func TestSpawnRetriesBusyPaneOnce(t *testing.T) {
 	p := herdrscript.Pane("w1:p2", "w1", "w1:t2")
-	s, w := tabCalls(t, call{Method: "agent.start", Params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w1:p2", "args": []string{}, "timeout_ms": 30000}, Err: busy()}, call{Method: "agent.start", Params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w1:p2", "args": []string{}, "timeout_ms": 30000}, Result: started(p)}, waitCall("worker", p, "idle"))
+	s, w := tabCalls(t, call{Method: "agent.start", Params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w1:p2", "args": []string{"--permission-mode", "bypassPermissions"}, "timeout_ms": 30000}, Err: busy()}, call{Method: "agent.start", Params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w1:p2", "args": []string{"--permission-mode", "bypassPermissions"}, "timeout_ms": 30000}, Result: started(p)}, waitCall("worker", p, "idle"))
 	out := s.run(context.Background(), tabOptions(), nil)
 	if out.Status != "success" || out.Error != nil {
 		t.Fatalf("%+v", out)
@@ -808,7 +808,7 @@ func TestSpawnStartReservationOutlastsShortTimeout(t *testing.T) {
 			p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
 			o := paneOptions()
 			o.Timeout, o.NoWait = tc.timeout, tc.noWait
-			calls := []call{{Method: "session.snapshot", Result: snapshot()}, labeled(p), {Method: "agent.start", Params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w1:p1", "args": []string{}, "timeout_ms": tc.start}, Result: started(p)}}
+			calls := []call{{Method: "session.snapshot", Result: snapshot()}, labeled(p), {Method: "agent.start", Params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w1:p1", "args": []string{"--permission-mode", "bypassPermissions"}, "timeout_ms": tc.start}, Result: started(p)}}
 			if !tc.noWait {
 				calls = append(calls, call{Method: "agent.wait", Params: map[string]any{"target": "worker", "timeout_ms": tc.waitMs}, Result: settled(p, "idle")})
 			}

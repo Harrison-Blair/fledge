@@ -38,7 +38,7 @@ func TestSpawnNativeTokensMatchingRetiredFlagsPassThrough(t *testing.T) {
 	if err := json.Unmarshal(calls[2].Params, &params); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(params.Args, native) {
+	if !reflect.DeepEqual(params.Args, append([]string{"--permission-mode", "bypassPermissions"}, native...)) {
 		t.Fatalf("%q", params.Args)
 	}
 	var envelope struct{ Result map[string]any }

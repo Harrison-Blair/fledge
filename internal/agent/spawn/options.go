@@ -17,6 +17,7 @@ type Options struct {
 	Prompt, File, Profile                                                                       string
 	Env, Args                                                                                   []string
 	Focus, NoWait, PromptSet, FileSet                                                           bool
+	NoPermissionBypass                                                                          bool
 	Timeout                                                                                     time.Duration
 }
 
@@ -63,7 +64,14 @@ func (o Options) Validate() ([]string, error) {
 			return nil, libagent.Invalid("arguments must be valid UTF-8 without NUL")
 		}
 	}
-	return modelArguments(o.Harness, o.Model, o.Args)
+	args, err := modelArguments(o.Harness, o.Model, o.Args)
+	if err != nil {
+		return nil, err
+	}
+	if o.NoPermissionBypass {
+		return args, nil
+	}
+	return permissionArguments(o.Harness, args), nil
 }
 func modelArguments(kind, model string, args []string) ([]string, error) {
 	result := append([]string{}, args...)

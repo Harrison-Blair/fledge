@@ -103,11 +103,32 @@ func TestSpawnProfileReadsInvokingRepositoryOverride(t *testing.T) {
 		t.Fatal(err, out.String())
 	}
 	calls := waitCalls(t, l, done, 5)
-	if kind, args := startArgs(t, calls[2]); kind != "claude" || !reflect.DeepEqual(args, []string{}) {
+	if kind, args := startArgs(t, calls[2]); kind != "claude" || !reflect.DeepEqual(args, []string{"--permission-mode", "bypassPermissions"}) {
 		t.Fatalf("%s %q", kind, args)
 	}
 	if want := (profiles.Profile{Role: "Local role.\n"}).Brief() + noMemories + "\n\ngo"; !headered(t, calls[4], want) {
 		t.Fatalf("%s", calls[4].Params)
+	}
+}
+
+func TestSpawnProfileHonorsPermissionOptOut(t *testing.T) {
+	for _, harness := range []string{"claude", "codex"} {
+		t.Run(harness, func(t *testing.T) {
+			t.Setenv("HERDR_PANE_ID", "")
+			l := newSocket(t)
+			done := serveRPCs(l, snapshotResult(), labeledResult(), startedResult(harness), readyAs(harness), promptedResult())
+			var out bytes.Buffer
+			if err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--harness", harness, "--profile", "reviewer", "--pane", "w1:p1", "--no-permission-bypass"}, &out); err != nil {
+				t.Fatal(err, out.String())
+			}
+			calls := waitCalls(t, l, done, 5)
+			if kind, args := startArgs(t, calls[2]); kind != harness || !reflect.DeepEqual(args, []string{}) {
+				t.Fatalf("%s %q", kind, args)
+			}
+			if !headered(t, calls[4], builtinProfile(t, "reviewer").Brief()+noMemories) {
+				t.Fatalf("%s", calls[4].Params)
+			}
+		})
 	}
 }
 

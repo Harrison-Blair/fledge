@@ -72,16 +72,22 @@ func profileSpawnIn(t *testing.T, cwd, kind string, args []string, text string) 
 	return s
 }
 
-// Every built-in role launches on any harness with exactly the caller's
-// native arguments; a profile never adds a model, permissions, or flags.
-func TestEveryBuiltinSendsItsBriefWithNoImplicitLaunchArguments(t *testing.T) {
+// Every built-in role uses the same harness permission defaults;
+// a profile supplies only instructions, never launch settings.
+func TestEveryBuiltinSendsItsBriefWithHarnessPermissionDefaults(t *testing.T) {
 	for _, name := range []string{"debugger", "implementer", "integrator", "orchestrator", "planner", "researcher", "reviewer", "verifier"} {
 		for _, kind := range []string{"claude", "pi", "codex"} {
 			t.Run(name+"/"+kind, func(t *testing.T) {
 				o := profileOptions(name)
 				o.Harness = kind
 				o.Prompt, o.PromptSet = "Do #14.", true
-				s := profileSpawn(t, kind, []string{}, header+builtinProfile(t, name).Brief()+noMemories+"\n\nDo #14.")
+				args := []string{}
+				if kind == "claude" {
+					args = []string{"--permission-mode", "bypassPermissions"}
+				} else if kind == "codex" {
+					args = []string{"--yolo"}
+				}
+				s := profileSpawn(t, kind, args, header+builtinProfile(t, name).Brief()+noMemories+"\n\nDo #14.")
 				out := s.run(context.Background(), o, nil)
 				r := out.Result.(*Result)
 				if out.Status != "success" || !r.Prompted || !r.PromptRequested || r.Harness != kind {
@@ -115,7 +121,7 @@ func TestProfileBriefIsInjectedOnceUnderOneHeader(t *testing.T) {
 			t.Fatalf("%q appears %d times in %q", once, strings.Count(want, once), want)
 		}
 	}
-	s := profileSpawn(t, "claude", []string{}, want)
+	s := profileSpawn(t, "claude", []string{"--permission-mode", "bypassPermissions"}, want)
 	if out := s.run(context.Background(), o, strings.NewReader("from file\n")); out.Status != "success" {
 		t.Fatalf("%+v %+v", out, out.Error)
 	}
@@ -169,7 +175,7 @@ func TestProfileComesFromInvokingCheckoutNotCwd(t *testing.T) {
 	p := herdrscript.Pane("w2:p1", "w2", "w2:t1")
 	p.AgentStatus = "idle"
 	want := header + profiles.Profile{Role: "Invoking role.\n"}.Brief() + noMemories
-	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "pane.current", Result: herdr.PaneResult{Type: "pane_current", Pane: herdrscript.Pane("w1:p1", "w1", "w1:t1")}}, call{Method: "workspace.create", Result: herdr.CreatedResult{Type: "workspace_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p}}, namedTab(p), labeled(p), call{Method: "agent.start", Params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w2:p1", "args": []string{}, "timeout_ms": 30000}, Result: started(p)}, waitCall("worker", p, "idle"), senderCall(), senderCall(), call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": want}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "pane.current", Result: herdr.PaneResult{Type: "pane_current", Pane: herdrscript.Pane("w1:p1", "w1", "w1:t1")}}, call{Method: "workspace.create", Result: herdr.CreatedResult{Type: "workspace_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p}}, namedTab(p), labeled(p), call{Method: "agent.start", Params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w2:p1", "args": []string{"--permission-mode", "bypassPermissions"}, "timeout_ms": 30000}, Result: started(p)}, waitCall("worker", p, "idle"), senderCall(), senderCall(), call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": want}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
 	s.Cwd = invoking
 	out := s.run(context.Background(), o, nil)
 	if out.Status != "success" {
@@ -180,9 +186,9 @@ func TestProfileComesFromInvokingCheckoutNotCwd(t *testing.T) {
 	}
 }
 
-func TestSpawnWithoutProfileIsUnchanged(t *testing.T) {
+func TestSpawnWithoutProfileUsesPermissionDefaults(t *testing.T) {
 	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
-	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, labeled(p), call{Method: "agent.start", Params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w1:p1", "args": []string{}, "timeout_ms": 30000}, Result: started(p)}, waitCall("worker", p, "idle"))
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, labeled(p), call{Method: "agent.start", Params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w1:p1", "args": []string{"--permission-mode", "bypassPermissions"}, "timeout_ms": 30000}, Result: started(p)}, waitCall("worker", p, "idle"))
 	o := validOptions()
 	o.Pane = "w1:p1"
 	out := s.run(context.Background(), o, nil)
@@ -193,7 +199,7 @@ func TestSpawnWithoutProfileIsUnchanged(t *testing.T) {
 
 func TestProfileNameIsRecordedOnTheAgentRecord(t *testing.T) {
 	cwd := identitytest.Repository(t)
-	s := profileSpawnIn(t, cwd, "claude", []string{}, header+builtinProfile(t, "reviewer").Brief()+noMemories)
+	s := profileSpawnIn(t, cwd, "claude", []string{"--permission-mode", "bypassPermissions"}, header+builtinProfile(t, "reviewer").Brief()+noMemories)
 	out := s.run(context.Background(), profileOptions("reviewer"), nil)
 	r := out.Result.(*Result)
 	if out.Status != "success" || !r.Registered {
@@ -207,7 +213,7 @@ func TestProfileNameIsRecordedOnTheAgentRecord(t *testing.T) {
 // The spawn result names the profile without retired fields, and a spawn
 // reports no read effects.
 func TestSpawnProfileResultHasNoRetiredFields(t *testing.T) {
-	s := profileSpawn(t, "claude", []string{}, header+builtinProfile(t, "reviewer").Brief()+noMemories)
+	s := profileSpawn(t, "claude", []string{"--permission-mode", "bypassPermissions"}, header+builtinProfile(t, "reviewer").Brief()+noMemories)
 	out := s.run(context.Background(), profileOptions("reviewer"), nil)
 	b, err := json.Marshal(out.Result)
 	if err != nil {
@@ -252,7 +258,7 @@ func TestProfileBriefEndsWithProjectMemoryIndex(t *testing.T) {
 	alpha(t, cwd)
 	want := header + reviewer.Brief() + "\n## Project memory\nRead one in full with `fledge memory get --name <name>`.\n\n" +
 		"- [alpha](alpha.md) — First fact\n- [herdr-socket](herdr-socket.md) — Herdr commands need socket access\n\nReview it."
-	s := profileSpawnIn(t, cwd, "claude", []string{}, want)
+	s := profileSpawnIn(t, cwd, "claude", []string{"--permission-mode", "bypassPermissions"}, want)
 	o := profileOptions("reviewer")
 	o.Prompt, o.PromptSet = "Review it.", true
 	if out := s.run(context.Background(), o, nil); out.Status != "success" {
@@ -262,7 +268,7 @@ func TestProfileBriefEndsWithProjectMemoryIndex(t *testing.T) {
 
 func TestProfileBriefNotesMissingMemories(t *testing.T) {
 	cwd := identitytest.Repository(t)
-	s := profileSpawnIn(t, cwd, "claude", []string{}, header+builtinProfile(t, "reviewer").Brief()+noMemories)
+	s := profileSpawnIn(t, cwd, "claude", []string{"--permission-mode", "bypassPermissions"}, header+builtinProfile(t, "reviewer").Brief()+noMemories)
 	if out := s.run(context.Background(), profileOptions("reviewer"), nil); out.Status != "success" {
 		t.Fatalf("%+v %+v", out, out.Error)
 	}

@@ -95,10 +95,16 @@ This release removes several interfaces without a compatibility layer:
   arguments after `--`), and delete the TOML file. There are no `extends`,
   `[sections]`, `reads`, or `protocol` keys; the shared protocol and project
   memory are always added to a selected profile. Built-ins no longer pick a
-  harness, model, or `--permission-mode`, so pass them yourself. `agent
+  harness or model, so pass them yourself. Permission defaults now come from
+  spawn itself (see below). `agent
   profiles --json` drops `harness`, `model`, `args`, `reads`, `protocol`,
   `base`, and `sections`, and spawn's `profile` object drops `base`. See
   [Profiles](#profiles).
+- **Spawn permissions.** Codex now defaults to `--yolo`, and Claude to
+  `--permission-mode bypassPermissions`, with or without a profile. Existing
+  explicit native permission options take precedence. Use
+  `--no-permission-bypass` to leave permissions to native arguments and harness
+  configuration.
 - **Tasks.** Briefs are free text; the six-heading template is optional and
   `--freeform` is gone, so drop the flag. `complete` and `verify` no longer
   record usage snapshots (existing ones stay readable); use
@@ -268,6 +274,19 @@ translates to verified native flags; it is currently unavailable for `kiro`,
 and receive native arguments. Model values remain opaque. Hermes uses its `chat`
 subcommand. Documented native model conflicts are rejected when `--model` is set;
 harness resume behavior can still affect model selection.
+
+Codex spawns default to `--yolo`, disabling approval prompts and sandboxing;
+Claude spawns default to `--permission-mode bypassPermissions`. These defaults
+apply with or without a profile. Other harnesses receive no permission defaults.
+Explicit native permission choices override the defaults: Claude's
+`--permission-mode` or `--dangerously-skip-permissions`, and Codex's bypass,
+sandbox, approval, `--approve-for-me`, or `--full-auto` options, including
+permission configuration through `-c`/`--config` (`approval_policy`,
+`sandbox_mode`, `default_permissions`, or `permissions` and its nested keys).
+Use `--no-permission-bypass` to suppress injection and use harness configuration
+or native arguments instead; it does not remove explicit bypass arguments or
+force a restricted mode. Fledge does not edit harness settings or answer startup
+confirmation dialogs.
 
 Pass native tokens with repeatable `--args=TOKEN`, then optional trailing
 `-- TOKEN...`. Tokens retain whitespace and commas; Fledge does not parse a shell
@@ -571,13 +590,13 @@ sub-agent share of `tokens`, or null), `basis`, `reason`, and `sources`.
 A profile is a named **role brief**: plain Markdown instructions that
 `fledge agent spawn --profile NAME` sends ahead of the task. A profile carries no
 launch settings. It never chooses the harness, model, or native arguments, so
-every spawn passes `--harness` itself, `--model` when wanted, and any native
-arguments explicitly, including permission flags such as Claude's
-`--permission-mode bypassPermissions`:
+every spawn passes `--harness` itself, `--model` when wanted, and any additional
+native arguments explicitly. Spawn supplies the Claude and Codex permission
+defaults independently of the profile:
 
 ```sh
 fledge agent spawn --name impl --harness claude --model claude-opus-5-5 --profile implementer \
-  --file brief.md -- --permission-mode bypassPermissions
+  --file brief.md
 fledge agent spawn --name review --harness pi --model openai-codex/gpt-6-astra --profile reviewer --file brief.md
 ```
 

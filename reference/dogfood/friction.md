@@ -1320,3 +1320,25 @@ to the ordering that requires an assignee.
 1. Construct a modern-only rollout with parent-thread metadata, a startup compacted entry, an inherited `token_count` total of 100, then a local turn context, a `token_usage_record` of 50, and a cumulative total of 150.
 2. Read it with the attempted repair at `1d65042`; observe 150 reported input tokens rather than the fork's 50 local tokens.
 3. Verify the corrected inherited-baseline handling against both a sanitized fork fixture and the private real rollout; retain the unmarked legacy-prefix regression and all existing window/deduplication checks.
+
+---
+
+**Issue:** Historical Claude bypass workaround became stale after profiles were simplified
+
+**Summary:** The 2026-09-22 entry above says Claude built-in profiles supply bypass arguments. Profiles now contain instructions only. The permission-default implementation moves this behavior into `agent spawn` for every Claude and Codex launch, independent of profiles: Claude receives `--permission-mode bypassPermissions`, and Codex receives `--yolo`. Explicit native permission options take precedence, and `--no-permission-bypass` suppresses injection. The old project memory requiring manual Claude flags is migrated to the user's shared worker-permission preference. Startup dialogs are still handled by the user; no harness settings are changed.
+
+**Reproduction steps:**
+1. With an older instruction-only-profile build, spawn a Claude agent without native permission arguments and observe that the profile supplies none.
+2. With the permission-default build, spawn Claude or Codex without native permission arguments and inspect the bypass launch arguments, with or without a profile.
+3. Supply an explicit permission option or `--no-permission-bypass` and observe that no default is injected.
+
+---
+
+**Issue:** Assigning a task to the active Codex agent can record ownership but reject brief delivery
+
+**Summary:** On 2026-10-05, `fledge task assign --id f6822138 --name permission-defaults --json` recorded the current agent as owner, then returned partial with `agent_blocked` while that agent was processing this implementation through tools. Ownership remains assigned, so work continues from the already-known brief without retrying delivery. This records the observed lifecycle classification; its cause is not established.
+
+**Reproduction steps:**
+1. Adopt the active Codex agent and create a task while it is handling a tool-driven turn.
+2. Assign the task to that same agent through Fledge.
+3. If Herdr reports the caller blocked, observe a partial outcome with saved ownership and failed delivery; inspect the task and continue from the known brief.

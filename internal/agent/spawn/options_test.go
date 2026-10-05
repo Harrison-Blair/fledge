@@ -60,6 +60,11 @@ func TestModelArguments(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := []string{"--model", "a model", "--flag=a,b", "two words"}
+			if h == "claude" {
+				want = append([]string{"--permission-mode", "bypassPermissions"}, want...)
+			} else if h == "codex" {
+				want = append([]string{"--yolo"}, want...)
+			}
 			if h == "hermes" {
 				want = append([]string{"chat"}, want...)
 			}
