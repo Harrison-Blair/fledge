@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 )
 
@@ -66,21 +67,34 @@ func fanOut(ctx context.Context, c libagent.Client, o Options, targets []selecto
 	return out
 }
 
-// reread refreshes t's status just before a confirmed message goes to it, as
-// earlier targets' deliveries give it time to change; the already-working
-// decision needs the status at sending. A failed read rejects the target.
+// reread refreshes t just before a message goes to it, as earlier targets'
+// deliveries give it time to change. A registered target is resolved again
+// from its record, following its terminal to a new pane and rejecting one
+// gone or now running another harness, so the message never reaches whatever
+// replaced it. Any other target's status is reread for a confirmed message;
+// the already-working decision needs the status at sending. A failed read
+// rejects the target.
 func reread(ctx context.Context, c libagent.Client, o Options, t *selector.Target, id string, sender *libagent.Sender) libagent.Outcome {
 	out := libagent.Outcome{Operation: "agent.message", Status: "success", Effects: []libagent.Effect{}}
-	if !o.Confirm {
+	a, pane, rec, err := t.Agent, t.Pane, t.Record, error(nil)
+	switch {
+	case t.Record != nil:
+		a, pane, rec, err = identity.Target{ID: t.Record.ID}.Get(ctx, c)
+	case o.Confirm:
+		a, err = c.Get(ctx, t.Pane)
+	default:
 		return out
 	}
-	a, err := c.Get(ctx, t.Pane)
 	if err != nil {
-		out.Result = Result{AgentRow: libagent.NewAgentRow(t.Agent.Pane), MessageID: id, Sender: sender, Confirmed: new(bool)}
+		r := Result{AgentRow: libagent.NewAgentRow(t.Agent.Pane), MessageID: id, Sender: sender}
+		if o.Confirm {
+			r.Confirmed = new(bool)
+		}
+		out.Result = r
 		out.Fail(err, "agent.get", false)
 		return out
 	}
-	t.Agent = a
+	t.Agent, t.Pane, t.Record = a, pane, rec
 	return out
 }
 
