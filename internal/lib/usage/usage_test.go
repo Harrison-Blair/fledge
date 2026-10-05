@@ -585,6 +585,66 @@ func TestCodexForkInheritedPhaseEndsAtValidContext(t *testing.T) {
 	}
 }
 
+// A valid turn_context ends the inherited phase for good, even before the
+// first session_meta; later metadata never reopens it.
+func TestCodexForkContextBeforeMetaKeepsPhaseClosed(t *testing.T) {
+	tail := codexForkMeta + codexTotal("2026-01-02T10:00:05Z", 100, 0, 0, 0, 0) +
+		codexRecordLine("2026-01-02T11:00:05Z", "r1", 50, 0, 0, 0, 0)
+	for name, ctx := range map[string]string{
+		"model":       codexModel("2026-01-02T10:00:01Z", "m"),
+		"empty model": `{"type":"turn_context","timestamp":"2026-01-02T10:00:01Z","payload":{}}` + "\n",
+	} {
+		s := readFile(t, "codex", ctx+tail)
+		if s.Basis != Measured || s.Tokens != (Tokens{Input: 150}) || s.Turns != 1 || !strings.Contains(s.Reason, legacyReason) {
+			t.Errorf("%s: %+v", name, s)
+		}
+	}
+}
+
+// A local total followed by a fork's inherited total mixes histories that
+// cannot be reconciled, so the whole summary is unavailable.
+func TestCodexLocalTotalBeforeInheritedTotalIsUnavailable(t *testing.T) {
+	head := codexTotal("2026-01-02T10:00:00Z", 100, 0, 0, 0, 0) + codexForkMeta +
+		codexTotal("2026-01-02T10:00:01Z", 3000, 0, 0, 0, 0)
+	for name, content := range map[string]string{
+		"with record":    head + codexModel("2026-01-02T10:00:02Z", "m") + codexRecordLine("2026-01-02T11:00:05Z", "r1", 50, 0, 0, 0, 0),
+		"without record": head + codexModel("2026-01-02T10:00:02Z", "m") + codexTotal("2026-01-02T10:00:05Z", 3100, 0, 0, 0, 0),
+		"no context":     head,
+	} {
+		s := readFile(t, "codex", content)
+		if s.Basis != Unavailable || s.Tokens != (Tokens{}) || !strings.Contains(s.Reason, "ambiguous") || strings.Contains(s.Reason, "s.jsonl") {
+			t.Errorf("%s: %+v", name, s)
+		}
+	}
+	// Totals after the first response record are ignored and never ambiguous.
+	s := readFile(t, "codex", codexTotal("2026-01-02T10:00:00Z", 100, 0, 0, 0, 0)+
+		codexRecordLine("2026-01-02T10:00:01Z", "r1", 50, 0, 0, 0, 0)+codexForkMeta+
+		codexTotal("2026-01-02T10:00:02Z", 3000, 0, 0, 0, 0))
+	if s.Basis != Measured || s.Tokens != (Tokens{Input: 150}) {
+		t.Errorf("after record: %+v", s)
+	}
+}
+
+// The inherited total is the window's baseline by rollout order even when its
+// timestamp falls inside the window and no local total precedes the window.
+func TestCodexForkInheritedBaselineIgnoresItsTimestamp(t *testing.T) {
+	content := codexForkMeta + codexTotal("2026-01-02T10:20:00Z", 1000, 0, 0, 0, 0) +
+		codexModel("2026-01-02T10:00:01Z", "m") +
+		codexTotal("2026-01-02T10:00:05Z", 1060, 0, 0, 0, 0) +
+		codexTotal("2026-01-02T10:10:05Z", 1130, 0, 0, 0, 0)
+	for name, content := range map[string]string{
+		"without record": content,
+		"with record":    content + codexRecordLine("2026-01-02T11:00:05Z", "r1", 50, 0, 0, 0, 0),
+	} {
+		path := filepath.Join(t.TempDir(), "s.jsonl")
+		write(t, path, content)
+		s := Read(context.Background(), Discovery{Run: noRun(t)}, "codex", Ref{Kind: "path", Value: path}, window("2026-01-02T09:00:00Z", "2026-01-02T10:30:00Z"))
+		if s.Basis != Measured || s.Tokens != (Tokens{Input: 130}) || !strings.Contains(s.Reason, "token_count total_token_usage") {
+			t.Errorf("%s: %+v", name, s)
+		}
+	}
+}
+
 func TestPiSumsUsageAndCost(t *testing.T) {
 	s := Read(context.Background(), fixture(t), "pi", Ref{Kind: "id", Value: "pi-1"}, Window{})
 	assertBasis(t, s, Measured)

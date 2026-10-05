@@ -3,9 +3,14 @@ package usage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"time"
 )
+
+// errAmbiguousCodex reports local totals followed by a fork's inherited total,
+// whose histories cannot be reconciled.
+var errAmbiguousCodex = errors.New("codex usage is ambiguous: local token totals precede the inherited parent total")
 
 type codexLine struct {
 	Timestamp *time.Time      `json:"timestamp"`
@@ -36,7 +41,8 @@ func (u codexUsage) minus(o codexUsage) codexUsage {
 // a rollout without records) count as the last one inside the window minus the
 // last one before it; totals after that first record are ignored. In a fork,
 // whose first session_meta names a parent_thread_id, totals before the first
-// turn_context are the parent's: they are a baseline, never usage.
+// valid turn_context are the parent's: they are a baseline, never usage. A
+// local total followed by such an inherited total makes usage unavailable.
 func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error) {
 	path, err := Locate(d, "codex", ref)
 	if err != nil {
@@ -47,7 +53,7 @@ func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error
 	var model string
 	var fallbackModels []string
 	var before, inside *codexUsage
-	var sawMeta, inherited, sawTotal, transitioned bool
+	var sawMeta, sawContext, inherited, sawTotal, transitioned, ambiguous bool
 	err = t.scanLines(path, func(line []byte) error {
 		var l codexLine
 		if err := json.Unmarshal(line, &l); err != nil {
@@ -64,7 +70,7 @@ func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error
 			var p struct {
 				ParentThreadID string `json:"parent_thread_id"`
 			}
-			inherited = json.Unmarshal(l.Payload, &p) == nil && p.ParentThreadID != ""
+			inherited = !sawContext && json.Unmarshal(l.Payload, &p) == nil && p.ParentThreadID != ""
 		case "turn_context":
 			var p struct {
 				Model string `json:"model"`
@@ -73,7 +79,7 @@ func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error
 				return err
 			}
 			model = p.Model
-			inherited = false
+			sawContext, inherited = true, false
 			if !transitioned && w.contains(l.Timestamp) && model != "" {
 				fallbackModels = append(fallbackModels, model)
 			}
@@ -118,6 +124,7 @@ func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error
 			}
 			total := *p.Info.Total
 			if inherited {
+				ambiguous = ambiguous || sawTotal
 				before = &total
 				return nil
 			}
@@ -136,6 +143,9 @@ func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error
 	}
 	if err != nil {
 		return nil, err
+	}
+	if ambiguous {
+		return nil, errAmbiguousCodex
 	}
 	if !sawTotal || transitioned && inside == nil {
 		return t, nil
