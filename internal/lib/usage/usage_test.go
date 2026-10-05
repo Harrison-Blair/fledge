@@ -3,6 +3,7 @@ package usage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -319,6 +320,100 @@ func TestCodexFallbackWindowSubtractsEarlierTotal(t *testing.T) {
 	assertTokens(t, s.Tokens, Tokens{Input: 100, Output: 25, CacheRead: 80, Reasoning: 3})
 }
 
+// codexTotal is a legacy cumulative token_count line.
+func codexTotal(ts string, in, cached, write, out, reasoning int) string {
+	return fmt.Sprintf(`{"type":"event_msg","timestamp":%q,"payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":%d,"cached_input_tokens":%d,"cache_write_input_tokens":%d,"output_tokens":%d,"reasoning_output_tokens":%d}}}}`, ts, in, cached, write, out, reasoning) + "\n"
+}
+
+// codexRecordLine is a newer per-response token_usage_record line.
+func codexRecordLine(ts, id string, in, cached, write, out, reasoning int) string {
+	return fmt.Sprintf(`{"type":"token_usage_record","timestamp":%q,"payload":{"response_id":%q,"usage":{"input_tokens":%d,"cached_input_tokens":%d,"cache_write_input_tokens":%d,"output_tokens":%d,"reasoning_output_tokens":%d}}}`, ts, id, in, cached, write, out, reasoning) + "\n"
+}
+
+func codexModel(ts, model string) string {
+	return fmt.Sprintf(`{"type":"turn_context","timestamp":%q,"payload":{"model":%q}}`, ts, model) + "\n"
+}
+
+// A rollout that switches from legacy token_count totals to token_usage_record
+// keeps the legacy prefix and ignores the cumulative totals after the switch.
+func TestCodexMixedRolloutAddsLegacyPrefix(t *testing.T) {
+	s := readFile(t, "codex", codexMeta+
+		codexTotal("2026-01-02T10:00:05Z", 100, 0, 0, 0, 0)+
+		codexRecordLine("2026-01-02T11:00:05Z", "r1", 50, 0, 0, 0, 0)+
+		codexTotal("2026-01-02T11:00:06Z", 150, 0, 0, 0, 0))
+	assertBasis(t, s, Measured)
+	assertTokens(t, s.Tokens, Tokens{Input: 150})
+	if s.Turns != 1 || !strings.Contains(s.Reason, "token_count total_token_usage from before the first token_usage_record") {
+		t.Fatalf("turns %d reason %q", s.Turns, s.Reason)
+	}
+}
+
+func TestCodexMixedRolloutWindows(t *testing.T) {
+	content := codexMeta +
+		codexModel("2026-01-02T10:00:01Z", "legacy-m") +
+		codexTotal("2026-01-02T10:00:05Z", 60, 10, 5, 12, 2) +
+		codexTotal("2026-01-02T10:10:05Z", 130, 20, 10, 30, 6) +
+		codexModel("2026-01-02T11:00:00Z", "new-m") +
+		codexRecordLine("2026-01-02T11:00:05Z", "r1", 70, 15, 5, 9, 3) +
+		codexRecordLine("2026-01-02T11:00:05Z", "r1", 70, 15, 5, 9, 3) +
+		codexTotal("2026-01-02T11:00:06Z", 200, 35, 15, 39, 9) +
+		// A model after the transition without a record of its own is not attributed.
+		codexModel("2026-01-02T11:20:00Z", "idle-m") +
+		codexModel("2026-01-02T12:00:00Z", "new-m2") +
+		codexRecordLine("2026-01-02T12:00:05Z", "r2", 30, 0, 0, 4, 1) +
+		codexTotal("2026-01-02T12:00:06Z", 230, 35, 15, 43, 10)
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	write(t, path, content)
+	cases := []struct {
+		name         string
+		w            Window
+		tokens       Tokens
+		turns        int
+		models       []string
+		first, last  *time.Time
+		legacyReason bool
+	}{
+		{"unbounded", Window{}, Tokens{Input: 180, Output: 43, CacheRead: 35, CacheWrite: 15, Reasoning: 10}, 2,
+			[]string{"legacy-m", "new-m", "new-m2"}, at("2026-01-02T11:00:05Z"), at("2026-01-02T12:00:05Z"), true},
+		// 130/20/10/30/6 minus 60/10/5/12/2 before the window; no turns.
+		{"before transition", window("2026-01-02T10:05:00Z", "2026-01-02T10:30:00Z"), Tokens{Input: 55, Output: 18, CacheRead: 10, CacheWrite: 5, Reasoning: 4}, 0,
+			nil, nil, nil, true},
+		{"across transition", window("2026-01-02T10:05:00Z", "2026-01-02T11:30:00Z"), Tokens{Input: 105, Output: 27, CacheRead: 25, CacheWrite: 10, Reasoning: 7}, 1,
+			[]string{"new-m"}, at("2026-01-02T11:00:05Z"), at("2026-01-02T11:00:05Z"), true},
+		{"after transition", window("2026-01-02T11:30:00Z", "2026-01-02T13:00:00Z"), Tokens{Input: 30, Output: 4, Reasoning: 1}, 1,
+			[]string{"new-m2"}, at("2026-01-02T12:00:05Z"), at("2026-01-02T12:00:05Z"), false},
+	}
+	for _, c := range cases {
+		s := Read(context.Background(), Discovery{Run: noRun(t)}, "codex", Ref{Kind: "path", Value: path}, c.w)
+		if s.Basis != Measured || s.Tokens != c.tokens || s.Turns != c.turns || !reflect.DeepEqual(s.Models, c.models) || s.Cost != nil {
+			t.Errorf("%s: %+v", c.name, s)
+		}
+		if !reflect.DeepEqual(s.First, c.first) || !reflect.DeepEqual(s.Last, c.last) {
+			t.Errorf("%s: first %v last %v", c.name, s.First, s.Last)
+		}
+		if got := strings.Contains(s.Reason, "token_count total_token_usage from before the first token_usage_record"); got != c.legacyReason {
+			t.Errorf("%s: reason %q", c.name, s.Reason)
+		}
+	}
+}
+
+// Only a valid token_usage_record ends the legacy prefix.
+func TestCodexMalformedRecordDoesNotEndLegacyPrefix(t *testing.T) {
+	for _, bad := range []string{
+		`{"type":"token_usage_record","timestamp":"2026-01-02T10:00:01Z","payload":{"response_id":"x","usage":null}}`,
+		`{"type":"token_usage_record","timestamp":"2026-01-02T10:00:01Z","payload":{"response_id":"x"}}`,
+		`{"type":"token_usage_record","timestamp":"2026-01-02T10:00:01Z","payload":"bad"}`,
+	} {
+		s := readFile(t, "codex", codexMeta+bad+"\n"+
+			codexTotal("2026-01-02T10:00:05Z", 100, 0, 0, 0, 0)+
+			codexRecordLine("2026-01-02T11:00:05Z", "r1", 50, 0, 0, 0, 0))
+		if s.Basis != Measured || s.Tokens != (Tokens{Input: 150}) || s.Turns != 1 ||
+			!strings.Contains(s.Reason, "token_count total_token_usage from before the first token_usage_record") || !strings.Contains(s.Reason, "1 malformed entries") {
+			t.Errorf("%s: %+v", bad, s)
+		}
+	}
+}
+
 func TestPiSumsUsageAndCost(t *testing.T) {
 	s := Read(context.Background(), fixture(t), "pi", Ref{Kind: "id", Value: "pi-1"}, Window{})
 	assertBasis(t, s, Measured)
@@ -585,6 +680,11 @@ func TestExplicitZeroUsageAndNullCodexInfoAreMeasured(t *testing.T) {
 	s := readFile(t, "codex", codexMeta+`{"type":"event_msg","timestamp":"2026-01-02T10:00:05Z","payload":{"type":"token_count","info":null}}`+"\n")
 	if s.Basis != Measured || s.Reason != "" || s.Tokens != (Tokens{}) {
 		t.Errorf("null info: %+v", s)
+	}
+	// A model without any usage is not attributed.
+	s = readFile(t, "codex", codexMeta+codexModel("2026-01-02T10:00:01Z", "m")+`{"type":"event_msg","timestamp":"2026-01-02T10:00:05Z","payload":{"type":"token_count","info":null}}`+"\n")
+	if s.Basis != Measured || len(s.Models) != 0 {
+		t.Errorf("null info with model: %+v", s)
 	}
 }
 

@@ -31,9 +31,10 @@ func (u codexUsage) minus(o codexUsage) codexUsage {
 	return codexUsage{u.Input - o.Input, u.Cached - o.Cached, u.CacheWrite - o.CacheWrite, u.Output - o.Output, u.Reasoning - o.Reasoning}
 }
 
-// readCodex sums token_usage_record entries deduplicated by response_id. A
-// rollout without them falls back to cumulative token_count totals: the last
-// one inside the window minus the last one before it.
+// readCodex sums token_usage_record entries deduplicated by response_id.
+// Cumulative token_count totals before the first valid record (all of them in
+// a rollout without records) count as the last one inside the window minus the
+// last one before it; totals after that first record are ignored.
 func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error) {
 	path, err := Locate(d, "codex", ref)
 	if err != nil {
@@ -44,7 +45,7 @@ func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error
 	var model string
 	var fallbackModels []string
 	var before, inside *codexUsage
-	var sawTotal bool
+	var sawTotal, transitioned bool
 	err = t.scanLines(path, func(line []byte) error {
 		var l codexLine
 		if err := json.Unmarshal(line, &l); err != nil {
@@ -61,7 +62,7 @@ func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error
 				return err
 			}
 			model = p.Model
-			if w.contains(l.Timestamp) && model != "" {
+			if !transitioned && w.contains(l.Timestamp) && model != "" {
 				fallbackModels = append(fallbackModels, model)
 			}
 		case "token_usage_record":
@@ -76,6 +77,7 @@ func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error
 				return errMissingUsage
 			}
 			t.records++
+			transitioned = true
 			if p.ResponseID != "" && seen[p.ResponseID] {
 				return nil
 			}
@@ -99,6 +101,9 @@ func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error
 				return errMissingUsage
 			}
 			t.records++
+			if transitioned {
+				return nil
+			}
 			sawTotal = true
 			total := *p.Info.Total
 			switch {
@@ -116,18 +121,25 @@ func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error
 	if err != nil {
 		return nil, err
 	}
-	if len(seen) == 0 && sawTotal {
-		t.note = "no token_usage_record entries; totals from the last token_count total_token_usage"
-		if inside != nil {
-			if before != nil {
-				*inside = inside.minus(*before)
-			}
-			t.tokens = inside.tokens()
+	if !sawTotal || transitioned && inside == nil {
+		return t, nil
+	}
+	t.note = "no token_usage_record entries; totals from the last token_count total_token_usage"
+	if transitioned {
+		t.note = "includes token_count total_token_usage from before the first token_usage_record"
+	}
+	if inside != nil {
+		if before != nil {
+			*inside = inside.minus(*before)
 		}
-		for _, m := range fallbackModels {
-			if !slices.Contains(t.models, m) {
-				t.models = append(t.models, m)
-			}
+		t.tokens.add(inside.tokens())
+	}
+	// Legacy models precede the token_usage_record models.
+	models := t.models
+	t.models = nil
+	for _, m := range append(fallbackModels, models...) {
+		if !slices.Contains(t.models, m) {
+			t.models = append(t.models, m)
 		}
 	}
 	return t, nil
