@@ -162,3 +162,12 @@ func TestPointerAndDisplay(t *testing.T) {
 		t.Fatalf("Pointer/Display round trip: %v", p)
 	}
 }
+
+func TestDisplayString(t *testing.T) {
+	if got := DisplayString(""); got != "-" {
+		t.Fatalf("DisplayString(\"\") = %q, want -", got)
+	}
+	if got := DisplayString("v1"); got != "v1" {
+		t.Fatalf("DisplayString(v1) = %q, want v1", got)
+	}
+}
