@@ -23,6 +23,33 @@ func TestAgentHelp(t *testing.T) {
 	}
 }
 
+// TestAgentFilterFlagsShared checks that every command with filter flags
+// shows the same help line for each one.
+func TestAgentFilterFlagsShared(t *testing.T) {
+	root := NewRootCmd()
+	agent, _, err := root.Find([]string{"agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	usages := map[string]string{}
+	for _, name := range []string{"list", "message", "stop", "usage", "wait"} {
+		sub, _, err := agent.Find([]string{name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, flag := range []string{"mine", "parent", "state", "harness", "profile", "task", "worktree", "registered"} {
+			f := sub.Flags().Lookup(flag)
+			if f == nil {
+				t.Fatalf("%s lacks --%s", name, flag)
+			}
+			if want, ok := usages[flag]; ok && f.Usage != want {
+				t.Errorf("%s --%s: %q, want %q", name, flag, f.Usage, want)
+			}
+			usages[flag] = f.Usage
+		}
+	}
+}
+
 // TestAgentCapabilitiesOffline runs outside Herdr: without --live no socket is needed.
 func TestAgentCapabilitiesOffline(t *testing.T) {
 	t.Setenv("HERDR_ENV", "")
