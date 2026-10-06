@@ -309,35 +309,22 @@ func serveLateRPC(l net.Listener, late int, results ...any) <-chan []rpcCall {
 }
 
 // TestSpawnTimeoutCutsOffLateReplies proves --timeout bounds spawn on the
-// socket: a late readiness poll ends it partial with the prompt unsent, and a
-// late prompt acknowledgement ends it unknown, each at the deadline.
+// socket: a late prompt acknowledgement ends it unknown at the deadline. The
+// spawn package checks each late-reply outcome with scripted time.
 func TestSpawnTimeoutCutsOffLateReplies(t *testing.T) {
-	pending := readyAs("claude").(map[string]any)
-	delete(pending["agent"].(map[string]any), "interactive_ready")
-	for _, tc := range []struct {
-		name    string
-		results []any
-		status  string
-		hint    string
-	}{
-		{"readiness poll", []any{snapshotResult(), labeledResult(), startedResult("claude"), pending, readyAs("claude")}, "partial", "The first prompt was not submitted"},
-		{"prompt ack", []any{snapshotResult(), labeledResult(), startedResult("claude"), readyAs("claude"), promptedResult()}, "unknown", "may have been submitted"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("HERDR_PANE_ID", "")
-			l := newSocket(t)
-			done := serveLateRPC(l, len(tc.results)-1, tc.results...)
-			var out bytes.Buffer
-			begin := time.Now()
-			err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "w1:p1", "--timeout", "3001ms", "--prompt", "late"}, &out)
-			if elapsed := time.Since(begin); ExitCode(err) != 1 || elapsed > 3800*time.Millisecond {
-				t.Fatalf("exit %d after %v: %s", ExitCode(err), elapsed, out.String())
-			}
-			waitCalls(t, l, done, len(tc.results))
-			if s := out.String(); !strings.HasPrefix(s, tc.status+":") || !strings.Contains(s, tc.hint) {
-				t.Fatalf("%q", s)
-			}
-		})
+	t.Setenv("HERDR_PANE_ID", "")
+	l := newSocket(t)
+	results := []any{snapshotResult(), labeledResult(), startedResult("claude"), readyAs("claude"), promptedResult()}
+	done := serveLateRPC(l, len(results)-1, results...)
+	var out bytes.Buffer
+	begin := time.Now()
+	err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "w1:p1", "--timeout", "3001ms", "--prompt", "late"}, &out)
+	if elapsed := time.Since(begin); ExitCode(err) != 1 || elapsed > 3800*time.Millisecond {
+		t.Fatalf("exit %d after %v: %s", ExitCode(err), elapsed, out.String())
+	}
+	waitCalls(t, l, done, len(results))
+	if s := out.String(); !strings.HasPrefix(s, "unknown:") || !strings.Contains(s, "may have been submitted") {
+		t.Fatalf("%q", s)
 	}
 }
 
