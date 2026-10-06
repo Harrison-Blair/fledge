@@ -1015,6 +1015,24 @@ func TestRegisteredFindsLiveRecordOfSameHarness(t *testing.T) {
 	}
 }
 
+// LiveEndingMismatched returns a live record of the same harness and ends one
+// left by a different harness, so its name says it writes.
+func TestLiveEndingMismatchedEndsRecordOfDifferentHarness(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t)
+	s := store(t, c)
+	want := registered(t, c, running(details("w1:p3", "term_a"), "codex"))
+	if rec, err := LiveEndingMismatched(s, running(details("w1:p3", "term_a"), "codex")); err != nil || rec == nil || !reflect.DeepEqual(*rec, want) {
+		t.Fatalf("%+v %v", rec, err)
+	}
+	if rec, err := LiveEndingMismatched(s, running(details("w1:p3", "term_a"), "claude")); err != nil || rec != nil {
+		t.Fatalf("%+v %v", rec, err)
+	}
+	if !ended(t, s, want.ID) {
+		t.Fatal("mismatched record is still live")
+	}
+}
+
 // Children reads ended records from the archive as well as live ones, so a
 // caller can still find what an agent it already stopped left behind.
 func TestChildrenIncludesEndedRecordsOfOneParent(t *testing.T) {
