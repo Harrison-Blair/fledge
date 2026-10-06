@@ -56,15 +56,15 @@ func register(t *testing.T, cwd string, a herdr.AgentDetails, profile *string) i
 	return rec
 }
 
-// RegisterChild records a like Register, then sets its parent to parent.
+// RegisterChild records a like Register, with parent as its parent.
 func RegisterChild(t *testing.T, cwd string, a herdr.AgentDetails, parent string) identity.Record {
 	t.Helper()
-	rec := Register(t, cwd, a)
-	s, err := identity.Existing(context.Background(), cwd)
+	s, err := identity.OpenStore(context.Background(), cwd, &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Update(identity.Kind, rec.ID, &rec, func() error { rec.Parent = &parent; return nil }); err != nil {
+	rec, err := identity.RegisterAs(context.Background(), s, libagent.Client{}, a, "spawn", nil, nil, &parent)
+	if err != nil {
 		t.Fatal(err)
 	}
 	return rec

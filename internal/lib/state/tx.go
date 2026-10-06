@@ -12,6 +12,10 @@ import (
 // it as it skips every directory; Get and Tx.Put still find its records.
 const archiveDir = "archive"
 
+// indexDir holds marker sets beneath their kind directory (see Mark). List
+// and ListArchived skip it as they skip every directory.
+const indexDir = "index"
+
 // Tx reads and writes records of its store while Exclusive holds the store
 // lock. It is valid only until the Exclusive fn that received it returns.
 type Tx struct{ s *Store }
@@ -25,6 +29,43 @@ func (tx *Tx) List(kind string) ([]string, error) { return tx.s.List(kind) }
 // Create is Store.Create under the lock.
 func (tx *Tx) Create(kind string, build func(id string) any) (string, error) {
 	return tx.s.Create(kind, build)
+}
+
+// CreatePrepared is Create that runs prepare(id) for each free id, one with
+// neither a live nor an archived record, before it claims that id. A failed
+// prepare stops the create and returns its error.
+func (tx *Tx) CreatePrepared(kind string, prepare func(id string) error, build func(id string) any) (string, error) {
+	return tx.s.create(kind, prepare, build)
+}
+
+// Mark creates the empty marker <kind>/index/<set>/<id>. An existing marker
+// is success once its directory is synced. Markers are never changed or
+// removed. set is lowercase letters, digits, and '-'.
+func (tx *Tx) Mark(kind, set, id string) error {
+	dir, err := tx.s.markDir(kind, set)
+	if err != nil {
+		return err
+	}
+	if !ValidID(id) {
+		return fmt.Errorf("state: invalid id %q", id)
+	}
+	// Create and sync each missing level, in case its creator has not synced
+	// it into its parent yet.
+	for _, d := range []string{filepath.Dir(filepath.Dir(dir)), filepath.Dir(dir), dir} {
+		if err := ensureDir(d); err != nil {
+			return fmt.Errorf("state: create %s: %w", d, err)
+		}
+		if err := syncDir(filepath.Dir(d)); err != nil {
+			return err
+		}
+	}
+	err = WriteExclusive(filepath.Join(dir, id), nil)
+	if errors.Is(err, fs.ErrExist) {
+		// An earlier Mark may have published the marker and then failed to
+		// sync its directory.
+		return syncDir(dir)
+	}
+	return err
 }
 
 // Put atomically replaces the existing record id with v, in the archive when

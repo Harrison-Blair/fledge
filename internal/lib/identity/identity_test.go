@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1067,14 +1068,9 @@ func TestChildrenIncludesEndedRecordsOfOneParent(t *testing.T) {
 	s := store(t, c)
 	register := func(terminal string, parent *string) Record {
 		t.Helper()
-		rec, err := Register(context.Background(), s, c, details("w1:"+terminal, terminal), "spawn", nil, nil)
+		rec, err := RegisterAs(context.Background(), s, c, details("w1:"+terminal, terminal), "spawn", nil, nil, parent)
 		if err != nil {
 			t.Fatal(err)
-		}
-		if parent != nil {
-			if err := s.Update(Kind, rec.ID, &rec, func() error { rec.Parent = parent; return nil }); err != nil {
-				t.Fatal(err)
-			}
 		}
 		return rec
 	}
@@ -1111,11 +1107,8 @@ func TestChildrenReadsArchivedRecordsFromTheArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	child, err := Register(context.Background(), s, c, details("w1:term_child", "term_child"), "spawn", nil, nil)
+	child, err := RegisterAs(context.Background(), s, c, details("w1:term_child", "term_child"), "spawn", nil, nil, &parent.ID)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Update(Kind, child.ID, &child, func() error { child.Parent = &parent.ID; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if err := End(s, child.ID); err != nil {
@@ -1386,5 +1379,314 @@ func TestTargetGetWithOpenFailureIsIdentityPhase(t *testing.T) {
 	out.Fail(err, "agent.get", false)
 	if out.Error.Phase != "identity" || out.Error.Message != "unavailable" {
 		t.Fatalf("%+v", out.Error)
+	}
+}
+
+// countReads counts agent record reads through fetch until the test ends.
+func countReads(t testing.TB) *int {
+	t.Helper()
+	var mu sync.Mutex
+	n, real := 0, fetch
+	fetch = func(get func(kind, id string, v any) error, id string, rec *Record) error {
+		mu.Lock()
+		n++
+		mu.Unlock()
+		return real(get, id, rec)
+	}
+	t.Cleanup(func() { fetch = real })
+	return &n
+}
+
+// family is a store with parent P, P's live and ended children, 50 archived
+// and 5 live unrelated records, all made through RegisterAs.
+type family struct {
+	c                 libagent.Client
+	s                 *state.Store
+	parent            Record
+	live, ended       Record
+	unrelatedArchived []string
+}
+
+func newFamily(t *testing.T) family {
+	t.Helper()
+	t.Setenv("HERDR_SESSION", "dev")
+	f := family{c: client(t)}
+	f.c.CallerPane = ""
+	f.s = store(t, f.c)
+	register := func(terminal string, parent *string) Record {
+		t.Helper()
+		rec, err := RegisterAs(context.Background(), f.s, f.c, details("w1:"+terminal, terminal), "spawn", nil, nil, parent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rec
+	}
+	f.parent = register("term_parent", nil)
+	f.live, f.ended = register("term_live", &f.parent.ID), register("term_ended", &f.parent.ID)
+	if err := End(f.s, f.ended.ID); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 50 {
+		rec := register(fmt.Sprintf("term_gone_%d", i), &f.live.ID)
+		if err := End(f.s, rec.ID); err != nil {
+			t.Fatal(err)
+		}
+		f.unrelatedArchived = append(f.unrelatedArchived, rec.ID)
+	}
+	for i := range 5 {
+		register(fmt.Sprintf("term_other_%d", i), nil)
+	}
+	return f
+}
+
+// check fails t unless got is exactly f's two children.
+func (f family) check(t *testing.T, got []Record, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{}
+	for _, r := range got {
+		ids[r.ID] = r.EndedAt != nil
+	}
+	if len(got) != 2 || ids[f.live.ID] || !ids[f.ended.ID] {
+		t.Fatalf("Children = %+v; want live %s and ended %s", got, f.live.ID, f.ended.ID)
+	}
+}
+
+func TestChildrenReadsOnlyChildrenAndUnindexedRecords(t *testing.T) {
+	f := newFamily(t)
+	n := countReads(t)
+	got, err := Children(f.s, f.parent.ID)
+	f.check(t, got, err)
+	if *n != 2 {
+		t.Fatalf("Children read %d agent records, want 2", *n)
+	}
+}
+
+func TestChildrenIgnoresUnrelatedArchivedRecords(t *testing.T) {
+	f := newFamily(t)
+	for _, id := range f.unrelatedArchived {
+		path := filepath.Join(f.c.Cwd, ".fledge", "state", Kind, "archive", id+".json")
+		if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := Children(f.s, f.parent.ID)
+	f.check(t, got, err)
+}
+
+// unindexed writes rec as a binary without the parent index does: with
+// state.Create and no markers. ended archives it.
+func unindexed(t *testing.T, s *state.Store, terminal string, parent *string, ended bool) string {
+	t.Helper()
+	id, err := s.Create(Kind, func(id string) any {
+		return Record{ID: id, Pane: "w1:" + terminal, TerminalID: terminal, Parent: parent, RegisteredAt: "2026-01-01T00:00:00Z", RegisteredBy: "spawn"}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ended {
+		if err := End(s, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return id
+}
+
+func TestChildrenFindsUnindexedRecords(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t)
+	c.CallerPane = ""
+	s := store(t, c)
+	parent := "0000cafe"
+	live, archived := unindexed(t, s, "term_live", &parent, false), unindexed(t, s, "term_ended", &parent, true)
+	unindexed(t, s, "term_other", nil, true)
+	ids := func() []string {
+		t.Helper()
+		got, err := Children(s, parent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, r := range got {
+			ids = append(ids, r.ID)
+		}
+		slices.Sort(ids)
+		return ids
+	}
+	want := []string{live, archived}
+	slices.Sort(want)
+	if got := ids(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Children of unindexed records = %v; want %v", got, want)
+	}
+	// One registration indexes every record, so Children then reads only the children.
+	if _, err := Register(context.Background(), s, c, details("w1:term_new", "term_new"), "spawn", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	n := countReads(t)
+	if got := ids(); !reflect.DeepEqual(got, want) || *n != 2 {
+		t.Fatalf("Children after Register = %v with %d reads; want %v with 2", got, *n, want)
+	}
+}
+
+// failSecondMark makes the second mark call fail, interrupting the indexing of
+// one record after its first marker, until the test ends.
+func failSecondMark(t *testing.T) error {
+	t.Helper()
+	boom := errors.New("injected mark failure")
+	n, real := 0, mark
+	mark = func(tx *state.Tx, set, id string) error {
+		if n++; n == 2 {
+			return boom
+		}
+		return real(tx, set, id)
+	}
+	t.Cleanup(func() { mark = real })
+	return boom
+}
+
+// A create interrupted after its parent marker leaves no phantom child.
+func TestChildrenSkipsMarkersOfUnwrittenRecords(t *testing.T) {
+	f := newFamily(t)
+	boom := failSecondMark(t)
+	if _, err := RegisterAs(context.Background(), f.s, f.c, details("w1:term_crash", "term_crash"), "spawn", nil, nil, &f.parent.ID); !errors.Is(err, boom) {
+		t.Fatalf("RegisterAs error = %v; want the injected failure", err)
+	}
+	marked, err := f.s.Marked(Kind, childrenSet(f.parent.ID))
+	if err != nil || len(marked) != 3 {
+		t.Fatalf("children markers = %v, %v; want the two children and the unwritten record", marked, err)
+	}
+	got, err := Children(f.s, f.parent.ID)
+	f.check(t, got, err)
+}
+
+// A record with its parent marker but no indexed marker is read once.
+func TestChildrenReadsHalfIndexedRecordOnce(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t)
+	c.CallerPane = ""
+	s := store(t, c)
+	parent := "0000cafe"
+	id := unindexed(t, s, "term_child", &parent, true)
+	if err := s.Exclusive(func(tx *state.Tx) error { return tx.Mark(Kind, childrenSet(parent), id) }); err != nil {
+		t.Fatal(err)
+	}
+	n := countReads(t)
+	got, err := Children(s, parent)
+	if err != nil || len(got) != 1 || got[0].ID != id || *n != 1 {
+		t.Fatalf("Children = %+v, %v with %d reads; want %s with 1", got, err, *n, id)
+	}
+}
+
+// A migration interrupted after a record's parent marker still finds it.
+func TestChildrenFindsRecordOfInterruptedMigration(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t)
+	c.CallerPane = ""
+	s := store(t, c)
+	parent := "0000cafe"
+	id := unindexed(t, s, "term_child", &parent, true)
+	boom := failSecondMark(t)
+	if _, err := Register(context.Background(), s, c, details("w1:term_new", "term_new"), "spawn", nil, nil); !errors.Is(err, boom) {
+		t.Fatalf("Register error = %v; want the injected failure", err)
+	}
+	got, err := Children(s, parent)
+	if err != nil || len(got) != 1 || got[0].ID != id {
+		t.Fatalf("Children = %+v, %v; want %s", got, err, id)
+	}
+}
+
+func TestChildrenDuringConcurrentRegisterAndArchive(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t)
+	c.CallerPane = ""
+	s := store(t, c)
+	parent, err := Register(context.Background(), s, c, details("w1:term_parent", "term_parent"), "spawn", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(got []Record, err error) {
+		if err != nil {
+			t.Error(err)
+		}
+		for _, r := range got {
+			if r.Parent == nil || *r.Parent != parent.ID {
+				t.Errorf("Children returned %+v, not a child of %s", r, parent.ID)
+			}
+		}
+	}
+	done := make(chan struct{})
+	var reader sync.WaitGroup
+	reader.Add(1)
+	go func() {
+		defer reader.Done()
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				check(Children(s, parent.ID))
+			}
+		}
+	}()
+	var wg sync.WaitGroup
+	for i := range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			terminal := fmt.Sprintf("term_%d", i)
+			rec, err := RegisterAs(context.Background(), s, c, details("w1:"+terminal, terminal), "spawn", nil, nil, &parent.ID)
+			if err == nil {
+				err = End(s, rec.ID)
+			}
+			if err == nil {
+				err = Reopen(s, rec.ID)
+			}
+			if err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	close(done)
+	reader.Wait()
+	got, err := Children(s, parent.ID)
+	check(got, err)
+	if len(got) != 20 {
+		t.Fatalf("Children found %d children, want 20", len(got))
+	}
+}
+
+func BenchmarkChildren(b *testing.B) {
+	b.Setenv("HERDR_SESSION", "dev")
+	c := libagent.Client{Cwd: gittest.Repository(b)}
+	s, err := OpenStore(context.Background(), c.Cwd, &cli.Outcome{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	parent := "0000cafe"
+	for i := range 1000 {
+		id, err := s.Create(Kind, func(id string) any {
+			return Record{ID: id, TerminalID: fmt.Sprintf("term_%d", i), RegisteredAt: "2026-01-01T00:00:00Z"}
+		})
+		if err == nil {
+			err = s.Exclusive(func(tx *state.Tx) error { return tx.Archive(Kind, id) })
+		}
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+	for i := range 2 {
+		terminal := fmt.Sprintf("term_child_%d", i)
+		if _, err := RegisterAs(context.Background(), s, c, details("w1:"+terminal, terminal), "spawn", nil, nil, &parent); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ResetTimer()
+	for range b.N {
+		if got, err := Children(s, parent); err != nil || len(got) != 2 {
+			b.Fatalf("Children = %d records, %v", len(got), err)
+		}
 	}
 }
