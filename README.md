@@ -1206,6 +1206,9 @@ allow), resolving each `after` key to the new task's id and setting every task's
 `parent`. `--parent TASK` places the tasks under an existing task instead; it
 must be neither verified nor cancelled, and it conflicts with a `[parent]` in
 the file. `created_by` is the caller, as for `create`. Import never assigns.
+A real import contacts Herdr's socket only when run inside a Herdr pane
+(`HERDR_PANE_ID` set), to identify the caller; outside a pane it imports
+without the socket.
 
 `--dry-run` runs the same checks, including that `--parent` and any existing
 `after` ids exist, and prints the tasks in creation order without creating
