@@ -55,15 +55,12 @@ func profileSpawn(t *testing.T, kind string, args []string, text string) *spawne
 	return profileSpawnIn(t, "", kind, args, text)
 }
 
-// profileSpawnIn is profileSpawn invoked from cwd; a repository cwd adds
-// registration's lookup of the calling agent.
+// profileSpawnIn is profileSpawn invoked from cwd; in a repository cwd,
+// registration's lookup of the calling agent also gives the prompt's sender.
 func profileSpawnIn(t *testing.T, cwd, kind string, args []string, text string) *spawner {
 	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
 	p.AgentStatus = "idle"
 	calls := []call{{Method: "session.snapshot", Result: snapshot()}, labeled(p), {Method: "agent.start", Params: map[string]any{"name": "worker", "kind": kind, "pane_id": "w1:p1", "args": args, "timeout_ms": 30000}, Result: started(p)}, waitCall("worker", p, "idle")}
-	if cwd != "" {
-		calls = append(calls, senderCall())
-	}
 	calls = append(calls, senderCall(), call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": text}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
 	s := fake(t, calls...)
 	if cwd != "" {
@@ -175,7 +172,7 @@ func TestProfileComesFromInvokingCheckoutNotCwd(t *testing.T) {
 	p := herdrscript.Pane("w2:p1", "w2", "w2:t1")
 	p.AgentStatus = "idle"
 	want := header + profiles.Profile{Role: "Invoking role.\n"}.Brief() + noMemories
-	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "pane.current", Result: herdr.PaneResult{Type: "pane_current", Pane: herdrscript.Pane("w1:p1", "w1", "w1:t1")}}, call{Method: "workspace.create", Result: herdr.CreatedResult{Type: "workspace_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p}}, namedTab(p), labeled(p), call{Method: "agent.start", Params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w2:p1", "args": []string{"--permission-mode", "bypassPermissions"}, "timeout_ms": 30000}, Result: started(p)}, waitCall("worker", p, "idle"), senderCall(), senderCall(), call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": want}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "pane.current", Result: herdr.PaneResult{Type: "pane_current", Pane: herdrscript.Pane("w1:p1", "w1", "w1:t1")}}, call{Method: "workspace.create", Result: herdr.CreatedResult{Type: "workspace_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p}}, namedTab(p), labeled(p), call{Method: "agent.start", Params: map[string]any{"name": "worker", "kind": "claude", "pane_id": "w2:p1", "args": []string{"--permission-mode", "bypassPermissions"}, "timeout_ms": 30000}, Result: started(p)}, waitCall("worker", p, "idle"), senderCall(), call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": want}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
 	s.Cwd = invoking
 	out := s.run(context.Background(), o, nil)
 	if out.Status != "success" {
@@ -287,7 +284,7 @@ func TestProfileMemoryComesFromPaneCwd(t *testing.T) {
 	snap := snapshot()
 	snap.Snapshot.Panes = []herdr.Pane{p}
 	p.AgentStatus = "idle"
-	s := fake(t, call{Method: "session.snapshot", Result: snap}, labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), senderCall(), senderCall(), call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": header + builtinProfile(t, "reviewer").Brief() + oneMemory}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
+	s := fake(t, call{Method: "session.snapshot", Result: snap}, labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), senderCall(), call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": header + builtinProfile(t, "reviewer").Brief() + oneMemory}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
 	s.Cwd = identitytest.Repository(t)
 	if out := s.run(context.Background(), profileOptions("reviewer"), nil); out.Status != "success" {
 		t.Fatalf("%+v %+v", out, out.Error)
@@ -301,7 +298,7 @@ func TestProfileMemoryComesFromCwd(t *testing.T) {
 	o.Pane, o.Workspace, o.Cwd = "", "new workspace", destination
 	p := herdrscript.Pane("w2:p1", "w2", "w2:t1")
 	p.AgentStatus = "idle"
-	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "pane.current", Result: herdr.PaneResult{Type: "pane_current", Pane: herdrscript.Pane("w1:p1", "w1", "w1:t1")}}, call{Method: "workspace.create", Result: herdr.CreatedResult{Type: "workspace_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p}}, namedTab(p), labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), senderCall(), senderCall(), call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": header + builtinProfile(t, "reviewer").Brief() + oneMemory}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "pane.current", Result: herdr.PaneResult{Type: "pane_current", Pane: herdrscript.Pane("w1:p1", "w1", "w1:t1")}}, call{Method: "workspace.create", Result: herdr.CreatedResult{Type: "workspace_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p}}, namedTab(p), labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), senderCall(), call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": header + builtinProfile(t, "reviewer").Brief() + oneMemory}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
 	s.Cwd = identitytest.Repository(t)
 	if out := s.run(context.Background(), o, nil); out.Status != "success" {
 		t.Fatalf("%+v %+v", out, out.Error)
@@ -318,7 +315,7 @@ func TestProfileMemoryComesFromWorktreePrimaryCheckout(t *testing.T) {
 	o := profileOptions("reviewer")
 	o.Pane, o.Worktree = "", "new"
 	create := call{Method: "worktree.create", Result: herdr.CreatedResult{Type: "worktree_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p, Worktree: herdr.Worktree{Path: path}}, Before: checkout(t, root, "worker", path)}
-	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "worktree.list", Result: newWorktreeListing(root)}, create, namedTab(p), labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), callerNotAgent(), senderCall(), call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": header + builtinProfile(t, "reviewer").Brief() + oneMemory}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "worktree.list", Result: newWorktreeListing(root)}, create, namedTab(p), labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), senderCall(), call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": header + builtinProfile(t, "reviewer").Brief() + oneMemory}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
 	s.Cwd = root
 	if out := s.run(context.Background(), o, nil); out.Status != "success" {
 		t.Fatalf("%+v %+v", out, out.Error)

@@ -129,7 +129,7 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) li
 	identity.Observe(s, observeSession, *owner, &a, time.Now(), &out)
 	body := fmt.Sprintf("task: %s · title: %s · complete with: fledge task complete --id %s --summary \"...\"\n%s", r.ID, r.Title, r.ID, r.Brief)
 	assignedAt := r.AssignedAt
-	if r, ok := task.Deliver(ctx, c, s, &out, o.ID, a.PaneID, messageID, body, func(r *task.Record) (*task.Attempt, error) {
+	if r, ok := task.Deliver(ctx, c, s, &out, libagent.ResolveSender(ctx, c), o.ID, a.PaneID, messageID, body, func(r *task.Record) (*task.Attempt, error) {
 		// Record the outcome only for this assignment; the owner may already
 		// have completed the task, so the status is not checked.
 		if r.AssignedAt == nil || *r.AssignedAt != *assignedAt || r.Owner == nil || *r.Owner != owner.ID || r.Delivery == nil || r.Delivery.MessageID != messageID {

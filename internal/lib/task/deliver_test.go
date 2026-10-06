@@ -63,7 +63,7 @@ func deliver(t *testing.T, repo, id string, prompt herdrscript.Call, attempt fun
 		t.Fatal(err)
 	}
 	out := libagent.Outcome{Operation: "task.test", Status: "success", Effects: []libagent.Effect{}}
-	r, ok := task.Deliver(context.Background(), c, s, &out, id, "w1:p3", "m-0a1b2c", "body", attempt)
+	r, ok := task.Deliver(context.Background(), c, s, &out, libagent.ResolveSender(context.Background(), c), id, "w1:p3", "m-0a1b2c", "body", attempt)
 	return out, r, ok
 }
 

@@ -220,7 +220,7 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 	setPlacement(result, a.Pane)
 	result.DetectedHarness = a.Agent
 	result.AgentStatus = libagent.Pointer(a.AgentStatus)
-	s.register(b.ctx, withHarness(a, o.Harness), &out)
+	known := s.register(b.ctx, withHarness(a, o.Harness), &out)
 	if a.AgentStatus == "blocked" {
 		out.Fail(&herdr.Error{Code: "agent_blocked", Message: fmt.Sprintf("agent %s is waiting on a startup prompt", o.Name)}, "agent.wait", true)
 		return out
@@ -238,12 +238,17 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 	if unsent() {
 		return out
 	}
-	id, sender := s.newID(), libagent.ResolveSender(b.ctx, s.Client)
+	// Registration's caller lookup gives the sender; resolve it only when that lookup failed or did not run.
+	id, sender := s.newID(), known
+	if sender == nil {
+		resolved := libagent.ResolveSender(b.ctx, s.Client)
+		sender = &resolved
+	}
 	if unsent() {
 		return out
 	}
-	result.MessageID, result.Sender = &id, &sender
-	if _, err := s.prompt(b.ctx, o.Name, libagent.WithHeader(id, sender, prompt), &out); err != nil {
+	result.MessageID, result.Sender = &id, sender
+	if _, err := s.prompt(b.ctx, o.Name, libagent.WithHeader(id, *sender, prompt), &out); err != nil {
 		return out
 	}
 	result.Prompted = true
