@@ -55,6 +55,27 @@ func TestPauseValidation(t *testing.T) {
 		}
 	}
 }
+
+// TestPauseValidationMessages gives each rejected value its own message,
+// checking the target before the timeout when both are invalid.
+func TestPauseValidationMessages(t *testing.T) {
+	for _, tc := range []struct {
+		o    Options
+		want string
+	}{
+		{Options{Target: identity.Target{Name: " "}, Timeout: time.Second}, "target must be nonempty"},
+		{Options{Target: identity.Target{Pane: "\t"}, Timeout: time.Second}, "target must be nonempty"},
+		{Options{Target: identity.Target{Name: "w"}}, "--timeout must be positive"},
+		{Options{Target: identity.Target{Name: "w"}, Timeout: -time.Second}, "--timeout must be positive"},
+		{Options{Target: identity.Target{Name: " "}}, "target must be nonempty"},
+	} {
+		out := fake(t).run(context.Background(), tc.o)
+		if out.ExitCode() != 2 || out.Error.Phase != "validation" || out.Error.Message != tc.want {
+			t.Fatalf("%+v: %+v, want %q", tc.o, out.Error, tc.want)
+		}
+	}
+}
+
 func TestPauseGuards(t *testing.T) {
 	for _, status := range []string{"idle", "done", "blocked", "unknown", "working"} {
 		for _, harness := range []string{"claude", "", "future"} {

@@ -41,8 +41,11 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 func (s pauser) run(ctx context.Context, o Options) libagent.Outcome {
 	out := libagent.Outcome{Operation: "agent.pause", Status: "success", Effects: []libagent.Effect{}}
 	err := o.Target.Validate()
-	if err == nil && (strings.TrimSpace(o.Name+o.Pane+o.ID) == "" || o.Timeout <= 0) {
-		err = libagent.Invalid("target must be nonempty and --timeout must be positive")
+	if err == nil && strings.TrimSpace(o.Name+o.Pane+o.ID) == "" {
+		err = libagent.Invalid("target must be nonempty")
+	}
+	if err == nil && o.Timeout <= 0 {
+		err = libagent.Invalid("--timeout must be positive")
 	}
 	if err != nil {
 		out.Fail(err, "validation", false)
