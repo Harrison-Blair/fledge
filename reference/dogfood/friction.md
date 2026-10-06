@@ -3,11 +3,15 @@
 This file tracks friction agents have hit while using Fledge itself for agent
 coordination: bugs, missing capabilities, and workarounds found during real
 work in this repository. New entries are appended at the bottom, using the
-template below.
+template below. Each entry has a status: `Open` until a fix lands, then
+`Resolved YYYY-MM-DD`, with the fix described in the summary. Resolved entries
+keep their full text as a record.
 
 ## Entry template
 
 **Issue:** Short title
+
+**Status:** Open
 
 **Summary:** What happened and how often/reliably it was observed.
 
@@ -18,6 +22,8 @@ template below.
 ## Entries
 
 **Issue:** First message after spawn is rejected as not ready
+
+**Status:** Resolved 2026-09-23
 
 **Summary:** `agent spawn` exits 0, but an immediate `agent message` fails
 with `rejected: agent_not_ready: agent <name> is not an active named agent
@@ -55,6 +61,8 @@ lifecycle status.
 
 **Issue:** `agent get` still reports `idle` just after a successful message
 
+**Status:** Resolved 2026-09-23
+
 **Summary:** For a few seconds after "Message submitted", `agent get` still
 reports status `idle`, so a loop that waits for `idle` exits before work
 starts. Observed 2026-09-18, Fledge 0.0.3 built from `dev` (`fc4538b`),
@@ -81,6 +89,8 @@ form `message; wait --until idle` should use `--confirm`.
 
 **Issue:** No command to wait for an agent
 
+**Status:** Resolved 2026-09-22
+
 **Summary:** There is no Fledge command that blocks until an agent finishes
 its work; orchestrators are left writing their own shell poll loops over
 `agent get`. Observed 2026-09-18, Fledge 0.0.3 built from `dev`
@@ -100,6 +110,8 @@ targets combined with `--all`/`--any`.
 
 **Issue:** No command to read an agent's output
 
+**Status:** Resolved 2026-09-22
+
 **Summary:** The only way to see a worker's reply is
 `herdr pane read <pane> --source recent-unwrapped`; Fledge itself has no
 command for it. Observed 2026-09-18, Fledge 0.0.3 built from `dev`
@@ -116,6 +128,8 @@ one live agent's pane, with `--source` and `--lines` options.
 ---
 
 **Issue:** No command to answer a blocked agent
+
+**Status:** Open
 
 **Summary:** A worker waiting on a permission prompt or question can only
 be answered with `herdr pane send-text` / `herdr pane send-keys`, not with
@@ -134,6 +148,8 @@ its choices.
 
 **Issue:** `blocked` status carries no reason
 
+**Status:** Open
+
 **Summary:** `agent get` shows `Status: blocked` but not what the agent is
 waiting on; the underlying pane must be read separately to find out.
 Observed 2026-09-18, Fledge 0.0.3 built from `dev` (`fc4538b`), Herdr
@@ -148,6 +164,8 @@ Observed 2026-09-18, Fledge 0.0.3 built from `dev` (`fc4538b`), Herdr
 ---
 
 **Issue:** Spawn reports success for an agent stuck on a startup dialog
+
+**Status:** Resolved 2026-09-23
 
 **Summary:** Codex 0.154.0 opens on an "Update available" menu (default
 choice runs a curl|sh installer). `agent spawn` prints success, status is
@@ -179,6 +197,8 @@ still cannot say what the dialog is (see the entry above).
 
 **Issue:** Delivered messages carry no sender
 
+**Status:** Resolved 2026-09-22
+
 **Summary:** `agent message` text arrives at the worker bare, with no
 indication of who sent it. A careful worker treated an orchestrator brief
 as a possible mis-paste and stopped to ask whether to execute it. Observed
@@ -197,6 +217,8 @@ line naming the sender and a correlation ID.
 ---
 
 **Issue:** `fledge --version` does not identify the build
+
+**Status:** Resolved 2026-09-22
 
 **Summary:** A binary built one commit behind `dev` reported the same
 `0.0.3` as the current `dev` build, so a stale binary went unnoticed until
@@ -217,6 +239,8 @@ appropriate); metadata-free builds report `dev`.
 
 **Issue:** Session fields rendered `-` for a Codex agent in `agent get`
 
+**Status:** Open
+
 **Summary:** The `Session ...` lines in `fledge agent get` output showed
 `-` instead of real values for a Codex agent. Observed at commit
 `62d9fa5`; not re-checked since.
@@ -229,6 +253,8 @@ appropriate); metadata-free builds report `dev`.
 ---
 
 **Issue:** Workers cannot reply to the agent that messaged them
+
+**Status:** Resolved 2026-09-22
 
 **Summary:** `agent message` gives the receiver no sender identity or
 reply path, so a worker told to "report to the orchestrator" guessed from
@@ -249,6 +275,8 @@ directly.
 ---
 
 **Issue:** Herdr reference docs may be outdated
+
+**Status:** Open
 
 **Summary:** The repo's `reference/herdr/` docs drove a wrong assumption; the
 `agent.start` section was marked validated against 0.8.2 and promised a
@@ -273,6 +301,8 @@ Herdr 0.9.1, binary `/tmp/fledge-dev`.
 ---
 
 **Issue:** Short spawn timeout loses the agent name
+
+**Status:** Resolved 2026-09-23
 
 **Summary:** With `--timeout 3001ms`, `agent.wait` returned `agent_not_running`
 (not `timeout`) at ~3011 ms; Herdr dropped the agent's name and left the
@@ -313,6 +343,8 @@ expires can still lose its name.
 
 **Issue:** Spawn-time prompt is lost when a harness shows a startup dialog
 
+**Status:** Open
+
 **Summary:** `fledge agent spawn --harness cursor --file <brief>` reported
 `Message submitted`, but cursor-agent stopped on its "Workspace Trust Required"
 dialog and the brief never reached the model; the pane showed an empty prompt input
@@ -332,6 +364,8 @@ Observed 2026-09-20, Fledge `dev` @ `d81468d`, Herdr 0.9.1.
 ---
 
 **Issue:** `fledge doctor` model discovery causes file writes and network activity
+
+**Status:** Resolved 2026-09-20
 
 **Summary:** A live `fledge doctor` run launches `opencode models` and
 `cursor-agent --list-models`. A syscall trace showed the child processes opening
@@ -356,6 +390,8 @@ longer checked there (use `fledge agent models` for those).
 
 **Issue:** Fake Herdr socket regression tests need sandbox approval
 
+**Status:** Open
+
 **Summary:** While implementing `agent pause`, the restricted Codex sandbox refused
 Unix socket listeners used by CLI integration tests (`setsockopt: operation not
 permitted`). This is an environment restriction, not a pause defect. Workaround:
@@ -372,6 +408,8 @@ in the sandbox.
 ---
 
 **Issue:** OpenCode interruption can report transient blocked settlement
+
+**Status:** Open
 
 **Summary:** During live pause smoke testing on 2026-09-21, OpenCode 1.18.25
 interrupted active arithmetic output at item 62 after the double-Escape sequence;
@@ -394,6 +432,8 @@ outcome as proof that the keys failed or automatically retry them.
 
 **Issue:** Initial Codex message acknowledged without visible prompt or session
 
+**Status:** Open
+
 **Summary:** During live smoke testing on 2026-09-21, a message sent immediately
 after a fresh Codex spawn was acknowledged, but no prompt or session appeared
 in the terminal. A later message worked. A startup readiness race is a possible
@@ -411,6 +451,8 @@ not establish that pause caused or fixed the initial delivery issue.
 ---
 
 **Issue:** `spawn --file` on the pi harness fails the prompt with `agent_not_ready` after reporting the agent idle
+
+**Status:** Resolved 2026-09-23
 
 **Summary:** On 2026-09-21, `fledge agent spawn --name plan-reviewer --harness pi
 --model openai-codex/gpt-6-astra --tab plan-reviewer --file brief.md --timeout 90s`
@@ -467,6 +509,8 @@ prompt retry was added.
 
 **Issue:** Spawn from a linked worktree sends the linked checkout as the `worktree.create` source
 
+**Status:** Resolved 2026-09-22
+
 **Summary:** `internal/agent/spawn/worktree.go` resolves the primary root from
 `worktree.list` for the destination path but keeps the caller's linked `cwd` as
 the `cwd` param of the following `worktree.create`/`worktree.open` call.
@@ -491,6 +535,8 @@ worktree and .fledge handling into shared libraries") now addresses
 ---
 
 **Issue:** `agent spawn --worktree PATH` without an explicit source fails with `linked_worktree_source`
+
+**Status:** Resolved 2026-09-22
 
 **Summary:** On 2026-09-22, at `dev` `1aed95d` with Herdr 0.9.1, running from the
 primary checkout `/home/penguin/source/fledge`:
@@ -519,6 +565,8 @@ addresses `worktree.open` to the primary checkout as well.
 ---
 
 **Issue:** Stopping the last agent in a worktree workspace closes the workspace and orphans the checkout
+
+**Status:** Resolved 2026-09-22
 
 **Summary:** On 2026-09-22 (`dev` at `1aed95d` plus branch `wave1/worktree-lib`
 `a09f509`, Herdr 0.9.1), an independent verifier spawned a probe agent with
@@ -552,6 +600,8 @@ closed one through `git worktree remove`, keeping the branch.
 
 **Issue:** pi agent loses its name shortly after a successful spawn
 
+**Status:** Open
+
 **Summary:** On 2026-09-22, `fledge agent spawn` (interactive picker, equivalent to
 `fledge agent spawn --harness pi --name picker-probe`, default `30s` timeout)
 reported success: "Spawned picker-probe (pi) in wS / wS:t3 / wS:p3". Seconds
@@ -582,6 +632,8 @@ agent by `--pane` or `--id`.
 
 **Issue:** Task completion does not notify the dispatcher
 
+**Status:** Resolved 2026-09-22
+
 **Summary:** On 2026-09-22 at `dev` `d68e0c1`, a task created by registered
 agent `pr14-dispatcher` was assigned to `pr14-worker-a`. The worker completed it
 successfully, and the durable task record moved to `completed`, but the creator
@@ -604,6 +656,8 @@ reports failed or uncertain notifications without rolling completion back.
 ---
 
 **Issue:** `agent spawn --cwd` with a relative path starts the agent in the wrong directory
+
+**Status:** Resolved 2026-09-22
 
 **Summary:** On 2026-09-22 with Fledge built from `dev` `a61f7ae`, running
 `fledge agent spawn --name review-agent --harness claude --cwd
@@ -630,6 +684,8 @@ unchanged.
 
 **Issue:** No way to change a live agent's model
 
+**Status:** Resolved 2026-09-22
+
 **Summary:** On 2026-09-22 with Fledge built from `dev` `a61f7ae`, switching a
 running Claude worker from Sonnet 5 to Opus 5.5 required `agent stop`, a
 respawn with `--worktree <path> --model claude-opus-5-5`, and `task assign`
@@ -653,6 +709,8 @@ sessions, rewriting `~/.claude/settings.json`.
 ---
 
 **Issue:** A new harness in a reused terminal inherits the previous agent record
+
+**Status:** Resolved 2026-09-22
 
 **Summary:** On 2026-09-22, Fledge `dev` at `d535618` (`agent current` added in
 `ff7c96c`), Herdr 0.9.1, record `b2934d28`
@@ -681,6 +739,8 @@ the terminal as unregistered; listings skip such records.
 
 **Issue:** A verified task cannot be reopened for re-verification after repairs
 
+**Status:** Resolved 2026-09-23
+
 **Summary:** On 2026-09-22, task `d1ba4881` (`agent send`) was verified by
 `send-verify` on the first pass while verification findings F1-F3 were still
 open. After the fix commit `48f5817`, the verifier's second
@@ -703,6 +763,8 @@ flag, and time, keeping only the latest verification.
 ---
 
 **Issue:** `agent stop` refuses a finished agent still reported as working
+
+**Status:** Resolved 2026-09-23
 
 **Summary:** At about 6:45 PM on 2026-09-22 the Claude verifier `docs-verify`
 (pane `w1J:p2`) had sent its final report, and its terminal showed an empty
@@ -743,6 +805,8 @@ about 5.1 s (3/3), and `--grace 60s` stopped a real agent that settled after
 
 **Issue:** A registered but unnamed agent cannot be given a name
 
+**Status:** Resolved 2026-09-23
+
 **Summary:** On 2026-09-22 the orchestrator's Claude pane (`wZ:p1`) had a live
 record (`27392de9`, registered by `adopt`) but no Herdr name. `agent adopt
 --name <name>` refuses a terminal that already has a live record, and no other
@@ -764,6 +828,8 @@ record's stored name. Renaming a named agent is still refused.
 ---
 
 **Issue:** `agent wait` keeps waiting after its target agents are stopped
+
+**Status:** Resolved 2026-09-23
 
 **Summary:** On 2026-09-22 the orchestrator ran `fledge agent wait --name
 impl-worktree --name impl-state --name impl-commands --any --until
@@ -798,6 +864,8 @@ verifier's runs); JSON output stays a single final outcome.
 
 **Issue:** `agent spawn --cwd <other repo>` registers the agent in the invoking repository
 
+**Status:** Resolved 2026-09-23
+
 **Summary:** On 2026-09-22 a verifier working in a `fledge` worktree ran
 `agent spawn --no-wait --cwd <throwaway repo>` to probe spawn behavior. Both
 probe records (`cc5cf5f8`, `c27617b2`) were written to the primary checkout's
@@ -818,6 +886,8 @@ coordination state; `--cwd` only places the shell. See README "Identity" and
 ---
 
 **Issue:** Spawn with `--prompt` into a new folder stops at Claude's trust dialog and drops the prompt
+
+**Status:** Resolved 2026-09-23
 
 **Summary:** On 2026-09-23 a verifier spawned a Claude probe with `--prompt`
 and `--cwd` pointing at a new throwaway repository. Spawn returned with the
@@ -841,6 +911,8 @@ resend it. Spawn deliberately does not queue, replay, or answer the dialog.
 
 **Issue:** Claude workers in auto mode stall on permission denials
 
+**Status:** Open
+
 **Summary:** On 2026-09-22 a Claude verifier spawned in the default auto
 permission mode had one `agent stop --force` denied by the auto-mode
 classifier. It then had `rm` and, finally, a read-only `git status` denied as
@@ -861,6 +933,8 @@ of Claude roles run in bypass mode without the extra `--` arguments.
 ---
 
 **Issue:** An interrupted `agent spawn` can leave a live agent with no Fledge record
+
+**Status:** Open
 
 **Summary:** On 2026-09-23 an orchestrator ran a loop of three
 `fledge agent spawn --harness claude --worktree new --branch <b> --base dev ...`
@@ -883,6 +957,8 @@ the same names was rejected with "agent name ... is already in use
 
 **Issue:** `worktree remove` reports branches merged into dev as unmerged.
 
+**Status:** Open
+
 **Summary:** on 2026-09-23 the orchestrator removed three wave-1 checkouts whose
 branches were already merged into `dev` (confirmed with
 `git merge-base --is-ancestor <branch> dev`). `fledge worktree remove --branch
@@ -904,6 +980,8 @@ manual fix.
 
 **Issue:** A verification task gated with `--after` on the task it verifies can never be assigned without `--force`
 
+**Status:** Open
+
 **Summary:** On 2026-09-23 (`dev` `b833d6f`) the orchestrator created each
 wave-3 verify task with `task create --after <impl task>`, to show that
 verification follows implementation. `task assign` treats a prerequisite as
@@ -920,6 +998,8 @@ completed" dependency kind.
 ---
 
 **Issue:** `agent cleanup` from an isolated probe repository has no registered caller
+
+**Status:** Open
 
 **Summary:** On 2026-09-23 verifier `verify-c`, registered in the project
 repository, spawned and stopped 32 named probes from a throwaway repository, as
@@ -939,6 +1019,8 @@ probes therefore needs a list of probe names plus explicit
 
 **Issue:** Claude's trust dialog defaults to "No, exit", and `agent send` once reported a dialog-blocked probe `idle`
 
+**Status:** Open
+
 **Summary:** On 2026-09-23, during wave-3 planning and verification, every
 Claude probe spawned into a fresh folder stopped at Claude's folder-trust
 dialog with the cursor on "No, exit". The workaround documented earlier,
@@ -956,6 +1038,8 @@ same dialog, reported `blocked`. Seen once and not pursued.
 ---
 
 **Issue:** Spawn can overrun `--timeout` while another Fledge process holds the state lock
+
+**Status:** Open
 
 **Summary:** Known limitation, accepted 2026-09-23. Spawn's `--timeout` bounds
 every Herdr request from launch through the first prompt, but registration's
@@ -977,6 +1061,8 @@ and `agent spawn --help` document it (`7a20b17`).
 
 **Issue:** `agent read` with a small `--lines` can miss a Claude reply
 
+**Status:** Open
+
 **Summary:** On 2026-09-23 two wave-3 implementers checked probe replies with
 `fledge agent read --lines 40` and missed replies that had been delivered.
 `impl-a` found that Claude repaints its screen, so the default
@@ -994,6 +1080,8 @@ window; a 1000-row read showed each reply exactly once. Use a larger `--lines`
 ---
 
 **Issue:** `task complete` loses the creator notification while the creator's pane is blocked
+
+**Status:** Open
 
 **Summary:** On 2026-09-23, during a planning session, the orchestrator (agent
 `c3c07b6b`, pane `wA:p1`, Claude Code) created planning tasks `5d6ab497`,
@@ -1018,6 +1106,8 @@ resend them.
 
 **Issue:** The orchestrator pane lost its Herdr agent name mid-session
 
+**Status:** Open
+
 **Summary:** On 2026-09-23, `fledge agent current` in pane `wA:p1` showed `Name:
 orchestrator` (record `c3c07b6b`). Shortly after, while spawning and messaging
 planners, `fledge agent list` showed the NAME column for `c3c07b6b` as `-`, and
@@ -1037,6 +1127,8 @@ what was observed; the exact trigger is not known.
 ---
 
 **Issue:** Every agent's identity is lost after a machine restart
+
+**Status:** Open
 
 **Summary:** On 2026-09-23 at about 23:29 EDT the user restarted their machine.
 Herdr came back (process start 23:29:14) with the same workspace and pane IDs
@@ -1066,6 +1158,8 @@ orchestrator with `fledge agent message`. Related backlog idea:
 
 **Issue:** Message reply hint omits --body
 
+**Status:** Open
+
 **Summary:** The header on every received message ends with
 `reply: fledge agent message --name <name>`, which does not show that the text
 must go in `--body` or `--file`. `impl-d4` copied the hint and appended the text
@@ -1083,6 +1177,8 @@ command`. Observed once. Workaround: pass the text with `--body "..."` or
 
 **Issue:** Primary checkout .fledge/tmp/ vanished (cause unknown)
 
+**Status:** Open
+
 **Summary:** On 2026-09-23 between about 23:30 and 23:41 EDT, the orchestrator's
 `.fledge/tmp/` (plans and working files) disappeared from
 `/home/penguin/source/fledge` while wave-2 agents ran. An investigation found no
@@ -1099,6 +1195,8 @@ loss. Workaround: keep durable planning artifacts in task records, or commit the
 ---
 
 **Issue:** fledgedir.Ensure append race can duplicate the managed .fledge/.gitignore block
+
+**Status:** Open
 
 **Summary:** `fledgedir.Ensure` reads the ignore file
 (`internal/lib/fledgedir/fledgedir.go:78-87`) and later appends the missing
@@ -1119,6 +1217,8 @@ the block, so the duplicate is harmless to Git but untidy.
 
 **Issue:** Agent status reports done after provider failure
 
+**Status:** Open
+
 **Summary:** Two `pi` verifiers running `opencode-go/kimi-k3` hit `402 Insufficient
 account funds` (the 5-hour usage window was exhausted) and stopped with `Retry
 failed after 3 attempts`. `fledge agent list` and `fledge agent wait` reported
@@ -1135,6 +1235,8 @@ quota-limited provider.
 ---
 
 **Issue:** Markdown scratch files under `.fledge/tmp/` appear untracked in some worktrees
+
+**Status:** Open
 
 **Summary:** In a linked worktree with no `.fledge/.gitignore` (one created before
 managed worktrees received that file), the root allowlist `.gitignore` applies to
@@ -1153,6 +1255,8 @@ delete it before committing.
 
 **Issue:** Spawned agents use the installed `fledge`, not the checkout build
 
+**Status:** Open
+
 **Summary:** When the installed binary lacks commands from this checkout (here
 `task template` and `task import`), AGENTS.md says to build a temporary binary and use
 it consistently. A spawned agent still runs `fledge` from `PATH`, and `--env` applies
@@ -1169,6 +1273,8 @@ Workaround: name the temporary binary's absolute path in the brief. Observed
 
 **Issue:** Planner role conflicts with the completion report file
 
+**Status:** Open
+
 **Summary:** The built-in planner role allows only the proposal file as a write, but
 its Fledge protocol section says to finish with `fledge task complete --file
 <report>`. The planner resolved this by passing the proposal TOML itself as the
@@ -1184,6 +1290,8 @@ the whole proposal. Observed once, 2026-09-24, A5 planner dogfood (task 6adf25eb
 
 **Issue:** No Fledge command shows an agent's pane or tab label
 
+**Status:** Open
+
 **Summary:** While verifying `agent rename` live, the only way to confirm the pane and
 tab labels was raw `herdr pane get` and `herdr tab get`: `agent get` and `agent list`
 report the agent name, pane, and tab IDs, but not the pane label, the tab label, or how
@@ -1197,6 +1305,8 @@ many panes share the tab. Observed 2026-09-24 on `feat/agent-rename`.
 ---
 
 **Issue:** No way to close a parent task when its subtasks are verified
+
+**Status:** Open
 
 **Summary:** Parent tasks created only to group subtasks stay `created` after all
 their subtasks are verified. `fledge task complete` accepts only `assigned` tasks,
@@ -1221,6 +1331,8 @@ to the ordering that requires an assignee.
 
 **Issue:** `agent usage --name` reports the selector name in its JSON `pane` field
 
+**Status:** Open
+
 **Summary:** On 2026-09-26, both baseline `d563d4f` and session-observe commit `8999cbf` reported `pane: "verify-5"` for `agent usage --name verify-5 --json`, but `pane: "w2E:p2"` for the same agent selected by pane. Both identify agent `824dba3f`. This predates the observe refactor. `internal/lib/selector/selection.go:75` retains the target string, and `internal/agent/usage/usage.go:131` uses that string for the reported pane. Workaround: select by `--pane` when a real pane ID is needed.
 
 **Reproduction steps:**
@@ -1234,6 +1346,8 @@ to the ordering that requires an assignee.
 
 **Issue:** Built-in orchestrator profile still prescribes the resolved pi first-prompt retry workaround
 
+**Status:** Open
+
 **Summary:** During the adversarial feature review on 2026-09-29 at `33c6301`, `internal/lib/profiles/builtin/orchestrator.toml:49-51` still tells agents that pi usually rejects its first prompt and to resend the brief after a short pause. The current readiness gate in `internal/agent/spawn/ready.go:39-50` waits for settled, interactive readiness with launch no longer pending; this log already records that fix on 2026-09-23. Both pi reviewer spawns in this review accepted their first prompt successfully without a retry. This is stale embedded workflow guidance, not a newly reproduced startup failure. Following it mechanically could duplicate an assignment. The review followed the actual spawn outcome and did not resend successful prompts.
 
 **Reproduction steps:**
@@ -1245,6 +1359,8 @@ to the ordering that requires an assignee.
 ---
 
 **Issue:** Feature-review history analysis required a direct scan of archived agent records
+
+**Status:** Open
 
 **Summary:** During the 2026-09-29 adversarial review at `33c6301`, the defender needed historical harness/profile/parentage counts. `agent list` exposes live agents, including a `--registered` filter, but offers no bulk archive query. The reviewer therefore read `.fledge/state/agents` and its archive directly with Python. This is a missing history-inspection capability, not a live orchestration failure; the review does not establish that adding a new command is worth its maintenance cost. Task history has an existing supported route, `fledge task list --json`, which the coordinator used for cross-checking.
 
@@ -1258,6 +1374,8 @@ to the ordering that requires an assignee.
 
 **Issue:** Completing a task from a long report injects the entire report into its creator's active context
 
+**Status:** Open
+
 **Summary:** In the 2026-09-29 adversarial review at `33c6301`, the defender completed task `70deefe7` with a roughly 20 KB Markdown report via `task complete --file`. Its completion notification delivered the whole report into the coordinator's active turn, alongside a verification hint. `internal/task/complete/complete.go:92` unconditionally appends the complete result to the notification. Delivery succeeded; the friction is context volume and unsolicited report formatting during ongoing work, not data loss. This run deliberately used full reports as durable task results, so the observed size reflects that choice. Short completion summaries with an artifact path avoid the volume today, but leave the task record dependent on that external artifact. No notification behavior was changed in this review.
 
 **Reproduction steps:**
@@ -1270,6 +1388,8 @@ to the ordering that requires an assignee.
 
 **Issue:** Task-group help retained mandatory-template wording after briefs became advisory
 
+**Status:** Open
+
 **Summary:** Independent verification of task simplification commit `383d52a` on 2026-09-29 found that a temporary built binary's `task --help` still said briefs follow a six-heading template, while create and template help described the approved advisory behavior. The implementation was withheld from acceptance. Repair `424045c` updates the parent help and adds a regression assertion; its author demonstrated failure with the old wording and passing checks after restoration. Independent re-verification `5a5a4365` confirmed the old-wording regression test fails, the repaired help is advisory, and formatting/vet/race checks pass; the fix is accepted at `424045c`.
 
 **Reproduction steps:**
@@ -1280,6 +1400,8 @@ to the ordering that requires an assignee.
 ---
 
 **Issue:** Task-board lifecycle tests need owned PTYs; Bubble Tea Kill during startup can race its renderer initialization
+
+**Status:** Open
 
 **Summary:** During task-board implementation on 2026-09-29, Fledge had no command to allocate a raw PTY for terminal-attribute assertions. Tests therefore allocate and close their own `/dev/ptmx` pair, and the live smoke uses a Python-owned PTY with the candidate Fledge binary. No unrelated pane is changed. An initial runtime-failure fixture called Bubble Tea v2.0.10 `Program.Kill` as soon as raw mode was observed, before the first frame; this triggered `fatal error: sync: unlock of unlocked mutex` where `startRenderer` resets the `sync.Once` used by `stopRenderer`. Waiting for a rendered frame avoided that startup race, but race-detector stress exposed cancelreader teardown races both with `Kill` and with direct program-context cancellation. The final runtime fixture injects an actual terminal read error after rendering. Production never calls `Kill` and routes external cancellation through a graceful quit message, while cancelling board IO immediately; this lets Bubble Tea wait for its input reader before closing it.
 
@@ -1292,6 +1414,8 @@ to the ordering that requires an assignee.
 
 **Issue:** Independent task-board rendering checks need a terminal emulator that Fledge does not provide
 
+**Status:** Open
+
 **Summary:** The independent task-board verifiers at `3fe3783` and `8d54ba0` used private `tmux -L` servers to inspect rendered terminal cells, drive key sequences and resize an owned terminal. Fledge can read and send to an existing agent pane, but cannot create a standalone terminal-emulator fixture. These checks ran the candidate Fledge binary against throwaway task stores and the live Herdr daemon; worker focus checks targeted only the verifier's own worker. Every private server was stopped, and no unrelated Herdr pane was changed. Evidence is preserved under `.fledge/tmp/task-board-evidence/`.
 
 **Reproduction steps:**
@@ -1302,6 +1426,8 @@ to the ordering that requires an assignee.
 ---
 
 **Issue:** Stale inherited Herdr pane ID prevents Fledge caller registration while doctor reports healthy
+
+**Status:** Open
 
 **Summary:** During the 2026-10-04 review-repair orchestration, the Codex tool environment exported `HERDR_PANE_ID=w2N:p3`, but the active conversation was hosted in `w2E:p1`. Both `agent adopt` and `agent rename` failed with `agent_not_found`; `fledge doctor` reported five healthy checks without validating the caller pane. The orchestrator used `agent list`, `agent get`, and `agent read` to confirm that `w2E:p1` displayed this conversation, then ran Fledge commands with `HERDR_PANE_ID=w2E:p1`. Registration and renaming succeeded. This records an environment workaround; no caller-discovery behavior was changed in this repair.
 
@@ -1314,6 +1440,8 @@ to the ordering that requires an assignee.
 
 **Issue:** Initial mixed-format Codex usage repair counted a fork's inherited startup total as local usage
 
+**Status:** Open
+
 **Summary:** Independent verification of the attempted legacy-prefix repair at `1d65042` used an actual Codex 0.154.0 guardian rollout. Its metadata identifies a parent thread; a leading compacted record and inherited cumulative total precede the first local turn context and newer response record. Treating every early total as legacy usage inflated reported input from 350,807 to 707,805 and cache reads from 1,924,608 to 5,207,808. The verifier rejected the attempt despite passing synthetic tests and required a fork-baseline regression. The user delegated the classification choice and allowed compatibility changes if needed. The repair workflow distinguishes explicit inherited startup totals from genuine local legacy usage; source and verification task records retain the rejected attempt and subsequent evidence.
 
 **Reproduction steps:**
@@ -1324,6 +1452,8 @@ to the ordering that requires an assignee.
 ---
 
 **Issue:** Historical Claude bypass workaround became stale after profiles were simplified
+
+**Status:** Open
 
 **Summary:** The 2026-09-22 entry above says Claude built-in profiles supply bypass arguments. Profiles now contain instructions only. The permission-default implementation moves this behavior into `agent spawn` for every Claude and Codex launch, independent of profiles: Claude receives `--permission-mode bypassPermissions`, and Codex receives `--yolo`. Explicit native permission options take precedence, and `--no-permission-bypass` suppresses injection. The old project memory requiring manual Claude flags is migrated to the user's shared worker-permission preference. Startup dialogs are still handled by the user; no harness settings are changed.
 
@@ -1336,6 +1466,8 @@ to the ordering that requires an assignee.
 
 **Issue:** Assigning a task to the active Codex agent can record ownership but reject brief delivery
 
+**Status:** Open
+
 **Summary:** On 2026-10-05, `fledge task assign --id f6822138 --name permission-defaults --json` recorded the current agent as owner, then returned partial with `agent_blocked` while that agent was processing this implementation through tools. Ownership remains assigned, so work continues from the already-known brief without retrying delivery. This records the observed lifecycle classification; its cause is not established.
 
 **Reproduction steps:**
@@ -1346,6 +1478,8 @@ to the ordering that requires an assignee.
 ---
 
 **Issue:** A worker in another repository cannot complete a task from this repository
+
+**Status:** Open
 
 **Summary:** On 2026-10-05 the orchestrator spawned a Codex verifier with `--cwd` set to a checkout of a different repository (`~/source/skills`) and assigned it a task from Fledge's task store. Delivery worked. The verifier's `fledge task complete --id 8eeecfe0` failed with `task_not_found`, because task commands resolve the store from the caller's working directory. The verifier also reported that `fledge agent message` to the orchestrator failed because "the Herdr environment is unavailable"; the cause of that second failure is not established. Workaround: the verifier put its report in its reply, and the orchestrator read it with `fledge agent read`.
 
@@ -1358,6 +1492,8 @@ to the ordering that requires an assignee.
 
 **Issue:** Codex workers spawned by Fledge run tool calls without `HERDR_*` variables
 
+**Status:** Open
+
 **Summary:** On 2026-10-05 two `gpt-6.1-sol` Codex verifiers, spawned with `fledge agent spawn --harness codex` (bypass defaults on), reported that their tool calls had no `HERDR_*` environment variables. The first one could not send `fledge agent message` and reported "the Herdr environment is unavailable". The second one found the socket path by hand and set `HERDR_SOCKET_PATH` and `HERDR_PANE_ID` on each command, and then coordination worked. Observed in 6 of 6 Codex spawns this session: two STE verifiers and four audit verifiers. Each one that set the variables by hand then coordinated normally. The cause, for example whether Codex filters the environment of its tool shell, is not established.
 
 **Reproduction steps:**
@@ -1368,6 +1504,8 @@ to the ordering that requires an assignee.
 ---
 
 **Issue:** No Fledge equivalent for a scripted, read-only fan-out with structured results
+
+**Status:** Open
 
 **Summary:** On 2026-10-05 the repository audit used Claude Code's Workflow tool instead of `fledge agent spawn`, by the user's choice, for 8 parallel read-only reviewers and one merge step. The workflow gives each reviewer a JSON schema for its result, a barrier before the merge step, and a single returned value. With Fledge, the orchestrator must spawn each reviewer, poll or wait on each one, and parse free-text task results by hand. Fledge stays in use for the work that changes files: implementers, verifiers, tasks, and worktrees.
 

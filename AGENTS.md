@@ -121,7 +121,7 @@ quick read-only lookups inside a single agent, or where Fledge fails.
 Maintain `reference/dogfood/` as the record of dogfooding information for this repository.
 Whenever an agent or one of its subagents hits a Fledge bug, missing capability, or
 workaround, including any fallback to a harness built-in caused by one, append an entry
-to `reference/dogfood/friction.md` using its Issue / Summary / Reproduction steps format.
+to `reference/dogfood/friction.md` using its Issue / Status / Summary / Reproduction steps format.
 
 Before using Fledge, check `--help` for the command groups needed for both the task and
 cleanup (`fledge agent`, `task`, `worktree`). If the installed binary lacks commands
@@ -135,7 +135,7 @@ accepts any nonblank text, including an unfilled skeleton.
 
 Known workarounds: spawn prompts and messages always start with a sender header, so ask
 a spawned agent in plain words to invoke a skill (a leading slash command will not run);
-see `reference/dogfood/friction.md` for current issues.
+see the Open entries in `reference/dogfood/friction.md` for current issues.
 
 Agents in this repository usually run inside a managed Fledge session: a Herdr pane,
 often spawned by an orchestrator and given a Fledge agent record id. Expect messages
