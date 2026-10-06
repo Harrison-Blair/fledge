@@ -639,6 +639,16 @@ func TestSpawnBothPromptAndFileRejectedBeforeMutation(t *testing.T) {
 		t.Fatalf("%+v", out)
 	}
 }
+func TestSpawnBothWorkspaceSelectorsNameTheFlags(t *testing.T) {
+	o := validOptions()
+	o.Workspace = "a"
+	o.WorkspaceID = "w1"
+	s := fake(t)
+	out := s.run(context.Background(), o, nil)
+	if out.Status != "rejected" || out.ExitCode() != 2 || len(out.Effects) != 0 || out.Error.Message != "--workspace and --workspace-id are mutually exclusive" {
+		t.Fatalf("%+v %+v", out, out.Error)
+	}
+}
 func TestSpawnUnreadablePromptFileFailsBeforeMutation(t *testing.T) {
 	o := validOptions()
 	o.File = "/does/not/exist"
