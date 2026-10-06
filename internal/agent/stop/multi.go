@@ -7,6 +7,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"sync"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
@@ -76,15 +77,33 @@ func (p pending) get(ctx context.Context, c libagent.Client) (herdr.AgentDetails
 	return a, target, rec, err
 }
 
+// records is a dry run's read-only view of the agent records, shared by its
+// targets: the store is opened, and the registered agents Herdr lists are
+// resolved, at most once each and only when a target first needs them.
+type records struct {
+	store   func() (*state.Store, error)
+	matches func() ([]selector.Match, error)
+}
+
+func newRecords(ctx context.Context, c libagent.Client) records {
+	r := records{store: sync.OnceValues(func() (*state.Store, error) { return identity.Existing(ctx, c.Cwd) })}
+	r.matches = sync.OnceValues(func() ([]selector.Match, error) {
+		// peek resolves only after the store opened without error.
+		s, _ := r.store()
+		return selector.ResolveIn(ctx, s, c, selector.Filter{Registered: true})
+	})
+	return r
+}
+
 // peek looks up p as get does, but only reads: a record id is read from the
 // store and found among the registered agents Herdr lists, so its record is
 // neither ended nor moved. An unknown id fails as get's does.
-func (p pending) peek(ctx context.Context, c libagent.Client) (herdr.AgentDetails, string, error) {
+func (p pending) peek(ctx context.Context, c libagent.Client, r records) (herdr.AgentDetails, string, error) {
 	if p.target.ID == "" {
 		a, target, _, err := p.get(ctx, c)
 		return a, target, err
 	}
-	s, err := identity.Existing(ctx, c.Cwd)
+	s, err := r.store()
 	if err != nil {
 		return herdr.AgentDetails{}, "", libagent.AtPhase("identity", err)
 	}
@@ -98,7 +117,7 @@ func (p pending) peek(ctx context.Context, c libagent.Client) (herdr.AgentDetail
 	if err != nil {
 		return herdr.AgentDetails{}, "", err
 	}
-	matches, err := selector.Resolve(ctx, c, selector.Filter{Registered: true})
+	matches, err := r.matches()
 	if err != nil {
 		return herdr.AgentDetails{}, "", err
 	}
@@ -115,6 +134,7 @@ func (p pending) peek(ctx context.Context, c libagent.Client) (herdr.AgentDetail
 func plan(ctx context.Context, c libagent.Client, o Options, targets []pending) libagent.Outcome {
 	out := libagent.Outcome{Operation: "agent.stop", Status: "success", Effects: []libagent.Effect{}}
 	result := FanOut{Mode: "dry-run", Targets: []Row{}}
+	recs := newRecords(ctx, c)
 	for _, p := range targets {
 		row := Row{Target: p.label, Outcome: "stop"}
 		var a herdr.AgentDetails
@@ -122,7 +142,7 @@ func plan(ctx context.Context, c libagent.Client, o Options, targets []pending) 
 		var err error
 		if p.match != nil {
 			a, target = *p.match, p.match.PaneID
-		} else if a, target, err = p.peek(ctx, c); err != nil {
+		} else if a, target, err = p.peek(ctx, c, recs); err != nil {
 			row.Outcome, row.Error = "error", failure(err, "agent.get")
 		}
 		if err == nil {

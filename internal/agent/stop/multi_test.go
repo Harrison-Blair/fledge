@@ -329,6 +329,27 @@ func TestStopDryRunByIDReportsRealStopCodes(t *testing.T) {
 	}
 }
 
+// A dry run by several record ids lists Herdr agents once for all of them.
+func TestStopDryRunByIDsListsOnce(t *testing.T) {
+	a := withTerminal(agentIn("w1:p1", "a", "idle"), "term_a")
+	b := withTerminal(agentIn("w1:p2", "b", "idle"), "term_b")
+	c := withTerminal(agentIn("w1:p3", "c", "idle"), "term_c")
+	s, r := record(libagent.Client{API: byMethod{"agent.list": listCall(a, b, c)}, CallerPane: "old:p1", Cwd: identitytest.Repository(t)})
+	var ids, want []string
+	for _, d := range []herdr.AgentDetails{a, b, c} {
+		rec := identitytest.Register(t, s.Cwd, d)
+		ids = append(ids, rec.ID)
+		want = append(want, rec.ID+"=stop/"+d.PaneID)
+	}
+	out := Run(context.Background(), s, Options{Selection: selector.Selection{IDs: ids}, DryRun: true})
+	if got := rows(t, out, "dry-run"); got != strings.Join(want, " ") {
+		t.Fatalf("got %q, want %q", got, strings.Join(want, " "))
+	}
+	if !slices.Equal(r.methods, []string{"agent.list"}) {
+		t.Fatalf("want one agent.list, got %v", r.methods)
+	}
+}
+
 // closes serves agent.get from agents by target and notes each closed pane.
 type closes struct {
 	agents map[string]herdr.Pane
