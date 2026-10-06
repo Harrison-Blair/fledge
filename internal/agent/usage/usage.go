@@ -46,6 +46,10 @@ type Row struct {
 // now is replaceable so tests can fix elapsed time.
 var now = time.Now
 
+// liveByTerminal is identity.LiveByTerminal, replaceable so tests can count
+// scans of the live records.
+var liveByTerminal = identity.LiveByTerminal
+
 // Run summarizes each selected agent's session. Its harness and session ref
 // come from the live agent when present, else from its record, so an --id
 // whose agent has ended still reports. A live ref is persisted on the agent's
@@ -66,9 +70,10 @@ func Run(ctx context.Context, c libagent.Client, d harnessenv.Env, o Options) li
 	if err != nil {
 		s = nil
 	}
+	records := attributable(s, targets)
 	rows := make([]Row, 0, len(targets))
 	for _, t := range targets {
-		rows = append(rows, row(ctx, s, d, t, &out))
+		rows = append(rows, row(ctx, s, records, d, t, &out))
 	}
 	out.Result = Result{Agents: rows}
 	return out
@@ -116,12 +121,33 @@ func stored(ctx context.Context, cwd, id string) (*identity.Record, error) {
 	return &rec, nil
 }
 
-func row(ctx context.Context, s *state.Store, d harnessenv.Env, t selector.Target, out *libagent.Outcome) Row {
+// attributable maps each terminal to its live record, scanning the store once
+// and only when a live target carries no record. A failed scan attributes
+// nothing.
+func attributable(s *state.Store, targets []selector.Target) map[string]identity.Record {
+	if s == nil {
+		return nil
+	}
+	for _, t := range targets {
+		if t.Record == nil && t.Agent.TerminalID != "" {
+			records, err := liveByTerminal(s)
+			if err != nil {
+				return nil
+			}
+			return records
+		}
+	}
+	return nil
+}
+
+// row reports t's usage. A live target without a record is attributed to its
+// record in records, an attributable map.
+func row(ctx context.Context, s *state.Store, records map[string]identity.Record, d harnessenv.Env, t selector.Target, out *libagent.Outcome) Row {
 	a, rec := t.Agent, t.Record
 	live := a.TerminalID != ""
-	if rec == nil && live && s != nil {
-		if found, err := identity.Live(s, a.TerminalID); err == nil && found != nil && !identity.Mismatched(*found, a) {
-			rec = found
+	if rec == nil {
+		if found, ok := identity.Attributed(records, a); ok {
+			rec = &found
 		}
 	}
 	if live && rec != nil && a.AgentSession != nil {
