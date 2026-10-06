@@ -3,11 +3,13 @@ package selector
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 )
 
@@ -136,5 +138,16 @@ func TestTargetsRejectsInvalidSelection(t *testing.T) {
 	_, err := Selection{Names: []string{"a", "a"}}.Targets(context.Background(), herdrscript.Client(t))
 	if code, phase := failure(err, "x"); code != "invalid_input" || phase != "validation" {
 		t.Fatalf("%v: %s at %s", err, code, phase)
+	}
+}
+
+func TestSelectionExplicitOrdersNamesPanesIDs(t *testing.T) {
+	s := Selection{IDs: []string{"0000beef"}, Panes: []string{"w1:p3", "w1:p4"}, Names: []string{"worker"}}
+	want := []identity.Target{{Name: "worker"}, {Pane: "w1:p3"}, {Pane: "w1:p4"}, {ID: "0000beef"}}
+	if got := s.Explicit(); !slices.Equal(got, want) {
+		t.Fatalf("Explicit() = %v, want %v", got, want)
+	}
+	if got := (Selection{Filter: Filter{Registered: true}}).Explicit(); got != nil {
+		t.Fatalf("filter Explicit() = %v, want nil", got)
 	}
 }

@@ -128,8 +128,8 @@ func TestWaitSingleTarget(t *testing.T) {
 		o    Options
 		want map[string]any
 	}{
-		{Options{Names: []string{"worker"}}, map[string]any{"target": "worker"}},
-		{Options{Panes: []string{"w1:p3"}, Until: []string{"working", "unknown"}, Timeout: 2 * time.Second, Any: true}, map[string]any{"target": "w1:p3", "until": []any{"working", "unknown"}, "timeout_ms": float64(2000)}},
+		{Options{Selection: selector.Selection{Names: []string{"worker"}}}, map[string]any{"target": "worker"}},
+		{Options{Selection: selector.Selection{Panes: []string{"w1:p3"}}, Until: []string{"working", "unknown"}, Timeout: 2 * time.Second, Any: true}, map[string]any{"target": "w1:p3", "until": []any{"working", "unknown"}, "timeout_ms": float64(2000)}},
 	} {
 		status := "idle"
 		if len(tc.o.Until) > 0 {
@@ -150,7 +150,7 @@ func TestWaitSingleTarget(t *testing.T) {
 func TestWaitSingleTargetFailures(t *testing.T) {
 	for _, code := range []string{"timeout", "agent_not_found", "agent_not_running"} {
 		_, c := newFake(t, map[string]reply{"worker": {err: herr(code)}})
-		out := Run(context.Background(), c, Options{Names: []string{"worker"}, Timeout: time.Second})
+		out := Run(context.Background(), c, Options{Selection: selector.Selection{Names: []string{"worker"}}, Timeout: time.Second})
 		if out.ExitCode() != 1 || out.Status != "rejected" || out.Error.Code != code || out.Error.Phase != "agent.wait" || out.Result != nil {
 			t.Fatalf("%s: %+v", code, out)
 		}
@@ -158,7 +158,7 @@ func TestWaitSingleTargetFailures(t *testing.T) {
 }
 
 func TestWaitCancellation(t *testing.T) {
-	for _, o := range []Options{{Names: []string{"a"}}, {Names: []string{"a", "b"}, All: true}, {Names: []string{"a", "b"}, Any: true}} {
+	for _, o := range []Options{{Selection: selector.Selection{Names: []string{"a"}}}, {Selection: selector.Selection{Names: []string{"a", "b"}}, All: true}, {Selection: selector.Selection{Names: []string{"a", "b"}}, Any: true}} {
 		replies := map[string]reply{}
 		for _, n := range o.Names {
 			replies[n] = reply{block: true}
@@ -183,27 +183,27 @@ func TestWaitCancellation(t *testing.T) {
 func TestWaitValidation(t *testing.T) {
 	for _, o := range []Options{
 		{},
-		{Names: []string{""}},
-		{Panes: []string{" "}},
-		{Names: []string{"a", "b"}},
-		{Names: []string{"a"}, Panes: []string{"w1:p1"}},
-		{Names: []string{"a", "b"}, All: true, Any: true},
-		{Names: []string{"a"}, All: true, Any: true},
-		{Names: []string{"a", "a"}, All: true},
-		{Names: []string{"a"}, Panes: []string{"a"}, Any: true},
-		{Names: []string{"a"}, Until: []string{"settled"}},
-		{Names: []string{"a"}, Timeout: -time.Second},
-		{Names: []string{"a"}, Timeout: time.Microsecond},
-		{Names: []string{"a"}, Timeout: maxTimeout + 1},
-		{Names: []string{"a"}, Timeout: math.MaxInt64},
-		{IDs: []string{"0000beef", "0000cafe"}},
-		{IDs: []string{"0000beef"}, Names: []string{"a"}},
-		{IDs: []string{"BEEF"}},
-		{IDs: []string{"0000beef", "0000beef"}, All: true},
-		{Names: []string{"a"}, Filter: selector.Filter{Registered: true}},
-		{IDs: []string{"0000beef"}, Filter: selector.Filter{States: []string{"idle"}}},
-		{Filter: selector.Filter{States: []string{"asleep"}}},
-		{Filter: selector.Filter{Registered: true}, All: true, Any: true},
+		{Selection: selector.Selection{Names: []string{""}}},
+		{Selection: selector.Selection{Panes: []string{" "}}},
+		{Selection: selector.Selection{Names: []string{"a", "b"}}},
+		{Selection: selector.Selection{Names: []string{"a"}, Panes: []string{"w1:p1"}}},
+		{Selection: selector.Selection{Names: []string{"a", "b"}}, All: true, Any: true},
+		{Selection: selector.Selection{Names: []string{"a"}}, All: true, Any: true},
+		{Selection: selector.Selection{Names: []string{"a", "a"}}, All: true},
+		{Selection: selector.Selection{Names: []string{"a"}, Panes: []string{"a"}}, Any: true},
+		{Selection: selector.Selection{Names: []string{"a"}}, Until: []string{"settled"}},
+		{Selection: selector.Selection{Names: []string{"a"}}, Timeout: -time.Second},
+		{Selection: selector.Selection{Names: []string{"a"}}, Timeout: time.Microsecond},
+		{Selection: selector.Selection{Names: []string{"a"}}, Timeout: maxTimeout + 1},
+		{Selection: selector.Selection{Names: []string{"a"}}, Timeout: math.MaxInt64},
+		{Selection: selector.Selection{IDs: []string{"0000beef", "0000cafe"}}},
+		{Selection: selector.Selection{IDs: []string{"0000beef"}, Names: []string{"a"}}},
+		{Selection: selector.Selection{IDs: []string{"BEEF"}}},
+		{Selection: selector.Selection{IDs: []string{"0000beef", "0000beef"}}, All: true},
+		{Selection: selector.Selection{Names: []string{"a"}, Filter: selector.Filter{Registered: true}}},
+		{Selection: selector.Selection{IDs: []string{"0000beef"}, Filter: selector.Filter{States: []string{"idle"}}}},
+		{Selection: selector.Selection{Filter: selector.Filter{States: []string{"asleep"}}}},
+		{Selection: selector.Selection{Filter: selector.Filter{Registered: true}}, All: true, Any: true},
 	} {
 		_, c := newFake(t, nil)
 		out := Run(context.Background(), c, o)
@@ -220,7 +220,7 @@ func TestWaitLargestTimeout(t *testing.T) {
 		t.Fatalf("bound %d", maxTimeout)
 	}
 	f, c := newFake(t, map[string]reply{"a": {status: "idle"}})
-	out := Run(context.Background(), c, Options{Names: []string{"a"}, Timeout: maxTimeout})
+	out := Run(context.Background(), c, Options{Selection: selector.Selection{Names: []string{"a"}}, Timeout: maxTimeout})
 	if out.Error != nil || f.params["a"]["timeout_ms"] != float64(maxTimeout.Milliseconds()) {
 		t.Fatalf("%+v %v", out, f.params)
 	}
@@ -244,7 +244,7 @@ func rowsByTarget(t *testing.T, out libagent.Outcome) map[string]Row {
 // match.
 func TestWaitFanOutErrorThenMatch(t *testing.T) {
 	_, c := newFake(t, map[string]reply{"a": {err: herr("agent_not_running")}, "w1:p9": {delay: 30 * time.Millisecond, status: "done"}})
-	out := Run(context.Background(), c, Options{Names: []string{"a"}, Panes: []string{"w1:p9"}, Any: true})
+	out := Run(context.Background(), c, Options{Selection: selector.Selection{Names: []string{"a"}, Panes: []string{"w1:p9"}}, Any: true})
 	rows := rowsByTarget(t, out)
 	if rows["a"].Outcome != "errored" || rows["a"].Error.Code != "agent_not_running" || rows["a"].Agent != nil ||
 		rows["w1:p9"].Outcome != "matched" || *rows["w1:p9"].Agent.AgentStatus != "done" || rows["w1:p9"].Error != nil {
@@ -260,7 +260,7 @@ func TestWaitAllFailsFast(t *testing.T) {
 	_, c := newFake(t, map[string]reply{"ghost": {err: herr("agent_not_found")}, "busy": {block: true}, "w1:p9": {status: "idle"}})
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	out := Run(ctx, c, Options{Names: []string{"ghost", "busy"}, Panes: []string{"w1:p9"}, All: true})
+	out := Run(ctx, c, Options{Selection: selector.Selection{Names: []string{"ghost", "busy"}, Panes: []string{"w1:p9"}}, All: true})
 	if ctx.Err() != nil {
 		t.Fatalf("remaining waits were not cancelled: %+v", out.Error)
 	}
@@ -278,13 +278,13 @@ func TestWaitAllFailsFast(t *testing.T) {
 
 func TestWaitFanOutTimeout(t *testing.T) {
 	_, c := newFake(t, map[string]reply{"a": {status: "idle"}, "b": {delay: 10 * time.Millisecond, err: herr("timeout")}})
-	out := Run(context.Background(), c, Options{Names: []string{"a", "b"}, All: true, Timeout: 10 * time.Millisecond})
+	out := Run(context.Background(), c, Options{Selection: selector.Selection{Names: []string{"a", "b"}}, All: true, Timeout: 10 * time.Millisecond})
 	rows := rowsByTarget(t, out)
 	if out.ExitCode() != 1 || out.Error.Code != "timeout" || rows["a"].Outcome != "matched" || rows["b"].Outcome != "errored" || rows["b"].Error.Code != "timeout" {
 		t.Fatalf("%+v %+v", out, rows)
 	}
 	_, c = newFake(t, map[string]reply{"a": {delay: 30 * time.Millisecond, status: "idle"}, "b": {err: herr("timeout")}})
-	out = Run(context.Background(), c, Options{Names: []string{"a", "b"}, Any: true, Timeout: time.Second})
+	out = Run(context.Background(), c, Options{Selection: selector.Selection{Names: []string{"a", "b"}}, Any: true, Timeout: time.Second})
 	if rows = rowsByTarget(t, out); out.Error != nil || rows["b"].Error.Code != "timeout" || *out.Result.(FanOut).Winner != "a" {
 		t.Fatalf("%+v %+v", out, rows)
 	}
@@ -293,7 +293,7 @@ func TestWaitFanOutTimeout(t *testing.T) {
 func TestWaitAnyCancelsRemaining(t *testing.T) {
 	_, c := newFake(t, map[string]reply{"a": {delay: 10 * time.Millisecond, status: "idle"}, "b": {block: true}, "c": {block: true}})
 	start := time.Now()
-	out := Run(context.Background(), c, Options{Names: []string{"a", "b", "c"}, Any: true})
+	out := Run(context.Background(), c, Options{Selection: selector.Selection{Names: []string{"a", "b", "c"}}, Any: true})
 	rows := rowsByTarget(t, out)
 	if out.Error != nil || rows["a"].Outcome != "matched" || rows["b"].Outcome != "cancelled" || rows["c"].Outcome != "cancelled" || rows["b"].Error != nil {
 		t.Fatalf("%+v %+v", out, rows)
@@ -308,7 +308,7 @@ func TestWaitAnyCancelsRemaining(t *testing.T) {
 
 func TestWaitAnyFailsWhenEveryTargetErrors(t *testing.T) {
 	_, c := newFake(t, map[string]reply{"a": {err: herr("agent_not_running")}, "b": {delay: 5 * time.Millisecond, err: herr("agent_not_found")}})
-	out := Run(context.Background(), c, Options{Names: []string{"a", "b"}, Any: true})
+	out := Run(context.Background(), c, Options{Selection: selector.Selection{Names: []string{"a", "b"}}, Any: true})
 	rows := rowsByTarget(t, out)
 	if out.ExitCode() != 1 || out.Status != "rejected" || out.Error.Code != "operation_failed" || out.Error.Phase != "agent.wait" ||
 		rows["a"].Outcome != "errored" || rows["b"].Outcome != "errored" || out.Result.(FanOut).Winner != nil {
@@ -331,7 +331,7 @@ func TestWaitAnyReportsFailureWhileOthersPending(t *testing.T) {
 	lines := make(lineWriter, 4)
 	outs := make(chan libagent.Outcome, 1)
 	go func() {
-		outs <- Run(context.Background(), c, Options{Names: []string{"a", "b", "c"}, Any: true, Progress: lines})
+		outs <- Run(context.Background(), c, Options{Selection: selector.Selection{Names: []string{"a", "b", "c"}}, Any: true, Progress: lines})
 	}()
 	select {
 	case line := <-lines:
@@ -358,10 +358,10 @@ func TestWaitProgressOnlyForFailuresWithPendingTargets(t *testing.T) {
 		replies map[string]reply
 		want    string
 	}{
-		{Options{Names: []string{"a", "b", "c"}, Any: true}, map[string]reply{"a": {delay: 10 * time.Millisecond, status: "idle"}, "b": {block: true}, "c": {block: true}}, ""},
-		{Options{Names: []string{"a", "b"}, All: true}, map[string]reply{"a": {err: herr("agent_not_found")}, "b": {block: true}}, ""},
-		{Options{Names: []string{"a", "b", "c"}, Any: true}, map[string]reply{"a": {status: "idle"}, "b": {block: true, onCancel: herr("agent_not_running")}, "c": {block: true, cancelDelay: 50 * time.Millisecond}}, ""},
-		{Options{Names: []string{"a", "b"}, Any: true}, map[string]reply{"a": {err: herr("agent_not_running")}, "b": {delay: 30 * time.Millisecond, err: herr("agent_not_found")}},
+		{Options{Selection: selector.Selection{Names: []string{"a", "b", "c"}}, Any: true}, map[string]reply{"a": {delay: 10 * time.Millisecond, status: "idle"}, "b": {block: true}, "c": {block: true}}, ""},
+		{Options{Selection: selector.Selection{Names: []string{"a", "b"}}, All: true}, map[string]reply{"a": {err: herr("agent_not_found")}, "b": {block: true}}, ""},
+		{Options{Selection: selector.Selection{Names: []string{"a", "b", "c"}}, Any: true}, map[string]reply{"a": {status: "idle"}, "b": {block: true, onCancel: herr("agent_not_running")}, "c": {block: true, cancelDelay: 50 * time.Millisecond}}, ""},
+		{Options{Selection: selector.Selection{Names: []string{"a", "b"}}, Any: true}, map[string]reply{"a": {err: herr("agent_not_running")}, "b": {delay: 30 * time.Millisecond, err: herr("agent_not_found")}},
 			"a failed: agent_not_running: agent_not_running message (still waiting on 1 target).\n"},
 	} {
 		_, c := newFake(t, tc.replies)
@@ -414,7 +414,7 @@ func TestWaitByIDWaitsOnVerifiedPane(t *testing.T) {
 		herdrscript.Call{Method: "agent.wait", Params: map[string]any{"target": "w1:p3"}, Result: herdrscript.Waited(live.Agent.Pane, "idle")})
 	c.Cwd = identitytest.Repository(t)
 	rec := identitytest.Register(t, c.Cwd, live.Agent)
-	out := Run(context.Background(), c, Options{IDs: []string{rec.ID}})
+	out := Run(context.Background(), c, Options{Selection: selector.Selection{IDs: []string{rec.ID}}})
 	if out.Error != nil || *out.Result.(libagent.AgentRow).AgentStatus != "idle" {
 		t.Fatalf("%+v", out)
 	}
@@ -427,7 +427,7 @@ func TestWaitByIDFailsClosedWhenTerminalChanges(t *testing.T) {
 	c := herdrscript.Client(t, herdrscript.Call{Method: "agent.get", Result: live}, herdrscript.Call{Method: "agent.wait", Result: replaced})
 	c.Cwd = identitytest.Repository(t)
 	rec := identitytest.Register(t, c.Cwd, live.Agent)
-	if out := Run(context.Background(), c, Options{IDs: []string{rec.ID}}); out.Error == nil || out.Error.Code != "agent_identity_stale" {
+	if out := Run(context.Background(), c, Options{Selection: selector.Selection{IDs: []string{rec.ID}}}); out.Error == nil || out.Error.Code != "agent_identity_stale" {
 		t.Fatalf("%+v", out)
 	}
 }
@@ -462,7 +462,7 @@ func targets(out libagent.Outcome) []string {
 func TestWaitSeveralIDsWithNames(t *testing.T) {
 	f, c := newFake(t, map[string]reply{"w1:p3": {status: "idle"}, "w1:p4": {status: "done"}, "worker": {status: "idle"}})
 	idA, idB := fleet(t, f, &c)
-	out := Run(context.Background(), c, Options{IDs: []string{idA, idB}, Names: []string{"worker"}, All: true})
+	out := Run(context.Background(), c, Options{Selection: selector.Selection{IDs: []string{idA, idB}, Names: []string{"worker"}}, All: true})
 	if want := []string{"worker=matched", idA + "=matched", idB + "=matched"}; out.Error != nil || !reflect.DeepEqual(targets(out), want) {
 		t.Fatalf("%+v %v", out, targets(out))
 	}
@@ -471,7 +471,7 @@ func TestWaitSeveralIDsWithNames(t *testing.T) {
 func TestWaitIDInFanOutFailsClosed(t *testing.T) {
 	f, c := newFake(t, map[string]reply{"w1:p3": {status: "idle", terminal: "term_new"}, "w1:p4": {status: "idle", delay: 20 * time.Millisecond}})
 	idA, idB := fleet(t, f, &c)
-	out := Run(context.Background(), c, Options{IDs: []string{idA, idB}, Any: true})
+	out := Run(context.Background(), c, Options{Selection: selector.Selection{IDs: []string{idA, idB}}, Any: true})
 	rows := rowsByTarget(t, out)
 	if out.Error != nil || rows[idA].Error == nil || rows[idA].Error.Code != "agent_identity_stale" || rows[idB].Outcome != "matched" || *out.Result.(FanOut).Winner != idB {
 		t.Fatalf("%+v", out)
@@ -481,7 +481,7 @@ func TestWaitIDInFanOutFailsClosed(t *testing.T) {
 func TestWaitFilterUsesRecordIDsAsTargets(t *testing.T) {
 	f, c := newFake(t, map[string]reply{"w1:p3": {status: "idle"}, "w1:p4": {status: "idle"}})
 	idA, idB := fleet(t, f, &c)
-	out := Run(context.Background(), c, Options{Filter: selector.Filter{Registered: true}, All: true})
+	out := Run(context.Background(), c, Options{Selection: selector.Selection{Filter: selector.Filter{Registered: true}}, All: true})
 	if want := []string{idA + "=matched", idB + "=matched"}; out.Error != nil || !reflect.DeepEqual(targets(out), want) {
 		t.Fatalf("%+v %v", out, targets(out))
 	}
@@ -491,7 +491,7 @@ func TestWaitFilterFailsClosedWhenTerminalChanges(t *testing.T) {
 	f, c := newFake(t, map[string]reply{"w1:p3": {status: "idle", terminal: "term_new"}})
 	idA, _ := fleet(t, f, &c)
 	f.live = f.live[:1]
-	if out := Run(context.Background(), c, Options{Filter: selector.Filter{Registered: true}}); out.Error == nil || out.Error.Code != "agent_identity_stale" {
+	if out := Run(context.Background(), c, Options{Selection: selector.Selection{Filter: selector.Filter{Registered: true}}}); out.Error == nil || out.Error.Code != "agent_identity_stale" {
 		t.Fatalf("%s: %+v", idA, out)
 	}
 }
@@ -500,7 +500,7 @@ func TestWaitFilterSingleMatchWaitsLikeSingleTarget(t *testing.T) {
 	f, c := newFake(t, map[string]reply{"w1:p5": {status: "idle"}})
 	fleet(t, f, &c)
 	f.live[2].AgentStatus = "blocked"
-	out := Run(context.Background(), c, Options{Filter: selector.Filter{States: []string{"blocked"}}})
+	out := Run(context.Background(), c, Options{Selection: selector.Selection{Filter: selector.Filter{States: []string{"blocked"}}}})
 	if row, ok := out.Result.(libagent.AgentRow); out.Error != nil || !ok || *row.PaneID != "w1:p5" {
 		t.Fatalf("%+v", out)
 	}
@@ -509,7 +509,7 @@ func TestWaitFilterSingleMatchWaitsLikeSingleTarget(t *testing.T) {
 func TestWaitFilterSeveralMatchesNeedAllOrAny(t *testing.T) {
 	f, c := newFake(t, nil)
 	fleet(t, f, &c)
-	out := Run(context.Background(), c, Options{Filter: selector.Filter{Registered: true}})
+	out := Run(context.Background(), c, Options{Selection: selector.Selection{Filter: selector.Filter{Registered: true}}})
 	if out.ExitCode() != 2 || out.Error.Code != "invalid_input" || out.Error.Phase != "validation" || !strings.Contains(out.Error.Message, "--all or --any") {
 		t.Fatalf("%+v", out)
 	}
@@ -518,7 +518,7 @@ func TestWaitFilterSeveralMatchesNeedAllOrAny(t *testing.T) {
 func TestWaitFilterNoMatch(t *testing.T) {
 	f, c := newFake(t, nil)
 	fleet(t, f, &c)
-	out := Run(context.Background(), c, Options{Filter: selector.Filter{States: []string{"done"}}})
+	out := Run(context.Background(), c, Options{Selection: selector.Selection{Filter: selector.Filter{States: []string{"done"}}}})
 	if out.ExitCode() != 1 || out.Status != "rejected" || out.Error.Code != "no_agents_matched" || out.Error.Phase != "selection" || out.Result != nil {
 		t.Fatalf("%+v", out)
 	}
@@ -535,7 +535,7 @@ func TestWaitWithReadOnlyStoreWritesNothing(t *testing.T) {
 	c.Cwd = identitytest.Repository(t)
 	rec := identitytest.Register(t, c.Cwd, live.Agent)
 	unchanged := identitytest.ReadOnly(t, c.Cwd, rec.ID)
-	out := Run(context.Background(), c, Options{IDs: []string{rec.ID}})
+	out := Run(context.Background(), c, Options{Selection: selector.Selection{IDs: []string{rec.ID}}})
 	if out.Status != "success" || *out.Result.(libagent.AgentRow).AgentStatus != "idle" || len(out.Effects) != 0 {
 		t.Fatalf("%+v %+v", out, out.Error)
 	}

@@ -49,14 +49,8 @@ type pending struct {
 func (o Options) targets(ctx context.Context, c libagent.Client) ([]pending, error) {
 	var ps []pending
 	if o.Filter.Empty() {
-		for _, v := range o.Names {
-			ps = append(ps, pending{label: v, target: identity.Target{Name: v}})
-		}
-		for _, v := range o.Panes {
-			ps = append(ps, pending{label: v, target: identity.Target{Pane: v}})
-		}
-		for _, v := range o.IDs {
-			ps = append(ps, pending{label: v, target: identity.Target{ID: v}})
+		for _, t := range o.Explicit() {
+			ps = append(ps, pending{label: t.Name + t.Pane + t.ID, target: t})
 		}
 		return ps, nil
 	}
