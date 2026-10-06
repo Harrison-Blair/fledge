@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -420,5 +423,35 @@ func TestFanOutReresolvesRegisteredTargetsBeforeEachDelivery(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+// A fan-out to registered targets finds the repository root once for its
+// rereads, not once per target: the store is reused across them.
+func TestFanOutRereadsReuseOneStore(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := shiftingHerdr{agents: map[string]herdr.AgentDetails{"w1:p1": hosted("w1:p1", "term_a", "claude"), "w1:p2": hosted("w1:p2", "term_b", "claude"), "w1:p3": hosted("w1:p3", "term_c", "claude")}, shift: func(map[string]herdr.AgentDetails) {}, prompts: new([]string)}
+	c := libagent.Client{API: h, CallerPane: "old:p1", Cwd: identitytest.Repository(t)}
+	var ids []string
+	for _, pane := range []string{"w1:p1", "w1:p2", "w1:p3"} {
+		ids = append(ids, identitytest.Register(t, c.Cwd, h.agents[pane]).ID)
+	}
+	bin, log := t.TempDir(), filepath.Join(t.TempDir(), "roots")
+	script := fmt.Sprintf("#!/bin/sh\ncase \"$*\" in *--is-bare-repository*) echo >>%q;; esac\nexec %q \"$@\"\n", log, git)
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out := run(context.Background(), c, Options{Selection: selector.Selection{IDs: ids}, Body: "hi", BodySet: true}, nil, "m-0a1b2c")
+	if out.Error != nil {
+		t.Fatalf("%+v", out.Error)
+	}
+	b, _ := os.ReadFile(log)
+	// One root per initial target and one shared by every reread.
+	if got, want := strings.Count(string(b), "\n"), len(ids)+1; got != want {
+		t.Fatalf("resolved the repository root %d times, want %d", got, want)
 	}
 }
