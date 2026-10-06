@@ -1342,3 +1342,36 @@ to the ordering that requires an assignee.
 1. Adopt the active Codex agent and create a task while it is handling a tool-driven turn.
 2. Assign the task to that same agent through Fledge.
 3. If Herdr reports the caller blocked, observe a partial outcome with saved ownership and failed delivery; inspect the task and continue from the known brief.
+
+---
+
+**Issue:** A worker in another repository cannot complete a task from this repository
+
+**Summary:** On 2026-10-05 the orchestrator spawned a Codex verifier with `--cwd` set to a checkout of a different repository (`~/source/skills`) and assigned it a task from Fledge's task store. Delivery worked. The verifier's `fledge task complete --id 8eeecfe0` failed with `task_not_found`, because task commands resolve the store from the caller's working directory. The verifier also reported that `fledge agent message` to the orchestrator failed because "the Herdr environment is unavailable"; the cause of that second failure is not established. Workaround: the verifier put its report in its reply, and the orchestrator read it with `fledge agent read`.
+
+**Reproduction steps:**
+1. From this repository, create a task and spawn an agent with `--cwd <checkout of another repository>`.
+2. Assign the task to that agent.
+3. From the agent, run `fledge task complete --id <task> --summary x` and observe `task_not_found`.
+
+---
+
+**Issue:** Codex workers spawned by Fledge run tool calls without `HERDR_*` variables
+
+**Summary:** On 2026-10-05 two `gpt-6.1-sol` Codex verifiers, spawned with `fledge agent spawn --harness codex` (bypass defaults on), reported that their tool calls had no `HERDR_*` environment variables. The first one could not send `fledge agent message` and reported "the Herdr environment is unavailable". The second one found the socket path by hand and set `HERDR_SOCKET_PATH` and `HERDR_PANE_ID` on each command, and then coordination worked. Observed in 2 of 2 Codex spawns this session. The cause, for example whether Codex filters the environment of its tool shell, is not established.
+
+**Reproduction steps:**
+1. Spawn a Codex agent with `fledge agent spawn --harness codex --model gpt-6.1-sol --name probe`.
+2. Ask it to run `env | grep HERDR` and `fledge agent current` in a tool call.
+3. Observe no `HERDR_*` variables and a failed caller lookup.
+
+---
+
+**Issue:** No Fledge equivalent for a scripted, read-only fan-out with structured results
+
+**Summary:** On 2026-10-05 the repository audit used Claude Code's Workflow tool instead of `fledge agent spawn`, by the user's choice, for 8 parallel read-only reviewers and one merge step. The workflow gives each reviewer a JSON schema for its result, a barrier before the merge step, and a single returned value. With Fledge, the orchestrator must spawn each reviewer, poll or wait on each one, and parse free-text task results by hand. Fledge stays in use for the work that changes files: implementers, verifiers, tasks, and worktrees.
+
+**Reproduction steps:**
+1. Plan N independent read-only reviewers whose results one merge step needs together.
+2. Try to express it with `fledge agent spawn`, `fledge agent wait --all`, and `fledge task get`.
+3. Observe no result schema and no single combined result.
