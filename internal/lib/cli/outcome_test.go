@@ -1,4 +1,4 @@
-package agent
+package cli
 
 import (
 	"bytes"
@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 )
 
@@ -122,13 +121,13 @@ func TestFinish(t *testing.T) {
 	failed := InvalidOutcome("agent.get", errors.New("bad"))
 	err := Finish(failed, &b, false, nil)
 	var result *ResultError
-	if !errors.As(err, &result) || result.ExitCode() != 2 || err.Error() != "bad" || !cli.IsRendered(err) {
+	if !errors.As(err, &result) || result.ExitCode() != 2 || err.Error() != "bad" || !IsRendered(err) {
 		t.Fatalf("%v", err)
 	}
 	for _, asJSON := range []bool{false, true} {
 		err = Finish(failed, failingWriter{}, asJSON, nil)
-		var output *cli.OutputError
-		if !errors.As(err, &output) || output.ExitCode() != 1 || !cli.IsRendered(err) {
+		var output *OutputError
+		if !errors.As(err, &output) || output.ExitCode() != 1 || !IsRendered(err) {
 			t.Fatalf("json=%v: %v", asJSON, err)
 		}
 	}
@@ -136,39 +135,6 @@ func TestFinish(t *testing.T) {
 	err = Finish(Outcome{Status: "success"}, &b, false, func(io.Writer, Outcome) error { return renderErr })
 	if !errors.Is(err, renderErr) {
 		t.Fatalf("renderer failure lost: %v", err)
-	}
-}
-
-func TestNewAgentRow(t *testing.T) {
-	name, kind, cwd := "worker", "claude", "/repo"
-	row := NewAgentRow(herdr.Pane{Name: &name, Agent: &kind, AgentStatus: "idle", WorkspaceID: "w1", TabID: "w1:t1", PaneID: "w1:p1", Cwd: &cwd})
-	if *row.Name != name || *row.Harness != kind || *row.AgentStatus != "idle" || *row.WorkspaceID != "w1" || *row.TabID != "w1:t1" || *row.PaneID != "w1:p1" || *row.Cwd != cwd {
-		t.Fatalf("%+v", row)
-	}
-	if empty := NewAgentRow(herdr.Pane{}); empty.AgentStatus != nil || empty.PaneID != nil || empty.WorkspaceID != nil || empty.TabID != nil {
-		t.Fatalf("empty values must be null: %+v", empty)
-	}
-}
-
-func TestPointerAndDisplay(t *testing.T) {
-	if Pointer("") != nil || Display(nil) != "-" || Display(Pointer("")) != "-" {
-		t.Fatal("empty values must render as -")
-	}
-	empty := ""
-	if Display(&empty) != "-" {
-		t.Fatal("an empty string must render as -")
-	}
-	if p := Pointer("w1"); p == nil || *p != "w1" || Display(p) != "w1" {
-		t.Fatalf("Pointer/Display round trip: %v", p)
-	}
-}
-
-func TestDisplayString(t *testing.T) {
-	if got := DisplayString(""); got != "-" {
-		t.Fatalf("DisplayString(\"\") = %q, want -", got)
-	}
-	if got := DisplayString("v1"); got != "v1" {
-		t.Fatalf("DisplayString(v1) = %q, want v1", got)
 	}
 }
 

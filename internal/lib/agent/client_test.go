@@ -56,16 +56,6 @@ func TestCallLocatesTransportFailures(t *testing.T) {
 	}
 }
 
-func TestAtPhaseLocatesResultFailures(t *testing.T) {
-	cause := Protocol("incomplete worktree.list result")
-	err := AtPhase("worktree.list", cause)
-	o := Outcome{}
-	o.Fail(err, "placement", true)
-	if !errors.Is(err, cause) || err.Error() != cause.Error() || *o.Error != (Failure{Code: "protocol_error", Message: cause.Error(), Phase: "worktree.list"}) || o.Status != "unknown" {
-		t.Fatalf("%v %s %+v", err, o.Status, o.Error)
-	}
-}
-
 func TestGetValidatesAgentInfo(t *testing.T) {
 	session := &herdr.AgentSession{Source: ptr("hook"), Agent: ptr("claude"), Kind: ptr("id"), Value: ptr("abc")}
 	good := agentInfo("idle")
