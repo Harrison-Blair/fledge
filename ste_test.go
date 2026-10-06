@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // steFiles lists the instruction text the ratchet covers. Each entry is a
@@ -94,9 +95,12 @@ var (
 	steInlineCode = regexp.MustCompile("`[^`]*`")
 )
 
-// steSegments drops fenced code and inline code spans, and splits a Markdown
-// table row into cells so no sentence runs across a pipe. A cell that held
-// only code is empty afterwards and contributes nothing.
+// steSegments drops fenced code, blanks every inline code span, and splits a
+// Markdown table row into cells so no sentence runs across a pipe. A span
+// becomes spaces of its own width, before the split: that keeps a pipe or a
+// semicolon inside it out of the checks, and it keeps the prose on either side
+// of it apart, which deleting the span would join into one word. A cell that
+// held only code is blank afterwards and contributes nothing.
 func steSegments(text string) []steSegment {
 	var out []steSegment
 	inFence := false
@@ -108,12 +112,14 @@ func steSegments(text string) []steSegment {
 		if inFence {
 			continue
 		}
-		cells := []string{raw}
-		if strings.Contains(raw, "|") {
-			cells = strings.Split(raw, "|")
+		masked := steInlineCode.ReplaceAllStringFunc(raw, func(span string) string {
+			return strings.Repeat(" ", utf8.RuneCountInString(span))
+		})
+		cells := []string{masked}
+		if strings.Contains(masked, "|") {
+			cells = strings.Split(masked, "|")
 		}
 		for _, cell := range cells {
-			cell = steInlineCode.ReplaceAllString(cell, "")
 			if strings.TrimSpace(cell) == "" {
 				continue
 			}
@@ -177,9 +183,38 @@ func steLint(file, text string, rules []steRule) []steViolation {
 	return out
 }
 
+// steWordForms returns a banned word and its regular inflections, as the STE
+// skill linter's _glossary_word_re builds them: a silent -e drops before -ing,
+// and a -y after a consonant becomes -ies or -ied. Longest first, so the
+// reported match is the whole inflection and not a shorter form inside it.
+func steWordForms(word string) []string {
+	forms := map[string]bool{
+		word: true, word + "s": true, word + "es": true,
+		word + "ed": true, word + "d": true, word + "ing": true,
+	}
+	if stem, ok := strings.CutSuffix(word, "e"); ok {
+		forms[stem+"ing"] = true
+	}
+	if stem, ok := strings.CutSuffix(word, "y"); ok && stem != "" && !strings.ContainsAny(stem[len(stem)-1:], "aeiou") {
+		forms[stem+"ies"] = true
+		forms[stem+"ied"] = true
+	}
+	list := make([]string, 0, len(forms))
+	for form := range forms {
+		list = append(list, form)
+	}
+	sort.Slice(list, func(i, j int) bool {
+		if len(list[i]) != len(list[j]) {
+			return len(list[i]) > len(list[j])
+		}
+		return list[i] < list[j]
+	})
+	return list
+}
+
 // steGlossaryRules turns each word in the glossary's "Do not use" column into
-// a rule, matched case-insensitively on word boundaries with the simple
-// inflections -s, -es, -ed, -d and -ing.
+// a rule, matched case-insensitively on word boundaries with the inflections
+// steWordForms builds.
 func steGlossaryRules(glossary string) ([]steRule, error) {
 	var rules []steRule
 	for _, line := range strings.Split(glossary, "\n") {
@@ -197,7 +232,11 @@ func steGlossaryRules(glossary string) ([]steRule, error) {
 			if word == "" {
 				continue
 			}
-			pattern, err := regexp.Compile(`(?i)\b` + regexp.QuoteMeta(word) + `(?:s|es|ed|d|ing)?\b`)
+			forms := steWordForms(word)
+			for i, form := range forms {
+				forms[i] = regexp.QuoteMeta(form)
+			}
+			pattern, err := regexp.Compile(`(?i)\b(?:` + strings.Join(forms, "|") + `)\b`)
 			if err != nil {
 				return nil, fmt.Errorf("glossary term %s: %w", term, err)
 			}
@@ -301,7 +340,9 @@ func TestSTEGlossaryTerm(t *testing.T) {
 		"| Term | Meaning | Do not use |\n" +
 		"| --- | --- | --- |\n" +
 		"| check | Run the suite yourself. | confirm, validate |\n" +
+		"| change | Change a file. | modify |\n" +
 		"| spawn | Start a new agent. | launch |\n" +
+		"| stop | End a live agent. | retire |\n" +
 		"| task | One unit of tracked work. | work unit |\n" +
 		"| verify | Record a passed independent check. | |\n"
 	rules, err := steGlossaryRules(glossary)
@@ -312,6 +353,11 @@ func TestSTEGlossaryTerm(t *testing.T) {
 		{"pass", "Check the output, then spawn the next worker and verify the task.", 0},
 		{"fail", "Confirm the output, then launch the next worker.", 2},
 		{"inflections count", "The run validated the launches.", 2},
+		{"silent e drops before -ing", "The agent is validating the output.", 1},
+		{"silent e drops before -ing, second word", "The parent is retiring the worker.", 1},
+		{"consonant y becomes -ies", "The flag modifies the run.", 1},
+		{"consonant y becomes -ied", "The flag modified the run.", 1},
+		{"regular -ing survives the y rule", "The flag is modifying the run.", 1},
 		{"multi-word term", "Record each work unit.", 1},
 		{"word boundary", "Stopping the pane is not a ping.", 0},
 	}
@@ -325,6 +371,34 @@ func TestSTEGlossaryTerm(t *testing.T) {
 				if v.Rule != "glossary" {
 					t.Errorf("rule = %q, want glossary", v.Rule)
 				}
+			}
+		})
+	}
+}
+
+// TestSTECodeSpanIsolation covers the two ways a code span can leak into the
+// prose checks: a pipe inside it must not split a table cell, and blanking it
+// must keep the prose on either side of it apart.
+func TestSTECodeSpanIsolation(t *testing.T) {
+	const glossary = "# STE glossary\n\n" +
+		"| Term | Meaning | Do not use |\n" +
+		"| --- | --- | --- |\n" +
+		"| check | Run the suite yourself. | confirm, validate |\n"
+	glossaryRules, err := steGlossaryRules(glossary)
+	if err != nil {
+		t.Fatalf("steGlossaryRules: %v", err)
+	}
+	rules := append(slices.Clone(steRules), glossaryRules...)
+	cases := []steCase{
+		{"live rules", "Confirm the output;", 2},
+		{"code span holding a pipe and a semicolon", "Run `confirm|validate;`.", 0},
+		{"code span does not join the prose around it", "A con`flag`firm check.", 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := steLint("x.md", c.text, rules)
+			if len(got) != c.want {
+				t.Fatalf("got %d violations, want %d:\n%s", len(got), c.want, steFormat(got))
 			}
 		})
 	}
@@ -371,9 +445,10 @@ func TestSTESegmentsSkipCode(t *testing.T) {
 	}{
 		{"fenced code", "```\nx = a; y = b\n```", nil},
 		{"tilde fence", "~~~\nx = a; y = b\n~~~", nil},
-		{"inline code span", "Run `go vet ./...` now.", []steSegment{{1, "Run  now."}}},
+		{"inline code span masked to its own width", "Run `go vet ./...` now.", []steSegment{{1, "Run " + strings.Repeat(" ", len("`go vet ./...`")) + " now."}}},
 		{"table row of only code", "| `--name` | `fledge agent stop` |", nil},
 		{"table cells split", "| Stop | End an agent. |", []steSegment{{1, " Stop "}, {1, " End an agent. "}}},
+		{"pipe inside a code span does not split a cell", "| `a|b` | Stop |", []steSegment{{1, " Stop "}}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

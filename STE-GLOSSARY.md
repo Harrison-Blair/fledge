@@ -9,7 +9,7 @@ is grounded in a Fledge command or in `AGENTS.md`.
 | agent | A harness process in a Herdr pane that Fledge tracks under a record id. | |
 | assign | Give a created task to an agent with `fledge task assign`. | |
 | brief | The Markdown text that gives a task or a role its scope. | |
-| cancel | End a task without a completion, with `fledge task cancel`. | |
+| cancel | End a task that is not verified or already cancelled, with `fledge task cancel`. | |
 | check | Run the repository check suite, or test behavior yourself read-only. | confirm, validate |
 | checkout | The Git working directory an agent works in. | |
 | complete | Report a finished task with `fledge task complete`. | |
