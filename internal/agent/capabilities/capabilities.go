@@ -48,11 +48,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	}
 	live := map[string]*Live{}
 	if o.Live {
-		var list herdr.IntegrationListResult
-		err := c.Call(ctx, "integration.list", nil, &list)
-		if err == nil && (list.Type != "integration_list" || list.Integrations == nil) {
-			err = libagent.Protocol("incomplete integration.list result")
-		}
+		list, err := herdr.IntegrationList(ctx, c)
 		if err != nil {
 			out.Fail(err, "integration.list", false)
 			return out

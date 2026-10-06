@@ -93,6 +93,7 @@ func TestLiveFailures(t *testing.T) {
 	}{
 		{"socket", call{Method: "integration.list", Err: errors.New("offline")}, "operation_failed"},
 		{"protocol", call{Method: "integration.list", Result: map[string]any{"type": "ok"}}, "protocol_error"},
+		{"missing array", call{Method: "integration.list", Result: map[string]any{"type": "integration_list"}}, "protocol_error"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out := Run(context.Background(), herdrscript.Client(t, tc.c), Options{Live: true})
