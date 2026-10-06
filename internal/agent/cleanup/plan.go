@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/gitstatus"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
@@ -31,7 +32,7 @@ type planned struct {
 func plan(ctx context.Context, c libagent.Client, o Options) (planned, error) {
 	s, err := identity.Existing(ctx, c.Cwd)
 	if err != nil {
-		return planned{}, libagent.AtPhase("state", err)
+		return planned{}, cli.AtPhase("state", err)
 	}
 	caller, live, err := callerRecord(ctx, c, s)
 	if err != nil {
@@ -43,7 +44,7 @@ func plan(ctx context.Context, c libagent.Client, o Options) (planned, error) {
 		tasks, err = task.List(s)
 	}
 	if err != nil {
-		return planned{}, libagent.AtPhase("state", err)
+		return planned{}, cli.AtPhase("state", err)
 	}
 	agents, err := c.List(ctx)
 	if err != nil {
@@ -67,7 +68,7 @@ func plan(ctx context.Context, c libagent.Client, o Options) (planned, error) {
 // matched by terminal, or fails with caller_unregistered. It also returns
 // the LiveByTerminal map it read, so the plan reads the records once.
 func callerRecord(ctx context.Context, c libagent.Client, s *state.Store) (identity.Record, map[string]identity.Record, error) {
-	unregistered := libagent.AtPhase("identity", &herdr.Error{Code: "caller_unregistered", Message: "the caller has no live Fledge record; register with fledge agent adopt"})
+	unregistered := cli.AtPhase("identity", &herdr.Error{Code: "caller_unregistered", Message: "the caller has no live Fledge record; register with fledge agent adopt"})
 	if c.CallerPane == "" {
 		return identity.Record{}, nil, unregistered
 	}
@@ -84,7 +85,7 @@ func callerRecord(ctx context.Context, c libagent.Client, s *state.Store) (ident
 	}
 	live, err := liveByTerminal(s)
 	if err != nil {
-		return identity.Record{}, nil, libagent.AtPhase("state", err)
+		return identity.Record{}, nil, cli.AtPhase("state", err)
 	}
 	rec, ok := identity.Attributed(live, a)
 	if !ok {
@@ -124,7 +125,7 @@ func selectWorkers(caller string, records []identity.Record, agents []herdr.Agen
 			reasons = append(reasons, r)
 		}
 		if len(reasons) > 0 {
-			w.Outcome, w.Reason = "skipped", libagent.Pointer(strings.Join(reasons, "; "))
+			w.Outcome, w.Reason = "skipped", cli.Pointer(strings.Join(reasons, "; "))
 		}
 		workers = append(workers, w)
 	}
@@ -233,7 +234,7 @@ func planCheckouts(ctx context.Context, caller string, records []identity.Record
 			c.marker, c.markedBranch = *rec.WorktreeMarker, *rec.WorktreeBranch
 		}
 		if reasons := checkoutHold(ctx, rec, owned, row, listing.Root, outcomes, others, live); len(reasons) > 0 {
-			c.Outcome, c.Reason = "skipped", libagent.Pointer(strings.Join(reasons, "; "))
+			c.Outcome, c.Reason = "skipped", cli.Pointer(strings.Join(reasons, "; "))
 		}
 		checkouts = append(checkouts, c)
 	}

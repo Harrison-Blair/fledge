@@ -12,6 +12,7 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/brief"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
@@ -30,8 +31,8 @@ type Options struct {
 // verified nor cancelled, and every After prerequisite must exist; both are
 // checked and the task stored under one store lock. Repeated prerequisites
 // are stored once.
-func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libagent.Outcome {
-	out := libagent.NewOutcome("task.create")
+func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Outcome {
+	out := cli.NewOutcome("task.create")
 	var text string
 	var after []string
 	var err error
@@ -49,9 +50,9 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 	switch {
 	case err != nil:
 	case o.Title == "" || strings.ContainsAny(o.Title, "\r\n"):
-		err = libagent.Invalid("--title must be nonempty and a single line")
+		err = cli.Invalid("--title must be nonempty and a single line")
 	default:
-		text, err = libagent.ReadText(in, libagent.TextInput{Body: o.Body, BodyFlag: "body", BodySet: o.BodySet, File: o.File, FileFlag: "file", FileSet: o.FileSet, Required: true, Noun: "brief"})
+		text, err = cli.ReadText(in, cli.TextInput{Body: o.Body, BodyFlag: "body", BodySet: o.BodySet, File: o.File, FileFlag: "file", FileSet: o.FileSet, Required: true, Noun: "brief"})
 		if err == nil {
 			err = brief.Validate(text)
 		}
@@ -93,13 +94,13 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 		out.Fail(err, phase, false)
 		return out
 	}
-	out.Effects = append(out.Effects, libagent.Effect{Action: "created", Kind: "task", ID: r.ID})
+	out.Effects = append(out.Effects, cli.Effect{Action: "created", Kind: "task", ID: r.ID})
 	out.Result = r
 	return out
 }
 
 // Render writes a successful creation.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(task.Record)
 	if o.Error != nil || !ok {
 		return nil

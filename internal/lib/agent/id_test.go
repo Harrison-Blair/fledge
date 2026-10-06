@@ -3,6 +3,8 @@ package agent
 import (
 	"errors"
 	"testing"
+
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 )
 
 func TestValidateID(t *testing.T) {
@@ -11,7 +13,7 @@ func TestValidateID(t *testing.T) {
 	}
 	for _, id := range []string{"", "0123ABCD", "0123abc", "0123abcde", "0123abcg"} {
 		err := ValidateID("parent", "task", id)
-		var input *InputError
+		var input *cli.InputError
 		if !errors.As(err, &input) || err.Error() != "--parent must be an 8 lowercase hexadecimal task id" {
 			t.Fatalf("%q: %v", id, err)
 		}

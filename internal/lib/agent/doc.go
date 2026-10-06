@@ -1,10 +1,9 @@
-// Package agent is the shared foundation for agent operations.
-// outcome.go defines the result envelope, failure classification, and generic rendering;
+// Package agent performs Herdr agent requests for agent operations.
+// row.go reports a live pane's agent fields;
 // fanout.go summarizes a fan-out's failed targets as one failure;
 // client.go performs validated Herdr requests;
 // read.go adds agent.read;
 // wait.go adds agent.wait with wait's transport deadline policy;
-// input.go reads inline, file, or stdin text;
 // status.go holds live agent_status membership and the settled subset;
 // harness.go validates --harness values against lib/harness;
 // id.go validates record id flag values;

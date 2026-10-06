@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 )
 
 var (
@@ -14,7 +14,7 @@ var (
 
 // Render writes a cleanup plan or its results, one line per worker and
 // checkout with the reason for any not acted on. It also runs after a failure.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if !ok {
 		return nil
@@ -41,7 +41,7 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		if x.Outcome == want {
 			stopping++
 		}
-		rows = append(rows, row{workerVerbs[x.Outcome], reason(libagent.Display(x.Name)+" ("+x.ID+")", x.Reason)})
+		rows = append(rows, row{workerVerbs[x.Outcome], reason(cli.Display(x.Name)+" ("+x.ID+")", x.Reason)})
 	}
 	for _, x := range r.Checkouts {
 		if x.Outcome == want {

@@ -11,6 +11,7 @@ import (
 	"text/tabwriter"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	libmodels "github.com/Harrison-Blair/fledge/internal/lib/models"
 )
 
@@ -22,8 +23,8 @@ type Result struct {
 }
 
 // Run lists locally discoverable models, optionally limited to one harness kind.
-func Run(ctx context.Context, d libmodels.Discovery, o Options) libagent.Outcome {
-	out := libagent.NewOutcome("agent.models")
+func Run(ctx context.Context, d libmodels.Discovery, o Options) cli.Outcome {
+	out := cli.NewOutcome("agent.models")
 	if o.Harness != "" {
 		if err := libagent.ValidateHarness(o.Harness); err != nil {
 			out.Fail(err, "validation", false)
@@ -49,7 +50,7 @@ func Run(ctx context.Context, d libmodels.Discovery, o Options) libagent.Outcome
 }
 
 // Render writes a successful models outcome as a table.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil
@@ -61,7 +62,7 @@ func Render(w io.Writer, o libagent.Outcome) error {
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(table, "HARNESS\tMODEL\tNAME")
 	for _, m := range r.Models {
-		fmt.Fprintf(table, "%s\t%s\t%s\n", m.Harness, m.Model, libagent.Display(m.Name))
+		fmt.Fprintf(table, "%s\t%s\t%s\n", m.Harness, m.Model, cli.Display(m.Name))
 	}
 	return table.Flush()
 }

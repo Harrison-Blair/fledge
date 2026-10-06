@@ -2,7 +2,7 @@
 package template
 
 import (
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/task/template"
 	"github.com/spf13/cobra"
 )
@@ -15,7 +15,7 @@ func New() *cobra.Command {
 	cmd.Flags().BoolVar(&options.Proposal, "proposal", false, "Print the proposal skeleton instead of the brief skeleton")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Emit a structured outcome")
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
-		return libagent.Finish(template.Run(options), cmd.OutOrStdout(), asJSON, template.Render)
+		return cli.Finish(template.Run(options), cmd.OutOrStdout(), asJSON, template.Render)
 	}
 	return cmd
 }

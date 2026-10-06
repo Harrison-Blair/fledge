@@ -6,6 +6,7 @@ import (
 
 	"github.com/Harrison-Blair/fledge/internal/agent/message"
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 	"github.com/spf13/cobra"
 )
@@ -33,7 +34,7 @@ func New() *cobra.Command {
 		if options.Confirm {
 			timeout = options.Timeout
 		}
-		return libagent.Finish(message.Run(cmd.Context(), libagent.FromEnvironment(timeout), options, cmd.InOrStdin()), cmd.OutOrStdout(), asJSON, message.Render)
+		return cli.Finish(message.Run(cmd.Context(), libagent.FromEnvironment(timeout), options, cmd.InOrStdin()), cmd.OutOrStdout(), asJSON, message.Render)
 	}
 	return cmd
 }

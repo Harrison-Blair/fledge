@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/memory"
 )
 
@@ -17,9 +17,9 @@ type Options struct {
 }
 
 // Run validates and stores a new memory without contacting Herdr.
-func Run(ctx context.Context, cwd string, o Options, in io.Reader) libagent.Outcome {
-	out := libagent.NewOutcome("memory.add")
-	body, err := libagent.ReadText(in, libagent.TextInput{Body: o.Body, BodyFlag: "body", BodySet: o.BodySet, File: o.File, FileFlag: "file", FileSet: o.FileSet, Required: true, Noun: "body"})
+func Run(ctx context.Context, cwd string, o Options, in io.Reader) cli.Outcome {
+	out := cli.NewOutcome("memory.add")
+	body, err := cli.ReadText(in, cli.TextInput{Body: o.Body, BodyFlag: "body", BodySet: o.BodySet, File: o.File, FileFlag: "file", FileSet: o.FileSet, Required: true, Noun: "body"})
 	m := memory.Memory{Name: o.Name, Description: o.Description, Type: o.Type, Body: body}
 	if err == nil {
 		err = memory.Validate(m)
@@ -37,7 +37,7 @@ func Run(ctx context.Context, cwd string, o Options, in io.Reader) libagent.Outc
 }
 
 // Render writes a successful addition.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	m, ok := o.Result.(memory.Memory)
 	if o.Error != nil || !ok {
 		return nil

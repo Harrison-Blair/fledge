@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 )
@@ -24,13 +25,13 @@ type Options struct {
 // cancelled, under one store lock. Adding a present prerequisite or removing
 // an absent one changes nothing. Each added prerequisite must exist and must
 // not already depend, directly or indirectly, on the task.
-func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.NewOutcome("task.depend")
+func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
+	out := cli.NewOutcome("task.depend")
 	err := task.ValidateID(o.ID)
 	switch {
 	case err != nil:
 	case len(o.After) == 0 && len(o.Remove) == 0:
-		err = libagent.Invalid("pass at least one --after or --remove")
+		err = cli.Invalid("pass at least one --after or --remove")
 	default:
 		for i, id := range slices.Concat(o.After, o.Remove) {
 			flag := "after"
@@ -41,7 +42,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			case e != nil:
 				err = e
 			case slices.Contains(o.After, id) && slices.Contains(o.Remove, id):
-				err = libagent.Invalid("task %s is both added and removed", id)
+				err = cli.Invalid("task %s is both added and removed", id)
 			}
 		}
 	}
@@ -89,7 +90,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Fail(err, "task", false)
 		return out
 	}
-	out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "task", ID: r.ID})
+	out.Effects = append(out.Effects, cli.Effect{Action: "updated", Kind: "task", ID: r.ID})
 	out.Result = r
 	return out
 }
@@ -121,7 +122,7 @@ func dependsOn(byID map[string]task.Record, from, to string) []string {
 }
 
 // Render writes the task's prerequisites after a successful change.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(task.Record)
 	if o.Error != nil || !ok {
 		return nil

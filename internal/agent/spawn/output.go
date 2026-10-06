@@ -5,6 +5,7 @@ import (
 	"io"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 )
 
 // Result reports the placement, launch, registration, and first-prompt state
@@ -42,7 +43,7 @@ type ProfileRef struct {
 
 // Render writes a successful spawn, or startup recovery hints by pane after
 // the generic failure lines that libagent writes first.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(*Result)
 	if !ok {
 		return nil
@@ -51,7 +52,7 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		if o.Status != "partial" && o.Status != "unknown" {
 			return nil
 		}
-		pane := libagent.Display(r.PaneID)
+		pane := cli.Display(r.PaneID)
 		switch o.Error.Phase {
 		case "agent.wait":
 			if o.Error.Code == "agent_blocked" {
@@ -85,11 +86,11 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		}
 		return nil
 	}
-	id := libagent.Display(r.ID)
+	id := cli.Display(r.ID)
 	if r.RegistrationError != nil {
 		id += " (not registered: " + *r.RegistrationError + ")"
 	}
-	if _, err := fmt.Fprintf(w, "Spawned %s (%s) in %s / %s / %s\n  cwd: %s\n  worktree: %s\n  id: %s\n", r.Name, r.Harness, libagent.Display(r.WorkspaceID), libagent.Display(r.TabID), libagent.Display(r.PaneID), libagent.Display(r.Cwd), libagent.Display(r.WorktreePath), id); err != nil {
+	if _, err := fmt.Fprintf(w, "Spawned %s (%s) in %s / %s / %s\n  cwd: %s\n  worktree: %s\n  id: %s\n", r.Name, r.Harness, cli.Display(r.WorkspaceID), cli.Display(r.TabID), cli.Display(r.PaneID), cli.Display(r.Cwd), cli.Display(r.WorktreePath), id); err != nil {
 		return err
 	}
 	if p := r.Profile; p != nil {
@@ -102,11 +103,11 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		}
 	}
 	if r.Prompted {
-		_, err := fmt.Fprintf(w, "Message submitted to %s.\n", libagent.Display(r.PaneID))
+		_, err := fmt.Fprintf(w, "Message submitted to %s.\n", cli.Display(r.PaneID))
 		return err
 	}
 	return nil
 }
 
 // PositionalError explains the native-argument separator requirement.
-func PositionalError() error { return libagent.Invalid("native positional arguments must follow --") }
+func PositionalError() error { return cli.Invalid("native positional arguments must follow --") }

@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"github.com/Harrison-Blair/fledge/internal/agent/profiles"
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/spf13/cobra"
 )
 
@@ -20,7 +20,7 @@ func New() *cobra.Command {
 				options.Name = args[0]
 			}
 			cwd, _ := os.Getwd()
-			return libagent.Finish(profiles.Run(cmd.Context(), cwd, options), cmd.OutOrStdout(), asJSON, profiles.Render)
+			return cli.Finish(profiles.Run(cmd.Context(), cwd, options), cmd.OutOrStdout(), asJSON, profiles.Render)
 		}}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Emit a structured outcome")
 	return cmd

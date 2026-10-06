@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/termtext"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -30,12 +30,12 @@ func formatDetail(ctx context.Context, s *Snapshot, id, worker string, width int
 	}
 	field("ID", r.ID)
 	field("Title", r.Title)
-	field("Parent", libagent.Display(r.Parent))
+	field("Parent", cli.Display(r.Parent))
 	field("Stored state", r.Status)
 	if r.Status == "completed" {
 		field("Review", "awaiting verification")
 	}
-	field("Owner", libagent.Display(r.Owner))
+	field("Owner", cli.Display(r.Owner))
 	field("Worker", worker)
 	optional("Cancellation reason", r.CancelReason)
 	field("Created", r.CreatedAt)
@@ -73,7 +73,7 @@ func formatDetail(ctx context.Context, s *Snapshot, id, worker string, width int
 	if r.CompletionNotification != nil {
 		field("Notification", r.CompletionNotification.State())
 		field("Notification recipient", r.CompletionNotification.Recipient)
-		field("Notification pane", libagent.Display(r.CompletionNotification.Pane))
+		field("Notification pane", cli.Display(r.CompletionNotification.Pane))
 		field("Notification message", r.CompletionNotification.MessageID)
 	}
 	b.WriteString("\nBrief:\n")
@@ -82,7 +82,7 @@ func formatDetail(ctx context.Context, s *Snapshot, id, worker string, width int
 		return nil
 	}
 	b.WriteString("\n\nResult:\n")
-	b.WriteString(termtext.Clean(libagent.Display(r.Result)))
+	b.WriteString(termtext.Clean(cli.Display(r.Result)))
 	if ctx.Err() != nil {
 		return nil
 	}

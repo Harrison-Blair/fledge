@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/memory"
 	"github.com/Harrison-Blair/fledge/internal/memory/add"
 	"github.com/spf13/cobra"
@@ -27,7 +27,7 @@ func New() *cobra.Command {
 		options.BodySet = f.Changed("body")
 		options.FileSet = f.Changed("file")
 		cwd, _ := os.Getwd()
-		return libagent.Finish(add.Run(cmd.Context(), cwd, options, cmd.InOrStdin()), cmd.OutOrStdout(), asJSON, add.Render)
+		return cli.Finish(add.Run(cmd.Context(), cwd, options, cmd.InOrStdin()), cmd.OutOrStdout(), asJSON, add.Render)
 	}
 	return cmd
 }

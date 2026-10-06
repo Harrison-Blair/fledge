@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/proposal"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
 )
@@ -263,10 +263,10 @@ func checkRejected(t *testing.T, root, name, path, want string) {
 	if err == nil {
 		t.Fatalf("accepted: %+v", p)
 	}
-	if !errors.As(err, new(*libagent.InputError)) || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), path) {
+	if !errors.As(err, new(*cli.InputError)) || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), path) {
 		t.Fatalf("%T %v", err, err)
 	}
-	if _, err := List(context.Background(), root); err == nil || !errors.As(err, new(*libagent.InputError)) || !strings.Contains(err.Error(), path) {
+	if _, err := List(context.Background(), root); err == nil || !errors.As(err, new(*cli.InputError)) || !strings.Contains(err.Error(), path) {
 		t.Fatalf("listing: %v", err)
 	}
 }
@@ -310,7 +310,7 @@ func TestInvalidNamesAndMissingProfilesAreRejected(t *testing.T) {
 	root := repository(t)
 	os.MkdirAll(filepath.Join(root, ".fledge", "profiles", "dir.md"), 0755)
 	for _, name := range []string{"", "../reviewer", "Reviewer", "a/b", "missing", "dir", "protocol"} {
-		if p, err := Load(context.Background(), root, name); err == nil || !errors.As(err, new(*libagent.InputError)) {
+		if p, err := Load(context.Background(), root, name); err == nil || !errors.As(err, new(*cli.InputError)) {
 			t.Fatalf("%q: %+v %v", name, p, err)
 		}
 	}

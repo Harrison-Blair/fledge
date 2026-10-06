@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
@@ -299,7 +300,7 @@ func failure(err error, phase string) (string, string) {
 	if err == nil {
 		return "", ""
 	}
-	var out libagent.Outcome
+	var out cli.Outcome
 	out.Fail(err, phase, false)
 	return out.Error.Code, out.Error.Phase
 }

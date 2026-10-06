@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 )
@@ -76,7 +76,7 @@ func TestExistingTabLabelCreatesNewTab(t *testing.T) {
 	o.Focus = true
 	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "tab.create", Params: map[string]any{"workspace_id": "w1", "label": "build", "focus": false}, Result: herdr.CreatedResult{Type: "tab_created", Tab: herdr.Tab{ID: "w1:t2", WorkspaceID: "w1", Label: "build"}, RootPane: p}}, call{Method: "pane.rename", Params: map[string]any{"pane_id": "w1:p2", "label": "worker pane"}, Result: herdr.PaneResult{Type: "pane_info", Pane: p}}, call{Method: "pane.focus", Params: map[string]any{"pane_id": "w1:p2"}, Result: herdr.PaneResult{Type: "pane_info", Pane: p}}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"))
 	out := s.run(context.Background(), o, nil)
-	if out.Status != "success" || !slices.Contains(out.Effects, libagent.Effect{Action: "created", Kind: "tab", ID: "w1:t2"}) {
+	if out.Status != "success" || !slices.Contains(out.Effects, cli.Effect{Action: "created", Kind: "tab", ID: "w1:t2"}) {
 		t.Fatalf("%+v", out)
 	}
 	if r := out.Result.(*Result); *r.TabID != "w1:t2" || *r.PaneID != "w1:p2" || *r.WorkspaceID != "w1" {
@@ -353,7 +353,7 @@ func TestSpawnBusyExhaustionIsPartial(t *testing.T) {
 	if !reflect.DeepEqual(w.delays, want) {
 		t.Fatalf("waits %v want %v", w.delays, want)
 	}
-	if !reflect.DeepEqual(out.Effects, []libagent.Effect{{Action: "created", Kind: "tab", ID: "w1:t2"}, {Action: "created", Kind: "pane", ID: "w1:p2"}, {Action: "updated", Kind: "pane_label", ID: "w1:p2"}}) || *out.Result.(*Result).PaneID != "w1:p2" {
+	if !reflect.DeepEqual(out.Effects, []cli.Effect{{Action: "created", Kind: "tab", ID: "w1:t2"}, {Action: "created", Kind: "pane", ID: "w1:p2"}, {Action: "updated", Kind: "pane_label", ID: "w1:p2"}}) || *out.Result.(*Result).PaneID != "w1:p2" {
 		t.Fatalf("resources changed: %+v", out)
 	}
 }
@@ -710,7 +710,7 @@ func TestWorkspaceRenameFailureRetainsResources(t *testing.T) {
 			if out.Status != tc.status || out.Error == nil || out.Error.Code != tc.code || out.Error.Phase != "tab.rename" {
 				t.Fatalf("%+v", out)
 			}
-			want := []libagent.Effect{{Action: "created", Kind: "workspace", ID: "w2"}, {Action: "created", Kind: "tab", ID: "w2:t1"}, {Action: "created", Kind: "pane", ID: "w2:p1"}}
+			want := []cli.Effect{{Action: "created", Kind: "workspace", ID: "w2"}, {Action: "created", Kind: "tab", ID: "w2:t1"}, {Action: "created", Kind: "pane", ID: "w2:p1"}}
 			if !reflect.DeepEqual(out.Effects, want) {
 				t.Fatalf("effects = %+v, want %+v", out.Effects, want)
 			}
@@ -833,7 +833,7 @@ func TestSpawnLabelsCreatedTabAndPaneWithName(t *testing.T) {
 	p := herdrscript.Pane("w1:p2", "w1", "w1:t2")
 	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "pane.current", Result: herdr.PaneResult{Type: "pane_current", Pane: herdrscript.Pane("w1:p1", "w1", "w1:t1")}}, call{Method: "tab.create", Params: map[string]any{"workspace_id": "w1", "focus": false, "label": "worker"}, Result: herdr.CreatedResult{Type: "tab_created", Tab: herdr.Tab{ID: "w1:t2", WorkspaceID: "w1", Label: "worker"}, RootPane: p}}, call{Method: "pane.rename", Params: map[string]any{"pane_id": "w1:p2", "label": "worker"}, Result: herdr.PaneResult{Type: "pane_info", Pane: p}}, call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"))
 	out := s.run(context.Background(), validOptions(), nil)
-	if out.Status != "success" || !slices.Contains(out.Effects, libagent.Effect{Action: "updated", Kind: "pane_label", ID: "w1:p2"}) {
+	if out.Status != "success" || !slices.Contains(out.Effects, cli.Effect{Action: "updated", Kind: "pane_label", ID: "w1:p2"}) {
 		t.Fatalf("%+v", out)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
@@ -33,7 +34,7 @@ func TestStopIdleClosesResolvedPane(t *testing.T) {
 	if !reflect.DeepEqual(out.Result, want) {
 		t.Fatalf("result %+v want %+v", out.Result, want)
 	}
-	if !reflect.DeepEqual(out.Effects, []libagent.Effect{{Action: "closed", Kind: "pane", ID: "w1:p3"}}) {
+	if !reflect.DeepEqual(out.Effects, []cli.Effect{{Action: "closed", Kind: "pane", ID: "w1:p3"}}) {
 		t.Fatalf("effects %+v", out.Effects)
 	}
 }
@@ -144,7 +145,7 @@ func TestHumanStop(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var b bytes.Buffer
-			if err := (libagent.Outcome{Operation: "agent.stop", Status: "success", Result: Result{AgentRow: tc.row, Stopped: true}}).Write(&b, false, Render); err != nil {
+			if err := (cli.Outcome{Operation: "agent.stop", Status: "success", Result: Result{AgentRow: tc.row, Stopped: true}}).Write(&b, false, Render); err != nil {
 				t.Fatal(err)
 			}
 			if b.String() != tc.want {
@@ -155,7 +156,7 @@ func TestHumanStop(t *testing.T) {
 }
 func TestHumanOperationResults(t *testing.T) {
 	var b bytes.Buffer
-	if err := (libagent.Outcome{Status: "success", Result: Result{AgentRow: herdrscript.Row(), Stopped: true}}).Write(&b, false, Render); err != nil {
+	if err := (cli.Outcome{Status: "success", Result: Result{AgentRow: herdrscript.Row(), Stopped: true}}).Write(&b, false, Render); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := strings.Join(strings.Fields(b.String()), " "), "Stopped worker (claude) in w1:p1."; got != want {
@@ -163,7 +164,7 @@ func TestHumanOperationResults(t *testing.T) {
 	}
 }
 func TestOutputFailuresPropagate(t *testing.T) {
-	herdrscript.CheckOutputFailures(t, Render, libagent.Outcome{Result: Result{}})
+	herdrscript.CheckOutputFailures(t, Render, cli.Outcome{Result: Result{}})
 }
 
 func TestStopByIDClosesVerifiedPane(t *testing.T) {
@@ -226,7 +227,7 @@ func TestStopEndsAgentRecord(t *testing.T) {
 			if out.Status != "success" || !out.Result.(Result).Stopped {
 				t.Fatalf("%+v", out)
 			}
-			want := []libagent.Effect{{Action: "closed", Kind: "pane", ID: "w1:p3"}, {Action: "updated", Kind: "agent_record", ID: rec.ID}}
+			want := []cli.Effect{{Action: "closed", Kind: "pane", ID: "w1:p3"}, {Action: "updated", Kind: "agent_record", ID: rec.ID}}
 			if !reflect.DeepEqual(out.Effects, want) {
 				t.Fatalf("effects %+v", out.Effects)
 			}
@@ -338,7 +339,7 @@ func TestStopReportsOnlyItsOwnRecordEnd(t *testing.T) {
 	s.Cwd = identitytest.Repository(t)
 	cwd, id = s.Cwd, identitytest.Register(t, s.Cwd, live.Agent).ID
 	out := Run(context.Background(), s, Options{Selection: selector.Selection{IDs: []string{id}}})
-	want := []libagent.Effect{{Action: "closed", Kind: "pane", ID: "w1:p3"}}
+	want := []cli.Effect{{Action: "closed", Kind: "pane", ID: "w1:p3"}}
 	if out.Status != "success" || out.Error != nil || !reflect.DeepEqual(out.Effects, want) || !ended(t, cwd, id) {
 		t.Fatalf("%+v %+v", out, out.Error)
 	}
@@ -398,7 +399,7 @@ func TestStopRecordFailureAfterCloseIsPartial(t *testing.T) {
 			tc.break_(t, filepath.Join(s.Cwd, ".fledge", "state", identity.Kind))
 			out := Run(context.Background(), s, tc.o(rec.ID))
 			if out.Status != "partial" || out.Error == nil || out.Error.Phase != "state" ||
-				!reflect.DeepEqual(out.Effects, []libagent.Effect{{Action: "closed", Kind: "pane", ID: "w1:p3"}}) {
+				!reflect.DeepEqual(out.Effects, []cli.Effect{{Action: "closed", Kind: "pane", ID: "w1:p3"}}) {
 				t.Fatalf("%+v %+v", out, out.Error)
 			}
 		})
@@ -415,7 +416,7 @@ func TestStopDoesNotAttributeRecordOfDifferentHarness(t *testing.T) {
 	recorded.Agent = &codex
 	rec := identitytest.Register(t, s.Cwd, recorded)
 	out := Run(context.Background(), s, Options{Selection: selector.Selection{Names: []string{"worker"}}})
-	if out.Status != "success" || !reflect.DeepEqual(out.Effects, []libagent.Effect{{Action: "closed", Kind: "pane", ID: "w1:p3"}}) {
+	if out.Status != "success" || !reflect.DeepEqual(out.Effects, []cli.Effect{{Action: "closed", Kind: "pane", ID: "w1:p3"}}) {
 		t.Fatalf("%+v", out)
 	}
 	if !ended(t, s.Cwd, rec.ID) {

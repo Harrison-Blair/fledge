@@ -11,6 +11,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
@@ -39,12 +40,12 @@ type Result struct {
 // replaces the previous verifier, note, time, and Force flag, keeping only the
 // latest. A registered verifier's live session ref is then stored. This is
 // a workflow guard, not a security boundary.
-func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libagent.Outcome {
-	out := libagent.NewOutcome("task.verify")
+func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Outcome {
+	out := cli.NewOutcome("task.verify")
 	err := task.ValidateID(o.ID)
 	var note string
 	if err == nil {
-		note, err = libagent.ReadText(in, libagent.TextInput{Body: o.Summary, BodyFlag: "summary", BodySet: o.SummarySet, File: o.File, FileFlag: "file", FileSet: o.FileSet, Noun: "summary"})
+		note, err = cli.ReadText(in, cli.TextInput{Body: o.Summary, BodyFlag: "summary", BodySet: o.SummarySet, File: o.File, FileFlag: "file", FileSet: o.FileSet, Noun: "summary"})
 	}
 	if err != nil {
 		out.Fail(err, "validation", false)
@@ -96,7 +97,7 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 		out.Fail(err, "task", false)
 		return out
 	}
-	out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "task", ID: r.ID})
+	out.Effects = append(out.Effects, cli.Effect{Action: "updated", Kind: "task", ID: r.ID})
 	if caller != nil {
 		identity.Observe(s, observeSession, *caller, live, time.Now(), &out)
 	}
@@ -121,7 +122,7 @@ func requireVerifiable(r *task.Record, p *task.Progress, open []string) error {
 }
 
 // Render writes a successful verification.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil

@@ -147,7 +147,7 @@ func (w *failAfterWriter) Write(p []byte) (int, error) {
 
 // CheckOutputFailures fails at every write boundary of each outcome, in human
 // and JSON form, and requires Finish to report the write error unchanged.
-func CheckOutputFailures(t *testing.T, render libagent.HumanRenderer, outcomes ...libagent.Outcome) {
+func CheckOutputFailures(t *testing.T, render cli.HumanRenderer, outcomes ...cli.Outcome) {
 	t.Helper()
 	for i, out := range outcomes {
 		for _, asJSON := range []bool{false, true} {
@@ -160,7 +160,7 @@ func CheckOutputFailures(t *testing.T, render libagent.HumanRenderer, outcomes .
 			for after := 0; after <= count.writes; after++ {
 				sentinel := errors.New("output unavailable")
 				w := &failAfterWriter{remaining: after, err: sentinel}
-				err := libagent.Finish(out, w, asJSON, render)
+				err := cli.Finish(out, w, asJSON, render)
 				if after == count.writes {
 					if w.failed {
 						t.Fatalf("case %d json=%v: more than %d writes", i, asJSON, count.writes)

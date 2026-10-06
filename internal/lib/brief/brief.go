@@ -8,7 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 )
 
 // Sections are the advisory template's `## ` headings, in order.
@@ -40,7 +40,7 @@ func Skeleton() string {
 // Unicode whitespace, and free of NUL. It never alters the text.
 func Validate(text string) error {
 	if err := CheckText(text); err != nil {
-		return libagent.Invalid("brief %v", err)
+		return cli.Invalid("brief %v", err)
 	}
 	return nil
 }

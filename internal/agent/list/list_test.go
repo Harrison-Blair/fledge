@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
@@ -37,7 +38,7 @@ func TestListRejectsIncompleteAgentInfo(t *testing.T) {
 	good, bad := herdrscript.Info(herdrscript.LiveAgent("idle")).Agent, herdrscript.Info(herdrscript.LiveAgent("idle")).Agent
 	bad.PaneID, bad.TerminalID = "w1:p4", ""
 	out := Run(context.Background(), herdrscript.Client(t, call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": []herdr.AgentDetails{good, bad}}}), Options{})
-	if out.Status != "rejected" || out.Result != nil || out.Error == nil || *out.Error != (libagent.Failure{Code: "protocol_error", Message: "protocol_error: incomplete agent.list result", Phase: "agent.list"}) {
+	if out.Status != "rejected" || out.Result != nil || out.Error == nil || *out.Error != (cli.Failure{Code: "protocol_error", Message: "protocol_error: incomplete agent.list result", Phase: "agent.list"}) {
 		t.Fatalf("%+v %+v", out, out.Error)
 	}
 }
@@ -93,7 +94,7 @@ func TestHumanOperationResults(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var b bytes.Buffer
-			if err := (libagent.Outcome{Status: "success", Result: tc.result}).Write(&b, false, Render); err != nil {
+			if err := (cli.Outcome{Status: "success", Result: tc.result}).Write(&b, false, Render); err != nil {
 				t.Fatal(err)
 			}
 			if got := strings.Join(strings.Fields(b.String()), " "); got != tc.want {
@@ -105,8 +106,8 @@ func TestHumanOperationResults(t *testing.T) {
 func TestOutputFailuresPropagate(t *testing.T) {
 	name := "worker"
 	herdrscript.CheckOutputFailures(t, Render,
-		libagent.Outcome{Result: Result{}},
-		libagent.Outcome{Result: Result{Agents: []Row{{AgentRow: libagent.AgentRow{Name: &name}}}}},
+		cli.Outcome{Result: Result{}},
+		cli.Outcome{Result: Result{Agents: []Row{{AgentRow: libagent.AgentRow{Name: &name}}}}},
 	)
 }
 
@@ -155,7 +156,7 @@ func (l lineage) listCall() call {
 func ids(rows []Row) []string {
 	var out []string
 	for _, r := range rows {
-		out = append(out, libagent.Display(r.ID)+"<"+libagent.Display(r.Parent))
+		out = append(out, cli.Display(r.ID)+"<"+cli.Display(r.Parent))
 	}
 	return out
 }
@@ -379,7 +380,7 @@ func newFleet(t *testing.T) fleet {
 	return f
 }
 
-func (f fleet) run(t *testing.T, o Options) libagent.Outcome {
+func (f fleet) run(t *testing.T, o Options) cli.Outcome {
 	c := herdrscript.Client(t, call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": f.agents}})
 	c.Cwd = f.cwd
 	return Run(context.Background(), c, o)
@@ -388,7 +389,7 @@ func (f fleet) run(t *testing.T, o Options) libagent.Outcome {
 func panes(rows []Row) string {
 	var out []string
 	for _, r := range rows {
-		out = append(out, libagent.Display(r.PaneID))
+		out = append(out, cli.Display(r.PaneID))
 	}
 	return strings.Join(out, " ")
 }

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
@@ -41,7 +42,7 @@ func names(v ...string) Options {
 }
 
 // rows summarizes a fan-out as target=outcome/message_id/pane per row.
-func rows(t *testing.T, out libagent.Outcome) string {
+func rows(t *testing.T, out cli.Outcome) string {
 	t.Helper()
 	r, ok := out.Result.(FanOut)
 	if !ok || r.Mode != "fan-out" {
@@ -54,7 +55,7 @@ func rows(t *testing.T, out libagent.Outcome) string {
 			id = *row.MessageID
 		}
 		if row.Agent != nil {
-			pane = libagent.Display(row.Agent.PaneID)
+			pane = cli.Display(row.Agent.PaneID)
 		}
 		parts = append(parts, row.Target+"="+row.Outcome+"/"+id+"/"+pane)
 	}
@@ -70,7 +71,7 @@ func TestFanOutSendsIdenticalHeaderToEachTargetInOrder(t *testing.T) {
 	if got, want := rows(t, out), "worker=submitted/m-0a1b2c/w1:p1 w1:p2=submitted/m-0a1b2c/w1:p2"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
-	if out.Status != "success" || out.Error != nil || len(out.Effects) != 2 || out.Effects[1] != (libagent.Effect{Action: "submitted", Kind: "message", ID: "w1:p2"}) {
+	if out.Status != "success" || out.Error != nil || len(out.Effects) != 2 || out.Effects[1] != (cli.Effect{Action: "submitted", Kind: "message", ID: "w1:p2"}) {
 		t.Fatalf("%+v", out)
 	}
 }
@@ -261,9 +262,9 @@ func TestFanOutRendering(t *testing.T) {
 		r := libagent.NewAgentRow(livePane(pane, status))
 		return &r
 	}
-	blocked := &libagent.Failure{Code: "agent_blocked", Message: "agent_blocked: approval", Phase: "agent.prompt"}
-	stalled := &libagent.Failure{Code: "agent_prompt_stalled", Message: "agent_prompt_stalled: no activity", Phase: "agent.prompt"}
-	uncertain := &libagent.Failure{Code: "transport_error", Message: "transport_error: EOF", Phase: "agent.prompt"}
+	blocked := &cli.Failure{Code: "agent_blocked", Message: "agent_blocked: approval", Phase: "agent.prompt"}
+	stalled := &cli.Failure{Code: "agent_prompt_stalled", Message: "agent_prompt_stalled: no activity", Phase: "agent.prompt"}
+	uncertain := &cli.Failure{Code: "transport_error", Message: "transport_error: EOF", Phase: "agent.prompt"}
 	result := FanOut{Mode: "fan-out", Targets: []Row{
 		{Target: "a", Outcome: "submitted", MessageID: &id, Agent: agent("w1:p1", "idle")},
 		{Target: "b", Outcome: "confirmed", MessageID: &id, Agent: agent("w1:p2", "working")},
@@ -272,7 +273,7 @@ func TestFanOutRendering(t *testing.T) {
 		{Target: "e", Outcome: "unknown", MessageID: &id, Agent: agent("w1:p5", "idle"), Error: uncertain},
 		{Target: "f", Outcome: "rejected", Agent: agent("w1:p6", "blocked"), Error: blocked},
 	}}
-	out := libagent.Outcome{Status: "partial", Result: result, Error: &libagent.Failure{Code: "operation_failed", Message: "3 of 6 targets failed: d (agent_prompt_stalled), e (transport_error), f (agent_blocked)", Phase: "agent.prompt"}}
+	out := cli.Outcome{Status: "partial", Result: result, Error: &cli.Failure{Code: "operation_failed", Message: "3 of 6 targets failed: d (agent_prompt_stalled), e (transport_error), f (agent_blocked)", Phase: "agent.prompt"}}
 	var b bytes.Buffer
 	if err := out.Write(&b, false, Render); err != nil {
 		t.Fatal(err)

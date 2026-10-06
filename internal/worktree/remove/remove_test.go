@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
@@ -164,7 +164,7 @@ func TestOpenCheckoutRemovedThroughHerdr(t *testing.T) {
 		if res.Path != r.topic || *res.Branch != "topic" || res.ClosedWorkspaceID == nil || *res.ClosedWorkspaceID != "w2" {
 			t.Fatalf("%+v", res)
 		}
-		want := []libagent.Effect{{Action: "removed", Kind: "worktree", Path: r.topic}, {Action: "closed", Kind: "workspace", ID: "w2"}}
+		want := []cli.Effect{{Action: "removed", Kind: "worktree", Path: r.topic}, {Action: "closed", Kind: "workspace", ID: "w2"}}
 		if len(out.Effects) != 2 || out.Effects[0] != want[0] || out.Effects[1] != want[1] {
 			t.Fatalf("%+v", out.Effects)
 		}
@@ -200,7 +200,7 @@ func TestClosedCheckoutRemovedWithGit(t *testing.T) {
 		t.Fatal("branch deleted")
 	}
 	res := out.Result.(Result)
-	if res.ClosedWorkspaceID != nil || len(out.Effects) != 1 || out.Effects[0] != (libagent.Effect{Action: "removed", Kind: "worktree", Path: r.topic}) {
+	if res.ClosedWorkspaceID != nil || len(out.Effects) != 1 || out.Effects[0] != (cli.Effect{Action: "removed", Kind: "worktree", Path: r.topic}) {
 		t.Fatalf("%+v %+v", res, out.Effects)
 	}
 }
@@ -225,13 +225,13 @@ func TestRender(t *testing.T) {
 		{Result{Path: "/r/t", Branch: s("topic")}, "Removed worktree /r/t; kept branch topic.\n"},
 	} {
 		var b bytes.Buffer
-		if err := (libagent.Outcome{Status: "success", Result: tc.result}).Write(&b, false, Render); err != nil {
+		if err := (cli.Outcome{Status: "success", Result: tc.result}).Write(&b, false, Render); err != nil {
 			t.Fatal(err)
 		}
 		if b.String() != tc.want {
 			t.Fatalf("got %q want %q", b.String(), tc.want)
 		}
-		herdrscript.CheckOutputFailures(t, Render, libagent.Outcome{Result: tc.result})
+		herdrscript.CheckOutputFailures(t, Render, cli.Outcome{Result: tc.result})
 	}
 }
 
@@ -299,7 +299,7 @@ func TestAgentInSiblingPathDoesNotBlock(t *testing.T) {
 func TestRegisteredAgentBlocksRemoval(t *testing.T) {
 	t.Setenv("HERDR_SESSION", "")
 	r := newRepo(t)
-	st, err := identity.OpenStore(context.Background(), r.root, &libagent.Outcome{})
+	st, err := identity.OpenStore(context.Background(), r.root, &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,7 +376,7 @@ func TestMissingConfiguredBaseBranchExplainsRefusal(t *testing.T) {
 func TestUnreadableAgentRecordBlocksRemoval(t *testing.T) {
 	t.Setenv("HERDR_SESSION", "")
 	r := newRepo(t)
-	st, err := identity.OpenStore(context.Background(), r.root, &libagent.Outcome{})
+	st, err := identity.OpenStore(context.Background(), r.root, &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -431,7 +431,7 @@ func TestAgentInSymlinkedCheckoutBlocksRemoval(t *testing.T) {
 func TestRecordOfDifferentHarnessDoesNotBlockRemoval(t *testing.T) {
 	t.Setenv("HERDR_SESSION", "")
 	r := newRepo(t)
-	st, err := identity.OpenStore(context.Background(), r.root, &libagent.Outcome{})
+	st, err := identity.OpenStore(context.Background(), r.root, &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 )
 
 // Types are the kinds of memory, in help order.
@@ -27,7 +27,7 @@ var slug = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 // ValidateName checks a --name value.
 func ValidateName(name string) error {
 	if len(name) > 64 || !slug.MatchString(name) {
-		return libagent.Invalid("--name must be a kebab-case slug of lowercase letters and digits, at most 64 characters")
+		return cli.Invalid("--name must be a kebab-case slug of lowercase letters and digits, at most 64 characters")
 	}
 	return nil
 }
@@ -35,7 +35,7 @@ func ValidateName(name string) error {
 // ValidateType checks a --type value.
 func ValidateType(kind string) error {
 	if !slices.Contains(Types, kind) {
-		return libagent.Invalid("--type must be one of %s", strings.Join(Types, ", "))
+		return cli.Invalid("--type must be one of %s", strings.Join(Types, ", "))
 	}
 	return nil
 }
@@ -46,13 +46,13 @@ func Validate(m Memory) error {
 		return err
 	}
 	if m.Description == "" || m.Description != strings.TrimSpace(m.Description) || strings.ContainsAny(m.Description, "\r\n") || !utf8.ValidString(m.Description) {
-		return libagent.Invalid("--description must be one nonempty line without surrounding whitespace")
+		return cli.Invalid("--description must be one nonempty line without surrounding whitespace")
 	}
 	if err := ValidateType(m.Type); err != nil {
 		return err
 	}
 	if strings.TrimSpace(m.Body) == "" || !utf8.ValidString(m.Body) {
-		return libagent.Invalid("body must be nonempty UTF-8")
+		return cli.Invalid("body must be nonempty UTF-8")
 	}
 	return nil
 }

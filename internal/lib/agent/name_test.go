@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 )
 
 func TestValidateName(t *testing.T) {
@@ -14,7 +16,7 @@ func TestValidateName(t *testing.T) {
 	}
 	for _, name := range []string{"", "2a", "_a", "Reviewer", "a.b", "a" + strings.Repeat("b", 32), "ab\n"} {
 		err := ValidateName(name)
-		var input *InputError
+		var input *cli.InputError
 		if !errors.As(err, &input) || err.Error() != "--name must match [a-z][a-z0-9_-]{0,31}" {
 			t.Fatalf("ValidateName(%q) = %v", name, err)
 		}

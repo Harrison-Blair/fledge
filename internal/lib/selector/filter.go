@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/harness"
 )
 
@@ -37,7 +38,7 @@ func (f Filter) NeedsRecords() bool {
 // Validate checks f without contacting Herdr or the store.
 func (f Filter) Validate() error {
 	if f.Mine && f.Parent != "" {
-		return libagent.Invalid("--mine and --parent are mutually exclusive")
+		return cli.Invalid("--mine and --parent are mutually exclusive")
 	}
 	if f.Parent != "" {
 		if err := libagent.ValidateID("parent", "agent", f.Parent); err != nil {
@@ -51,13 +52,13 @@ func (f Filter) Validate() error {
 	}
 	switch {
 	case slices.ContainsFunc(f.States, func(s string) bool { return !libagent.IsStatus(s) }):
-		return libagent.Invalid("--state must be idle, working, blocked, done, or unknown")
+		return cli.Invalid("--state must be idle, working, blocked, done, or unknown")
 	case slices.ContainsFunc(f.Harnesses, func(h string) bool { return !harness.IsKind(h) }):
-		return libagent.Invalid("--harness must be a documented Herdr harness kind")
+		return cli.Invalid("--harness must be a documented Herdr harness kind")
 	case slices.ContainsFunc(f.Profiles, blank):
-		return libagent.Invalid("--profile must be nonempty")
+		return cli.Invalid("--profile must be nonempty")
 	case slices.ContainsFunc(f.Worktrees, blank):
-		return libagent.Invalid("--worktree must be nonempty")
+		return cli.Invalid("--worktree must be nonempty")
 	}
 	return nil
 }

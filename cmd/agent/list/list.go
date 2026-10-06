@@ -4,6 +4,7 @@ package list
 import (
 	"github.com/Harrison-Blair/fledge/internal/agent/list"
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 	"github.com/spf13/cobra"
 )
@@ -13,7 +14,7 @@ func New() *cobra.Command {
 	cmd := &cobra.Command{Use: "list", Short: "List all live Herdr agents", Args: cobra.NoArgs,
 		Long: "List all live Herdr agents, or only those the filter flags select. Different\nflags AND together; repeating one flag ORs its values. --profile, --task,\n--worktree, --registered, --mine, and --parent match only agents with a live\nrecord in this repository.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return libagent.Finish(list.Run(cmd.Context(), libagent.FromEnvironment(0), options), cmd.OutOrStdout(), options.JSON, list.Render)
+			return cli.Finish(list.Run(cmd.Context(), libagent.FromEnvironment(0), options), cmd.OutOrStdout(), options.JSON, list.Render)
 		}}
 	f := cmd.Flags()
 	selector.BindFlags(f, &options.Filter)

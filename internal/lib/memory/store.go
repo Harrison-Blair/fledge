@@ -10,7 +10,7 @@ import (
 	"slices"
 	"strings"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/fledgedir"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
@@ -82,7 +82,7 @@ func read(dir, name string) (Memory, error) {
 // failing with memory_exists rather than replacing one. The write and the
 // index regeneration share the state store lock, so concurrent adds never
 // lose index lines. A malformed existing memory fails Add before any write.
-func Add(ctx context.Context, cwd string, m Memory, out *libagent.Outcome) error {
+func Add(ctx context.Context, cwd string, m Memory, out *cli.Outcome) error {
 	if err := Validate(m); err != nil {
 		return err
 	}
@@ -95,14 +95,14 @@ func Add(ctx context.Context, cwd string, m Memory, out *libagent.Outcome) error
 		if err != nil {
 			return err
 		}
-		out.Effects = append(out.Effects, libagent.Effect{Action: "created", Kind: "memory", Path: path})
+		out.Effects = append(out.Effects, cli.Effect{Action: "created", Kind: "memory", Path: path})
 		return writeIndex(dir, append(ms, m), out)
 	})
 }
 
 // Remove deletes the memory named name and regenerates the index under the
 // state store lock. A malformed existing memory fails Remove before any write.
-func Remove(ctx context.Context, cwd, name string, out *libagent.Outcome) error {
+func Remove(ctx context.Context, cwd, name string, out *cli.Outcome) error {
 	if err := ValidateName(name); err != nil {
 		return err
 	}
@@ -115,7 +115,7 @@ func Remove(ctx context.Context, cwd, name string, out *libagent.Outcome) error 
 		if err != nil {
 			return err
 		}
-		out.Effects = append(out.Effects, libagent.Effect{Action: "removed", Kind: "memory", Path: path})
+		out.Effects = append(out.Effects, cli.Effect{Action: "removed", Kind: "memory", Path: path})
 		return writeIndex(dir, slices.DeleteFunc(ms, func(m Memory) bool { return m.Name == name }), out)
 	})
 }
@@ -123,7 +123,7 @@ func Remove(ctx context.Context, cwd, name string, out *libagent.Outcome) error 
 // locked prepares the primary checkout's .fledge and memories directories and,
 // holding the state store lock, reads every memory and runs fn with the
 // directory and those memories. A malformed memory fails before fn runs.
-func locked(ctx context.Context, cwd string, out *libagent.Outcome, fn func(dir string, ms []Memory) error) error {
+func locked(ctx context.Context, cwd string, out *cli.Outcome, fn func(dir string, ms []Memory) error) error {
 	root, err := fledgedir.Root(ctx, cwd)
 	if err != nil {
 		return err
@@ -154,13 +154,13 @@ func locked(ctx context.Context, cwd string, out *libagent.Outcome, fn func(dir 
 var indexStep = func() {}
 
 // writeIndex writes the index of ms, the memories now in dir.
-func writeIndex(dir string, ms []Memory, out *libagent.Outcome) error {
+func writeIndex(dir string, ms []Memory, out *cli.Outcome) error {
 	indexStep()
 	path := filepath.Join(dir, IndexName)
 	if err := state.WriteReplace(path, []byte(Index(ms))); err != nil {
 		return err
 	}
-	out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "file", Path: path})
+	out.Effects = append(out.Effects, cli.Effect{Action: "updated", Kind: "file", Path: path})
 	return nil
 }
 

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/brief"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/proposal"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/tasktest"
@@ -102,7 +102,7 @@ func TestTaskJSONValidation(t *testing.T) {
 			if !errors.As(err, &status) || status.ExitCode() != 2 {
 				t.Fatalf("wrong exit: %v", err)
 			}
-			var envelope libagent.Outcome
+			var envelope cli.Outcome
 			if err = json.Unmarshal(out.Bytes(), &envelope); err != nil {
 				t.Fatalf("not one JSON object: %q: %v", out.String(), err)
 			}
@@ -162,7 +162,7 @@ func TestTaskCreateBriefCLI(t *testing.T) {
 		if !errors.As(err, &status) || status.ExitCode() != 2 {
 			t.Fatalf("%v: wrong exit: %v %s", tc.args, err, out.String())
 		}
-		var envelope libagent.Outcome
+		var envelope cli.Outcome
 		if err := json.Unmarshal(out.Bytes(), &envelope); err != nil || envelope.Status != "rejected" || envelope.Error == nil || envelope.Error.Code != "invalid_input" || !strings.Contains(envelope.Error.Message, tc.message) {
 			t.Fatalf("%v: %v %s", tc.args, err, out.String())
 		}
@@ -220,7 +220,7 @@ func TestTaskImportCLI(t *testing.T) {
 			Parent string
 			Tasks  []struct{ ID string }
 		}
-		Effects []libagent.Effect
+		Effects []cli.Effect
 	}
 	if err := json.Unmarshal(out.Bytes(), &envelope); err != nil || envelope.Status != "success" || len(envelope.Result.Tasks) != 2 {
 		t.Fatalf("%v %s", err, out.String())

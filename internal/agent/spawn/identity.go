@@ -4,6 +4,7 @@ import (
 	"context"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 )
@@ -14,7 +15,7 @@ import (
 // effect, without failing the spawn, since the agent is already running. It
 // returns the caller as a prompt sender when registration's caller lookup
 // succeeded, or nil.
-func (s *spawner) register(ctx context.Context, a herdr.AgentDetails, out *libagent.Outcome) *libagent.Sender {
+func (s *spawner) register(ctx context.Context, a herdr.AgentDetails, out *cli.Outcome) *libagent.Sender {
 	result := out.Result.(*Result)
 	store, err := identity.OpenStore(ctx, s.Cwd, out)
 	var rec identity.Record
@@ -32,7 +33,7 @@ func (s *spawner) register(ctx context.Context, a herdr.AgentDetails, out *libag
 		return sender
 	}
 	result.ID, result.Registered = &rec.ID, true
-	out.Effects = append(out.Effects, libagent.Effect{Action: "created", Kind: "agent_record", ID: rec.ID})
+	out.Effects = append(out.Effects, cli.Effect{Action: "created", Kind: "agent_record", ID: rec.ID})
 	identity.Observe(store, observeSession, rec, &a, s.now(), out)
 	return sender
 }

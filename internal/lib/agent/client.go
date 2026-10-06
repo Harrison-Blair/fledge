@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 )
 
@@ -44,7 +45,7 @@ func (c Client) Call(ctx context.Context, method string, params any, result any)
 	}
 	err := c.API.Call(ctx, method, params, result)
 	if err != nil {
-		return &phaseError{phase: method, cause: err}
+		return cli.AtPhase(method, err)
 	}
 	return nil
 }
@@ -108,14 +109,3 @@ func ValidAgentInfo(a herdr.AgentDetails) bool {
 	}
 	return true
 }
-
-// AtPhase attributes err to an API phase, as Call does for transport failures.
-func AtPhase(phase string, err error) error { return &phaseError{phase: phase, cause: err} }
-
-type phaseError struct {
-	phase string
-	cause error
-}
-
-func (e *phaseError) Error() string { return e.cause.Error() }
-func (e *phaseError) Unwrap() error { return e.cause }

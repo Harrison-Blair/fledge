@@ -9,6 +9,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/harness"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
@@ -39,7 +40,7 @@ func TestPauseMappings(t *testing.T) {
 			s := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "worker"}, Result: herdrscript.Info(p)}, call{Method: "agent.send_keys", Params: map[string]any{"target": p.PaneID, "keys": keys}, Result: herdrscript.OK()})
 			out := s.run(context.Background(), Options{Target: identity.Target{Name: "worker"}, Timeout: 10 * time.Second, NoWait: true})
 			r := out.Result.(Result)
-			if out.Status != "success" || !r.Submitted || r.Settled || len(out.Effects) != 1 || out.Effects[0] != (libagent.Effect{Action: "submitted", Kind: "interrupt", ID: p.PaneID}) {
+			if out.Status != "success" || !r.Submitted || r.Settled || len(out.Effects) != 1 || out.Effects[0] != (cli.Effect{Action: "submitted", Kind: "interrupt", ID: p.PaneID}) {
 				t.Fatalf("%+v %+v", out, r)
 			}
 		})
@@ -79,7 +80,7 @@ func TestPauseGuards(t *testing.T) {
 		for _, harness := range []string{"claude", "", "future"} {
 			t.Run(status+"/"+harness, func(t *testing.T) {
 				p := herdrscript.LiveAgent(status)
-				p.Agent = libagent.Pointer(harness)
+				p.Agent = cli.Pointer(harness)
 				a := herdrscript.Info(p)
 				pending := true
 				if status == "working" {
@@ -204,13 +205,13 @@ func TestRender(t *testing.T) {
 	row := herdrscript.Row()
 	for _, tc := range []struct {
 		name string
-		out  libagent.Outcome
+		out  cli.Outcome
 		want string
 	}{
-		{"requested", libagent.Outcome{Status: "success", Result: Result{AgentRow: row, Submitted: true}}, "Pause requested: worker (claude) in w1:p1.\n"},
-		{"paused", libagent.Outcome{Status: "success", Result: Result{AgentRow: row, Submitted: true, Settled: true}}, "Paused: worker (claude) in w1:p1.\n"},
-		{"already settled", libagent.Outcome{Status: "success", Result: Result{AgentRow: row, Settled: true}}, "Already idle or done: worker (claude) in w1:p1.\n"},
-		{"failure", libagent.Outcome{Status: "partial", Result: Result{AgentRow: row, Submitted: true}, Error: &libagent.Failure{Message: "timed out", Phase: "agent.wait"}}, "partial: timed out (agent.wait)\n"},
+		{"requested", cli.Outcome{Status: "success", Result: Result{AgentRow: row, Submitted: true}}, "Pause requested: worker (claude) in w1:p1.\n"},
+		{"paused", cli.Outcome{Status: "success", Result: Result{AgentRow: row, Submitted: true, Settled: true}}, "Paused: worker (claude) in w1:p1.\n"},
+		{"already settled", cli.Outcome{Status: "success", Result: Result{AgentRow: row, Settled: true}}, "Already idle or done: worker (claude) in w1:p1.\n"},
+		{"failure", cli.Outcome{Status: "partial", Result: Result{AgentRow: row, Submitted: true}, Error: &cli.Failure{Message: "timed out", Phase: "agent.wait"}}, "partial: timed out (agent.wait)\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var b bytes.Buffer

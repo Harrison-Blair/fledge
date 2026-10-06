@@ -9,6 +9,7 @@ import (
 	"io"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
@@ -29,8 +30,8 @@ type Result struct {
 }
 
 // Run resolves the agent in the caller's pane to its live record.
-func Run(ctx context.Context, c libagent.Client) libagent.Outcome {
-	out := libagent.NewOutcome("agent.current")
+func Run(ctx context.Context, c libagent.Client) cli.Outcome {
+	out := cli.NewOutcome("agent.current")
 	s, err := identity.Existing(ctx, c.Cwd)
 	if err != nil {
 		out.Fail(err, "state", false)
@@ -80,18 +81,18 @@ func assigned(s *state.Store, owner string) ([]Task, error) {
 }
 
 // Render writes a successful current outcome as labeled lines.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil
 	}
-	parent := libagent.Display(r.Parent)
+	parent := cli.Display(r.Parent)
 	if r.ParentName != nil {
 		parent += " (" + *r.ParentName + ")"
 	}
 	for _, f := range []struct{ label, value string }{
-		{"Fledge ID", r.ID}, {"Name", libagent.Display(r.Name)}, {"Pane", r.Pane}, {"Workspace ID", r.WorkspaceID},
-		{"Harness", libagent.Display(r.Harness)}, {"Worktree", libagent.Display(r.WorktreePath)}, {"Profile", libagent.Display(r.Profile)}, {"Parent", parent},
+		{"Fledge ID", r.ID}, {"Name", cli.Display(r.Name)}, {"Pane", r.Pane}, {"Workspace ID", r.WorkspaceID},
+		{"Harness", cli.Display(r.Harness)}, {"Worktree", cli.Display(r.WorktreePath)}, {"Profile", cli.Display(r.Profile)}, {"Parent", parent},
 	} {
 		if _, err := fmt.Fprintf(w, "%s: %s\n", f.label, f.value); err != nil {
 			return err

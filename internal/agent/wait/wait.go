@@ -11,6 +11,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
@@ -47,7 +48,7 @@ type Row struct {
 	Target  string             `json:"target"`
 	Outcome string             `json:"outcome"`
 	Agent   *libagent.AgentRow `json:"agent"`
-	Error   *libagent.Failure  `json:"error"`
+	Error   *cli.Failure       `json:"error"`
 }
 
 // target is one wait. An explicit id resolves to its pane when its wait
@@ -59,8 +60,8 @@ type target struct {
 
 // Run waits for one target, or fans out one agent.wait call per target. A
 // single target's result is its agent row.
-func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.NewOutcome("agent.wait")
+func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
+	out := cli.NewOutcome("agent.wait")
 	targets, err := validate(o)
 	if err != nil {
 		out.Fail(err, "validation", false)
@@ -74,7 +75,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			return out
 		}
 		if len(matches) > 1 && !o.All && !o.Any {
-			out.Fail(libagent.Invalid("%d agents matched; waiting on several targets requires --all or --any", len(matches)), "validation", false)
+			out.Fail(cli.Invalid("%d agents matched; waiting on several targets requires --all or --any", len(matches)), "validation", false)
 			return out
 		}
 		for _, m := range matches {
@@ -131,17 +132,17 @@ func validate(o Options) ([]target, error) {
 	}
 	switch {
 	case o.All && o.Any:
-		return nil, libagent.Invalid("at most one of --all or --any is allowed")
+		return nil, cli.Invalid("at most one of --all or --any is allowed")
 	case len(targets) > 1 && !o.All && !o.Any:
-		return nil, libagent.Invalid("waiting on several targets requires --all or --any")
+		return nil, cli.Invalid("waiting on several targets requires --all or --any")
 	case o.Timeout < 0 || (o.Timeout > 0 && o.Timeout < time.Millisecond):
-		return nil, libagent.Invalid("--timeout must be zero (indefinite) or at least 1ms")
+		return nil, cli.Invalid("--timeout must be zero (indefinite) or at least 1ms")
 	case o.Timeout > maxTimeout:
-		return nil, libagent.Invalid("--timeout must be at most %s", maxTimeout)
+		return nil, cli.Invalid("--timeout must be at most %s", maxTimeout)
 	}
 	for _, s := range o.Until {
 		if !libagent.IsStatus(s) {
-			return nil, libagent.Invalid("--until must be idle, working, blocked, done, or unknown")
+			return nil, cli.Invalid("--until must be idle, working, blocked, done, or unknown")
 		}
 	}
 	return targets, nil
@@ -187,7 +188,7 @@ func fanOut(ctx context.Context, c libagent.Client, targets []target, o Options,
 		case waits.Err() != nil && !serverError(r.err):
 			row.Outcome = "cancelled"
 		default:
-			var failed libagent.Outcome
+			var failed cli.Outcome
 			failed.Fail(r.err, "agent.wait", false)
 			row.Outcome, row.Error = "errored", failed.Error
 			if o.All {
@@ -235,7 +236,7 @@ func cancelled() error { return &herdr.Error{Code: "cancelled", Message: "wait c
 
 // Render writes a single target's settled state, or one line per fan-out
 // target. Fan-out rows are also written after a failure.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	switch r := o.Result.(type) {
 	case libagent.AgentRow:
 		if o.Error != nil {
@@ -245,14 +246,14 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		if r.Name != nil && *r.Name != "" {
 			who = r.Name
 		}
-		_, err := fmt.Fprintf(w, "%s is %s.\n", libagent.Display(who), libagent.Display(r.AgentStatus))
+		_, err := fmt.Fprintf(w, "%s is %s.\n", cli.Display(who), cli.Display(r.AgentStatus))
 		return err
 	case FanOut:
 		for _, row := range r.Targets {
 			var line string
 			switch row.Outcome {
 			case "matched":
-				line = fmt.Sprintf("%s is %s", row.Target, libagent.Display(row.Agent.AgentStatus))
+				line = fmt.Sprintf("%s is %s", row.Target, cli.Display(row.Agent.AgentStatus))
 				if r.Winner != nil && *r.Winner == row.Target {
 					line += " (first match)"
 				}

@@ -3,6 +3,7 @@ package importcmd
 
 import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	taskimport "github.com/Harrison-Blair/fledge/internal/task/import"
 	"github.com/spf13/cobra"
 )
@@ -19,7 +20,7 @@ func New() *cobra.Command {
 	f.BoolVar(&asJSON, "json", false, "Emit a structured outcome")
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 		options.FileSet = f.Changed("file")
-		return libagent.Finish(taskimport.Run(cmd.Context(), libagent.FromEnvironment(0), options, cmd.InOrStdin()), cmd.OutOrStdout(), asJSON, taskimport.Render)
+		return cli.Finish(taskimport.Run(cmd.Context(), libagent.FromEnvironment(0), options, cmd.InOrStdin()), cmd.OutOrStdout(), asJSON, taskimport.Render)
 	}
 	return cmd
 }

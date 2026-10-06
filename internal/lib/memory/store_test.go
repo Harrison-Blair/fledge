@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
@@ -38,14 +38,14 @@ func code(err error) string {
 
 func add(t *testing.T, cwd string, m Memory) {
 	t.Helper()
-	if err := Add(context.Background(), cwd, m, &libagent.Outcome{}); err != nil {
+	if err := Add(context.Background(), cwd, m, &cli.Outcome{}); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestAddWritesMemoryAndIndexInPrimaryCheckout(t *testing.T) {
 	root := identitytest.Repository(t)
-	out := libagent.Outcome{}
+	out := cli.Outcome{}
 	if err := Add(context.Background(), root, valid(), &out); err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestAddWritesMemoryAndIndexInPrimaryCheckout(t *testing.T) {
 	if got := readFile(t, filepath.Join(dir, IndexName)); got != want {
 		t.Fatalf("%q", got)
 	}
-	if !reflect.DeepEqual(out.Effects[len(out.Effects)-2:], []libagent.Effect{{Action: "created", Kind: "memory", Path: filepath.Join(dir, "herdr-socket.md")}, {Action: "updated", Kind: "file", Path: filepath.Join(dir, IndexName)}}) {
+	if !reflect.DeepEqual(out.Effects[len(out.Effects)-2:], []cli.Effect{{Action: "created", Kind: "memory", Path: filepath.Join(dir, "herdr-socket.md")}, {Action: "updated", Kind: "file", Path: filepath.Join(dir, IndexName)}}) {
 		t.Fatalf("%+v", out.Effects)
 	}
 	// The managed ignore file keeps memories out of Git.
@@ -71,8 +71,8 @@ func TestAddRejectsInvalidMemoryBeforeWriting(t *testing.T) {
 	root := identitytest.Repository(t)
 	m := valid()
 	m.Type = "note"
-	var input *libagent.InputError
-	if err := Add(context.Background(), root, m, &libagent.Outcome{}); !errors.As(err, &input) {
+	var input *cli.InputError
+	if err := Add(context.Background(), root, m, &cli.Outcome{}); !errors.As(err, &input) {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(root, ".fledge")); !os.IsNotExist(err) {
@@ -85,7 +85,7 @@ func TestAddRejectsExistingNameWithoutOverwriting(t *testing.T) {
 	add(t, root, valid())
 	m := valid()
 	m.Body = "replacement\n"
-	err := Add(context.Background(), root, m, &libagent.Outcome{})
+	err := Add(context.Background(), root, m, &cli.Outcome{})
 	if code(err) != "memory_exists" {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestConcurrentAddsKeepEveryIndexLine(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs <- Add(context.Background(), root, Memory{Name: fmt.Sprintf("fact-%02d", i), Description: "d", Type: "project", Body: "b"}, &libagent.Outcome{})
+			errs <- Add(context.Background(), root, Memory{Name: fmt.Sprintf("fact-%02d", i), Description: "d", Type: "project", Body: "b"}, &cli.Outcome{})
 		}()
 	}
 	wg.Wait()
@@ -165,7 +165,7 @@ func TestListAndGetReadWithoutCreatingState(t *testing.T) {
 	if m, err := Get(dir, "herdr-socket"); err != nil || m != valid() {
 		t.Fatalf("%+v %v", m, err)
 	}
-	var input *libagent.InputError
+	var input *cli.InputError
 	if _, err := Get(dir, "../x"); !errors.As(err, &input) {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestRemoveDeletesMemoryAndRegeneratesIndex(t *testing.T) {
 	add(t, root, valid())
 	add(t, root, Memory{Name: "alpha", Description: "First fact", Type: "user", Body: "x\n"})
 	dir := filepath.Join(root, ".fledge", "memories")
-	out := libagent.Outcome{}
+	out := cli.Outcome{}
 	if err := Remove(context.Background(), root, "herdr-socket", &out); err != nil {
 		t.Fatal(err)
 	}
@@ -198,10 +198,10 @@ func TestRemoveDeletesMemoryAndRegeneratesIndex(t *testing.T) {
 	if got := readFile(t, filepath.Join(dir, IndexName)); got != "- [alpha](alpha.md) — First fact\n" {
 		t.Fatalf("%q", got)
 	}
-	if !reflect.DeepEqual(out.Effects, []libagent.Effect{{Action: "removed", Kind: "memory", Path: filepath.Join(dir, "herdr-socket.md")}, {Action: "updated", Kind: "file", Path: filepath.Join(dir, IndexName)}}) {
+	if !reflect.DeepEqual(out.Effects, []cli.Effect{{Action: "removed", Kind: "memory", Path: filepath.Join(dir, "herdr-socket.md")}, {Action: "updated", Kind: "file", Path: filepath.Join(dir, IndexName)}}) {
 		t.Fatalf("%+v", out.Effects)
 	}
-	if err := Remove(context.Background(), root, "alpha", &libagent.Outcome{}); err != nil {
+	if err := Remove(context.Background(), root, "alpha", &cli.Outcome{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := readFile(t, filepath.Join(dir, IndexName)); got != "" {
@@ -211,11 +211,11 @@ func TestRemoveDeletesMemoryAndRegeneratesIndex(t *testing.T) {
 
 func TestRemoveUnknownNameFails(t *testing.T) {
 	root := identitytest.Repository(t)
-	if err := Remove(context.Background(), root, "herdr-socket", &libagent.Outcome{}); code(err) != "memory_not_found" {
+	if err := Remove(context.Background(), root, "herdr-socket", &cli.Outcome{}); code(err) != "memory_not_found" {
 		t.Fatal(err)
 	}
 	add(t, root, valid())
-	if err := Remove(context.Background(), root, "alpha", &libagent.Outcome{}); code(err) != "memory_not_found" {
+	if err := Remove(context.Background(), root, "alpha", &cli.Outcome{}); code(err) != "memory_not_found" {
 		t.Fatal(err)
 	}
 }
@@ -244,11 +244,11 @@ func TestMalformedMemoryRejectsWritesWithoutMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := snapshot(t, dir)
-	for name, write := range map[string]func(*libagent.Outcome) error{
-		"add":    func(out *libagent.Outcome) error { return Add(context.Background(), root, valid(), out) },
-		"remove": func(out *libagent.Outcome) error { return Remove(context.Background(), root, "first", out) },
+	for name, write := range map[string]func(*cli.Outcome) error{
+		"add":    func(out *cli.Outcome) error { return Add(context.Background(), root, valid(), out) },
+		"remove": func(out *cli.Outcome) error { return Remove(context.Background(), root, "first", out) },
 	} {
-		out := libagent.Outcome{}
+		out := cli.Outcome{}
 		err := write(&out)
 		if err == nil || !strings.Contains(err.Error(), "broken.md") {
 			t.Errorf("%s: %v", name, err)

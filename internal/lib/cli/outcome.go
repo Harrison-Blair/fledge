@@ -1,4 +1,4 @@
-package agent
+package cli
 
 import (
 	"encoding/json"
@@ -6,11 +6,10 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 )
 
-// Outcome is the stable JSON envelope for every agent operation.
+// Outcome is the stable JSON envelope for every command operation.
 type Outcome struct {
 	Operation string   `json:"operation"`
 	Status    string   `json:"status"`
@@ -37,46 +36,8 @@ type Effect struct {
 	ID     string `json:"id,omitempty"`
 	Path   string `json:"path,omitempty"`
 }
-type AgentRow struct {
-	Name        *string `json:"name"`
-	Harness     *string `json:"harness"`
-	AgentStatus *string `json:"agent_status"`
-	WorkspaceID *string `json:"workspace_id"`
-	TabID       *string `json:"tab_id"`
-	PaneID      *string `json:"pane_id"`
-	Cwd         *string `json:"cwd"`
-}
 
-// NewAgentRow reports a live pane's agent fields, preserving empty values as null.
-func NewAgentRow(p herdr.Pane) AgentRow {
-	return AgentRow{Name: p.Name, Harness: p.Agent, AgentStatus: Pointer(p.AgentStatus), WorkspaceID: Pointer(p.WorkspaceID), TabID: Pointer(p.TabID), PaneID: Pointer(p.PaneID), Cwd: p.Cwd}
-}
-
-// Pointer returns nil for an empty string, so optional JSON fields encode null.
-func Pointer(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
-}
-
-// Display renders an optional value for humans, showing "-" when it is absent.
-func Display(s *string) string {
-	if s == nil {
-		return "-"
-	}
-	return DisplayString(*s)
-}
-
-// DisplayString renders a value for humans, showing "-" when it is empty.
-func DisplayString(s string) string {
-	if s == "" {
-		return "-"
-	}
-	return s
-}
-
-// Fail records err as the outcome's failure. A located transport error
+// Fail records err as the outcome's failure. An error located by AtPhase
 // overrides phase; mutating marks unconfirmed requests as unknown.
 func (o *Outcome) Fail(err error, phase string, mutating bool) {
 	var located *phaseError
@@ -175,7 +136,7 @@ func (o Outcome) Write(w io.Writer, asJSON bool, render HumanRenderer) error {
 // Error details are never printed twice by callers.
 func Finish(o Outcome, w io.Writer, asJSON bool, render HumanRenderer) error {
 	if err := o.Write(w, asJSON, render); err != nil {
-		return &cli.OutputError{Cause: err}
+		return &OutputError{Cause: err}
 	}
 	if o.Error != nil {
 		return &ResultError{Outcome: o}

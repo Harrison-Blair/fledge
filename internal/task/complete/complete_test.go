@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
@@ -329,7 +329,7 @@ func TestOwnerCompletionCapturesSessionRef(t *testing.T) {
 	if rec := loadAgent(t, repo, owner); rec.NativeSession == nil || rec.NativeSession.Value != "sess-1" {
 		t.Fatalf("session ref not captured: %+v", rec.NativeSession)
 	}
-	want := []libagent.Effect{{Action: "updated", Kind: "task", ID: id}, {Action: "updated", Kind: "native_session", ID: owner}}
+	want := []cli.Effect{{Action: "updated", Kind: "task", ID: id}, {Action: "updated", Kind: "native_session", ID: owner}}
 	if !reflect.DeepEqual(out.Effects[len(out.Effects)-2:], want) {
 		t.Fatalf("%+v", out.Effects)
 	}
@@ -343,7 +343,7 @@ func TestForcedCompletionObservesNoSession(t *testing.T) {
 	id := tasktest.Seed(t, repo, task.Record{Title: "t", Status: task.Assigned, Owner: &owner.ID})
 	out := Run(context.Background(), tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p1", withSession(boss, "boss-sess"))), Options{ID: id, Summary: "x", SummarySet: true, Force: true}, strings.NewReader(""))
 	if out.Error != nil || loadAgent(t, repo, owner.ID).NativeSession != nil || loadAgent(t, repo, bossRec.ID).NativeSession != nil ||
-		slices.ContainsFunc(out.Effects, func(e libagent.Effect) bool { return e.Kind == "native_session" }) {
+		slices.ContainsFunc(out.Effects, func(e cli.Effect) bool { return e.Kind == "native_session" }) {
 		t.Fatalf("%+v %+v", out.Error, out.Effects)
 	}
 }
@@ -362,7 +362,7 @@ func TestCompletionSucceedsWhenSessionWriteFails(t *testing.T) {
 	if out.Error != nil || out.Status != "success" || r.Status != task.Completed {
 		t.Fatalf("%+v %+v", out.Error, r)
 	}
-	if !slices.Contains(out.Effects, libagent.Effect{Action: "warning", Kind: "native_session", ID: owner}) {
+	if !slices.Contains(out.Effects, cli.Effect{Action: "warning", Kind: "native_session", ID: owner}) {
 		t.Fatalf("%+v", out.Effects)
 	}
 }

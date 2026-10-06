@@ -16,6 +16,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
@@ -37,7 +38,7 @@ func client(t *testing.T, calls ...call) libagent.Client {
 }
 func store(t *testing.T, c libagent.Client) *state.Store {
 	t.Helper()
-	s, err := OpenStore(context.Background(), c.Cwd, &libagent.Outcome{})
+	s, err := OpenStore(context.Background(), c.Cwd, &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +133,7 @@ func TestRegisterRequiresTerminalID(t *testing.T) {
 }
 
 func TestOpenStoreOutsideRepositoryFails(t *testing.T) {
-	out := libagent.Outcome{}
+	out := cli.Outcome{}
 	if _, err := OpenStore(context.Background(), t.TempDir(), &out); err == nil || len(out.Effects) != 0 {
 		t.Fatalf("%v %+v", err, out)
 	}
@@ -140,7 +141,7 @@ func TestOpenStoreOutsideRepositoryFails(t *testing.T) {
 
 func TestOpenStoreCreatesIgnoredStateDirectory(t *testing.T) {
 	root := repository(t)
-	out := libagent.Outcome{}
+	out := cli.Outcome{}
 	if _, err := OpenStore(context.Background(), root, &out); err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +342,7 @@ func TestResolveMissingAndInvalidIDs(t *testing.T) {
 	if _, _, err := Resolve(context.Background(), store(t, c), c, "0000beef"); code(err) != "agent_record_not_found" {
 		t.Fatalf("%v", err)
 	}
-	var input *libagent.InputError
+	var input *cli.InputError
 	if _, _, err := Resolve(context.Background(), store(t, c), c, "../x"); !errors.As(err, &input) {
 		t.Fatalf("%v", err)
 	}
@@ -367,7 +368,7 @@ func TestLiveFindsUnendedRecordInSession(t *testing.T) {
 
 func TestTargetValidatesExactlyOneSelector(t *testing.T) {
 	for _, tg := range []Target{{}, {Name: "a", Pane: "p"}, {Name: "a", ID: "0000beef"}, {Pane: "p", ID: "0000beef"}} {
-		var input *libagent.InputError
+		var input *cli.InputError
 		if err := tg.Validate(); !errors.As(err, &input) {
 			t.Fatalf("%+v: %v", tg, err)
 		}
@@ -493,7 +494,7 @@ func TestWithSenderReusesCallerLookup(t *testing.T) {
 	caller := details("old:p1", "term_parent")
 	name := "orchestrator"
 	caller.Name = &name
-	want := libagent.Sender{Name: &name, Pane: libagent.Pointer("old:p1"), Kind: "named"}
+	want := libagent.Sender{Name: &name, Pane: cli.Pointer("old:p1"), Kind: "named"}
 	get := call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: info(caller)}
 
 	c := client(t, get)
@@ -916,7 +917,7 @@ func TestReopenUnknownOrInvalidRecord(t *testing.T) {
 	if err := Reopen(s, "0123abcd"); code(err) != "agent_record_not_found" {
 		t.Fatalf("%v", err)
 	}
-	var input *libagent.InputError
+	var input *cli.InputError
 	if err := Reopen(s, "nope"); !errors.As(err, &input) || err.Error() != "--id must be an 8 lowercase hexadecimal agent id" {
 		t.Fatalf("%v", err)
 	}
@@ -966,7 +967,7 @@ func TestReopenRefusesRecordOfAnotherSession(t *testing.T) {
 
 func TestRenameUpdatesNameAndLocationKeepingRecord(t *testing.T) {
 	t.Setenv("HERDR_SESSION", "dev")
-	for label, stored := range map[string]*string{"lost name": libagent.Pointer("worker"), "never named": nil} {
+	for label, stored := range map[string]*string{"lost name": cli.Pointer("worker"), "never named": nil} {
 		t.Run(label, func(t *testing.T) {
 			c := client(t)
 			d := details("w1:p3", "term_a")
@@ -978,10 +979,10 @@ func TestRenameUpdatesNameAndLocationKeepingRecord(t *testing.T) {
 				t.Fatal(err)
 			}
 			a := moved("w2:p1", "w2", "term_a")
-			a.Name = libagent.Pointer("helper")
+			a.Name = cli.Pointer("helper")
 			got, err := Rename(store(t, c), rec, a)
 			want := rec
-			want.Name, want.Pane, want.WorkspaceID = libagent.Pointer("helper"), "w2:p1", "w2"
+			want.Name, want.Pane, want.WorkspaceID = cli.Pointer("helper"), "w2:p1", "w2"
 			if err != nil || !reflect.DeepEqual(got, want) {
 				t.Fatalf("%+v %v", got, err)
 			}
@@ -1015,7 +1016,7 @@ func TestRenameRefusesStaleRecordUnchanged(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			tc.a.Name = libagent.Pointer("helper")
+			tc.a.Name = cli.Pointer("helper")
 			if _, err := Rename(s, rec, tc.a); code(err) != "agent_identity_stale" {
 				t.Fatalf("%v", err)
 			}
@@ -1184,28 +1185,28 @@ func TestObserveStoresTheLiveSessionBestEffort(t *testing.T) {
 		seen = id + " " + *s.Value + " " + at.Format(time.RFC3339)
 		return stored, true, nil
 	}
-	out := libagent.Outcome{}
+	out := cli.Outcome{}
 	if got := Observe(nil, ok, rec, &herdr.AgentDetails{AgentSession: &s1}, now, &out); !reflect.DeepEqual(got, stored) || seen != "0000aaaa s1 2026-09-24T05:00:00Z" ||
-		!reflect.DeepEqual(out.Effects, []libagent.Effect{{Action: "updated", Kind: "native_session", ID: "0000aaaa"}}) {
+		!reflect.DeepEqual(out.Effects, []cli.Effect{{Action: "updated", Kind: "native_session", ID: "0000aaaa"}}) {
 		t.Fatalf("%+v %q %+v", got, seen, out.Effects)
 	}
 	failing := func(*state.Store, string, herdr.AgentSession, time.Time) (Record, bool, error) {
 		return Record{}, false, errors.New("read-only")
 	}
-	out = libagent.Outcome{Status: "success"}
+	out = cli.Outcome{Status: "success"}
 	if got := Observe(nil, failing, rec, &herdr.AgentDetails{AgentSession: &s1}, now, &out); !reflect.DeepEqual(got, rec) || out.Error != nil ||
-		!reflect.DeepEqual(out.Effects, []libagent.Effect{{Action: "warning", Kind: "native_session", ID: "0000aaaa"}}) {
+		!reflect.DeepEqual(out.Effects, []cli.Effect{{Action: "warning", Kind: "native_session", ID: "0000aaaa"}}) {
 		t.Fatalf("%+v %+v", got, out)
 	}
 	unchanged := func(*state.Store, string, herdr.AgentSession, time.Time) (Record, bool, error) {
 		return stored, false, nil
 	}
-	out = libagent.Outcome{}
+	out = cli.Outcome{}
 	if got := Observe(nil, unchanged, rec, &herdr.AgentDetails{AgentSession: &s1}, now, &out); !reflect.DeepEqual(got, stored) || len(out.Effects) != 0 {
 		t.Fatalf("%+v %+v", got, out)
 	}
 	for _, live := range []*herdr.AgentDetails{nil, {}} {
-		out = libagent.Outcome{}
+		out = cli.Outcome{}
 		if got := Observe(nil, failing, rec, live, now, &out); !reflect.DeepEqual(got, rec) || len(out.Effects) != 0 {
 			t.Fatalf("%+v %+v", got, out)
 		}
@@ -1382,7 +1383,7 @@ func TestTargetGetWithUsesGivenStore(t *testing.T) {
 func TestTargetGetWithOpenFailureIsIdentityPhase(t *testing.T) {
 	c := client(t)
 	_, _, _, err := (Target{ID: "0000beef"}).GetWith(context.Background(), c, func() (*state.Store, error) { return nil, errors.New("unavailable") })
-	var out libagent.Outcome
+	var out cli.Outcome
 	out.Fail(err, "agent.get", false)
 	if out.Error.Phase != "identity" || out.Error.Message != "unavailable" {
 		t.Fatalf("%+v", out.Error)

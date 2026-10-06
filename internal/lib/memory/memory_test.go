@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 )
 
 func valid() Memory {
@@ -71,7 +71,7 @@ func TestValidateRejectsEachBadField(t *testing.T) {
 	} {
 		m := valid()
 		mutate(&m)
-		var input *libagent.InputError
+		var input *cli.InputError
 		if err := Validate(m); !errors.As(err, &input) {
 			t.Errorf("%s: %v", name, err)
 		}

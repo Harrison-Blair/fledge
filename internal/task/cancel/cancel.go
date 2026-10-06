@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 )
 
@@ -27,8 +28,8 @@ type Result struct {
 // Subtasks are left as they are. Dependents keep the cancelled prerequisite,
 // which now counts as satisfied; those left ready are found under the same
 // store lock.
-func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.NewOutcome("task.cancel")
+func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
+	out := cli.NewOutcome("task.cancel")
 	if err := task.ValidateID(o.ID); err != nil {
 		out.Fail(err, "validation", false)
 		return out
@@ -64,13 +65,13 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Fail(err, "task", false)
 		return out
 	}
-	out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "task", ID: r.ID})
+	out.Effects = append(out.Effects, cli.Effect{Action: "updated", Kind: "task", ID: r.ID})
 	out.Result = Result{Record: r, Unblocked: unblocked}
 	return out
 }
 
 // Render writes a successful cancellation.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil

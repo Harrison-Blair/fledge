@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/harness"
 )
 
@@ -15,7 +16,7 @@ func TestValidateHarness(t *testing.T) {
 	}
 	for _, kind := range []string{"nope", ""} {
 		err := ValidateHarness(kind)
-		var input *InputError
+		var input *cli.InputError
 		if !errors.As(err, &input) || err.Error() != "--harness must be a documented Herdr harness kind" {
 			t.Fatalf("%q: %v", kind, err)
 		}

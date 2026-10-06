@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
@@ -41,7 +42,7 @@ func ResolveIn(ctx context.Context, s *state.Store, c libagent.Client, f Filter)
 // resolve is Resolve with open supplying the store after the listing.
 func resolve(ctx context.Context, c libagent.Client, f Filter, open func() (*state.Store, error)) ([]Match, error) {
 	if err := f.Validate(); err != nil {
-		return nil, libagent.AtPhase("validation", err)
+		return nil, cli.AtPhase("validation", err)
 	}
 	agents, err := c.List(ctx)
 	if err != nil {
@@ -49,7 +50,7 @@ func resolve(ctx context.Context, c libagent.Client, f Filter, open func() (*sta
 	}
 	s, records, err := load(open)
 	if err != nil && f.NeedsRecords() {
-		return nil, libagent.AtPhase("state", err)
+		return nil, cli.AtPhase("state", err)
 	}
 	match := func(a herdr.AgentDetails) *identity.Record {
 		if rec, ok := identity.Attributed(records, a); ok {
@@ -66,7 +67,7 @@ func resolve(ctx context.Context, c libagent.Client, f Filter, open func() (*sta
 		if caller == nil {
 			// Without a store, RequireCaller fails with caller_unregistered.
 			_, err := identity.RequireCaller(ctx, nil, c)
-			return nil, libagent.AtPhase("identity", err)
+			return nil, cli.AtPhase("identity", err)
 		}
 		parent = caller.ID
 	}
@@ -74,7 +75,7 @@ func resolve(ctx context.Context, c libagent.Client, f Filter, open func() (*sta
 	for _, id := range f.Tasks {
 		t, err := task.Get(s, id)
 		if err != nil {
-			return nil, libagent.AtPhase("selection", err)
+			return nil, cli.AtPhase("selection", err)
 		}
 		if t.Owner != nil {
 			owners = append(owners, *t.Owner)
@@ -83,7 +84,7 @@ func resolve(ctx context.Context, c libagent.Client, f Filter, open func() (*sta
 	worktrees := make([]string, len(f.Worktrees))
 	for i, w := range f.Worktrees {
 		if worktrees[i], err = filepath.Abs(w); err != nil {
-			return nil, libagent.AtPhase("validation", libagent.Invalid("--worktree %q: %v", w, err))
+			return nil, cli.AtPhase("validation", cli.Invalid("--worktree %q: %v", w, err))
 		}
 	}
 	matches := []Match{}

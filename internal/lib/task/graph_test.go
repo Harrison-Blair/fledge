@@ -5,13 +5,13 @@ import (
 	"reflect"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
 
 func TestRecordWithoutGraphFieldsLoads(t *testing.T) {
-	s, err := identity.OpenStore(context.Background(), identitytest.Repository(t), &libagent.Outcome{})
+	s, err := identity.OpenStore(context.Background(), identitytest.Repository(t), &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestUnmetKeepsOrderAndTreatsCancelledAsSatisfied(t *testing.T) {
 }
 
 func TestCheckLinks(t *testing.T) {
-	s, err := identity.OpenStore(context.Background(), identitytest.Repository(t), &libagent.Outcome{})
+	s, err := identity.OpenStore(context.Background(), identitytest.Repository(t), &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}

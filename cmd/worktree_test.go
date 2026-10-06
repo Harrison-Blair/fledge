@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 )
 
 func TestWorktreeHelp(t *testing.T) {
@@ -39,7 +39,7 @@ func TestWorktreeJSONValidation(t *testing.T) {
 			if !errors.As(err, &status) || status.ExitCode() != 2 {
 				t.Fatalf("wrong exit: %v", err)
 			}
-			var envelope libagent.Outcome
+			var envelope cli.Outcome
 			if err = json.Unmarshal(out.Bytes(), &envelope); err != nil {
 				t.Fatalf("not one JSON object: %q: %v", out.String(), err)
 			}

@@ -6,7 +6,7 @@ import (
 	"context"
 	"io"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/memory"
 )
 
@@ -24,8 +24,8 @@ type Result struct {
 }
 
 // Run reads the memories, ordered by name, without contacting Herdr.
-func Run(ctx context.Context, cwd string, o Options) libagent.Outcome {
-	out := libagent.NewOutcome("memory.list")
+func Run(ctx context.Context, cwd string, o Options) cli.Outcome {
+	out := cli.NewOutcome("memory.list")
 	if o.Type != "" {
 		if err := memory.ValidateType(o.Type); err != nil {
 			out.Fail(err, "validation", false)
@@ -52,7 +52,7 @@ func Run(ctx context.Context, cwd string, o Options) libagent.Outcome {
 }
 
 // Render writes the entries as index lines.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil

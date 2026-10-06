@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
@@ -257,7 +257,7 @@ func TestAlreadyOpenWorktreeWithMatchingTabLabelCreatesTab(t *testing.T) {
 	s := fake(t, call{Method: "session.snapshot", Result: snap}, call{Method: "worktree.list", Params: map[string]any{"cwd": path}, Result: herdr.WorktreeListResult{Type: "worktree_list", Source: struct {
 		RepoRoot string `json:"repo_root"`
 	}{RepoRoot: path}, Worktrees: []herdr.Worktree{{Path: path, OpenWorkspaceID: &ws}}}}, call{Method: "worktree.open", Params: map[string]any{"cwd": path, "path": path, "focus": false}, Result: herdr.CreatedResult{Type: "worktree_opened", Workspace: herdr.Workspace{ID: "w1"}, Tab: herdr.Tab{ID: "w1:t1", WorkspaceID: "w1"}, RootPane: herdrscript.Pane("w1:p1", "w1", "w1:t1"), Worktree: herdr.Worktree{Path: path}, AlreadyOpen: &open}}, call{Method: "tab.create", Params: map[string]any{"label": "build", "workspace_id": "w1", "cwd": path, "focus": false}, Result: herdr.CreatedResult{Type: "tab_created", Tab: herdr.Tab{ID: "w1:t2", WorkspaceID: "w1", Label: "build"}, RootPane: p}}, labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"))
-	if out := s.run(context.Background(), o, nil); out.Status != "success" || !slices.Contains(out.Effects, libagent.Effect{Action: "reused", Kind: "workspace", ID: "w1"}) {
+	if out := s.run(context.Background(), o, nil); out.Status != "success" || !slices.Contains(out.Effects, cli.Effect{Action: "reused", Kind: "workspace", ID: "w1"}) {
 		t.Fatalf("%+v %+v", out, out.Error)
 	}
 }
@@ -299,7 +299,7 @@ func TestNewWorktreeGetsManagedIgnore(t *testing.T) {
 	if b, err := os.ReadFile(ignore); err != nil || string(b) != "*\n!/profiles/\n!/profiles/*.md\n" {
 		t.Fatalf("%q %v", b, err)
 	}
-	want := []libagent.Effect{{Action: "created", Kind: "worktree", Path: path}, {Action: "created", Kind: "directory", Path: filepath.Join(path, ".fledge")}, {Action: "created", Kind: "file", Path: ignore}}
+	want := []cli.Effect{{Action: "created", Kind: "worktree", Path: path}, {Action: "created", Kind: "directory", Path: filepath.Join(path, ".fledge")}, {Action: "created", Kind: "file", Path: ignore}}
 	for i, e := range out.Effects {
 		if e == want[0] {
 			if len(out.Effects) < i+3 || !slices.Equal(out.Effects[i:i+3], want) {
@@ -332,7 +332,7 @@ func TestNewWorktreeIgnoreFailureIsPartial(t *testing.T) {
 	if out.Status != "partial" || out.Error == nil || out.Error.Phase != "worktree.ignore" || !strings.Contains(out.Error.Message, path) {
 		t.Fatalf("%+v %+v", out, out.Error)
 	}
-	if !slices.Contains(out.Effects, libagent.Effect{Action: "created", Kind: "worktree", Path: path}) || !slices.Contains(out.Effects, libagent.Effect{Action: "created", Kind: "workspace", ID: "w2"}) {
+	if !slices.Contains(out.Effects, cli.Effect{Action: "created", Kind: "worktree", Path: path}) || !slices.Contains(out.Effects, cli.Effect{Action: "created", Kind: "workspace", ID: "w2"}) {
 		t.Fatalf("%+v", out.Effects)
 	}
 }

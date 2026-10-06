@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"reflect"
 	"strings"
 	"testing"
@@ -129,7 +129,7 @@ func TestGetShowsPrerequisiteStates(t *testing.T) {
 // usage in either output.
 func TestGetOmitsLegacyUsage(t *testing.T) {
 	repo := identitytest.Repository(t)
-	s, err := identity.OpenStore(context.Background(), repo, &libagent.Outcome{})
+	s, err := identity.OpenStore(context.Background(), repo, &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestRenderRemovesControlSequences(t *testing.T) {
 	dep := Dependency{ID: "22222222", Title: evil, Status: task.Cancelled, CancelReason: &evil}
 	r := Result{Record: task.Record{ID: "11111111", Title: evil, Status: task.Cancelled, Brief: evil + "\n" + evil, Result: &evil, VerificationNote: &evil, CreatedAt: "now", CancelledAt: tasktest.Ptr("later"), CancelReason: &evil}, Dependencies: []Dependency{dep}}
 	var buf bytes.Buffer
-	if err := Render(&buf, libagent.Outcome{Result: r}); err != nil {
+	if err := Render(&buf, cli.Outcome{Result: r}); err != nil {
 		t.Fatal(err)
 	}
 	if got := buf.String(); strings.ContainsAny(got, "\x1b\x07") || !strings.Contains(got, "X") {

@@ -4,7 +4,7 @@ package remove
 import (
 	"os"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/memory/remove"
 	"github.com/spf13/cobra"
 )
@@ -18,7 +18,7 @@ func New() *cobra.Command {
 	f.BoolVar(&asJSON, "json", false, "Emit a structured outcome")
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 		cwd, _ := os.Getwd()
-		return libagent.Finish(remove.Run(cmd.Context(), cwd, options), cmd.OutOrStdout(), asJSON, remove.Render)
+		return cli.Finish(remove.Run(cmd.Context(), cwd, options), cmd.OutOrStdout(), asJSON, remove.Render)
 	}
 	return cmd
 }

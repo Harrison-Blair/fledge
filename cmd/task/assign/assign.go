@@ -3,6 +3,7 @@ package assign
 
 import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/task/assign"
 	"github.com/spf13/cobra"
 )
@@ -20,7 +21,7 @@ func New() *cobra.Command {
 	f.BoolVar(&options.Force, "force", false, "Assign before every prerequisite is satisfied")
 	f.BoolVar(&asJSON, "json", false, "Emit a structured outcome")
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
-		return libagent.Finish(assign.Run(cmd.Context(), libagent.FromEnvironment(0), options), cmd.OutOrStdout(), asJSON, assign.Render)
+		return cli.Finish(assign.Run(cmd.Context(), libagent.FromEnvironment(0), options), cmd.OutOrStdout(), asJSON, assign.Render)
 	}
 	return cmd
 }

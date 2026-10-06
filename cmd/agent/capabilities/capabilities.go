@@ -4,6 +4,7 @@ package capabilities
 import (
 	"github.com/Harrison-Blair/fledge/internal/agent/capabilities"
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/spf13/cobra"
 )
 
@@ -11,7 +12,7 @@ func New() *cobra.Command {
 	var options capabilities.Options
 	var asJSON bool
 	cmd := &cobra.Command{Use: "capabilities", Short: "Report which operations each harness supports", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		return libagent.Finish(capabilities.Run(cmd.Context(), libagent.FromEnvironment(0), options), cmd.OutOrStdout(), asJSON, capabilities.Render)
+		return cli.Finish(capabilities.Run(cmd.Context(), libagent.FromEnvironment(0), options), cmd.OutOrStdout(), asJSON, capabilities.Render)
 	}}
 	f := cmd.Flags()
 	f.StringVar(&options.Harness, "harness", "", "Limit to one Herdr harness kind")

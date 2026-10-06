@@ -9,6 +9,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
@@ -106,14 +107,14 @@ func TestHumanOperationResults(t *testing.T) {
 	var b bytes.Buffer
 	name, pane := "orchestrator", "wA:p1"
 	result := Result{AgentRow: herdrscript.Row(), Submitted: true, MessageID: "m-0a1b2c", Sender: &libagent.Sender{Name: &name, Pane: &pane, Kind: "named"}}
-	if err := (libagent.Outcome{Status: "success", Result: result}).Write(&b, false, Render); err != nil {
+	if err := (cli.Outcome{Status: "success", Result: result}).Write(&b, false, Render); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := strings.Join(strings.Fields(b.String()), " "), "Message m-0a1b2c submitted to w1:p1 from orchestrator (wA:p1)."; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 	b.Reset()
-	if err := (libagent.Outcome{Status: "success", Result: result}).Write(&b, true, Render); err != nil {
+	if err := (cli.Outcome{Status: "success", Result: result}).Write(&b, true, Render); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(b.String(), `"message_id":"m-0a1b2c","sender":{"name":"orchestrator","pane":"wA:p1","kind":"named","error":null}`) {
@@ -121,7 +122,7 @@ func TestHumanOperationResults(t *testing.T) {
 	}
 }
 func TestOutputFailuresPropagate(t *testing.T) {
-	herdrscript.CheckOutputFailures(t, Render, libagent.Outcome{Result: Result{}})
+	herdrscript.CheckOutputFailures(t, Render, cli.Outcome{Result: Result{}})
 }
 
 func TestMessageByIDPromptsVerifiedPane(t *testing.T) {
@@ -159,7 +160,7 @@ func TestMessageExplicitTargetsExcludeFilters(t *testing.T) {
 
 // confirmRun messages worker, observed before sending in status before, with
 // --confirm; the scripted client fails the test on any second agent.prompt.
-func confirmRun(t *testing.T, before string, result any, err error) libagent.Outcome {
+func confirmRun(t *testing.T, before string, result any, err error) cli.Outcome {
 	t.Helper()
 	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
 	p.AgentStatus = before
@@ -205,7 +206,7 @@ func TestConfirmStalledIsPartialSubmission(t *testing.T) {
 	out := confirmRun(t, "idle", nil, &herdr.Error{Code: "agent_prompt_stalled", Message: "no activity"})
 	r, ok := out.Result.(Result)
 	if out.Status != "partial" || !ok || !r.Submitted || r.Confirmed == nil || *r.Confirmed || out.ExitCode() != 1 || out.Error.Code != "agent_prompt_stalled" ||
-		len(out.Effects) != 1 || out.Effects[0] != (libagent.Effect{Action: "submitted", Kind: "message", ID: "w1:p1"}) {
+		len(out.Effects) != 1 || out.Effects[0] != (cli.Effect{Action: "submitted", Kind: "message", ID: "w1:p1"}) {
 		t.Fatalf("%+v", out)
 	}
 }
@@ -255,18 +256,18 @@ func TestConfirmHumanOutput(t *testing.T) {
 	working := "working"
 	row.AgentStatus = &working
 	for _, tc := range []struct {
-		out  libagent.Outcome
+		out  cli.Outcome
 		want string
 	}{
-		{libagent.Outcome{Status: "success", Result: Result{AgentRow: row, Submitted: true, Confirmed: &yes, MessageID: "m-0a1b2c", Sender: sender}},
+		{cli.Outcome{Status: "success", Result: Result{AgentRow: row, Submitted: true, Confirmed: &yes, MessageID: "m-0a1b2c", Sender: sender}},
 			"Message m-0a1b2c submitted to w1:p1 from orchestrator (wA:p1); activity confirmed (working)."},
-		{libagent.Outcome{Status: "success", Result: Result{AgentRow: row, Submitted: true, Confirmed: &no, AlreadyWorking: true, MessageID: "m-0a1b2c", Sender: sender}},
+		{cli.Outcome{Status: "success", Result: Result{AgentRow: row, Submitted: true, Confirmed: &no, AlreadyWorking: true, MessageID: "m-0a1b2c", Sender: sender}},
 			"Message m-0a1b2c submitted to w1:p1 from orchestrator (wA:p1) while the agent was already observed working; this prompt's start is not confirmed."},
-		{libagent.Outcome{Status: "partial", Error: &libagent.Failure{Code: "agent_prompt_stalled", Message: "agent_prompt_stalled: no activity", Phase: "agent.prompt"}, Result: Result{AgentRow: row, Submitted: true, Confirmed: &no, MessageID: "m-0a1b2c", Sender: sender}},
+		{cli.Outcome{Status: "partial", Error: &cli.Failure{Code: "agent_prompt_stalled", Message: "agent_prompt_stalled: no activity", Phase: "agent.prompt"}, Result: Result{AgentRow: row, Submitted: true, Confirmed: &no, MessageID: "m-0a1b2c", Sender: sender}},
 			"partial: agent_prompt_stalled: no activity (agent.prompt) The message was submitted, but activity was not confirmed; do not resend it. Inspect: fledge agent read --pane w1:p1"},
-		{libagent.Outcome{Status: "unknown", Error: &libagent.Failure{Code: "timeout", Message: "timeout: slow", Phase: "agent.prompt"}, Result: Result{AgentRow: row, Confirmed: &no, MessageID: "m-0a1b2c", Sender: sender}},
+		{cli.Outcome{Status: "unknown", Error: &cli.Failure{Code: "timeout", Message: "timeout: slow", Phase: "agent.prompt"}, Result: Result{AgentRow: row, Confirmed: &no, MessageID: "m-0a1b2c", Sender: sender}},
 			"unknown: timeout: slow (agent.prompt) The message may have been submitted; do not resend it. Inspect: fledge agent read --pane w1:p1"},
-		{libagent.Outcome{Status: "rejected", Error: &libagent.Failure{Code: "agent_blocked", Message: "agent_blocked: approval", Phase: "agent.prompt"}, Result: Result{AgentRow: row, Confirmed: &no, MessageID: "m-0a1b2c", Sender: sender}},
+		{cli.Outcome{Status: "rejected", Error: &cli.Failure{Code: "agent_blocked", Message: "agent_blocked: approval", Phase: "agent.prompt"}, Result: Result{AgentRow: row, Confirmed: &no, MessageID: "m-0a1b2c", Sender: sender}},
 			"rejected: agent_blocked: approval (agent.prompt)"},
 	} {
 		var b bytes.Buffer
@@ -290,7 +291,7 @@ func TestConfirmJSONFieldsOnlyWithConfirm(t *testing.T) {
 		{Result{Submitted: true, MessageID: "m-0a1b2c", Confirmed: &yes}, `"confirmed":true`, false},
 	} {
 		var b bytes.Buffer
-		if err := (libagent.Outcome{Status: "success", Result: tc.result}).Write(&b, true, Render); err != nil {
+		if err := (cli.Outcome{Status: "success", Result: tc.result}).Write(&b, true, Render); err != nil {
 			t.Fatal(err)
 		}
 		if strings.Contains(b.String(), tc.want) == tc.absent || strings.Contains(b.String(), "already_working") {

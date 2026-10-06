@@ -1,4 +1,3 @@
-// Package cli holds process-output contracts shared by command implementations.
 package cli
 
 import "errors"

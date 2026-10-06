@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/termtext"
 )
@@ -34,8 +35,8 @@ type Dependency struct {
 }
 
 // Run reads one task from the store without contacting Herdr.
-func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.NewOutcome("task.get")
+func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
+	out := cli.NewOutcome("task.get")
 	if err := task.ValidateID(o.ID); err != nil {
 		out.Fail(err, "validation", false)
 		return out
@@ -67,7 +68,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 
 // Render writes the task as labelled lines, omitting steps not yet reached,
 // followed by its indented texts.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil

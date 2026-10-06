@@ -8,6 +8,7 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/brief"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
@@ -47,7 +48,7 @@ func Client(t *testing.T, cwd, callerPane string, calls ...herdrscript.Call) lib
 // Seed stores r as a new task in the repository at cwd and returns its id.
 func Seed(t *testing.T, cwd string, r task.Record) string {
 	t.Helper()
-	s, err := identity.OpenStore(context.Background(), cwd, &libagent.Outcome{})
+	s, err := identity.OpenStore(context.Background(), cwd, &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}
