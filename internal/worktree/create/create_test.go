@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
@@ -63,7 +63,7 @@ func TestCreatesManagedCheckout(t *testing.T) {
 		t.Fatal("managed directory not prepared")
 	}
 	n := len(out.Effects)
-	if n < 4 || out.Effects[n-4] != (libagent.Effect{Action: "created", Kind: "worktree", Path: path}) || out.Effects[n-3] != (libagent.Effect{Action: "created", Kind: "workspace", ID: "w3"}) {
+	if n < 4 || out.Effects[n-4] != (cli.Effect{Action: "created", Kind: "worktree", Path: path}) || out.Effects[n-3] != (cli.Effect{Action: "created", Kind: "workspace", ID: "w3"}) {
 		t.Fatalf("%+v", out.Effects)
 	}
 }
@@ -91,7 +91,7 @@ func TestCreatedCheckoutIgnoresFledgeScratch(t *testing.T) {
 		t.Fatalf("%q %v", b, err)
 	}
 	n := len(out.Effects)
-	if n < 2 || out.Effects[n-2] != (libagent.Effect{Action: "created", Kind: "directory", Path: filepath.Join(path, ".fledge")}) || out.Effects[n-1] != (libagent.Effect{Action: "created", Kind: "file", Path: ignore}) {
+	if n < 2 || out.Effects[n-2] != (cli.Effect{Action: "created", Kind: "directory", Path: filepath.Join(path, ".fledge")}) || out.Effects[n-1] != (cli.Effect{Action: "created", Kind: "file", Path: ignore}) {
 		t.Fatalf("%+v", out.Effects)
 	}
 	for _, dir := range []string{"tmp", "profiles"} {
@@ -181,11 +181,11 @@ func TestCreateFailureIsUnknownWhenUncertain(t *testing.T) {
 func TestRender(t *testing.T) {
 	r := Result{Path: "/r/.fledge/worktrees/topic", Branch: "topic", WorkspaceID: "w3"}
 	var b bytes.Buffer
-	if err := (libagent.Outcome{Status: "success", Result: r}).Write(&b, false, Render); err != nil {
+	if err := (cli.Outcome{Status: "success", Result: r}).Write(&b, false, Render); err != nil {
 		t.Fatal(err)
 	}
 	if want := "Created worktree /r/.fledge/worktrees/topic on branch topic in workspace w3.\n"; b.String() != want {
 		t.Fatalf("%q", b.String())
 	}
-	herdrscript.CheckOutputFailures(t, Render, libagent.Outcome{Result: r})
+	herdrscript.CheckOutputFailures(t, Render, cli.Outcome{Result: r})
 }

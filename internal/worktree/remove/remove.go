@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/gitstatus"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
@@ -37,10 +38,10 @@ type Result struct {
 	Forced            bool    `json:"forced"`
 }
 
-func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.NewOutcome("worktree.remove")
+func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
+	out := cli.NewOutcome("worktree.remove")
 	if (o.Path == "") == (o.Branch == "") {
-		out.Fail(libagent.Invalid("exactly one of --path or --branch is required"), "validation", false)
+		out.Fail(cli.Invalid("exactly one of --path or --branch is required"), "validation", false)
 		return out
 	}
 	listing, err := worktree.ListCheckouts(ctx, c, o.Cwd)
@@ -54,7 +55,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		return out
 	}
 	if row.Path == listing.Root {
-		out.Fail(libagent.Invalid("%s is the primary checkout, which is never removed", row.Path), "guard", false)
+		out.Fail(cli.Invalid("%s is the primary checkout, which is never removed", row.Path), "guard", false)
 		return out
 	}
 	if err = checkAgents(ctx, c, listing.Root, row); err != nil {
@@ -79,7 +80,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			reasons = append(reasons, reason)
 		}
 		if len(reasons) > 0 {
-			out.Fail(libagent.Invalid("worktree %s is not known to be clean and merged (%s); pass --force to remove it anyway", row.Path, strings.Join(reasons, ", ")), "guard", false)
+			out.Fail(cli.Invalid("worktree %s is not known to be clean and merged (%s); pass --force to remove it anyway", row.Path, strings.Join(reasons, ", ")), "guard", false)
 			return out
 		}
 	}
@@ -93,12 +94,12 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		// PlannedPath was canonical when planned; resolving it again would
 		// follow a symlink left at it to wherever the checkout moved.
 		if row.Path != filepath.Clean(o.PlannedPath) || !worktree.Managed(listing.Root, row.Path) {
-			out.Fail(libagent.Invalid("worktree %s moved since cleanup planned it (now at %s); it is kept", o.PlannedPath, row.Path), "guard", false)
+			out.Fail(cli.Invalid("worktree %s moved since cleanup planned it (now at %s); it is kept", o.PlannedPath, row.Path), "guard", false)
 			return out
 		}
 		branch := gitstatus.Branch(ctx, row.Path)
 		if worktree.Marker(ctx, row.Path) != o.Marker || branch == nil || *branch != o.MarkedBranch {
-			out.Fail(libagent.Invalid("worktree %s was replaced since the worker's spawn; it is kept", row.Path), "guard", false)
+			out.Fail(cli.Invalid("worktree %s was replaced since the worker's spawn; it is kept", row.Path), "guard", false)
 			return out
 		}
 	}
@@ -112,7 +113,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			out.Fail(fmt.Errorf("git worktree remove: %v: %s", err, strings.TrimSpace(string(b))), "git worktree remove", false)
 			return out
 		}
-		out.Effects = append(out.Effects, libagent.Effect{Action: "removed", Kind: "worktree", Path: row.Path})
+		out.Effects = append(out.Effects, cli.Effect{Action: "removed", Kind: "worktree", Path: row.Path})
 		out.Result = result
 		return out
 	}
@@ -132,8 +133,8 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	result.Path = filepath.Clean(r.Path)
 	result.ClosedWorkspaceID = row.OpenWorkspaceID
 	out.Effects = append(out.Effects,
-		libagent.Effect{Action: "removed", Kind: "worktree", Path: result.Path},
-		libagent.Effect{Action: "closed", Kind: "workspace", ID: *row.OpenWorkspaceID})
+		cli.Effect{Action: "removed", Kind: "worktree", Path: result.Path},
+		cli.Effect{Action: "closed", Kind: "workspace", ID: *row.OpenWorkspaceID})
 	out.Result = result
 	return out
 }
@@ -154,9 +155,9 @@ func target(r worktree.Checkouts, o Options) (herdr.Worktree, error) {
 		}
 	}
 	if path != "" {
-		return herdr.Worktree{}, libagent.Invalid("no worktree of %s at %s", r.Root, path)
+		return herdr.Worktree{}, cli.Invalid("no worktree of %s at %s", r.Root, path)
 	}
-	return herdr.Worktree{}, libagent.Invalid("no worktree of %s has branch %s checked out", r.Root, o.Branch)
+	return herdr.Worktree{}, cli.Invalid("no worktree of %s has branch %s checked out", r.Root, o.Branch)
 }
 
 // checkAgents refuses when any live agent in the connected Herdr session is in
@@ -177,13 +178,13 @@ func checkAgents(ctx context.Context, c libagent.Client, repo string, row herdr.
 		return fmt.Errorf("read agent records: %w; repair or remove the bad record under .fledge/state", err)
 	}
 	if user := worktree.User(agents, records, row); user != "" {
-		return libagent.Invalid("%s; stop it first (--force does not override this)", user)
+		return cli.Invalid("%s; stop it first (--force does not override this)", user)
 	}
 	return nil
 }
 
 // Render writes a successful remove outcome.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil

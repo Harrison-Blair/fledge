@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
@@ -132,7 +132,7 @@ func TestRender(t *testing.T) {
 		{Path: "/repo/.fledge/worktrees/y", Branch: s("y"), Dirty: "no", Merged: "no", Managed: true, Owner: &Owner{ID: "4e5f6a7b", Pane: "w1:p3"}, OwnerCount: 1},
 	}}
 	var b bytes.Buffer
-	if err := (libagent.Outcome{Status: "success", Result: r}).Write(&b, false, Render); err != nil {
+	if err := (cli.Outcome{Status: "success", Result: r}).Write(&b, false, Render); err != nil {
 		t.Fatal(err)
 	}
 	want := "PATH BRANCH WORKSPACE DIRTY MERGED MANAGED OWNER /repo (primary) main w1 no yes no - " +
@@ -140,13 +140,13 @@ func TestRender(t *testing.T) {
 	if got := strings.Join(strings.Fields(b.String()), " "); got != want {
 		t.Fatalf("got %q\nwant %q", got, want)
 	}
-	herdrscript.CheckOutputFailures(t, Render, libagent.Outcome{Result: r})
+	herdrscript.CheckOutputFailures(t, Render, cli.Outcome{Result: r})
 }
 
 // record stores an agent record naming terminal with worktree path at when.
 func record(t *testing.T, root, terminal, name, worktree, at string) string {
 	t.Helper()
-	s, err := identity.OpenStore(context.Background(), root, &libagent.Outcome{})
+	s, err := identity.OpenStore(context.Background(), root, &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +291,7 @@ func TestListMissingConfiguredBaseBranch(t *testing.T) {
 	if !strings.Contains(b.String(), "MERGED is unknown: "+*r.DefaultBranchError) {
 		t.Fatalf("%q", b.String())
 	}
-	herdrscript.CheckOutputFailures(t, Render, libagent.Outcome{Result: r})
+	herdrscript.CheckOutputFailures(t, Render, cli.Outcome{Result: r})
 }
 
 func TestListUsesConfiguredBaseBranch(t *testing.T) {
@@ -356,7 +356,7 @@ func TestListRespectsCancellation(t *testing.T) {
 func TestListSkipsOwnerOfDifferentHarness(t *testing.T) {
 	t.Setenv("HERDR_SESSION", "")
 	f := newFixture(t)
-	s, err := identity.OpenStore(context.Background(), f.root, &libagent.Outcome{})
+	s, err := identity.OpenStore(context.Background(), f.root, &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}

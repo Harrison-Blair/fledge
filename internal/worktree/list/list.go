@@ -12,6 +12,7 @@ import (
 	"text/tabwriter"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/gitstatus"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
@@ -53,8 +54,8 @@ type Result struct {
 	Worktrees          []Row   `json:"worktrees"`
 }
 
-func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.NewOutcome("worktree.list")
+func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
+	out := cli.NewOutcome("worktree.list")
 	r, err := inspectAll(ctx, c, o.Cwd)
 	if err != nil {
 		out.Fail(err, "worktree.list", false)
@@ -155,7 +156,7 @@ func addOwners(ctx context.Context, c libagent.Client, r Result) {
 }
 
 // Render writes a successful list outcome as a table.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil
