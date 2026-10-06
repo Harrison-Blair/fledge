@@ -3,6 +3,7 @@ package create
 
 import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/task/create"
 	"github.com/spf13/cobra"
 )
@@ -22,7 +23,7 @@ func New() *cobra.Command {
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 		options.BodySet = f.Changed("body")
 		options.FileSet = f.Changed("file")
-		return libagent.Finish(create.Run(cmd.Context(), libagent.FromEnvironment(0), options, cmd.InOrStdin()), cmd.OutOrStdout(), asJSON, create.Render)
+		return cli.Finish(create.Run(cmd.Context(), libagent.FromEnvironment(0), options, cmd.InOrStdin()), cmd.OutOrStdout(), asJSON, create.Render)
 	}
 	return cmd
 }

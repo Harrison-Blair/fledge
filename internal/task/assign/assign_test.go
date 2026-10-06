@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
@@ -66,7 +66,7 @@ func TestAssignRecordsOwnerThenDelivery(t *testing.T) {
 		r.Delivery.MessageID != "m-0a1b2c" || r.Delivery.Pane != "w1:p3" || r.Delivery.DeliveredAt == nil || r.Delivery.Error != nil {
 		t.Fatalf("%+v %+v", r, r.Delivery)
 	}
-	want := []libagent.Effect{{Action: "updated", Kind: "task", ID: id}, {Action: "submitted", Kind: "message", ID: "w1:p3"}, {Action: "updated", Kind: "task", ID: id}}
+	want := []cli.Effect{{Action: "updated", Kind: "task", ID: id}, {Action: "submitted", Kind: "message", ID: "w1:p3"}, {Action: "updated", Kind: "task", ID: id}}
 	if !reflect.DeepEqual(out.Effects, want) {
 		t.Fatalf("%+v", out.Effects)
 	}
@@ -212,7 +212,7 @@ func TestConcurrentAssignExactlyOneSucceeds(t *testing.T) {
 	other := tasktest.Agent("w1:p4", "term_other", "other")
 	tasktest.Register(t, repo, other)
 	id := seed(t, repo)
-	var winner libagent.Outcome
+	var winner cli.Outcome
 	loser := tasktest.Client(t, repo, "",
 		call{Method: "agent.get", Params: map[string]any{"target": "other"}, Result: other, Before: func() {
 			c := tasktest.Client(t, repo, "", tasktest.Get("worker", worker), call{Method: "agent.prompt", Result: prompted(worker)})
@@ -457,7 +457,7 @@ func TestAssignCapturesOwnerSessionRef(t *testing.T) {
 			if label == "failing store" {
 				action, stored = "warning", rec.NativeSession == nil
 			}
-			if !stored || !slices.Contains(out.Effects, libagent.Effect{Action: action, Kind: "native_session", ID: owner.ID}) {
+			if !stored || !slices.Contains(out.Effects, cli.Effect{Action: action, Kind: "native_session", ID: owner.ID}) {
 				t.Fatalf("%+v %+v", rec.NativeSession, out.Effects)
 			}
 		})

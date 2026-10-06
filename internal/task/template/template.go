@@ -5,8 +5,8 @@ package template
 import (
 	"io"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/brief"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/proposal"
 )
 
@@ -18,18 +18,18 @@ type Result struct {
 	Text string `json:"text"`
 }
 
-func Run(o Options) libagent.Outcome {
+func Run(o Options) cli.Outcome {
 	r := Result{Kind: "brief", Text: brief.Skeleton()}
 	if o.Proposal {
 		r = Result{Kind: "proposal", Text: proposal.Skeleton()}
 	}
-	out := libagent.NewOutcome("task.template")
+	out := cli.NewOutcome("task.template")
 	out.Result = r
 	return out
 }
 
 // Render writes the skeleton text exactly as returned.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil

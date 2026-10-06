@@ -12,6 +12,7 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/brief"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/proposal"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
@@ -52,7 +53,7 @@ func count(t *testing.T, repo string) int {
 	return len(rs)
 }
 
-func render(t *testing.T, out libagent.Outcome) string {
+func render(t *testing.T, out cli.Outcome) string {
 	t.Helper()
 	var b bytes.Buffer
 	if err := out.Write(&b, false, Render); err != nil {
@@ -283,7 +284,7 @@ func TestRenderRemovesControlSequences(t *testing.T) {
 	for _, dry := range []bool{true, false} {
 		var buf bytes.Buffer
 		r := Result{Parent: &id, Tasks: []Task{{Key: evil, ID: &id, Title: evil}, {Key: "b", ID: &id, Title: "t", After: []string{evil}}}, DryRun: dry, newParent: evil}
-		if err := Render(&buf, libagent.Outcome{Result: r}); err != nil {
+		if err := Render(&buf, cli.Outcome{Result: r}); err != nil {
 			t.Fatal(err)
 		}
 		if got := buf.String(); strings.ContainsAny(got, "\x1b\x07") || !strings.Contains(got, "X") {

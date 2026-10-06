@@ -3,6 +3,7 @@ package cancel
 
 import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/task/cancel"
 	"github.com/spf13/cobra"
 )
@@ -17,7 +18,7 @@ func New() *cobra.Command {
 	f.StringVar(&options.Reason, "reason", "", "Why the task was cancelled")
 	f.BoolVar(&asJSON, "json", false, "Emit a structured outcome")
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
-		return libagent.Finish(cancel.Run(cmd.Context(), libagent.FromEnvironment(0), options), cmd.OutOrStdout(), asJSON, cancel.Render)
+		return cli.Finish(cancel.Run(cmd.Context(), libagent.FromEnvironment(0), options), cmd.OutOrStdout(), asJSON, cancel.Render)
 	}
 	return cmd
 }

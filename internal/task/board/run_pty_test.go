@@ -15,6 +15,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
@@ -54,7 +55,7 @@ func TestProgramRestoresTerminal(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			c := libagent.Client{Cwd: identitytest.Repository(t), API: apiFunc(func(context.Context, string, any, any) error { return fmt.Errorf("unavailable") })}
-			done := make(chan libagent.Outcome, 1)
+			done := make(chan cli.Outcome, 1)
 			var input io.Reader = slave
 			if mode == "runtime" {
 				input = failingTerminal{slave}
@@ -77,7 +78,7 @@ func TestProgramRestoresTerminal(t *testing.T) {
 			case "runtime":
 				_, _ = master.Write([]byte("!"))
 			}
-			var outcome libagent.Outcome
+			var outcome cli.Outcome
 			select {
 			case outcome = <-done:
 			case <-time.After(5 * time.Second):

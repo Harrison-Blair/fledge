@@ -13,6 +13,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
@@ -40,12 +41,12 @@ type Result struct {
 // assignment records the prerequisites it bypassed as UnmetAtAssign. The
 // owner's live session ref is stored on its record, best effort, once the
 // assignment is committed.
-func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
+func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 	return run(ctx, c, o, libagent.NewMessageID())
 }
 
-func run(ctx context.Context, c libagent.Client, o Options, messageID string) libagent.Outcome {
-	out := libagent.NewOutcome("task.assign")
+func run(ctx context.Context, c libagent.Client, o Options, messageID string) cli.Outcome {
+	out := cli.NewOutcome("task.assign")
 	err := task.ValidateID(o.ID)
 	if err == nil {
 		err = o.Agent.Validate()
@@ -124,7 +125,7 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) li
 		out.Fail(err, "task", false)
 		return out
 	}
-	out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "task", ID: r.ID})
+	out.Effects = append(out.Effects, cli.Effect{Action: "updated", Kind: "task", ID: r.ID})
 	out.Result = Result{Record: r, OwnerName: owner.Name}
 	identity.Observe(s, observeSession, *owner, &a, time.Now(), &out)
 	body := fmt.Sprintf("task: %s · title: %s · complete with: fledge task complete --id %s --summary \"...\"\n%s", r.ID, r.Title, r.ID, r.Brief)
@@ -175,7 +176,7 @@ func waiting(r task.Record, byID map[string]task.Record, force bool) ([]string, 
 
 // Render writes an assignment, or after a failed delivery, what state the
 // task was left in.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if !ok {
 		return nil

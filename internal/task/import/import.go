@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/proposal"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
@@ -48,8 +49,8 @@ type Result struct {
 // checks the same without creating anything. The creator is the caller's
 // live agent record, or null when the caller is unregistered. Repeated
 // prerequisites are stored once.
-func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libagent.Outcome {
-	out := libagent.NewOutcome("task.import")
+func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Outcome {
+	out := cli.NewOutcome("task.import")
 	p, order, err := validate(o, in)
 	if err != nil {
 		out.Fail(err, "validation", false)
@@ -115,7 +116,7 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 			}
 			id, err := tx.Create(task.Kind, func(id string) any { rec.ID = id; return rec })
 			if err == nil {
-				out.Effects = append(out.Effects, libagent.Effect{Action: "created", Kind: "task", ID: id})
+				out.Effects = append(out.Effects, cli.Effect{Action: "created", Kind: "task", ID: id})
 			}
 			return id, err
 		}
@@ -162,29 +163,29 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 func validate(o Options, in io.Reader) (proposal.Proposal, []proposal.Task, error) {
 	switch {
 	case !o.FileSet:
-		return proposal.Proposal{}, nil, libagent.Invalid("--file is required")
+		return proposal.Proposal{}, nil, cli.Invalid("--file is required")
 	case o.Parent != "":
 		if err := libagent.ValidateID("parent", "task", o.Parent); err != nil {
 			return proposal.Proposal{}, nil, err
 		}
 	}
-	text, err := libagent.ReadText(in, libagent.TextInput{File: o.File, FileFlag: "file", FileSet: true, Noun: "proposal"})
+	text, err := cli.ReadText(in, cli.TextInput{File: o.File, FileFlag: "file", FileSet: true, Noun: "proposal"})
 	if err != nil {
 		return proposal.Proposal{}, nil, err
 	}
 	p, order, err := proposal.DecodeOrdered([]byte(text))
 	if err != nil {
-		return proposal.Proposal{}, nil, libagent.Invalid("%v", err)
+		return proposal.Proposal{}, nil, cli.Invalid("%v", err)
 	}
 	if p.Parent != nil && o.Parent != "" {
-		return proposal.Proposal{}, nil, libagent.Invalid("--parent conflicts with the file's [parent]; use one")
+		return proposal.Proposal{}, nil, cli.Invalid("--parent conflicts with the file's [parent]; use one")
 	}
 	return p, order, nil
 }
 
 // Render writes the tasks in creation order: a plan on a dry run, one line
 // per created record otherwise.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil

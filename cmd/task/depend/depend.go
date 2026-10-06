@@ -3,6 +3,7 @@ package depend
 
 import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/task/depend"
 	"github.com/spf13/cobra"
 )
@@ -18,7 +19,7 @@ func New() *cobra.Command {
 	f.StringArrayVar(&options.Remove, "remove", nil, "Prerequisite task ID to remove (repeatable)")
 	f.BoolVar(&asJSON, "json", false, "Emit a structured outcome")
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
-		return libagent.Finish(depend.Run(cmd.Context(), libagent.FromEnvironment(0), options), cmd.OutOrStdout(), asJSON, depend.Render)
+		return cli.Finish(depend.Run(cmd.Context(), libagent.FromEnvironment(0), options), cmd.OutOrStdout(), asJSON, depend.Render)
 	}
 	return cmd
 }

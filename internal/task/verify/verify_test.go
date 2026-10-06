@@ -12,6 +12,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
@@ -190,7 +191,7 @@ func TestConcurrentSubtaskCreateAndParentVerify(t *testing.T) {
 	tasktest.Register(t, repo, boss)
 	for range 50 {
 		parent := tasktest.Seed(t, repo, task.Record{Title: "goal", Status: task.Completed, Owner: &owner.ID})
-		var created, verified libagent.Outcome
+		var created, verified cli.Outcome
 		var wg sync.WaitGroup
 		wg.Go(func() {
 			created = create.Run(context.Background(), tasktest.Client(t, repo, ""), create.Options{Title: "late", Body: "b", BodySet: true, Parent: parent}, strings.NewReader(""))
@@ -382,7 +383,7 @@ func TestVerificationCapturesVerifierSessionRef(t *testing.T) {
 	otherRec := tasktest.Register(t, repo, other)
 	for _, value := range []string{"verify-1", "verify-2"} {
 		out := Run(context.Background(), tasktest.Client(t, repo, "w1:p5", tasktest.Get("w1:p5", withSession(other, value))), Options{ID: id}, strings.NewReader(""))
-		want := []libagent.Effect{{Action: "updated", Kind: "task", ID: id}, {Action: "updated", Kind: "native_session", ID: otherRec.ID}}
+		want := []cli.Effect{{Action: "updated", Kind: "task", ID: id}, {Action: "updated", Kind: "native_session", ID: otherRec.ID}}
 		if out.Error != nil || !reflect.DeepEqual(out.Effects[len(out.Effects)-2:], want) {
 			t.Fatalf("%s: %+v %+v", value, out.Error, out.Effects)
 		}
@@ -391,7 +392,7 @@ func TestVerificationCapturesVerifierSessionRef(t *testing.T) {
 		}
 	}
 	out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{ID: id, Force: true}, strings.NewReader(""))
-	if out.Error != nil || slices.ContainsFunc(out.Effects, func(e libagent.Effect) bool { return e.Kind == "native_session" }) {
+	if out.Error != nil || slices.ContainsFunc(out.Effects, func(e cli.Effect) bool { return e.Kind == "native_session" }) {
 		t.Fatalf("%+v %+v", out.Error, out.Effects)
 	}
 }
@@ -408,7 +409,7 @@ func TestVerificationSucceedsWhenSessionWriteFails(t *testing.T) {
 	out := Run(context.Background(), tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p1", withSession(boss, "s"))), Options{ID: id}, strings.NewReader(""))
 	r := tasktest.Load(t, repo, id)
 	if out.Error != nil || r.Status != task.Verified || *r.Verifier != bossRec.ID ||
-		!slices.Contains(out.Effects, libagent.Effect{Action: "warning", Kind: "native_session", ID: bossRec.ID}) {
+		!slices.Contains(out.Effects, cli.Effect{Action: "warning", Kind: "native_session", ID: bossRec.ID}) {
 		t.Fatalf("%+v %+v %+v", out.Error, r, out.Effects)
 	}
 }
