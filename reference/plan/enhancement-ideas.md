@@ -190,9 +190,11 @@ A checked item means its main capability is implemented; accompanying notes reco
 
 43. [ ] **Queue follow-up prompts.** Offer "send after the current turn" so routine follow-ups do not accidentally steer active work.
 
-44. [ ] **Broadcast to a selected group.** Send a changed requirement to every worker on a task, with individual delivery outcomes.
+44. [x] **Broadcast to a selected group.** Send a changed requirement to every worker on a task, with individual delivery outcomes.
 
-    **Existing support:** `agent message` accepts repeatable `--name`/`--pane`/`--id` targets or the `agent list` filter flags (`--task`, `--mine`, `--state`, and others) and delivers the same message, with one sender header and message ID, to each target in turn, reporting a fan-out row per target with its own outcome and message ID; any failed row makes the outcome `partial`. This covers the broadcast, so this item can be checked off, or narrowed to anything the fan-out lacks, such as delivery that is queued until each worker's turn ends (#43). [Current behavior](../../README.md#agents)
+    **Implemented:** [f295084](https://github.com/Harrison-Blair/fledge/commit/f295084225679a012058bebfa523f87b3c1956b4) · **Author:** Harrison-Blair · **Author date:** 2026-09-24
+
+    **Implementation decisions and remaining gaps:** `agent message` accepts repeatable `--name`/`--pane`/`--id` targets or the `agent list` filter flags (`--task`, `--mine`, `--state`, and others) and delivers the same message, with one sender header and message ID, to each target in turn, reporting a fan-out row per target with its own outcome and message ID; any failed row makes the outcome `partial`. Remaining gap: delivery that is queued until each worker's turn ends (#43). [Current behavior](../../README.md#agents)
 
 45. [ ] **Generate handoff briefs.** Capture current progress, important files, decisions, failed approaches, and remaining work before transferring an assignment.
 
