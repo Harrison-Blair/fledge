@@ -381,8 +381,8 @@ func end(tx *state.Tx, id string) (bool, error) {
 // session. An unknown id fails with agent_record_not_found. A record that has
 // not ended is left as is without error; that is the only no-op.
 func Reopen(s *state.Store, id string) error {
-	if !state.ValidID(id) {
-		return libagent.Invalid("--id must be 8 lowercase hexadecimal characters")
+	if err := libagent.ValidateID("id", "agent", id); err != nil {
+		return err
 	}
 	return s.Exclusive(func(tx *state.Tx) error {
 		var rec Record
@@ -685,8 +685,8 @@ func harnessChanged(rec Record, a herdr.AgentDetails) error {
 }
 
 func load(s *state.Store, id string) (Record, error) {
-	if !state.ValidID(id) {
-		return Record{}, libagent.Invalid("--id must be 8 lowercase hexadecimal characters")
+	if err := libagent.ValidateID("id", "agent", id); err != nil {
+		return Record{}, err
 	}
 	var rec Record
 	var missing *state.NotFoundError

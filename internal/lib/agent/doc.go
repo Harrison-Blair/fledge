@@ -7,6 +7,7 @@
 // input.go reads inline, file, or stdin text;
 // status.go holds live agent_status membership and the settled subset;
 // harness.go validates --harness values against lib/harness;
+// id.go validates record id flag values;
 // name.go holds the agent-name rule;
 // label.go renames an agent and labels its pane and, when alone, its tab;
 // header.go attributes delivered prompts to their sender;

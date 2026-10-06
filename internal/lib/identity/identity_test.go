@@ -923,7 +923,10 @@ func TestReopenUnknownOrInvalidRecord(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 	var input *libagent.InputError
-	if err := Reopen(s, "nope"); !errors.As(err, &input) {
+	if err := Reopen(s, "nope"); !errors.As(err, &input) || err.Error() != "--id must be an 8 lowercase hexadecimal agent id" {
+		t.Fatalf("%v", err)
+	}
+	if _, _, err := Resolve(context.Background(), s, c, "nope"); !errors.As(err, &input) || err.Error() != "--id must be an 8 lowercase hexadecimal agent id" {
 		t.Fatalf("%v", err)
 	}
 }

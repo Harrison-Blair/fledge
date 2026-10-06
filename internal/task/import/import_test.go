@@ -215,6 +215,7 @@ func TestImportValidatesBeforeStore(t *testing.T) {
 		message string
 	}{
 		"no file":     {Options{}, "invalid_input", 2, "--file is required"},
+		"bad parent":  {Options{File: write(t, "schema_version = 1\n"+taskTOML("a", "A")), FileSet: true, Parent: "nope"}, "invalid_input", 2, "--parent must be an 8 lowercase hexadecimal task id"},
 		"bad toml":    {Options{File: write(t, "schema_version = "), FileSet: true}, "invalid_input", 2, ""},
 		"unknown key": {Options{File: write(t, "schema_version = 1\nextra = 1\n"+taskTOML("a", "A")), FileSet: true}, "invalid_input", 2, `unknown key "extra"`},
 		"cycle":       {Options{File: write(t, "schema_version = 1\n"+taskTOML("a", "A", "b")+taskTOML("b", "B", "a")), FileSet: true}, "invalid_input", 2, "dependency cycle"},

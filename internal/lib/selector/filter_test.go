@@ -15,8 +15,8 @@ func TestFilterValidateRejects(t *testing.T) {
 		flag string
 	}{
 		{"mine with parent", Filter{Mine: true, Parent: "0000beef"}, "--mine"},
-		{"malformed parent", Filter{Parent: "BEEF"}, "--parent"},
-		{"malformed task", Filter{Tasks: []string{"0000beef", "nope"}}, "--task"},
+		{"malformed parent", Filter{Parent: "BEEF"}, "--parent must be an 8 lowercase hexadecimal agent id"},
+		{"malformed task", Filter{Tasks: []string{"0000beef", "nope"}}, "--task must be an 8 lowercase hexadecimal task id"},
 		{"unknown state", Filter{States: []string{"idle", "sleeping"}}, "--state"},
 		{"unknown harness", Filter{Harnesses: []string{"claude", "vim"}}, "--harness"},
 		{"empty profile", Filter{Profiles: []string{""}}, "--profile"},

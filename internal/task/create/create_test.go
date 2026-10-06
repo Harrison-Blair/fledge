@@ -83,6 +83,22 @@ func TestCreateRejectsInvalidInput(t *testing.T) {
 	}
 }
 
+func TestCreateRejectsMalformedIDs(t *testing.T) {
+	repo := identitytest.Repository(t)
+	for label, tc := range map[string]struct {
+		o    Options
+		want string
+	}{
+		"after":  {Options{Title: "t", Body: "b", BodySet: true, After: []string{"nope"}}, "--after must be an 8 lowercase hexadecimal task id"},
+		"parent": {Options{Title: "t", Body: "b", BodySet: true, Parent: "nope"}, "--parent must be an 8 lowercase hexadecimal task id"},
+	} {
+		out := Run(context.Background(), tasktest.Client(t, repo, ""), tc.o, strings.NewReader(""))
+		if out.Error == nil || out.Error.Code != "invalid_input" || out.Error.Message != tc.want || out.ExitCode() != 2 {
+			t.Fatalf("%s: %+v", label, out.Error)
+		}
+	}
+}
+
 // Any nonblank, NUL-free UTF-8 brief is stored exactly as given, whether
 // inline, from a file, or from stdin; the template is advisory.
 func TestCreateAcceptsAnyNonblankBrief(t *testing.T) {

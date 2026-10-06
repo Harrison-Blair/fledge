@@ -77,6 +77,18 @@ func TestListEmptyAndInvalid(t *testing.T) {
 	}
 }
 
+func TestListRejectsMalformedIDs(t *testing.T) {
+	repo := identitytest.Repository(t)
+	for o, want := range map[Options]string{
+		{Owner: "worker"}: "--owner must be an 8 lowercase hexadecimal agent id",
+		{Parent: "goal"}:  "--parent must be an 8 lowercase hexadecimal task id",
+	} {
+		if out := Run(context.Background(), tasktest.Client(t, repo, ""), o); out.Error == nil || out.Error.Code != "invalid_input" || out.Error.Message != want || out.ExitCode() != 2 {
+			t.Fatalf("%+v: %+v", o, out.Error)
+		}
+	}
+}
+
 func TestListParentShowsDirectChildrenAndProgress(t *testing.T) {
 	repo := identitytest.Repository(t)
 	goal := tasktest.Seed(t, repo, task.Record{Title: "goal", Status: task.Assigned, CreatedAt: "2026-01-01T00:00:00Z"})

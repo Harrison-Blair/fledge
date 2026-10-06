@@ -163,8 +163,10 @@ func validate(o Options, in io.Reader) (proposal.Proposal, []proposal.Task, erro
 	switch {
 	case !o.FileSet:
 		return proposal.Proposal{}, nil, libagent.Invalid("--file is required")
-	case o.Parent != "" && task.ValidateID(o.Parent) != nil:
-		return proposal.Proposal{}, nil, libagent.Invalid("--parent must be 8 lowercase hexadecimal characters")
+	case o.Parent != "":
+		if err := libagent.ValidateID("parent", "task", o.Parent); err != nil {
+			return proposal.Proposal{}, nil, err
+		}
 	}
 	text, err := libagent.ReadText(in, libagent.TextInput{File: o.File, FileFlag: "file", FileSet: true, Noun: "proposal"})
 	if err != nil {

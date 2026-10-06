@@ -50,8 +50,8 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) li
 	if err == nil {
 		err = o.Agent.Validate()
 	}
-	if err == nil && o.Agent.ID != "" && !state.ValidID(o.Agent.ID) {
-		err = libagent.Invalid("--agent-id must be 8 lowercase hexadecimal characters")
+	if err == nil && o.Agent.ID != "" {
+		err = libagent.ValidateID("agent-id", "agent", o.Agent.ID)
 	}
 	if err != nil {
 		out.Fail(err, "validation", false)

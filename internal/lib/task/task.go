@@ -91,10 +91,7 @@ func Existing(ctx context.Context, cwd string) (*state.Store, error) {
 
 // ValidateID checks a --id value without touching the store.
 func ValidateID(id string) error {
-	if !state.ValidID(id) {
-		return libagent.Invalid("--id must be 8 lowercase hexadecimal characters")
-	}
-	return nil
+	return libagent.ValidateID("id", "task", id)
 }
 
 // Get loads task id, failing with task_not_found when it does not exist.

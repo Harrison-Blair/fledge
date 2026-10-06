@@ -45,12 +45,10 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	case o.Status != "" && !slices.Contains(task.Statuses, o.Status):
 		err = libagent.Invalid("--status must be one of %s", strings.Join(task.Statuses, ", "))
 	case o.Owner != "":
-		if task.ValidateID(o.Owner) != nil {
-			err = libagent.Invalid("--owner must be an 8 lowercase hexadecimal agent id")
-		}
+		err = libagent.ValidateID("owner", "agent", o.Owner)
 	}
-	if err == nil && o.Parent != "" && task.ValidateID(o.Parent) != nil {
-		err = libagent.Invalid("--parent must be an 8 lowercase hexadecimal task id")
+	if err == nil && o.Parent != "" {
+		err = libagent.ValidateID("parent", "task", o.Parent)
 	}
 	if err != nil {
 		out.Fail(err, "validation", false)

@@ -32,10 +32,14 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	case len(o.After) == 0 && len(o.Remove) == 0:
 		err = libagent.Invalid("pass at least one --after or --remove")
 	default:
-		for _, id := range slices.Concat(o.After, o.Remove) {
-			switch {
-			case task.ValidateID(id) != nil:
-				err = libagent.Invalid("--after and --remove take 8 lowercase hexadecimal task ids")
+		for i, id := range slices.Concat(o.After, o.Remove) {
+			flag := "after"
+			if i >= len(o.After) {
+				flag = "remove"
+			}
+			switch e := libagent.ValidateID(flag, "task", id); {
+			case e != nil:
+				err = e
 			case slices.Contains(o.After, id) && slices.Contains(o.Remove, id):
 				err = libagent.Invalid("task %s is both added and removed", id)
 			}
