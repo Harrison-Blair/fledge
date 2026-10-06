@@ -224,12 +224,12 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		}
 		width := 0
 		for _, t := range r.Tasks {
-			width = max(width, len(t.Key))
+			width = max(width, len(termtext.Clean(t.Key)))
 		}
 		for _, t := range r.Tasks {
-			fmt.Fprintf(&b, "  %-*s  %s", width, t.Key, termtext.Clean(t.Title))
+			fmt.Fprintf(&b, "  %-*s  %s", width, termtext.Clean(t.Key), termtext.Clean(t.Title))
 			if len(t.After) > 0 {
-				fmt.Fprintf(&b, "  (after: %s)", strings.Join(t.After, ", "))
+				fmt.Fprintf(&b, "  (after: %s)", termtext.Clean(strings.Join(t.After, ", ")))
 			}
 			b.WriteString("\n")
 		}
@@ -238,7 +238,7 @@ func Render(w io.Writer, o libagent.Outcome) error {
 			fmt.Fprintf(&b, "Created task %s: %s\n", *r.Parent, termtext.Clean(r.newParent))
 		}
 		for _, t := range r.Tasks {
-			fmt.Fprintf(&b, "Created task %s (%s): %s\n", *t.ID, t.Key, termtext.Clean(t.Title))
+			fmt.Fprintf(&b, "Created task %s (%s): %s\n", *t.ID, termtext.Clean(t.Key), termtext.Clean(t.Title))
 		}
 		if r.newParent != "" {
 			fmt.Fprintf(&b, "Created %s under parent %s\n", n, *r.Parent)

@@ -281,7 +281,7 @@ func TestRenderRemovesControlSequences(t *testing.T) {
 	id := "11111111"
 	for _, dry := range []bool{true, false} {
 		var buf bytes.Buffer
-		r := Result{Parent: &id, Tasks: []Task{{Key: "a", ID: &id, Title: evil}}, DryRun: dry, newParent: evil}
+		r := Result{Parent: &id, Tasks: []Task{{Key: evil, ID: &id, Title: evil}, {Key: "b", ID: &id, Title: "t", After: []string{evil}}}, DryRun: dry, newParent: evil}
 		if err := Render(&buf, libagent.Outcome{Result: r}); err != nil {
 			t.Fatal(err)
 		}
