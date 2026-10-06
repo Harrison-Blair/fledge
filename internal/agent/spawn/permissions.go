@@ -39,21 +39,9 @@ func permissionArguments(kind string, args []string) []string {
 		if strings.HasPrefix(arg, "-s") && !strings.HasPrefix(arg, "--") || strings.HasPrefix(arg, "-a") && !strings.HasPrefix(arg, "--") {
 			return args
 		}
-		config := ""
-		switch {
-		case arg == "-c" || arg == "--config":
-			i++
-			if i < len(args) {
-				config = args[i]
-			}
-		case strings.HasPrefix(arg, "--config="):
-			config = strings.TrimPrefix(arg, "--config=")
-		case strings.HasPrefix(arg, "-c"):
-			config = strings.TrimPrefix(strings.TrimPrefix(arg, "-c"), "=")
-		}
-		key, _, ok := strings.Cut(config, "=")
-		key = strings.Trim(strings.TrimSpace(key), `"'`)
-		if ok && (key == "approval_policy" || key == "sandbox_mode" || key == "default_permissions" || key == "permissions" || strings.HasPrefix(key, "permissions.")) {
+		key, consumed := codexConfigKey(args, i)
+		i += consumed
+		if key == "approval_policy" || key == "sandbox_mode" || key == "default_permissions" || key == "permissions" || strings.HasPrefix(key, "permissions.") {
 			return args
 		}
 	}

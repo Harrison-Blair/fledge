@@ -1,5 +1,5 @@
 // Package spawn implements agent spawn: launching an agent in a Herdr pane.
-// options.go validates flags and native model arguments; spawn.go runs startup, retries, and the first prompt;
+// options.go validates flags and native model arguments, and reads Codex -c and --config keys; spawn.go runs startup, retries, and the first prompt;
 // permissions.go supplies Claude and Codex bypass defaults while honoring native permission choices;
 // ready.go bounds startup by --timeout and holds the first prompt until Herdr admits input from the started agent;
 // profile.go places a profile's brief, ending with the destination's project memory index, before the task prompt;
