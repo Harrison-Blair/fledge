@@ -67,6 +67,9 @@ func TestListEmptyAndInvalid(t *testing.T) {
 	if err := out.Write(&b, false, Render); out.Error != nil || err != nil || b.String() != "No tasks.\n" || out.Result.(Result).Tasks == nil {
 		t.Fatalf("%+v %q", out.Error, b.String())
 	}
+	if out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{Status: "done"}); out.Error == nil || out.Error.Message != "--status must be one of "+strings.Join(task.Statuses, ", ") {
+		t.Fatalf("%+v", out.Error)
+	}
 	for _, o := range []Options{{Status: "done"}, {Owner: "worker"}, {Parent: "goal"}} {
 		if out := Run(context.Background(), tasktest.Client(t, repo, ""), o); out.Error == nil || out.Error.Code != "invalid_input" {
 			t.Fatalf("%+v", out.Error)

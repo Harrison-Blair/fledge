@@ -43,7 +43,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	var err error
 	switch {
 	case o.Status != "" && !slices.Contains(task.Statuses, o.Status):
-		err = libagent.Invalid("--status must be one of %v", task.Statuses)
+		err = libagent.Invalid("--status must be one of %s", strings.Join(task.Statuses, ", "))
 	case o.Owner != "":
 		if task.ValidateID(o.Owner) != nil {
 			err = libagent.Invalid("--owner must be an 8 lowercase hexadecimal agent id")

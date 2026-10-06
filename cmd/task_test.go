@@ -29,6 +29,10 @@ func TestTaskHelp(t *testing.T) {
 			t.Fatalf("%s: %v %s", name, err, sub.String())
 		}
 	}
+	var list bytes.Buffer
+	if err := ExecuteWithArgs([]string{"task", "list", "--help"}, &list); err != nil || !strings.Contains(list.String(), "Only tasks in this state: "+strings.Join(task.Statuses, ", ")+"\n") {
+		t.Fatalf("%v %s", err, list.String())
+	}
 	if !strings.Contains(out.String(), "never derived from Herdr") {
 		t.Fatal(out.String())
 	}
