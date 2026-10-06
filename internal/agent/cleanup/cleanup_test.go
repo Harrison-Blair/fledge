@@ -18,6 +18,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/tasktest"
 	"github.com/Harrison-Blair/fledge/internal/lib/worktree"
 )
@@ -815,5 +816,29 @@ func TestMovedOutsideManagedTreeIsKept(t *testing.T) {
 	c := checkout(out.Result.(Result), r.topic)
 	if out.Status != "success" || c.Outcome != "skipped" || c.Reason == nil || !strings.Contains(*c.Reason, "moved since cleanup planned it") {
 		t.Fatalf("%+v %+v", out, c)
+	}
+}
+
+// Stopping planned workers reuses the plan's store: the whole cleanup
+// resolves the repository root once.
+func TestCleanupStopsResolveRootOnce(t *testing.T) {
+	r := newRepo(t)
+	callerAgent := agent("w1:p1", "w1", "t_caller", "orchestrator", "working")
+	callerRec := r.register(t, callerAgent, nil, "adopt", nil)
+	a, b := agent("w2:p1", "w2", "t_a", "a", "idle"), agent("w3:p1", "w3", "t_b", "b", "idle")
+	ra, rb := r.register(t, a, &callerRec.ID, "spawn", nil), r.register(t, b, &callerRec.ID, "spawn", nil)
+	tasktest.Seed(t, r.root, task.Record{Title: "a", Owner: &ra.ID, Status: task.Verified})
+	tasktest.Seed(t, r.root, task.Record{Title: "b", Owner: &rb.ID, Status: task.Verified})
+	roots := identitytest.CountRoots(t)
+	out := Run(context.Background(), client(t, r,
+		herdrscript.Get(callerAgent.PaneID, callerAgent), herdrscript.List(callerAgent, a, b),
+		herdrscript.Get(a.PaneID, a), call{Method: "pane.close", Params: map[string]any{"pane_id": "w2:p1"}, Result: herdrscript.OK()},
+		herdrscript.Get(b.PaneID, b), call{Method: "pane.close", Params: map[string]any{"pane_id": "w3:p1"}, Result: herdrscript.OK()},
+	), Options{})
+	if res, ok := out.Result.(Result); out.Status != "success" || !ok || worker(res, ra.ID).Outcome != "done" || worker(res, rb.ID).Outcome != "done" {
+		t.Fatalf("%+v", out)
+	}
+	if got := roots(); got != 1 {
+		t.Fatalf("resolved the repository root %d times, want 1", got)
 	}
 }

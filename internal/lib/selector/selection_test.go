@@ -10,6 +10,7 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 )
 
@@ -66,7 +67,7 @@ func TestTargetsExplicitInFlagOrder(t *testing.T) {
 	f := newFleet(t)
 	c := herdrscript.Client(t, get("worker", f.stray), get("w1:p3", f.lead), get(f.child.PaneID, f.child))
 	c.Cwd = f.cwd
-	ts, err := Selection{Names: []string{"worker"}, Panes: []string{"w1:p3"}, IDs: []string{f.childID}}.Targets(context.Background(), c)
+	ts, err := Selection{Names: []string{"worker"}, Panes: []string{"w1:p3"}, IDs: []string{f.childID}}.Targets(context.Background(), c, identity.OpenOnce(context.Background(), c.Cwd))
 	want := "worker@worker=- w1:p3@w1:p3=- " + f.childID + "@w1:p4=" + f.childID
 	if got := labels(ts); err != nil || got != want {
 		t.Fatalf("got %q (%v), want %q", got, err, want)
@@ -92,9 +93,39 @@ func TestTargetsExplicitStaleIDs(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := herdrscript.Client(t, tc.calls...)
 			c.Cwd = f.cwd
-			_, err := Selection{IDs: []string{tc.id}}.Targets(context.Background(), c)
+			_, err := Selection{IDs: []string{tc.id}}.Targets(context.Background(), c, identity.OpenOnce(context.Background(), c.Cwd))
 			if code, phase := failure(err, "x"); code != tc.code || phase != "identity" {
 				t.Fatalf("%v: %s at %s", err, code, phase)
+			}
+		})
+	}
+}
+
+// Every explicit id, and a filter, reads the store open supplies, so one
+// opener serves the whole selection.
+func TestTargetsUseGivenStore(t *testing.T) {
+	f := newFleet(t)
+	s, err := identity.Existing(context.Background(), f.cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name  string
+		sel   Selection
+		calls []call
+		want  string
+		opens int
+	}{
+		{"ids", Selection{IDs: []string{f.leadID, f.childID}}, []call{get(f.lead.PaneID, f.lead), get(f.child.PaneID, f.child)}, f.leadID + "@w1:p3=" + f.leadID + " " + f.childID + "@w1:p4=" + f.childID, 2},
+		{"filter", Selection{Filter: Filter{Profiles: []string{"reviewer"}}}, []call{listCall(f.lead, f.child, f.stray)}, f.childID + "@w1:p4=" + f.childID, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := herdrscript.Client(t, tc.calls...)
+			c.Cwd = t.TempDir() // outside any repository: only open finds the store
+			opens := 0
+			ts, err := tc.sel.Targets(context.Background(), c, func() (*state.Store, error) { opens++; return s, nil })
+			if got := labels(ts); err != nil || got != tc.want || opens != tc.opens {
+				t.Fatalf("got %q (%v) opens=%d, want %q", got, err, opens, tc.want)
 			}
 		})
 	}
@@ -104,7 +135,7 @@ func TestTargetsFilterExcludesCaller(t *testing.T) {
 	f := newFleet(t)
 	c := f.client(t)
 	c.CallerPane = f.lead.PaneID
-	ts, err := Selection{Filter: Filter{Harnesses: []string{"claude", "codex"}}}.Targets(context.Background(), c)
+	ts, err := Selection{Filter: Filter{Harnesses: []string{"claude", "codex"}}}.Targets(context.Background(), c, identity.OpenOnce(context.Background(), c.Cwd))
 	want := f.childID + "@w1:p4=" + f.childID + " w1:p5@w1:p5=-"
 	if got := labels(ts); err != nil || got != want {
 		t.Fatalf("got %q (%v), want %q", got, err, want)
@@ -124,7 +155,7 @@ func TestTargetsFilterNoMatch(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := f.client(t)
 			c.CallerPane = tc.caller
-			ts, err := Selection{Filter: tc.flt}.Targets(context.Background(), c)
+			ts, err := Selection{Filter: tc.flt}.Targets(context.Background(), c, identity.OpenOnce(context.Background(), c.Cwd))
 			var out libagent.Outcome
 			out.Fail(err, "x", false)
 			if ts != nil || out.Error.Code != "no_agents_matched" || out.Error.Phase != "selection" || out.Status != "rejected" || out.ExitCode() != 1 {
@@ -135,7 +166,7 @@ func TestTargetsFilterNoMatch(t *testing.T) {
 }
 
 func TestTargetsRejectsInvalidSelection(t *testing.T) {
-	_, err := Selection{Names: []string{"a", "a"}}.Targets(context.Background(), herdrscript.Client(t))
+	_, err := Selection{Names: []string{"a", "a"}}.Targets(context.Background(), herdrscript.Client(t), nil)
 	if code, phase := failure(err, "x"); code != "invalid_input" || phase != "validation" {
 		t.Fatalf("%v: %s at %s", err, code, phase)
 	}

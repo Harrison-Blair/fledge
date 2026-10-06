@@ -426,8 +426,8 @@ func TestFanOutReresolvesRegisteredTargetsBeforeEachDelivery(t *testing.T) {
 	}
 }
 
-// A fan-out to registered targets finds the repository root once for its
-// rereads, not once per target: the store is reused across them.
+// A fan-out to registered targets finds the repository root once: target
+// selection and every reread share one store.
 func TestFanOutRereadsReuseOneStore(t *testing.T) {
 	git, err := exec.LookPath("git")
 	if err != nil {
@@ -450,41 +450,28 @@ func TestFanOutRereadsReuseOneStore(t *testing.T) {
 		t.Fatalf("%+v", out.Error)
 	}
 	b, _ := os.ReadFile(log)
-	// One root per initial target and one shared by every reread.
-	if got, want := strings.Count(string(b), "\n"), len(ids)+1; got != want {
+	if got, want := strings.Count(string(b), "\n"), 1; got != want {
 		t.Fatalf("resolved the repository root %d times, want %d", got, want)
 	}
 }
 
-// A failed store open rejects only the target being reread; the next reread
-// opens the store again and its target still receives the message.
-func TestFanOutStoreOpenFailureRejectsOnlyItsTarget(t *testing.T) {
-	git, err := exec.LookPath("git")
-	if err != nil {
-		t.Fatal(err)
-	}
+// A store that cannot be opened fails an id fan-out at phase identity
+// before any target receives the message.
+func TestFanOutStoreOpenFailureRejectsIDs(t *testing.T) {
 	var prompts []string
-	h := shiftingHerdr{agents: map[string]herdr.AgentDetails{"w1:p1": hosted("w1:p1", "term_a", "claude"), "w1:p2": hosted("w1:p2", "term_b", "claude"), "w1:p3": hosted("w1:p3", "term_c", "claude")}, shift: func(map[string]herdr.AgentDetails) {}, prompts: &prompts}
+	h := shiftingHerdr{agents: map[string]herdr.AgentDetails{"w1:p1": hosted("w1:p1", "term_a", "claude"), "w1:p2": hosted("w1:p2", "term_b", "claude")}, shift: func(map[string]herdr.AgentDetails) {}, prompts: &prompts}
 	c := libagent.Client{API: h, CallerPane: "old:p1", Cwd: identitytest.Repository(t)}
 	var ids []string
-	for _, pane := range []string{"w1:p1", "w1:p2", "w1:p3"} {
+	for _, pane := range []string{"w1:p1", "w1:p2"} {
 		ids = append(ids, identitytest.Register(t, c.Cwd, h.agents[pane]).ID)
 	}
-	// The fourth root resolution, the first reread's, fails.
-	bin, log := t.TempDir(), filepath.Join(t.TempDir(), "roots")
-	script := fmt.Sprintf("#!/bin/sh\ncase \"$*\" in *--is-bare-repository*) echo >>%q; [ \"$(wc -l <%q)\" -eq 4 ] && exit 128;; esac\nexec %q \"$@\"\n", log, log, git)
-	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\nexit 128\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	out := run(context.Background(), c, Options{Selection: selector.Selection{IDs: ids}, Body: "hi", BodySet: true}, nil, "m-0a1b2c")
-	if got, want := rows(t, out), ids[0]+"=rejected/-/w1:p1 "+ids[1]+"=submitted/m-0a1b2c/w1:p2 "+ids[2]+"=submitted/m-0a1b2c/w1:p3"; got != want {
-		t.Fatalf("got %q, want %q", got, want)
-	}
-	if got := strings.Join(prompts, " "); got != "w1:p2 w1:p3" {
-		t.Fatalf("prompted %q", got)
-	}
-	if row := out.Result.(FanOut).Targets[0]; out.Status != "partial" || row.Error.Phase != "identity" {
-		t.Fatalf("%+v %+v", out, row.Error)
+	if out.Error == nil || out.Error.Phase != "identity" || out.Status != "rejected" || out.ExitCode() != 1 || len(prompts) != 0 {
+		t.Fatalf("%+v %+v prompted %v", out, out.Error, prompts)
 	}
 }

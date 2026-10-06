@@ -50,7 +50,8 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Fail(err, "validation", false)
 		return out
 	}
-	a, _, rec, err := o.Target.Get(ctx, c)
+	open := identity.OpenOnce(ctx, c.Cwd)
+	a, _, rec, err := o.Target.GetWith(ctx, c, open)
 	if err != nil {
 		out.Fail(err, "agent.get", false)
 		return out
@@ -65,7 +66,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	}
 	result := Result{AgentRow: libagent.NewAgentRow(a.Pane), Previous: previous}
 	out.Result = result
-	s, err := identity.Existing(ctx, c.Cwd)
+	s, err := open()
 	if err == nil && s != nil && rec == nil {
 		rec, err = identity.LiveEndingMismatched(s, a)
 		if err != nil {

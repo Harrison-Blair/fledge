@@ -133,3 +133,24 @@ func TestRenameRejections(t *testing.T) {
 		})
 	}
 }
+
+// Renaming by id resolves the repository root once for the lookup and the
+// record update.
+func TestRenameByIDResolvesRootOnce(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	calls := append([]call{
+		{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: agent("w1:p3", named("worker"))},
+		{Method: "agent.rename", Result: agent("w1:p3", named("reviewer"))},
+	}, labels("w1:p3", 2)...)
+	c := herdrscript.Client(t, calls...)
+	c.Cwd = identitytest.Repository(t)
+	rec := identitytest.Register(t, c.Cwd, agent("w1:p3", named("worker")).Agent)
+	roots := identitytest.CountRoots(t)
+	out := Run(context.Background(), c, Options{Target: identity.Target{ID: rec.ID}, To: "reviewer"})
+	if out.Error != nil || *out.Result.(Result).ID != rec.ID {
+		t.Fatalf("%+v %+v", out.Error, out.Effects)
+	}
+	if got := roots(); got != 1 {
+		t.Fatalf("resolved the repository root %d times, want 1", got)
+	}
+}

@@ -556,3 +556,28 @@ func TestUsageHistoricalJSONPaneIsRecordPane(t *testing.T) {
 		})
 	}
 }
+
+// Usage of a stale id and a live id resolves the repository root once for
+// the lookups, the stale record's reread, and the rows.
+func TestUsageIDsResolveRootOnce(t *testing.T) {
+	f := newFixture(t)
+	gone, live := piAgent("w1:p3", "term_a", "gone", ""), piAgent("w1:p4", "term_b", "live", "")
+	recGone, recLive := identitytest.Register(t, f.cwd, gone), identitytest.Register(t, f.cwd, live)
+	s, err := identity.Existing(context.Background(), f.cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ended := time.Now().UTC().Format(time.RFC3339)
+	if err := s.Update(identity.Kind, recGone.ID, &recGone, func() error { recGone.EndedAt = &ended; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	c := client(t, f.cwd, call{Method: "agent.get", Params: map[string]any{"target": "w1:p4"}, Result: herdr.AgentResult{Type: "agent_info", Agent: live}})
+	roots := identitytest.CountRoots(t)
+	got := rows(t, Run(context.Background(), c, f.d, Options{Selection: selector.Selection{IDs: []string{recGone.ID, recLive.ID}}}))
+	if len(got) != 2 || *got[0].AgentID != recGone.ID || *got[1].AgentID != recLive.ID {
+		t.Fatalf("%+v", got)
+	}
+	if n := roots(); n != 1 {
+		t.Fatalf("resolved the repository root %d times, want 1", n)
+	}
+}

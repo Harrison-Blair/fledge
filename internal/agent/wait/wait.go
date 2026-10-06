@@ -14,6 +14,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
 )
 
 // Options selects targets by name, pane, and record ID, or by a filter, the
@@ -65,8 +66,9 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Fail(err, "validation", false)
 		return out
 	}
+	open := identity.OpenOnce(ctx, c.Cwd)
 	if targets == nil {
-		matches, err := o.Selection.Targets(ctx, c)
+		matches, err := o.Selection.Targets(ctx, c, open)
 		if err != nil {
 			out.Fail(err, "selection", false)
 			return out
@@ -80,7 +82,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		}
 	}
 	if len(targets) == 1 {
-		a, err := waitOne(ctx, c, targets[0], o)
+		a, err := waitOne(ctx, c, targets[0], o, open)
 		if err != nil && ctx.Err() != nil {
 			err = cancelled()
 		}
@@ -91,7 +93,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Result = libagent.NewAgentRow(a.Pane)
 		return out
 	}
-	result, err := fanOut(ctx, c, targets, o)
+	result, err := fanOut(ctx, c, targets, o, open)
 	out.Result = result
 	if err != nil {
 		out.Fail(err, "agent.wait", false)
@@ -99,13 +101,14 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	return out
 }
 
-// waitOne waits on t. A record id resolves to its verified pane first; a
-// target with a record fails closed if a different terminal answers the wait.
-func waitOne(ctx context.Context, c libagent.Client, t target, o Options) (herdr.AgentDetails, error) {
+// waitOne waits on t. A record id resolves to its verified pane first, from
+// the store open supplies; a target with a record fails closed if a
+// different terminal answers the wait.
+func waitOne(ctx context.Context, c libagent.Client, t target, o Options, open func() (*state.Store, error)) (herdr.AgentDetails, error) {
 	pane, rec := t.pane, t.record
 	if t.id != "" {
 		var err error
-		if _, pane, rec, err = (identity.Target{ID: t.id}).Get(ctx, c); err != nil {
+		if _, pane, rec, err = (identity.Target{ID: t.id}).GetWith(ctx, c, open); err != nil {
 			return herdr.AgentDetails{}, err
 		}
 	}
@@ -148,7 +151,7 @@ func validate(o Options) ([]target, error) {
 // and --all on its first failure; errors that end a call after that
 // cancellation, or after ctx ends, are reported as cancelled rather than as
 // target failures.
-func fanOut(ctx context.Context, c libagent.Client, targets []target, o Options) (FanOut, error) {
+func fanOut(ctx context.Context, c libagent.Client, targets []target, o Options, open func() (*state.Store, error)) (FanOut, error) {
 	waits, cancel := context.WithCancel(ctx)
 	defer cancel()
 	type reply struct {
@@ -159,7 +162,7 @@ func fanOut(ctx context.Context, c libagent.Client, targets []target, o Options)
 	replies := make(chan reply, len(targets))
 	for i, target := range targets {
 		go func() {
-			a, err := waitOne(waits, c, target, o)
+			a, err := waitOne(waits, c, target, o, open)
 			replies <- reply{i, a, err}
 		}()
 	}

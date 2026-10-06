@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -1285,5 +1286,105 @@ func TestObserveSessionWithoutValueWritesNothing(t *testing.T) {
 		if err != nil || changed || !bytes.Equal(before, after) {
 			t.Fatalf("%+v: %v %v", session, changed, err)
 		}
+	}
+}
+
+// countRoots puts a git wrapper first on PATH that counts repository root
+// resolutions, and returns a function that reads the count.
+func countRoots(t *testing.T) func() int {
+	t.Helper()
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin, log := t.TempDir(), filepath.Join(t.TempDir(), "roots")
+	script := fmt.Sprintf("#!/bin/sh\ncase \"$*\" in *--is-bare-repository*) echo >>%q;; esac\nexec %q \"$@\"\n", log, git)
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return func() int {
+		b, _ := os.ReadFile(log)
+		return strings.Count(string(b), "\n")
+	}
+}
+
+// OpenOnce resolves the repository root on its first call only and returns
+// the same store to every later call.
+func TestOpenOnceResolvesRootOnce(t *testing.T) {
+	c := client(t)
+	registered(t, c, details("w1:p3", "term_a"))
+	roots := countRoots(t)
+	open := OpenOnce(context.Background(), c.Cwd)
+	first, err := open()
+	if err != nil || first == nil {
+		t.Fatalf("%v %v", first, err)
+	}
+	for range 2 {
+		if s, err := open(); err != nil || s != first {
+			t.Fatalf("%p %v, want %p", s, err, first)
+		}
+	}
+	if got := roots(); got != 1 {
+		t.Fatalf("resolved the repository root %d times, want 1", got)
+	}
+}
+
+// A repository without state is a successful open: the nil store is kept.
+func TestOpenOnceKeepsMissingStore(t *testing.T) {
+	c := client(t)
+	roots := countRoots(t)
+	open := OpenOnce(context.Background(), c.Cwd)
+	for range 2 {
+		if s, err := open(); err != nil || s != nil {
+			t.Fatalf("%v %v", s, err)
+		}
+	}
+	if got := roots(); got != 1 {
+		t.Fatalf("resolved the repository root %d times, want 1", got)
+	}
+}
+
+// A failed open is not kept: the next call opens again.
+func TestOpenOnceRetriesFailedOpen(t *testing.T) {
+	dir := t.TempDir()
+	open := OpenOnce(context.Background(), dir)
+	if _, err := open(); err == nil {
+		t.Fatal("opened a store outside a repository")
+	}
+	gittest.Git(t, dir, "init", "-q")
+	registered(t, libagent.Client{Cwd: dir}, details("w1:p3", "term_a"))
+	if s, err := open(); err != nil || s == nil {
+		t.Fatalf("%v %v", s, err)
+	}
+}
+
+// GetWith reads an id target's record from the store open supplies, and
+// never opens it for a name or pane target.
+func TestTargetGetWithUsesGivenStore(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	live := details("w1:p3", "term_a")
+	c := client(t, call{Method: "agent.get", Params: map[string]any{"target": "worker"}, Result: info(live)},
+		call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: info(live)})
+	want := registered(t, c, live)
+	s := store(t, c)
+	opens := 0
+	open := func() (*state.Store, error) { opens++; return s, nil }
+	if _, target, rec, err := (Target{Name: "worker"}).GetWith(context.Background(), c, open); err != nil || target != "worker" || rec != nil || opens != 0 {
+		t.Fatalf("%s %+v %v opens=%d", target, rec, err, opens)
+	}
+	if _, target, rec, err := (Target{ID: want.ID}).GetWith(context.Background(), c, open); err != nil || target != "w1:p3" || rec == nil || rec.ID != want.ID || opens != 1 {
+		t.Fatalf("%s %+v %v opens=%d", target, rec, err, opens)
+	}
+}
+
+// A failed open fails an id target at phase identity, as Get does.
+func TestTargetGetWithOpenFailureIsIdentityPhase(t *testing.T) {
+	c := client(t)
+	_, _, _, err := (Target{ID: "0000beef"}).GetWith(context.Background(), c, func() (*state.Store, error) { return nil, errors.New("unavailable") })
+	var out libagent.Outcome
+	out.Fail(err, "agent.get", false)
+	if out.Error.Phase != "identity" || out.Error.Message != "unavailable" {
+		t.Fatalf("%+v", out.Error)
 	}
 }
