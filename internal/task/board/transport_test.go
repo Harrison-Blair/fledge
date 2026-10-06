@@ -41,14 +41,19 @@ func TestLoadActualTransportDeadlineAndBrokenReplies(t *testing.T) {
 	for _, reply := range []string{"hold", "close", "{", `{"id":"fledge","result":{"type":"agent_list","agents":null}}`, `{"id":"other","result":{"type":"agent_list","agents":[]}}`} {
 		t.Run(reply, func(t *testing.T) {
 			c := libagent.Client{Cwd: identitytest.Repository(t), API: herdr.Client{Socket: peer(t, reply), Timeout: 20 * time.Second}}
+			r := repository(t, c.Cwd)
 			start := time.Now()
-			out := Load(context.Background(), c, repository(t, c.Cwd), Workers)
+			// A short parent deadline proves the socket request honors the
+			// caller's context; TestRefreshHasTotalDeadline checks the budget.
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			out := Load(ctx, c, r, Workers)
 			if out.Err == nil {
 				t.Fatal("broken peer accepted")
 			}
 			elapsed := time.Since(start)
-			if reply == "hold" && (elapsed < 4500*time.Millisecond || elapsed > 7*time.Second) {
-				t.Fatalf("total deadline elapsed %v", elapsed)
+			if reply == "hold" && (elapsed < 100*time.Millisecond || elapsed > 2*time.Second) {
+				t.Fatalf("parent deadline elapsed %v", elapsed)
 			}
 		})
 	}
