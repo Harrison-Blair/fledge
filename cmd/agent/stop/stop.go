@@ -4,6 +4,7 @@ package stop
 import (
 	"github.com/Harrison-Blair/fledge/internal/agent/stop"
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 	"github.com/spf13/cobra"
 )
 
@@ -19,14 +20,7 @@ func New() *cobra.Command {
 	f.StringArrayVar(&options.Names, "name", nil, "Live agent name (repeatable)")
 	f.StringArrayVar(&options.Panes, "pane", nil, "Hosting pane ID (repeatable)")
 	f.StringArrayVar(&options.IDs, "id", nil, "Fledge agent record ID (repeatable; follows its terminal to a new pane; fails if the terminal is gone)")
-	f.BoolVar(&options.Filter.Mine, "mine", false, "Only agents whose parent is the caller's own record")
-	f.StringVar(&options.Filter.Parent, "parent", "", "Only agents whose parent is this Fledge agent record ID")
-	f.StringArrayVar(&options.Filter.States, "state", nil, "Only agents in this state: idle, working, blocked, done, or unknown (repeatable)")
-	f.StringArrayVar(&options.Filter.Harnesses, "harness", nil, "Only agents running this harness (repeatable)")
-	f.StringArrayVar(&options.Filter.Profiles, "profile", nil, "Only agents spawned with this profile (repeatable)")
-	f.StringArrayVar(&options.Filter.Tasks, "task", nil, "Only the owner of this task ID (repeatable)")
-	f.StringArrayVar(&options.Filter.Worktrees, "worktree", nil, "Only agents whose recorded worktree is this path (repeatable)")
-	f.BoolVar(&options.Filter.Registered, "registered", false, "Only agents with a live record in this repository")
+	selector.BindFlags(f, &options.Filter)
 	f.BoolVar(&options.DryRun, "dry-run", false, "List each target and what stopping it would do, without changing anything")
 	f.BoolVar(&options.Force, "force", false, "Stop even when the agent is working, blocked, or unknown, without waiting")
 	f.DurationVar(&options.Grace, "grace", stop.DefaultGrace, "How long a working agent is given to finish its turn before stop refuses (0s through 60s; 0 refuses at once)")

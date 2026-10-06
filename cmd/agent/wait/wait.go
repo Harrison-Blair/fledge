@@ -7,6 +7,7 @@ import (
 
 	"github.com/Harrison-Blair/fledge/internal/agent/wait"
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 	"github.com/spf13/cobra"
 )
 
@@ -46,14 +47,7 @@ outcome.`,
 	f.StringArrayVar(&options.Names, "name", nil, "Live agent name (repeatable)")
 	f.StringArrayVar(&options.Panes, "pane", nil, "Hosting pane ID (repeatable)")
 	f.StringArrayVar(&options.IDs, "id", nil, "Fledge agent record ID (repeatable; follows its terminal to a new pane; fails if the terminal is gone)")
-	f.StringArrayVar(&options.Filter.States, "state", nil, "Filter: live state idle, working, blocked, done, or unknown (repeatable)")
-	f.StringArrayVar(&options.Filter.Harnesses, "harness", nil, "Filter: live harness kind (repeatable)")
-	f.StringArrayVar(&options.Filter.Profiles, "profile", nil, "Filter: recorded spawn profile (repeatable)")
-	f.StringArrayVar(&options.Filter.Tasks, "task", nil, "Filter: owner of this task ID (repeatable)")
-	f.StringArrayVar(&options.Filter.Worktrees, "worktree", nil, "Filter: recorded worktree path (repeatable)")
-	f.BoolVar(&options.Filter.Registered, "registered", false, "Filter: only agents with a live record in this repository")
-	f.BoolVar(&options.Filter.Mine, "mine", false, "Filter: only agents whose parent is the caller's own record")
-	f.StringVar(&options.Filter.Parent, "parent", "", "Filter: only agents whose parent is this Fledge agent record ID")
+	selector.BindFlags(f, &options.Filter)
 	f.StringArrayVar(&options.Until, "until", nil, "State to match: idle, working, blocked, done, or unknown (repeatable)")
 	f.DurationVar(&options.Timeout, "timeout", 0, "Give up after this duration (default: wait indefinitely)")
 	f.BoolVar(&options.All, "all", false, "With several targets, wait for every target")

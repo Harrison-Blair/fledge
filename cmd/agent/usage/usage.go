@@ -4,6 +4,7 @@ package usage
 import (
 	"github.com/Harrison-Blair/fledge/internal/agent/usage"
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 	libusage "github.com/Harrison-Blair/fledge/internal/lib/usage"
 	"github.com/spf13/cobra"
 )
@@ -20,14 +21,7 @@ func New() *cobra.Command {
 	f.StringArrayVar(&options.Names, "name", nil, "Live agent name (repeatable)")
 	f.StringArrayVar(&options.Panes, "pane", nil, "Hosting pane ID (repeatable)")
 	f.StringArrayVar(&options.IDs, "id", nil, "Fledge agent record ID (repeatable; follows its terminal to a new pane; reports from the record if the agent has ended)")
-	f.BoolVar(&options.Filter.Mine, "mine", false, "Only agents whose parent is the caller's own record")
-	f.StringVar(&options.Filter.Parent, "parent", "", "Only agents whose parent is this Fledge agent record ID")
-	f.StringArrayVar(&options.Filter.States, "state", nil, "Only agents in this state: idle, working, blocked, done, or unknown (repeatable)")
-	f.StringArrayVar(&options.Filter.Harnesses, "harness", nil, "Only agents running this harness (repeatable)")
-	f.StringArrayVar(&options.Filter.Profiles, "profile", nil, "Only agents spawned with this profile (repeatable)")
-	f.StringArrayVar(&options.Filter.Tasks, "task", nil, "Only the owner of this task ID (repeatable)")
-	f.StringArrayVar(&options.Filter.Worktrees, "worktree", nil, "Only agents whose recorded worktree is this path (repeatable)")
-	f.BoolVar(&options.Filter.Registered, "registered", false, "Only agents with a live record in this repository")
+	selector.BindFlags(f, &options.Filter)
 	f.BoolVar(&asJSON, "json", false, "Emit a structured outcome")
 	return cmd
 }
