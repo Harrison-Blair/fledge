@@ -99,7 +99,7 @@ func (p pending) peek(ctx context.Context, c libagent.Client) (herdr.AgentDetail
 		err = s.Get(identity.Kind, p.target.ID, &identity.Record{})
 	}
 	if s == nil || errors.As(err, &missing) {
-		return herdr.AgentDetails{}, "", libagent.AtPhase("identity", &herdr.Error{Code: "agent_record_not_found", Message: fmt.Sprintf("no agent record with id %s", p.target.ID)})
+		return herdr.AgentDetails{}, "", libagent.AtPhase("identity", identity.RecordNotFound(p.target.ID))
 	}
 	if err != nil {
 		return herdr.AgentDetails{}, "", err
