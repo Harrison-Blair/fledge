@@ -19,6 +19,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
 
 type call = herdrscript.Call
@@ -485,8 +486,7 @@ func TestAdoptRenamedButRecordEndedIsPartial(t *testing.T) {
 // withSession is the live agent in pane carrying a claude session ref.
 func withSession(pane string, name *string) herdr.AgentResult {
 	r := agent(pane, name)
-	source, harness, kind, value := "herdr:claude", "claude", "id", "s-1"
-	r.Agent.AgentSession = &herdr.AgentSession{Source: &source, Agent: &harness, Kind: &kind, Value: &value}
+	r.Agent = identitytest.WithSession(r.Agent, "s-1")
 	return r
 }
 

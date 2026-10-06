@@ -359,9 +359,8 @@ func TestGetShowsPersistedNativeSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source, harness, kind := "herdr:claude", "claude", "id"
 	for _, v := range []string{"s-old", "s-new"} {
-		if _, _, err := identity.ObserveSession(s, rec.ID, herdr.AgentSession{Source: &source, Agent: &harness, Kind: &kind, Value: &v}, time.Now()); err != nil {
+		if _, _, err := identity.ObserveSession(s, rec.ID, *identitytest.WithSession(herdr.AgentDetails{}, v).AgentSession, time.Now()); err != nil {
 			t.Fatal(err)
 		}
 	}
