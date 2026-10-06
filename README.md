@@ -434,14 +434,13 @@ missing or unknown harnesses are refused without keys.
 The bindings assume harness defaults: double Escape for `amp`, `copilot`,
 `opencode`, and `kilo`; single Ctrl+C for `droid`, `grok`, `hermes`, `mastracode`,
 and `qodercli`; single Escape for every other currently supported harness.
-Prior keybinding experiments covered Claude and Codex; live smoke tests of the
-implemented `fledge agent pause` command covered Codex and OpenCode. Codex interruption settled
-successfully and a subsequent message resumed the same session and pane.
-OpenCode 1.18.25 visibly interrupted active output with double Escape, but the
-immediate wait reported `blocked` (`partial`, `submitted=true`, `settled=false`,
-`agent_blocked`); a subsequent message resumed the same session and pane and
-reached `done`. See the [integration observations](reference/dogfood/friction.md).
-Other mappings remain best effort; custom keybindings can change their effect. Interruption does not freeze a
+Run `fledge agent capabilities --harness <kind>` to see a harness's interrupt
+binding and its evidence; the evidence column does not mark every binding as
+checked or unchecked. The [dogfooding record](reference/dogfood/friction.md)
+keeps the live pause observations, including an OpenCode limitation: the keys
+can visibly interrupt output while the outcome is `partial` with
+`agent_blocked`, so inspect the terminal before retrying.
+Mappings remain best effort; custom keybindings can change their effect. Interruption does not freeze a
 process, undo completed work, drain queued prompts, or establish a persistent
 paused state. Queued work can start again. Resume or redirect the conversation
 with `fledge agent message`.
