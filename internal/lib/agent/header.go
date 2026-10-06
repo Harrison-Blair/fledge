@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 )
 
@@ -45,7 +46,7 @@ func ResolveSender(ctx context.Context, c Client) Sender {
 		return CallerSender(c.CallerPane, nil)
 	}
 	msg := err.Error()
-	return Sender{Pane: Pointer(c.CallerPane), Kind: "unknown", Error: &msg}
+	return Sender{Pane: cli.Pointer(c.CallerPane), Kind: "unknown", Error: &msg}
 }
 
 // CallerSender is ResolveSender from a finished lookup of the caller's pane:
@@ -57,11 +58,11 @@ func CallerSender(pane string, caller *herdr.AgentDetails) Sender {
 		msg := "HERDR_PANE_ID is not set"
 		return Sender{Kind: "unknown", Error: &msg}
 	case caller == nil:
-		return Sender{Pane: Pointer(pane), Kind: "pane"}
+		return Sender{Pane: cli.Pointer(pane), Kind: "pane"}
 	case caller.Pane.Name != nil && *caller.Pane.Name != "":
-		return Sender{Name: caller.Pane.Name, Pane: Pointer(caller.Pane.PaneID), Kind: "named"}
+		return Sender{Name: caller.Pane.Name, Pane: cli.Pointer(caller.Pane.PaneID), Kind: "named"}
 	}
-	return Sender{Pane: Pointer(caller.Pane.PaneID), Kind: "unnamed"}
+	return Sender{Pane: cli.Pointer(caller.Pane.PaneID), Kind: "unnamed"}
 }
 
 // String describes the sender as it appears in headers and human output.

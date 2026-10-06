@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 )
 
@@ -49,7 +50,7 @@ func TestCallLocatesTransportFailures(t *testing.T) {
 	remote := &herdr.Error{Code: "agent_not_found", Message: "missing"}
 	c := Client{API: apiFunc(func(string, any) (any, error) { return nil, remote })}
 	err := c.Call(context.Background(), "tab.create", nil, &struct{}{})
-	o := Outcome{}
+	o := cli.Outcome{}
 	o.Fail(err, "placement", false)
 	if !errors.Is(err, remote) || o.Error.Phase != "tab.create" || o.Error.Code != "agent_not_found" {
 		t.Fatalf("%v %+v", err, o.Error)
@@ -134,7 +135,7 @@ func TestListValidatesEveryAgentInfo(t *testing.T) {
 	}
 	sent := errors.New("socket closed")
 	c := Client{API: apiFunc(func(string, any) (any, error) { return nil, sent })}
-	o := Outcome{}
+	o := cli.Outcome{}
 	_, err := c.List(context.Background())
 	o.Fail(err, "state", false)
 	if !errors.Is(err, sent) || o.Error.Phase != "agent.list" {

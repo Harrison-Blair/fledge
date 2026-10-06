@@ -1,5 +1,4 @@
 // Package agent performs Herdr agent requests for agent operations.
-// outcome.go holds temporary aliases to the lib/cli result envelope;
 // row.go reports a live pane's agent fields;
 // fanout.go summarizes a fan-out's failed targets as one failure;
 // client.go performs validated Herdr requests;
