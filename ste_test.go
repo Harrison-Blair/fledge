@@ -126,7 +126,9 @@ func steSegments(text string) []steSegment {
 // steSentenceBreak ends a sentence: terminal punctuation then whitespace.
 var steSentenceBreak = regexp.MustCompile(`[.!?]\s+`)
 
-// steLongSentences flags a sentence above the word cap.
+// steLongSentences flags a sentence above the word cap. Like the upstream
+// linter, it measures one segment at a time, so a sentence that wraps across
+// source lines is never measured. It catches a long single line or table cell.
 func steLongSentences(file string, seg steSegment) []steViolation {
 	var out []steViolation
 	start := 0
