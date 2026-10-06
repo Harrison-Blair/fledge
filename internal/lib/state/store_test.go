@@ -982,3 +982,30 @@ func TestListArchivedReturnsOnlyArchivedIDs(t *testing.T) {
 		t.Fatalf("ListArchived = %v, %v; want only %s, not %s", ids, err, archived, kept)
 	}
 }
+
+// GetArchived reads the archive before the live path, so an archived record
+// is found without a failed live lookup, and it follows a record that a
+// concurrent Unarchive returned to the live path.
+func TestGetArchivedReadsArchiveFirstAndFollowsUnarchive(t *testing.T) {
+	store, root := openStore(t)
+	archived, unarchived := createCounter(t, store), createCounter(t, store)
+	if err := store.Exclusive(func(tx *Tx) error { return tx.Archive("counters", archived) }); err != nil {
+		t.Fatal(err)
+	}
+	// A directory at the live path fails any read of it, so only an
+	// archive-first read succeeds.
+	if err := os.Mkdir(filepath.Join(root, "counters", archived+recordSuffix), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var c counter
+	if err := store.GetArchived("counters", archived, &c); err != nil {
+		t.Fatalf("GetArchived of an archived record: %v", err)
+	}
+	if err := store.GetArchived("counters", unarchived, &c); err != nil {
+		t.Fatalf("GetArchived of a record returned to the live path: %v", err)
+	}
+	var notFound *NotFoundError
+	if err := store.GetArchived("counters", "0123abcd", &c); !errors.As(err, &notFound) {
+		t.Fatalf("GetArchived of a missing record: %v, want *NotFoundError", err)
+	}
+}

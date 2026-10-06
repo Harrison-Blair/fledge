@@ -144,6 +144,22 @@ func (s *Store) Get(kind, id string, v any) error {
 	return err
 }
 
+// GetArchived is Get for an id from ListArchived: it reads the archive first,
+// then the live path, where a concurrent Unarchive links the record before
+// removing its archived copy.
+func (s *Store) GetArchived(kind, id string, v any) error {
+	path, err := s.recordPath(kind, id)
+	if err != nil {
+		return err
+	}
+	err = read(archivePath(path), kind, id, v)
+	var missing *NotFoundError
+	if errors.As(err, &missing) {
+		return read(path, kind, id, v)
+	}
+	return err
+}
+
 // List returns the ids of every unarchived record of kind in sorted order. A
 // kind with no records yet returns an empty list.
 func (s *Store) List(kind string) ([]string, error) {
