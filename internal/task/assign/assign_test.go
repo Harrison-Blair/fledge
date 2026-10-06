@@ -188,6 +188,22 @@ func TestAssignRejectsInvalidInput(t *testing.T) {
 	}
 }
 
+func TestAssignRejectsMalformedIDs(t *testing.T) {
+	repo := identitytest.Repository(t)
+	for label, tc := range map[string]struct {
+		o    Options
+		want string
+	}{
+		"task id":  {Options{Agent: identity.Target{Name: "worker"}, ID: "xyz"}, "--id must be an 8 lowercase hexadecimal task id"},
+		"agent id": {Options{Agent: identity.Target{ID: "nope"}, ID: "0123abcd"}, "--agent-id must be an 8 lowercase hexadecimal agent id"},
+	} {
+		out := Run(context.Background(), tasktest.Client(t, repo, ""), tc.o)
+		if out.Error == nil || out.Error.Code != "invalid_input" || out.Error.Message != tc.want || out.ExitCode() != 2 {
+			t.Fatalf("%s: %+v", label, out.Error)
+		}
+	}
+}
+
 // Two callers assign the same created task at once: the second reaches the
 // store lock after the first has assigned it, and must refuse.
 func TestConcurrentAssignExactlyOneSucceeds(t *testing.T) {

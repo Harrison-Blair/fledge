@@ -36,17 +36,18 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 	var after []string
 	var err error
 	for _, id := range o.After {
-		if task.ValidateID(id) != nil {
-			err = libagent.Invalid("--after must be 8 lowercase hexadecimal characters")
+		if e := libagent.ValidateID("after", "task", id); e != nil {
+			err = e
 		}
 		if !slices.Contains(after, id) {
 			after = append(after, id)
 		}
 	}
+	if err == nil && o.Parent != "" {
+		err = libagent.ValidateID("parent", "task", o.Parent)
+	}
 	switch {
 	case err != nil:
-	case o.Parent != "" && task.ValidateID(o.Parent) != nil:
-		err = libagent.Invalid("--parent must be 8 lowercase hexadecimal characters")
 	case o.Title == "" || strings.ContainsAny(o.Title, "\r\n"):
 		err = libagent.Invalid("--title must be nonempty and a single line")
 	default:

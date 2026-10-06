@@ -7,7 +7,6 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
-	"github.com/Harrison-Blair/fledge/internal/lib/state"
 )
 
 // Selection is either explicit targets or a filter; mixing is invalid.
@@ -41,8 +40,10 @@ func (s Selection) Validate() error {
 			return libagent.Invalid("duplicate target %q", t)
 		}
 	}
-	if slices.ContainsFunc(s.IDs, func(id string) bool { return !state.ValidID(id) }) {
-		return libagent.Invalid("--id must be 8 lowercase hexadecimal characters")
+	for _, id := range s.IDs {
+		if err := libagent.ValidateID("id", "agent", id); err != nil {
+			return err
+		}
 	}
 	return s.Filter.Validate()
 }

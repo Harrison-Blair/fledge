@@ -6,7 +6,6 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/harness"
-	"github.com/Harrison-Blair/fledge/internal/lib/state"
 )
 
 // Filter selects live agents. Fields AND together; values within one slice OR
@@ -37,13 +36,20 @@ func (f Filter) NeedsRecords() bool {
 
 // Validate checks f without contacting Herdr or the store.
 func (f Filter) Validate() error {
-	switch {
-	case f.Mine && f.Parent != "":
+	if f.Mine && f.Parent != "" {
 		return libagent.Invalid("--mine and --parent are mutually exclusive")
-	case f.Parent != "" && !state.ValidID(f.Parent):
-		return libagent.Invalid("--parent must be an 8 lowercase hexadecimal agent id")
-	case slices.ContainsFunc(f.Tasks, func(id string) bool { return !state.ValidID(id) }):
-		return libagent.Invalid("--task must be an 8 lowercase hexadecimal task id")
+	}
+	if f.Parent != "" {
+		if err := libagent.ValidateID("parent", "agent", f.Parent); err != nil {
+			return err
+		}
+	}
+	for _, id := range f.Tasks {
+		if err := libagent.ValidateID("task", "task", id); err != nil {
+			return err
+		}
+	}
+	switch {
 	case slices.ContainsFunc(f.States, func(s string) bool { return !libagent.IsStatus(s) }):
 		return libagent.Invalid("--state must be idle, working, blocked, done, or unknown")
 	case slices.ContainsFunc(f.Harnesses, func(h string) bool { return !harness.IsKind(h) }):

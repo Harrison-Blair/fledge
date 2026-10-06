@@ -184,3 +184,13 @@ func TestUpdateDropsLegacyUsage(t *testing.T) {
 		t.Fatalf("%s", stored)
 	}
 }
+
+func TestValidateIDNamesATaskID(t *testing.T) {
+	if err := ValidateID("0123abcd"); err != nil {
+		t.Fatal(err)
+	}
+	var input *libagent.InputError
+	if err := ValidateID("nope"); !errors.As(err, &input) || err.Error() != "--id must be an 8 lowercase hexadecimal task id" {
+		t.Fatalf("%v", err)
+	}
+}

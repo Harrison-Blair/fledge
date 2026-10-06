@@ -27,7 +27,7 @@ func TestSelectionValidateRejects(t *testing.T) {
 		{"duplicate name", Selection{Names: []string{"a", "a"}}, "duplicate"},
 		{"duplicate across flags", Selection{Names: []string{"w1:p3"}, Panes: []string{"w1:p3"}}, "duplicate"},
 		{"duplicate id", Selection{IDs: []string{"0000beef", "0000beef"}}, "duplicate"},
-		{"malformed id", Selection{IDs: []string{"BEEF"}}, "--id"},
+		{"malformed id", Selection{IDs: []string{"BEEF"}}, "--id must be an 8 lowercase hexadecimal agent id"},
 		{"invalid filter", Selection{Filter: Filter{States: []string{"asleep"}}}, "--state"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
