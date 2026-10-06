@@ -5,6 +5,7 @@ package assign
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -67,8 +68,14 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) li
 	if err == nil {
 		err = task.Require(&snapshot, "assign", task.Created, task.Assigned)
 	}
+	// Listing every task also refuses a malformed record, even one the task
+	// does not wait on; the locked check reads only the prerequisites.
+	var rs []task.Record
 	if err == nil {
-		_, err = waiting(s, snapshot, o.Force)
+		rs, err = task.List(s)
+	}
+	if err == nil {
+		_, err = waiting(snapshot, task.Index(rs), o.Force)
 	}
 	if err != nil {
 		out.Fail(err, "task", false)
@@ -101,7 +108,11 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) li
 		if !reflect.DeepEqual(*r, snapshot) {
 			return &herdr.Error{Code: "task_state_changed", Message: fmt.Sprintf("task %s changed while it was being assigned; inspect it with fledge task get --id %s", r.ID, r.ID)}
 		}
-		unmet, err := waiting(s, *r, o.Force)
+		byID, err := prerequisites(s, *r)
+		if err != nil {
+			return err
+		}
+		unmet, err := waiting(*r, byID, o.Force)
 		if err != nil {
 			return err
 		}
@@ -131,14 +142,28 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) li
 	return out
 }
 
-// waiting returns r's unmet prerequisites, nil when there are none, and
-// refuses them unless force is set.
-func waiting(s *state.Store, r task.Record, force bool) ([]string, error) {
-	rs, err := task.List(s)
-	if err != nil {
-		return nil, err
+// prerequisites reads r's prerequisites by id. A missing one is left out, so
+// it counts as unmet; any other read error is returned.
+func prerequisites(s *state.Store, r task.Record) (map[string]task.Record, error) {
+	byID := make(map[string]task.Record, len(r.After))
+	for _, id := range r.After {
+		dep, err := task.Get(s, id)
+		var e *herdr.Error
+		if errors.As(err, &e) && e.Code == "task_not_found" {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		byID[id] = dep
 	}
-	unmet := task.Unmet(r, task.Index(rs))
+	return byID, nil
+}
+
+// waiting returns r's prerequisites that are unmet in byID, nil when there are
+// none, and refuses them unless force is set.
+func waiting(r task.Record, byID map[string]task.Record, force bool) ([]string, error) {
+	unmet := task.Unmet(r, byID)
 	switch {
 	case len(unmet) == 0:
 		return nil, nil

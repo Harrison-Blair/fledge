@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -288,6 +290,92 @@ func TestAssignWithSatisfiedPrerequisites(t *testing.T) {
 	out := Run(context.Background(), c, Options{Agent: identity.Target{Name: "worker"}, ID: id, Force: true})
 	if r := tasktest.Load(t, repo, id); out.Error != nil || r.Status != task.Assigned || r.UnmetAtAssign != nil {
 		t.Fatalf("%+v %+v", out.Error, r)
+	}
+}
+
+// malform overwrites task id's record with text that does not decode.
+func malform(t *testing.T, repo, id string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(repo, ".fledge/state/tasks", id+".json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A malformed task record, even one the task does not wait on, fails the
+// assignment before the agent is resolved.
+func TestAssignRefusesMalformedUnrelatedRecord(t *testing.T) {
+	repo := identitytest.Repository(t)
+	tasktest.Register(t, repo, worker)
+	malform(t, repo, tasktest.Seed(t, repo, task.Record{Title: "other", Status: task.Created}))
+	id := seed(t, repo)
+	before := tasktest.Load(t, repo, id)
+	out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{Agent: identity.Target{Name: "worker"}, ID: id})
+	if out.Error == nil || out.Error.Phase != "task" || !strings.Contains(out.Error.Message, "decode") || !reflect.DeepEqual(tasktest.Load(t, repo, id), before) {
+		t.Fatalf("%+v", out.Error)
+	}
+}
+
+// The locked check reads only the prerequisites: a record the task does not
+// wait on that becomes malformed while the agent is resolved does not block
+// the assignment.
+func TestAssignLockedCheckIgnoresUnrelatedRecords(t *testing.T) {
+	repo := identitytest.Repository(t)
+	tasktest.Register(t, repo, worker)
+	other := tasktest.Seed(t, repo, task.Record{Title: "other", Status: task.Created})
+	done := tasktest.Seed(t, repo, task.Record{Title: "done", Status: task.Verified})
+	id := tasktest.Seed(t, repo, task.Record{Title: "Fix it", Brief: "do the thing", Status: task.Created, After: []string{done}})
+	get := tasktest.Get("worker", worker)
+	get.Before = func() { malform(t, repo, other) }
+	c := tasktest.Client(t, repo, "", get, call{Method: "agent.prompt", Result: prompted(worker)})
+	out := Run(context.Background(), c, Options{Agent: identity.Target{Name: "worker"}, ID: id})
+	if r := tasktest.Load(t, repo, id); out.Error != nil || r.Status != task.Assigned || r.UnmetAtAssign != nil {
+		t.Fatalf("%+v %+v", out.Error, r)
+	}
+}
+
+// The locked check sees prerequisite changes made while the agent is
+// resolved: a missing prerequisite is unmet, in declaration order.
+func TestAssignRechecksPrerequisitesUnderLock(t *testing.T) {
+	repo := identitytest.Repository(t)
+	tasktest.Register(t, repo, worker)
+	done := tasktest.Seed(t, repo, task.Record{Title: "done", Status: task.Verified})
+	gone := tasktest.Seed(t, repo, task.Record{Title: "gone", Status: task.Verified})
+	reopened := tasktest.Seed(t, repo, task.Record{Title: "reopened", Status: task.Verified})
+	id := tasktest.Seed(t, repo, task.Record{Title: "Fix it", Brief: "do the thing", Status: task.Created, After: []string{reopened, done, gone}})
+	change := func() {
+		if err := os.Remove(filepath.Join(repo, ".fledge/state/tasks", gone+".json")); err != nil {
+			t.Fatal(err)
+		}
+		s, err := task.Existing(context.Background(), repo)
+		if err == nil {
+			_, err = task.Update(s, reopened, func(r *task.Record) error { r.Status = task.Completed; return nil })
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	get := tasktest.Get("worker", worker)
+	get.Before = change
+	before := tasktest.Load(t, repo, id)
+	out := Run(context.Background(), tasktest.Client(t, repo, "", get), Options{Agent: identity.Target{Name: "worker"}, ID: id})
+	if out.Error == nil || out.Error.Code != "task_dependencies_unmet" || !strings.Contains(out.Error.Message, reopened+", "+gone) || !reflect.DeepEqual(tasktest.Load(t, repo, id), before) {
+		t.Fatalf("%+v", out.Error)
+	}
+}
+
+// A prerequisite that is present but unreadable under the lock fails the
+// assignment, even when forced, instead of counting as unmet.
+func TestAssignPropagatesPrerequisiteReadErrors(t *testing.T) {
+	repo := identitytest.Repository(t)
+	tasktest.Register(t, repo, worker)
+	dep := tasktest.Seed(t, repo, task.Record{Title: "dep", Status: task.Verified})
+	id := tasktest.Seed(t, repo, task.Record{Title: "Fix it", Brief: "do the thing", Status: task.Created, After: []string{dep}})
+	get := tasktest.Get("worker", worker)
+	get.Before = func() { malform(t, repo, dep) }
+	before := tasktest.Load(t, repo, id)
+	out := Run(context.Background(), tasktest.Client(t, repo, "", get), Options{Agent: identity.Target{Name: "worker"}, ID: id, Force: true})
+	if out.Error == nil || out.Error.Phase != "task" || !strings.Contains(out.Error.Message, "decode") || !reflect.DeepEqual(tasktest.Load(t, repo, id), before) {
+		t.Fatalf("%+v", out.Error)
 	}
 }
 
