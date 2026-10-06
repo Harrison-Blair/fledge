@@ -1,5 +1,7 @@
 # Fledge agent command plan — Fable review
 
+> **Historical record.** This is a review of the superseded [agent command plan](agent-command.md). The current command contracts are in the README: [Agents](../../README.md#agents), [Tasks](../../README.md#tasks), [Worktrees](../../README.md#worktrees), and [Migrating from earlier versions](../../README.md#migrating-from-earlier-versions).
+
 **Reviewer:** Claude Code Fable 5.1
 
 **Herdr agent:** `fable-review`, pane `wQ:p5`
