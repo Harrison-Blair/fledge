@@ -11,6 +11,7 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
+	"github.com/Harrison-Blair/fledge/internal/lib/termtext"
 )
 
 // Source identifies independently refreshed observations.
@@ -105,7 +106,7 @@ func project(records []task.Record) (*Snapshot, error) {
 	seen := map[string]bool{}
 	for _, r := range records {
 		if task.ValidateID(r.ID) != nil || seen[r.ID] || !slices.Contains(task.Statuses, r.Status) {
-			return nil, fmt.Errorf("malformed task identity or state: %s", DisplayText(r.ID))
+			return nil, fmt.Errorf("malformed task identity or state: %s", termtext.Clean(r.ID))
 		}
 		seen[r.ID] = true
 	}
@@ -128,7 +129,7 @@ func project(records []task.Record) (*Snapshot, error) {
 			}
 		}
 		if colors[id] == 1 {
-			return nil, fmt.Errorf("cyclic task hierarchy at %s", DisplayText(id))
+			return nil, fmt.Errorf("cyclic task hierarchy at %s", termtext.Clean(id))
 		}
 		for _, id := range path {
 			colors[id] = 2

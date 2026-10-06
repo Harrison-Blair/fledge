@@ -3,6 +3,7 @@ package get
 import (
 	"bytes"
 	"context"
+	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"reflect"
 	"strings"
 	"testing"
@@ -153,5 +154,18 @@ func TestGetShowsUsage(t *testing.T) {
 	Run(context.Background(), tasktest.Client(t, repo, ""), Options{ID: id}).Write(&b, false, Render)
 	if want := "usage:\n  worker: 40s, unavailable (no native session ref observed)\n"; !strings.HasSuffix(b.String(), want) {
 		t.Fatalf("%q\nwant suffix %q", b.String(), want)
+	}
+}
+
+func TestRenderRemovesControlSequences(t *testing.T) {
+	evil := "X\x1b[2J\x1b]0;pwned\x07"
+	dep := Dependency{ID: "22222222", Title: evil, Status: task.Cancelled, CancelReason: &evil}
+	r := Result{Record: task.Record{ID: "11111111", Title: evil, Status: task.Cancelled, Brief: evil + "\n" + evil, Result: &evil, VerificationNote: &evil, CreatedAt: "now", CancelledAt: tasktest.Ptr("later"), CancelReason: &evil}, Dependencies: []Dependency{dep}}
+	var buf bytes.Buffer
+	if err := Render(&buf, libagent.Outcome{Result: r}); err != nil {
+		t.Fatal(err)
+	}
+	if got := buf.String(); strings.ContainsAny(got, "\x1b\x07") || !strings.Contains(got, "X") {
+		t.Fatalf("unsafe human output: %q", got)
 	}
 }

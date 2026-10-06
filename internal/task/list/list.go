@@ -13,6 +13,7 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
+	"github.com/Harrison-Blair/fledge/internal/lib/termtext"
 )
 
 // Options filters by status, by owner agent id, and by parent task id (direct
@@ -128,7 +129,7 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		if t.Progress != nil {
 			progress = t.Progress.String()
 		}
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", t.ID, t.Status, owner, libagent.Display(t.Parent), waiting, progress, t.Title)
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", t.ID, t.Status, owner, libagent.Display(t.Parent), waiting, progress, termtext.Clean(t.Title))
 	}
 	return table.Flush()
 }

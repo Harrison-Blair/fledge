@@ -275,3 +275,18 @@ func TestImportStoresRepeatedPrerequisitesOnce(t *testing.T) {
 		t.Fatalf("%+v %+v", r.Tasks[1].After, tasktest.Load(t, repo, *r.Tasks[1].ID).After)
 	}
 }
+
+func TestRenderRemovesControlSequences(t *testing.T) {
+	evil := "X\x1b[2J\x1b]0;pwned\x07"
+	id := "11111111"
+	for _, dry := range []bool{true, false} {
+		var buf bytes.Buffer
+		r := Result{Parent: &id, Tasks: []Task{{Key: evil, ID: &id, Title: evil}, {Key: "b", ID: &id, Title: "t", After: []string{evil}}}, DryRun: dry, newParent: evil}
+		if err := Render(&buf, libagent.Outcome{Result: r}); err != nil {
+			t.Fatal(err)
+		}
+		if got := buf.String(); strings.ContainsAny(got, "\x1b\x07") || !strings.Contains(got, "X") {
+			t.Fatalf("unsafe human output: %q", got)
+		}
+	}
+}
