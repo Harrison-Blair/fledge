@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -215,6 +216,53 @@ func TestListMine(t *testing.T) {
 	want := []string{l.childID + "<" + l.parentID}
 	if got := ids(out.Result.(Result).Agents); out.Error != nil || strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("got %v want %v (%+v)", got, want, out.Error)
+	}
+}
+
+// TestListMineOpensStoreOnce counts git processes through a PATH wrapper:
+// --mine opens the store once, as an unfiltered list does.
+func TestListMineOpensStoreOnce(t *testing.T) {
+	l := newLineage(t)
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	log := filepath.Join(bin, "log")
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\necho >>"+log+"\nexec "+git+" \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	gits := func(o Options, calls ...call) int {
+		os.Remove(log)
+		c := herdrscript.Client(t, calls...)
+		c.Cwd = l.cwd
+		if out := Run(context.Background(), c, o); out.Error != nil {
+			t.Fatalf("%+v", out.Error)
+		}
+		b, _ := os.ReadFile(log)
+		return strings.Count(string(b), "\n")
+	}
+	caller := herdrscript.Info(herdrscript.Pane("old:p1", "w1", "w1:t2"))
+	caller.Agent.AgentStatus, caller.Agent.TerminalID = "working", "term_parent"
+	plain := gits(Options{}, l.listCall())
+	mine := gits(Options{Filter: selector.Filter{Mine: true}}, call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: caller}, l.listCall())
+	if plain == 0 || mine != plain {
+		t.Fatalf("--mine ran git %d times, plain list %d", mine, plain)
+	}
+}
+
+// TestListMineReportsSelectionFailure keeps a filter failure after the caller
+// lookup, here a missing task, from passing as an empty listing.
+func TestListMineReportsSelectionFailure(t *testing.T) {
+	l := newLineage(t)
+	caller := herdrscript.Info(herdrscript.Pane("old:p1", "w1", "w1:t2"))
+	caller.Agent.AgentStatus, caller.Agent.TerminalID = "working", "term_parent"
+	c := herdrscript.Client(t, call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: caller}, l.listCall())
+	c.Cwd = l.cwd
+	out := Run(context.Background(), c, Options{Filter: selector.Filter{Mine: true, Tasks: []string{"0000dead"}}})
+	if out.Error == nil || out.Error.Code != "task_not_found" || out.Error.Phase != "selection" {
+		t.Fatalf("%+v %+v", out, out.Error)
 	}
 }
 
