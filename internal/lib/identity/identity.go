@@ -509,13 +509,17 @@ func Children(s *state.Store, id string) ([]Record, error) {
 		return nil, err
 	}
 	seen := map[string]bool{}
-	for _, rid := range append(live, archived...) {
+	for i, rid := range append(live, archived...) {
 		var rec Record
 		if seen[rid] {
 			continue
 		}
 		seen[rid] = true
-		if err := s.Get(Kind, rid, &rec); err != nil {
+		get := s.Get
+		if i >= len(live) {
+			get = s.GetArchived
+		}
+		if err := get(Kind, rid, &rec); err != nil {
 			return nil, err
 		}
 		if rec.Parent != nil && *rec.Parent == id {

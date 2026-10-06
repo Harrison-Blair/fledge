@@ -1076,6 +1076,35 @@ func TestChildrenIncludesEndedRecordsOfOneParent(t *testing.T) {
 	}
 }
 
+// Children reads archived records from the archive first, never failing on
+// the live path an archived record left.
+func TestChildrenReadsArchivedRecordsFromTheArchive(t *testing.T) {
+	c := client(t)
+	c.CallerPane = ""
+	s := store(t, c)
+	parent, err := Register(context.Background(), s, c, details("w1:term_parent", "term_parent"), "spawn", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := Register(context.Background(), s, c, details("w1:term_child", "term_child"), "spawn", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Update(Kind, child.ID, &child, func() error { child.Parent = &parent.ID; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := End(s, child.ID); err != nil {
+		t.Fatal(err)
+	}
+	// List skips directories, but reading this live path fails.
+	if err := os.Mkdir(filepath.Join(c.Cwd, ".fledge", "state", Kind, child.ID+".json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := Children(s, parent.ID); err != nil || len(got) != 1 || got[0].ID != child.ID {
+		t.Fatalf("Children = %+v, %v; want archived %s", got, err, child.ID)
+	}
+}
+
 func TestRegisterRecordsProfileAfterParent(t *testing.T) {
 	c := client(t, call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Err: notFound()})
 	s := store(t, c)

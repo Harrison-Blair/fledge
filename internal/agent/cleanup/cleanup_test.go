@@ -15,6 +15,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/gitstatus"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/tasktest"
@@ -286,6 +287,27 @@ func TestDryRunPlansWithoutWrites(t *testing.T) {
 	}
 	if _, err := os.Stat(r.topic); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The plan reads the live agent records once, for the caller and for every
+// worker's and checkout's checks.
+func TestPlanReadsLiveRecordsOnce(t *testing.T) {
+	r := newRepo(t)
+	callerAgent := agent("w1:p1", "w1", "t_caller", "orchestrator", "working")
+	callerRec := r.register(t, callerAgent, nil, "adopt", nil)
+	w := agent("w2:p1", "w2", "t_worker", "worker", "idle")
+	wrec := r.register(t, w, &callerRec.ID, "spawn", created(t, r.topic, "dev"))
+	tasktest.Seed(t, r.root, task.Record{Title: "t", Owner: &wrec.ID, Status: task.Verified})
+	n, real := 0, liveByTerminal
+	liveByTerminal = func(s *state.Store) (map[string]identity.Record, error) { n++; return real(s) }
+	t.Cleanup(func() { liveByTerminal = real })
+	out := Run(context.Background(), client(t, r, herdrscript.Get(callerAgent.PaneID, callerAgent), herdrscript.List(callerAgent, w), call{Method: "worktree.list", Result: r.listing(map[string]string{r.topic: "w2"}, r.topic)}), Options{DryRun: true})
+	if res, ok := out.Result.(Result); out.Status != "success" || !ok || worker(res, wrec.ID).Outcome != "planned" || checkout(res, r.topic).Outcome != "planned" {
+		t.Fatalf("%+v", out)
+	}
+	if n != 1 {
+		t.Fatalf("live agent records read %d times; want 1", n)
 	}
 }
 
