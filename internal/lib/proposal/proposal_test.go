@@ -146,6 +146,32 @@ func TestOrderDiamond(t *testing.T) {
 	}
 }
 
+func TestDecodeOrderedReturnsCheckedOrder(t *testing.T) {
+	// Dependents listed first; a duplicate prerequisite and an existing id.
+	src := header + task("d", `"b", "c", "b"`) + task("c", `"a"`) + task("b", `"a", "0123abcd"`) + task("a", "") + task("e", "")
+	p, order, err := DecodeOrdered([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := p.Order()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := func(ts []Task) []string {
+		var k []string
+		for _, t := range ts {
+			k = append(k, t.Key)
+		}
+		return k
+	}
+	if got := keys(order); !slices.Equal(got, keys(want)) || !slices.Equal(got, []string{"a", "b", "c", "d", "e"}) {
+		t.Fatalf("order = %v, want %v", got, keys(want))
+	}
+	if _, _, err := DecodeOrdered([]byte(header + task("a", `"b"`) + task("b", `"a"`))); err == nil || !strings.Contains(err.Error(), "cycle: a → b → a") {
+		t.Fatalf("cycle err = %v", err)
+	}
+}
+
 func TestOrderReportsCycle(t *testing.T) {
 	p := Proposal{Tasks: []Task{{Key: "a", After: []string{"b"}}, {Key: "b", After: []string{"a"}}}}
 	if _, err := p.Order(); err == nil || !strings.Contains(err.Error(), "a → b → a") {
