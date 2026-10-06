@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/Harrison-Blair/fledge/internal/doctor/report"
+	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 )
 
@@ -19,13 +20,13 @@ func Compatibility(pong herdr.PongResult, pingErr error) report.Check {
 	}
 	data := report.CompatibilityData{Version: pong.Version, Protocol: pong.Protocol, Expected: PinnedProtocol, Capabilities: pong.Capabilities}
 	names := data.CapabilityNames()
-	base := fmt.Sprintf("version=%s protocol=%d capabilities=%s", dash(pong.Version), pong.Protocol, capabilityList(names, ","))
+	base := fmt.Sprintf("version=%s protocol=%d capabilities=%s", libagent.DisplayString(pong.Version), pong.Protocol, capabilityList(names, ","))
 	if pong.Protocol != PinnedProtocol {
 		detail := fmt.Sprintf("protocol %d != pinned %d; %s", pong.Protocol, PinnedProtocol, base)
 		// The human diagnostic joins capabilities with ", " so the renderer can
 		// wrap between capability names; the JSON detail keeps the comma-joined
 		// form byte-for-byte.
-		humanBase := fmt.Sprintf("version=%s protocol=%d capabilities=%s", dash(pong.Version), pong.Protocol, capabilityList(names, ", "))
+		humanBase := fmt.Sprintf("version=%s protocol=%d capabilities=%s", libagent.DisplayString(pong.Version), pong.Protocol, capabilityList(names, ", "))
 		human := fmt.Sprintf("protocol %d != pinned %d; %s", pong.Protocol, PinnedProtocol, humanBase)
 		return report.Check{Name: "herdr_compatibility", Status: report.Warn, Detail: detail, Human: human, Data: data}
 	}
@@ -39,12 +40,4 @@ func capabilityList(names []string, sep string) string {
 		return "none"
 	}
 	return strings.Join(names, sep)
-}
-
-// dash renders an empty value as "-" for human output.
-func dash(s string) string {
-	if s == "" {
-		return "-"
-	}
-	return s
 }

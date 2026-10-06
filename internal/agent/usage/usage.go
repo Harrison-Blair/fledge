@@ -194,7 +194,7 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 		fmt.Fprintln(table, "NAME\tHARNESS\tMODELS\tTURNS\tINPUT\tOUTPUT\tCACHE-R\tCACHE-W\tCOST\tELAPSED\tBASIS")
 		for _, a := range r.Agents {
-			cells := []string{libagent.Display(a.Name), dash(a.Harness), dash(strings.Join(a.Models, ","))}
+			cells := []string{libagent.Display(a.Name), libagent.DisplayString(a.Harness), libagent.DisplayString(strings.Join(a.Models, ","))}
 			if a.Basis == libusage.Measured {
 				t := a.Tokens
 				cells = append(cells, strconv.Itoa(a.Turns), libusage.Count(t.Input), libusage.Count(t.Output), libusage.Count(t.CacheRead), libusage.Count(t.CacheWrite))
@@ -226,11 +226,4 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		}
 	}
 	return nil
-}
-
-func dash(s string) string {
-	if s == "" {
-		return "-"
-	}
-	return s
 }

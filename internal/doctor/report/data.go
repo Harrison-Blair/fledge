@@ -45,6 +45,17 @@ type HarnessData struct {
 	Integrations []herdr.IntegrationInfo `json:"integrations"`
 }
 
+// Available returns the targets of the available integrations, in list order.
+func (d HarnessData) Available() []string {
+	var available []string
+	for _, in := range d.Integrations {
+		if in.Available {
+			available = append(available, in.Target)
+		}
+	}
+	return available
+}
+
 // ModelHarness is one harness kind's model-discovery result.
 type ModelHarness struct {
 	Harness   string `json:"harness"`

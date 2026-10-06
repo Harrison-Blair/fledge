@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/Harrison-Blair/fledge/internal/doctor/report"
+	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 )
 
 // Environment reads process environment state without touching globals, so
@@ -43,7 +44,7 @@ func Configuration(e Environment) report.Check {
 	}
 
 	data := report.ConfigData{HerdrEnv: herdrEnv, SocketPath: socketPath, SocketMode: mode, PaneID: paneID, Session: session, Cwd: cwd, SocketField: socketDetail}
-	detail := fmt.Sprintf("HERDR_ENV=%s socket=%s pane=%s session=%s cwd=%s", dash(herdrEnv), socketDetail, dash(paneID), dash(session), dash(cwd))
+	detail := fmt.Sprintf("HERDR_ENV=%s socket=%s pane=%s session=%s cwd=%s", libagent.DisplayString(herdrEnv), socketDetail, libagent.DisplayString(paneID), libagent.DisplayString(session), libagent.DisplayString(cwd))
 	return report.Check{Name: "configuration", Status: status, Detail: detail, Data: data}
 }
 

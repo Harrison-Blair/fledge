@@ -55,10 +55,18 @@ func Pointer(s string) *string {
 
 // Display renders an optional value for humans, showing "-" when it is absent.
 func Display(s *string) string {
-	if s == nil || *s == "" {
+	if s == nil {
 		return "-"
 	}
-	return *s
+	return DisplayString(*s)
+}
+
+// DisplayString renders a value for humans, showing "-" when it is empty.
+func DisplayString(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 // Fail records err as the outcome's failure. A located transport error
