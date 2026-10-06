@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/sockettest"
 )
 
 // newSocket starts a fake Herdr Unix socket listener and points the
@@ -20,17 +22,7 @@ import (
 // outside any Git repository so agent records never reach a real checkout.
 func newSocket(t *testing.T) net.Listener {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "fc-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	path := filepath.Join(dir, "s")
-	l, err := net.Listen("unix", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { l.Close() })
+	l, path := sockettest.Listen(t)
 	t.Setenv("HERDR_ENV", "1")
 	t.Setenv("HERDR_SOCKET_PATH", path)
 	t.Chdir(t.TempDir())
@@ -398,17 +390,7 @@ func TestSpawnBlockedWaitWithPromptIsPartialWithFledgeHints(t *testing.T) {
 func TestGetForwardsTargetAndDecodesDetails(t *testing.T) {
 	for _, flag := range []string{"--name", "--pane"} {
 		t.Run(flag, func(t *testing.T) {
-			dir, err := os.MkdirTemp("", "fg-")
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { os.RemoveAll(dir) })
-			path := filepath.Join(dir, "s")
-			l, err := net.Listen("unix", path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer l.Close()
+			l, path := sockettest.Listen(t)
 			t.Setenv("HERDR_ENV", "1")
 			t.Setenv("HERDR_SOCKET_PATH", path)
 			t.Chdir(t.TempDir())
@@ -445,7 +427,7 @@ func TestGetForwardsTargetAndDecodesDetails(t *testing.T) {
 				done <- ""
 			}()
 			var out bytes.Buffer
-			err = ExecuteWithArgs([]string{"agent", "get", flag, target, "--json"}, &out)
+			err := ExecuteWithArgs([]string{"agent", "get", flag, target, "--json"}, &out)
 			if err != nil {
 				t.Fatal(err, out.String())
 			}

@@ -3,30 +3,19 @@ package wait
 import (
 	"bytes"
 	"encoding/json"
-	"net"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/sockettest"
 )
 
 // serveFanOut answers agent.wait for "a" with agent_not_running at once and
 // for "b" with an idle agent once release closes, each on its own connection.
 func serveFanOut(t *testing.T, release <-chan struct{}) {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "fw-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	path := filepath.Join(dir, "s")
-	l, err := net.Listen("unix", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { l.Close() })
+	l, path := sockettest.Listen(t)
 	t.Setenv("HERDR_ENV", "1")
 	t.Setenv("HERDR_SOCKET_PATH", path)
 	t.Chdir(t.TempDir())

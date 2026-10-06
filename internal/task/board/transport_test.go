@@ -3,25 +3,20 @@ package board
 import (
 	"bufio"
 	"context"
-	"net"
-	"path/filepath"
 	"testing"
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/sockettest"
 )
 
 func peer(t *testing.T, reply string) string {
 	t.Helper()
-	socket := filepath.Join(t.TempDir(), "s")
-	l, err := net.Listen("unix", socket)
-	if err != nil {
-		t.Fatal(err)
-	}
+	l, socket := sockettest.Listen(t)
 	done := make(chan struct{})
-	t.Cleanup(func() { close(done); l.Close() })
+	t.Cleanup(func() { close(done) })
 	go func() {
 		conn, err := l.Accept()
 		if err != nil {

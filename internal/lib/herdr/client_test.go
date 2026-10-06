@@ -7,25 +7,17 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/sockettest"
 )
 
 func socket(t *testing.T, handle func(net.Conn)) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "fh-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, "s")
-	l, err := net.Listen("unix", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { l.Close(); os.RemoveAll(dir) })
+	l, path := sockettest.Listen(t)
 	go func() {
 		c, e := l.Accept()
 		if e == nil {

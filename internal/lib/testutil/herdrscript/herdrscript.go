@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"reflect"
 	"testing"
 
@@ -122,6 +121,14 @@ func Waited(p herdr.Pane, status string) herdr.AgentResult {
 // OK is the bare acknowledgement returned by pane.close and agent.send_keys.
 func OK() map[string]any { return map[string]any{"type": "ok"} }
 
+// countWriter counts the writes of a successful render.
+type countWriter struct{ writes int }
+
+func (w *countWriter) Write(p []byte) (int, error) {
+	w.writes++
+	return len(p), nil
+}
+
 // failAfterWriter checks errors on later writes as well as the initial write.
 type failAfterWriter struct {
 	remaining int
@@ -144,26 +151,31 @@ func CheckOutputFailures(t *testing.T, render libagent.HumanRenderer, outcomes .
 	t.Helper()
 	for i, out := range outcomes {
 		for _, asJSON := range []bool{false, true} {
-			if err := out.Write(io.Discard, asJSON, render); err != nil {
+			var count countWriter
+			if err := out.Write(&count, asJSON, render); err != nil {
 				t.Fatal(err)
 			}
-			// Exercise each write boundary without depending on the number of writes.
-			for after := 0; ; after++ {
+			// Fail at each write of the successful render, then confirm that
+			// the render makes no more writes than counted.
+			for after := 0; after <= count.writes; after++ {
 				sentinel := errors.New("output unavailable")
 				w := &failAfterWriter{remaining: after, err: sentinel}
 				err := libagent.Finish(out, w, asJSON, render)
+				if after == count.writes {
+					if w.failed {
+						t.Fatalf("case %d json=%v: more than %d writes", i, asJSON, count.writes)
+					}
+					break
+				}
 				var outputErr *cli.OutputError
 				if !w.failed {
-					break
+					t.Fatalf("case %d json=%v: %d writes, want %d", i, asJSON, after, count.writes)
 				}
 				if !errors.As(err, &outputErr) {
 					t.Fatalf("output failure lost: %v", err)
 				}
 				if !errors.Is(err, sentinel) || outputErr.ExitCode() != 1 || outputErr.Error() != sentinel.Error() {
 					t.Fatalf("case %d json=%v write=%d: %v", i, asJSON, after, err)
-				}
-				if after > 100 {
-					t.Fatalf("unbounded writes for case %d", i)
 				}
 			}
 		}
