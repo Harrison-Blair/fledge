@@ -69,17 +69,6 @@ func piAgent(pane, terminal, name, session string) herdr.AgentDetails {
 	return a
 }
 
-func listCall(agents ...herdr.AgentDetails) call {
-	if agents == nil {
-		agents = []herdr.AgentDetails{}
-	}
-	return call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": agents}}
-}
-
-func getCall(target string, a herdr.AgentDetails) call {
-	return call{Method: "agent.get", Params: map[string]any{"target": target}, Result: herdr.AgentResult{Type: "agent_info", Agent: a}}
-}
-
 func client(t *testing.T, cwd string, calls ...call) libagent.Client {
 	c := herdrscript.Client(t, calls...)
 	c.Cwd = cwd
@@ -114,7 +103,7 @@ func TestUsageFilterMeasuresAndPersistsLiveRef(t *testing.T) {
 	f := newFixture(t)
 	a := piAgent("w1:p3", "term_a", "worker", f.session)
 	rec := identitytest.Register(t, f.cwd, a)
-	out := Run(context.Background(), client(t, f.cwd, listCall(a)), f.d, Options{Selection: selector.Selection{Filter: selector.Filter{Harnesses: []string{"pi"}}}})
+	out := Run(context.Background(), client(t, f.cwd, herdrscript.List(a)), f.d, Options{Selection: selector.Selection{Filter: selector.Filter{Harnesses: []string{"pi"}}}})
 	got := rows(t, out)
 	if len(got) != 1 {
 		t.Fatalf("%+v", got)
@@ -171,7 +160,7 @@ func TestUsageGoneIDUsesPersistedRef(t *testing.T) {
 	}
 	c := client(t, f.cwd,
 		call{Method: "agent.get", Err: &herdr.Error{Code: "agent_not_found", Message: "gone"}},
-		listCall(),
+		herdrscript.List(),
 		call{Method: "pane.list", Result: map[string]any{"type": "pane_list", "panes": []any{}}})
 	got := rows(t, Run(context.Background(), c, f.d, Options{Selection: selector.Selection{IDs: []string{rec.ID}}}))
 	if len(got) != 1 || got[0].Basis != libusage.Measured || *got[0].AgentID != rec.ID {
@@ -196,7 +185,7 @@ func TestUsageStaleIDUnreadableRecordFails(t *testing.T) {
 	}
 	c := client(t, f.cwd,
 		call{Method: "agent.get", Err: &herdr.Error{Code: "agent_not_found", Message: "gone"}},
-		listCall(),
+		herdrscript.List(),
 		call{Method: "pane.list", Result: map[string]any{"type": "pane_list", "panes": []any{a}}, Before: corrupt})
 	out := Run(context.Background(), c, f.d, Options{Selection: selector.Selection{IDs: []string{rec.ID}}})
 	if out.Error == nil || out.Error.Phase != "identity" {
@@ -240,7 +229,7 @@ func TestUsageEndedClaudeIDWithoutWorktreeIsMeasured(t *testing.T) {
 	a.Agent, a.Cwd = &harness, &cwd
 	a = identitytest.WithSession(a, "cl-1")
 	rec := identitytest.Register(t, f.cwd, a)
-	live := rows(t, Run(context.Background(), client(t, f.cwd, listCall(a)), f.d, Options{Selection: selector.Selection{Filter: selector.Filter{Registered: true}}}))
+	live := rows(t, Run(context.Background(), client(t, f.cwd, herdrscript.List(a)), f.d, Options{Selection: selector.Selection{Filter: selector.Filter{Registered: true}}}))
 	if len(live) != 1 || live[0].Basis != libusage.Measured || live[0].Tokens.Output != 4 {
 		t.Fatalf("live: %+v", live)
 	}
@@ -269,7 +258,7 @@ func TestUsageUnknownIDFails(t *testing.T) {
 func TestUsageWithoutRefIsUnavailable(t *testing.T) {
 	f := newFixture(t)
 	a := piAgent("w1:p4", "term_b", "stray", "")
-	got := rows(t, Run(context.Background(), client(t, f.cwd, getCall("w1:p4", a)), f.d, Options{Selection: selector.Selection{Panes: []string{"w1:p4"}}}))
+	got := rows(t, Run(context.Background(), client(t, f.cwd, herdrscript.Get("w1:p4", a)), f.d, Options{Selection: selector.Selection{Panes: []string{"w1:p4"}}}))
 	if len(got) != 1 || got[0].Basis != libusage.Unavailable || got[0].Reason != "no native session ref observed" || got[0].Harness != "pi" || got[0].AgentID != nil || got[0].ElapsedSeconds != nil {
 		t.Fatalf("%+v", got)
 	}
@@ -280,7 +269,7 @@ func TestUsageNameAttributesRecord(t *testing.T) {
 	f := newFixture(t)
 	a := piAgent("w1:p3", "term_a", "worker", f.session)
 	rec := identitytest.Register(t, f.cwd, a)
-	got := rows(t, Run(context.Background(), client(t, f.cwd, getCall("worker", a)), f.d, Options{Selection: selector.Selection{Names: []string{"worker"}}}))
+	got := rows(t, Run(context.Background(), client(t, f.cwd, herdrscript.Get("worker", a)), f.d, Options{Selection: selector.Selection{Names: []string{"worker"}}}))
 	if len(got) != 1 || got[0].AgentID == nil || *got[0].AgentID != rec.ID || record(t, f.cwd, rec.ID).NativeSession == nil {
 		t.Fatalf("%+v", got)
 	}
@@ -292,7 +281,7 @@ func TestUsagePersistFailureWarns(t *testing.T) {
 	a := piAgent("w1:p3", "term_a", "worker", f.session)
 	rec := identitytest.Register(t, f.cwd, a)
 	unchanged := identitytest.ReadOnly(t, f.cwd, rec.ID)
-	out := Run(context.Background(), client(t, f.cwd, listCall(a)), f.d, Options{Selection: selector.Selection{Filter: selector.Filter{Registered: true}}})
+	out := Run(context.Background(), client(t, f.cwd, herdrscript.List(a)), f.d, Options{Selection: selector.Selection{Filter: selector.Filter{Registered: true}}})
 	if got := rows(t, out); len(got) != 1 || got[0].Basis != libusage.Measured || got[0].AgentID == nil || *got[0].AgentID != rec.ID || out.Status != "success" {
 		t.Fatalf("%+v", out)
 	}
@@ -305,7 +294,7 @@ func TestUsagePersistFailureWarns(t *testing.T) {
 // An empty filter selection is no_agents_matched, as for stop and message.
 func TestUsageEmptySelectionFails(t *testing.T) {
 	f := newFixture(t)
-	out := Run(context.Background(), client(t, f.cwd, listCall(piAgent("w1:p3", "term_a", "worker", ""))), f.d, Options{Selection: selector.Selection{Filter: selector.Filter{States: []string{"working"}}}})
+	out := Run(context.Background(), client(t, f.cwd, herdrscript.List(piAgent("w1:p3", "term_a", "worker", ""))), f.d, Options{Selection: selector.Selection{Filter: selector.Filter{States: []string{"working"}}}})
 	if out.Status != "rejected" || out.ExitCode() != 1 || out.Error.Code != "no_agents_matched" || out.Error.Phase != "selection" {
 		t.Fatalf("%+v", out)
 	}
@@ -371,7 +360,7 @@ func TestJSONFields(t *testing.T) {
 	f := newFixture(t)
 	a := piAgent("w1:p3", "term_a", "worker", f.session)
 	identitytest.Register(t, f.cwd, a)
-	out := Run(context.Background(), client(t, f.cwd, listCall(a)), f.d, Options{Selection: selector.Selection{Filter: selector.Filter{Registered: true}}})
+	out := Run(context.Background(), client(t, f.cwd, herdrscript.List(a)), f.d, Options{Selection: selector.Selection{Filter: selector.Filter{Registered: true}}})
 	var b bytes.Buffer
 	if err := out.Write(&b, true, Render); err != nil {
 		t.Fatal(err)
@@ -426,10 +415,10 @@ func TestUsageLiveJSONPaneIsResolvedPaneID(t *testing.T) {
 		calls []call
 		sel   selector.Selection
 	}{
-		{"name", []call{getCall("worker", a)}, selector.Selection{Names: []string{"worker"}}},
-		{"pane", []call{getCall("w1:p3", a)}, selector.Selection{Panes: []string{"w1:p3"}}},
-		{"id", []call{getCall("w1:p3", a)}, selector.Selection{IDs: []string{rec.ID}}},
-		{"filter", []call{listCall(a)}, selector.Selection{Filter: selector.Filter{Harnesses: []string{"pi"}}}},
+		{"name", []call{herdrscript.Get("worker", a)}, selector.Selection{Names: []string{"worker"}}},
+		{"pane", []call{herdrscript.Get("w1:p3", a)}, selector.Selection{Panes: []string{"w1:p3"}}},
+		{"id", []call{herdrscript.Get("w1:p3", a)}, selector.Selection{IDs: []string{rec.ID}}},
+		{"filter", []call{herdrscript.List(a)}, selector.Selection{Filter: selector.Filter{Harnesses: []string{"pi"}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out := Run(context.Background(), client(t, f.cwd, tc.calls...), f.d, Options{Selection: tc.sel})
@@ -453,7 +442,7 @@ func TestUsageHistoricalJSONPaneIsRecordPane(t *testing.T) {
 		{"stale", func(a herdr.AgentDetails) []call {
 			return []call{
 				{Method: "agent.get", Err: &herdr.Error{Code: "agent_not_found", Message: "gone"}},
-				listCall(),
+				herdrscript.List(),
 				{Method: "pane.list", Result: map[string]any{"type": "pane_list", "panes": []any{a}}},
 			}
 		}},
