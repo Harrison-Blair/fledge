@@ -25,7 +25,7 @@ type Options struct {
 // an absent one changes nothing. Each added prerequisite must exist and must
 // not already depend, directly or indirectly, on the task.
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "task.depend", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("task.depend")
 	err := task.ValidateID(o.ID)
 	switch {
 	case err != nil:

@@ -20,7 +20,7 @@ type Result struct {
 
 // Run deletes one memory without contacting Herdr.
 func Run(ctx context.Context, cwd string, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "memory.remove", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("memory.remove")
 	if err := memory.ValidateName(o.Name); err != nil {
 		out.Fail(err, "validation", false)
 		return out

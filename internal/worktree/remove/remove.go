@@ -38,7 +38,7 @@ type Result struct {
 }
 
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "worktree.remove", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("worktree.remove")
 	if (o.Path == "") == (o.Branch == "") {
 		out.Fail(libagent.Invalid("exactly one of --path or --branch is required"), "validation", false)
 		return out

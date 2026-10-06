@@ -39,7 +39,7 @@ type Result struct {
 
 // Run reads tasks from the store without contacting Herdr.
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "task.list", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("task.list")
 	var err error
 	switch {
 	case o.Status != "" && !slices.Contains(task.Statuses, o.Status):

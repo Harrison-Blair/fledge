@@ -54,7 +54,7 @@ type Result struct {
 }
 
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "worktree.list", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("worktree.list")
 	r, err := inspectAll(ctx, c, o.Cwd)
 	if err != nil {
 		out.Fail(err, "worktree.list", false)

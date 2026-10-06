@@ -49,7 +49,7 @@ type Result struct {
 // live agent record, or null when the caller is unregistered. Repeated
 // prerequisites are stored once.
 func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libagent.Outcome {
-	out := libagent.Outcome{Operation: "task.import", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("task.import")
 	p, order, err := validate(o, in)
 	if err != nil {
 		out.Fail(err, "validation", false)

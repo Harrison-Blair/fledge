@@ -23,7 +23,9 @@ func Run(o Options) libagent.Outcome {
 	if o.Proposal {
 		r = Result{Kind: "proposal", Text: proposal.Skeleton()}
 	}
-	return libagent.Outcome{Operation: "task.template", Status: "success", Result: r, Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("task.template")
+	out.Result = r
+	return out
 }
 
 // Render writes the skeleton text exactly as returned.

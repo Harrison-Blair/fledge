@@ -19,6 +19,13 @@ type Outcome struct {
 	Error     *Failure `json:"error"`
 	input     bool
 }
+
+// NewOutcome starts a successful operation with no effects yet. Effects is
+// non-nil so the JSON envelope always encodes "effects":[].
+func NewOutcome(operation string) Outcome {
+	return Outcome{Operation: operation, Status: "success", Effects: []Effect{}}
+}
+
 type Failure struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
@@ -129,7 +136,7 @@ func (e *ResultError) Rendered()     {}
 
 // InvalidOutcome wraps command syntax errors in the same public envelope.
 func InvalidOutcome(operation string, err error) Outcome {
-	o := Outcome{Operation: operation, Result: nil, Effects: []Effect{}}
+	o := NewOutcome(operation)
 	o.Fail(Invalid("%v", err), "validation", false)
 	return o
 }

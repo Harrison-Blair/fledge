@@ -39,7 +39,7 @@ type Live struct {
 
 // Run reports capabilities; only Live opens the Herdr socket.
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.capabilities", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("agent.capabilities")
 	if o.Harness != "" {
 		if err := libagent.ValidateHarness(o.Harness); err != nil {
 			out.Fail(err, "validation", false)

@@ -45,7 +45,7 @@ func resolveTitle(a herdr.AgentDetails) *string {
 
 // Run inspects an agent without focusing its pane or marking output seen.
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.get", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("agent.get")
 	if err := o.Target.Validate(); err != nil {
 		out.Fail(err, "validation", false)
 		return out

@@ -130,7 +130,7 @@ func (p pending) peek(ctx context.Context, c libagent.Client, r records) (herdr.
 // plan reports what stopping each target would do. It only reads: explicit
 // targets are looked up without writing, filter matches come from the listing.
 func plan(ctx context.Context, c libagent.Client, o Options, targets []pending) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.stop", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("agent.stop")
 	result := FanOut{Mode: "dry-run", Targets: []Row{}}
 	recs := newRecords(ctx, c)
 	for _, p := range targets {
@@ -164,7 +164,7 @@ func plan(ctx context.Context, c libagent.Client, o Options, targets []pending) 
 // The caller's own pane is stopped last, as closing it ends this process;
 // rows keep target order.
 func fanOut(ctx context.Context, c libagent.Client, o Options, targets []pending) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.stop", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("agent.stop")
 	result := FanOut{Mode: "fan-out", Targets: make([]Row, len(targets))}
 	report := func(i int, one libagent.Outcome) {
 		p := targets[i]

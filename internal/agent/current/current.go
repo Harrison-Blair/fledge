@@ -30,7 +30,7 @@ type Result struct {
 
 // Run resolves the agent in the caller's pane to its live record.
 func Run(ctx context.Context, c libagent.Client) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.current", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("agent.current")
 	s, err := identity.Existing(ctx, c.Cwd)
 	if err != nil {
 		out.Fail(err, "state", false)

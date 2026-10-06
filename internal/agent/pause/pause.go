@@ -39,7 +39,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	return pauser{Client: c, Now: time.Now}.run(ctx, o)
 }
 func (s pauser) run(ctx context.Context, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.pause", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("agent.pause")
 	err := o.Target.Validate()
 	if err == nil && strings.TrimSpace(o.Name+o.Pane+o.ID) == "" {
 		err = libagent.Invalid("target must be nonempty")

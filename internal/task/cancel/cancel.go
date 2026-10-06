@@ -28,7 +28,7 @@ type Result struct {
 // which now counts as satisfied; those left ready are found under the same
 // store lock.
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "task.cancel", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("task.cancel")
 	if err := task.ValidateID(o.ID); err != nil {
 		out.Fail(err, "validation", false)
 		return out

@@ -23,7 +23,7 @@ type Result struct {
 
 // Run lists locally discoverable models, optionally limited to one harness kind.
 func Run(ctx context.Context, d libmodels.Discovery, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.models", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("agent.models")
 	if o.Harness != "" {
 		if err := libagent.ValidateHarness(o.Harness); err != nil {
 			out.Fail(err, "validation", false)

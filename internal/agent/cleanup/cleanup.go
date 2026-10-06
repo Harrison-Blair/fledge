@@ -57,7 +57,7 @@ type Checkout struct {
 // Guards are refreshed before each action. Safety skips still succeed;
 // failed actions fail the outcome after every other action has run.
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.cleanup", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("agent.cleanup")
 	p, err := plan(ctx, c, o)
 	if err != nil {
 		out.Fail(err, "identity", false)

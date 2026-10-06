@@ -49,7 +49,7 @@ func (o Options) EffectiveGrace() time.Duration {
 // Run stops the selected agents one after another. A single target keeps its
 // own result; several, or any dry run, report one row per target.
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.stop", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("agent.stop")
 	err := o.Selection.Validate()
 	if err == nil && o.GraceSet {
 		switch {
@@ -85,7 +85,7 @@ func stopOne(ctx context.Context, c libagent.Client, o Options, p pending) libag
 
 // stopFound stops the agent a lookup found, or reports the lookup's error.
 func stopFound(ctx context.Context, c libagent.Client, o Options, a herdr.AgentDetails, target string, rec *identity.Record, err error) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.stop", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("agent.stop")
 	if err != nil {
 		out.Fail(err, "agent.get", false)
 		return out

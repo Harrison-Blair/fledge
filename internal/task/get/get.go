@@ -35,7 +35,7 @@ type Dependency struct {
 
 // Run reads one task from the store without contacting Herdr.
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "task.get", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("task.get")
 	if err := task.ValidateID(o.ID); err != nil {
 		out.Fail(err, "validation", false)
 		return out

@@ -18,7 +18,7 @@ type Options struct {
 
 // Run validates and stores a new memory without contacting Herdr.
 func Run(ctx context.Context, cwd string, o Options, in io.Reader) libagent.Outcome {
-	out := libagent.Outcome{Operation: "memory.add", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("memory.add")
 	body, err := libagent.ReadText(in, libagent.TextInput{Body: o.Body, BodyFlag: "body", BodySet: o.BodySet, File: o.File, FileFlag: "file", FileSet: o.FileSet, Required: true, Noun: "body"})
 	m := memory.Memory{Name: o.Name, Description: o.Description, Type: o.Type, Body: body}
 	if err == nil {

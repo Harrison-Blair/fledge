@@ -28,7 +28,7 @@ type ShowResult struct {
 
 // Run resolves profiles for the checkout containing cwd.
 func Run(ctx context.Context, cwd string, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.profiles", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("agent.profiles")
 	if o.Name != "" {
 		p, err := libprofiles.Load(ctx, cwd, o.Name)
 		if err != nil {

@@ -29,7 +29,7 @@ type Result struct {
 // pane is alone there. Run never renames a named agent, and refuses one whose
 // terminal already has a live record.
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.adopt", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("agent.adopt")
 	target := o.Pane
 	if target == "" {
 		target = c.CallerPane
