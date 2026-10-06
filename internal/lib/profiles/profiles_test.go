@@ -132,10 +132,12 @@ func TestBuiltinRolesNameNoRepositoryBranch(t *testing.T) {
 			t.Errorf("%s does not name the integration branch", name)
 		}
 	}
-	integrator := builtin(t, "integrator").Role
-	for _, want := range []string{"fledge.baseBranch", "origin/HEAD", "stop"} {
-		if !strings.Contains(integrator, want) {
-			t.Errorf("integrator lacks %q", want)
+	for _, name := range []string{"integrator", "orchestrator"} {
+		role := builtin(t, name).Role
+		for _, want := range []string{"fledge.baseBranch", "origin/HEAD", "stop"} {
+			if !strings.Contains(role, want) {
+				t.Errorf("%s lacks %q", name, want)
+			}
 		}
 	}
 }
