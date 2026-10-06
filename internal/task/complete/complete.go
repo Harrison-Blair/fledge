@@ -28,7 +28,7 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 }
 
 func run(ctx context.Context, c libagent.Client, o Options, in io.Reader, messageID string) libagent.Outcome {
-	out := libagent.Outcome{Operation: "task.complete", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("task.complete")
 	err := task.ValidateID(o.ID)
 	var summary string
 	if err == nil {

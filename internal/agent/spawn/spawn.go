@@ -95,7 +95,8 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 }
 func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Outcome {
 	result := &Result{Name: o.Name, Harness: o.Harness}
-	out := libagent.Outcome{Operation: "agent.spawn", Status: "success", Result: result, Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("agent.spawn")
+	out.Result = result
 	var profile *profiles.Profile
 	brief := ""
 	if o.Profile != "" {

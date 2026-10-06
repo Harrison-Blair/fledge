@@ -55,7 +55,7 @@ var liveByTerminal = identity.LiveByTerminal
 // whose agent has ended still reports. A live ref is persisted on the agent's
 // record; a failed write is only a warning effect.
 func Run(ctx context.Context, c libagent.Client, d harnessenv.Env, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.usage", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("agent.usage")
 	if err := o.Selection.Validate(); err != nil {
 		out.Fail(err, "validation", false)
 		return out
