@@ -1111,3 +1111,38 @@ func TestCreatePreparedRunsPrepareBeforeTheRecord(t *testing.T) {
 		t.Fatalf("failed prepare left record cccccccc: %+v, %v", c, err)
 	}
 }
+
+// A marker published before its directory sync failed is synced when Mark is
+// retried, so an existing marker is durable once Mark succeeds.
+func TestMarkRetrySyncsAnExistingMarker(t *testing.T) {
+	store, root := openStore(t)
+	dir := filepath.Join(root, "counters", indexDir, "indexed")
+	real := syncDir
+	failed, synced := false, false
+	syncDir = func(d string) error {
+		if d == dir {
+			if !failed {
+				failed = true
+				return errors.New("injected sync failure")
+			}
+			synced = true
+		}
+		return real(d)
+	}
+	t.Cleanup(func() { syncDir = real })
+	mark := func() error {
+		return store.Exclusive(func(tx *Tx) error { return tx.Mark("counters", "indexed", "aaaaaaaa") })
+	}
+	if err := mark(); err == nil {
+		t.Fatal("Mark succeeded despite the failed directory sync")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "aaaaaaaa")); err != nil {
+		t.Fatalf("marker not published before the failed sync: %v", err)
+	}
+	if err := mark(); err != nil {
+		t.Fatal(err)
+	}
+	if !synced {
+		t.Fatal("retried Mark accepted the existing marker without syncing its directory")
+	}
+}

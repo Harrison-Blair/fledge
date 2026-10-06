@@ -39,8 +39,8 @@ func (tx *Tx) CreatePrepared(kind string, prepare func(id string) error, build f
 }
 
 // Mark creates the empty marker <kind>/index/<set>/<id>. An existing marker
-// is success. Markers are never changed or removed. set is lowercase letters,
-// digits, and '-'.
+// is success once its directory is synced. Markers are never changed or
+// removed. set is lowercase letters, digits, and '-'.
 func (tx *Tx) Mark(kind, set, id string) error {
 	dir, err := tx.s.markDir(kind, set)
 	if err != nil {
@@ -59,10 +59,13 @@ func (tx *Tx) Mark(kind, set, id string) error {
 			return err
 		}
 	}
-	if err := WriteExclusive(filepath.Join(dir, id), nil); err != nil && !errors.Is(err, fs.ErrExist) {
-		return err
+	err = WriteExclusive(filepath.Join(dir, id), nil)
+	if errors.Is(err, fs.ErrExist) {
+		// An earlier Mark may have published the marker and then failed to
+		// sync its directory.
+		return syncDir(dir)
 	}
-	return nil
+	return err
 }
 
 // Put atomically replaces the existing record id with v, in the archive when
