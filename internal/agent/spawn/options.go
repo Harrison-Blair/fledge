@@ -39,7 +39,7 @@ func (o Options) Validate() ([]string, error) {
 		return nil, libagent.Invalid("--timeout must convert to 3001 through 300000 milliseconds")
 	}
 	if o.Workspace != "" && o.WorkspaceID != "" {
-		return nil, libagent.Invalid("name and ID selectors are mutually exclusive")
+		return nil, libagent.Invalid("--workspace and --workspace-id are mutually exclusive")
 	}
 	if o.Pane != "" && (o.Workspace != "" || o.WorkspaceID != "" || o.Tab != "" || o.Worktree != "" || o.Cwd != "" || len(o.Env) > 0) {
 		return nil, libagent.Invalid("--pane cannot be combined with placement, cwd, or env settings")
