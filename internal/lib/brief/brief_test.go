@@ -2,6 +2,7 @@ package brief
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -43,11 +44,32 @@ func TestValidateRejects(t *testing.T) {
 		"only NUL":        {"\x00", "brief must not contain NUL"},
 		"invalid UTF-8":   {"ok \xff", "brief must be valid UTF-8"},
 		"surrogate bytes": {"\xed\xa0\x80", "brief must be valid UTF-8"},
+		"NUL and invalid": {"\x00\xff", "brief must be valid UTF-8"},
+		"NUL and blank":   {" \x00 ", "brief must not contain NUL"},
 	} {
 		err := Validate(c.text)
 		var input *libagent.InputError
 		if !errors.As(err, &input) || input.Message != c.message {
 			t.Errorf("%s: %v", label, err)
+		}
+	}
+}
+
+// CheckText reports the first broken rule as a plain, unprefixed error, in
+// the order UTF-8, NUL, blank.
+func TestCheckText(t *testing.T) {
+	for text, want := range map[string]string{
+		"ok":        "",
+		"\x00\xff":  "must be valid UTF-8",
+		" \x00 ":    "must not contain NUL",
+		" \u3000\n": "must not be blank",
+	} {
+		err := CheckText(text)
+		if got := fmt.Sprint(err); want == "" && err != nil || want != "" && got != want {
+			t.Errorf("%q: %v", text, err)
+		}
+		if errors.As(err, new(*libagent.InputError)) {
+			t.Errorf("%q: classified %T", text, err)
 		}
 	}
 }

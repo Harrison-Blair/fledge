@@ -204,15 +204,21 @@ func TestCustomMarkdownProfilesAreAdded(t *testing.T) {
 
 func TestInvalidMarkdownProfilesFailWithoutFallback(t *testing.T) {
 	for _, tc := range []struct{ name, content, want string }{
-		{"empty", "", "blank"},
-		{"blank", " \n\t\r\n", "blank"},
-		{"invalid utf-8", "a\xffb", "UTF-8"},
-		{"nul", "a\x00b", "NUL"},
+		{"empty", "", "must not be blank"},
+		{"blank", " \n\t\r\n", "must not be blank"},
+		{"invalid utf-8", "a\xffb", "must be valid UTF-8"},
+		{"nul", "a\x00b", "must not contain NUL"},
+		{"invalid utf-8 and nul", "\x00\xff", "must be valid UTF-8"},
+		{"nul and blank", " \x00 ", "must not contain NUL"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := repository(t)
 			path := write(t, root, "reviewer.md", tc.content)
 			checkRejected(t, root, "reviewer", path, tc.want)
+			_, err := Load(context.Background(), root, "reviewer")
+			if want := "profile " + path + ": " + tc.want; err.Error() != want {
+				t.Fatalf("got %q, want %q", err, want)
+			}
 		})
 	}
 	t.Run("directory", func(t *testing.T) {

@@ -3,6 +3,7 @@
 package brief
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -38,13 +39,23 @@ func Skeleton() string {
 // Validate reports whether text can be a brief: valid UTF-8, not only
 // Unicode whitespace, and free of NUL. It never alters the text.
 func Validate(text string) error {
+	if err := CheckText(text); err != nil {
+		return libagent.Invalid("brief %v", err)
+	}
+	return nil
+}
+
+// CheckText applies the brief text rule shared with role profiles. It returns
+// the first broken rule, in the order UTF-8, NUL, blank, as a plain error that
+// callers prefix and classify.
+func CheckText(text string) error {
 	switch {
 	case !utf8.ValidString(text):
-		return libagent.Invalid("brief must be valid UTF-8")
+		return errors.New("must be valid UTF-8")
 	case strings.ContainsRune(text, 0):
-		return libagent.Invalid("brief must not contain NUL")
+		return errors.New("must not contain NUL")
 	case strings.TrimSpace(text) == "":
-		return libagent.Invalid("brief must not be blank")
+		return errors.New("must not be blank")
 	}
 	return nil
 }

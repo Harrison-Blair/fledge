@@ -13,9 +13,9 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/brief"
 )
 
 //go:embed builtin/*.md
@@ -59,7 +59,7 @@ func builtins() (map[string]Profile, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := validate(data); err != nil {
+		if err := brief.CheckText(string(data)); err != nil {
 			return nil, fmt.Errorf("built-in profile %s: %w", name, err)
 		}
 		result[name] = Profile{Name: name, Source: "builtin", Role: string(data)}
@@ -176,23 +176,10 @@ func read(name, path string) (Profile, bool, error) {
 	if err != nil {
 		return Profile{}, true, err
 	}
-	if err := validate(data); err != nil {
+	if err := brief.CheckText(string(data)); err != nil {
 		return Profile{}, true, invalid(path, err)
 	}
 	return Profile{Name: name, Source: "repo", Path: &path, Role: string(data)}, true, nil
-}
-
-// validate accepts nonblank UTF-8 text without NUL.
-func validate(data []byte) error {
-	switch {
-	case !utf8.Valid(data):
-		return errors.New("must be valid UTF-8")
-	case slices.Contains(data, 0):
-		return errors.New("must not contain NUL")
-	case strings.TrimSpace(string(data)) == "":
-		return errors.New("must not be blank")
-	}
-	return nil
 }
 
 // invalid reports a profile file problem as invalid input naming the file.
