@@ -9,9 +9,6 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 )
 
-// states are the live agent statuses a filter may select.
-var states = []string{"idle", "working", "blocked", "done", "unknown"}
-
 // Filter selects live agents. Fields AND together; values within one slice OR
 // together. States and Harnesses compare live Herdr values; every other field
 // is record-backed and matches only agents with a live record in this
@@ -47,7 +44,7 @@ func (f Filter) Validate() error {
 		return libagent.Invalid("--parent must be an 8 lowercase hexadecimal agent id")
 	case slices.ContainsFunc(f.Tasks, func(id string) bool { return !state.ValidID(id) }):
 		return libagent.Invalid("--task must be an 8 lowercase hexadecimal task id")
-	case slices.ContainsFunc(f.States, func(s string) bool { return !slices.Contains(states, s) }):
+	case slices.ContainsFunc(f.States, func(s string) bool { return !libagent.IsStatus(s) }):
 		return libagent.Invalid("--state must be idle, working, blocked, done, or unknown")
 	case slices.ContainsFunc(f.Harnesses, func(h string) bool { return !harness.IsKind(h) }):
 		return libagent.Invalid("--harness must be a documented Herdr harness kind")

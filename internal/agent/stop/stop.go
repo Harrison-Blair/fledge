@@ -96,7 +96,7 @@ func stopFound(ctx context.Context, c libagent.Client, o Options, a herdr.AgentD
 		// Only a settled row from the same terminal (and, for --id, still its
 		// record's agent) replaces the one inspected; any wait failure keeps
 		// the working row and so the refusal below.
-		if settled, err := c.Wait(ctx, target, []string{"idle", "done", "blocked"}, grace); err == nil && settled.TerminalID == a.TerminalID && (rec == nil || identity.Verify(*rec, settled) == nil) {
+		if settled, err := c.Wait(ctx, target, libagent.SettledStatuses(), grace); err == nil && settled.TerminalID == a.TerminalID && (rec == nil || identity.Verify(*rec, settled) == nil) {
 			a = settled
 			out.Result = Result{AgentRow: libagent.NewAgentRow(a.Pane)}
 		}

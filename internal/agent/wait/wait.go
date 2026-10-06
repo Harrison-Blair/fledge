@@ -142,7 +142,7 @@ func validate(o Options) ([]target, error) {
 		return nil, libagent.Invalid("--timeout must be at most %s", maxTimeout)
 	}
 	for _, s := range o.Until {
-		if !slices.Contains([]string{"idle", "working", "blocked", "done", "unknown"}, s) {
+		if !libagent.IsStatus(s) {
 			return nil, libagent.Invalid("--until must be idle, working, blocked, done, or unknown")
 		}
 	}
