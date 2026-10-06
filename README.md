@@ -1435,7 +1435,8 @@ summarizes them.
     `memory` commands and the spawn brief.
   - `internal/lib/usage` reads a harness session's measured tokens and
     harness-recorded cost estimate from claude, codex, and pi session files and
-    `opencode export`, optionally filtered to a time window, for `agent usage`;
+    `opencode export` for `agent usage`, which always reads the whole session
+    (the library can also filter to a time window, but no command uses it);
     missing or unreadable data is
     `unavailable` with a reason.
 
