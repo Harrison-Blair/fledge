@@ -643,7 +643,7 @@ func load(s *state.Store, id string) (Record, error) {
 	}
 	var rec Record
 	var missing *state.NotFoundError
-	err := errors.New("no agent records exist in this repository")
+	var err error
 	if s != nil {
 		err = s.Get(Kind, id, &rec)
 	}
