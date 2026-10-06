@@ -1,6 +1,6 @@
 # herdr API: pane methods
 
-> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
+> herdr 0.9.3 · protocol 22 · schema_version 1 · captured 2026-10-06
 > Part of the fledge herdr reference. Index: [README.md](../README.md). Wire format: [protocol.md](../protocol.md).
 
 The `pane.*` namespace controls individual terminal panes: the leaf terminals inside a
@@ -8,9 +8,8 @@ workspace/tab layout tree. Methods here inspect pane topology and geometry (`lis
 `get`, `current`, `layout`, `edges`, `neighbor`, `process_info`), mutate the split tree
 (`split`, `swap`, `move`, `resize`, `zoom`, `close`, `focus`, `focus_direction`), drive a
 pane's terminal (`read`, `wait_for_output`, `send_text`, `send_keys`, `send_input`,
-`rename`, `input.set`), render inline images (`graphics.set`, `graphics.clear`,
-`graphics.info`), scroll and copy a pane's content and resolve/activate links in it
-(`scroll`, `edit_scrollback`, `copy_motion`, `copy_search`, `selection.read`,
+`rename`, `input.set`), clear, scroll, and copy a pane's content and resolve/activate
+links in it (`clear`, `scroll`, `edit_scrollback`, `copy_motion`, `copy_search`, `selection.read`,
 `link.resolve`, `link.activate`), and let an integration report/withdraw agent-lifecycle and display
 metadata for a pane (`report_agent`, `report_agent_session`, `report_metadata`,
 `release_agent`, `clear_agent_authority`). A pane exists whether or not it hosts a
@@ -35,19 +34,29 @@ method (`edges`, `focus`, `move_result`, `neighbor`, `process_info`, `read`, `re
 against that nested object, matching its example.
 
 Across this namespace `pane_not_found`'s message text is not stable (e.g. `"pane w9:p9
-not found"` on some methods, a bare `"pane not found"` or `"source pane not found"` on
-others) — match on `code`, never on `message`. `params` is mandatory on every request
+not found"` on some methods, a bare `"pane not found"`, `"source pane not found"`, or
+`"pane not found: w1:p99"` on others) — match on `code`, never on `message`. `params` is mandatory on every request
 even when every field inside it is optional; omitting it fails with `invalid_request`
 (`"missing field \`params\`"`). A result field documented as nullable is generally
 *omitted* rather than sent as `null` when unset; treat missing and `null` alike unless a
 section says otherwise.
 
-37 documented methods (the installed 0.9.1 binary also accepts an undocumented
-`pane.graphics.stream`, named in the server's own "unknown variant" error text but absent
-from `raw/schema.json`; no section below covers it):
+A pane that a restarted server could not restore carries `restore_error` and is a
+placeholder: `pane.get` and `pane.list` show it, but `pane.read`, `pane.process_info`, and
+`pane.send_text` fail with `pane_not_found` (see [PaneInfo](../data-model.md#paneinfo);
+Validated 2026-10-06 against herdr 0.9.3 by that page's probes, not re-run here).
+
+35 documented methods. herdr 0.9.3 removed the three `pane.graphics.*` methods
+(`set`, `clear`, `info`) that 0.9.1 documented here, together with the undocumented
+`pane.graphics.stream` that the 0.9.1 binary also accepted. All four names now fail with
+`unknown_method` (`"unknown method: pane.graphics.set"`), with the request's `id`
+echoed, instead of the `invalid_request` "unknown variant" error that other unknown
+method names return (see [errors.md](../errors.md)). Validated 2026-10-06 against
+herdr 0.9.3.
 
 | method | purpose |
 |---|---|
+| [pane.clear](#paneclear) | Clear a pane's screen and scrollback |
 | [pane.clear_agent_authority](#paneclear_agent_authority) | Withdraw a source's authority over a pane's agent lifecycle reporting |
 | [pane.close](#paneclose) | Close a pane and its terminal |
 | [pane.copy_motion](#panecopy_motion) | Move a copy-mode cursor by a text motion |
@@ -58,9 +67,6 @@ from `raw/schema.json`; no section below covers it):
 | [pane.focus](#panefocus) | Focus a specific pane by ID and return its pane info |
 | [pane.focus_direction](#panefocus_direction) | Move focus to the neighboring pane in a direction |
 | [pane.get](#paneget) | Fetch a single pane's `PaneInfo` |
-| [pane.graphics.clear](#panegraphicsclear) | Clear graphics layer(s) from a pane |
-| [pane.graphics.info](#panegraphicsinfo) | Report a pane's graphics capabilities |
-| [pane.graphics.set](#panegraphicsset) | Draw/replace an image layer in a pane |
 | [pane.input.set](#paneinputset) | Set a pane's right-click input routing |
 | [pane.layout](#panelayout) | Return the layout snapshot of a pane's tab |
 | [pane.link.activate](#panelinkactivate) | Activate a detected link at a pane viewport position |
@@ -97,9 +103,9 @@ Enums used across this namespace:
 - **PaneAgentState**: `idle`, `working`, `blocked`, `unknown` — the states a
   `pane.report_agent` call may report. `PaneInfo.agent_status` is a separate `AgentStatus`
   with a fifth, observation-only value, `done`, that no report can set directly: reporting
-  `idle` after `working`/`blocked` surfaces as `done` until the pane is focused/seen (see
-  [pane.report_agent](#panereport_agent)).
-- **PaneGraphicsFormat**: `png`, `rgb`, `rgba`, `bgra`.
+  `idle` after `working`/`blocked` while the pane's tab is not focused surfaces as `done`
+  until the tab is focused/seen (see [pane.report_agent](#panereport_agent)). Reporting
+  `done` fails as `invalid_request`.
 - **PaneCopyMotion**: `line_end`, `first_non_blank`, `next_word_start`, `previous_word_start`,
   `next_word_end`, `next_big_word_start`, `previous_big_word_start`, `next_big_word_end`,
   `previous_paragraph`, `next_paragraph`.
@@ -113,14 +119,60 @@ seen; only focusing (via the UI or a focus command) does.
 
 ---
 
+## pane.clear
+
+New in 0.9.3. Clear a pane's screen and scrollback, like a terminal "clear and reset
+scrollback" command. Only the line holding the cursor survives: it moves to the top row,
+so a shell prompt stays visible and any typed but unsubmitted input on that line is kept.
+Nothing is written to the pane's program — the pending input still runs when Enter is
+sent afterward, and the foreground process is unchanged. The scroll state resets to
+`offset_from_bottom: 0` and `max_offset_from_bottom: 0`, even when the pane was scrolled
+back. The target does not need to be focused or in the focused tab. Emits
+`pane.scroll_changed` (with the reset `PaneScrollInfo`) when the scroll state changed; no
+plain event (`pane_updated`, `layout_updated`, …) is emitted, and `PaneInfo.revision` does
+not change. The default keybinding `clear_pane` (unbound in
+[raw/default-config.toml](../raw/default-config.toml)) is the UI equivalent.
+
+**Params** (`PaneTarget`):
+
+| field | type | required | default | meaning |
+|---|---|---|---|---|
+| `pane_id` | string | yes | — | Pane to clear. Unknown extra keys in `params` are ignored. |
+
+**Result**: `type: "ok"` — no other fields.
+
+**Errors**: `pane_not_found` (`"pane w1:p99 not found"`); a missing `pane_id` fails as
+`invalid_request`; other codes possible.
+
+**CLI**: API-only (no CLI subcommand). `herdr pane clear` prints the `pane` usage list and
+exits 2.
+
+**Example**
+
+```json
+{"id":"r4","method":"pane.clear","params":{"pane_id":"w1:p1"}}
+{"id":"r4","result":{"type":"ok"}}
+```
+
+Validated 2026-10-06 against herdr 0.9.3 (on a scratch server: a pane scrolled back 50
+rows in 2963 rows of scrollback read back as only its prompt line from every `source`
+afterward; on an unfocused pane, a pending `echo PENDING` survived the clear and ran on
+Enter; a pane in an unfocused tab also returned `ok` but its content was not read back;
+event stream observed with a subscription to every plain event plus
+`pane.scroll_changed`/`pane.agent_status_changed`).
+
+---
+
 ## pane.clear_agent_authority
 
 Withdraw the authority a reporting `source` established over a pane's agent-lifecycle
 reporting, without naming a specific agent. Use it when an integration stops managing a
 pane entirely; to release a single named agent instead, use
 [pane.release_agent](#panerelease_agent). Idempotent — returns `ok` even when the source
-holds no authority. Emits `pane_agent_detected` (with `agent` absent) and
-`pane.agent_status_changed` (`agent_status` `"unknown"`).
+holds no authority. When a claim is actually cleared it emits `pane_agent_detected`
+(with `agent` absent) and `pane.agent_status_changed` (`agent_status` `"unknown"`); a
+no-op clear emits nothing. A named `source` that does not hold the pane's current claim
+clears nothing (another source's claim stays in place).
 
 **Params** (`PaneClearAgentAuthorityParams`):
 
@@ -144,8 +196,10 @@ authority-clear.
 {"id":"p6","result":{"type":"ok"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1 (seq-gate and event behaviour from evidence;
-example response shape unchanged since 0.8.2).
+Validated 2026-10-06 against herdr 0.9.3 (example re-run; seq gate re-checked with
+equal, null, and greater `seq`, including a null-`source` wildcard clear after a seq'd
+report; events observed for both the clearing and the no-op case; non-holder clear
+checked on a fresh pane).
 
 ---
 
@@ -174,7 +228,7 @@ Closing a workspace's last pane closes the workspace too. Emits `pane_closed`.
 {"id":"cli:pane:close","result":{"type":"ok"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ---
 
@@ -228,7 +282,7 @@ copy-mode counter (older, newer, or arbitrary) fails with the undocumented
 {"id":"cm1","result":{"type":"pane_copy_motion","pane_id":"w1:p1","cursor":{"row":0,"col":1},"content_revision":32}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ---
 
@@ -284,7 +338,7 @@ copy-mode counter fails with the undocumented `stale_content` (`"pane content ch
 {"id":"cs1","result":{"type":"pane_copy_search","pane_id":"w1:p1","content_revision":32,"matches":[{"start":{"row":0,"col":26},"end":{"row":0,"col":33}},{"start":{"row":1,"col":0},"end":{"row":1,"col":7}},{"start":{"row":2,"col":26},"end":{"row":2,"col":33}},{"start":{"row":3,"col":0},"end":{"row":3,"col":7}}],"total":4,"current":0,"current_global":0}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ---
 
@@ -316,9 +370,9 @@ currently in. Prefer this with the caller's own `caller_pane_id` to resolve "my 
 {"id":"cli:pane:current","result":{"pane":{"agent":"claude","agent_session":{"agent":"claude","kind":"id","source":"herdr:claude","value":"ef3b9d04-…"},"agent_status":"working","cwd":"/home/penguin/source/fledge","focused":false,"foreground_cwd":"/home/penguin/source/fledge","pane_id":"w2:p1","revision":4,"scroll":{"max_offset_from_bottom":0,"offset_from_bottom":0,"viewport_rows":54},"tab_id":"w2:t1","terminal_id":"term_659708952f5514","terminal_title":"◐ herdr-api-documentation","terminal_title_stripped":"herdr-api-documentation","workspace_id":"w2"},"type":"pane_current"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1 (the example's `agent`/`agent_session` values
-come from a real agent session and were not re-captured; the shape and the
-`caller_pane_id` behaviour were re-confirmed).
+Validated 2026-10-06 against herdr 0.9.3 (shape and `caller_pane_id` behaviour re-confirmed; the example's
+`agent`/`agent_session` values come from a real agent session captured before 2026-09-19
+and were not re-captured).
 
 ---
 
@@ -362,17 +416,23 @@ directional focus/move would leave the tab. Also returns the full tab layout sna
 {"id":"cli:pane:edges","result":{"edges":{"down":true,"layout":{"area":{"height":54,"width":166,"x":26,"y":1},"focused_pane_id":"w2:p1","panes":[{"focused":true,"pane_id":"w2:p1","rect":{"height":54,"width":166,"x":26,"y":1}}],"splits":[],"tab_id":"w2:t1","workspace_id":"w2","zoomed":false},"left":true,"pane_id":"w2:p1","right":true,"up":true},"type":"pane_edges"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ---
 
 ## pane.edit_scrollback
 
 Open a pane's scrollback buffer in an external editor for browsing/copying. The target
-must be the currently focused pane. Each call also allocates a real (if short-lived)
-pane, consuming a pane-id slot from the workspace counter even though it never appears
-in `pane.list` once the editor process exits — combined with "closed pane IDs are not
-reused", visible pane numbers can skip as a result.
+must be the currently focused pane. Each call writes the scrollback to a temporary file
+and opens a real pane, split beside the target and focused, that runs
+`/bin/sh -c 'scrollback_file=/tmp/herdr-scrollback-<server-pid>-<nonce>-<n>.txt; eval
+"${EDITOR:-vi} \"$scrollback_file\""; status=$?; rm -f "$scrollback_file"; exit
+$status'` — so with `$EDITOR` unset in the server's environment, `vi` opens. The editor
+pane is an ordinary entry in `pane.list` while the editor runs. When the editor exits,
+the shell removes the temporary file, the pane closes with `pane_exited` followed by
+`layout_updated` (no `pane_closed`), and focus returns to the target pane. The editor
+pane consumes a pane-id slot from the workspace counter — combined with "closed pane IDs
+are not reused", visible pane numbers skip as a result.
 
 **Params** (`PaneTarget`):
 
@@ -395,9 +455,11 @@ pane first; other codes possible.
 {"id":"e1","result":{"type":"ok"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1 (focus precondition, `stale_pane_target`, and
-pane-id consumption confirmed; the editor actually opening was not probed — the scratch
-server resolves no `$EDITOR`/opener, so the spawned pane exits immediately).
+Validated 2026-10-06 against herdr 0.9.3 (on a scratch server with `$EDITOR` unset: the
+editor pane appeared in `pane.list` running `vi` on the scrollback; quitting `vi`
+produced `pane_exited` then `layout_updated`, removed the temporary file, and returned
+focus to the target; focus precondition and pane-id consumption re-checked). In 0.9.1 the
+same probe saw the spawned pane exit at once and never list.
 
 ---
 
@@ -434,12 +496,11 @@ is focused (see [tab.md](tab.md)).
 {"id":"fledge-focus-probe","result":{"type":"pane_info","pane":{"pane_id":"wQ:p6","terminal_id":"term_65bb7c91616a65","workspace_id":"wQ","tab_id":"wQ:t5","focused":true,"cwd":"/home/penguin/source/fledge","foreground_cwd":"/home/penguin/source/fledge","label":"Claude smoke test","terminal_title":"penguin@iceberg:~/source/fledge","terminal_title_stripped":"penguin@iceberg:~/source/fledge","agent_status":"unknown","scroll":{"offset_from_bottom":0,"max_offset_from_bottom":0,"viewport_rows":58},"revision":1}}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1 (this example was originally captured 2026-09-18
-by a direct socket probe against the live session's `wQ:p6`, replacing an earlier
-inferred `agent_info` response, and preserves that captured response including
-session-specific IDs and paths; a repeated focus call returns the same `pane_info`/`pane`
-shape; the `done`→`idle` collapse and `pane_focused` event were confirmed separately
-against a scratch server).
+Validated 2026-10-06 against herdr 0.9.3 on a scratch server (result shape and the `pane_focused`/`tab_focused`/
+`workspace_focused` events re-run; the `done`→`idle` collapse was re-checked through
+`tab.focus`). The example was captured 2026-09-18 by a direct socket probe against the
+live session's `wQ:p6` and preserves that response, including session-specific IDs and
+paths.
 
 ---
 
@@ -483,7 +544,7 @@ under `focus`:
 {"id":"1","result":{"type":"pane_focus_direction","focus":{"changed":true,"source_pane_id":"w1:p1","focused_pane_id":"w1:p2","layout":{"workspace_id":"w1","tab_id":"w1:t1","zoomed":false,"area":{"x":0,"y":0,"width":120,"height":40},"focused_pane_id":"w1:p2","panes":[{"pane_id":"w1:p1","focused":false,"rect":{"x":0,"y":0,"width":60,"height":40}},{"pane_id":"w1:p2","focused":true,"rect":{"x":60,"y":0,"width":60,"height":40}}],"splits":[{"id":"split_0_root","direction":"right","ratio":0.5,"rect":{"x":0,"y":0,"width":120,"height":40}}]}}}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ---
 
@@ -514,167 +575,7 @@ Fetch a single pane's `PaneInfo` by exact ID.
 {"id":"cli:pane:get","result":{"pane":{"agent":"claude","agent_session":{"agent":"claude","kind":"id","source":"herdr:claude","value":"ef3b9d04-…"},"agent_status":"working","cwd":"/home/penguin/source/fledge","focused":false,"foreground_cwd":"/home/penguin/source/fledge","pane_id":"w2:p1","revision":4,"scroll":{"max_offset_from_bottom":0,"offset_from_bottom":0,"viewport_rows":54},"tab_id":"w2:t1","terminal_id":"term_659708952f5514","terminal_title":"◐ herdr-api-documentation","terminal_title_stripped":"herdr-api-documentation","workspace_id":"w2"},"type":"pane_info"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
-
----
-
-## pane.graphics.clear
-
-Clear a graphics image layer from a pane by name. Requires the `terminal.kitty_graphics`
-feature, which is **enabled by default** (`default-config.toml`'s `[terminal]` section
-documents the default as a commented-out `# kitty_graphics = true`, not an active
-key=value pair — confirmed live, since a fresh scratch server with no custom config
-returns `cell_size_unavailable` rather than `feature_disabled` from
-[pane.graphics.info](#panegraphicsinfo)); otherwise returns `feature_disabled`. A
-null/omitted `layer_id` is a **silent no-op**, not a clear-all: it clears nothing, so a
-pane stays pinned at `max_layers_per_pane` and every later
-[pane.graphics.set](#panegraphicsset) fails with `layer_limit` once the limit is
-reached. Clear each layer you created by its own `layer_id`.
-
-**Params** (`PaneGraphicsClearParams`):
-
-| field | type | required | default | meaning |
-|---|---|---|---|---|
-| `pane_id` | string | yes | — | Pane whose graphics to clear. |
-| `layer_id` | string \| null | no | null | Layer to clear, by name. Null/omitted clears **nothing** — confirmed by filling a pane to its 16-layer limit, calling `graphics.clear` with `layer_id` null (then omitted) and getting `ok` both times while the limit stayed in effect; only clearing each of the 16 layers individually by name freed them. |
-
-**Result**: `type: "ok"` — no other fields.
-
-**Errors**: `feature_disabled` (`"pane graphics are disabled by terminal.kitty_graphics"`
-— the gating config key is `terminal.kitty_graphics`, under `[terminal]`, not the
-schema's `experimental.kitty_graphics`), `invalid_layer_id` (`"layer_id must contain
-between 1 and 64 characters"` for an empty or over-64-character name, `"layer_id contains
-unsupported characters"` for one with characters like `/`), `pane_not_found`;
-`feature_disabled` takes precedence over both when the feature is off; other codes
-possible.
-
-**CLI**: API-only (no CLI subcommand).
-
-**Example**
-
-```json
-{"id":"1","method":"pane.graphics.clear","params":{"pane_id":"w1:p1","layer_id":"overlay-1"}}
-{"id":"1","result":{"type":"ok"}}
-```
-
-Validated 2026-09-19 against herdr 0.9.1 (`feature_disabled`'s message was reproduced
-with `terminal.kitty_graphics` explicitly set `false`; the default config leaves the
-feature on).
-
----
-
-## pane.graphics.info
-
-Report a pane's graphics capabilities: cell pixel dimensions, layer limits, and file-frame
-transport parameters. Requires `terminal.kitty_graphics` (enabled by default, see
-[pane.graphics.clear](#panegraphicsclear)). Also requires a client actually rendering the
-session — a headless server has no host cell size to report — so this method is unusable
-from a server with no attached client even when the feature is on.
-
-**Params** (`PaneTarget`):
-
-| field | type | required | default | meaning |
-|---|---|---|---|---|
-| `pane_id` | string | yes | — | Pane to query. |
-
-**Result**: `type: "pane_graphics_info"`
-
-| field | type | meaning |
-|---|---|---|
-| `cell_width_px` | integer (uint32) | Width of one terminal cell in pixels. |
-| `cell_height_px` | integer (uint32) | Height of one terminal cell in pixels. |
-| `pane_visible` | boolean | True only when the pane is on the currently rendered terminal surface. |
-| `max_layers_per_pane` | integer (uint) | Maximum simultaneous graphics layers per pane (default 0). |
-| `pixel_mouse` | boolean | Whether pixel-precision mouse reporting is active (default false). |
-| `file_frame_damage` | boolean | Accepts damage metadata while still consuming a complete canonical file (default false). |
-| `file_frame_transport` | string \| null | Name of the file-frame transport, if any. |
-| `file_frame_directory` | string \| null | Directory where file-frame payloads are staged. |
-| `file_frame_formats` | array&lt;string&gt; | Accepted file-frame image formats. |
-| `file_frame_max_bytes` | integer (uint) \| null | Max bytes for a file-frame payload. |
-| `file_frame_direct_max_bytes` | integer (uint) \| null | Max bytes for a directly-inlined file frame. |
-
-**Errors**: `feature_disabled` (`"pane graphics are disabled by terminal.kitty_graphics"`),
-`pane_not_found`, `cell_size_unavailable` (`"host cell size is unavailable"`, on a
-headless server / one with no rendering client attached); precedence measured as
-`feature_disabled` > `pane_not_found` > `cell_size_unavailable`; other codes possible.
-
-**CLI**: API-only (no CLI subcommand).
-
-**Example**
-
-```json
-{"id":"p3","method":"pane.graphics.info","params":{"pane_id":"w1:p1"}}
-{"id":"p3","result":{"type":"pane_graphics_info","cell_width_px":10,"cell_height_px":22,"pane_visible":false,"file_frame_directory":"/run/user/1000/herdr-pane-graphics-1000/server-11441-1789856182335799369/source","file_frame_formats":["rgba","bgra"],"file_frame_max_bytes":16777216,"file_frame_direct_max_bytes":419430400,"file_frame_damage":true,"max_layers_per_pane":16,"pixel_mouse":true,"file_frame_transport":"direct-kitty"}}
-```
-
-Validated 2026-09-19 against herdr 0.9.1 (success path captured read-only against the
-live session's rendered pane; the `cell_size_unavailable` and `feature_disabled` error
-paths were confirmed separately on headless/feature-off scratch servers).
-
----
-
-## pane.graphics.set
-
-Draw or replace an image layer in a pane. The image bytes are base64-encoded in
-`data_base64`, described by `format`/`image_width`/`image_height`, and positioned via
-`placement`. Requires `terminal.kitty_graphics` (enabled by default, see
-[pane.graphics.clear](#panegraphicsclear)). Limited to 16 layers per pane — re-setting an
-existing `layer_id` does not consume a new slot, but reaching the limit fails every
-further layer until one is freed with [pane.graphics.clear](#panegraphicsclear). The
-decoded image payload is capped at 512 KiB, and the request line itself at 1 MiB
-(base64's 4/3 inflation makes a roughly-786 KB image unsendable even before the 512 KiB
-image cap applies — see [protocol.md](../protocol.md)).
-
-**Params** (`PaneGraphicsSetParams`):
-
-| field | type | required | default | meaning |
-|---|---|---|---|---|
-| `pane_id` | string | yes | — | Target pane. |
-| `format` | PaneGraphicsFormat (`png`,`rgb`,`rgba`,`bgra`) | yes | — | Pixel/encoding format of `data_base64`. |
-| `image_width` | integer (uint32) | yes | — | Source image width in pixels. |
-| `image_height` | integer (uint32) | yes | — | Source image height in pixels. |
-| `data_base64` | string | no | `""` | Base64-encoded image payload. The `""` default is unusable — an empty payload is rejected with `invalid_image`, making this field effectively required. |
-| `layer_id` | string \| null | no | null | Layer to create/replace, by name; null assigns/uses the default layer (inferred). A non-null value must be 1-64 characters from a restricted set — an empty or over-64-character name, or one containing characters like `/`, fails with `invalid_layer_id` (see [pane.graphics.clear](#panegraphicsclear)). |
-| `z_index` | integer (int32) | no | 0 | Stacking order among layers. |
-| `placement` | PaneGraphicsPlacementParams | no | `{grid_cols:0,grid_rows:0,viewport_col:0,viewport_row:0}` | Where and how large to place the image (see below). |
-
-`PaneGraphicsPlacementParams`:
-
-| field | type | required | default | meaning |
-|---|---|---|---|---|
-| `grid_cols` | integer (uint32) | no | 0 | Image width in terminal cells (0 = derive from pixels, inferred). |
-| `grid_rows` | integer (uint32) | no | 0 | Image height in terminal cells (0 = derive from pixels, inferred). |
-| `viewport_col` | integer (int32) | no | 0 | Column offset within the pane viewport. |
-| `viewport_row` | integer (int32) | no | 0 | Row offset within the pane viewport. |
-
-**Result**: `type: "ok"` — no other fields. The schema's `ResponseResult` union also
-declares a `pane_graphics_frame_ack` variant (`sequence`, `revision`), but every
-successful call observed on 0.9.1 returned plain `ok`; treat `pane_graphics_frame_ack` as
-unreachable from this method until contradicted by evidence.
-
-**Errors**: `feature_disabled` (`"pane graphics are disabled by terminal.kitty_graphics"`),
-`pane_not_found`, `invalid_image` (`"image data must not be empty"`, `"image_width and
-image_height must be greater than zero"`, `"data_base64 is not valid base64"`, or `"image
-data does not match the frame contract"` for a byte length inconsistent with the declared
-dimensions — that last check applies to `rgb`/`rgba`/`bgra` only; a `png` payload's bytes
-are not validated against `format` or the declared dimensions at all), `invalid_layer_id`
-(above), `layer_limit` (`"pane graphics layer limit reached"`, at 16 layers per pane),
-`image_too_large` (`"image data is too large"`, decoded payload over 512 KiB); other
-codes possible.
-
-**CLI**: API-only (no CLI subcommand).
-
-**Example**
-
-```json
-{"id":"1","method":"pane.graphics.set","params":{"pane_id":"w1:p1","format":"png","image_width":64,"image_height":64,"data_base64":"iVBORw0KGgo…","placement":{"grid_cols":8,"grid_rows":4,"viewport_col":0,"viewport_row":0},"z_index":0}}
-{"id":"1","result":{"type":"ok"}}
-```
-
-Validated 2026-09-19 against herdr 0.9.1 (the default config leaves the feature on, so
-this and the layer/size limits above were live-probed; `feature_disabled`'s message was
-confirmed from the installed binary's string table rather than provoked, to avoid editing
-the user's shared global config).
+Validated 2026-10-06 against herdr 0.9.3.
 
 ---
 
@@ -706,7 +607,7 @@ set.
 {"id":"p2","result":{"type":"ok"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1 (wire behavior — params, errors, `ok` result,
+Validated 2026-10-06 against herdr 0.9.3 (wire behavior — params, errors, `ok` result,
 and the absence of any read-back or event — confirmed; the actual right-click routing
 effect needs a human at a real terminal with a mouse and was not exercised).
 
@@ -740,7 +641,7 @@ per-pane rectangles.
 {"id":"cli:pane:layout","result":{"layout":{"area":{"height":54,"width":166,"x":26,"y":1},"focused_pane_id":"w2:p1","panes":[{"focused":true,"pane_id":"w2:p1","rect":{"height":54,"width":166,"x":26,"y":1}}],"splits":[],"tab_id":"w2:t1","workspace_id":"w2","zoomed":false},"type":"pane_layout"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ---
 
@@ -765,8 +666,8 @@ find link regions without going through this uncertainty.
 | `pane_id` | string | yes | — | Target pane. |
 | `viewport_row` | integer (uint16) | yes | — | Zero-based viewport row. |
 | `col` | integer (uint16) | yes | — | Zero-based viewport column. |
-| `content_revision` | integer (uint64) \| null | no | null | Content revision the position is relative to (inferred) — the same private copy-mode counter as [pane.copy_motion](#panecopy_motion), obtainable only from a `copy_motion`/`copy_search` result. A mismatch fails with `stale_content` (`"pane content changed before link resolution"`); null/omitted skips the check. |
-| `offset_from_bottom` | integer (uint64) \| null | no | null | Scroll offset the viewport row is relative to (inferred). This is a **strict equality check against the pane's live scroll offset**, not a value that repositions the read: anything other than the pane's current offset fails with `stale_content` (`"pane viewport changed before link resolution"`); null/omitted matches the pane's current position. |
+| `content_revision` | integer (uint64) \| null | no | null | Content revision the position is relative to (inferred) — the same private copy-mode counter as [pane.copy_motion](#panecopy_motion), obtainable only from a `copy_motion`/`copy_search` result. A mismatch fails with `stale_content` (`"pane content changed before link activation"` here, `"…before link resolution"` from `pane.link.resolve`); null/omitted skips the check. |
+| `offset_from_bottom` | integer (uint64) \| null | no | null | Scroll offset the viewport row is relative to (inferred). This is a **strict equality check against the pane's live scroll offset**, not a value that repositions the read: anything other than the pane's current offset fails with `stale_content` (`"pane viewport changed before link activation"` here, `"…before link resolution"` from `pane.link.resolve`); null/omitted matches the pane's current position. |
 
 **Result**: `type: "pane_link_activated"`
 
@@ -789,9 +690,10 @@ methods in this namespace with that requirement; other codes possible.
 {"id":"la1","result":{"type":"pane_link_activated","handled":false}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1. (This example is the no-link case: `handled`
-false, `url` omitted. A link-present case was also captured — `handled` still false,
-`url` populated with the link's text, no opener process run — see the prose above.)
+Validated 2026-10-06 against herdr 0.9.3 (example, link-present case with `handled`
+false and `url` populated, both `stale_content` messages, and `stale_target` re-run). The
+opener-shim experiment in the prose (no opener process run, including with an attached
+client) is from the 2026-09-19 pass against herdr 0.9.1 and was not repeated.
 
 ---
 
@@ -818,7 +720,9 @@ them. Takes the same params shape as [pane.link.activate](#panelinkactivate).
 | `end_col` | integer (uint16) | yes | — | Last column of the region (inclusive). |
 
 **Errors**: `pane_not_found`; the same `stale_content` and `stale_target` conditions as
-[pane.link.activate](#panelinkactivate) (the two methods share request handling); an
+[pane.link.activate](#panelinkactivate), with `"resolution"` in place of `"activation"` in
+the two `stale_content` messages (`"pane viewport changed before link resolution"`,
+`"pane content changed before link resolution"`); an
 out-of-range `viewport_row`/`col` is not an error and simply returns `regions: []`; other
 codes possible.
 
@@ -831,7 +735,7 @@ codes possible.
 {"id":"lr2","result":{"type":"pane_link_resolved","regions":[{"row":5,"start_col":0,"end_col":27}]}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ---
 
@@ -864,7 +768,7 @@ other codes possible.
 {"id":"cli:pane:list","result":{"panes":[{"agent":"claude","agent_session":{"agent":"claude","kind":"id","source":"herdr:claude","value":"ef3b9d04-…"},"agent_status":"working","cwd":"/home/penguin/source/fledge","focused":false,"foreground_cwd":"/home/penguin/source/fledge","pane_id":"w2:p1","revision":4,"scroll":{"max_offset_from_bottom":0,"offset_from_bottom":0,"viewport_rows":54},"tab_id":"w2:t1","terminal_id":"term_659708952f5514","terminal_title":"◐ herdr-api-documentation","terminal_title_stripped":"herdr-api-documentation","workspace_id":"w2"}],"type":"pane_list"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ---
 
@@ -947,10 +851,11 @@ destination tab); `workspace_not_found` when a `new_tab` destination names an un
 
 A successful move emits `pane_moved` (mirroring `move_result`: `pane`,
 `previous_pane_id`/`previous_tab_id`/`previous_workspace_id`, `created_tab`,
-`closed_tab_id`, `closed_workspace_id`) plus `layout_updated` for both tabs;
-`new_tab`/`new_workspace` additionally emit `tab_created`/`workspace_created`/
-`workspace_focused`/`tab_focused`; emptying a tab or workspace emits `tab_closed`/
-`workspace_closed`; `focus: true` adds `pane_focused`. A no-op move (`reason: "same_tab"`
+`closed_tab_id`, `closed_workspace_id`) plus `layout_updated`; `new_tab` additionally
+emits `tab_created`, and `new_workspace` emits `workspace_created` and `tab_created`;
+emptying a tab or workspace emits `tab_closed`/`workspace_closed`. Focus events
+(`pane_focused`, `tab_focused`, `workspace_focused`) are emitted only with `focus: true`
+— a `focus: false` move into a new tab or workspace emits none of them. A no-op move (`reason: "same_tab"`
 or `"zoomed_tab"`) emits nothing.
 
 **Example**
@@ -963,7 +868,11 @@ or `"zoomed_tab"`) emits nothing.
 Note `pane.pane_id` ("w1:p2") equals `previous_pane_id` — the move only crossed tabs
 within workspace `w1`, so the ID did not change.
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3 (all three destination variants, both
+`target_pane_not_found` messages, ratio clamping, the `same_tab` short-circuit,
+`zoomed_tab`, `closed_tab_id`, `workspace_not_found`, the cross-workspace ID change
+(`w1:p6` → `w2:p1`), and the event sets with `focus: false` re-probed; the example
+response is from the 2026-09-19 capture and keeps its shape).
 
 ---
 
@@ -1006,7 +915,7 @@ null `neighbor_pane_id` means there is no neighbor that way.
 {"id":"cli:pane:neighbor","result":{"neighbor":{"direction":"right","layout":{"area":{"height":54,"width":166,"x":26,"y":1},"focused_pane_id":"w2:p1","panes":[{"focused":true,"pane_id":"w2:p1","rect":{"height":54,"width":166,"x":26,"y":1}}],"splits":[],"tab_id":"w2:t1","workspace_id":"w2","zoomed":false},"pane_id":"w2:p1"},"type":"pane_neighbor"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1. (Here the single-pane tab has no right
+Validated 2026-10-06 against herdr 0.9.3. (Here the single-pane tab has no right
 neighbor, so `neighbor_pane_id` is omitted/null.)
 
 ---
@@ -1035,7 +944,7 @@ under `process_info`:
 |---|---|---|
 | `pane_id` | string | Pane inspected. |
 | `shell_pid` | integer (uint32) \| null | PID of the pane's shell. |
-| `tty` | string \| null | Controlling TTY path. Not observed on this Linux 0.9.1 build across an idle shell, a busy pipeline, a visible pane, and a hidden pane, both via the API and the CLI — never populated on this platform. |
+| `tty` | string \| null | Controlling TTY path. Not observed on this Linux platform: absent in 0.9.1 across an idle shell, a busy pipeline, a visible pane, and a hidden pane (API and CLI), and absent again in 0.9.3 on idle shells. |
 | `foreground_process_group_id` | integer (uint32) \| null | Foreground process group ID. |
 | `foreground_processes` | array&lt;PaneProcessInfoProcess&gt; | Processes in the foreground group (see below). |
 
@@ -1061,7 +970,7 @@ under `process_info`:
 {"id":"cli:pane:process_info","result":{"process_info":{"foreground_process_group_id":130012,"foreground_processes":[{"argv":["claude"],"cmdline":"claude","cwd":"/home/penguin/source/fledge","name":"claude","pid":130012}],"pane_id":"w2:p1","shell_pid":129736},"type":"pane_process_info"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1 (`tty` and `argv0` are documented from the
+Validated 2026-10-06 against herdr 0.9.3 (`tty` and `argv0` are documented from the
 schema only — see the notes above — since neither was ever observed populated on this
 platform).
 
@@ -1077,7 +986,7 @@ from the most recent end, and `lines: 0` returns empty text with `truncated: tru
 Omitting `lines` does not mean "everything": for `recent`/`recent_unwrapped` the server
 default is exactly 80 rows (`truncated: true`), while `visible`/`detection` return the
 whole viewport (`truncated: false`). `strip_ansi` (default true) is documented to remove
-escape sequences unless `format` is `ansi`, but had no observed effect on 0.9.1 in either
+escape sequences unless `format` is `ansi`, but had no observed effect on 0.9.1 or 0.9.3 in either
 direction — `format: "text"` with `strip_ansi: false` still returned fully stripped text,
 and `format: "ansi"` with `strip_ansi: true` still returned SGR sequences; `format` alone
 decides. Whether CLI reads mark an agent as seen was not probed — no API surface exposes
@@ -1091,7 +1000,7 @@ a "seen" flag, and confirming it would need a live agent plus a UI client.
 | `source` | ReadSource (`visible`,`recent`,`recent_unwrapped`,`detection`) | yes | — | Which snapshot to read. |
 | `format` | ReadFormat (`text`,`ansi`) | no | `text` | `text` = plain, `ansi` = keep escape sequences. This alone decides stripping; see `strip_ansi` below. |
 | `lines` | integer (uint32) \| null | no | null | Max rows to return from screen + scrollback, capped at 1000; null uses the server default described above (80 rows for `recent`/`recent_unwrapped`, the full viewport for `visible`/`detection`) rather than returning everything. |
-| `strip_ansi` | boolean | no | true | Documented to strip ANSI escapes from the returned text; had no observed effect on 0.9.1 in either direction (see above). |
+| `strip_ansi` | boolean | no | true | Documented to strip ANSI escapes from the returned text; had no observed effect on 0.9.1 or 0.9.3 in either direction (see above). |
 
 **Result**: `type: "pane_read"`, with the fields below nested one level down under
 `read`:
@@ -1125,7 +1034,7 @@ a "seen" flag, and confirming it would need a live agent plus a UI client.
 {"id":"1","result":{"type":"pane_read","read":{"pane_id":"w1:p3","workspace_id":"w1","tab_id":"w1:t1","source":"recent_unwrapped","format":"text","text":"echo docprobe-marker-42\n…","revision":0,"truncated":false}}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ---
 
@@ -1142,7 +1051,7 @@ claim on the pane. Idempotent.
 | `pane_id` | string | yes | — | Target pane. |
 | `source` | string | yes | — | Reporting source releasing authority. |
 | `agent` | string | yes | — | Agent label whose authority is released. |
-| `seq` | integer (uint64) \| null | no | null | Monotonic sequence for ordering reports from this source. A release whose `seq` is lower than the last report's `seq` from that source is silently dropped — it still returns `{"type":"ok"}`, but the pane's agent is unchanged; callers cannot distinguish "released" from "dropped as stale" by the result alone. |
+| `seq` | integer (uint64) \| null | no | null | Monotonic sequence for ordering reports from this source. A release whose `seq` is not greater than the last report's `seq` from that source (equal, lower, or null/omitted after a seq'd report) is silently dropped — it still returns `{"type":"ok"}`, but the pane's agent is unchanged; callers cannot distinguish "released" from "dropped as stale" by the result alone. |
 
 **Result**: `type: "ok"` — no other fields.
 
@@ -1157,7 +1066,12 @@ claim on the pane. Idempotent.
 {"id":"p7","result":{"type":"ok"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
+When a release takes effect it emits `pane_agent_detected` (with `released: true`,
+`final_status: "unknown"`) and `pane.agent_status_changed` (`unknown`); a dropped or
+superseded release emits nothing.
+
+Validated 2026-10-06 against herdr 0.9.3 (example re-run; seq gate checked with equal,
+lower, and greater `seq`; superseded-source no-op and release events observed).
 
 ---
 
@@ -1193,7 +1107,9 @@ so a client cannot learn about a label change from the event stream.
 {"id":"cli:pane:rename","result":{"pane":{"agent_status":"unknown","cwd":"/tmp/…/scratch-repo","focused":false,"foreground_cwd":"/tmp/…/scratch-repo","label":"docs-pane","pane_id":"w1:p3","revision":0,"scroll":{"max_offset_from_bottom":0,"offset_from_bottom":0,"viewport_rows":39},"tab_id":"w1:t1","terminal_id":"term_65970bc8a38ec4","workspace_id":"w1"},"type":"pane_info"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3 (500-character label, empty-string and null
+clear, absence of events, and the CLI form re-run; the example response is from the
+2026-09-19 capture).
 
 ---
 
@@ -1206,15 +1122,20 @@ last "until released"**: a report from any other source immediately takes over t
 — both the agent label and status change, with no error — so the newest reporting source
 holds authority, and [pane.release_agent](#panerelease_agent) only actually works for
 the *current* holder (called by a superseded source it still returns `ok` but is a
-silent no-op). Reporting `idle` after `working`/`blocked` does not necessarily surface as
-`idle`: it becomes the observation-only `done` (see the intro's `PaneAgentState` note)
-until the pane/tab is focused/seen. Emits `pane_agent_detected` and
-`pane.agent_status_changed` on every report. A `source` beginning with the reserved
-prefix `herdr:` (e.g. `herdr:claude`) is silently ignored — the call returns `ok` but the
-pane's agent is left unset; the same reserved-prefix rule presumably applies to `source`
-in [pane.release_agent](#panerelease_agent) and
-[pane.clear_agent_authority](#paneclear_agent_authority) (inferred — only
-`pane.report_agent` itself was probed for this).
+silent no-op). Reporting `idle` after `working`/`blocked` surfaces as the
+observation-only `done` (see the intro's `PaneAgentState` note) only when the pane's tab is
+not the focused tab; `AgentInfo.completion_seq` then records the completion. Focusing the
+tab turns `done` into `idle` and keeps `completion_seq`. When the pane's tab is already
+focused, the pane shows `idle` directly. Emits `pane_agent_detected` only when the
+reported agent label changes and `pane.agent_status_changed` only when the status
+changes — a repeated report with the same agent and state emits nothing. A `source` of
+the form `herdr:<agent>` that names the reported `agent` is silently ignored for the
+agents herdr integrates itself — `herdr:claude` reporting `claude`, `herdr:pi` reporting
+`pi`, and `herdr:codex` reporting `codex` each return `ok` but leave the pane's agent
+unset (presumably so an external reporter cannot impersonate herdr's own integration;
+inferred). The prefix alone does not trigger this: `herdr:claude` reporting `pi`,
+`herdr:x` reporting `x`, a bare `herdr:` reporting `codex`, and `HERDR:claude` reporting
+`claude` were all applied, and a release from a `herdr:` source works normally.
 
 **Params** (`PaneReportAgentParams`):
 
@@ -1228,12 +1149,16 @@ in [pane.release_agent](#panerelease_agent) and
 | `seq` | integer (uint64) \| null | no | null | Monotonic sequence for ordering reports from this source. |
 | `agent_session_id` | string \| null | no | null | Agent session identifier (ID form). Accepted but not observable through any read method afterward — `PaneInfo.agent_session` stays absent, and `agent.get`/`agent.list`/`session.snapshot` carry no session fields. |
 | `agent_session_path` | string \| null | no | null | Agent session identifier (path form). Same unobservability caveat as `agent_session_id`. |
+| `resume_argv` | array&lt;string&gt; \| null | no | null | New in 0.9.3. Schema: "Command that resumes this agent's session after a Herdr restart. The first element must be a plain command name." (Restart-resume itself, governed by the `resume_agents_on_restore` setting in [raw/default-config.toml](../raw/default-config.toml), was not exercised on this page. The same 2026-10-06 pass exercised it for [data-model.md](../data-model.md#agentsessioninfo): herdr persists the value as `agent_resume` and types it into the restored shell on restart.) Validated after the `pane_not_found` and `invalid_agent` checks, failing with `invalid_resume_argv`: it must be non-empty (`"resume_argv must not be empty"`); its first element must be a plain command name of ASCII letters, digits, `.`, `_`, and `-`, not starting with `-` (`"resume_argv must start with a plain command name, not a path"` — rejects `/usr/bin/claude`, `./claude`, `~`, `""`, `"claude code"`, `FOO=1`, `-x`; accepts `claude-code`, `claude.exe`, `.claude`, `1claude`); at most 64 elements (`"resume_argv allows at most 64 arguments"`); at most 8192 bytes summed across elements (`"resume_argv allows at most 8192 bytes"`); no control characters such as newline or NUL in any element (`"resume_argv must not contain control characters"`). A valid value is accepted only when `source` holds the pane for this `agent` after the report; otherwise the call fails with `resume_not_accepted` (`"resume_argv requires the reporter to hold the pane; report its state with pane.report_agent first"`). Null is accepted. Not observable through `pane.get`, `agent.list`, or `session.snapshot`. CLI: the arguments after `--`. |
 
 **Result**: `type: "ok"` — no other fields.
 
-**Errors**: `pane_not_found`; `invalid_agent` (empty `agent`); other codes possible.
+**Errors**: `pane_not_found`; `invalid_agent` (empty `agent`); `invalid_resume_argv` and
+`resume_not_accepted` (see `resume_argv`; an ignored `herdr:<agent>` source with a valid
+`resume_argv` fails with `resume_not_accepted`); a `state` of `done` fails as
+`invalid_request`; other codes possible.
 
-**CLI**: `herdr pane report-agent <PANE_ID> --source <ID> --agent <LABEL> --state <idle|working|blocked|unknown> [--message <TEXT>] [--seq <N>] [--agent-session-id <ID>] [--agent-session-path <PATH>]`
+**CLI**: `herdr pane report-agent <PANE_ID> --source <ID> --agent <LABEL> --state <idle|working|blocked|unknown> [--message <TEXT>] [--seq <N>] [--agent-session-id <ID>] [--agent-session-path <PATH>] [-- <RESUME_ARG>...]`
 
 **Example**
 
@@ -1242,15 +1167,21 @@ in [pane.release_agent](#panerelease_agent) and
 {"id":"p4","result":{"type":"ok"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3 (example; authority takeover, superseded-source
+release, seq gating per source, `done` only for an unfocused tab with `completion_seq`,
+events only on change, the `herdr:` source rule, `invalid_agent`, every `resume_argv`
+rule, `resume_not_accepted`, and the CLI `--` form re-run on fresh panes). One anomaly is
+not explained: on a pane reused after a long seq'd report history, later reports from new
+sources did not take over; the cause was not isolated.
 
 ---
 
 ## pane.report_agent_session
 
 Report (or update) the agent **session identity** for a pane without changing lifecycle
-state. Use it to attach a session ID/path and record where the session started. None of
-the reported identity is observable afterward through any read method — `PaneInfo.
+state. Use it to attach a session ID/path, record where the session started, and (new in
+0.9.3) set a `resume_argv`. The call does not need the source to hold the pane unless it
+carries `resume_argv`. None of the reported identity is observable afterward through any read method — `PaneInfo.
 agent_session` stays absent, and `agent.get`/`agent.list`/`session.snapshot` carry no
 session fields — and, unlike [pane.report_agent](#panereport_agent) (which emits
 `pane_agent_detected`/`pane.agent_status_changed`), this method emits no event at all.
@@ -1266,12 +1197,16 @@ session fields — and, unlike [pane.report_agent](#panereport_agent) (which emi
 | `agent_session_path` | string \| null | no | null | Session identifier (path form). |
 | `session_start_source` | string \| null | no | null | Where/how the session was started (inferred). |
 | `seq` | integer (uint64) \| null | no | null | Monotonic sequence for ordering reports from this source. |
+| `resume_argv` | array&lt;string&gt; \| null | no | null | New in 0.9.3. Schema: "Command that resumes this agent's session after a Herdr restart. The first element must be a plain command name." (Restart-resume itself, governed by the `resume_agents_on_restore` setting in [raw/default-config.toml](../raw/default-config.toml), was not exercised on this page. The same 2026-10-06 pass exercised it for [data-model.md](../data-model.md#agentsessioninfo): herdr persists the value as `agent_resume` and types it into the restored shell on restart.) Validated after the `pane_not_found` and `invalid_agent` checks, failing with `invalid_resume_argv`: it must be non-empty (`"resume_argv must not be empty"`); its first element must be a plain command name of ASCII letters, digits, `.`, `_`, and `-`, not starting with `-` (`"resume_argv must start with a plain command name, not a path"` — rejects `/usr/bin/claude`, `./claude`, `~`, `""`, `"claude code"`, `FOO=1`, `-x`; accepts `claude-code`, `claude.exe`, `.claude`, `1claude`); at most 64 elements (`"resume_argv allows at most 64 arguments"`); at most 8192 bytes summed across elements (`"resume_argv allows at most 8192 bytes"`); no control characters such as newline or NUL in any element (`"resume_argv must not contain control characters"`). A valid value is accepted only when `source` holds the pane for this `agent` after the report; otherwise the call fails with `resume_not_accepted` (`"resume_argv requires the reporter to hold the pane; report its state with pane.report_agent first"`). Null is accepted. Not observable through `pane.get`, `agent.list`, or `session.snapshot`. CLI: the arguments after `--`. |
 
 **Result**: `type: "ok"` — no other fields.
 
-**Errors**: `pane_not_found`; other codes possible.
+**Errors**: `pane_not_found`; `invalid_agent` (empty `agent`); `invalid_resume_argv`;
+`resume_not_accepted` when `resume_argv` is sent by a source that does not hold the pane
+for this `agent` (never reported, released, superseded by another source, or naming a
+different agent); other codes possible.
 
-**CLI**: `herdr pane report-agent-session <PANE_ID> --source <ID> --agent <LABEL> [--seq <N>] [--agent-session-id <ID>] [--agent-session-path <PATH>] [--session-start-source <SOURCE>]`
+**CLI**: `herdr pane report-agent-session <PANE_ID> --source <ID> --agent <LABEL> [--seq <N>] [--agent-session-id <ID>] [--agent-session-path <PATH>] [--session-start-source <SOURCE>] [-- <RESUME_ARG>...]`
 
 **Example**
 
@@ -1280,10 +1215,11 @@ session fields — and, unlike [pane.report_agent](#panereport_agent) (which emi
 {"id":"p5","result":{"type":"ok"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1 (the request/response envelope and the absence
-of an emitted event were confirmed; the stored session identity's effect could not be
-exercised, since no read method exposes `agent_session_id`/`agent_session_path`/
-`session_start_source`).
+Validated 2026-10-06 against herdr 0.9.3 (envelope, absence of events, `invalid_agent`,
+`pane_not_found`, the `resume_argv` rules, and `resume_not_accepted` for an unheld,
+released, other-source, and other-agent pane; the stored session identity's effect could
+not be exercised, since no read method exposes `agent_session_id`/`agent_session_path`/
+`session_start_source`/`resume_argv`).
 
 ---
 
@@ -1296,8 +1232,11 @@ match `^[A-Za-z0-9_-]{1,32}$` (max 16 keys per report — see the accumulation n
 `state_labels` map status → label. A report **replaces** the pane's visible metadata
 record rather than merging field-by-field with earlier reports: a later report carrying
 only `title` makes a previously set `display_agent`/`state_labels` disappear too, unless
-it repeats them. Emits a `pane.updated` event carrying the full `PaneInfo` and bumps
-`PaneInfo.revision` (`pane.report_agent` does not emit `pane.updated`).
+it repeats them. A report that changes `tokens` emits a `pane.updated` event carrying
+the full `PaneInfo` and bumps `PaneInfo.revision`; a report that changes only `title`,
+`display_agent`, or `state_labels` emits no event and leaves `revision` unchanged, so a
+client sees those changes only by reading the pane (`pane.report_agent` does not emit
+`pane.updated` either).
 
 **Params** (`PaneReportMetadataParams`):
 
@@ -1321,9 +1260,12 @@ it repeats them. Emits a `pane.updated` event carrying the full `PaneInfo` and b
 
 **Errors**: `pane_not_found`; `invalid_metadata_request` (`"cannot set and clear the same
 metadata field"` when e.g. both `title` and `clear_title` are sent, or `"missing metadata
-field to set or clear"` for a report with only `pane_id`+`source`); `invalid_metadata_ttl`;
-`invalid_metadata_token`; `invalid_state_label`; `metadata_token_limit` (`"pane metadata
-may contain at most 32 tokens"`, above); other codes possible.
+field to set or clear"` for a report with only `pane_id`+`source`); `invalid_metadata_ttl`
+(`"metadata ttl_ms must be at least 1"`, `"metadata ttl_ms must be 86400000 or less"`);
+`invalid_metadata_token` (`"invalid metadata token key: bad key!"`, `"a metadata report
+may update at most 16 tokens"`); `invalid_state_label` (`"unknown state label: bogus"`;
+`done` is a valid key); `metadata_token_limit` (`"pane metadata may contain at most 32
+tokens"`, above); other codes possible.
 
 **CLI**: `herdr pane report-metadata <PANE_ID> --source <ID> [--agent <LABEL>] [--applies-to-source <ID>] [--title <TEXT> | --clear-title] [--display-agent <TEXT> | --clear-display-agent] [--state-label <STATUS=TEXT> | --clear-state-labels] [--token <NAME=VALUE> | --clear-token <NAME>] [--seq <N>] [--ttl-ms <N>]`
 
@@ -1334,7 +1276,9 @@ may contain at most 32 tokens"`, above); other codes possible.
 {"id":"1","result":{"type":"ok"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3 (example; replace-versus-accumulate, the
+`agent` and `applies_to_source` gates, TTL expiry at 300 ms, every listed error and
+message, and the event/revision behaviour per field re-run).
 
 ---
 
@@ -1383,7 +1327,7 @@ past either clamp bound), `changed` is false and `reason` is `unchanged`.
 {"id":"cli:pane:resize","result":{"resize":{"changed":true,"focused_pane_id":"w1:p1","layout":{"area":{"height":39,"width":94,"x":26,"y":1},"focused_pane_id":"w1:p1","panes":[{"focused":false,"pane_id":"w1:p3","rect":{"height":39,"width":56,"x":26,"y":1}},{"focused":true,"pane_id":"w1:p1","rect":{"height":39,"width":38,"x":82,"y":1}}],"splits":[{"direction":"right","id":"split_0_root","ratio":0.6,"rect":{"height":39,"width":94,"x":26,"y":1}}],"tab_id":"w1:t1","workspace_id":"w1","zoomed":false},"pane_id":"w1:p3"},"type":"pane_resize"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ---
 
@@ -1419,9 +1363,10 @@ live tail.
 {"id":"s1","result":{"type":"pane_info","pane":{"pane_id":"w1:p1","terminal_id":"term_65bb4da209a581","workspace_id":"w1","tab_id":"w1:t1","focused":true,"cwd":"/home/penguin","foreground_cwd":"/home/penguin","terminal_title":"penguin@iceberg:~","terminal_title_stripped":"penguin@iceberg:~","agent_status":"unknown","scroll":{"offset_from_bottom":0,"max_offset_from_bottom":0,"viewport_rows":40},"revision":1}}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1. (Requested offset 1 was clamped to 0 because
-the pane's scrollback did not extend beyond the viewport; on a pane with more
-scrollback, an offset beyond it clamps to `max_offset_from_bottom` instead.)
+Validated 2026-10-06 against herdr 0.9.3 (clamping to `max_offset_from_bottom` (2963), the `pane.scroll_changed`
+event, the scrolled `visible` read, and the missing-`offset_from_bottom` error re-run). In
+the example, from the 2026-09-19 capture, the requested offset 1 was clamped to 0 because
+the pane's scrollback did not extend beyond the viewport.
 
 ---
 
@@ -1449,7 +1394,7 @@ returns the same text. Remember `row` is an absolute scrollback row, not a viewp
 | `pane_id` | string | Pane read. |
 | `text` | string | Text spanned by the selection. |
 
-**Errors**: `pane_not_found`; `stale_content` (`content_revision` mismatch, above);
+**Errors**: `pane_not_found` (`"pane not found: w1:p99"`, a message form no other pane method uses); `stale_content` (`content_revision` mismatch, above);
 `selection_unavailable` (`"selection text is unavailable"`) for an out-of-range point;
 other codes possible.
 
@@ -1462,7 +1407,8 @@ other codes possible.
 {"id":"sel1","result":{"type":"pane_selection","pane_id":"w1:p1","text":"[penguin@ic"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3 (example, inclusive and order-insensitive
+ranges, `selection_unavailable`, `stale_content`, and `pane_not_found` re-run).
 
 ---
 
@@ -1499,7 +1445,7 @@ and `run`.
 {"id":"p1","result":{"type":"ok"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ---
 
@@ -1529,7 +1475,7 @@ name; other codes possible. An empty `keys` array is accepted and returns `ok`.
 {"id":"1","result":{"type":"ok"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ---
 
@@ -1559,7 +1505,7 @@ sends text followed by Enter in one call).
 {"id":"1","result":{"type":"ok"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ---
 
@@ -1603,7 +1549,7 @@ between when `focus: true`.
 {"id":"cli:pane:split","result":{"pane":{"agent_status":"unknown","cwd":"/tmp/…/scratch-repo","focused":false,"foreground_cwd":"/tmp/…/scratch-repo","pane_id":"w1:p3","revision":0,"scroll":{"max_offset_from_bottom":0,"offset_from_bottom":0,"viewport_rows":39},"tab_id":"w1:t1","terminal_id":"term_65970bc8a38ec4","workspace_id":"w1"},"type":"pane_info"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1 (`right_click`'s effect could not be exercised —
+Validated 2026-10-06 against herdr 0.9.3 (`right_click`'s effect could not be exercised —
 no read-back path exists for it).
 
 ---
@@ -1659,7 +1605,7 @@ reason: "not_found"`; other codes possible.
 {"id":"cli:pane:swap","result":{"swap":{"changed":true,"focused_pane_id":"w1:p1","layout":{"area":{"height":39,"width":94,"x":26,"y":1},"focused_pane_id":"w1:p1","panes":[{"focused":false,"pane_id":"w1:p3","rect":{"height":39,"width":47,"x":26,"y":1}},{"focused":true,"pane_id":"w1:p1","rect":{"height":39,"width":47,"x":73,"y":1}}],"splits":[{"direction":"right","id":"split_0_root","ratio":0.5,"rect":{"height":39,"width":94,"x":26,"y":1}}],"tab_id":"w1:t1","workspace_id":"w1","zoomed":false},"source_pane_id":"w1:p1","target_pane_id":"w1:p3"},"type":"pane_swap"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ---
 
@@ -1678,7 +1624,7 @@ similarly searches an empty snapshot and never matches.
 | field | type | required | default | meaning |
 |---|---|---|---|---|
 | `pane_id` | string | yes | — | Pane to watch. |
-| `source` | ReadSource (`visible`,`recent`,`recent_unwrapped`,`detection`) | yes | — | Snapshot source to search. |
+| `source` | ReadSource (`visible`,`recent`,`recent_unwrapped`,`detection`) | yes | — | Snapshot source to search. `recent` is searched and returned as `recent_unwrapped`: the result's `read.source` is `"recent_unwrapped"` and its text has soft wraps joined, both for a match found at once and for one found by polling (`pane.read` with `recent` reports `recent`). |
 | `match` | OutputMatch | yes | — | Match specification (tagged union, below). |
 | `lines` | integer (uint32) \| null | no | null | Restrict the searched snapshot to N rows. |
 | `strip_ansi` | boolean | no | true | Strip ANSI escapes before matching (CLI `--raw` sets false). |
@@ -1696,12 +1642,12 @@ similarly searches an empty snapshot and never matches.
 | field | type | meaning |
 |---|---|---|
 | `pane_id` | string | Pane that matched. |
-| `revision` | integer (uint64) | Documented as the pane content revision at match time, but observed constant `0` in every probe (before/after new output, after `report_agent`, after `report_metadata`) — it tracks neither `PaneInfo.revision` nor the copy-mode `content_revision`, so its documented meaning could not be confirmed on 0.9.1. |
+| `revision` | integer (uint64) | Documented as the pane content revision at match time, but observed constant `0` in every probe (before/after new output, after `report_agent`, after `report_metadata`) — it tracks neither `PaneInfo.revision` nor the copy-mode `content_revision`, so its documented meaning could not be confirmed (0.9.1 and 0.9.3). |
 | `matched_line` | string \| null | The line that matched (null if not line-scoped, inferred). Every match observed across 12 probes — substring, regex, the `detection` source, and `strip_ansi: false` — returned a non-null value; no input was found that produces `null`. |
 | `read` | [PaneReadResult](../data-model.md) | Snapshot at match time (`pane_id`, `workspace_id`, `tab_id`, `source`, `format`, `text`, `revision`, `truncated`); `read.revision` is likewise constant `0`. |
 
-**Errors**: `pane_not_found`; a timeout error when `timeout_ms` elapses without a match
-(inferred); `invalid_regex` for an unparseable `regex` pattern, with the full Rust
+**Errors**: `pane_not_found`; `timeout` (`"timed out waiting for output match"`) when
+`timeout_ms` elapses without a match; `invalid_regex` for an unparseable `regex` pattern, with the full Rust
 regex-parser diagnostic passed through (e.g. `"regex parse error:\n    ([unclosed\n
 ^\nerror: unclosed character class"`); other codes possible.
 
@@ -1714,8 +1660,11 @@ regex-parser diagnostic passed through (e.g. `"regex parse error:\n    ([unclose
 {"id":"cli:pane:wait-output","result":{"matched_line":"echo docprobe-marker-42","pane_id":"w1:p3","read":{"format":"text","pane_id":"w1:p3","revision":0,"source":"recent_unwrapped","tab_id":"w1:t1","text":"echo docprobe-marker-42","truncated":false,"workspace_id":"w1"},"revision":0,"type":"output_matched"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1 (`matched_line`'s null case and `revision`'s
-documented meaning could not be confirmed — see above).
+Validated 2026-10-06 against herdr 0.9.3 (immediate and polled matches, `timeout_ms: 0`
+and a 700 ms timeout, `lines: 0`, `invalid_regex`, the `recent` → `recent_unwrapped`
+result, and the constant `revision` re-run; `matched_line`'s null case and `revision`'s
+documented meaning could not be confirmed — see above; the example is from the
+2026-09-19 capture).
 
 ---
 
@@ -1766,4 +1715,4 @@ false and `reason` explains why.
 {"id":"cli:pane:zoom","result":{"type":"pane_zoom","zoom":{"changed":true,"focus_changed":true,"focused_pane_id":"w1:p3","layout":{"area":{"height":39,"width":94,"x":26,"y":1},"focused_pane_id":"w1:p3","panes":[{"focused":false,"pane_id":"w1:p1","rect":{"height":39,"width":47,"x":26,"y":1}},{"focused":true,"pane_id":"w1:p3","rect":{"height":39,"width":47,"x":73,"y":1}}],"splits":[{"direction":"right","id":"split_0_root","ratio":0.5,"rect":{"height":39,"width":94,"x":26,"y":1}}],"tab_id":"w1:t1","workspace_id":"w1","zoomed":true},"pane_id":"w1:p3","zoom_changed":true,"zoomed":true}}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
