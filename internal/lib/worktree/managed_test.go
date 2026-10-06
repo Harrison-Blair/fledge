@@ -154,6 +154,7 @@ func TestManaged(t *testing.T) {
 	for path, want := range map[string]bool{
 		"/repo/.fledge/worktrees/topic":         true,
 		"/repo/.fledge/worktrees/feature/topic": true,
+		"/repo/.fledge/worktrees/..topic":       true,
 		"/repo/.fledge/worktrees":               false,
 		"/repo/.fledge/worktreesX/topic":        false,
 		"/repo/.fledge/topic":                   false,
