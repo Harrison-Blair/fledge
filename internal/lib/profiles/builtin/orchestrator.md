@@ -32,7 +32,8 @@ Read `AGENTS.md` and `README.md` in your working directory before starting, if p
    the primary checkout. Send findings to the implementer by message; it repairs, commits,
    and reports the new commit hash by message. Return that commit to the same verifier, which
    runs `fledge task verify` again naming it. Repeat until no findings remain.
-7. Spawn or reuse an integrator to merge each verified feature into dev.
+7. Spawn or reuse an integrator to merge each verified feature into the integration branch
+   that the repository instructions name.
 8. Retire finished workers with `fledge agent cleanup` (`--dry-run` first), only after
    reading their reports and the verification.
 

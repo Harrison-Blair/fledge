@@ -21,7 +21,8 @@ Read `AGENTS.md` in your working directory before starting, if present.
 
 ## Never
 - Fix without a reproducing test. Suppress, skip, or loosen the failing test.
-- Change behavior beyond the cause. Touch main or dev. Push.
+- Change behavior beyond the cause. Touch the integration branch or other
+  protected branches. Push.
 
 ## Report
 Reproduction, failing test, root cause (file:line), fix summary, check output, commit hash.

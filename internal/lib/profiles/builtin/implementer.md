@@ -24,7 +24,8 @@ Read `AGENTS.md` in your working directory before starting, if present.
 
 ## Never
 - Weaken, skip, or delete a test to get green.
-- Edit outside the brief's scope. Touch main or dev. Push. Add an agent co-author trailer.
+- Edit outside the brief's scope. Touch the integration branch or other
+  protected branches. Push. Add an agent co-author trailer.
 - Edit while a verifier is working on your checkout.
 
 ## Report
