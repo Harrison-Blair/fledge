@@ -40,13 +40,13 @@ func noRun(t *testing.T) harnessenv.Runner {
 	}
 }
 
-func fixture(t *testing.T) Discovery {
+func fixture(t *testing.T) harnessenv.Env {
 	t.Helper()
 	home, err := filepath.Abs(filepath.Join("testdata", "home"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Discovery{Home: home, Run: noRun(t)}
+	return harnessenv.Env{Home: home, Run: noRun(t)}
 }
 
 func write(t *testing.T, path, content string) {
@@ -134,7 +134,7 @@ func TestReadMalformedLinesAreCountedAndValidLinesSummed(t *testing.T) {
 
 {"type":"message","timestamp":"2026-01-03T10:00:07.000Z","message":{"role":"assistant","model":"m","provider":"p","usage":{"input":10,"output":20,"cacheRead":0,"cacheWrite":0,"reasoning":0,"cost":{"total":0.25}}}}
 `)
-	s := Read(context.Background(), Discovery{Run: noRun(t)}, "pi", Ref{Kind: "path", Value: path}, Window{})
+	s := Read(context.Background(), harnessenv.Env{Run: noRun(t)}, "pi", Ref{Kind: "path", Value: path}, Window{})
 	assertBasis(t, s, Measured)
 	assertTokens(t, s.Tokens, Tokens{Input: 11, Output: 22, CacheRead: 3, CacheWrite: 4})
 	if !strings.Contains(s.Reason, "2 malformed entries") {
@@ -145,7 +145,7 @@ func TestReadMalformedLinesAreCountedAndValidLinesSummed(t *testing.T) {
 func TestReadOnlyMalformedLinesIsUnavailable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	write(t, path, "{broken\nalso broken\n")
-	s := Read(context.Background(), Discovery{Run: noRun(t)}, "pi", Ref{Kind: "path", Value: path}, Window{})
+	s := Read(context.Background(), harnessenv.Env{Run: noRun(t)}, "pi", Ref{Kind: "path", Value: path}, Window{})
 	assertBasis(t, s, Unavailable)
 	if !strings.Contains(s.Reason, "2 malformed entries") {
 		t.Fatalf("reason %q", s.Reason)
@@ -244,7 +244,7 @@ func TestClaudeIDWithoutCwdMissingIsUnavailable(t *testing.T) {
 
 // Two projects holding the same session id cannot be told apart without a cwd.
 func TestClaudeIDWithoutCwdAmbiguousIsUnavailable(t *testing.T) {
-	d := Discovery{Home: t.TempDir(), Run: noRun(t)}
+	d := harnessenv.Env{Home: t.TempDir(), Run: noRun(t)}
 	line := `{"type":"assistant","sessionId":"dup","requestId":"r","timestamp":"2026-01-02T10:00:00.000Z","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1}}}` + "\n"
 	for _, slug := range []string{"-a", "-b"} {
 		write(t, filepath.Join(d.Home, ".claude", "projects", slug, "dup.jsonl"), line)
@@ -400,7 +400,7 @@ func TestCodexMixedRolloutWindows(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "s.jsonl")
 		write(t, path, content)
 		for _, c := range cases {
-			s := Read(context.Background(), Discovery{Run: noRun(t)}, "codex", Ref{Kind: "path", Value: path}, c.w)
+			s := Read(context.Background(), harnessenv.Env{Run: noRun(t)}, "codex", Ref{Kind: "path", Value: path}, c.w)
 			if s.Basis != Measured || s.Tokens != c.tokens || s.Turns != c.turns || !reflect.DeepEqual(s.Models, c.models) || s.Cost != nil {
 				t.Errorf("%s %s: %+v", kind, c.name, s)
 			}
@@ -488,7 +488,7 @@ func TestCodexForkBaselineFollowsRolloutOrder(t *testing.T) {
 	for _, c := range cases {
 		path := filepath.Join(t.TempDir(), "s.jsonl")
 		write(t, path, codexForkMeta+c.inherited+body)
-		s := Read(context.Background(), Discovery{Run: noRun(t)}, "codex", Ref{Kind: "path", Value: path}, c.w)
+		s := Read(context.Background(), harnessenv.Env{Run: noRun(t)}, "codex", Ref{Kind: "path", Value: path}, c.w)
 		if s.Basis != Measured || s.Tokens != (Tokens{Input: c.input}) || !strings.Contains(s.Reason, legacyReason) {
 			t.Errorf("%s: %+v", c.name, s)
 		}
@@ -638,7 +638,7 @@ func TestCodexForkInheritedBaselineIgnoresItsTimestamp(t *testing.T) {
 	} {
 		path := filepath.Join(t.TempDir(), "s.jsonl")
 		write(t, path, content)
-		s := Read(context.Background(), Discovery{Run: noRun(t)}, "codex", Ref{Kind: "path", Value: path}, window("2026-01-02T09:00:00Z", "2026-01-02T10:30:00Z"))
+		s := Read(context.Background(), harnessenv.Env{Run: noRun(t)}, "codex", Ref{Kind: "path", Value: path}, window("2026-01-02T09:00:00Z", "2026-01-02T10:30:00Z"))
 		if s.Basis != Measured || s.Tokens != (Tokens{Input: 130}) || !strings.Contains(s.Reason, "token_count total_token_usage") {
 			t.Errorf("%s: %+v", name, s)
 		}
@@ -704,7 +704,7 @@ func lockedHome(t *testing.T) string {
 
 func TestOpencodeReadsExportAndNeverTheDatabase(t *testing.T) {
 	r := opencodeRunner(t)
-	s := Read(context.Background(), Discovery{Home: lockedHome(t), Run: r.run}, "opencode", Ref{Kind: "id", Value: "oc-1"}, Window{})
+	s := Read(context.Background(), harnessenv.Env{Home: lockedHome(t), Run: r.run}, "opencode", Ref{Kind: "id", Value: "oc-1"}, Window{})
 	assertBasis(t, s, Measured)
 	if want := []string{"opencode export oc-1"}; !reflect.DeepEqual(r.calls, want) {
 		t.Fatalf("calls %q", r.calls)
@@ -733,7 +733,7 @@ func TestOpencodeReadsExportAndNeverTheDatabase(t *testing.T) {
 
 func TestOpencodeWindow(t *testing.T) {
 	r := opencodeRunner(t)
-	s := Read(context.Background(), Discovery{Run: r.run}, "opencode", Ref{Kind: "id", Value: "oc-1"},
+	s := Read(context.Background(), harnessenv.Env{Run: r.run}, "opencode", Ref{Kind: "id", Value: "oc-1"},
 		window("2026-01-03T10:05:00Z", "2026-01-03T11:00:00Z"))
 	assertTokens(t, s.Tokens, Tokens{Input: 10, Output: 2})
 	if s.Cost == nil || math.Abs(s.Cost.Amount-0.01) > 1e-9 {
@@ -742,7 +742,7 @@ func TestOpencodeWindow(t *testing.T) {
 }
 
 func TestOpencodeExportFailureIsUnavailable(t *testing.T) {
-	s := Read(context.Background(), Discovery{Run: (&fakeRunner{}).run}, "opencode", Ref{Kind: "id", Value: "oc-1"}, Window{})
+	s := Read(context.Background(), harnessenv.Env{Run: (&fakeRunner{}).run}, "opencode", Ref{Kind: "id", Value: "oc-1"}, Window{})
 	assertBasis(t, s, Unavailable)
 	if !strings.Contains(s.Reason, "opencode export") {
 		t.Fatalf("reason %q", s.Reason)
@@ -755,7 +755,7 @@ func TestClaudeSkipsSyntheticMessages(t *testing.T) {
 	write(t, path, `{"type":"assistant","requestId":"req-a","timestamp":"2026-01-02T10:00:00.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":2}}}
 {"type":"assistant","timestamp":"2026-01-02T10:01:00.000Z","message":{"model":"<synthetic>","usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0}}}
 `)
-	s := Read(context.Background(), Discovery{Run: noRun(t)}, "claude", Ref{Kind: "path", Value: path}, Window{})
+	s := Read(context.Background(), harnessenv.Env{Run: noRun(t)}, "claude", Ref{Kind: "path", Value: path}, Window{})
 	if s.Turns != 1 || !reflect.DeepEqual(s.Models, []string{"claude-opus-5"}) {
 		t.Fatalf("turns %d models %q", s.Turns, s.Models)
 	}
@@ -770,7 +770,7 @@ func TestUnrecognizedOrUnreadableSessionIsUnavailable(t *testing.T) {
 		for _, kind := range []string{"claude", "codex", "pi"} {
 			path := filepath.Join(t.TempDir(), "s.jsonl")
 			write(t, path, content)
-			s := Read(context.Background(), Discovery{Run: noRun(t)}, kind, Ref{Kind: "path", Value: path}, Window{})
+			s := Read(context.Background(), harnessenv.Env{Run: noRun(t)}, kind, Ref{Kind: "path", Value: path}, Window{})
 			if s.Basis != Unavailable || s.Reason == "" {
 				t.Errorf("%s %s: basis %q reason %q", name, kind, s.Basis, s.Reason)
 			}
@@ -787,7 +787,7 @@ func TestClaudeUnrecognizedSubagentFileIsUnavailable(t *testing.T) {
 	write(t, path, `{"type":"assistant","requestId":"r","timestamp":"2026-01-02T10:00:00.000Z","message":{"model":"m","usage":{"input_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":2}}}
 `)
 	write(t, filepath.Join(dir, "s", "subagents", "agent-x.jsonl"), "{}\n")
-	s := Read(context.Background(), Discovery{Run: noRun(t)}, "claude", Ref{Kind: "path", Value: path}, Window{})
+	s := Read(context.Background(), harnessenv.Env{Run: noRun(t)}, "claude", Ref{Kind: "path", Value: path}, Window{})
 	assertBasis(t, s, Unavailable)
 }
 
@@ -814,7 +814,7 @@ func TestValidSessionWithoutResponsesIsMeasuredZero(t *testing.T) {
 	} {
 		path := filepath.Join(t.TempDir(), "s.jsonl")
 		write(t, path, content)
-		s := Read(context.Background(), Discovery{Run: noRun(t)}, strings.TrimSuffix(kind, "-stub"), Ref{Kind: "path", Value: path}, Window{})
+		s := Read(context.Background(), harnessenv.Env{Run: noRun(t)}, strings.TrimSuffix(kind, "-stub"), Ref{Kind: "path", Value: path}, Window{})
 		if s.Basis != Measured || s.Tokens != (Tokens{}) || s.Reason != "" {
 			t.Errorf("%s header only: %+v", kind, s)
 		}
@@ -824,7 +824,7 @@ func TestValidSessionWithoutResponsesIsMeasuredZero(t *testing.T) {
 func TestOpencodeRejectsUnrecognizedExport(t *testing.T) {
 	for _, out := range []string{`{"error":"session missing"}`, `{}`, `{"info":{"id":"oc-1"}}`, `{"messages":[]}`, `[]`} {
 		r := &fakeRunner{outputs: map[string]string{"opencode export oc-1": out}}
-		s := Read(context.Background(), Discovery{Run: r.run}, "opencode", Ref{Kind: "id", Value: "oc-1"}, Window{})
+		s := Read(context.Background(), harnessenv.Env{Run: r.run}, "opencode", Ref{Kind: "id", Value: "oc-1"}, Window{})
 		if s.Basis != Unavailable || s.Cost != nil {
 			t.Errorf("%s: %+v", out, s)
 		}
@@ -833,7 +833,7 @@ func TestOpencodeRejectsUnrecognizedExport(t *testing.T) {
 
 func TestOpencodeEmptySessionIsMeasuredZero(t *testing.T) {
 	r := &fakeRunner{outputs: map[string]string{"opencode export oc-1": `{"info":{"id":"oc-1"},"messages":[]}`}}
-	s := Read(context.Background(), Discovery{Run: r.run}, "opencode", Ref{Kind: "id", Value: "oc-1"}, Window{})
+	s := Read(context.Background(), harnessenv.Env{Run: r.run}, "opencode", Ref{Kind: "id", Value: "oc-1"}, Window{})
 	assertBasis(t, s, Measured)
 	if s.Tokens != (Tokens{}) || s.Cost == nil || s.Cost.Amount != 0 {
 		t.Fatalf("%+v", s)
@@ -845,7 +845,7 @@ func readFile(t *testing.T, kind, content string) Summary {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	write(t, path, content)
-	return Read(context.Background(), Discovery{Run: noRun(t)}, kind, Ref{Kind: "path", Value: path}, Window{})
+	return Read(context.Background(), harnessenv.Env{Run: noRun(t)}, kind, Ref{Kind: "path", Value: path}, Window{})
 }
 
 const (
@@ -926,12 +926,12 @@ func TestOpencodeMissingOrNullTokensIsMalformed(t *testing.T) {
 		`{"info":{"role":"assistant","modelID":"m","cost":0.5,"tokens":null,"time":{"created":1767434405000}}}`,
 	} {
 		r := &fakeRunner{outputs: map[string]string{"opencode export s": `{"info":{"id":"s"},"messages":[` + bad + `]}`}}
-		s := Read(context.Background(), Discovery{Run: r.run}, "opencode", Ref{Kind: "id", Value: "s"}, Window{})
+		s := Read(context.Background(), harnessenv.Env{Run: r.run}, "opencode", Ref{Kind: "id", Value: "s"}, Window{})
 		if s.Basis != Unavailable || s.Cost != nil {
 			t.Errorf("alone %s: %+v", bad, s)
 		}
 		r = &fakeRunner{outputs: map[string]string{"opencode export s": `{"info":{"id":"s"},"messages":[` + valid + `,` + bad + `]}`}}
-		s = Read(context.Background(), Discovery{Run: r.run}, "opencode", Ref{Kind: "id", Value: "s"}, Window{})
+		s = Read(context.Background(), harnessenv.Env{Run: r.run}, "opencode", Ref{Kind: "id", Value: "s"}, Window{})
 		if s.Basis != Measured || s.Turns != 1 || s.Tokens.Input != 10 || s.Cost == nil || s.Cost.Amount != 0.25 || !strings.Contains(s.Reason, "1 malformed entries") {
 			t.Errorf("mixed %s: %+v", bad, s)
 		}
