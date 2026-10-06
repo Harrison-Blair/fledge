@@ -1,14 +1,6 @@
 package task
 
-import (
-	"time"
-
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
-	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
-	"github.com/Harrison-Blair/fledge/internal/lib/identity"
-	"github.com/Harrison-Blair/fledge/internal/lib/state"
-	"github.com/Harrison-Blair/fledge/internal/lib/usage"
-)
+import "github.com/Harrison-Blair/fledge/internal/lib/usage"
 
 // Usage holds historical snapshots: the worker's, taken at completion, and
 // the latest verifier's, taken at verification, by Fledge versions that
@@ -47,25 +39,4 @@ type UsageSession struct {
 type UsageWindow struct {
 	From string `json:"from"`
 	To   string `json:"to"`
-}
-
-// Observer is identity.ObserveSession, replaceable in tests.
-type Observer func(s *state.Store, id string, session herdr.AgentSession, now time.Time) (identity.Record, bool, error)
-
-// Observe stores live's session ref on rec through observe, as seen at now,
-// and returns the updated record. It is best effort: a failed write is a
-// warning effect and rec is returned as it was.
-func Observe(s *state.Store, observe Observer, rec identity.Record, live *herdr.AgentDetails, now time.Time, out *libagent.Outcome) identity.Record {
-	if live == nil || live.AgentSession == nil {
-		return rec
-	}
-	updated, changed, err := observe(s, rec.ID, *live.AgentSession, now)
-	switch {
-	case err != nil:
-		out.Effects = append(out.Effects, libagent.Effect{Action: "warning", Kind: "native_session", ID: rec.ID})
-		return rec
-	case changed:
-		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "native_session", ID: rec.ID})
-	}
-	return updated
 }

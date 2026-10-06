@@ -82,7 +82,7 @@ func run(ctx context.Context, c libagent.Client, o Options, in io.Reader, messag
 	}
 	out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "task", ID: r.ID})
 	if caller != nil && r.Owner != nil && *r.Owner == caller.ID {
-		task.Observe(s, observeSession, *caller, live, time.Now(), &out)
+		identity.Observe(s, observeSession, *caller, live, time.Now(), &out)
 	}
 	out.Result = r
 	if notification == nil {
@@ -149,4 +149,4 @@ func display(s *string) string {
 }
 
 // observeSession is replaceable so tests can fail the session write.
-var observeSession task.Observer = identity.ObserveSession
+var observeSession identity.Observer = identity.ObserveSession
