@@ -1048,7 +1048,7 @@ its subtasks, and a subtask is not a prerequisite of its parent.
   notification. A stale creator or confirmed delivery failure returns `partial`;
   an uncertain delivery returns `unknown`. The task remains completed, the
   notification outcome is recorded, and delivery is never retried automatically.
-- `verify --id TASK [--summary TEXT]` requires a `completed` or `verified` task
+- `verify --id TASK [--summary TEXT | --file PATH]` requires a `completed` or `verified` task
   and a registered caller other than the owner. The owner is refused with
   `task_self_verification` and an unregistered caller with
   `caller_unregistered`; `--force` overrides both and records `forced: true`.
