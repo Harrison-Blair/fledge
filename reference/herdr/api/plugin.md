@@ -1,6 +1,6 @@
 # herdr API: plugin methods
 
-> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
+> herdr 0.9.3 · protocol 22 · schema_version 1 · captured 2026-10-06
 > Part of the fledge herdr reference. Index: [README.md](../README.md). Wire format: [protocol.md](../protocol.md).
 
 The `plugin.*` namespace manages herdr's plugin registry: linking a plugin directory into
@@ -8,7 +8,7 @@ The `plugin.*` namespace manages herdr's plugin registry: linking a plugin direc
 plugins, enumerating plugins and their declared actions, invoking an action, reading plugin
 command logs, and driving plugin-owned terminal panes. Plugins are described by a manifest
 (parsed into `InstalledPluginInfo`) that declares actions, event hooks, link handlers, panes,
-build/startup commands, and target platforms. As of 0.9.1 every method below also has a
+build/startup commands, and target platforms. As of 0.9.1 (and still in 0.9.3) every method below also has a
 `herdr plugin` CLI equivalent (see each method's **CLI** row); `herdr plugin install`,
 `herdr plugin uninstall`, and `herdr plugin config-dir` are additional CLI subcommands with
 no direct `plugin.*` wire-method equivalent documented here.
@@ -20,8 +20,10 @@ registry survives a server restart. Sandboxing `plugin.link`/`unlink`/`enable`/`
 therefore requires relocating the whole config root (e.g. via `XDG_CONFIG_HOME`), not just
 using a scratch session directory.
 
-All 11 methods below are now live-validated on herdr 0.9.1, against an isolated scratch
-server with its config root relocated so the registry probes could not escape it. Coverage
+All 11 methods below were re-validated on 2026-10-06 against herdr 0.9.3 (first validated
+on 0.9.1), against an isolated scratch server with its config root (`XDG_CONFIG_HOME`,
+`XDG_STATE_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`) relocated so the registry probes could
+not escape it. The examples keep illustrative ids and paths; their shapes match 0.9.3 replies. Coverage
 is not complete everywhere: `herdr plugin install`/`uninstall` (which fetch and write a
 managed checkout, and are the only path that appears to drive `[[build]]` commands),
 `integration.install`/`integration.uninstall`, real link-handler activation, and
@@ -62,7 +64,7 @@ as a plugin subprocess and its execution is recorded as a `PluginCommandLogInfo`
 at spawn time, with `log.status` always `"running"` and no `finished_unix_ms`, `exit_code`,
 `stdout` or `stderr` yet — to learn how the command finished, poll
 [plugin.log.list](#pluginloglist) for the returned `log_id`; there is no wait/completion
-method. Side-effecting: spawns a process. Validated 2026-09-19 against herdr 0.9.1.
+method. Side-effecting: spawns a process. Validated 2026-10-06 against herdr 0.9.3.
 
 **Params** (`PluginActionInvokeParams`):
 
@@ -91,7 +93,7 @@ include plugin_id"), `plugin_disabled` (the resolved plugin is disabled — mess
 
 **CLI**: `herdr plugin action invoke <ACTION_ID> [--plugin <ID>]`
 
-**Example** — Validated 2026-09-19 against herdr 0.9.1.
+**Example** — Validated 2026-10-06 against herdr 0.9.3.
 
 ```json
 {"id":"1","method":"plugin.action.invoke","params":{"action_id":"format-buffer","plugin_id":"acme.tools","context":{"workspace_id":"ws-1","focused_pane_id":"pane-7","selected_text":"…"}}}
@@ -110,8 +112,8 @@ Lists all actions declared by installed plugins, optionally filtered to a single
 The listing does **not** filter on `enabled`: actions belonging to a disabled plugin are
 still returned here, but invoking one fails with `plugin_disabled`
 ([plugin.action.invoke](#pluginactioninvoke)); cross-reference `plugin.list`'s `enabled`
-field to know which listed actions are actually callable. Read-only. Validated 2026-09-19
-against herdr 0.9.1 (both against the empty session and against a populated registry
+field to know which listed actions are actually callable. Read-only. Validated 2026-10-06
+against herdr 0.9.3 (both against the empty session and against a populated registry
 including a disabled plugin).
 
 **Params** (`PluginActionListParams`):
@@ -132,7 +134,7 @@ including a disabled plugin).
 **CLI**: `herdr plugin action list [--plugin <ID>]`
 
 **Example** — Validated 2026-08-19 against herdr 0.8.2 (empty-session case; re-confirmed
-2026-09-19 against 0.9.1).
+2026-09-19 against 0.9.1 and 2026-10-06 against 0.9.3).
 
 ```json
 {"id":"r4","method":"plugin.action.list","params":{}}
@@ -147,7 +149,7 @@ Disables an installed plugin by id: its actions and panes become un-invokable/un
 (`plugin_disabled`) and its event hooks stop firing, but the registry entry is retained
 (contrast [plugin.unlink](#pluginunlink), which removes it). Disabling an already-disabled
 plugin (or re-enabling an already-enabled one) succeeds idempotently. Side-effecting.
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 **Params** (`PluginSetEnabledParams`):
 
@@ -169,7 +171,7 @@ possible — see [errors.md](../errors.md).
 
 **CLI**: `herdr plugin disable <PLUGIN_ID>`
 
-**Example** — Validated 2026-09-19 against herdr 0.9.1.
+**Example** — Validated 2026-10-06 against herdr 0.9.3.
 
 ```json
 {"id":"1","method":"plugin.disable","params":{"plugin_id":"acme.tools"}}
@@ -185,7 +187,7 @@ panes. **Startup commands do not run on enable**: enabling a plugin produced no 
 `plugin_command_log` entry for its `[[startup]]` commands, while restarting the server with
 the same plugin already enabled in the registry did (logged with `event: "startup"`; see
 [plugin.log.list](#pluginloglist)) — startup commands run once per enabled plugin at server
-boot, not on this call. Side-effecting. Validated 2026-09-19 against herdr 0.9.1.
+boot, not on this call. Side-effecting. Validated 2026-10-06 against herdr 0.9.3.
 
 **Params** (`PluginSetEnabledParams`):
 
@@ -207,7 +209,7 @@ possible — see [errors.md](../errors.md).
 
 **CLI**: `herdr plugin enable <PLUGIN_ID>`
 
-**Example** — Validated 2026-09-19 against herdr 0.9.1.
+**Example** — Validated 2026-10-06 against herdr 0.9.3.
 
 ```json
 {"id":"1","method":"plugin.enable","params":{"plugin_id":"acme.tools"}}
@@ -229,7 +231,7 @@ event hook naming an unknown wire event — are instead collected into the entry
 and the plugin still links; `platforms: []` (an explicit empty array) is rejected with
 `invalid_plugin_platform`. Re-linking an already-linked `plugin_id` silently **replaces** the
 existing entry — there is no "already linked" error. Side-effecting: mutates the registry.
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 **Params** (`PluginLinkParams`):
 
@@ -257,7 +259,7 @@ possible for other malformed manifests — see [errors.md](../errors.md).
 
 **CLI**: `herdr plugin link <PATH> [--enabled | --disabled]`
 
-**Example** — Validated 2026-09-19 against herdr 0.9.1.
+**Example** — Validated 2026-10-06 against herdr 0.9.3.
 
 ```json
 {"id":"1","method":"plugin.link","params":{"path":"/home/u/dev/acme-plugin/herdr-plugin.toml"}}
@@ -278,7 +280,7 @@ sent as `[]`. A GitHub source needs `managed_path` to be accepted:
 ## plugin.list
 
 Lists installed plugins and their parsed manifests, optionally filtered to a single
-`plugin_id`. Read-only. Validated 2026-09-19 against herdr 0.9.1, against both the empty
+`plugin_id`. Read-only. Validated 2026-10-06 against herdr 0.9.3, against both the empty
 session (no plugins → empty `plugins`) and a populated registry (linked, disabled,
 warning-carrying, and platform-restricted plugins).
 
@@ -302,7 +304,7 @@ possible — see [errors.md](../errors.md).
 **CLI**: `herdr plugin list [--plugin <ID>] [--json]`
 
 **Example** — Validated 2026-09-17 against herdr 0.9.1 (empty registry; re-confirmed 2026-09-19
-against 0.9.1).
+against 0.9.1 and 2026-10-06 against 0.9.3).
 
 ```json
 {"id":"r3","method":"plugin.list","params":{}}
@@ -318,16 +320,18 @@ both logged live; startup commands are logged once per enabled plugin at server 
 [plugin.enable](#pluginenable) — but build commands were never observed to be logged at all,
 even across link/enable/restart, and appear to be driven only by `herdr plugin install`),
 **oldest-first**, optionally filtered by `plugin_id` and capped by `limit`. The in-memory log
-store holds at most 50 entries — after that, the oldest are evicted — and `log_id` restarts
-from `plugin-log-1` after a server restart; anything evicted or from a previous server run is
-unrecoverable. Read-only. Validated 2026-09-19 against herdr 0.9.1.
+store holds at most 200 entries on 0.9.3 — after that, the oldest are evicted (after 309
+invocations it held `plugin-log-110` through `plugin-log-309`) — but a call without `limit`
+returns only the newest 50 of them. On 0.9.1 the store itself held at most 50. `log_id`
+restarts from `plugin-log-1` after a server restart; anything evicted or from a previous
+server run is unrecoverable. Read-only. Validated 2026-10-06 against herdr 0.9.3.
 
 **Params** (`PluginLogListParams`):
 
 | field | type | required | default | meaning |
 | --- | --- | --- | --- | --- |
 | `plugin_id` | string \| null | no | null | Restrict to logs from this plugin; when null, logs from all plugins are returned. |
-| `limit` | integer (uint, ≥ 0) \| null | no | null | Selects the last N entries (still returned oldest-first), then applied on top of the 50-entry cap; `limit: 0` returns **one** entry, not zero — the effective count is `max(limit, 1)`. A negative value fails `invalid_request` ("expected usize"); values up to `u64::MAX` are accepted, larger ones are rejected as a non-integer float. |
+| `limit` | integer (uint, ≥ 0) \| null | no | null | Selects the last N entries (still returned oldest-first), up to the 200 entries the store holds (`limit: 120` returned 120); when null or absent, the last 50 are returned; `limit: 0` returns **one** entry, not zero — the effective count is `max(limit, 1)`. A negative value fails `invalid_request` ("expected usize"); values up to `u64::MAX` are accepted, larger ones are rejected as a non-integer float. |
 
 **Result** — `type: "plugin_log_list"`:
 
@@ -341,7 +345,7 @@ unrecoverable. Read-only. Validated 2026-09-19 against herdr 0.9.1.
 
 **CLI**: `herdr plugin log list [--plugin <ID>] [--limit <N>]`
 
-**Example** — Validated 2026-09-19 against herdr 0.9.1.
+**Example** — Validated 2026-10-06 against herdr 0.9.3.
 
 ```json
 {"id":"1","method":"plugin.log.list","params":{"plugin_id":"acme.tools","limit":2}}
@@ -361,7 +365,7 @@ consistent with every other optional field on this page (see
 Closes a plugin-owned terminal pane by id. This method is strictly for panes this plugin API
 opened: a real but non-plugin pane, an unknown id, and an already-closed plugin pane all fail
 the same way (see **Errors**) — use [pane.close](pane.md#paneclose) for ordinary panes.
-Side-effecting: destroys the pane. Validated 2026-09-19 against herdr 0.9.1.
+Side-effecting: destroys the pane. Validated 2026-10-06 against herdr 0.9.3.
 
 **Params** (`PluginPaneCloseParams`):
 
@@ -380,11 +384,13 @@ Side-effecting: destroys the pane. Validated 2026-09-19 against herdr 0.9.1.
 `pane_id`, for a real pane that is not plugin-owned, and for a plugin pane that is already
 closed. Other codes possible — see [errors.md](../errors.md).
 
-**Events**: emits `pane_closed` and `layout.updated` to subscribers.
+**Events**: for a `split` (or other in-tab) plugin pane, emits `pane_closed` and `layout_updated`
+to subscribers. Closing a `tab`-placement plugin pane also removes its tab, but emits only
+`pane_closed` (no `tab_closed`, no `layout_updated`).
 
 **CLI**: `herdr plugin pane close <PANE_ID>`
 
-**Example** — Validated 2026-09-19 against herdr 0.9.1.
+**Example** — Validated 2026-10-06 against herdr 0.9.3.
 
 ```json
 {"id":"1","method":"plugin.pane.close","params":{"pane_id":"pane-9"}}
@@ -398,7 +404,7 @@ closed. Other codes possible — see [errors.md](../errors.md).
 Focuses an existing plugin-owned terminal pane by id, bringing it forward. Like
 [plugin.pane.close](#pluginpaneclose), this is strictly for plugin-owned panes: a real but
 non-plugin pane fails the same way as an unknown id. Side-effecting: changes UI focus.
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 **Params** (`PluginPaneFocusParams`):
 
@@ -421,7 +427,7 @@ Validated 2026-09-19 against herdr 0.9.1.
 
 **CLI**: `herdr plugin pane focus <PANE_ID>`
 
-**Example** — Validated 2026-09-19 against herdr 0.9.1.
+**Example** — Validated 2026-10-06 against herdr 0.9.3.
 
 ```json
 {"id":"1","method":"plugin.pane.focus","params":{"pane_id":"pane-9"}}
@@ -436,10 +442,12 @@ Opens a new plugin-owned terminal pane running the plugin's `entrypoint` command
 according to `placement` (overlay/popup/split/tab/zoomed), with a working directory that
 **defaults to the plugin's `plugin_root`** (not the caller's or server's cwd) and a `label`
 taken from the manifest pane's `title`. `placement: "tab"` opens the pane in a **new tab**,
-not the current one. This method requires a foreground UI client attached to the session (a
-headless `herdr server` with no TUI attached can never satisfy it — see **Errors**). Optionally
-focuses the new pane. Side-effecting: spawns a process and creates a pane. Validated
-2026-09-19 against herdr 0.9.1 (popup's pane body could not be inspected — it never appears in
+not the current one. On 0.9.3 the method works on a headless server with no TUI attached, as long as the server
+has a workspace: `overlay`, `split`, `tab` and `zoomed` panes all opened, and a `popup` open
+returned `ok`. Only a server with no workspace fails (see **Errors**). On 0.9.1 every
+placement failed without a foreground UI client. Optionally focuses the new pane.
+Side-effecting: spawns a process and creates a pane. Validated 2026-10-06 against herdr 0.9.3
+(popup's pane body could not be inspected — it never appears in
 `pane.list` — so only its documented result shape and its errors were exercised).
 
 **Params** (`PluginPaneOpenParams`):
@@ -455,7 +463,7 @@ focuses the new pane. Side-effecting: spawns a process and creates a pane. Valid
 | `cwd` | string \| null | no | null | Working directory for the pane process; defaults to the plugin's `plugin_root` when omitted, not the caller's or server's cwd. |
 | `env` | object (string → string) | no | `{}` | Environment variable overrides for the pane process. |
 | `target_pane_id` | string \| null | no | null | Existing pane to anchor placement against. **Placement-restricted**: accepted only for `split` and `zoomed`; `overlay`/`popup` reject it with `invalid_params` ("overlay and popup plugin panes target the active pane"); `tab` rejects it with the same message as `direction` above. |
-| `workspace_id` | string \| null | no | null | Workspace to open the pane in; when null the current/target workspace is used. |
+| `workspace_id` | string \| null | no | null | Workspace for a new `tab`-placement pane; when null the active workspace is used. **Placement-restricted**: accepted only for `tab` (an unknown id fails `workspace_not_found`, "workspace not found"); `split`/`zoomed` reject it with `invalid_params` ("split and zoomed plugin panes target an existing pane; use target_pane_id"), and `overlay`/`popup` with the "target the active pane" message above. |
 | `focus` | boolean | no | `false` | Whether to focus the new pane after opening. |
 
 **Result**: for placement `overlay`, `split`, `tab`, or `zoomed`, `type: "plugin_pane_opened"`
@@ -475,17 +483,21 @@ disabled), `plugin_pane_not_found` (unknown `entrypoint`, message: "plugin pane 
 '\<id\>' not found"), `pane_not_found` (unknown `target_pane_id`), `workspace_not_found`
 (unknown `workspace_id`), `invalid_params` (placement-restricted `width`/`height`/
 `direction`/`target_pane_id` misuse — see the params above), `ui_busy` (a popup is already
-open). With no foreground UI client attached, every placement fails instead with one of three
-"no active …" codes: `plugin_pane_open_failed` ("no active workspace") for `overlay`/`popup`,
+open). On a server with no workspace, every placement fails instead with one of three
+"no active …" codes (on 0.9.1 these also appeared whenever no foreground UI client was
+attached): `plugin_pane_open_failed` ("no active workspace") for `overlay`/`popup`,
 `no_active_workspace` for `tab`, and `no_active_pane` for `split`/`zoomed`. Other codes
 possible — see [errors.md](../errors.md).
 
-**Events**: for placements other than `popup`, emits `pane.created` and `layout.updated` to
-subscribers. A `popup` open emits no event.
+**Events**: for placements other than `popup`, emits `pane_created` and `layout_updated` to
+subscribers. With `focus: true` and a client attached, a `split`, `overlay` or `zoomed` open
+emitted, in order, `workspace_focused`, `tab_focused`, `pane_created`, `pane_focused`,
+`layout_updated`; a `tab` open emitted `tab_created`, `pane_created`, `layout_updated`. A
+`popup` open emits no event.
 
 **CLI**: `herdr plugin pane open --plugin <ID> --entrypoint <ID> [--placement <overlay|split|tab|zoomed>] [--workspace <ID>] [--target-pane <PANE>] [--direction <right|down>] [--cwd <PATH>] [--env <KEY=VALUE>]... [--focus | --no-focus]` (the CLI's `--placement` omits `popup`, which remains valid on the wire).
 
-**Example** — Validated 2026-09-19 against herdr 0.9.1.
+**Example** — Validated 2026-10-06 against herdr 0.9.3.
 
 ```json
 {"id":"1","method":"plugin.pane.open","params":{"plugin_id":"acme.tools","entrypoint":"dashboard","placement":"split","direction":"down","target_pane_id":"w1:p1","focus":true}}
@@ -506,7 +518,7 @@ because the request above omits `cwd`. A `popup` open instead answers like this:
 
 Removes a plugin from the registry by id, undoing a [plugin.link](#pluginlink). The result's
 `removed` flag reports whether an entry was actually present and removed. Side-effecting.
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 **Params** (`PluginUnlinkParams`):
 
@@ -530,7 +542,7 @@ unlinking the same `plugin_id` twice returns `true` then `false`. Other codes po
 
 **CLI**: `herdr plugin unlink <PLUGIN_ID>`
 
-**Example** — Validated 2026-09-19 against herdr 0.9.1.
+**Example** — Validated 2026-10-06 against herdr 0.9.3.
 
 ```json
 {"id":"1","method":"plugin.unlink","params":{"plugin_id":"acme.tools"}}
@@ -543,7 +555,7 @@ unlinking the same `plugin_id` twice returns `true` then `false`. Other codes po
 
 Composite entities referenced by the methods above. `PaneInfo` is documented in
 [../data-model.md](../data-model.md); the rest are plugin-namespace-specific and defined here.
-Validated 2026-09-19 against herdr 0.9.1: on the wire, an absent/null optional field
+Validated 2026-10-06 against herdr 0.9.3: on the wire, an absent/null optional field
 (`description`, `warnings`, and every declaration array below) is **omitted from the JSON
 object entirely**, never sent as `null` or `[]` — read a missing key the same as its default.
 
@@ -560,7 +572,7 @@ A linked plugin entry with its parsed manifest.
 | `plugin_root` | string | yes | — | Root directory of the plugin. |
 | `enabled` | boolean | yes | — | Whether the plugin is currently enabled. |
 | `description` | string \| null | no | null | Plugin description. |
-| `min_herdr_version` | string | no | `""` | Minimum required herdr version. The schema marks this optional with an empty-string default, but the running server treats it as **mandatory in the manifest**: omitting it fails the link with `invalid_plugin_min_herdr_version` ("plugin min_herdr_version is required") — there is no observed path to the schema's `""` default. Must be semver; a value newer than the running herdr fails the link outright with `plugin_requires_newer_herdr`, e.g. "plugin requires Herdr 99.0.0 or newer; current Herdr is 0.9.1". |
+| `min_herdr_version` | string | no | `""` | Minimum required herdr version. The schema marks this optional with an empty-string default, but the running server treats it as **mandatory in the manifest**: omitting it fails the link with `invalid_plugin_min_herdr_version` ("plugin min_herdr_version is required") — there is no observed path to the schema's `""` default. Must be semver; a value newer than the running herdr fails the link outright with `plugin_requires_newer_herdr`, e.g. "plugin requires Herdr 99.0.0 or newer; current Herdr is 0.9.3". |
 | `source` | [PluginSourceInfo](#pluginsourceinfo) | no | `{"kind":"local"}` | Provenance metadata. |
 | `platforms` | array of [PluginPlatform](#pluginplatform) \| null | no | null | Platforms the plugin targets; null/absent means unrestricted, but an undeclared manifest `platforms` is not silent — it adds a standing warning ("manifest does not declare platforms; platform support unknown") to `warnings` on every link and every `plugin.list`. An explicit empty array is rejected with `invalid_plugin_platform` ("platforms must not be an empty array; omit the field to leave platforms undeclared"). |
 | `actions` | array of [PluginManifestAction](#pluginmanifestaction) | no | `[]` | Declared actions. Defaults to `[]` on input (the manifest); an empty result is omitted from the response, not sent as `[]`. |
@@ -576,10 +588,12 @@ A linked plugin entry with its parsed manifest.
 Provenance of a plugin. Used both as a request field (on `plugin.link`) and a response field.
 As a request field it is validated more tightly than the field list below implies: `kind:
 "github"` additionally **requires** `managed_path` — omitting it fails `plugin.link` with
-`invalid_plugin_source` ("GitHub plugin source requires managed_path"). Validated 2026-09-19
-against herdr 0.9.1 (only the `managed_path` requirement itself was exercised; the further
-constraints a schema reader might expect around a managed checkout's own path layout were not
-probed).
+`invalid_plugin_source` ("GitHub plugin source requires managed_path"). Supplying
+`managed_path` is not enough on its own: with `managed_path` set to an existing directory, the
+link still failed `invalid_plugin_source` ("No such file or directory (os error 2)"), so the
+server expects a particular layout under the managed path. Validated 2026-10-06 against herdr
+0.9.3 (the missing-`managed_path` case and one existing-directory case; the expected layout
+was not probed).
 
 | field | type | required | default | meaning |
 | --- | --- | --- | --- | --- |
@@ -650,7 +664,7 @@ no `plugin.*` event types: the manifest hook names a herdr event to react to. Th
 form (`"pane_focused"`) links successfully but with a warning ("unknown event 'pane_focused'")
 and then never fires. A matching hook run is logged via [plugin.log.list](#pluginloglist) with
 `event` set and `action_id` absent, and hooks stop firing while the plugin is disabled.
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 | field | type | required | default | meaning |
 | --- | --- | --- | --- | --- |

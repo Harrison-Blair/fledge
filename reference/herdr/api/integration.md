@@ -1,6 +1,6 @@
 # herdr API: integration methods
 
-> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
+> herdr 0.9.3 · protocol 22 · schema_version 1 · captured 2026-10-06
 > Part of the fledge herdr reference. Index: [README.md](../README.md). Wire format: [protocol.md](../protocol.md).
 
 The `integration` namespace installs and removes herdr's built-in integrations into
@@ -20,7 +20,9 @@ open the herdr socket: against a fake socket server that records every byte, all
 `{"id":"api-client:status","method":"ping","params":{}}`. With `HERDR_SOCKET_PATH` pointed
 at a path that does not exist, `herdr integration status` still exits 0 with its full
 output, where `herdr tab list` fails with `server_not_running`. These wire methods
-therefore have no first-party CLI caller in 0.9.1, and the **CLI** line in each section
+therefore have no first-party CLI caller (0.9.1; on 0.9.3 `herdr integration status` and
+`status --outdated-only` again sent nothing to a logging socket and exited 0 against a
+missing socket path; `install`/`uninstall` were not run), and the **CLI** line in each section
 below names the nearest subcommand, not a request that the CLI sends.
 
 3 methods:
@@ -62,8 +64,10 @@ request is being deserialized and therefore never reaches the handler and writes
 `params: {}` returns ``invalid request: missing field `target` at line 1 column 59``; an
 out-of-enum value returns ``invalid request: unknown variant `zzz_not_a_real_target`,
 expected one of `pi`, `omp`, … `grok` ``; and `{"target":5}` returns ``invalid request:
-invalid type: integer `5`, expected string or map``. All three come back with `"id":""` —
-the server does not echo the request id on request-validation failures. The handler's own
+invalid type: integer `5`, expected string or map``. All three came back with `"id":""` on
+0.9.1. On 0.9.3 the server echoes the request id on request-validation failures for other
+methods (including `integration.list`, below), so these probably echo it too; this method was
+not called on 0.9.3 (see the stamp below). The handler's own
 error codes are unprobed, because reaching the handler requires a well-formed call that
 edits user agent configs.
 
@@ -85,6 +89,10 @@ variant.
 {"id":"1","result":{"type":"integration_install","target":"claude","details":{"messages":["Installed herdr integration for claude"]}}}
 ```
 
+Not probed on 2026-10-06 (herdr 0.9.3): by instruction, no `integration.install` request
+was sent, not even a malformed one, because a well-formed call writes outside the scratch
+session. Only `herdr integration install --help` was re-run (same 18 values). The rest keeps
+its 0.9.1 stamp:
 Constructed from schema; not live-validated (2026-09-19, herdr 0.9.1: a well-formed call
 writes herdr hook files into agent config directories under `$HOME`, an effect that escapes
 the scratch session, so only structurally invalid requests — which fail during request
@@ -143,7 +151,8 @@ stale hook.
 returns ``invalid request: missing field `params` at line 1 column 41``; `params` as `null`,
 `""`, `true` or `5` returns `invalid request: invalid type: <value>, expected struct
 EmptyParams`; and `params: [1,2]` returns `invalid request: invalid length 2, expected 0
-elements in sequence`. These also come back with `"id":""`. No handler-level error could be
+elements in sequence`. Since 0.9.3 these echo the request id (`"id":"e"` for a request
+sent with id `e`); 0.9.1 answered `"id":""`. No handler-level error could be
 provoked; other codes possible.
 
 **Events**: none. A subscriber holding open all 24 subscription types that need no
@@ -167,7 +176,11 @@ likewise a local filter, not a request param.
 {"id":"2","result":{"type":"integration_list","integrations":[{"target":"pi","label":"pi","command":"pi","available":true,"state":"current"},{"target":"omp","label":"omp","command":"omp","available":false,"state":"not_installed"},{"target":"claude","label":"claude","command":"claude","available":true,"state":"current"},{"target":"codex","label":"codex","command":"codex","available":true,"state":"current"},{"target":"copilot","label":"copilot","command":"copilot","available":false,"state":"not_installed"},{"target":"devin","label":"devin","command":"devin","available":false,"state":"not_installed"},{"target":"droid","label":"droid","command":"droid","available":false,"state":"not_installed"},{"target":"kimi","label":"kimi","command":"kimi","available":false,"state":"not_installed"},{"target":"opencode","label":"opencode","command":"opencode","available":true,"state":"current"},{"target":"kilo","label":"kilo","command":"kilo","available":false,"state":"not_installed"},{"target":"hermes","label":"hermes","command":"hermes","available":false,"state":"not_installed"},{"target":"qodercli","label":"qodercli","command":"qodercli","available":false,"state":"not_installed"},{"target":"qwen","label":"qwen","command":"qwen","available":false,"state":"not_installed"},{"target":"cursor","label":"cursor","command":"cursor-agent","available":true,"state":"current"},{"target":"mastracode","label":"mastracode","command":"mastracode","available":false,"state":"not_installed"},{"target":"antigravity_cli","label":"antigravity-cli","command":"agy","available":false,"state":"not_installed"},{"target":"grok","label":"grok","command":"grok","available":false,"state":"not_installed"}]}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1. (Captured against a scratch server; `state` and
+Validated 2026-10-06 against herdr 0.9.3: the five keys with no nulls, `available`
+matching `PATH`, the `current`/`not_installed` states, the parameter matrix, every error
+row, the no-events check, and the CLI claims (including the 18th `letta` line) were re-run on
+a scratch server; the 50-call read-only check below was not repeated. The example is
+unchanged on 0.9.3. (Originally captured 2026-09-19 against herdr 0.9.1 on a scratch server; `state` and
 `available` values reflect this machine's local agent-tool installs, not a fixed fixture,
 and the `outdated` state was not exercised. Read-only was checked by 50 consecutive calls,
 after which the md5 of every installed herdr hook file was unchanged; two back-to-back calls
@@ -204,7 +217,8 @@ that were applied.
 fails during deserialization and removes nothing. `params: {}` returns ``invalid request:
 missing field `target` at line 1 column 61``; an out-of-enum value returns ``invalid
 request: unknown variant `zzz_not_a_real_target`, expected one of `pi`, `omp`, … `grok` ``,
-naming the same 17 values as `install`. Both come back with `"id":""`. The handler's own
+naming the same 17 values as `install`. Both came back with `"id":""` on 0.9.1; see the
+id note under [integration.install](#integrationinstall). The handler's own
 error codes are unprobed.
 
 **Events**: none possible — the schema's `Subscription` enum has no `integration.*` variant.
@@ -222,6 +236,9 @@ value is `antigravity_cli` (underscore).
 {"id":"1","result":{"type":"integration_uninstall","target":"claude","details":{"messages":["Removed herdr integration for claude"]}}}
 ```
 
+Not probed on 2026-10-06 (herdr 0.9.3): by instruction, no `integration.uninstall` request
+was sent, because a well-formed call writes outside the scratch session. Only `herdr
+integration uninstall --help` was re-run (same 18 values). The rest keeps its 0.9.1 stamp:
 Constructed from schema; not live-validated (2026-09-19, herdr 0.9.1: a well-formed call
 removes hook files and hook entries from agent config under `$HOME`, an effect that escapes
 the scratch session, so only structurally invalid requests — which fail during request
@@ -269,7 +286,10 @@ as an 18th line, but `letta` is absent from the schema enum, absent from the 17 
 `integration.list` returns, and absent from the server's own unknown-variant error list. A
 caller restricted to the wire API cannot reach the letta integration at all.
 
-Validated 2026-09-19 against herdr 0.9.1. (The 17 values and their order match
+Validated 2026-10-06 against herdr 0.9.3 for the 17 values, their order in `schema.json`
+and in `integration.list`, and the `letta` CLI claims; the two wire rejections (the
+hyphenated spelling and the unknown-variant list) came from `integration.install` requests
+and stay Validated 2026-09-19 against herdr 0.9.1. (The 17 values and their order match
 `schema.json`, the server's own unknown-variant error and the order of `integration.list`
 entries; the `tool (inferred)` column was not verified beyond the `label` and `command`
 values the server returns.)

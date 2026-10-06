@@ -1,12 +1,12 @@
 # herdr API: error handling
 
-> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
+> herdr 0.9.3 · protocol 22 · schema_version 1 · captured 2026-10-06
 > Part of the fledge herdr reference. Index: [README.md](README.md). Wire format: [protocol.md](protocol.md).
 
 Every herdr request either succeeds with a `result` or fails with a single `error` object
 on the same connection. This file documents the error envelope, how errors surface through
-the CLI, and every error `code` observed against a live herdr 0.9.1 server, with the trigger
-and the live probe that evidences it. The probe captures are not stored in this
+the CLI, and every error `code` observed against a live herdr server (0.9.3 unless a row
+says otherwise), with the trigger and the live probe that evidences it. The probe captures are not stored in this
 repository.
 
 ## Error envelope
@@ -21,20 +21,25 @@ connection (the same one-request-per-connection rule as success responses):
 Defined by the `error_response` schema (`ErrorBody`): `error.code` and `error.message` are
 both required strings.
 
-- **`id`** echoes the request's `id`. When the request could not be parsed far enough to
-  read its `id` (malformed envelope, missing `id`), the server returns `"id": ""` — see the
-  `invalid_request` variants below.
+- **`id`** echoes the request's `id`, including on most `invalid_request` failures. Only
+  when the server cannot recover a single string `id` (unparseable JSON, or an `id` that is
+  missing, not a string, or duplicated — see [protocol.md](protocol.md)) does it return
+  `"id": ""` — see the `invalid_request` variants below.
 - **`error.code`** is a stable, machine-matchable snake_case slug. **The schema does not
   enumerate the code set** — `code` is typed as a free `string` — so the catalog below is
   *observational*, gathered from probes and [raw/skill.md](raw/skill.md), and is **not
   exhaustive**. Match on codes you have handled and treat unknown codes as generic failures.
 - **`error.message`** is human-facing text and may include specific IDs/paths (e.g.
   `pane w1:p99 not found`). Do not parse it for control flow; use `code`.
-- The one-request-per-connection rule is enforced by an active close, not a passive one:
-  after a response has been read, writing a second request on the same connection raises a
-  hard reset (`ECONNRESET`) rather than being silently dropped or ignored.
+- The one-request-per-connection rule is enforced by an active close: after the response,
+  the server closes the connection. On 0.9.3, writing a second request on the same
+  connection fails at once with a broken pipe (`EPIPE`), whether sent immediately or 200 ms
+  after the response, and a read returns end-of-file. (The 2026-09-19 pass against 0.9.1
+  recorded a hard reset, `ECONNRESET`, for the same sequence; writing both lines at once
+  also ends in a reset — see [protocol.md](protocol.md).) Either way the second request is
+  never answered, so treat `EPIPE`, `ECONNRESET`, and end-of-file alike.
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ## CLI surfacing
 
@@ -45,7 +50,9 @@ printed to stderr**, and the process exits **1**:
 {"error":{"code":"pane_not_found","message":"pane w1:p99 not found"},"id":"cli:pane:read"}
 ```
 
-(Note the CLI sets `id` to a `cli:<group>:<command>` string.) A CLI **syntax** error —
+(Note the CLI usually sets `id` to a `cli:<group>:<command>` string; the CLI forms of
+`pane.report_agent` and `pane.report_agent_session` with `--` resume arguments use
+`cli:request` instead.) A CLI **syntax** error —
 unknown flag, bad argument, missing required option — is caught client-side before any
 socket request, is *not* JSON, and exits **2**. Example:
 
@@ -56,72 +63,109 @@ unknown option: --path
 So callers can distinguish: exit 2 = malformed CLI invocation; exit 1 = server-side error
 whose JSON `code` is one of the below.
 
-Validated 2026-09-19 against herdr 0.9.1 — both exit paths reproduced byte-for-byte,
-including the page's own `pane read w1:p99` example.
+Validated 2026-10-06 against herdr 0.9.3 — both exit paths reproduced byte-for-byte,
+including the page's own `pane read w1:p99` example and `worktree remove --path`.
 
 ## Observed error codes
 
 | code | trigger | evidence (probe) |
 | --- | --- | --- |
-| `workspace_not_found` | A method referenced a workspace ID that does not exist (`workspace w99`). | live probe (capture not stored) |
-| `pane_not_found` | A method referenced a pane ID that does not exist (`pane w1:p99`). | live probe (capture not stored) |
-| `agent_pane_not_found` | An `agent.*` method targeted a pane that does not exist (`agent target pane w1:p99 not found`). Distinct from `pane_not_found`: raised on the agent-command path when resolving the agent's target pane. | live probe (capture not stored) |
-| `invalid_request` | The request envelope or `params` failed to deserialize. Covers several triggers (see variants below). | live probes (capture not stored) |
-| `popup_not_open` | `popup.close` (or another popup op) was called when no popup is open. | live probe (capture not stored) |
+| `workspace_not_found` | A method referenced a workspace ID that does not exist (`workspace w99`). | live probe, 0.9.3 (capture not stored) |
+| `pane_not_found` | A method referenced a pane ID that does not exist (`pane w1:p99`). | live probe, 0.9.3 (capture not stored) |
+| `agent_pane_not_found` | An `agent.*` method targeted a pane that does not exist (`agent target pane w1:p99 not found`). Distinct from `pane_not_found`: raised on the agent-command path when resolving the agent's target pane. | live probe, 0.9.3 (capture not stored) |
+| `invalid_request` | The request envelope or `params` failed to deserialize. Covers several triggers (see variants below). | live probe, 0.9.3 (capture not stored) |
+| `popup_not_open` | `popup.close` (or another popup op) was called when no popup is open. | live probe, 0.9.3 (capture not stored) |
+| `split_not_found` | `layout.set_split_ratio` was given a split `path` that does not resolve to an existing split. | live probe, 0.9.3 (capture not stored) |
+| `unsupported_event_wait_match` | `events.wait` was given a `match_event` other than a pane agent-status match (`tab_created`, `pane_created`, `workspace_focused`, `pane_agent_detected`, …); on 0.9.3, as in 0.8.2 and 0.9.1, only pane agent-status matches are supported, despite the schema allowing broader match shapes. A `pane_agent_status_changed` match_event also requires an `agent_status` field — omitting it fails as `invalid_request` before the unsupported-shape check runs. | live probe, 0.9.3 (capture not stored) |
+| `stale_content` | A method that takes a `content_revision` (optional on `pane.selection.read`, `pane.copy_motion`, `pane.link.activate`; required on `pane.copy_search`) was called with a revision that no longer matches the pane's current content revision. | live probe, 0.9.3 (capture not stored) |
+| `connection_local_only` | New in 0.9.1. `client_shell.surface.set` was called over a plain API connection; it is only available through a client-shell endpoint connection. | live probe, 0.9.3 (capture not stored) |
+| `command_not_found` | New in 0.9.1. `command.invoke` was given a `command_id` the client-shell command manifest does not recognize. The message is always `custom command manifest is stale; reload configuration` — it fires this way even on a freshly-started server whose manifest was never loaded, so "stale/reload" is generic fallback text, not evidence the manifest actually changed. | live probe, 0.9.3 (capture not stored) |
+| `stale_announcement` | New in 0.9.1. `product_announcement.dismiss` was given an `id`/`version` pair that is no longer the current announcement. | live probe, 0.9.3 (capture not stored) |
+| `stale_release_notes` | New in 0.9.1. `release_notes.dismiss` was given a `version` that is no longer the current release notes version. | live probe, 0.9.3 (capture not stored) |
+| `tab_not_found` | A method referenced a tab ID that does not exist (`tab w1:t99`). Not previously listed here despite being alongside `workspace_not_found`/`pane_not_found`. | live probe, 0.9.3 (capture not stored) |
+| `unsupported_agent_kind` | `agent.start` was given a `kind` the server does not recognize as an interactive harness. | live probe, 0.9.3 (capture not stored) |
+| `invalid_agent_name` | `agent.start` was given a `name` that does not match the required pattern: must start with a lowercase letter and contain only lowercase letters, digits, `-` or `_` (1–32 characters). | live probe, 0.9.3 (capture not stored) |
+| `invalid_agent_timeout` | `agent.start`'s `timeout_ms` was outside the accepted range (must be greater than 3000ms and at most 300000ms). | live probe, 0.9.3 (capture not stored) |
+| `agent_not_found` | An `agent.*` method (`agent.get`, `.prompt`, `.wait`, …) targeted a `name` with no matching live agent (`agent target nosuchagent not found`); a pane-ID target with no pane gives the same code (`agent target w1:p99 not found`) on `agent.get`. Distinct from `agent_pane_not_found`, which is raised when the *pane* doesn't resolve; this is raised when the *name* doesn't. | live probe, 0.9.3 (capture not stored) |
+| `empty_agent_prompt` | `agent.prompt` was given an empty `text`. | live probe, 0.9.3 (capture not stored) |
+| `agent_name_taken` | New in 0.9.1. `agent.start` was given a `name` already used by another agent whose startup is still `launch_pending`; the message lists that agent's `terminal_id`/`pane_id`/`workspace_id`/`tab_id`/`cwd`/`status` as disambiguation candidates. | live probe, 0.9.1 (capture not stored); not re-probed on 0.9.3 |
+| `agent_launch_pending` | New in 0.9.1. `agent.rename` was called on an agent whose `agent.start` launch is still pending; the name cannot change until startup settles. A third state-guard code alongside `agent_not_ready`/`agent_blocked`. | live probe, 0.9.1 (capture not stored); not re-probed on 0.9.3 |
+| `layout_not_found` | `layout.set_split_ratio` was given both a `tab_id` and a `pane_id` as the target — the two are mutually exclusive. A different code from `split_not_found`, which covers an unresolvable `path`. | live probe, 0.9.3 (capture not stored) |
+| `query_too_large` | `pane.copy_search`'s `query` exceeded the server's length limit (`copy search query is too large`; 4096 characters passed, 10000 failed). | live probe, 0.9.3 (capture not stored) |
+| `invalid_metadata_ttl` | `pane.report_metadata`'s `ttl_ms` was out of range: must be at least 1 and at most 86400000. | live probe, 0.9.3 (capture not stored) |
+| `invalid_metadata_request` | `pane.report_metadata` set neither a field to update nor to clear (`missing metadata field to set or clear`), or both set and cleared the same field (`cannot set and clear the same metadata field`). | live probe, 0.9.3 (capture not stored) |
+| `invalid_params` | `notification.show` was given an empty `title`. | live probe, 0.9.3 (capture not stored) |
+| `not_linked_worktree` | `worktree.remove` targeted a workspace Herdr does not track as a linked worktree checkout. Observed even for a workspace whose `cwd` isn't inside a Git work tree at all — `worktree.remove` doesn't distinguish that case from `not_git_worktree` below the way `worktree.list`/`.create` do. | live probe, 0.9.3 (capture not stored) |
+| `not_git_worktree` | `worktree.list`/`.create` (and presumably other read/create paths) were called against a workspace whose `cwd` is not inside a Git work tree at all. | live probe, 0.9.3 (capture not stored) |
+| `plugin_not_found` | A `plugin.*` method (e.g. `plugin.pane.open`) referenced a `plugin_id` that isn't linked/known. | live probe, 0.9.3 (capture not stored) |
+| `invalid_pane_swap` | `pane.swap` was called without either a `direction` or a `source_pane_id`/`target_pane_id` pair. | live probe, 0.9.3 (capture not stored) |
+| `workspace_move_block_failed` | `workspace.move_block` was given an empty `workspace_ids` list. | live probe, 0.9.3 (capture not stored) |
+| `timeout` | New in 0.9.1. Generic across any method that takes a `timeout_ms` and finds no match before it elapses — observed on `events.wait` (`timed out waiting for event match`) and `pane.wait_for_output` (`timed out waiting for output match`), not only the `agent.prompt --wait --timeout` framing implied below under skill-documented codes. | live probe, 0.9.3 (capture not stored) |
+| `unknown_method` | New in 0.9.3. The request named a method this build recognizes as removed: `pane.graphics.set`, `pane.graphics.clear`, `pane.graphics.info`, and `pane.graphics.stream` (`unknown method: pane.graphics.set`). Other unknown names (`bogus.method`, `pane.foo`, `pane.graphics.x`) still fail as `invalid_request` (see variants below). | live probe, 0.9.3 (capture not stored) |
+| `invalid_resume_argv` | New in 0.9.3. `pane.report_agent`/`pane.report_agent_session` got a `resume_argv` that is empty, does not start with a plain command name (a path, `~`, a leading `-`, a space, `=`, …), has more than 64 elements or more than 8192 bytes in total, or contains a control character. Checked after `pane_not_found` and `invalid_agent`. See [api/pane.md](api/pane.md#panereport_agent). | live probe, 0.9.3 (capture not stored) |
+| `resume_not_accepted` | New in 0.9.3. A valid `resume_argv` was sent by a source that does not hold the pane for that agent after the report — for example `pane.report_agent_session` before any `pane.report_agent`, after a release, from a superseded source, or from an ignored `herdr:<agent>` source (`resume_argv requires the reporter to hold the pane; report its state with pane.report_agent first`). | live probe, 0.9.3 (capture not stored) |
+| `invalid_ssh_agent` | New in 0.9.3. `server.ssh_agent.register` got a `socket_path` that is not an absolute path to an existing socket owned by the user (`SSH agent must be an absolute, user-owned socket`). See [api/server.md](api/server.md#serverssh_agentregister). | live probe, 0.9.3, by the api/server.md pass (capture in that page) |
+| `invalid_agent` | `pane.report_agent`/`pane.report_agent_session` was given an empty `agent` (`agent label must not be empty`). | live probe, 0.9.3 (capture not stored) |
+| `invalid_key` | `pane.send_keys`/`pane.send_input` was given a key name the server does not support (`unsupported key X`). Keys are checked before any text is written, so a bad key means no input at all. | live probe, 0.9.3 (capture not stored) |
+| `target_pane_not_found` | `pane.move` into a tab named a `target_pane_id` that does not exist (`target pane <ID> not found`) or is not in the destination tab (`target pane <ID> is not in tab <TAB_ID>`). | live probe, 0.9.3 (capture not stored) |
+| `stale_target` | `pane.link.resolve`/`pane.link.activate` targeted a pane outside the focused tab (`pane is no longer visible`). | live probe, 0.9.3 (capture not stored) |
+| `stale_pane_target` | `pane.edit_scrollback` targeted a pane that is not focused (`pane is no longer focused`). | live probe, 0.9.3 (capture not stored) |
+| `selection_unavailable` | `pane.selection.read` was given an anchor or cursor outside the pane's content. | live probe, 0.9.3 (capture not stored) |
+| `invalid_regex` | `pane.wait_for_output` got an unparseable `regex`; the message carries the full Rust regex-parser diagnostic. | live probe, 0.9.3 (capture not stored) |
+| `invalid_metadata_token` | `pane.report_metadata` got a token key outside `^[A-Za-z0-9_-]{1,32}$` (`invalid metadata token key: bad key!`) or more than 16 tokens in one report (`a metadata report may update at most 16 tokens`). | live probe, 0.9.3 (capture not stored) |
+| `invalid_state_label` | `pane.report_metadata` got a `state_labels` key that is not a known status (`unknown state label: bogus`; `done` is accepted). | live probe, 0.9.3 (capture not stored) |
+| `metadata_token_limit` | `pane.report_metadata` would leave the pane with more than 32 accumulated tokens (`pane metadata may contain at most 32 tokens`). | live probe, 0.9.3 (capture not stored) |
+
+Note: `pane.read` requires a `source` field (`visible`, `recent`, `recent_unwrapped`, or
+`detection`); omitting it fails as `invalid_request` (`missing field \`source\``) before pane
+existence is even checked, so a bad `pane_id` only surfaces as `pane_not_found` once `source`
+is present.
+
+Validated 2026-10-06 against herdr 0.9.3 on a scratch server for every row whose evidence
+says 0.9.3, with the messages quoted above. `agent_name_taken` and `agent_launch_pending`
+keep their 0.9.1 evidence: reproducing them needs a real agent launch held in
+`launch_pending`, which this pass did not attempt.
+
+### Removed with `pane.graphics.*` in 0.9.3
+
+herdr 0.9.3 removed the `pane.graphics.*` methods (see [api/pane.md](api/pane.md)), and
+these three codes went with them: no 0.9.3 method was found that returns them, and none of
+the three code strings occurs in the 0.9.3 binary. They are kept here as history for
+0.9.1 servers only.
+
+| code | trigger (0.9.1) | evidence (probe) |
+| --- | --- | --- |
 | `feature_disabled` | A method needs an experimental/optional feature that is off. In 0.8.2, `pane.graphics.info` required `experimental.kitty_graphics`; in 0.9.1 `kitty_graphics` defaults to `true` and moved out of `[experimental]` into `[terminal]`, so that specific trigger no longer reproduces on a default config. Re-probed on 0.9.1 against a scratch server with `terminal.kitty_graphics` explicitly set to `false`: `pane.graphics.info`/`.set`/`.clear` all still return it, `pane graphics are disabled by terminal.kitty_graphics`. | live probe, 0.8.2; live probe, 0.9.1, non-default config (capture not stored) |
-| `split_not_found` | `layout.set_split_ratio` was given a split `path` that does not resolve to an existing split. | live probe (capture not stored) |
-| `unsupported_event_wait_match` | `events.wait` was given a `match_event` other than a pane agent-status match (`tab_created`, `pane_created`, `workspace_focused`, `pane_agent_detected`, …); on 0.9.1, as in 0.8.2, only pane agent-status matches are supported, despite the schema allowing broader match shapes. A `pane_agent_status_changed` match_event also requires an `agent_status` field — omitting it fails as `invalid_request` before the unsupported-shape check runs. | live probe (capture not stored) |
-| `stale_content` | A method that takes a `content_revision` (optional on `pane.selection.read`, `pane.copy_motion`, `pane.link.activate`; required on `pane.copy_search`) was called with a revision that no longer matches the pane's current content revision. | live probe (capture not stored) |
 | `cell_size_unavailable` | New in 0.9.1. `pane.graphics.info` on a headless server (or any outer terminal that hasn't reported cell size) — now reachable by default since `kitty_graphics` defaults on. | live probe (capture not stored) |
-| `connection_local_only` | New in 0.9.1. `client_shell.surface.set` was called over a plain API connection; it is only available through a client-shell endpoint connection. | live probe (capture not stored) |
-| `command_not_found` | New in 0.9.1. `command.invoke` was given a `command_id` the client-shell command manifest does not recognize. The message is always `custom command manifest is stale; reload configuration` — it fires this way even on a freshly-started server whose manifest was never loaded, so "stale/reload" is generic fallback text, not evidence the manifest actually changed. | live probe (capture not stored) |
-| `stale_announcement` | New in 0.9.1. `product_announcement.dismiss` was given an `id`/`version` pair that is no longer the current announcement. | live probe (capture not stored) |
-| `stale_release_notes` | New in 0.9.1. `release_notes.dismiss` was given a `version` that is no longer the current release notes version. | live probe (capture not stored) |
-| `tab_not_found` | A method referenced a tab ID that does not exist (`tab w1:t99`). Not previously listed here despite being alongside `workspace_not_found`/`pane_not_found`. | live probe (capture not stored) |
-| `unsupported_agent_kind` | `agent.start` was given a `kind` the server does not recognize as an interactive harness. | live probe (capture not stored) |
-| `invalid_agent_name` | `agent.start` was given a `name` that does not match the required pattern: must start with a lowercase letter and contain only lowercase letters, digits, `-` or `_` (1–32 characters). | live probe (capture not stored) |
-| `invalid_agent_timeout` | `agent.start`'s `timeout_ms` was outside the accepted range (must be greater than 3000ms and at most 300000ms). | live probe (capture not stored) |
-| `agent_not_found` | An `agent.*` method (`agent.get`, `.prompt`, `.wait`, …) targeted a `name` with no matching live agent. Distinct from `agent_pane_not_found`, which is raised when the *pane* doesn't resolve; this is raised when the *name* doesn't. | live probe (capture not stored) |
-| `empty_agent_prompt` | `agent.prompt` was given an empty `text`. | live probe (capture not stored) |
-| `agent_name_taken` | New in 0.9.1. `agent.start` was given a `name` already used by another agent whose startup is still `launch_pending`; the message lists that agent's `terminal_id`/`pane_id`/`workspace_id`/`tab_id`/`cwd`/`status` as disambiguation candidates. | live probe (capture not stored) |
-| `agent_launch_pending` | New in 0.9.1. `agent.rename` was called on an agent whose `agent.start` launch is still pending; the name cannot change until startup settles. A third state-guard code alongside `agent_not_ready`/`agent_blocked`. | live probe (capture not stored) |
-| `layout_not_found` | `layout.set_split_ratio` was given both a `tab_id` and a `pane_id` as the target — the two are mutually exclusive. A different code from `split_not_found`, which covers an unresolvable `path`. | live probe (capture not stored) |
-| `query_too_large` | `pane.copy_search`'s `query` exceeded the server's length limit. | live probe (capture not stored) |
-| `invalid_metadata_ttl` | `pane.report_metadata`'s `ttl_ms` was out of range: must be at least 1 and at most 86400000. | live probe (capture not stored) |
-| `invalid_metadata_request` | `pane.report_metadata` set neither a field to update nor to clear. | live probe (capture not stored) |
-| `invalid_params` | `notification.show` was given an empty `title`. | live probe (capture not stored) |
-| `not_linked_worktree` | `worktree.remove` targeted a workspace Herdr does not track as a linked worktree checkout. Observed even for a workspace whose `cwd` isn't inside a Git work tree at all — `worktree.remove` doesn't distinguish that case from `not_git_worktree` below the way `worktree.list`/`.create` do. | live probe (capture not stored) |
-| `not_git_worktree` | `worktree.list`/`.create` (and presumably other read/create paths) were called against a workspace whose `cwd` is not inside a Git work tree at all. | live probe (capture not stored) |
-| `plugin_not_found` | A `plugin.*` method (e.g. `plugin.pane.open`) referenced a `plugin_id` that isn't linked/known. | live probe (capture not stored) |
 | `invalid_image` | `pane.graphics.set` was given image dimensions that are not both greater than zero. | live probe (capture not stored) |
-| `invalid_pane_swap` | `pane.swap` was called without either a `direction` or a `source_pane_id`/`target_pane_id` pair. | live probe (capture not stored) |
-| `workspace_move_block_failed` | `workspace.move_block` was given an empty `workspace_ids` list. | live probe (capture not stored) |
-| `timeout` | New in 0.9.1. Generic across any method that takes a `timeout_ms` and finds no match before it elapses — observed on `events.wait` and `pane.wait_for_output`, not only the `agent.prompt --wait --timeout` framing implied below under skill-documented codes. | live probes (capture not stored) |
 
-Note: `pane.read` requires a `source` field (`visible`, `recent`, or `recent-unwrapped`);
-omitting it fails as `invalid_request` (`missing field \`source\``) before pane existence is
-even checked, so a bad `pane_id` only surfaces as `pane_not_found` once `source` is present.
-
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-09-19 against herdr 0.9.1 for the triggers. The removal was validated
+2026-10-06 against herdr 0.9.3: every `pane.graphics.*` name returns `unknown_method`, and
+a search of the installed 0.9.3 binary found none of the three code strings.
 
 ### `invalid_request` variants
 
 `invalid_request` is a single code covering all envelope/params deserialization failures.
-The `message` distinguishes the cause, and these requests return `"id": ""` because parsing
-failed before the `id` was usable:
+The `message` distinguishes the cause. Since 0.9.3 the server echoes the request's `id`
+whenever the request line is valid JSON with exactly one string `id`; unparseable JSON
+and a missing, non-string, or duplicate `id` return `"id": ""` (the last two are probed in
+[protocol.md](protocol.md), not here). (The 2026-09-19 pass recorded `"id": ""` for every variant it listed on 0.9.1.)
 
 | variant | message shape | evidence |
 | --- | --- | --- |
-| unknown method | `invalid request: unknown variant \`bogus.method\`, expected one of \`ping\`, \`server.stop\`, …` (the message lists every valid method name) | live probe (capture not stored) |
-| missing required param field | `invalid request: missing field \`workspace_id\` at line 1 column 66` | live probe (capture not stored) |
-| missing envelope field (`id`) | `invalid request: missing field \`id\` at line 1 column 32` | live probe (capture not stored) |
-| non-finite number | `invalid request: number out of range at line 1 column 82` — a value like `layout.set_split_ratio`'s `ratio: 1e400` (JSON-overflows to infinity) is rejected at parse time, before any semantic range check. | live probe (capture not stored) |
+| unknown method | `invalid request: unknown variant \`bogus.method\`, expected one of \`ping\`, \`server.stop\`, …` (the message lists every valid method name; since 0.9.3 the list has no `pane.graphics.*` names). `id` echoed. The removed `pane.graphics.*` names return `unknown_method` instead. | live probe, 0.9.3 (capture not stored) |
+| missing required param field | `invalid request: missing field \`workspace_id\` at line 1 column 66`. `id` echoed. | live probe, 0.9.3 (capture not stored) |
+| missing `params` | `invalid request: missing field \`params\` at line 1 column 33`. `id` echoed. | live probe, 0.9.3 (capture not stored) |
+| missing envelope field (`id`) | `invalid request: missing field \`id\` at line 1 column 29`. `"id": ""`. | live probe, 0.9.3 (capture not stored) |
+| unparseable JSON | `invalid request: key must be a string at line 1 column 2` (or another serde parse message). `"id": ""`. | live probe, 0.9.3 (capture not stored) |
+| non-finite number | `invalid request: number out of range at line 1 column 95` — a value like `layout.set_split_ratio`'s `ratio: 1e400` (JSON-overflows to infinity) is rejected at parse time, before any semantic range check. `id` echoed. | live probe, 0.9.3 (capture not stored) |
 
 A wrong-type field (e.g. a string where an integer is expected) also surfaces as
 `invalid_request` with a serde-style type-mismatch message; treat any `invalid_request` as
-a client bug to fix rather than a runtime condition to retry.
+a client bug to fix rather than a runtime condition to retry. Example: `invalid request:
+invalid type: integer \`5\`, expected a string`, with the `id` echoed.
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ## Skill-documented codes (not probed)
 
@@ -146,7 +190,8 @@ their rows above).
 
 - `error.code` is a free-form string in the schema; the two lists above are observational
   and **not exhaustive**. Other methods can return codes not seen here — handle unknown
-  codes gracefully.
+  codes gracefully. Treat `unknown_method` like `invalid_request`: the server does not
+  support the method you called.
 - Match on `code`, never on `message`.
 - Reserve exit-2 handling for CLI syntax errors; every server error is exit 1 with a JSON
   body on stderr.

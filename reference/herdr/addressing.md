@@ -1,6 +1,6 @@
 # herdr API: addressing and IDs
 
-> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
+> herdr 0.9.3 · protocol 22 · schema_version 1 · captured 2026-10-06
 > Part of the fledge herdr reference. Index: [README.md](README.md). Wire format: [protocol.md](protocol.md). Access model: [environment.md](environment.md).
 
 herdr addresses topology with three kinds of opaque public ID — workspace, tab, and pane — plus live agent names that follow a pane's current occupant. This file defines the ID grammar, the opacity and stability guarantees, why closed IDs are never reused, how a moved pane is re-identified, the difference between a stable ID and the reorderable display `number`, how `--current` and injected caller context resolve a target, and the rules for targeting an agent by name. Every claim here is grounded in `raw/skill.md` (§"Use IDs and caller context") and corroborated by probe captures. Method-specific params/results are in the `api/*.md` files.
@@ -15,9 +15,9 @@ Public IDs are opaque, stable string handles. Their shapes:
 | tab | `w<C>:t<C>` | `w1:t1`, `w1:tA` | Workspace-qualified. A tab belongs to exactly one workspace and its ID names that workspace. |
 | pane | `w<C>:p<C>` | `w1:p1`, `w1:pA` | Workspace-qualified. A pane's ID names the workspace it currently lives in. |
 
-`<C>` is a per-workspace/per-session counter, but it is **not** a decimal integer: herdr 0.9.1 renders it in a Crockford-Base32-style alphabet — `1`-`9`, then `A,B,C,D,E,F,G,H,J,K,M,N,P,Q,R,S,T,V,W,X,Y,Z` (`I`, `L`, `O`, `U` are skipped to avoid look-alikes), then `0`, then two-character combinations (`11`, `12`, … `1Z`, `10`, `21`, …). IDs such as `w1:pA`, `wZ`, `w0`, `w11` are ordinary, not exceptional; a caller that validates or parses IDs with a decimal-only pattern such as `w\d+` or `w\d+:p\d+` will reject valid IDs. `raw/schema.json` places no `pattern` constraint on `workspace_id`/`tab_id`/`pane_id` at all, so this alphabet is a runtime fact, not something the schema documents either way. The counters for workspaces, tabs, and panes are independent, so `w2:p1` and `w1:p1` are distinct panes that merely share suffix `1`. Because tab and pane IDs embed the workspace, the same pane acquires a **different** ID when moved to another workspace (see below). IDs appear in every entity object as `workspace_id`, `tab_id`, `pane_id`, and in cross-references such as a pane's `tab_id`/`workspace_id`.
+`<C>` is a per-workspace/per-session counter, but it is **not** a decimal integer: herdr renders it in a Crockford-Base32-style alphabet — `1`-`9`, then `A,B,C,D,E,F,G,H,J,K,M,N,P,Q,R,S,T,V,W,X,Y,Z` (`I`, `L`, `O`, `U` are skipped to avoid look-alikes), then `0`, then two-character combinations (`11`, `12`, … `1Z`, `10`, `21`, …). IDs such as `w1:pA`, `wZ`, `w0`, `w11` are ordinary, not exceptional; a caller that validates or parses IDs with a decimal-only pattern such as `w\d+` or `w\d+:p\d+` will reject valid IDs. `raw/schema.json` places no `pattern` constraint on `workspace_id`/`tab_id`/`pane_id` at all, so this alphabet is a runtime fact, not something the schema documents either way. The counters for workspaces, tabs, and panes are independent, so `w2:p1` and `w1:p1` are distinct panes that merely share suffix `1`. Because tab and pane IDs embed the workspace, the same pane acquires a **different** ID when moved to another workspace (see below). IDs appear in every entity object as `workspace_id`, `tab_id`, `pane_id`, and in cross-references such as a pane's `tab_id`/`workspace_id`.
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3 for the single-character range: a scratch server minted `w9` → `wA` → `wB`, `w2:t9` → `w2:tA` → `w2:tB`, and `w2:pH` → `w2:pJ` → `w2:pK` (no `I`), and the workspace, tab, and pane counters ran independently. Minting workspaces past `wZ` gave `wJ, wK, wM, wN, wP, wQ, wR, wS, wT, wV, … wZ, w0, w11, w12, … w19, w1A, … w1Z, w10, w21, w22` (no `U`, `w0` after `wZ`, `w10` after `w1Z`), which confirms the skipped `L`/`O`/`U` and the two-character sequence; also Validated 2026-10-06 against herdr 0.9.3.
 
 ## Opacity and stability
 
@@ -34,17 +34,17 @@ Treat IDs as opaque handles, not as structured data to compute over. The rules:
      {"workspace_id":"w3","number":3,"label":"docs-probe",…}]}}}
   ```
 
-  Validated 2026-09-19 against herdr 0.9.1.
+  Validated 2026-10-06 against herdr 0.9.3 (`workspace.move` of `w3` to index 0 gave `w3` `number: 1` and `w1` `number: 2`, IDs unchanged; the capture above is from 0.9.1).
 - **A tab ID is stable across reordering within its workspace.** Probe `tab.move` reindexed tabs; each kept its `tab_id` (`w1:t1`, `w1:t2`, `w1:t3`, …) across the move. The tab's `number`, however, does **not** reflect the new order the way a workspace's does — see the next section for the corrected behaviour and an example.
 - **IDs are scoped to one server.** New in 0.9.1: with saved SSH machines, two machines can
   both have a `w1:p1` or an agent named `reviewer`. Without the global `--machine` prefix a
   command keeps using the inherited session and socket context, and inherited local IDs and
   `--current` never identify remote panes; discover IDs on the target machine.
 
-  Source: `raw/skill.md`, not live-validated (2026-09-19, herdr 0.9.1: requires a second saved SSH machine registered with herdr, out of scope for a single-host scratch session).
+  Source: `raw/skill.md` (this text is unchanged in 0.9.3), not live-validated (2026-10-06, herdr 0.9.3: requires a second saved SSH machine registered with herdr, out of scope for a single-host scratch session).
 - **Labels are not identifiers.** `label` is display text set by rename and can collide (two workspaces both labeled `fledge` in `probes/workspace-list.json`). Never target by label. Renaming two different workspaces to the identical label succeeds for both with no error, and `workspace.get`/`tab.get` with a label string in the id field return a not-found error rather than resolving it — labels are never accepted as a selector.
 
-Validated 2026-09-19 against herdr 0.9.1 (cross-machine ID scoping not exercised — see above).
+Validated 2026-10-06 against herdr 0.9.3 (cross-machine ID scoping not exercised — see above).
 
 ## Display numbers vs stable IDs (public pane numbers)
 
@@ -66,7 +66,7 @@ There are two distinct "numbers" and they must not be conflated:
 
 In short: the counter baked into a pane ID is stable; the standalone `number` field is a mutable display position for workspaces, a fixed creation-order value for tabs, and — though undocumented — a working alternate selector for workspace and tab targets, never for panes.
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3 (the `tab.move` result, the label rewrite to `"2"`, every selector form listed, and both mutations through a numeric selector reproduced exactly).
 
 ## Non-reuse of closed IDs
 
@@ -75,7 +75,7 @@ Closed tab and pane IDs are **not reused**. skill.md: "Closed tab and pane IDs a
 - A stale reference to a closed pane will not silently resolve to a different, newly created pane — it resolves to nothing. Targeting a closed ID yields a not-found style error rather than acting on an unrelated pane.
 - You may safely cache an ID for the lifetime of the entity and detect closure by a failed lookup; you will never get a false positive from number recycling.
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3 (closing `w5:p2` and splitting again minted `w5:p3`; `w5:p2` then returned `pane_not_found`).
 
 ## Pane-move re-identification
 
@@ -90,11 +90,11 @@ Moving a pane into a different tab or workspace **re-identifies** it: because th
 | `move_result.previous_tab_id`, `previous_workspace_id` | Prior container IDs. |
 | `move_result.created_tab` / `created_workspace` | Populated when the move created a destination tab/workspace (`--new-tab` / `--new-workspace`). |
 | `move_result.closed_tab_id` / `closed_workspace_id` | Populated when the move emptied and closed the source tab/workspace. |
-| `move_result.focused_pane_id`, `move_result.changed`, `move_result.reason`, `source_layout`, `target_layout` | Focus outcome, whether anything changed, an optional reason (`PaneMoveReason` enum: `same_tab`, `zoomed_tab`; only `same_tab` observed live), and before/after layouts. |
+| `move_result.focused_pane_id`, `move_result.changed`, `move_result.reason`, `source_layout`, `target_layout` | Focus outcome, whether anything changed, an optional reason (`PaneMoveReason` enum: `same_tab`, `zoomed_tab`; both observed live on 0.9.3), and before/after layouts. |
 
-`closed_tab_id`, `closed_workspace_id`, `reason`, `created_tab`, and `created_workspace` are declared nullable in the schema (e.g. `closed_tab_id: ["string", "null"]`), but on the wire herdr 0.9.1 omits each of these fields entirely when it does not apply, rather than serializing it as JSON `null`. A caller checking `"closed_tab_id" in result` and one checking `result.closed_tab_id is None` will disagree.
+`closed_tab_id`, `closed_workspace_id`, `reason`, `created_tab`, and `created_workspace` are declared nullable in the schema (e.g. `closed_tab_id: ["string", "null"]`), but on the wire herdr (0.9.1 and 0.9.3) omits each of these fields entirely when it does not apply, rather than serializing it as JSON `null`. A caller checking `"closed_tab_id" in result` and one checking `result.closed_tab_id is None` will disagree.
 
-skill.md's rule reads: "After `pane move`, continue with `.result.move_result.pane.pane_id` or the live agent name. The old value is reported as `.result.move_result.previous_pane_id`; only the moved process's inherited caller context keeps resolving that old ID, so do not use it as a general agent target." **Measured behaviour on herdr 0.9.1 contradicts this claim.** A retired `pane_id` keeps resolving for *any* caller, not only the moved process, with no inherited context needed: `pane.get`, `pane.current`, and even a mutating call like `pane.rename` all succeed against a retired ID and act on the pane's current identity. This chains across multiple moves — after a pane is moved twice, both the original ID and the intermediate ID still resolve to its latest identity — and only stops once the pane is actually closed, at which point every ID in its history, retired or current, starts returning `pane_not_found`. Still switch to `move_result.pane.pane_id` for anything you write down: relying on a retired ID working is against the documented contract and could change without notice.
+skill.md's rule reads: "After `pane move`, continue with `.result.move_result.pane.pane_id` or the live agent name. The old value is reported as `.result.move_result.previous_pane_id`; only the moved process's inherited caller context keeps resolving that old ID, so do not use it as a general agent target." **Measured behaviour on herdr 0.9.1 and 0.9.3 contradicts this claim.** A retired `pane_id` keeps resolving for *any* caller, not only the moved process, with no inherited context needed: `pane.get`, `pane.current` (as `caller_pane_id`), and even a mutating call like `pane.rename` all succeed against a retired ID and act on the pane's current identity. This chains across multiple moves — after a pane is moved twice, both the original ID and the intermediate ID still resolve to its latest identity — and only stops once the pane is actually closed, at which point every ID in its history, retired or current, starts returning `pane_not_found`. Still switch to `move_result.pane.pane_id` for anything you write down: relying on a retired ID working is against the documented contract and could change without notice.
 
 Example (an external, unrelated connection resolving a pane by an ID retired two moves ago):
 
@@ -127,14 +127,14 @@ Example (move into a freshly created tab; note the new tab and the previous/new 
 
 In this capture the move stayed within `w1` and the pane's numeric suffix happened to be unchanged (`w1:p3` before and after, only the tab changed); the general rule still stands — always read the returned `pane` and continue with its `pane_id` rather than the ID you moved from, even though (see above) the old ID keeps working too.
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3 (a pane moved `w5:p3` → `w6:p2` → `w7:p2` resolved from both retired IDs, `pane.rename` through `w5:p3` succeeded, `pane.current` with `caller_pane_id` set to a retired ID returned the moved pane, and after `pane.close` all three IDs returned `pane_not_found`; a move into a new tab returned `created_tab`; the JSON captures above are from 0.9.1 and show the same shapes).
 
 ## Resolving --current and caller context
 
 herdr injects the calling pane's identity into every managed pane as environment variables, and pane commands can target "the pane I am running in" without knowing its ID:
 
 - Injected context (see [environment.md](environment.md)): `$HERDR_WORKSPACE_ID`, `$HERDR_TAB_ID`, `$HERDR_PANE_ID`.
-- **Prefer `--current`** on a pane command to target the calling pane. skill.md: "An omitted `pane split` target uses the calling pane when `HERDR_PANE_ID` is available, otherwise the focused pane. Other commands may use the UI-focused pane, which can belong to the user or another client." So an omitted target is *not* a safe default for most pane commands — it can act on someone else's focused pane; `pane split` is the one documented exception, falling back to the calling pane via `$HERDR_PANE_ID` before the focused pane. A `$HERDR_PANE_ID` that no longer resolves is not treated as absent: `pane current --current` with a stale value returns `pane_not_found` rather than silently falling further back to the focused pane.
+- **Prefer `--current`** on a pane command to target the calling pane. skill.md: "An omitted `pane split` target uses the calling pane when `HERDR_PANE_ID` is available, otherwise the focused pane. Other commands may use the UI-focused pane, which can belong to the user or another client." So an omitted target is *not* a safe default for most pane commands — it can act on someone else's focused pane; `pane split` is the one documented exception, falling back to the calling pane via `$HERDR_PANE_ID` before the focused pane. A `$HERDR_PANE_ID` that no longer resolves is not treated as absent: `pane current --current` with a stale value (a closed pane's ID) returns `pane_not_found` (exit 1) rather than silently falling further back to the focused pane (Validated 2026-10-06 against herdr 0.9.3).
 - Equivalent explicit forms: pass `--pane "$HERDR_PANE_ID"`, or pass a concrete ID read from a prior response. Many pane subcommands accept `--pane <ID>` and `--current` interchangeably (`pane current`, `pane layout`, `pane split`, `pane neighbor`, `pane edges`, `pane focus`, `pane resize`, `pane zoom`, `pane input`, `pane swap`).
 - `pane current --current` resolves and returns the calling pane's full `PaneInfo`, the reliable way to learn your own `pane_id`, `tab_id`, `workspace_id`, and current agent occupant. Probe `probes/pane-current.json` returns `pane_id: "w2:p1"` with its `tab_id`/`workspace_id`.
 
@@ -148,17 +148,18 @@ herdr pane list --workspace "$HERDR_WORKSPACE_ID"
 herdr agent list
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-09-19 against herdr 0.9.1, except the stale-`$HERDR_PANE_ID` case stamped above (the omitted-target fallbacks and the discovery commands were not re-run on 0.9.3).
 
 ## Agent-name targeting
 
 Agent commands (`herdr agent …`, methods under `agent.*`) accept a target that is **either** a live agent name **or** the pane ID currently hosting that agent. They do **not** accept terminal IDs or bare agent-kind labels. Rules from skill.md §"Understand layout, panes, and agents":
 
-- **Name grammar:** a name matches `[a-z][a-z0-9_-]{0,31}` — lowercase-first, then lowercase letters, digits, `_`, or `-`, up to 32 characters total.
-- **Uniqueness:** a name must be unique among live agents. Uniqueness is only over *live* agents, so a name is reusable after its holder is gone. The `agent_name_taken` error additionally embeds diagnostic fields about the conflicting live agent (`terminal_id`, `pane_id`, `workspace_id`, `tab_id`, `cwd`, `status`) beyond the documented shape — useful for deciding what to do next, though not part of the documented error contract.
+- **Name grammar:** a name matches `[a-z][a-z0-9_-]{0,31}` — lowercase-first, then lowercase letters, digits, `_`, or `-`, up to 32 characters total. A name outside it (`Bad`, `1abc`, 33 characters) fails with `invalid_agent_name`; a 32-character name is accepted.
+- **Uniqueness:** a name must be unique among live agents. Uniqueness is only over *live* agents, so a name is reusable after its holder is gone. The `agent_name_taken` error additionally names the conflicting live agent inside its `message` text, not as separate JSON fields: `agent name ok-name_1 is already used; candidates: terminal_id=… pane_id=w1:p2 workspace_id=w1 tab_id=w1:t2 cwd=… status=Idle`. Useful for a human deciding what to do next; the message is not a stable contract, so do not parse it.
 - **Lifetime / opacity:** "A name follows the current pane occupant and is cleared when that agent exits, is released, or is replaced." The name is a handle to whatever agent currently occupies the pane, not a durable identity of a process.
+- **Kind labels and terminal IDs are rejected:** `agent.get` with the agent kind (`rvbot2`) or the pane's `terminal_id` returns `agent_not_found`.
 - **Pane ID as target:** you may instead pass the hosting pane's ID (e.g. `w2:p1`); after a `pane move`, the new `pane_id` (or the still-valid agent name) is the correct target — see the move section.
 - **Assigning a name:** `agent start <name> --kind <kind> --pane <id>` names the agent it starts; `agent rename <target> <name>|--clear` changes or clears it. `agent rename` refuses to run — for both setting and clearing (`name: null`) — while the agent's launch is still pending (`launch_pending: true`), failing with error `agent_launch_pending` ("agent name cannot change while startup is pending"). This is undocumented in skill.md's unconditional description of `agent rename`, and it can persist well past the ~3.9s a launch usually takes to settle if the started process is itself blocked on interactive input (e.g. a harness's own first-run trust prompt).
 - Agent identity fields in `AgentInfo`: `name` (the assignable unique name, nullable), `agent` (detected kind label such as `claude`/`codex`, nullable), and `agent_session` (`AgentSessionInfo`: `source`, `agent`, `kind` ∈ `{id,path}`, `value`) which carries the native session ref. Probe `probes/agent-get.json` resolves target `claude` to `pane_id: "w2:p1"` with `agent_session.value` a UUID. Target by `name`/pane-id; read `agent`/`agent_session` as attributes, not as targets.
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3 for the name grammar, uniqueness, the name being cleared when the agent's process exited (the name then resolved to nothing and was reusable by another agent), pane-ID targeting, and the rejection of kind labels and terminal IDs. The `agent_launch_pending` refusal was not re-probed (it needs a real `agent.start` launch) and keeps its earlier stamp: Validated 2026-09-19 against herdr 0.9.1.
