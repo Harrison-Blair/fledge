@@ -4,14 +4,22 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"maps"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
 
 // livePane is an agent in pane with status.
@@ -34,7 +42,7 @@ func names(v ...string) Options {
 }
 
 // rows summarizes a fan-out as target=outcome/message_id/pane per row.
-func rows(t *testing.T, out libagent.Outcome) string {
+func rows(t *testing.T, out cli.Outcome) string {
 	t.Helper()
 	r, ok := out.Result.(FanOut)
 	if !ok || r.Mode != "fan-out" {
@@ -47,7 +55,7 @@ func rows(t *testing.T, out libagent.Outcome) string {
 			id = *row.MessageID
 		}
 		if row.Agent != nil {
-			pane = libagent.Display(row.Agent.PaneID)
+			pane = cli.Display(row.Agent.PaneID)
 		}
 		parts = append(parts, row.Target+"="+row.Outcome+"/"+id+"/"+pane)
 	}
@@ -63,7 +71,7 @@ func TestFanOutSendsIdenticalHeaderToEachTargetInOrder(t *testing.T) {
 	if got, want := rows(t, out), "worker=submitted/m-0a1b2c/w1:p1 w1:p2=submitted/m-0a1b2c/w1:p2"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
-	if out.Status != "success" || out.Error != nil || len(out.Effects) != 2 || out.Effects[1] != (libagent.Effect{Action: "submitted", Kind: "message", ID: "w1:p2"}) {
+	if out.Status != "success" || out.Error != nil || len(out.Effects) != 2 || out.Effects[1] != (cli.Effect{Action: "submitted", Kind: "message", ID: "w1:p2"}) {
 		t.Fatalf("%+v", out)
 	}
 }
@@ -248,15 +256,22 @@ func TestFanOutExplicitCallerIsMessaged(t *testing.T) {
 	}
 }
 
+// failure is the row failure that Fail records for err.
+func failure(err error, phase string) *cli.Failure {
+	o := cli.NewOutcome("")
+	o.Fail(err, phase, false)
+	return o.Error
+}
+
 func TestFanOutRendering(t *testing.T) {
 	id := "m-0a1b2c"
 	agent := func(pane, status string) *libagent.AgentRow {
 		r := libagent.NewAgentRow(livePane(pane, status))
 		return &r
 	}
-	blocked := &libagent.Failure{Code: "agent_blocked", Message: "agent_blocked: approval", Phase: "agent.prompt"}
-	stalled := &libagent.Failure{Code: "agent_prompt_stalled", Message: "agent_prompt_stalled: no activity", Phase: "agent.prompt"}
-	uncertain := &libagent.Failure{Code: "transport_error", Message: "transport_error: EOF", Phase: "agent.prompt"}
+	blocked := failure(&herdr.Error{Code: "agent_blocked", Message: "approval"}, "agent.prompt")
+	stalled := failure(&herdr.Error{Code: "agent_prompt_stalled", Message: "no activity"}, "agent.prompt")
+	uncertain := failure(&herdr.Error{Code: "transport_error", Message: "EOF", Uncertain: true}, "agent.prompt")
 	result := FanOut{Mode: "fan-out", Targets: []Row{
 		{Target: "a", Outcome: "submitted", MessageID: &id, Agent: agent("w1:p1", "idle")},
 		{Target: "b", Outcome: "confirmed", MessageID: &id, Agent: agent("w1:p2", "working")},
@@ -265,7 +280,7 @@ func TestFanOutRendering(t *testing.T) {
 		{Target: "e", Outcome: "unknown", MessageID: &id, Agent: agent("w1:p5", "idle"), Error: uncertain},
 		{Target: "f", Outcome: "rejected", Agent: agent("w1:p6", "blocked"), Error: blocked},
 	}}
-	out := libagent.Outcome{Status: "partial", Result: result, Error: &libagent.Failure{Code: "operation_failed", Message: "3 of 6 targets failed: d (agent_prompt_stalled), e (transport_error), f (agent_blocked)", Phase: "agent.prompt"}}
+	out := cli.Outcome{Status: "partial", Result: result, Error: &cli.Failure{Code: "operation_failed", Message: "3 of 6 targets failed: d (agent_prompt_stalled), e (transport_error), f (agent_blocked)", Phase: "agent.prompt"}}
 	var b bytes.Buffer
 	if err := out.Write(&b, false, Render); err != nil {
 		t.Fatal(err)
@@ -300,4 +315,171 @@ Message not submitted to f (w1:p6): agent_blocked: approval.
 		}
 	}
 	herdrscript.CheckOutputFailures(t, Render, out)
+}
+
+// shiftingHerdr is a stateful Herdr: agents maps each pane to the agent it
+// hosts, listed in pane order, shift reshapes them once the first message is submitted, and prompts
+// records every pane prompted, in order.
+type shiftingHerdr struct {
+	agents  map[string]herdr.AgentDetails
+	shift   func(agents map[string]herdr.AgentDetails)
+	prompts *[]string
+}
+
+func (h shiftingHerdr) Call(_ context.Context, method string, params, result any) error {
+	var r any
+	switch method {
+	case "agent.list", "pane.list":
+		list := []herdr.AgentDetails{}
+		for _, pane := range slices.Sorted(maps.Keys(h.agents)) {
+			list = append(list, h.agents[pane])
+		}
+		key := "agents"
+		if method == "pane.list" {
+			key = "panes"
+		}
+		r = map[string]any{"type": strings.ReplaceAll(method, ".", "_"), key: list}
+	case "agent.get":
+		target := params.(map[string]any)["target"].(string)
+		if target == "old:p1" {
+			r = senderCall().Result
+			break
+		}
+		a, ok := h.agents[target]
+		if !ok {
+			return &herdr.Error{Code: "agent_not_found", Message: "no agent in " + target}
+		}
+		r = herdr.AgentResult{Type: "agent_info", Agent: a}
+	case "agent.prompt":
+		target := params.(map[string]any)["target"].(string)
+		a, ok := h.agents[target]
+		if !ok {
+			return &herdr.Error{Code: "agent_not_found", Message: "no agent in " + target}
+		}
+		*h.prompts = append(*h.prompts, target)
+		if len(*h.prompts) == 1 {
+			h.shift(h.agents)
+		}
+		a.AgentStatus = "working"
+		r = herdr.AgentResult{Type: "agent_prompted", Agent: a}
+	}
+	b, _ := json.Marshal(r)
+	return json.Unmarshal(b, result)
+}
+
+// hosted is an idle agent in pane running harness in terminal.
+func hosted(pane, terminal, harness string) herdr.AgentDetails {
+	p := livePane(pane, "idle")
+	p.Agent, p.Name = &harness, &terminal
+	a := herdrscript.Info(p).Agent
+	a.TerminalID = terminal
+	return a
+}
+
+// After the first recipient's message, the second registered recipient's
+// terminal moves, is replaced, or runs another harness. Its message follows
+// the moved terminal and is never typed into the agent now in its old pane.
+func TestFanOutReresolvesRegisteredTargetsBeforeEachDelivery(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		shift func(map[string]herdr.AgentDetails)
+		// want is b's row outcome/pane for unconfirmed and confirmed delivery.
+		want, wantConfirm, prompted string
+	}{
+		{"moved", func(m map[string]herdr.AgentDetails) {
+			moved := hosted("w1:p9", "term_b", "claude")
+			moved.AgentStatus = "working"
+			m["w1:p9"], m["w1:p2"] = moved, hosted("w1:p2", "term_c", "claude")
+		}, "submitted/m-0a1b2c/w1:p9", "already_working/m-0a1b2c/w1:p9", "w1:p1 w1:p9"},
+		{"terminal replaced", func(m map[string]herdr.AgentDetails) {
+			m["w1:p2"] = hosted("w1:p2", "term_c", "claude")
+		}, "rejected/-/w1:p2", "rejected/-/w1:p2", "w1:p1"},
+		{"harness changed", func(m map[string]herdr.AgentDetails) {
+			m["w1:p2"] = hosted("w1:p2", "term_b", "codex")
+		}, "rejected/-/w1:p2", "rejected/-/w1:p2", "w1:p1"},
+	} {
+		for _, confirm := range []bool{false, true} {
+			for _, by := range []string{"id", "filter"} {
+				t.Run(fmt.Sprintf("%s/confirm=%v/%s", tc.name, confirm, by), func(t *testing.T) {
+					var prompts []string
+					h := shiftingHerdr{agents: map[string]herdr.AgentDetails{"w1:p1": hosted("w1:p1", "term_a", "claude"), "w1:p2": hosted("w1:p2", "term_b", "claude")}, shift: tc.shift, prompts: &prompts}
+					c := libagent.Client{API: h, CallerPane: "old:p1", Cwd: identitytest.Repository(t)}
+					a, b := identitytest.Register(t, c.Cwd, h.agents["w1:p1"]), identitytest.Register(t, c.Cwd, h.agents["w1:p2"])
+					o := Options{Selection: selector.Selection{IDs: []string{a.ID, b.ID}}, Body: "hi", BodySet: true}
+					if by == "filter" {
+						o.Selection = selector.Selection{Filter: selector.Filter{States: []string{"idle"}}}
+					}
+					o.Confirm, o.Timeout = confirm, 5*time.Second
+					want, first := tc.want, "submitted"
+					if confirm {
+						want, first = tc.wantConfirm, "confirmed"
+					}
+					out := run(context.Background(), c, o, nil, "m-0a1b2c")
+					if got, want := rows(t, out), a.ID+"="+first+"/m-0a1b2c/w1:p1 "+b.ID+"="+want; got != want {
+						t.Fatalf("got %q, want %q", got, want)
+					}
+					if got := strings.Join(prompts, " "); got != tc.prompted {
+						t.Fatalf("prompted %q, want %q", got, tc.prompted)
+					}
+					if len(out.Effects) != len(prompts) || out.Effects[len(prompts)-1].ID != prompts[len(prompts)-1] {
+						t.Fatalf("effects %+v for prompts %v", out.Effects, prompts)
+					}
+					if row := out.Result.(FanOut).Targets[1]; row.Outcome == "rejected" &&
+						(out.Status != "partial" || out.ExitCode() != 1 || row.Error.Code != "agent_identity_stale" || row.Error.Phase != "identity") {
+						t.Fatalf("%+v %+v", out, row.Error)
+					}
+				})
+			}
+		}
+	}
+}
+
+// A fan-out to registered targets finds the repository root once: target
+// selection and every reread share one store.
+func TestFanOutRereadsReuseOneStore(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := shiftingHerdr{agents: map[string]herdr.AgentDetails{"w1:p1": hosted("w1:p1", "term_a", "claude"), "w1:p2": hosted("w1:p2", "term_b", "claude"), "w1:p3": hosted("w1:p3", "term_c", "claude")}, shift: func(map[string]herdr.AgentDetails) {}, prompts: new([]string)}
+	c := libagent.Client{API: h, CallerPane: "old:p1", Cwd: identitytest.Repository(t)}
+	var ids []string
+	for _, pane := range []string{"w1:p1", "w1:p2", "w1:p3"} {
+		ids = append(ids, identitytest.Register(t, c.Cwd, h.agents[pane]).ID)
+	}
+	bin, log := t.TempDir(), filepath.Join(t.TempDir(), "roots")
+	script := fmt.Sprintf("#!/bin/sh\ncase \"$*\" in *--is-bare-repository*) echo >>%q;; esac\nexec %q \"$@\"\n", log, git)
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out := run(context.Background(), c, Options{Selection: selector.Selection{IDs: ids}, Body: "hi", BodySet: true}, nil, "m-0a1b2c")
+	if out.Error != nil {
+		t.Fatalf("%+v", out.Error)
+	}
+	b, _ := os.ReadFile(log)
+	if got, want := strings.Count(string(b), "\n"), 1; got != want {
+		t.Fatalf("resolved the repository root %d times, want %d", got, want)
+	}
+}
+
+// A store that cannot be opened fails an id fan-out at phase identity
+// before any target receives the message.
+func TestFanOutStoreOpenFailureRejectsIDs(t *testing.T) {
+	var prompts []string
+	h := shiftingHerdr{agents: map[string]herdr.AgentDetails{"w1:p1": hosted("w1:p1", "term_a", "claude"), "w1:p2": hosted("w1:p2", "term_b", "claude")}, shift: func(map[string]herdr.AgentDetails) {}, prompts: &prompts}
+	c := libagent.Client{API: h, CallerPane: "old:p1", Cwd: identitytest.Repository(t)}
+	var ids []string
+	for _, pane := range []string{"w1:p1", "w1:p2"} {
+		ids = append(ids, identitytest.Register(t, c.Cwd, h.agents[pane]).ID)
+	}
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\nexit 128\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out := run(context.Background(), c, Options{Selection: selector.Selection{IDs: ids}, Body: "hi", BodySet: true}, nil, "m-0a1b2c")
+	if out.Error == nil || out.Error.Phase != "identity" || out.Status != "rejected" || out.ExitCode() != 1 || len(prompts) != 0 {
+		t.Fatalf("%+v %+v prompted %v", out, out.Error, prompts)
+	}
 }

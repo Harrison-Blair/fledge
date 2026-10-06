@@ -2,11 +2,13 @@
 
 **File:** `reference/plan/agent-command.md`
 
-**Status:** Implemented and independently verified, including the repaired live focus response. Git-aware formatting, vet, race tests, build, whitespace checks, rebuild, and installation passed. Live Claude/Codex launch and messaging, focused Claude launch, and agent listing passed.
+> **Historical record.** This plan is superseded by the current command contracts in the README: [Agents](../../README.md#agents), [Tasks](../../README.md#tasks), [Worktrees](../../README.md#worktrees), and [Migrating from earlier versions](../../README.md#migrating-from-earlier-versions). Where this plan and the README differ, the README is correct. Later releases removed the interactive wizard, split placement, and the `--tab-id`, `--direction`, and `--ratio` flags; every spawn without `--pane` now opens a new tab.
+
+**Status:** Historical. Implemented and independently verified, including the repaired live focus response. Git-aware formatting, vet, race tests, build, whitespace checks, rebuild, and installation passed. Live Claude/Codex launch and messaging, focused Claude launch, and agent listing passed.
 
 **Review status:** Astra and [Claude Code Fable plan review](agent-command-fable-review.md) complete. [Claude Code Fable implementation review and triage](agent-command-fable-code-review.md) are complete: branch-namespace preflight, optional caller resolution, append-only ignore updates, and the observed `pane_info`/`pane` focus response are repaired and independently verified. Both original Fable critiques are preserved verbatim. Optional output/refactoring choices remain for discussion.
 
-**Live follow-up:** immediate split-to-launch sometimes returned `agent_pane_busy`; the partial outcome preserved the new pane, and manual launch into that same pane succeeded after shell inspection. No automatic retry or readiness policy was added. This readiness race remains open. Live worktree behavior and all harness/model combinations were not verified.
+**Live follow-up:** immediate split-to-launch sometimes returned `agent_pane_busy`; the partial outcome preserved the new pane, and manual launch into that same pane succeeded after shell inspection. No automatic retry or readiness policy was added. This readiness race was open when this plan was written; Fledge now retries the launch step on `agent_pane_busy` (see [Outcomes and recovery](../../README.md#outcomes-and-recovery)). Live worktree behavior and all harness/model combinations were not verified.
 
 ## 1. Objective and design constraints
 

@@ -13,35 +13,32 @@ type Version struct {
 	Major, Minor, Patch int
 }
 
-// String renders the version back in the tag form it was parsed from.
-func (v Version) String() string {
-	return fmt.Sprintf("v%d.%d.%d", v.Major, v.Minor, v.Patch)
-}
-
 // ParseVersion parses a "vX.Y.Z" tag. Anything else — "dev", a bare "1.2.3",
 // a pre-release suffix, leading or trailing space — is an error, which is
 // what makes an unknown current version detectable rather than silently
 // comparable.
 func ParseVersion(s string) (Version, error) {
+	invalid := fmt.Errorf("update: %q is not a vX.Y.Z version", s)
 	rest, ok := strings.CutPrefix(s, "v")
 	if !ok {
-		return Version{}, fmt.Errorf("update: %q is not a vX.Y.Z version", s)
+		return Version{}, invalid
 	}
 	parts := strings.Split(rest, ".")
 	if len(parts) != 3 {
-		return Version{}, fmt.Errorf("update: %q is not a vX.Y.Z version", s)
+		return Version{}, invalid
 	}
 	var v Version
 	for i, p := range parts {
 		// strconv.Atoi accepts a leading sign and Go's parser accepts
 		// underscores in some forms; require plain digits so "v-1.2.3"
-		// and friends are rejected.
+		// and friends are rejected. Atoi still rejects a component that
+		// exceeds int.
 		if p == "" || (len(p) > 1 && p[0] == '0') || strings.TrimFunc(p, func(r rune) bool { return r >= '0' && r <= '9' }) != "" {
-			return Version{}, fmt.Errorf("update: %q is not a vX.Y.Z version", s)
+			return Version{}, invalid
 		}
 		n, err := strconv.Atoi(p)
 		if err != nil {
-			return Version{}, fmt.Errorf("update: %q is not a vX.Y.Z version", s)
+			return Version{}, invalid
 		}
 		switch i {
 		case 0:

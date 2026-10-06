@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
@@ -160,6 +161,27 @@ func TestResolveMine(t *testing.T) {
 	}
 }
 
+// TestResolveInUsesGivenStore runs from a directory outside any repository,
+// so only the given store can supply the records.
+func TestResolveInUsesGivenStore(t *testing.T) {
+	f := newFleet(t)
+	s, err := identity.Existing(context.Background(), f.cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := f.client(t)
+	c.Cwd, c.CallerPane = t.TempDir(), f.lead.PaneID
+	ms, err := ResolveIn(context.Background(), s, c, Filter{Mine: true})
+	if got := panes(ms); err != nil || got != "w1:p4="+f.childID {
+		t.Fatalf("%q %v", got, err)
+	}
+	c = f.client(t)
+	ms, err = ResolveIn(context.Background(), nil, c, Filter{States: []string{"idle"}})
+	if got := panes(ms); err != nil || got != "w1:p3=- w1:p5=-" {
+		t.Fatalf("nil store: %q %v", got, err)
+	}
+}
+
 func TestResolveMineRequiresRegisteredCaller(t *testing.T) {
 	f := newFleet(t)
 	for _, tc := range []struct{ name, cwd, pane string }{
@@ -278,7 +300,7 @@ func failure(err error, phase string) (string, string) {
 	if err == nil {
 		return "", ""
 	}
-	var out libagent.Outcome
+	var out cli.Outcome
 	out.Fail(err, phase, false)
 	return out.Error.Code, out.Error.Phase
 }

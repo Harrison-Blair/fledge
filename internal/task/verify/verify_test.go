@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
@@ -20,7 +20,6 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/tasktest"
-	"github.com/Harrison-Blair/fledge/internal/lib/usage"
 	"github.com/Harrison-Blair/fledge/internal/task/assign"
 	"github.com/Harrison-Blair/fledge/internal/task/complete"
 	"github.com/Harrison-Blair/fledge/internal/task/create"
@@ -67,7 +66,6 @@ func TestLifecycleCreateAssignCompleteVerify(t *testing.T) {
 	completed := complete.Run(ctx, tasktest.Client(t, repo, "w1:p3",
 		tasktest.Get("w1:p3", worker),
 		tasktest.Get("w1:p1", boss),
-		tasktest.Get("w1:p3", worker),
 		herdrscript.Call{Method: "agent.prompt", Result: herdr.AgentResult{Type: "agent_prompted", Agent: boss.Agent}},
 	), complete.Options{ID: id, Summary: "fixed", SummarySet: true}, strings.NewReader(""))
 	if completed.Error != nil {
@@ -79,11 +77,6 @@ func TestLifecycleCreateAssignCompleteVerify(t *testing.T) {
 		t.Fatalf("after complete %+v", r)
 	}
 	want.CompletionNotification = &task.CompletionNotification{Recipient: bossRec.ID, MessageID: r.CompletionNotification.MessageID, Pane: tasktest.Ptr("w1:p1"), Attempt: task.Attempt{DeliveredAt: r.CompletionNotification.DeliveredAt}}
-	if w := r.Usage.Worker; w == nil || w.CollectedAt == "" {
-		t.Fatalf("after complete %+v", r.Usage)
-	}
-	want.Usage = &task.Usage{Worker: &task.UsageSnapshot{AgentID: &workerRec.ID, Harness: tasktest.Ptr("claude"), Window: task.UsageWindow{From: *r.AssignedAt, To: *r.CompletedAt},
-		ElapsedSeconds: r.Usage.Worker.ElapsedSeconds, Basis: usage.Unavailable, Reason: tasktest.Ptr("no native session ref observed"), CollectedAt: r.Usage.Worker.CollectedAt}}
 	if !reflect.DeepEqual(r, want) || r.CompletedAt == nil {
 		t.Fatalf("after complete %+v", r)
 	}
@@ -94,11 +87,6 @@ func TestLifecycleCreateAssignCompleteVerify(t *testing.T) {
 	}
 	r = tasktest.Load(t, repo, id)
 	want.Status, want.Verifier, want.VerificationNote, want.VerifiedAt = task.Verified, &bossRec.ID, tasktest.Ptr("looks right"), r.VerifiedAt
-	if v := r.Usage.Verifier; v == nil || v.CollectedAt == "" {
-		t.Fatalf("after verify %+v", r.Usage)
-	}
-	want.Usage = &task.Usage{Worker: want.Usage.Worker, Verifier: &task.UsageSnapshot{AgentID: &bossRec.ID, Harness: tasktest.Ptr("claude"), Window: task.UsageWindow{From: *r.CompletedAt, To: *r.VerifiedAt},
-		ElapsedSeconds: r.Usage.Verifier.ElapsedSeconds, Basis: usage.Unavailable, Reason: tasktest.Ptr("no native session ref observed"), CollectedAt: r.Usage.Verifier.CollectedAt}}
 	if !reflect.DeepEqual(r, want) || r.VerifiedAt == nil || !reflect.DeepEqual(verified.Result, Result{Record: r, OpenSubtasks: []string{}}) {
 		t.Fatalf("after verify %+v", r)
 	}
@@ -203,10 +191,10 @@ func TestConcurrentSubtaskCreateAndParentVerify(t *testing.T) {
 	tasktest.Register(t, repo, boss)
 	for range 50 {
 		parent := tasktest.Seed(t, repo, task.Record{Title: "goal", Status: task.Completed, Owner: &owner.ID})
-		var created, verified libagent.Outcome
+		var created, verified cli.Outcome
 		var wg sync.WaitGroup
 		wg.Go(func() {
-			created = create.Run(context.Background(), tasktest.Client(t, repo, ""), create.Options{Title: "late", Body: "b", BodySet: true, Freeform: true, Parent: parent}, strings.NewReader(""))
+			created = create.Run(context.Background(), tasktest.Client(t, repo, ""), create.Options{Title: "late", Body: "b", BodySet: true, Parent: parent}, strings.NewReader(""))
 		})
 		wg.Go(func() {
 			verified = Run(context.Background(), tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p1", boss)), Options{ID: parent}, strings.NewReader(""))
@@ -244,7 +232,6 @@ func TestRepeatVerificationReplacesLatestVerification(t *testing.T) {
 	}
 	want := before
 	want.Verifier, want.VerificationNote, want.Forced, want.VerifiedAt = &otherRec.ID, nil, false, r.VerifiedAt
-	want.Usage = r.Usage // asserted by the usage tests
 	if !reflect.DeepEqual(r, want) {
 		t.Fatalf("got %+v\nwant %+v", r, want)
 	}
@@ -264,7 +251,6 @@ func TestRepeatUnregisteredForceClearsVerifierAndNote(t *testing.T) {
 	r := tasktest.Load(t, repo, id)
 	want := before
 	want.Verifier, want.VerificationNote, want.VerifiedAt = nil, nil, r.VerifiedAt
-	want.Usage = r.Usage // asserted by the usage tests
 	if out.Error != nil || !reflect.DeepEqual(r, want) || *r.VerifiedAt == *before.VerifiedAt {
 		t.Fatalf("%+v %+v", out.Error, r)
 	}
@@ -322,7 +308,6 @@ func TestFinishedParentVerifiesFromCreatedOrAssigned(t *testing.T) {
 			}
 			want := before
 			want.Status, want.Verifier, want.VerificationNote, want.VerifiedAt = task.Verified, r.Verifier, tasktest.Ptr("all done"), r.VerifiedAt
-			want.Usage = r.Usage // asserted by the usage tests
 			if !reflect.DeepEqual(r, want) || !reflect.DeepEqual(out.Result, Result{Record: r, OpenSubtasks: []string{}}) {
 				t.Fatalf("got %+v\nwant %+v", r, want)
 			}
@@ -385,102 +370,54 @@ func TestCancelledParentWithVerifiedSubtaskIsRefused(t *testing.T) {
 	}
 }
 
-// Tests never read real harness stores unless they inject a reader.
-func TestMain(m *testing.M) {
-	readUsage = func(context.Context, string, usage.Ref, usage.Window) usage.Summary {
-		return usage.Summary{Basis: usage.Unavailable, Reason: "no reader injected"}
-	}
-	os.Exit(m.Run())
-}
-
-// inject replaces the usage reader for one test and returns its windows.
-func inject(t *testing.T, s usage.Summary) *[]usage.Window {
-	t.Helper()
-	old := readUsage
-	t.Cleanup(func() { readUsage = old })
-	windows := &[]usage.Window{}
-	readUsage = func(_ context.Context, _ string, _ usage.Ref, w usage.Window) usage.Summary {
-		*windows = append(*windows, w)
-		return s
-	}
-	return windows
-}
-
 func withSession(a herdr.AgentResult, value string) herdr.AgentResult {
 	a.Agent = identitytest.WithSession(a.Agent, value)
 	return a
 }
 
-// Verification snapshots the verifier over completed_at..verified_at and
-// captures its session ref; a repeat replaces the snapshot, keeping the worker's.
-func TestVerificationRecordsVerifierUsage(t *testing.T) {
-	windows := inject(t, usage.Summary{Turns: 3, Basis: usage.Measured})
-	repo, id, before := verified(t)
-	workerUsage := &task.UsageSnapshot{Basis: usage.Measured, Turns: 9}
-	if _, err := task.Update(mustStore(t, repo), id, func(r *task.Record) error { r.Usage = &task.Usage{Worker: workerUsage}; return nil }); err != nil {
-		t.Fatal(err)
-	}
+// A registered verifier's live session ref is stored on each verification;
+// an unregistered forced verifier observes nothing.
+func TestVerificationCapturesVerifierSessionRef(t *testing.T) {
+	repo, id, _ := verified(t)
 	other := tasktest.Agent("w1:p5", "term_other", "other")
 	otherRec := tasktest.Register(t, repo, other)
-	var first *task.UsageSnapshot
-	for i, value := range []string{"verify-1", "verify-2"} {
+	for _, value := range []string{"verify-1", "verify-2"} {
 		out := Run(context.Background(), tasktest.Client(t, repo, "w1:p5", tasktest.Get("w1:p5", withSession(other, value))), Options{ID: id}, strings.NewReader(""))
-		r := tasktest.Load(t, repo, id)
-		if out.Error != nil || !reflect.DeepEqual(out.Result, Result{Record: r, OpenSubtasks: []string{}}) {
-			t.Fatalf("%+v", out.Error)
-		}
-		v := r.Usage.Verifier
-		if !reflect.DeepEqual(r.Usage.Worker, workerUsage) || v == nil || *v.AgentID != otherRec.ID || v.Session.Value != value || v.Turns != 3 || v.Basis != usage.Measured ||
-			v.Window != (task.UsageWindow{From: *before.CompletedAt, To: *r.VerifiedAt}) || v == first {
-			t.Fatalf("%d: %+v", i, r.Usage)
-		}
-		if w := (*windows)[i]; w.From == nil || w.To == nil || w.From.Format(time.RFC3339) != *before.CompletedAt {
-			t.Fatalf("%d: window %+v", i, w)
+		want := []cli.Effect{{Action: "updated", Kind: "task", ID: id}, {Action: "updated", Kind: "native_session", ID: otherRec.ID}}
+		if out.Error != nil || !reflect.DeepEqual(out.Effects[len(out.Effects)-2:], want) {
+			t.Fatalf("%s: %+v %+v", value, out.Error, out.Effects)
 		}
 		if rec := loadAgent(t, repo, otherRec.ID); rec.NativeSession == nil || rec.NativeSession.Value != value {
-			t.Fatalf("%d: session ref not captured: %+v", i, rec.NativeSession)
+			t.Fatalf("%s: session ref not captured: %+v", value, rec.NativeSession)
 		}
-		first = v
+	}
+	out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{ID: id, Force: true}, strings.NewReader(""))
+	if out.Error != nil || slices.ContainsFunc(out.Effects, func(e cli.Effect) bool { return e.Kind == "native_session" }) {
+		t.Fatalf("%+v %+v", out.Error, out.Effects)
 	}
 }
 
-// An unregistered forced verifier, or a failing session write, still verifies.
-func TestVerificationSucceedsWhenUsageCollectionFails(t *testing.T) {
-	inject(t, usage.Summary{Basis: usage.Measured})
-	repo, id := setup(t, task.Completed)
-	out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{ID: id, Force: true}, strings.NewReader(""))
-	r := tasktest.Load(t, repo, id)
-	if out.Error != nil || r.Status != task.Verified || r.Usage.Verifier.AgentID != nil || r.Usage.Verifier.Basis != usage.Unavailable || *r.Usage.Verifier.Reason != "task was never completed; window starts at created_at; the verifier is not a registered agent" {
-		t.Fatalf("%+v %+v", out.Error, r.Usage)
-	}
-
+// A failing session write never stops verification; it is a warning.
+func TestVerificationSucceedsWhenSessionWriteFails(t *testing.T) {
 	old := observeSession
 	t.Cleanup(func() { observeSession = old })
 	observeSession = func(*state.Store, string, herdr.AgentSession, time.Time) (identity.Record, bool, error) {
 		return identity.Record{}, false, errors.New("read-only store")
 	}
+	repo, id := setup(t, task.Completed)
 	bossRec := tasktest.Register(t, repo, boss)
-	out = Run(context.Background(), tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p1", withSession(boss, "s"))), Options{ID: id}, strings.NewReader(""))
-	r = tasktest.Load(t, repo, id)
-	if out.Error != nil || r.Status != task.Verified || *r.Verifier != bossRec.ID || *r.Usage.Verifier.AgentID != bossRec.ID || r.Usage.Verifier.Session.Value != "s" ||
-		!slices.Contains(out.Effects, libagent.Effect{Action: "warning", Kind: "native_session", ID: bossRec.ID}) {
-		t.Fatalf("%+v %+v %+v", out.Error, r.Usage.Verifier, out.Effects)
+	out := Run(context.Background(), tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p1", withSession(boss, "s"))), Options{ID: id}, strings.NewReader(""))
+	r := tasktest.Load(t, repo, id)
+	if out.Error != nil || r.Status != task.Verified || *r.Verifier != bossRec.ID ||
+		!slices.Contains(out.Effects, cli.Effect{Action: "warning", Kind: "native_session", ID: bossRec.ID}) {
+		t.Fatalf("%+v %+v %+v", out.Error, r, out.Effects)
 	}
-}
-
-func mustStore(t *testing.T, repo string) *state.Store {
-	t.Helper()
-	s, err := task.Existing(context.Background(), repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return s
 }
 
 func loadAgent(t *testing.T, repo, id string) identity.Record {
 	t.Helper()
 	var rec identity.Record
-	if err := mustStore(t, repo).Get(identity.Kind, id, &rec); err != nil {
+	if err := tasktest.Store(t, repo).Get(identity.Kind, id, &rec); err != nil {
 		t.Fatal(err)
 	}
 	return rec

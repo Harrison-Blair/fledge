@@ -22,15 +22,29 @@ func TestKinds(t *testing.T) {
 	}
 }
 
-func TestEveryKindHasOneProfile(t *testing.T) {
+func TestKindsAreUnique(t *testing.T) {
+	seen := map[string]bool{}
+	for _, kind := range Kinds() {
+		if seen[kind] {
+			t.Fatalf("kind %q listed twice", kind)
+		}
+		seen[kind] = true
+	}
+}
+
+func TestLookup(t *testing.T) {
 	for _, kind := range Kinds() {
 		p, ok := Lookup(kind)
 		if !ok || p.Kind != kind {
-			t.Fatalf("%s: no registry entry (%+v, %v)", kind, p, ok)
+			t.Fatalf("%s: Lookup gave (%+v, %v)", kind, p, ok)
 		}
 	}
-	if len(profiles) != len(Kinds()) {
-		t.Fatalf("registry has %d profiles for %d kinds", len(profiles), len(Kinds()))
+	p, _ := Lookup("hermes")
+	p.InterruptKeys[0] = "mutated"
+	p.Model.Prefix[0] = "mutated"
+	again, _ := Lookup("hermes")
+	if again.InterruptKeys[0] != "ctrl+c" || again.Model.Prefix[0] != "chat" {
+		t.Fatalf("Lookup leaked shared slices: %+v", again)
 	}
 }
 

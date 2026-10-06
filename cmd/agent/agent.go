@@ -23,7 +23,7 @@ import (
 )
 
 func New() *cobra.Command {
-	cmd := &cobra.Command{Use: "agent", Short: "Launch, adopt, rename, list, inspect, identify the caller, message, send input to, pause, stop, read, wait for, clean up, report usage of, discover models for, report capabilities of, and list launch profiles for Herdr agents", Args: cobra.NoArgs}
+	cmd := &cobra.Command{Use: "agent", Short: "Spawn, inspect, message, and stop Herdr agents", Args: cobra.NoArgs}
 	cmd.AddCommand(spawn.New(), adopt.New(), rename.New(), list.New(), get.New(), current.New(), message.New(), send.New(), pause.New(), stop.New(), cleanup.New(), models.New(), capabilities.New(), profiles.New(), read.New(), wait.New(), usage.New())
 	return cmd
 }

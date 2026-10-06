@@ -10,14 +10,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 )
 
@@ -25,14 +28,7 @@ type call = herdrscript.Call
 
 func repository(t *testing.T) string {
 	t.Helper()
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if b, err := exec.Command("git", "-C", root, "init", "-q").CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v %s", err, b)
-	}
-	return root
+	return gittest.Repository(t)
 }
 
 // client scripts calls with the caller in old:p1 and cwd inside a fresh repository.
@@ -43,7 +39,7 @@ func client(t *testing.T, calls ...call) libagent.Client {
 }
 func store(t *testing.T, c libagent.Client) *state.Store {
 	t.Helper()
-	s, err := OpenStore(context.Background(), c.Cwd, &libagent.Outcome{})
+	s, err := OpenStore(context.Background(), c.Cwd, &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,9 +59,8 @@ func notFound() error {
 	return &herdr.Error{Code: "agent_not_found", Message: "no agent"}
 }
 func code(err error) string {
-	var remote *herdr.Error
-	if errors.As(err, &remote) {
-		return remote.Code
+	if c, ok := cli.Coded(err); ok {
+		return c
 	}
 	return ""
 }
@@ -138,7 +133,7 @@ func TestRegisterRequiresTerminalID(t *testing.T) {
 }
 
 func TestOpenStoreOutsideRepositoryFails(t *testing.T) {
-	out := libagent.Outcome{}
+	out := cli.Outcome{}
 	if _, err := OpenStore(context.Background(), t.TempDir(), &out); err == nil || len(out.Effects) != 0 {
 		t.Fatalf("%v %+v", err, out)
 	}
@@ -146,7 +141,7 @@ func TestOpenStoreOutsideRepositoryFails(t *testing.T) {
 
 func TestOpenStoreCreatesIgnoredStateDirectory(t *testing.T) {
 	root := repository(t)
-	out := libagent.Outcome{}
+	out := cli.Outcome{}
 	if _, err := OpenStore(context.Background(), root, &out); err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +342,7 @@ func TestResolveMissingAndInvalidIDs(t *testing.T) {
 	if _, _, err := Resolve(context.Background(), store(t, c), c, "0000beef"); code(err) != "agent_record_not_found" {
 		t.Fatalf("%v", err)
 	}
-	var input *libagent.InputError
+	var input *cli.InputError
 	if _, _, err := Resolve(context.Background(), store(t, c), c, "../x"); !errors.As(err, &input) {
 		t.Fatalf("%v", err)
 	}
@@ -373,7 +368,7 @@ func TestLiveFindsUnendedRecordInSession(t *testing.T) {
 
 func TestTargetValidatesExactlyOneSelector(t *testing.T) {
 	for _, tg := range []Target{{}, {Name: "a", Pane: "p"}, {Name: "a", ID: "0000beef"}, {Pane: "p", ID: "0000beef"}} {
-		var input *libagent.InputError
+		var input *cli.InputError
 		if err := tg.Validate(); !errors.As(err, &input) {
 			t.Fatalf("%+v: %v", tg, err)
 		}
@@ -442,8 +437,8 @@ func TestRegisterRefusesTerminalWithLiveRecord(t *testing.T) {
 	c := client(t)
 	first := registered(t, c, details("w1:p3", "term_a"))
 	_, err := Register(context.Background(), store(t, c), libagent.Client{}, details("w1:p3", "term_a"), "spawn", nil, nil)
-	var remote *herdr.Error
-	if !errors.As(err, &remote) || remote.Code != "agent_already_registered" || !strings.Contains(remote.Message, first.ID) {
+	var fledge *cli.Error
+	if !errors.As(err, &fledge) || fledge.Code != "agent_already_registered" || !strings.Contains(fledge.Message, first.ID) {
 		t.Fatalf("%v", err)
 	}
 	if ids, _ := store(t, c).List(Kind); len(ids) != 1 {
@@ -489,6 +484,34 @@ func TestCallerPropagatesLookupFailures(t *testing.T) {
 				t.Fatal("registered without a provable parent lookup")
 			}
 		})
+	}
+}
+
+// The WithSender forms build the caller's sender from their one lookup, and
+// return none when that lookup failed or did not run.
+func TestWithSenderReusesCallerLookup(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	caller := details("old:p1", "term_parent")
+	name := "orchestrator"
+	caller.Name = &name
+	want := libagent.Sender{Name: &name, Pane: cli.Pointer("old:p1"), Kind: "named"}
+	get := call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: info(caller)}
+
+	c := client(t, get)
+	if _, _, got, err := CallerAgentWithSender(context.Background(), store(t, c), c); err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("caller %+v %v", got, err)
+	}
+	c = client(t, get)
+	if _, got, err := RegisterWithSender(context.Background(), store(t, c), c, details("w1:p3", "term_child"), "spawn", nil, nil); err != nil || got == nil || !reflect.DeepEqual(*got, want) {
+		t.Fatalf("register %+v %v", got, err)
+	}
+	c = client(t, call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Err: &herdr.Error{Code: "timeout", Message: "slow"}})
+	if _, got, err := RegisterWithSender(context.Background(), store(t, c), c, details("w1:p3", "term_child"), "spawn", nil, nil); err == nil || got != nil {
+		t.Fatalf("failed lookup %+v %v", got, err)
+	}
+	c = client(t)
+	if _, got, err := RegisterWithSender(context.Background(), store(t, c), c, details("w1:p3", ""), "spawn", nil, nil); err == nil || got != nil {
+		t.Fatalf("no lookup %+v %v", got, err)
 	}
 }
 
@@ -881,14 +904,24 @@ func TestReopenOfLiveRecordIsNoop(t *testing.T) {
 	}
 }
 
+func TestRecordNotFoundNamesID(t *testing.T) {
+	var fledge *cli.Error
+	if err := RecordNotFound("0123abcd"); !errors.As(err, &fledge) || fledge.Code != "agent_record_not_found" || fledge.Message != "no agent record with id 0123abcd" {
+		t.Fatalf("%#v", err)
+	}
+}
+
 func TestReopenUnknownOrInvalidRecord(t *testing.T) {
 	c := client(t)
 	s := store(t, c)
 	if err := Reopen(s, "0123abcd"); code(err) != "agent_record_not_found" {
 		t.Fatalf("%v", err)
 	}
-	var input *libagent.InputError
-	if err := Reopen(s, "nope"); !errors.As(err, &input) {
+	var input *cli.InputError
+	if err := Reopen(s, "nope"); !errors.As(err, &input) || err.Error() != "--id must be an 8 lowercase hexadecimal agent id" {
+		t.Fatalf("%v", err)
+	}
+	if _, _, err := Resolve(context.Background(), s, c, "nope"); !errors.As(err, &input) || err.Error() != "--id must be an 8 lowercase hexadecimal agent id" {
 		t.Fatalf("%v", err)
 	}
 }
@@ -934,7 +967,7 @@ func TestReopenRefusesRecordOfAnotherSession(t *testing.T) {
 
 func TestRenameUpdatesNameAndLocationKeepingRecord(t *testing.T) {
 	t.Setenv("HERDR_SESSION", "dev")
-	for label, stored := range map[string]*string{"lost name": libagent.Pointer("worker"), "never named": nil} {
+	for label, stored := range map[string]*string{"lost name": cli.Pointer("worker"), "never named": nil} {
 		t.Run(label, func(t *testing.T) {
 			c := client(t)
 			d := details("w1:p3", "term_a")
@@ -946,10 +979,10 @@ func TestRenameUpdatesNameAndLocationKeepingRecord(t *testing.T) {
 				t.Fatal(err)
 			}
 			a := moved("w2:p1", "w2", "term_a")
-			a.Name = libagent.Pointer("helper")
+			a.Name = cli.Pointer("helper")
 			got, err := Rename(store(t, c), rec, a)
 			want := rec
-			want.Name, want.Pane, want.WorkspaceID = libagent.Pointer("helper"), "w2:p1", "w2"
+			want.Name, want.Pane, want.WorkspaceID = cli.Pointer("helper"), "w2:p1", "w2"
 			if err != nil || !reflect.DeepEqual(got, want) {
 				t.Fatalf("%+v %v", got, err)
 			}
@@ -983,7 +1016,7 @@ func TestRenameRefusesStaleRecordUnchanged(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			tc.a.Name = libagent.Pointer("helper")
+			tc.a.Name = cli.Pointer("helper")
 			if _, err := Rename(s, rec, tc.a); code(err) != "agent_identity_stale" {
 				t.Fatalf("%v", err)
 			}
@@ -1008,6 +1041,24 @@ func TestRegisteredFindsLiveRecordOfSameHarness(t *testing.T) {
 	}
 }
 
+// LiveEndingMismatched returns a live record of the same harness and ends one
+// left by a different harness, so its name says it writes.
+func TestLiveEndingMismatchedEndsRecordOfDifferentHarness(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t)
+	s := store(t, c)
+	want := registered(t, c, running(details("w1:p3", "term_a"), "codex"))
+	if rec, err := LiveEndingMismatched(s, running(details("w1:p3", "term_a"), "codex")); err != nil || rec == nil || !reflect.DeepEqual(*rec, want) {
+		t.Fatalf("%+v %v", rec, err)
+	}
+	if rec, err := LiveEndingMismatched(s, running(details("w1:p3", "term_a"), "claude")); err != nil || rec != nil {
+		t.Fatalf("%+v %v", rec, err)
+	}
+	if !ended(t, s, want.ID) {
+		t.Fatal("mismatched record is still live")
+	}
+}
+
 // Children reads ended records from the archive as well as live ones, so a
 // caller can still find what an agent it already stopped left behind.
 func TestChildrenIncludesEndedRecordsOfOneParent(t *testing.T) {
@@ -1017,14 +1068,9 @@ func TestChildrenIncludesEndedRecordsOfOneParent(t *testing.T) {
 	s := store(t, c)
 	register := func(terminal string, parent *string) Record {
 		t.Helper()
-		rec, err := Register(context.Background(), s, c, details("w1:"+terminal, terminal), "spawn", nil, nil)
+		rec, err := RegisterAs(context.Background(), s, c, details("w1:"+terminal, terminal), "spawn", nil, nil, parent)
 		if err != nil {
 			t.Fatal(err)
-		}
-		if parent != nil {
-			if err := s.Update(Kind, rec.ID, &rec, func() error { rec.Parent = parent; return nil }); err != nil {
-				t.Fatal(err)
-			}
 		}
 		return rec
 	}
@@ -1048,6 +1094,32 @@ func TestChildrenIncludesEndedRecordsOfOneParent(t *testing.T) {
 	}
 	if got, err := Children(nil, parent.ID); err != nil || len(got) != 0 {
 		t.Fatalf("Children of a nil store = %v, %v", got, err)
+	}
+}
+
+// Children reads archived records from the archive first, never failing on
+// the live path an archived record left.
+func TestChildrenReadsArchivedRecordsFromTheArchive(t *testing.T) {
+	c := client(t)
+	c.CallerPane = ""
+	s := store(t, c)
+	parent, err := Register(context.Background(), s, c, details("w1:term_parent", "term_parent"), "spawn", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := RegisterAs(context.Background(), s, c, details("w1:term_child", "term_child"), "spawn", nil, nil, &parent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := End(s, child.ID); err != nil {
+		t.Fatal(err)
+	}
+	// List skips directories, but reading this live path fails.
+	if err := os.Mkdir(filepath.Join(c.Cwd, ".fledge", "state", Kind, child.ID+".json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := Children(s, parent.ID); err != nil || len(got) != 1 || got[0].ID != child.ID {
+		t.Fatalf("Children = %+v, %v; want archived %s", got, err, child.ID)
 	}
 }
 
@@ -1092,6 +1164,44 @@ func TestRecordWithoutNativeSessionReadsNil(t *testing.T) {
 	}
 	if rec.NativeSession != nil || rec.NativeSessionHistory != nil {
 		t.Fatalf("%+v", rec)
+	}
+}
+
+func TestObserveStoresTheLiveSessionBestEffort(t *testing.T) {
+	rec := Record{ID: "0000aaaa"}
+	s1 := nativeSession("s1")
+	stored := Record{ID: "0000aaaa", NativeSession: &NativeSessionRef{Value: "s1"}}
+	now := time.Date(2026, 9, 24, 5, 0, 0, 0, time.UTC)
+	var seen string
+	ok := func(_ *state.Store, id string, s herdr.AgentSession, at time.Time) (Record, bool, error) {
+		seen = id + " " + *s.Value + " " + at.Format(time.RFC3339)
+		return stored, true, nil
+	}
+	out := cli.Outcome{}
+	if got := Observe(nil, ok, rec, &herdr.AgentDetails{AgentSession: &s1}, now, &out); !reflect.DeepEqual(got, stored) || seen != "0000aaaa s1 2026-09-24T05:00:00Z" ||
+		!reflect.DeepEqual(out.Effects, []cli.Effect{{Action: "updated", Kind: "native_session", ID: "0000aaaa"}}) {
+		t.Fatalf("%+v %q %+v", got, seen, out.Effects)
+	}
+	failing := func(*state.Store, string, herdr.AgentSession, time.Time) (Record, bool, error) {
+		return Record{}, false, errors.New("read-only")
+	}
+	out = cli.Outcome{Status: "success"}
+	if got := Observe(nil, failing, rec, &herdr.AgentDetails{AgentSession: &s1}, now, &out); !reflect.DeepEqual(got, rec) || out.Error != nil ||
+		!reflect.DeepEqual(out.Effects, []cli.Effect{{Action: "warning", Kind: "native_session", ID: "0000aaaa"}}) {
+		t.Fatalf("%+v %+v", got, out)
+	}
+	unchanged := func(*state.Store, string, herdr.AgentSession, time.Time) (Record, bool, error) {
+		return stored, false, nil
+	}
+	out = cli.Outcome{}
+	if got := Observe(nil, unchanged, rec, &herdr.AgentDetails{AgentSession: &s1}, now, &out); !reflect.DeepEqual(got, stored) || len(out.Effects) != 0 {
+		t.Fatalf("%+v %+v", got, out)
+	}
+	for _, live := range []*herdr.AgentDetails{nil, {}} {
+		out = cli.Outcome{}
+		if got := Observe(nil, failing, rec, live, now, &out); !reflect.DeepEqual(got, rec) || len(out.Effects) != 0 {
+			t.Fatalf("%+v %+v", got, out)
+		}
 	}
 }
 
@@ -1168,6 +1278,415 @@ func TestObserveSessionWithoutValueWritesNothing(t *testing.T) {
 		after, _ := os.ReadFile(path)
 		if err != nil || changed || !bytes.Equal(before, after) {
 			t.Fatalf("%+v: %v %v", session, changed, err)
+		}
+	}
+}
+
+// countRoots puts a git wrapper first on PATH that counts repository root
+// resolutions, and returns a function that reads the count.
+func countRoots(t *testing.T) func() int {
+	t.Helper()
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin, log := t.TempDir(), filepath.Join(t.TempDir(), "roots")
+	script := fmt.Sprintf("#!/bin/sh\ncase \"$*\" in *--is-bare-repository*) echo >>%q;; esac\nexec %q \"$@\"\n", log, git)
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return func() int {
+		b, _ := os.ReadFile(log)
+		return strings.Count(string(b), "\n")
+	}
+}
+
+// OpenOnce resolves the repository root on its first call only and returns
+// the same store to every later call.
+func TestOpenOnceResolvesRootOnce(t *testing.T) {
+	c := client(t)
+	registered(t, c, details("w1:p3", "term_a"))
+	roots := countRoots(t)
+	open := OpenOnce(context.Background(), c.Cwd)
+	first, err := open()
+	if err != nil || first == nil {
+		t.Fatalf("%v %v", first, err)
+	}
+	for range 2 {
+		if s, err := open(); err != nil || s != first {
+			t.Fatalf("%p %v, want %p", s, err, first)
+		}
+	}
+	if got := roots(); got != 1 {
+		t.Fatalf("resolved the repository root %d times, want 1", got)
+	}
+}
+
+// A repository without state is a successful open: the nil store is kept.
+func TestOpenOnceKeepsMissingStore(t *testing.T) {
+	c := client(t)
+	roots := countRoots(t)
+	open := OpenOnce(context.Background(), c.Cwd)
+	for range 2 {
+		if s, err := open(); err != nil || s != nil {
+			t.Fatalf("%v %v", s, err)
+		}
+	}
+	if got := roots(); got != 1 {
+		t.Fatalf("resolved the repository root %d times, want 1", got)
+	}
+}
+
+// A failed open is not kept: the next call opens again.
+func TestOpenOnceRetriesFailedOpen(t *testing.T) {
+	dir := t.TempDir()
+	open := OpenOnce(context.Background(), dir)
+	if _, err := open(); err == nil {
+		t.Fatal("opened a store outside a repository")
+	}
+	gittest.Git(t, dir, "init", "-q")
+	registered(t, libagent.Client{Cwd: dir}, details("w1:p3", "term_a"))
+	if s, err := open(); err != nil || s == nil {
+		t.Fatalf("%v %v", s, err)
+	}
+}
+
+// GetWith reads an id target's record from the store open supplies, and
+// never opens it for a name or pane target.
+func TestTargetGetWithUsesGivenStore(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	live := details("w1:p3", "term_a")
+	c := client(t, call{Method: "agent.get", Params: map[string]any{"target": "worker"}, Result: info(live)},
+		call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: info(live)})
+	want := registered(t, c, live)
+	s := store(t, c)
+	opens := 0
+	open := func() (*state.Store, error) { opens++; return s, nil }
+	if _, target, rec, err := (Target{Name: "worker"}).GetWith(context.Background(), c, open); err != nil || target != "worker" || rec != nil || opens != 0 {
+		t.Fatalf("%s %+v %v opens=%d", target, rec, err, opens)
+	}
+	if _, target, rec, err := (Target{ID: want.ID}).GetWith(context.Background(), c, open); err != nil || target != "w1:p3" || rec == nil || rec.ID != want.ID || opens != 1 {
+		t.Fatalf("%s %+v %v opens=%d", target, rec, err, opens)
+	}
+}
+
+// A failed open fails an id target at phase identity, as Get does.
+func TestTargetGetWithOpenFailureIsIdentityPhase(t *testing.T) {
+	c := client(t)
+	_, _, _, err := (Target{ID: "0000beef"}).GetWith(context.Background(), c, func() (*state.Store, error) { return nil, errors.New("unavailable") })
+	var out cli.Outcome
+	out.Fail(err, "agent.get", false)
+	if out.Error.Phase != "identity" || out.Error.Message != "unavailable" {
+		t.Fatalf("%+v", out.Error)
+	}
+}
+
+// countReads counts agent record reads through fetch until the test ends.
+func countReads(t testing.TB) *int {
+	t.Helper()
+	var mu sync.Mutex
+	n, real := 0, fetch
+	fetch = func(get func(kind, id string, v any) error, id string, rec *Record) error {
+		mu.Lock()
+		n++
+		mu.Unlock()
+		return real(get, id, rec)
+	}
+	t.Cleanup(func() { fetch = real })
+	return &n
+}
+
+// family is a store with parent P, P's live and ended children, 50 archived
+// and 5 live unrelated records, all made through RegisterAs.
+type family struct {
+	c                 libagent.Client
+	s                 *state.Store
+	parent            Record
+	live, ended       Record
+	unrelatedArchived []string
+}
+
+func newFamily(t *testing.T) family {
+	t.Helper()
+	t.Setenv("HERDR_SESSION", "dev")
+	f := family{c: client(t)}
+	f.c.CallerPane = ""
+	f.s = store(t, f.c)
+	register := func(terminal string, parent *string) Record {
+		t.Helper()
+		rec, err := RegisterAs(context.Background(), f.s, f.c, details("w1:"+terminal, terminal), "spawn", nil, nil, parent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rec
+	}
+	f.parent = register("term_parent", nil)
+	f.live, f.ended = register("term_live", &f.parent.ID), register("term_ended", &f.parent.ID)
+	if err := End(f.s, f.ended.ID); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 50 {
+		rec := register(fmt.Sprintf("term_gone_%d", i), &f.live.ID)
+		if err := End(f.s, rec.ID); err != nil {
+			t.Fatal(err)
+		}
+		f.unrelatedArchived = append(f.unrelatedArchived, rec.ID)
+	}
+	for i := range 5 {
+		register(fmt.Sprintf("term_other_%d", i), nil)
+	}
+	return f
+}
+
+// check fails t unless got is exactly f's two children.
+func (f family) check(t *testing.T, got []Record, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{}
+	for _, r := range got {
+		ids[r.ID] = r.EndedAt != nil
+	}
+	if len(got) != 2 || ids[f.live.ID] || !ids[f.ended.ID] {
+		t.Fatalf("Children = %+v; want live %s and ended %s", got, f.live.ID, f.ended.ID)
+	}
+}
+
+func TestChildrenReadsOnlyChildrenAndUnindexedRecords(t *testing.T) {
+	f := newFamily(t)
+	n := countReads(t)
+	got, err := Children(f.s, f.parent.ID)
+	f.check(t, got, err)
+	if *n != 2 {
+		t.Fatalf("Children read %d agent records, want 2", *n)
+	}
+}
+
+func TestChildrenIgnoresUnrelatedArchivedRecords(t *testing.T) {
+	f := newFamily(t)
+	for _, id := range f.unrelatedArchived {
+		path := filepath.Join(f.c.Cwd, ".fledge", "state", Kind, "archive", id+".json")
+		if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := Children(f.s, f.parent.ID)
+	f.check(t, got, err)
+}
+
+// unindexed writes rec as a binary without the parent index does: with
+// state.Create and no markers. ended archives it.
+func unindexed(t *testing.T, s *state.Store, terminal string, parent *string, ended bool) string {
+	t.Helper()
+	id, err := s.Create(Kind, func(id string) any {
+		return Record{ID: id, Pane: "w1:" + terminal, TerminalID: terminal, Parent: parent, RegisteredAt: "2026-01-01T00:00:00Z", RegisteredBy: "spawn"}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ended {
+		if err := End(s, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return id
+}
+
+func TestChildrenFindsUnindexedRecords(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t)
+	c.CallerPane = ""
+	s := store(t, c)
+	parent := "0000cafe"
+	live, archived := unindexed(t, s, "term_live", &parent, false), unindexed(t, s, "term_ended", &parent, true)
+	unindexed(t, s, "term_other", nil, true)
+	ids := func() []string {
+		t.Helper()
+		got, err := Children(s, parent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, r := range got {
+			ids = append(ids, r.ID)
+		}
+		slices.Sort(ids)
+		return ids
+	}
+	want := []string{live, archived}
+	slices.Sort(want)
+	if got := ids(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Children of unindexed records = %v; want %v", got, want)
+	}
+	// One registration indexes every record, so Children then reads only the children.
+	if _, err := Register(context.Background(), s, c, details("w1:term_new", "term_new"), "spawn", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	n := countReads(t)
+	if got := ids(); !reflect.DeepEqual(got, want) || *n != 2 {
+		t.Fatalf("Children after Register = %v with %d reads; want %v with 2", got, *n, want)
+	}
+}
+
+// failSecondMark makes the second mark call fail, interrupting the indexing of
+// one record after its first marker, until the test ends.
+func failSecondMark(t *testing.T) error {
+	t.Helper()
+	boom := errors.New("injected mark failure")
+	n, real := 0, mark
+	mark = func(tx *state.Tx, set, id string) error {
+		if n++; n == 2 {
+			return boom
+		}
+		return real(tx, set, id)
+	}
+	t.Cleanup(func() { mark = real })
+	return boom
+}
+
+// A create interrupted after its parent marker leaves no phantom child.
+func TestChildrenSkipsMarkersOfUnwrittenRecords(t *testing.T) {
+	f := newFamily(t)
+	boom := failSecondMark(t)
+	if _, err := RegisterAs(context.Background(), f.s, f.c, details("w1:term_crash", "term_crash"), "spawn", nil, nil, &f.parent.ID); !errors.Is(err, boom) {
+		t.Fatalf("RegisterAs error = %v; want the injected failure", err)
+	}
+	marked, err := f.s.Marked(Kind, childrenSet(f.parent.ID))
+	if err != nil || len(marked) != 3 {
+		t.Fatalf("children markers = %v, %v; want the two children and the unwritten record", marked, err)
+	}
+	got, err := Children(f.s, f.parent.ID)
+	f.check(t, got, err)
+}
+
+// A record with its parent marker but no indexed marker is read once.
+func TestChildrenReadsHalfIndexedRecordOnce(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t)
+	c.CallerPane = ""
+	s := store(t, c)
+	parent := "0000cafe"
+	id := unindexed(t, s, "term_child", &parent, true)
+	if err := s.Exclusive(func(tx *state.Tx) error { return tx.Mark(Kind, childrenSet(parent), id) }); err != nil {
+		t.Fatal(err)
+	}
+	n := countReads(t)
+	got, err := Children(s, parent)
+	if err != nil || len(got) != 1 || got[0].ID != id || *n != 1 {
+		t.Fatalf("Children = %+v, %v with %d reads; want %s with 1", got, err, *n, id)
+	}
+}
+
+// A migration interrupted after a record's parent marker still finds it.
+func TestChildrenFindsRecordOfInterruptedMigration(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t)
+	c.CallerPane = ""
+	s := store(t, c)
+	parent := "0000cafe"
+	id := unindexed(t, s, "term_child", &parent, true)
+	boom := failSecondMark(t)
+	if _, err := Register(context.Background(), s, c, details("w1:term_new", "term_new"), "spawn", nil, nil); !errors.Is(err, boom) {
+		t.Fatalf("Register error = %v; want the injected failure", err)
+	}
+	got, err := Children(s, parent)
+	if err != nil || len(got) != 1 || got[0].ID != id {
+		t.Fatalf("Children = %+v, %v; want %s", got, err, id)
+	}
+}
+
+func TestChildrenDuringConcurrentRegisterAndArchive(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	c := client(t)
+	c.CallerPane = ""
+	s := store(t, c)
+	parent, err := Register(context.Background(), s, c, details("w1:term_parent", "term_parent"), "spawn", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(got []Record, err error) {
+		if err != nil {
+			t.Error(err)
+		}
+		for _, r := range got {
+			if r.Parent == nil || *r.Parent != parent.ID {
+				t.Errorf("Children returned %+v, not a child of %s", r, parent.ID)
+			}
+		}
+	}
+	done := make(chan struct{})
+	var reader sync.WaitGroup
+	reader.Add(1)
+	go func() {
+		defer reader.Done()
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				check(Children(s, parent.ID))
+			}
+		}
+	}()
+	var wg sync.WaitGroup
+	for i := range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			terminal := fmt.Sprintf("term_%d", i)
+			rec, err := RegisterAs(context.Background(), s, c, details("w1:"+terminal, terminal), "spawn", nil, nil, &parent.ID)
+			if err == nil {
+				err = End(s, rec.ID)
+			}
+			if err == nil {
+				err = Reopen(s, rec.ID)
+			}
+			if err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	close(done)
+	reader.Wait()
+	got, err := Children(s, parent.ID)
+	check(got, err)
+	if len(got) != 20 {
+		t.Fatalf("Children found %d children, want 20", len(got))
+	}
+}
+
+func BenchmarkChildren(b *testing.B) {
+	b.Setenv("HERDR_SESSION", "dev")
+	c := libagent.Client{Cwd: gittest.Repository(b)}
+	s, err := OpenStore(context.Background(), c.Cwd, &cli.Outcome{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	parent := "0000cafe"
+	for i := range 1000 {
+		id, err := s.Create(Kind, func(id string) any {
+			return Record{ID: id, TerminalID: fmt.Sprintf("term_%d", i), RegisteredAt: "2026-01-01T00:00:00Z"}
+		})
+		if err == nil {
+			err = s.Exclusive(func(tx *state.Tx) error { return tx.Archive(Kind, id) })
+		}
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+	for i := range 2 {
+		terminal := fmt.Sprintf("term_child_%d", i)
+		if _, err := RegisterAs(context.Background(), s, c, details("w1:"+terminal, terminal), "spawn", nil, nil, &parent); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ResetTimer()
+	for range b.N {
+		if got, err := Children(s, parent); err != nil || len(got) != 2 {
+			b.Fatalf("Children = %d records, %v", len(got), err)
 		}
 	}
 }

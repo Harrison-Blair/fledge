@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 )
 
@@ -40,16 +41,16 @@ func TestLabelNamesPaneAndItsOwnTab(t *testing.T) {
 		count    *int
 		tabLabel string
 		calls    []string
-		effects  []Effect
+		effects  []cli.Effect
 	}{
-		"sole pane":         {ptr(1), "1", []string{"pane.rename", "tab.get", "tab.rename"}, []Effect{{Action: "updated", Kind: "pane_label", ID: "w1:p2"}, {Action: "updated", Kind: "tab", ID: "w1:t1"}}},
-		"shared tab":        {ptr(2), "1", []string{"pane.rename", "tab.get"}, []Effect{{Action: "updated", Kind: "pane_label", ID: "w1:p2"}}},
-		"tab already named": {ptr(1), "reviewer", []string{"pane.rename", "tab.get"}, []Effect{{Action: "updated", Kind: "pane_label", ID: "w1:p2"}}},
+		"sole pane":         {ptr(1), "1", []string{"pane.rename", "tab.get", "tab.rename"}, []cli.Effect{{Action: "updated", Kind: "pane_label", ID: "w1:p2"}, {Action: "updated", Kind: "tab", ID: "w1:t1"}}},
+		"shared tab":        {ptr(2), "1", []string{"pane.rename", "tab.get"}, []cli.Effect{{Action: "updated", Kind: "pane_label", ID: "w1:p2"}}},
+		"tab already named": {ptr(1), "reviewer", []string{"pane.rename", "tab.get"}, []cli.Effect{{Action: "updated", Kind: "pane_label", ID: "w1:p2"}}},
 	} {
 		t.Run(label, func(t *testing.T) {
 			var calls []string
 			c := Client{API: labelAPI(t, tc.count, tc.tabLabel, &calls)}
-			out := Outcome{Status: "success", Effects: []Effect{}}
+			out := cli.Outcome{Status: "success", Effects: []cli.Effect{}}
 			if err := c.Label(context.Background(), herdr.Pane{PaneID: "w1:p2", WorkspaceID: "w1", TabID: "w1:t1"}, "reviewer", &out); err != nil || out.Error != nil {
 				t.Fatalf("%v %+v", err, out.Error)
 			}
@@ -63,7 +64,7 @@ func TestLabelNamesPaneAndItsOwnTab(t *testing.T) {
 func TestLabelRejectsTabWithoutPaneCount(t *testing.T) {
 	var calls []string
 	c := Client{API: labelAPI(t, nil, "1", &calls)}
-	out := Outcome{Status: "success", Effects: []Effect{}}
+	out := cli.Outcome{Status: "success", Effects: []cli.Effect{}}
 	err := c.Label(context.Background(), herdr.Pane{PaneID: "w1:p2", WorkspaceID: "w1", TabID: "w1:t1"}, "reviewer", &out)
 	if err == nil || out.Error == nil || out.Error.Phase != "tab.get" || out.Error.Code != "protocol_error" || out.Status != "partial" {
 		t.Fatalf("%v %+v %+v", err, out.Error, out)
@@ -81,7 +82,7 @@ func TestLabelRejectsTabRenameWithoutTab(t *testing.T) {
 		}
 		return r, err
 	})}
-	out := Outcome{Status: "success", Effects: []Effect{}}
+	out := cli.Outcome{Status: "success", Effects: []cli.Effect{}}
 	err := c.Label(context.Background(), herdr.Pane{PaneID: "w1:p2", WorkspaceID: "w1", TabID: "w1:t1"}, "reviewer", &out)
 	if err == nil || out.Error == nil || out.Error.Phase != "tab.rename" || out.Error.Code != "protocol_error" || len(out.Effects) != 1 {
 		t.Fatalf("%v %+v %+v", err, out.Error, out)

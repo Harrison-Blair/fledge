@@ -3,6 +3,7 @@ package verify
 
 import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/task/verify"
 	"github.com/spf13/cobra"
 )
@@ -21,7 +22,7 @@ func New() *cobra.Command {
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 		options.SummarySet = f.Changed("summary")
 		options.FileSet = f.Changed("file")
-		return libagent.Finish(verify.Run(cmd.Context(), libagent.FromEnvironment(0), options, cmd.InOrStdin()), cmd.OutOrStdout(), asJSON, verify.Render)
+		return cli.Finish(verify.Run(cmd.Context(), libagent.FromEnvironment(0), options, cmd.InOrStdin()), cmd.OutOrStdout(), asJSON, verify.Render)
 	}
 	return cmd
 }

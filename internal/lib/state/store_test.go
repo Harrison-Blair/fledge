@@ -21,6 +21,17 @@ type counter struct {
 	N int `json:"n"`
 }
 
+// skipFsync makes writes skip both file and directory fsyncs until the test
+// ends. Concurrency tests check locking, not durability, and fsyncs dominate
+// their run time. A helper process runs its own copy of the stub.
+func skipFsync(t *testing.T) {
+	t.Helper()
+	realFile, realDir := syncFile, syncDir
+	syncFile = func(*os.File) error { return nil }
+	syncDir = func(string) error { return nil }
+	t.Cleanup(func() { syncFile, syncDir = realFile, realDir })
+}
+
 func openStore(t *testing.T) (*Store, string) {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "state")
@@ -439,6 +450,7 @@ func TestInvalidKindAndIDRejected(t *testing.T) {
 }
 
 func TestConcurrentUpdatesDoNotLoseWrites(t *testing.T) {
+	skipFsync(t)
 	store, root := openStore(t)
 	id := createCounter(t, store)
 	other, err := Open(root)
@@ -482,6 +494,7 @@ func TestHelperProcessIncrement(t *testing.T) {
 	if root == "" {
 		t.Skip("helper process only")
 	}
+	skipFsync(t)
 	count, err := strconv.Atoi(os.Getenv(helperCountEnv))
 	if err != nil {
 		t.Fatal(err)
@@ -501,6 +514,7 @@ func TestConcurrentProcessesDoNotLoseWrites(t *testing.T) {
 	if os.Getenv(helperRootEnv) != "" {
 		t.Skip("inside helper process")
 	}
+	skipFsync(t)
 	store, root := openStore(t)
 	id := createCounter(t, store)
 	const n = 200
@@ -589,6 +603,32 @@ func TestMovesSyncTheNewPathBeforeRemovingTheOld(t *testing.T) {
 	want = []string{"  has " + live, "  has " + archived, "sync " + kind, "  has " + live, "sync " + archive}
 	if !reflect.DeepEqual(*ops, want) {
 		t.Fatalf("Unarchive ops = %q\nwant %q", *ops, want)
+	}
+}
+
+func TestWritesSyncTheTempFileBeforePublishing(t *testing.T) {
+	dir := t.TempDir()
+	realSync := syncFile
+	t.Cleanup(func() { syncFile = realSync })
+	for name, write := range map[string]func(string, []byte) error{
+		"replace":   WriteReplace,
+		"exclusive": WriteExclusive,
+	} {
+		path := filepath.Join(dir, name)
+		var synced []string
+		syncFile = func(f *os.File) error {
+			if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("%s: %s exists before its temp file is synced", name, path)
+			}
+			synced = append(synced, filepath.Base(f.Name()))
+			return realSync(f)
+		}
+		if err := write(path, []byte("{}")); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(synced) != 1 || !strings.HasPrefix(synced[0], tempPrefix) {
+			t.Errorf("%s: synced %v, want one temp file", name, synced)
+		}
 	}
 }
 
@@ -826,6 +866,7 @@ func TestHelperProcessClaim(t *testing.T) {
 	if root == "" {
 		t.Skip("helper process only")
 	}
+	skipFsync(t)
 	store, err := Open(root)
 	if err != nil {
 		t.Fatal(err)
@@ -841,6 +882,7 @@ func TestExclusiveSerializesProcesses(t *testing.T) {
 	if os.Getenv(helperClaimsEnv) != "" {
 		t.Skip("inside helper process")
 	}
+	skipFsync(t)
 	store, root := openStore(t)
 	outputs := make([][]byte, 2)
 	errs := make([]error, 2)
@@ -938,5 +980,169 @@ func TestListArchivedReturnsOnlyArchivedIDs(t *testing.T) {
 	}
 	if ids, err := store.ListArchived("counters"); err != nil || !reflect.DeepEqual(ids, []string{archived}) {
 		t.Fatalf("ListArchived = %v, %v; want only %s, not %s", ids, err, archived, kept)
+	}
+}
+
+// GetArchived reads the archive before the live path, so an archived record
+// is found without a failed live lookup, and it follows a record that a
+// concurrent Unarchive returned to the live path.
+func TestGetArchivedReadsArchiveFirstAndFollowsUnarchive(t *testing.T) {
+	store, root := openStore(t)
+	archived, unarchived := createCounter(t, store), createCounter(t, store)
+	if err := store.Exclusive(func(tx *Tx) error { return tx.Archive("counters", archived) }); err != nil {
+		t.Fatal(err)
+	}
+	// A directory at the live path fails any read of it, so only an
+	// archive-first read succeeds.
+	if err := os.Mkdir(filepath.Join(root, "counters", archived+recordSuffix), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var c counter
+	if err := store.GetArchived("counters", archived, &c); err != nil {
+		t.Fatalf("GetArchived of an archived record: %v", err)
+	}
+	if err := store.GetArchived("counters", unarchived, &c); err != nil {
+		t.Fatalf("GetArchived of a record returned to the live path: %v", err)
+	}
+	var notFound *NotFoundError
+	if err := store.GetArchived("counters", "0123abcd", &c); !errors.As(err, &notFound) {
+		t.Fatalf("GetArchived of a missing record: %v, want *NotFoundError", err)
+	}
+}
+
+func TestMarkIsIdempotentAndMarkedListsSortedIDs(t *testing.T) {
+	store, _ := openStore(t)
+	if got, err := store.Marked("counters", "children-aaaaaaaa"); err != nil || len(got) != 0 {
+		t.Fatalf("Marked on a missing set = %v, %v; want none", got, err)
+	}
+	err := store.Exclusive(func(tx *Tx) error {
+		for _, id := range []string{"bbbbbbbb", "aaaaaaaa", "bbbbbbbb"} {
+			if err := tx.Mark("counters", "children-aaaaaaaa", id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Marked("counters", "children-aaaaaaaa")
+	if err != nil || !reflect.DeepEqual(got, []string{"aaaaaaaa", "bbbbbbbb"}) {
+		t.Fatalf("Marked = %v, %v; want [aaaaaaaa bbbbbbbb]", got, err)
+	}
+	if got, err := store.Marked("counters", "indexed"); err != nil || len(got) != 0 {
+		t.Fatalf("Marked on another set = %v, %v; want none", got, err)
+	}
+}
+
+func TestMarkRejectsInvalidSetsAndIDs(t *testing.T) {
+	store, _ := openStore(t)
+	for _, c := range []struct{ set, id string }{{"", "aaaaaaaa"}, {"../x", "aaaaaaaa"}, {"Upper", "aaaaaaaa"}, {"indexed", "nothex!!"}} {
+		if err := store.Exclusive(func(tx *Tx) error { return tx.Mark("counters", c.set, c.id) }); err == nil {
+			t.Errorf("Mark(%q, %q) succeeded", c.set, c.id)
+		}
+	}
+	if _, err := store.Marked("counters", "../x"); err == nil {
+		t.Error("Marked accepted an invalid set")
+	}
+}
+
+func TestListsSkipMarkers(t *testing.T) {
+	store, _ := openStore(t)
+	id := createCounter(t, store)
+	if err := store.Exclusive(func(tx *Tx) error { return tx.Mark("counters", "indexed", id) }); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.List("counters"); err != nil || !reflect.DeepEqual(got, []string{id}) {
+		t.Fatalf("List = %v, %v; want [%s]", got, err, id)
+	}
+	if got, err := store.ListArchived("counters"); err != nil || len(got) != 0 {
+		t.Fatalf("ListArchived = %v, %v; want none", got, err)
+	}
+}
+
+// CreatePrepared runs prepare for a free id before the record exists, never
+// for an id an archived record holds, and writes nothing when prepare fails.
+func TestCreatePreparedRunsPrepareBeforeTheRecord(t *testing.T) {
+	store, _ := openStore(t)
+	ids := []string{"aaaaaaaa", "aaaaaaaa", "bbbbbbbb", "cccccccc"}
+	store.newID = func() (string, error) {
+		id := ids[0]
+		ids = ids[1:]
+		return id, nil
+	}
+	first := createCounter(t, store)
+	if err := store.Exclusive(func(tx *Tx) error { return tx.Archive("counters", first) }); err != nil {
+		t.Fatal(err)
+	}
+	var prepared []string
+	err := store.Exclusive(func(tx *Tx) error {
+		id, err := tx.CreatePrepared("counters", func(id string) error {
+			prepared = append(prepared, id)
+			var c counter
+			var missing *NotFoundError
+			if err := tx.Get("counters", id, &c); !errors.As(err, &missing) {
+				t.Errorf("prepare saw record %s: %v", id, err)
+			}
+			return nil
+		}, func(string) any { return counter{N: 2} })
+		if err != nil || id != "bbbbbbbb" {
+			t.Errorf("CreatePrepared = %q, %v; want bbbbbbbb", id, err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(prepared, []string{"bbbbbbbb"}) {
+		t.Fatalf("prepared %v; want only bbbbbbbb", prepared)
+	}
+	boom := errors.New("boom")
+	err = store.Exclusive(func(tx *Tx) error {
+		_, err := tx.CreatePrepared("counters", func(string) error { return boom }, func(string) any { return counter{N: 3} })
+		return err
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("CreatePrepared error = %v; want boom", err)
+	}
+	var c counter
+	var missing *NotFoundError
+	if err := store.Get("counters", "cccccccc", &c); !errors.As(err, &missing) {
+		t.Fatalf("failed prepare left record cccccccc: %+v, %v", c, err)
+	}
+}
+
+// A marker published before its directory sync failed is synced when Mark is
+// retried, so an existing marker is durable once Mark succeeds.
+func TestMarkRetrySyncsAnExistingMarker(t *testing.T) {
+	store, root := openStore(t)
+	dir := filepath.Join(root, "counters", indexDir, "indexed")
+	real := syncDir
+	failed, synced := false, false
+	syncDir = func(d string) error {
+		if d == dir {
+			if !failed {
+				failed = true
+				return errors.New("injected sync failure")
+			}
+			synced = true
+		}
+		return real(d)
+	}
+	t.Cleanup(func() { syncDir = real })
+	mark := func() error {
+		return store.Exclusive(func(tx *Tx) error { return tx.Mark("counters", "indexed", "aaaaaaaa") })
+	}
+	if err := mark(); err == nil {
+		t.Fatal("Mark succeeded despite the failed directory sync")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "aaaaaaaa")); err != nil {
+		t.Fatalf("marker not published before the failed sync: %v", err)
+	}
+	if err := mark(); err != nil {
+		t.Fatal(err)
+	}
+	if !synced {
+		t.Fatal("retried Mark accepted the existing marker without syncing its directory")
 	}
 }

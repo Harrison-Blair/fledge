@@ -6,13 +6,15 @@ import (
 	"errors"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/sockettest"
 )
 
 // newSocket starts a fake Herdr Unix socket listener and points the
@@ -20,17 +22,7 @@ import (
 // outside any Git repository so agent records never reach a real checkout.
 func newSocket(t *testing.T) net.Listener {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "fc-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	path := filepath.Join(dir, "s")
-	l, err := net.Listen("unix", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { l.Close() })
+	l, path := sockettest.Listen(t)
 	t.Setenv("HERDR_ENV", "1")
 	t.Setenv("HERDR_SOCKET_PATH", path)
 	t.Chdir(t.TempDir())
@@ -46,29 +38,7 @@ type rpcCall struct {
 // closes l so an unexpected extra request fails fast (connection refused)
 // instead of hanging the test.
 func serveRPCs(l net.Listener, results ...any) <-chan []rpcCall {
-	done := make(chan []rpcCall, 1)
-	go func() {
-		var calls []rpcCall
-		for _, result := range results {
-			conn, err := l.Accept()
-			if err != nil {
-				done <- calls
-				return
-			}
-			var req struct {
-				ID     string          `json:"id"`
-				Method string          `json:"method"`
-				Params json.RawMessage `json:"params"`
-			}
-			json.NewDecoder(conn).Decode(&req)
-			calls = append(calls, rpcCall{Method: req.Method, Params: req.Params})
-			json.NewEncoder(conn).Encode(map[string]any{"id": req.ID, "result": result})
-			conn.Close()
-		}
-		l.Close()
-		done <- calls
-	}()
-	return done
+	return serveLateRPC(l, -1, results...)
 }
 
 // waitCalls closes l first, so a serveRPCs goroutine blocked in Accept on an
@@ -147,7 +117,7 @@ func TestSpawnForwardsExactNativeTokens(t *testing.T) {
 	if err := json.Unmarshal(calls[2].Params, &args); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(args.Args, []string{"--setting=a,b", "two words", "--native", "x,y"}) {
+	if !reflect.DeepEqual(args.Args, []string{"--permission-mode", "bypassPermissions", "--setting=a,b", "two words", "--native", "x,y"}) {
 		t.Fatalf("%q", args.Args)
 	}
 	var envelope map[string]any
@@ -156,6 +126,23 @@ func TestSpawnForwardsExactNativeTokens(t *testing.T) {
 	}
 	if envelope["status"] != "success" {
 		t.Fatal(out.String())
+	}
+}
+
+// TestSpawnPermissionOptOutReachesStartRequest proves the
+// --no-permission-bypass binding and positional native arguments reach
+// agent.start without a profile. The permission rules are tested in
+// internal/agent/spawn.
+func TestSpawnPermissionOptOutReachesStartRequest(t *testing.T) {
+	l := newSocket(t)
+	done := serveRPCs(l, snapshotResult(), labeledResult(), startedResult("codex"), readyAs("codex"))
+	var out bytes.Buffer
+	if err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--harness", "codex", "--pane", "w1:p1", "--no-permission-bypass", "--", "--search"}, &out); err != nil {
+		t.Fatal(err, out.String())
+	}
+	calls := waitCalls(t, l, done, 4)
+	if kind, args := startArgs(t, calls[2]); kind != "codex" || !reflect.DeepEqual(args, []string{"--search"}) {
+		t.Fatalf("got %s %q; want codex [\"--search\"]", kind, args)
 	}
 }
 
@@ -278,35 +265,22 @@ func serveLateRPC(l net.Listener, late int, results ...any) <-chan []rpcCall {
 }
 
 // TestSpawnTimeoutCutsOffLateReplies proves --timeout bounds spawn on the
-// socket: a late readiness poll ends it partial with the prompt unsent, and a
-// late prompt acknowledgement ends it unknown, each at the deadline.
+// socket: a late prompt acknowledgement ends it unknown at the deadline. The
+// spawn package checks each late-reply outcome with scripted time.
 func TestSpawnTimeoutCutsOffLateReplies(t *testing.T) {
-	pending := readyAs("claude").(map[string]any)
-	delete(pending["agent"].(map[string]any), "interactive_ready")
-	for _, tc := range []struct {
-		name    string
-		results []any
-		status  string
-		hint    string
-	}{
-		{"readiness poll", []any{snapshotResult(), labeledResult(), startedResult("claude"), pending, readyAs("claude")}, "partial", "The first prompt was not submitted"},
-		{"prompt ack", []any{snapshotResult(), labeledResult(), startedResult("claude"), readyAs("claude"), promptedResult()}, "unknown", "may have been submitted"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("HERDR_PANE_ID", "")
-			l := newSocket(t)
-			done := serveLateRPC(l, len(tc.results)-1, tc.results...)
-			var out bytes.Buffer
-			begin := time.Now()
-			err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "w1:p1", "--timeout", "3001ms", "--prompt", "late"}, &out)
-			if elapsed := time.Since(begin); ExitCode(err) != 1 || elapsed > 3800*time.Millisecond {
-				t.Fatalf("exit %d after %v: %s", ExitCode(err), elapsed, out.String())
-			}
-			waitCalls(t, l, done, len(tc.results))
-			if s := out.String(); !strings.HasPrefix(s, tc.status+":") || !strings.Contains(s, tc.hint) {
-				t.Fatalf("%q", s)
-			}
-		})
+	t.Setenv("HERDR_PANE_ID", "")
+	l := newSocket(t)
+	results := []any{snapshotResult(), labeledResult(), startedResult("claude"), readyAs("claude"), promptedResult()}
+	done := serveLateRPC(l, len(results)-1, results...)
+	var out bytes.Buffer
+	begin := time.Now()
+	err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "w1:p1", "--timeout", "3001ms", "--prompt", "late"}, &out)
+	if elapsed := time.Since(begin); ExitCode(err) != 1 || elapsed > 3800*time.Millisecond {
+		t.Fatalf("exit %d after %v: %s", ExitCode(err), elapsed, out.String())
+	}
+	waitCalls(t, l, done, len(results))
+	if s := out.String(); !strings.HasPrefix(s, "unknown:") || !strings.Contains(s, "may have been submitted") {
+		t.Fatalf("%q", s)
 	}
 }
 
@@ -380,20 +354,7 @@ func TestSpawnBlockedWaitWithPromptIsPartialWithFledgeHints(t *testing.T) {
 func TestGetForwardsTargetAndDecodesDetails(t *testing.T) {
 	for _, flag := range []string{"--name", "--pane"} {
 		t.Run(flag, func(t *testing.T) {
-			dir, err := os.MkdirTemp("", "fg-")
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { os.RemoveAll(dir) })
-			path := filepath.Join(dir, "s")
-			l, err := net.Listen("unix", path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer l.Close()
-			t.Setenv("HERDR_ENV", "1")
-			t.Setenv("HERDR_SOCKET_PATH", path)
-			t.Chdir(t.TempDir())
+			l := newSocket(t)
 			target := "reviewer"
 			if flag == "--pane" {
 				target = "w2:p3"
@@ -427,7 +388,7 @@ func TestGetForwardsTargetAndDecodesDetails(t *testing.T) {
 				done <- ""
 			}()
 			var out bytes.Buffer
-			err = ExecuteWithArgs([]string{"agent", "get", flag, target, "--json"}, &out)
+			err := ExecuteWithArgs([]string{"agent", "get", flag, target, "--json"}, &out)
 			if err != nil {
 				t.Fatal(err, out.String())
 			}
@@ -449,9 +410,7 @@ func TestGetForwardsTargetAndDecodesDetails(t *testing.T) {
 // gitRepo makes the current directory a fresh Git repository.
 func gitRepo(t *testing.T) {
 	t.Helper()
-	if b, err := exec.Command("git", "init", "-q").CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v %s", err, b)
-	}
+	gittest.Git(t, ".", "init", "-q")
 }
 
 func TestListParentFlagFiltersAgents(t *testing.T) {

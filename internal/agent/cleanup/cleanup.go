@@ -6,8 +6,10 @@ import (
 
 	"github.com/Harrison-Blair/fledge/internal/agent/stop"
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/worktree/remove"
 )
@@ -56,8 +58,8 @@ type Checkout struct {
 // removes each planned checkout whose worker is gone, never forcing either.
 // Guards are refreshed before each action. Safety skips still succeed;
 // failed actions fail the outcome after every other action has run.
-func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.cleanup", Status: "success", Effects: []libagent.Effect{}}
+func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
+	out := cli.NewOutcome("agent.cleanup")
 	p, err := plan(ctx, c, o)
 	if err != nil {
 		out.Fail(err, "identity", false)
@@ -67,17 +69,17 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	if o.DryRun {
 		return out
 	}
-	var failures []libagent.Outcome
-	record := func(sub libagent.Outcome) (string, *string) {
+	var failures []cli.Outcome
+	record := func(sub cli.Outcome) (string, *string) {
 		out.Effects = append(out.Effects, sub.Effects...)
 		switch {
 		case sub.Error == nil:
 			return "done", nil
 		case sub.Error.Code == "invalid_input" || sub.Error.Code == "agent_identity_stale" || sub.Error.Code == "agent_record_not_found":
-			return "skipped", &sub.Error.Message
+			return "skipped", cli.Pointer(sub.Error.Text())
 		}
 		failures = append(failures, sub)
-		return "failed", &sub.Error.Message
+		return "failed", cli.Pointer(sub.Error.Text())
 	}
 	stopped := map[string]bool{}
 	for i := range p.Workers {
@@ -93,14 +95,14 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			tasks, err = task.List(p.store)
 		}
 		if err != nil {
-			w.Outcome, w.Reason = record(libagent.Outcome{Error: &libagent.Failure{Code: "operation_failed", Message: err.Error(), Phase: "state"}})
+			w.Outcome, w.Reason = record(cli.Outcome{Error: &cli.Failure{Code: "operation_failed", Message: err.Error(), Phase: "state"}})
 			continue
 		}
 		if r := hold(live, tasks, w.ID, o.ResultsCollected); r != "" {
 			w.Outcome, w.Reason = "skipped", &r
 			continue
 		}
-		w.Outcome, w.Reason = record(stop.Run(ctx, c, stop.Options{Selection: selector.Selection{IDs: []string{w.ID}}}))
+		w.Outcome, w.Reason = record(stop.RunWith(ctx, c, stop.Options{Selection: selector.Selection{IDs: []string{w.ID}}}, func() (*state.Store, error) { return p.store, nil }))
 		stopped[w.ID] = w.Outcome == "done"
 	}
 	for i := range p.Checkouts {
@@ -109,7 +111,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			continue
 		}
 		if done, ok := stopped[ch.Worker]; ok && !done {
-			ch.Outcome, ch.Reason = "skipped", libagent.Pointer("its worker "+ch.Worker+" was not stopped")
+			ch.Outcome, ch.Reason = "skipped", cli.Pointer("its worker "+ch.Worker+" was not stopped")
 			continue
 		}
 		ch.Outcome, ch.Reason = record(remove.Run(ctx, c, remove.Options{Path: ch.Path, Cwd: p.root, Base: *ch.Base, Marker: ch.marker, MarkedBranch: ch.markedBranch, PlannedPath: ch.Path}))
@@ -117,7 +119,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	out.Result = p.Result
 	if len(failures) > 0 {
 		first := failures[0].Error
-		out.Fail(fmt.Errorf("%d cleanup action(s) failed; first: %s", len(failures), first.Message), first.Phase, false)
+		out.Fail(fmt.Errorf("%d cleanup action(s) failed; first: %s", len(failures), first.Text()), first.Phase, false)
 		for _, f := range failures {
 			if f.Status == "unknown" {
 				out.Status = "unknown"

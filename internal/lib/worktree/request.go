@@ -4,6 +4,7 @@ import (
 	"context"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 )
 
@@ -32,7 +33,7 @@ func List(ctx context.Context, api libagent.API, src Source) (herdr.WorktreeList
 	var listing herdr.WorktreeListResult
 	err := api.Call(ctx, "worktree.list", src.params(), &listing)
 	if err == nil && (listing.Type != "worktree_list" || listing.Source.RepoRoot == "" || listing.Worktrees == nil) {
-		err = libagent.AtPhase("worktree.list", libagent.Protocol("incomplete worktree.list result"))
+		err = cli.AtPhase("worktree.list", libagent.Protocol("incomplete worktree.list result"))
 	}
 	return listing, err
 }

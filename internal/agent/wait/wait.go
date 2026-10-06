@@ -8,14 +8,14 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"slices"
-	"strings"
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
 )
 
 // Options selects targets by name, pane, and record ID, or by a filter, the
@@ -24,11 +24,11 @@ import (
 // Any. Progress, when set, receives a line as soon as an --any target fails
 // while others are still pending.
 type Options struct {
-	Names, Panes, IDs, Until []string
-	Filter                   selector.Filter
-	Timeout                  time.Duration
-	All, Any                 bool
-	Progress                 io.Writer
+	selector.Selection
+	Until    []string
+	Timeout  time.Duration
+	All, Any bool
+	Progress io.Writer
 }
 
 // maxTimeout is the largest finite timeout whose transport margin, added by
@@ -48,7 +48,7 @@ type Row struct {
 	Target  string             `json:"target"`
 	Outcome string             `json:"outcome"`
 	Agent   *libagent.AgentRow `json:"agent"`
-	Error   *libagent.Failure  `json:"error"`
+	Error   *cli.Failure       `json:"error"`
 }
 
 // target is one wait. An explicit id resolves to its pane when its wait
@@ -60,21 +60,22 @@ type target struct {
 
 // Run waits for one target, or fans out one agent.wait call per target. A
 // single target's result is its agent row.
-func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.wait", Status: "success", Effects: []libagent.Effect{}}
+func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
+	out := cli.NewOutcome("agent.wait")
 	targets, err := validate(o)
 	if err != nil {
 		out.Fail(err, "validation", false)
 		return out
 	}
+	open := identity.OpenOnce(ctx, c.Cwd)
 	if targets == nil {
-		matches, err := selector.Selection{Filter: o.Filter}.Targets(ctx, c)
+		matches, err := o.Selection.Targets(ctx, c, open)
 		if err != nil {
 			out.Fail(err, "selection", false)
 			return out
 		}
 		if len(matches) > 1 && !o.All && !o.Any {
-			out.Fail(libagent.Invalid("%d agents matched; waiting on several targets requires --all or --any", len(matches)), "validation", false)
+			out.Fail(cli.Invalid("%d agents matched; waiting on several targets requires --all or --any", len(matches)), "validation", false)
 			return out
 		}
 		for _, m := range matches {
@@ -82,7 +83,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		}
 	}
 	if len(targets) == 1 {
-		a, err := waitOne(ctx, c, targets[0], o)
+		a, err := waitOne(ctx, c, targets[0], o, open)
 		if err != nil && ctx.Err() != nil {
 			err = cancelled()
 		}
@@ -93,7 +94,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Result = libagent.NewAgentRow(a.Pane)
 		return out
 	}
-	result, err := fanOut(ctx, c, targets, o)
+	result, err := fanOut(ctx, c, targets, o, open)
 	out.Result = result
 	if err != nil {
 		out.Fail(err, "agent.wait", false)
@@ -101,13 +102,14 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	return out
 }
 
-// waitOne waits on t. A record id resolves to its verified pane first; a
-// target with a record fails closed if a different terminal answers the wait.
-func waitOne(ctx context.Context, c libagent.Client, t target, o Options) (herdr.AgentDetails, error) {
+// waitOne waits on t. A record id resolves to its verified pane first, from
+// the store open supplies; a target with a record fails closed if a
+// different terminal answers the wait.
+func waitOne(ctx context.Context, c libagent.Client, t target, o Options, open func() (*state.Store, error)) (herdr.AgentDetails, error) {
 	pane, rec := t.pane, t.record
 	if t.id != "" {
 		var err error
-		if _, pane, rec, err = (identity.Target{ID: t.id}).Get(ctx, c); err != nil {
+		if _, pane, rec, err = (identity.Target{ID: t.id}).GetWith(ctx, c, open); err != nil {
 			return herdr.AgentDetails{}, err
 		}
 	}
@@ -121,29 +123,26 @@ func waitOne(ctx context.Context, c libagent.Client, t target, o Options) (herdr
 // validate checks o and returns its explicit targets in flag order, names then
 // panes then ids, or nil when a filter selects them.
 func validate(o Options) ([]target, error) {
-	if err := (selector.Selection{Names: o.Names, Panes: o.Panes, IDs: o.IDs, Filter: o.Filter}).Validate(); err != nil {
+	if err := o.Validate(); err != nil {
 		return nil, err
 	}
 	var targets []target
-	for _, v := range slices.Concat(o.Names, o.Panes) {
-		targets = append(targets, target{label: v, pane: v})
-	}
-	for _, v := range o.IDs {
-		targets = append(targets, target{label: v, id: v})
+	for _, t := range o.Explicit() {
+		targets = append(targets, target{label: t.Name + t.Pane + t.ID, pane: t.Name + t.Pane, id: t.ID})
 	}
 	switch {
 	case o.All && o.Any:
-		return nil, libagent.Invalid("at most one of --all or --any is allowed")
+		return nil, cli.Invalid("at most one of --all or --any is allowed")
 	case len(targets) > 1 && !o.All && !o.Any:
-		return nil, libagent.Invalid("waiting on several targets requires --all or --any")
+		return nil, cli.Invalid("waiting on several targets requires --all or --any")
 	case o.Timeout < 0 || (o.Timeout > 0 && o.Timeout < time.Millisecond):
-		return nil, libagent.Invalid("--timeout must be zero (indefinite) or at least 1ms")
+		return nil, cli.Invalid("--timeout must be zero (indefinite) or at least 1ms")
 	case o.Timeout > maxTimeout:
-		return nil, libagent.Invalid("--timeout must be at most %s", maxTimeout)
+		return nil, cli.Invalid("--timeout must be at most %s", maxTimeout)
 	}
 	for _, s := range o.Until {
-		if !slices.Contains([]string{"idle", "working", "blocked", "done", "unknown"}, s) {
-			return nil, libagent.Invalid("--until must be idle, working, blocked, done, or unknown")
+		if !libagent.IsStatus(s) {
+			return nil, cli.Invalid("--until must be idle, working, blocked, done, or unknown")
 		}
 	}
 	return targets, nil
@@ -153,7 +152,7 @@ func validate(o Options) ([]target, error) {
 // and --all on its first failure; errors that end a call after that
 // cancellation, or after ctx ends, are reported as cancelled rather than as
 // target failures.
-func fanOut(ctx context.Context, c libagent.Client, targets []target, o Options) (FanOut, error) {
+func fanOut(ctx context.Context, c libagent.Client, targets []target, o Options, open func() (*state.Store, error)) (FanOut, error) {
 	waits, cancel := context.WithCancel(ctx)
 	defer cancel()
 	type reply struct {
@@ -164,7 +163,7 @@ func fanOut(ctx context.Context, c libagent.Client, targets []target, o Options)
 	replies := make(chan reply, len(targets))
 	for i, target := range targets {
 		go func() {
-			a, err := waitOne(waits, c, target, o)
+			a, err := waitOne(waits, c, target, o, open)
 			replies <- reply{i, a, err}
 		}()
 	}
@@ -189,7 +188,7 @@ func fanOut(ctx context.Context, c libagent.Client, targets []target, o Options)
 		case waits.Err() != nil && !serverError(r.err):
 			row.Outcome = "cancelled"
 		default:
-			var failed libagent.Outcome
+			var failed cli.Outcome
 			failed.Fail(r.err, "agent.wait", false)
 			row.Outcome, row.Error = "errored", failed.Error
 			if o.All {
@@ -205,23 +204,16 @@ func fanOut(ctx context.Context, c libagent.Client, targets []target, o Options)
 	if ctx.Err() != nil {
 		return result, cancelled()
 	}
-	var failures, codes []string
+	var failed []libagent.TargetFailure
 	for _, row := range result.Targets {
 		if row.Error != nil {
-			failures = append(failures, fmt.Sprintf("%s (%s)", row.Target, row.Error.Code))
-			if !slices.Contains(codes, row.Error.Code) {
-				codes = append(codes, row.Error.Code)
-			}
+			failed = append(failed, libagent.TargetFailure{Target: row.Target, Code: row.Error.Code})
 		}
 	}
-	if len(failures) == 0 {
-		return result, nil
+	if f := libagent.FanOutFailure(failed, len(targets), "failed", ""); f != nil {
+		return result, &cli.Error{Code: f.Code, Message: f.Message}
 	}
-	code := "operation_failed"
-	if len(codes) == 1 {
-		code = codes[0]
-	}
-	return result, &herdr.Error{Code: code, Message: fmt.Sprintf("%d of %d targets failed: %s", len(failures), len(targets), strings.Join(failures, ", "))}
+	return result, nil
 }
 
 // progress reports a failed --any target while others are pending. It is
@@ -231,20 +223,21 @@ func progress(w io.Writer, row Row, pending int) {
 	if pending == 1 {
 		unit = "target"
 	}
-	fmt.Fprintf(w, "%s failed: %s (still waiting on %d %s).\n", row.Target, row.Error.Message, pending, unit)
+	fmt.Fprintf(w, "%s failed: %s (still waiting on %d %s).\n", row.Target, row.Error.Text(), pending, unit)
 }
 
-// serverError reports a definite Herdr answer, as opposed to a local transport
-// failure such as the connection closing on cancellation.
+// serverError reports a definite answer, Fledge's own or Herdr's, as opposed
+// to a local transport failure such as the connection closing on cancellation.
 func serverError(err error) bool {
+	var fledge *cli.Error
 	var remote *herdr.Error
-	return errors.As(err, &remote) && !remote.Uncertain && remote.Code != "connection_error"
+	return errors.As(err, &fledge) || errors.As(err, &remote) && !remote.Uncertain && remote.Code != "connection_error"
 }
-func cancelled() error { return &herdr.Error{Code: "cancelled", Message: "wait cancelled"} }
+func cancelled() error { return &cli.Error{Code: "cancelled", Message: "wait cancelled"} }
 
 // Render writes a single target's settled state, or one line per fan-out
 // target. Fan-out rows are also written after a failure.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	switch r := o.Result.(type) {
 	case libagent.AgentRow:
 		if o.Error != nil {
@@ -254,19 +247,19 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		if r.Name != nil && *r.Name != "" {
 			who = r.Name
 		}
-		_, err := fmt.Fprintf(w, "%s is %s.\n", libagent.Display(who), libagent.Display(r.AgentStatus))
+		_, err := fmt.Fprintf(w, "%s is %s.\n", cli.Display(who), cli.Display(r.AgentStatus))
 		return err
 	case FanOut:
 		for _, row := range r.Targets {
 			var line string
 			switch row.Outcome {
 			case "matched":
-				line = fmt.Sprintf("%s is %s", row.Target, libagent.Display(row.Agent.AgentStatus))
+				line = fmt.Sprintf("%s is %s", row.Target, cli.Display(row.Agent.AgentStatus))
 				if r.Winner != nil && *r.Winner == row.Target {
 					line += " (first match)"
 				}
 			case "errored":
-				line = fmt.Sprintf("%s failed: %s", row.Target, row.Error.Message)
+				line = fmt.Sprintf("%s failed: %s", row.Target, row.Error.Text())
 			default:
 				line = row.Target + " was cancelled"
 			}

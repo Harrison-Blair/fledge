@@ -4,14 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"os"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
@@ -19,7 +18,6 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/tasktest"
-	"github.com/Harrison-Blair/fledge/internal/lib/usage"
 )
 
 var (
@@ -29,8 +27,7 @@ var (
 
 func completionMessage(id string) string {
 	return "ᛉ fledge message from worker (w1:p3) · id m-0a1b2c · reply: fledge agent message --name worker\n" +
-		"task completed: " + id + " · title: Fix it · verify with: fledge task verify --id " + id + " --summary \"...\"\n" +
-		"result:\nall done"
+		"task completed: " + id + " · title: Fix it · read result: fledge task get --id " + id + " · verify with: fledge task verify --id " + id + " --summary \"...\""
 }
 
 // setup registers boss and worker and seeds a task in status owned by worker.
@@ -77,7 +74,6 @@ func TestOwnerCompletionNotifiesCreator(t *testing.T) {
 	c := tasktest.Client(t, repo, "w1:p3",
 		tasktest.Get("w1:p3", worker),
 		tasktest.Get("w1:p1", boss),
-		tasktest.Get("w1:p3", worker),
 		herdrscript.Call{Method: "agent.prompt", Params: map[string]any{"target": "w1:p1", "text": completionMessage(id)}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: boss.Agent}},
 	)
 	out := run(context.Background(), c, Options{ID: id, Summary: "all done", SummarySet: true}, strings.NewReader(""), "m-0a1b2c")
@@ -189,7 +185,6 @@ func TestCompletionNotificationFailuresAreRecorded(t *testing.T) {
 			c := tasktest.Client(t, repo, "w1:p3",
 				tasktest.Get("w1:p3", worker),
 				tasktest.Get("w1:p1", boss),
-				tasktest.Get("w1:p3", worker),
 				herdrscript.Call{Method: "agent.prompt", Err: tc.remote},
 			)
 			out := run(context.Background(), c, Options{ID: id, Summary: "all done", SummarySet: true}, strings.NewReader(""), "m-0a1b2c")
@@ -220,9 +215,8 @@ func TestNotificationOutcomeSurvivesLaterTaskState(t *testing.T) {
 			c := tasktest.Client(t, repo, "w1:p3",
 				tasktest.Get("w1:p3", worker),
 				tasktest.Get("w1:p1", boss),
-				tasktest.Get("w1:p3", worker),
 				herdrscript.Call{Method: "agent.prompt", Result: herdr.AgentResult{Type: "agent_prompted", Agent: boss.Agent}, Before: func() {
-					_, err := task.Update(mustStore(t, repo), id, func(r *task.Record) error {
+					_, err := task.Update(tasktest.Store(t, repo), id, func(r *task.Record) error {
 						r.Status = status
 						if status == task.Verified {
 							r.VerifiedAt = task.Now()
@@ -243,15 +237,6 @@ func TestNotificationOutcomeSurvivesLaterTaskState(t *testing.T) {
 			}
 		})
 	}
-}
-
-func mustStore(t *testing.T, repo string) *state.Store {
-	t.Helper()
-	s, err := task.Existing(context.Background(), repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return s
 }
 
 func TestCompleteRefusesNonOwner(t *testing.T) {
@@ -311,9 +296,8 @@ func TestNotificationNotRecordedAfterChange(t *testing.T) {
 	c := tasktest.Client(t, repo, "w1:p3",
 		tasktest.Get("w1:p3", worker),
 		tasktest.Get("w1:p1", boss),
-		tasktest.Get("w1:p3", worker),
 		herdrscript.Call{Method: "agent.prompt", Result: herdr.AgentResult{Type: "agent_prompted", Agent: boss.Agent}, Before: func() {
-			if _, err := task.Update(mustStore(t, repo), id, func(r *task.Record) error { r.CompletionNotification.MessageID = "m-ffffff"; return nil }); err != nil {
+			if _, err := task.Update(tasktest.Store(t, repo), id, func(r *task.Record) error { r.CompletionNotification.MessageID = "m-ffffff"; return nil }); err != nil {
 				t.Fatal(err)
 			}
 		}},
@@ -329,143 +313,100 @@ func TestNotificationNotRecordedAfterChange(t *testing.T) {
 	}
 }
 
-// Tests never read real harness stores unless they inject a reader.
-func TestMain(m *testing.M) {
-	readUsage = func(context.Context, string, usage.Ref, usage.Window) usage.Summary {
-		return usage.Summary{Basis: usage.Unavailable, Reason: "no reader injected"}
-	}
-	os.Exit(m.Run())
-}
-
-// inject replaces the usage reader for one test and returns its calls.
-func inject(t *testing.T, s usage.Summary) *[]usage.Ref {
-	t.Helper()
-	old := readUsage
-	t.Cleanup(func() { readUsage = old })
-	refs := &[]usage.Ref{}
-	readUsage = func(_ context.Context, kind string, ref usage.Ref, w usage.Window) usage.Summary {
-		*refs = append(*refs, ref)
-		return s
-	}
-	return refs
-}
-
 func withSession(a herdr.AgentResult, value string) herdr.AgentResult {
 	a.Agent = identitytest.WithSession(a.Agent, value)
 	return a
 }
 
-func TestCompletionRecordsWorkerUsageAndSessionRef(t *testing.T) {
-	refs := inject(t, usage.Summary{Turns: 14, Tokens: usage.Tokens{Input: 1200, Output: 18400}, Models: []string{"claude-opus-5"}, Basis: usage.Measured})
-	repo := identitytest.Repository(t)
-	owner := tasktest.Register(t, repo, worker)
-	assignedAt := "2026-09-23T10:00:00Z"
-	id := tasktest.Seed(t, repo, task.Record{Title: "t", Status: task.Assigned, Owner: &owner.ID, CreatedAt: "2026-09-23T09:00:00Z", AssignedAt: &assignedAt})
+// The owner completing its task stores its live session ref.
+func TestOwnerCompletionCapturesSessionRef(t *testing.T) {
+	repo, id := setup(t, task.Assigned)
+	owner := *tasktest.Load(t, repo, id).Owner
 	out := Run(context.Background(), tasktest.Client(t, repo, "w1:p3", tasktest.Get("w1:p3", withSession(worker, "sess-1"))), Options{ID: id, Summary: "done", SummarySet: true}, strings.NewReader(""))
-	r := tasktest.Load(t, repo, id)
-	if out.Error != nil || r.Status != task.Completed || !reflect.DeepEqual(out.Result, r) {
-		t.Fatalf("%+v %+v", out.Error, r)
+	if out.Error != nil {
+		t.Fatalf("%+v", out.Error)
 	}
-	if len(*refs) != 1 || (*refs)[0].Value != "sess-1" || (*refs)[0].Kind != "id" {
-		t.Fatalf("reader refs %+v", *refs)
-	}
-	w := r.Usage.Worker
-	if w == nil || r.Usage.Verifier != nil || *w.AgentID != owner.ID || *w.Harness != "claude" || *w.Session != (task.UsageSession{Kind: "id", Value: "sess-1"}) ||
-		w.Window != (task.UsageWindow{From: assignedAt, To: *r.CompletedAt}) || w.Turns != 14 || w.Basis != usage.Measured || w.Reason != nil || w.CollectedAt == "" {
-		t.Fatalf("%+v", w)
-	}
-	if rec := loadAgent(t, repo, owner.ID); rec.NativeSession == nil || rec.NativeSession.Value != "sess-1" {
+	if rec := loadAgent(t, repo, owner); rec.NativeSession == nil || rec.NativeSession.Value != "sess-1" {
 		t.Fatalf("session ref not captured: %+v", rec.NativeSession)
 	}
-	if !slices.Contains(out.Effects, libagent.Effect{Action: "updated", Kind: "native_session", ID: owner.ID}) {
+	want := []cli.Effect{{Action: "updated", Kind: "task", ID: id}, {Action: "updated", Kind: "native_session", ID: owner}}
+	if !reflect.DeepEqual(out.Effects[len(out.Effects)-2:], want) {
 		t.Fatalf("%+v", out.Effects)
 	}
 }
 
-// A failing reader, a failing session write, or an unassigned window never
-// stops completion; each is recorded on the snapshot or as a warning.
-func TestCompletionSucceedsWhenUsageCollectionFails(t *testing.T) {
-	inject(t, usage.Summary{Basis: usage.Unavailable, Reason: "no claude session file for id sess-1"})
+// A forced completion by another agent observes no one's session.
+func TestForcedCompletionObservesNoSession(t *testing.T) {
+	repo := identitytest.Repository(t)
+	bossRec := tasktest.Register(t, repo, boss)
+	owner := tasktest.Register(t, repo, worker)
+	id := tasktest.Seed(t, repo, task.Record{Title: "t", Status: task.Assigned, Owner: &owner.ID})
+	out := Run(context.Background(), tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p1", withSession(boss, "boss-sess"))), Options{ID: id, Summary: "x", SummarySet: true, Force: true}, strings.NewReader(""))
+	if out.Error != nil || loadAgent(t, repo, owner.ID).NativeSession != nil || loadAgent(t, repo, bossRec.ID).NativeSession != nil ||
+		slices.ContainsFunc(out.Effects, func(e cli.Effect) bool { return e.Kind == "native_session" }) {
+		t.Fatalf("%+v %+v", out.Error, out.Effects)
+	}
+}
+
+// A failing session write never stops completion; it is a warning.
+func TestCompletionSucceedsWhenSessionWriteFails(t *testing.T) {
 	old := observeSession
 	t.Cleanup(func() { observeSession = old })
 	observeSession = func(*state.Store, string, herdr.AgentSession, time.Time) (identity.Record, bool, error) {
 		return identity.Record{}, false, errors.New("read-only store")
 	}
-	repo := identitytest.Repository(t)
-	owner := tasktest.Register(t, repo, worker)
-	id := tasktest.Seed(t, repo, task.Record{Title: "t", Status: task.Assigned, Owner: &owner.ID, CreatedAt: "2026-09-23T09:00:00Z"})
+	repo, id := setup(t, task.Assigned)
+	owner := *tasktest.Load(t, repo, id).Owner
 	out := Run(context.Background(), tasktest.Client(t, repo, "w1:p3", tasktest.Get("w1:p3", withSession(worker, "sess-1"))), Options{ID: id, Summary: "done", SummarySet: true}, strings.NewReader(""))
 	r := tasktest.Load(t, repo, id)
 	if out.Error != nil || out.Status != "success" || r.Status != task.Completed {
 		t.Fatalf("%+v %+v", out.Error, r)
 	}
-	if !slices.Contains(out.Effects, libagent.Effect{Action: "warning", Kind: "native_session", ID: owner.ID}) {
+	if !slices.Contains(out.Effects, cli.Effect{Action: "warning", Kind: "native_session", ID: owner}) {
 		t.Fatalf("%+v", out.Effects)
-	}
-	w := r.Usage.Worker
-	want := "task was never assigned; window starts at created_at; no claude session file for id sess-1"
-	if w == nil || w.Basis != usage.Unavailable || w.Reason == nil || *w.Reason != want || w.Window.From != "2026-09-23T09:00:00Z" || w.Session.Value != "sess-1" {
-		t.Fatalf("%+v %v", w, w.Reason)
-	}
-}
-
-// A forced completion on the owner's behalf snapshots the owner from its
-// persisted ref, and says so.
-func TestForcedCompletionSnapshotsTheOwner(t *testing.T) {
-	refs := inject(t, usage.Summary{Basis: usage.Measured})
-	repo, id := setup(t, task.Assigned)
-	owner := *tasktest.Load(t, repo, id).Owner
-	if _, _, err := identity.ObserveSession(mustStore(t, repo), owner, *identitytest.WithSession(herdr.AgentDetails{}, "persisted").AgentSession, time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	for label, c := range map[string]libagent.Client{
-		"other agent": tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p1", boss)),
-		"outside":     tasktest.Client(t, repo, ""),
-	} {
-		t.Run(label, func(t *testing.T) {
-			if _, err := task.Update(mustStore(t, repo), id, func(r *task.Record) error { r.Status, r.Usage = task.Assigned, nil; return nil }); err != nil {
-				t.Fatal(err)
-			}
-			*refs = nil
-			out := Run(context.Background(), c, Options{ID: id, Summary: "x", SummarySet: true, Force: true}, strings.NewReader(""))
-			w := tasktest.Load(t, repo, id).Usage.Worker
-			if out.Error != nil || w == nil || *w.AgentID != owner || w.Session.Value != "persisted" || len(*refs) != 1 || w.Reason == nil || !strings.Contains(*w.Reason, "completed with --force by ") || !strings.Contains(*w.Reason, "on the owner's behalf") {
-				t.Fatalf("%+v %+v %+v", out.Error, w, *refs)
-			}
-		})
-	}
-}
-
-// An owner without any session ref, completing from outside Herdr, is unavailable.
-func TestCompletionOutsideHerdrWithoutRefIsUnavailable(t *testing.T) {
-	refs := inject(t, usage.Summary{Basis: usage.Measured})
-	repo, id := setup(t, task.Assigned)
-	out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{ID: id, Summary: "x", SummarySet: true, Force: true}, strings.NewReader(""))
-	r := tasktest.Load(t, repo, id)
-	if out.Error != nil || r.Status != task.Completed || len(*refs) != 0 || r.Usage.Worker.Basis != usage.Unavailable || !strings.HasSuffix(*r.Usage.Worker.Reason, "no native session ref observed") {
-		t.Fatalf("%+v %+v", out.Error, r.Usage.Worker)
-	}
-}
-
-// A worker snapshot already on the record is never replaced.
-func TestWorkerSnapshotIsWrittenOnce(t *testing.T) {
-	inject(t, usage.Summary{Basis: usage.Measured, Turns: 2})
-	repo := identitytest.Repository(t)
-	owner := tasktest.Register(t, repo, worker)
-	earlier := &task.UsageSnapshot{Basis: usage.Measured, Turns: 1}
-	id := tasktest.Seed(t, repo, task.Record{Title: "t", Status: task.Assigned, Owner: &owner.ID, Usage: &task.Usage{Worker: earlier}})
-	out := Run(context.Background(), tasktest.Client(t, repo, "w1:p3", tasktest.Get("w1:p3", worker)), Options{ID: id, Summary: "done", SummarySet: true}, strings.NewReader(""))
-	r := tasktest.Load(t, repo, id)
-	if out.Error != nil || r.Status != task.Completed || !reflect.DeepEqual(r.Usage.Worker, earlier) {
-		t.Fatalf("%+v %+v", out.Error, r.Usage.Worker)
 	}
 }
 
 func loadAgent(t *testing.T, repo, id string) identity.Record {
 	t.Helper()
 	var rec identity.Record
-	if err := mustStore(t, repo).Get(identity.Kind, id, &rec); err != nil {
+	if err := tasktest.Store(t, repo).Get(identity.Kind, id, &rec); err != nil {
 		t.Fatal(err)
 	}
 	return rec
+}
+
+// The notice's sender reuses the caller lookup that identified the completer,
+// so completion asks Herdr for the caller once, and the header matches the one
+// a separate lookup gives for the same caller.
+func TestCompletionNoticeSenderReusesCallerLookup(t *testing.T) {
+	unnamed := tasktest.Agent("w1:p5", "term_other", "")
+	unnamed.Agent.Name = nil
+	stranger := tasktest.Agent("w1:p5", "term_other", "stranger")
+	notice := func(id string) string {
+		return "task completed: " + id + " · title: Fix it · read result: fledge task get --id " + id + " · verify with: fledge task verify --id " + id + " --summary \"...\""
+	}
+	for _, tc := range []struct {
+		name, pane string
+		caller     []herdrscript.Call
+		header     string
+	}{
+		{"unregistered named agent", "w1:p5", []herdrscript.Call{tasktest.Get("w1:p5", stranger)}, "ᛉ fledge message from stranger (w1:p5) · id m-0a1b2c · reply: fledge agent message --name stranger"},
+		{"unnamed agent", "w1:p5", []herdrscript.Call{tasktest.Get("w1:p5", unnamed)}, "ᛉ fledge message from unnamed agent (w1:p5) · id m-0a1b2c"},
+		{"not an agent", "w1:p9", []herdrscript.Call{{Method: "agent.get", Params: map[string]any{"target": "w1:p9"}, Err: &herdr.Error{Code: "agent_not_found", Message: "none"}}}, "ᛉ fledge message from pane w1:p9 · id m-0a1b2c"},
+		{"outside Herdr", "", nil, "ᛉ fledge message from unknown sender · id m-0a1b2c"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := identitytest.Repository(t)
+			creator := tasktest.Register(t, repo, boss)
+			owner := tasktest.Register(t, repo, worker)
+			id := tasktest.Seed(t, repo, task.Record{Title: "Fix it", Status: task.Assigned, Owner: &owner.ID, CreatedBy: &creator.ID})
+			calls := append(tc.caller, tasktest.Get("w1:p1", boss),
+				herdrscript.Call{Method: "agent.prompt", Params: map[string]any{"target": "w1:p1", "text": tc.header + "\n" + notice(id)}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: boss.Agent}})
+			out := run(context.Background(), tasktest.Client(t, repo, tc.pane, calls...), Options{ID: id, Summary: "done", SummarySet: true, Force: true}, strings.NewReader(""), "m-0a1b2c")
+			if n := tasktest.Load(t, repo, id).CompletionNotification; out.Error != nil || n == nil || n.DeliveredAt == nil {
+				t.Fatalf("%+v %+v", out.Error, n)
+			}
+		})
+	}
 }

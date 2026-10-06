@@ -13,12 +13,13 @@ import (
 // behind by a crashed writer is harmless.
 const tempPrefix = ".tmp-"
 
-// mkdir and syncDir are replaceable so tests can observe directory creation
-// and syncing; createStep runs between Create's claim and its archive check so tests
-// can interleave an archive.
+// mkdir, syncDir, and syncFile are replaceable so tests can observe directory
+// creation and file and directory syncing; createStep runs between Create's
+// claim and its archive check so tests can interleave an archive.
 var (
 	mkdir      = os.Mkdir
 	syncDir    = fsyncDir
+	syncFile   = (*os.File).Sync
 	createStep = func() {}
 )
 
@@ -66,15 +67,15 @@ func lock(path string) (func(), error) {
 	return func() { f.Close() }, nil
 }
 
-// writeReplace atomically replaces path with data.
-func writeReplace(path string, data []byte) error {
+// WriteReplace atomically replaces path with data.
+func WriteReplace(path string, data []byte) error {
 	return writeTemp(path, data, os.Rename)
 }
 
-// writeExclusive atomically creates path with data, failing with fs.ErrExist
+// WriteExclusive atomically creates path with data, failing with fs.ErrExist
 // when path already exists. Linking a complete temp file means readers never
 // observe a partially written record.
-func writeExclusive(path string, data []byte) error {
+func WriteExclusive(path string, data []byte) error {
 	return writeTemp(path, data, os.Link)
 }
 
@@ -89,7 +90,7 @@ func writeTemp(path string, data []byte, publish func(oldpath, newpath string) e
 	defer os.Remove(tmp.Name())
 	_, err = tmp.Write(data)
 	if err == nil {
-		err = tmp.Sync()
+		err = syncFile(tmp)
 	}
 	if closeErr := tmp.Close(); err == nil {
 		err = closeErr

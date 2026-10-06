@@ -5,11 +5,9 @@ import (
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
-	"github.com/Harrison-Blair/fledge/internal/lib/state"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
+	"github.com/Harrison-Blair/fledge/internal/lib/harness"
 )
-
-// states are the live agent statuses a filter may select.
-var states = []string{"idle", "working", "blocked", "done", "unknown"}
 
 // Filter selects live agents. Fields AND together; values within one slice OR
 // together. States and Harnesses compare live Herdr values; every other field
@@ -39,21 +37,28 @@ func (f Filter) NeedsRecords() bool {
 
 // Validate checks f without contacting Herdr or the store.
 func (f Filter) Validate() error {
+	if f.Mine && f.Parent != "" {
+		return cli.Invalid("--mine and --parent are mutually exclusive")
+	}
+	if f.Parent != "" {
+		if err := libagent.ValidateID("parent", "agent", f.Parent); err != nil {
+			return err
+		}
+	}
+	for _, id := range f.Tasks {
+		if err := libagent.ValidateID("task", "task", id); err != nil {
+			return err
+		}
+	}
 	switch {
-	case f.Mine && f.Parent != "":
-		return libagent.Invalid("--mine and --parent are mutually exclusive")
-	case f.Parent != "" && !state.ValidID(f.Parent):
-		return libagent.Invalid("--parent must be an 8 lowercase hexadecimal agent id")
-	case slices.ContainsFunc(f.Tasks, func(id string) bool { return !state.ValidID(id) }):
-		return libagent.Invalid("--task must be an 8 lowercase hexadecimal task id")
-	case slices.ContainsFunc(f.States, func(s string) bool { return !slices.Contains(states, s) }):
-		return libagent.Invalid("--state must be idle, working, blocked, done, or unknown")
-	case slices.ContainsFunc(f.Harnesses, func(h string) bool { return !libagent.IsHarness(h) }):
-		return libagent.Invalid("--harness must be a documented Herdr harness kind")
+	case slices.ContainsFunc(f.States, func(s string) bool { return !libagent.IsStatus(s) }):
+		return cli.Invalid("--state must be idle, working, blocked, done, or unknown")
+	case slices.ContainsFunc(f.Harnesses, func(h string) bool { return !harness.IsKind(h) }):
+		return cli.Invalid("--harness must be a documented Herdr harness kind")
 	case slices.ContainsFunc(f.Profiles, blank):
-		return libagent.Invalid("--profile must be nonempty")
+		return cli.Invalid("--profile must be nonempty")
 	case slices.ContainsFunc(f.Worktrees, blank):
-		return libagent.Invalid("--worktree must be nonempty")
+		return cli.Invalid("--worktree must be nonempty")
 	}
 	return nil
 }

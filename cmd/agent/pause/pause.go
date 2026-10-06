@@ -6,6 +6,7 @@ import (
 
 	"github.com/Harrison-Blair/fledge/internal/agent/pause"
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/spf13/cobra"
 )
 
@@ -13,7 +14,7 @@ func New() *cobra.Command {
 	var options pause.Options
 	var asJSON bool
 	cmd := &cobra.Command{Use: "pause", Short: "Interrupt a live agent's foreground turn", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		return libagent.Finish(pause.Run(cmd.Context(), libagent.FromEnvironment(options.Timeout), options), cmd.OutOrStdout(), asJSON, pause.Render)
+		return cli.Finish(pause.Run(cmd.Context(), libagent.FromEnvironment(options.Timeout), options), cmd.OutOrStdout(), asJSON, pause.Render)
 	}}
 	f := cmd.Flags()
 	f.StringVar(&options.Name, "name", "", "Live agent name")

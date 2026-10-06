@@ -77,6 +77,39 @@ Stable tags use `vMAJOR.MINOR.PATCH`. A `v2` or later release requires migrating
 report their exact tag. Local builds use Go's embedded tag or commit-derived
 version, including `+dirty` when appropriate; metadata-free builds report `dev`.
 
+## Migrating from earlier versions
+
+This release removes several interfaces without a compatibility layer:
+
+- **Spawn placement.** The interactive wizard, split placement, and
+  `--tab-id`, `--direction`, and `--ratio` are gone, and spawn's JSON no longer
+  has a `split` field (`tab_id`, `pane_id`, and `workspace_id` remain). Every
+  spawn that does not pass `--pane` opens a new tab; `--tab` only labels it. To
+  put an agent in a specific existing shell, pass `--pane`. See
+  [Agents](#agents).
+- **Profiles.** Profiles are Markdown role instructions in
+  `.fledge/profiles/NAME.md`; TOML profiles are rejected, never loaded or
+  converted. For each `.fledge/profiles/NAME.toml`: copy its role instructions
+  into `NAME.md` (it replaces a same-name built-in entirely), move `harness`,
+  `model`, and `args` to the spawn command line (`--harness`, `--model`, native
+  arguments after `--`), and delete the TOML file. There are no `extends`,
+  `[sections]`, `reads`, or `protocol` keys; the shared protocol and project
+  memory are always added to a selected profile. Built-ins no longer pick a
+  harness or model, so pass them yourself. Permission defaults now come from
+  spawn itself (see below). `agent
+  profiles --json` drops `harness`, `model`, `args`, `reads`, `protocol`,
+  `base`, and `sections`, and spawn's `profile` object drops `base`. See
+  [Profiles](#profiles).
+- **Spawn permissions.** Codex now defaults to `--yolo`, and Claude to
+  `--permission-mode bypassPermissions`, with or without a profile. Existing
+  explicit native permission options take precedence. Use
+  `--no-permission-bypass` to leave permissions to native arguments and harness
+  configuration.
+- **Tasks.** Briefs are free text; the six-heading template is optional and
+  `--freeform` is gone, so drop the flag. `complete` and `verify` no longer
+  record usage snapshots; use `fledge agent usage` instead. Completion notices
+  no longer include the report; read it with `fledge task get`. See [Tasks](#tasks).
+
 ## Agents
 
 Run agent commands inside Herdr, with `HERDR_ENV=1` and `HERDR_SOCKET_PATH` set.
@@ -87,7 +120,7 @@ fledge agent spawn --name reviewer --harness claude --model sonnet
 fledge agent spawn --name builder --harness codex --workspace backend --tab builds
 fledge agent spawn --name task --harness codex --workspace backend --worktree new --branch feature/task
 fledge agent spawn --name existing --harness claude --pane w2:p3
-fledge agent spawn --name review-1 --profile reviewer --file brief.md
+fledge agent spawn --name review-1 --harness pi --model openai-codex/gpt-6-astra --profile reviewer --file brief.md
 fledge agent profiles
 fledge agent profiles reviewer --json
 fledge agent adopt --name helper
@@ -133,32 +166,32 @@ fledge agent usage --name reviewer
 fledge agent usage --mine --json
 ```
 
-Spawn requires a unique live `--name` and a `--harness`, which a
-[profile](#profiles) can supply. By default it creates a
-new tab in the caller's workspace. Workspace and tab names match exactly and
-case-sensitively: missing destination names are created, ambiguous names fail,
-and an existing tab receives a fresh split. New containers reuse their initial
-children. `--workspace-id` and `--tab-id` select existing IDs instead of names.
-`--pane` uses an existing shell and excludes other placement, cwd, env, and split
-flags. `--label` and `--focus` still apply to that pane. The pane label defaults to
-`--name`, and a tab spawn creates (a new tab, or the first tab of a new workspace or
-worktree workspace) is labeled `--tab`, else `--name`; an existing tab keeps its label.
+Spawn requires a unique live `--name` and a `--harness`; a
+[profile](#profiles) never supplies either. Every spawn that does not reuse a
+pane creates a **new tab**, by default in the caller's workspace. `--tab NAME`
+is only that new tab's label (default: the agent name); it never selects an
+existing tab, and labels need not be unique, so two spawns with the same `--tab`
+get two tabs. Workspace names match exactly and case-sensitively: a missing
+`--workspace` name is created and an ambiguous one fails; `--workspace-id`
+selects an existing workspace by ID. A newly created workspace (or newly opened
+worktree workspace) uses its initial tab, labeled as above; an existing
+workspace receives a new tab from `tab.create`. `--pane` is the only way to
+reuse an existing shell, and it excludes `--workspace`, `--workspace-id`,
+`--tab`, `--worktree`, `--cwd`, and `--env`. `--label` and `--focus` still apply
+to that pane. The pane label defaults to `--name`.
 
-Running `fledge agent spawn` with no flags or native arguments, with stdin and
-stdout both on a terminal, prompts for the harness, model (from local discovery,
-or the harness default), name, and placement: a new tab, a split right or down
-of the caller's tab, or a new worktree. Empty answers take the shown default;
-EOF or Ctrl-C cancels with exit status 2 before any Herdr call. The equivalent
-flag form is printed before launch. Any flag, or a non-terminal stream, keeps the
-ordinary required-flag validation.
+Spawn has no interactive prompts and never splits a pane: there is no wizard,
+and `--tab-id`, `--direction`, and `--ratio` no longer exist (see
+[Migrating from earlier versions](#migrating-from-earlier-versions)).
+Those spellings are rejected as unknown flags before any Herdr call; the same
+tokens after `--` are still passed to the harness as native arguments.
 
 Ordinary spawn honors Herdr's configured cwd policy unless `--cwd` is supplied.
 A relative `--cwd` resolves against the caller's working directory; an
 absolute path is used as given. `--cwd` only places the shell (and selects the
 source for `--worktree new`); the agent is still registered in the repository
 Fledge was invoked from (see [Identity](#identity)). Use repeatable
-`--env KEY=VALUE` for new ordinary shells. `--direction` defaults to `right`;
-`--ratio` delegates to Herdr when omitted. These flags only affect splits. `--focus` defaults to
+`--env KEY=VALUE` for new ordinary shells. `--focus` defaults to
 false and focuses the destination before launch. `--timeout` is a duration,
 default `30s`; its millisecond value must be greater than 3000 and at most
 300000.
@@ -228,8 +261,10 @@ ignore file.
 `--worktree PATH` opens an existing checkout. Without an explicit source, the
 absolute checkout path determines its repository. A newly opened workspace uses
 its initial pane; an already-open workspace receives a new tab. `--tab NAME`
-selects or creates a tab there. Worktree shells use the checkout directory.
-Worktree mode excludes `--env`, `--pane`, and, in this version, `--tab-id`.
+labels that tab. Every checkout gets its own workspace; `--workspace` and
+`--workspace-id` never place a worktree agent, they only select the source.
+Worktree shells use the checkout directory. Worktree mode excludes `--env` and
+`--pane`.
 `--branch` and `--base` apply only to creation.
 
 All 24 documented Herdr harness kinds are accepted. Fledge's optional `--model`
@@ -238,6 +273,19 @@ translates to verified native flags; it is currently unavailable for `kiro`,
 and receive native arguments. Model values remain opaque. Hermes uses its `chat`
 subcommand. Documented native model conflicts are rejected when `--model` is set;
 harness resume behavior can still affect model selection.
+
+Codex spawns default to `--yolo`, disabling approval prompts and sandboxing;
+Claude spawns default to `--permission-mode bypassPermissions`. These defaults
+apply with or without a profile. Other harnesses receive no permission defaults.
+Explicit native permission choices override the defaults: Claude's
+`--permission-mode` or `--dangerously-skip-permissions`, and Codex's bypass,
+sandbox, approval, `--approve-for-me`, or `--full-auto` options, including
+permission configuration through `-c`/`--config` (`approval_policy`,
+`sandbox_mode`, `default_permissions`, or `permissions` and its nested keys).
+Use `--no-permission-bypass` to suppress injection and use harness configuration
+or native arguments instead; it does not remove explicit bypass arguments or
+force a restricted mode. Fledge does not edit harness settings or answer startup
+confirmation dialogs.
 
 Pass native tokens with repeatable `--args=TOKEN`, then optional trailing
 `-- TOKEN...`. Tokens retain whitespace and commas; Fledge does not parse a shell
@@ -386,14 +434,13 @@ missing or unknown harnesses are refused without keys.
 The bindings assume harness defaults: double Escape for `amp`, `copilot`,
 `opencode`, and `kilo`; single Ctrl+C for `droid`, `grok`, `hermes`, `mastracode`,
 and `qodercli`; single Escape for every other currently supported harness.
-Prior keybinding experiments covered Claude and Codex; live smoke tests of the
-implemented `fledge agent pause` command covered Codex and OpenCode. Codex interruption settled
-successfully and a subsequent message resumed the same session and pane.
-OpenCode 1.18.25 visibly interrupted active output with double Escape, but the
-immediate wait reported `blocked` (`partial`, `submitted=true`, `settled=false`,
-`agent_blocked`); a subsequent message resumed the same session and pane and
-reached `done`. See the [integration observations](reference/dogfood/friction.md).
-Other mappings remain best effort; custom keybindings can change their effect. Interruption does not freeze a
+Run `fledge agent capabilities --harness <kind>` to see a harness's interrupt
+binding and its evidence; the evidence column does not mark every binding as
+checked or unchecked. The [dogfooding record](reference/dogfood/friction.md)
+keeps the live pause observations, including an OpenCode limitation: the keys
+can visibly interrupt output while the outcome is `partial` with
+`agent_blocked`, so inspect the terminal before retrying.
+Mappings remain best effort; custom keybindings can change their effect. Interruption does not freeze a
 process, undo completed work, drain queued prompts, or establish a persistent
 paused state. Queued work can start again. Resume or redirect the conversation
 with `fledge agent message`.
@@ -538,100 +585,76 @@ sub-agent share of `tokens`, or null), `basis`, `reason`, and `sources`.
 
 ### Profiles
 
-A profile is a named launch configuration: harness, model, native arguments, and
-a brief. `fledge agent spawn --profile NAME` applies one. Eight built-ins ship
-inside the binary and update with it; they are never copied into a repository.
-Every Claude built-in launches with `--permission-mode bypassPermissions`, so
-those agents run without permission prompts: they can edit files and run
-commands without asking. A repository override that sets `args = []` removes
-the flag.
+A profile is a named **role brief**: plain Markdown instructions that
+`fledge agent spawn --profile NAME` sends ahead of the task. A profile carries no
+launch settings. It never chooses the harness, model, or native arguments, so
+every spawn passes `--harness` itself, `--model` when wanted, and any additional
+native arguments explicitly. Spawn supplies the Claude and Codex permission
+defaults independently of the profile:
 
-| Profile | Harness | Model | Args |
-| --- | --- | --- | --- |
-| `orchestrator` | `claude` | `claude-opus-5-5` | `--permission-mode bypassPermissions` |
-| `planner` | `pi` | `openai-codex/gpt-6-astra` | `--thinking xhigh` |
-| `researcher` | `claude` | `claude-opus-5-5` | `--permission-mode bypassPermissions` |
-| `implementer` | `claude` | `claude-opus-5-5` | `--permission-mode bypassPermissions` |
-| `debugger` | `claude` | `claude-opus-5-5` | `--permission-mode bypassPermissions` |
-| `integrator` | `claude` | `claude-opus-5-5` | `--permission-mode bypassPermissions` |
-| `reviewer` | `pi` | `openai-codex/gpt-6-astra` | none |
-| `verifier` | `pi` | `openai-codex/gpt-6-astra` | none |
-
-Codex models run through the `pi` harness; no built-in uses `codex`. A brief is
-an ordinary first-prompt instruction, subordinate to the task and repository
-instructions; it grants no permissions and changes no task state. Every built-in
-sets `protocol = true`; the orchestrator and planner read `AGENTS.md` and
-`README.md`, the others `AGENTS.md`.
-
-`fledge agent profiles` lists the effective profiles with their source, and
-`fledge agent profiles NAME` shows one resolved profile: source, built-in base,
-harness, model, args, reads, protocol, and the rendered brief exactly as a spawn
-would send it, before reads are checked. Both accept `--json` (the profile adds
-`sections`, `reads`, `protocol`, and `brief`), need no Herdr session, work
-outside Git (built-ins only), and write nothing.
-
-Repository profiles live in `.fledge/profiles/NAME.toml` at the Git top level of
-the checkout Fledge is invoked from, so a linked worktree uses its own branch's
-profiles. This differs from agent and task state, which the primary checkout
-shares, and from `--cwd`, which only places the agent. A file named after a
-built-in overrides and extends it; any other name is a custom profile, which
-may extend a built-in explicitly or stand alone:
-
-```toml
-schema_version = 1                # required
-extends = "builtin:reviewer"      # optional; only built-in bases
-harness = "claude"
-model = "sonnet"
-args = ["--permission-mode", "plan"]   # exact tokens, never shell text
-reads = ["AGENTS.md", "docs/style.md"] # relative to the agent's working directory
-protocol = true                   # include the shared Fledge protocol block
-
-[sections]                        # replace a section ("" clears it)
-report = "Findings with file:line, most severe first."
-
-[sections_append]                 # add a paragraph to the inherited section
-always = "Focus on this repository's Go conventions."
+```sh
+fledge agent spawn --name impl --harness claude --model claude-opus-5-5 --profile implementer \
+  --file brief.md
+fledge agent spawn --name review --harness pi --model openai-codex/gpt-6-astra --profile reviewer --file brief.md
 ```
 
-Sections are `mission`, `workflow`, `always`, `never`, `protocol`, and
-`report`. Only fields present in the file apply. Scalars replace the base,
-`args` and `reads` replace the whole list (`[]` clears it), `protocol` replaces
-the inherited value (a stand-alone profile defaults to `false`), a `[sections]`
-entry replaces that section, and a `[sections_append]` entry adds a paragraph to
-the inherited section or sets it when empty; one section cannot appear in both
-tables. `reads` entries must be nonempty relative paths without `..` segments. Unknown
-keys (including the retired `role`), unknown sections, wrong types, unknown
-bases or schema versions, and invalid names fail before Herdr is contacted; an
+Eight built-ins ship inside the binary as Markdown and update with it; they are
+never copied into a repository: `orchestrator`, `planner`, `researcher`,
+`implementer`, `debugger`, `integrator`, `reviewer`, and `verifier`. Each is
+role guidance only. Files a role should read first, such as `AGENTS.md`, are
+named in its prose ("read if present"), not in a schema, and nothing checks or
+filters them. A brief is an ordinary first-prompt instruction, subordinate to
+the task and repository instructions; it grants no permissions and changes no
+task state.
+
+A repository profile is `.fledge/profiles/NAME.md` at the Git top level of the
+checkout Fledge is invoked from, so a linked worktree uses its own branch's
+profiles. This differs from agent and task state, which the primary checkout
+shares, and from `--cwd`, which only places the agent. A file named after a
+built-in replaces that built-in's role text entirely; any other name adds a
+custom profile. There is no inheritance, section merging, or partial override:
+copy a built-in's text (`fledge agent profiles NAME`) and edit it to adapt one.
+Names match `[a-z][a-z0-9_-]{0,31}`; the file must be a regular file holding
+nonblank UTF-8 without NUL. Invalid files fail before Herdr is contacted, and an
 invalid override never falls back to its built-in. Fledge never rewrites these
-files. Inherited built-in section text follows binary upgrades; set the section
-in `[sections]` to pin it.
+files.
 
-The brief is Markdown with one `##` block per non-empty part, in this order:
-Mission, Read first (one line naming the `reads` files), Workflow, Always,
-Never, Fledge protocol (the shared block when `protocol = true`, then the
-`protocol` section), and Report. Empty parts are omitted. `reads` are
-instructions only; the harness does not enforce them. At spawn, each read is
-checked in the agent's working directory (the new or opened checkout for
-`--worktree`); a missing file is left out of the Read first line, reported as a
-`skipped` `read` effect and a `skipped read: PATH (not found in DIR)` line, and
-the spawn still succeeds.
+The brief a spawn sends is the role text, then one `## Fledge protocol` block
+(the shared protocol every profile gets once), then a `## Project memory` block
+read at spawn time from the agent's working directory (the new or opened
+checkout for `--worktree`): the [memory](#memory) index of that repository's
+primary checkout with a pointer to `fledge memory get`, or
+`No project memories yet.` when there are none or the directory is outside any
+repository. An unreadable memory file puts the error in the block instead; it
+never fails the spawn. The protocol and memory blocks are added only when a
+profile is selected; a spawn without `--profile` sends just its prompt, as
+before. The brief is sent before the task from `--prompt`/`--file`, separated
+by a blank line, in one readiness-gated first prompt with one sender header; a
+brief alone is sent by itself, so `--profile` with `--no-wait` is rejected
+before any Herdr call. Human output names the profile and its source, and JSON
+adds `profile` (`name`, `source`, `path`).
 
-On spawn, explicit flags win. `--harness` matching the profile keeps everything;
-a different `--harness` drops the profile's model and args, which belong to its
-harness, and keeps the brief. `--model` replaces the model, and `--args` or
-tokens after `--` replace the args (a native model option in the effective args
-still conflicts with `--model`). The brief is sent before the task from
-`--prompt`/`--file`, separated by a blank line, in one first prompt with one
-sender header; a brief alone is sent by itself, so `--no-wait` is rejected
-before any Herdr call when the profile has a brief, including any `reads`,
-whether or not the files exist. Human output names the profile and its
-source, and JSON adds `profile` (`name`, `source`, `path`, `base`).
+`fledge agent profiles` lists the effective profiles (`NAME`, `SOURCE`), and
+`fledge agent profiles NAME` shows one profile's source and its brief: the role
+text followed by the shared protocol, without the spawn-time memory block. With
+`--json` a profile is `name`, `source` (`builtin` or `repo`), `path` (null for a
+built-in), and `brief`. Both need no Herdr session, work outside Git (built-ins
+only), and write nothing.
+
+Legacy TOML profiles are not loaded or migrated. Spawning with a profile whose
+`.fledge/profiles/NAME.toml` exists fails before launch, and any `.toml` file in
+`.fledge/profiles/` fails `agent profiles`. The error names the file, adds
+`and conflicts with .../NAME.md` when a Markdown file of the same name also
+exists, and says how to migrate: move the brief text into `NAME.md`, pass launch
+settings to `agent spawn` (`--harness`, `--model`, native arguments after
+`--`), and delete the TOML file.
 
 `.fledge/.gitignore` keeps everything else in `.fledge` ignored and ends with
-`*`, `!/profiles/`, `!/profiles/*.toml`, so profile files can be committed. The
+`*`, `!/profiles/`, `!/profiles/*.md`, so profile files can be committed. The
 next command that prepares `.fledge`, such as agent registration or managed
 worktree creation, appends any missing rules to an existing file and preserves
-its contents. A checkout Fledge creates (`agent spawn --worktree new` or
+its contents; a file from an older Fledge that ends with `!/profiles/*.toml`
+gets the whole Markdown block appended after it. A checkout Fledge creates (`agent spawn --worktree new` or
 `worktree create`) gets its own `.fledge/.gitignore` with the same rules, so
 scratch files such as `.fledge/tmp/` stay out of its `git status` even under an
 allowlist-style root `.gitignore`; if that write fails, the checkout stays and
@@ -671,6 +694,10 @@ unidentified. The parent is the caller's live record when the
 caller's pane hosts a registered terminal; otherwise it is null. Records are
 never deleted: an ended record moves to `.fledge/state/agents/archive/`, where
 lookups by ID still find it but scans for live agents no longer read it.
+`.fledge/state/agents/index/` holds empty marker files that index each record
+by its parent, which is fixed when the record is created, so `agent cleanup`
+reads only the caller's children. A record without a marker, such as one an
+older Fledge wrote, is still read, and the next registration indexes it.
 
 `native_session` is the harness's own session ref (`source`, `harness`, `kind`,
 `value`, `observed_at`) as Herdr reports it in `agent_session`, so later
@@ -885,7 +912,7 @@ cleans up after failure. Inspect the reported pane and resources in Herdr before
 retrying. For an unknown message outcome, inspect the conversation first to avoid
 submitting the same prompt twice. A launched process is not proof of readiness.
 
-A fresh split can briefly return `agent_pane_busy` while its shell reaches a
+A fresh tab can briefly return `agent_pane_busy` while its shell reaches a
 prompt. Fledge retries only the launch step for that code, up to six more times
 with delays of 50ms doubling to a cap of 800ms (about 2.4 seconds in total),
 without recreating any resource; other errors are never retried. If it still
@@ -908,10 +935,10 @@ pane closing. Owners and verifiers are Fledge agent record IDs (see
 completion is never derived from Herdr idle or done.
 
 ```sh
-fledge task template > brief.md                               # fill in, then create
+fledge task template > brief.md                               # optional skeleton
 fledge task create --title "Fix the parser" --file brief.md   # prints the task ID
 fledge task create --title "Add tests" --file tests.md --parent 1a2b3c4d --after 5e6f7a8b
-fledge task create --title "Try a probe" --body "one line" --freeform
+fledge task create --title "Try a probe" --body "one line"
 fledge task import --file .fledge/tmp/plans/5d6ab497.toml --dry-run   # see Proposals
 fledge task depend --id 9c0d1e2f --after 1a2b3c4d --remove 5e6f7a8b
 fledge task list --ready                                        # created and unblocked
@@ -924,8 +951,14 @@ fledge task get --id 1a2b3c4d
 
 ### Briefs
 
-`create` requires the brief to follow the **brief template**: six `## `
-headings, exactly once each and in this order, each followed by content:
+A brief is any nonblank, valid UTF-8 text without NUL. `create` and `import`
+store it exactly as given, without trimming, and `assign` delivers it
+unchanged. Blank, invalid UTF-8, or NUL-containing text fails before any state
+is created as invalid input (exit 2, phase `validation`). There is no required
+structure and no `--freeform` flag.
+
+The optional **brief template** is a recommended structure: six `## ` headings,
+in this order:
 
 - `## Objective` – the outcome wanted, in one paragraph.
 - `## Acceptance criteria` – concrete, testable checks that decide completion.
@@ -937,20 +970,10 @@ headings, exactly once each and in this order, each followed by content:
 - `## Constraints` – rules: authorization, commit policy, who to report to,
   what to escalate.
 
-Headings match exactly (case-sensitive, trailing whitespace ignored). Text
-before the first heading and `###` sub-headings inside a section are allowed;
-any other `## ` heading outside a fenced code block is an unknown section. A section holding only blank
-lines or HTML comments on their own lines (`<!-- hint -->`) is empty. A brief
-off the template fails with `task_brief_incomplete` (exit 1, phase
-`validation`) naming the missing, empty, duplicated, unknown, or misordered
-section, before any state is created. `--freeform` skips the check and stores
-the brief as given. Existing records are never re-checked, and `assign`
-delivers the brief text unchanged.
-
-Run `fledge task template` for the brief skeleton and fill it in, rather than
-writing the headings from memory: the command is the source of truth for the
-template. It prints the six headings, each followed by an HTML comment hint,
-so an unfilled skeleton fails `create` with `task_brief_incomplete`.
+`fledge task template` prints the six headings, each followed by an HTML
+comment hint, as a starting point. Nothing checks the headings: a brief may use
+some, none, or others, and even the unfilled skeleton is accepted, so fill it in
+before creating the task.
 `--proposal` prints a proposal skeleton instead: `schema_version`, a `[parent]`,
 and one example `[[tasks]]` entry, each brief being the brief skeleton.
 `--json` returns `kind` (`brief` or `proposal`) and `text` in the outcome
@@ -1019,13 +1042,15 @@ its subtasks, and a subtask is not a prerequisite of its parent.
   caller assigned it first, assign fails with `task_state_changed`.
 - `complete --id TASK` (`--summary` or `--file`) requires an `assigned` task and
   a caller whose live agent record is the owner (`task_not_owner` otherwise);
-  `--force` overrides the owner check. After recording completion, it sends the
-  task ID, title, result, and verification command to the distinct registered
-  creator. An unregistered creator or a creator completing its own task needs no
+  `--force` overrides the owner check. The result is stored on the task first;
+  then the distinct registered creator is sent a short notice, without the
+  report body:
+  `task completed: <id> · title: <title> · read result: fledge task get --id <id> · verify with: fledge task verify --id <id> --summary "..."`.
+  Read the full result with `task get`. An unregistered creator or a creator completing its own task needs no
   notification. A stale creator or confirmed delivery failure returns `partial`;
   an uncertain delivery returns `unknown`. The task remains completed, the
   notification outcome is recorded, and delivery is never retried automatically.
-- `verify --id TASK [--summary TEXT]` requires a `completed` or `verified` task
+- `verify --id TASK [--summary TEXT | --file PATH]` requires a `completed` or `verified` task
   and a registered caller other than the owner. The owner is refused with
   `task_self_verification` and an unregistered caller with
   `caller_unregistered`; `--force` overrides both and records `forced: true`.
@@ -1050,63 +1075,60 @@ its subtasks, and a subtask is not a prerequisite of its parent.
   tasks whose prerequisites are all satisfied. Filters combine. `get --id TASK`
   prints the full record with its parent, subtask progress, and each
   prerequisite's state, for example
-  `after: 1a2b3c4d (verified), 5e6f7a8b (cancelled: superseded), 9c0d1e2f (assigned, waiting)`,
-  and a `usage:` block once usage is recorded (see [Usage snapshots](#usage-snapshots)).
+  `after: 1a2b3c4d (verified), 5e6f7a8b (cancelled: superseded), 9c0d1e2f (assigned, waiting)`.
 
-### Usage snapshots
-
-`complete` and `verify` record a usage snapshot on the task after their state
-change is committed, in a separate write, so collecting usage never fails or
-delays the transition: `usage.worker` is written once, at completion, and
-`usage.verifier` at each verification, replacing the previous one. `task get`
-shows them:
-
-```text
-usage:
-  worker: 1h02m, 14 turns, in 1.2k out 18.4k cache-r 410k cache-w 96k, cost -, measured
-  verifier: 5m12s, 3 turns, in 840 out 2.1k cache-r 88k cache-w 12k, cost $0.04 (est), measured
-```
-
-The worker is the owner completing its task; for a `--force` completion on
-another agent's behalf it is still the owner, read from its persisted session
-ref, and `reason` says so. The verifier is the caller; an unregistered one is
-`unavailable`. The window runs from `assigned_at` to `completed_at` for the
-worker (from `created_at`, with a reason, when the task was never assigned)
-and from `completed_at` to `verified_at` for the verifier (from `created_at`
-for a parent verified without completing). `elapsed_seconds` is that window's
-length, from the task timestamps. The harness and native session ref come
-from the agent's live Herdr details, else from its record's `native_session`
-(see [Identity](#identity)); `assign`, `complete`, and `verify` store the live
-ref they see on the owner's or verifier's record, best effort, and a failed
-write is a `warning` effect. Tokens are measured from the harness's own
-session store (see `internal/lib/usage`); cost appears only when the harness
-records one and is labelled `(est)`: Fledge keeps no price table and does not
-integrate qmeter. A missing ref, an unsupported harness, or unreadable data
-records `basis: unavailable` with a `reason`; a failed snapshot write is a
-`warning` effect and the command still succeeds.
-
-Attribution is by time window on the agent's session: an agent that works two
-tasks at once, or chats with a human in the same pane, is counted in each
-overlapping window.
+Task commands do not collect usage. `complete` and `verify` read no harness
+transcripts. For token and cost figures, ask for them explicitly with
+[`fledge agent usage`](#usage), which reads an agent's whole native session on
+demand. `assign`, the owner's own `complete`, and `verify` still record the
+live native session ref they observe on the owner's or verifier's agent record,
+best effort (a failed write is a `warning` effect), so `agent usage` can find
+the session later.
 
 Each record holds `id`, `title`, `brief`, `parent`, `after`, `owner`, `status`,
 `result`, `verifier`, `verification_note`, `forced`, `cancel_reason`,
 `created_at`, `created_by`, `assigned_at`, `unmet_at_assign`, `completed_at`,
-`completion_notification`, `verified_at`, `cancelled_at`, `delivery`, and
-`usage`. Records written before subtasks and dependencies load with a null
-`parent`, `after`, and `unmet_at_assign`, and those written before usage
-snapshots with a null `usage`. Each snapshot holds `agent_id`, `harness`,
-`session` (`kind`, `value`), `window` (`from`, `to`), `elapsed_seconds`,
-`tokens` (`input`, `output`, `cache_read`, `cache_write`, `reasoning`), `cost`
-(null, or `amount`, `currency`, `basis: estimate`, `source`), `models`,
-`turns`, `basis` (`measured` or `unavailable`), `reason`, and `collected_at`. A completion notification records
+`completion_notification`, `verified_at`, `cancelled_at`, and `delivery`.
+Records written before subtasks and dependencies load with a null `parent`,
+`after`, and `unmet_at_assign`. A completion notification records
 its `recipient`, `message_id`, optional `pane`, `delivered_at`, `error`, and
-`uncertain` state. Every command supports `--json` with the same outcome envelope
+`uncertain` state. Every noninteractive task command supports `--json` with the same outcome envelope
 as the agent commands. JSON results add derived fields: list rows `progress`
 (`verified`, `total`, `cancelled`, or null) and `waiting`; get `progress` and
 `dependencies` (`id`, `title`, `status`, `cancel_reason`, `satisfied`); verify
 `open_subtasks`; cancel `unblocked`; and template `kind` and `text`. `task
 list`, `task get`, `task depend`, and `task template` never contact Herdr.
+
+### Task board
+
+`fledge task board` opens a read-only keyboard outline in the current terminal.
+Run it in a normal Herdr terminal tab to keep the board alongside your workers.
+It shows active tasks and their ancestors, including terminal parents with active
+children. Roots and siblings stay oldest first. Parent progress counts direct
+children; it never changes the parent's stored state. Created leaves are ready
+or waiting on prerequisites; completed tasks await verification. Worker activity
+is shown separately from task state.
+
+Use arrows to select and expand/collapse the outline. Enter opens scrollable
+full-screen details below 100 columns, or focuses the side panel at wider sizes.
+Tab switches wide panels, Escape returns to the outline, and arrows scroll the
+details. `h` toggles history, `r` refreshes, and `q` or Ctrl-C exits. Details include
+briefs, results, dependencies, verification notes, delivery errors and timestamps.
+Selection, expansion choices and scroll positions survive ordinary refreshes.
+
+The board refreshes every two seconds. Task and worker failures are marked
+independently; the last good snapshot stays visible. `g` visits the selected
+worker after rechecking its current owner, terminal and pane. Visiting marks the
+worker's Herdr output seen, leaves the board running in its own tab, and never
+updates task or identity records. Navigation is disabled while worker observation
+is stale or unavailable. Revalidation and focusing are not atomic; a changed
+identity in the focus response is reported without an automatic retry.
+
+Input and output must both be terminals (otherwise exit 2). A genuine initial
+task read error exits 1; an uninitialized repository displays an empty board
+without creating state. Inspection also works outside Herdr, with worker activity
+unavailable. There is no board JSON mode or editing/assignment/verification UI.
+Managed worktrees share the primary checkout's task state.
 
 ### Proposals
 
@@ -1143,8 +1165,9 @@ after = ["brief-lib"]
 `schema_version` must be `1`, and unknown keys anywhere are rejected. There
 must be at least one `[[tasks]]` entry. Each `key` is nonempty, single-line,
 unique, and never an 8-hex task id; each `title` is nonempty and single-line;
-every brief, including the parent's, must follow the brief template (there is
-no freeform import); and each `after` entry names a key in the file or an
+every brief, including the parent's, must be nonblank, valid UTF-8 without NUL
+after TOML decoding (so an escaped `\u0000` is rejected too), with no required
+headings; and each `after` entry names a key in the file or an
 existing task id. Local dependencies must not form a cycle.
 
 ```sh
@@ -1160,6 +1183,9 @@ allow), resolving each `after` key to the new task's id and setting every task's
 `parent`. `--parent TASK` places the tasks under an existing task instead; it
 must be neither verified nor cancelled, and it conflicts with a `[parent]` in
 the file. `created_by` is the caller, as for `create`. Import never assigns.
+A real import contacts Herdr's socket only when run inside a Herdr pane
+(`HERDR_PANE_ID` set), to identify the caller; outside a pane it imports
+without the socket.
 
 `--dry-run` runs the same checks, including that `--parent` and any existing
 `after` ids exist, and prints the tasks in creation order without creating
@@ -1180,9 +1206,8 @@ entries on a dry run and resolved ids otherwise. Effects list one `created
 task <id>` per record.
 
 A file or schema problem, a `[parent]` with `--parent`, or a missing `--file`
-is invalid input (exit 2, phase `validation`); a brief off the template fails
-with `task_brief_incomplete` (exit 1) naming the task key, as in
-`task "import": ...`. An unknown `--parent` or `after` id fails with
+is invalid input (exit 2, phase `validation`), including an invalid brief,
+which names the task key, as in `task "import": brief must not be blank`. An unknown `--parent` or `after` id fails with
 `task_not_found`, and a verified or cancelled `--parent` with
 `task_invalid_state` (phase `task`); none of these create anything. The store
 keeps one file per record, so a failure partway through a real import leaves
@@ -1193,6 +1218,56 @@ By convention a planner writes its proposal to
 `.fledge/tmp/plans/<task-id>.toml`, named for the planning task it was
 assigned. `.fledge/tmp/` is the agents' scratch directory and is already
 ignored; no Fledge command creates it, and `task import` accepts any path.
+
+## Memory
+
+Memories are durable, non-obvious facts about the project, Fledge, or Herdr that
+agents share across sessions. Each is one Markdown file in `.fledge/memories/`
+under the repository's primary checkout, so every linked worktree reads and
+writes the same memories; `.fledge/.gitignore` keeps them untracked. Memory
+commands never contact Herdr, so they work outside a Herdr pane.
+
+```sh
+fledge memory add --name herdr-socket --type project \
+  --description "Herdr commands need socket access in sandboxes" --file note.md
+fledge memory list                  # one index line per memory, by name
+fledge memory list --type feedback
+fledge memory get --name herdr-socket
+fledge memory remove --name herdr-socket
+```
+
+A memory file has `name`, `description`, and `type` frontmatter, then a
+nonempty Markdown body:
+
+```markdown
+---
+name: herdr-socket
+description: Herdr commands need socket access in sandboxes
+type: project
+---
+
+Every `fledge agent` command except `models`, `profiles`, and `capabilities`
+without `--live` connects to Herdr's socket.
+```
+
+The name is a kebab-case slug of lowercase letters and digits, at most 64
+characters, and is the file's basename. The description is one line. The type is
+`user`, `feedback`, `project`, or `reference`. `add` takes the body from
+`--body`, or from `--file` (`-` for stdin); invalid input fails with
+`invalid_input` (exit 2) before anything is written, and an existing name fails
+with `memory_exists` rather than being replaced: remove it first. `get` prints
+the file; `get` and `remove` fail with `memory_not_found` for an unknown name.
+
+`MEMORY.md` beside the memories is the index, one `- [name](name.md) —
+description` line per memory ordered by name, with no frontmatter. `add` and
+`remove` regenerate it from the memory files under the state lock, so
+concurrent writers never lose a line; never edit it by hand. `list` prints the
+same lines, or `No memories.`. A malformed memory file fails `list`, and
+fails `add` and `remove` before they change any file, naming the file; fix or
+delete it to continue. All four commands accept `--json`; `list`
+returns `memories` (`name`, `description`, `type`) and `get` the memory with
+its `body`. Profile spawns inject the index into the worker's brief (see
+[Profiles](#profiles)).
 
 ## Worktrees
 
@@ -1263,8 +1338,8 @@ from; see [Cleanup](#cleanup)):
 4. Otherwise, none: every checkout is merged `unknown`.
 
 Set it when work integrates into a branch other than the remote default. Fledge
-itself develops on `dev` and reaches `main` only through pull requests, so its
-checkouts set:
+itself develops on `dev` and reaches `main` only through pull requests, so
+contributors must set it in each clone (Git does not copy local config):
 
 ```sh
 git config fledge.baseBranch dev
@@ -1346,54 +1421,36 @@ as a `fail`, not a crash.
 
 ## Layout
 
-- `main.go` delegates to `cmd.Execute()` and handles the exit status.
-- `cmd/` constructs fresh command trees with `NewRootCmd()` and provides
-  `ExecuteWithArgs()` for tests.
-- `cmd/<name>/` and `cmd/<parent>/<subcommand>/` contain thin Cobra wiring;
-  `internal/` mirrors that command nesting as `internal/<name>/` and
-  `internal/<parent>/<subcommand>/`.
-- Each internal command leaf owns its options, orchestration, result types,
-  human rendering, and tests. Internal parent packages may coordinate nested
-  components, as `doctor` does with `checks`/`report` and `update` with
-  `release`/`archive`/`install`/`confirm`; child packages do not import their
-  parents.
-- `internal/lib/<capability>/` contains focused shared code used by multiple
-  commands or packages; do not create one flat grab-bag lib package and do not
-  extract speculative utilities.
-- `internal/lib/version` reports the release tag or Go build metadata through
-  `--version` and `-V`, without a maintained version file.
-- `internal/lib/harness` is the single source of per-harness facts: the kinds,
-  one typed profile per kind that `agent pause`, `agent spawn`, and `agent models`
-  read, and the fixed capability rows derived from it. It imports nothing from Fledge.
-- `internal/lib/usage` reads a harness session's measured tokens and
-  harness-recorded cost estimate from claude, codex, and pi session files and
-  `opencode export`, filtered to a time window; missing or unreadable data is
-  `unavailable` with a reason. Windows attribute by time on one session, so
-  concurrent tasks or human chat in the same pane double-count.
+[AGENTS.md](AGENTS.md#layout) holds the contributor rules for package structure.
+This map is a starting point. A package with several files has a `doc.go` that
+summarizes them.
 
-New subcommands export `New() *cobra.Command` and are registered by their parent.
-Internal packages do not import Cobra or `cmd/`.
+- `main.go` is the installable entrypoint; `cmd/` holds the root command and the
+  thin Cobra wiring for each subcommand.
+- `internal/<name>/` and `internal/<parent>/<subcommand>/` implement each command.
+- `internal/lib/<capability>/` holds code that several commands share. Some
+  examples:
+  - `internal/lib/version` reports the release tag or Go build metadata through
+    `--version` and `-V`, without a maintained version file.
+  - `internal/lib/harness` is the single source of per-harness facts: the kinds,
+    one typed profile per kind that `agent pause`, `agent spawn`, and `agent models`
+    read, and the fixed capability rows derived from it. It imports nothing from Fledge.
+  - `internal/lib/memory` stores memory files and their generated index for the
+    `memory` commands and the spawn brief.
+  - `internal/lib/usage` reads a harness session's measured tokens and
+    harness-recorded cost estimate from claude, codex, and pi session files and
+    `opencode export` for `agent usage`, which always reads the whole session
+    (the library can also filter to a time window, but no command uses it);
+    missing or unreadable data is
+    `unavailable` with a reason.
 
 ## Development
 
 Check formatting from the repository root using Bash. This includes tracked and
 new nonignored Go files, skips deleted files, and excludes ignored worktrees:
 
-```bash
-set -euo pipefail
-git ls-files --cached --others --exclude-standard --deduplicate -z -- '*.go' |
-  (
-    status=0
-    while IFS= read -r -d '' file; do
-      [[ -f "$file" ]] || continue
-      unformatted="$(gofmt -l -- "$file")" || exit "$?"
-      if [[ -n "$unformatted" ]]; then
-        printf '%s\n' "$unformatted" >&2
-        status=1
-      fi
-    done
-    exit "$status"
-  )
+```sh
+bash .github/scripts/gofmt-check.sh
 ```
 
 Then run:

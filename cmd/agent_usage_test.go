@@ -7,15 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 )
 
-func TestAgentUsageRegistered(t *testing.T) {
+func TestAgentUsageHelpFlags(t *testing.T) {
 	var out bytes.Buffer
-	if err := ExecuteWithArgs([]string{"agent", "--help"}, &out); err != nil || !strings.Contains(out.String(), "\n  usage ") {
-		t.Fatalf("%v %s", err, out.String())
-	}
-	out.Reset()
 	if err := ExecuteWithArgs([]string{"agent", "usage", "--help"}, &out); err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +37,7 @@ func TestAgentUsageJSONValidation(t *testing.T) {
 			if !errors.As(err, &status) || status.ExitCode() != 2 {
 				t.Fatalf("wrong exit: %v", err)
 			}
-			var envelope libagent.Outcome
+			var envelope cli.Outcome
 			if err := json.Unmarshal(out.Bytes(), &envelope); err != nil || envelope.Status != "rejected" || envelope.Operation != "agent.usage" {
 				t.Fatalf("%q: %v", out.String(), err)
 			}

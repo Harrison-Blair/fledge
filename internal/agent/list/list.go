@@ -9,8 +9,10 @@ import (
 	"text/tabwriter"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
 )
 
 type Result struct {
@@ -36,32 +38,35 @@ type Options struct {
 	IDs, JSON bool
 }
 
-func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.list", Status: "success", Effects: []libagent.Effect{}}
+func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
+	out := cli.NewOutcome("agent.list")
 	err := o.Validate()
 	if err == nil && o.IDs && o.JSON {
-		err = libagent.Invalid("--ids and --json are mutually exclusive")
+		err = cli.Invalid("--ids and --json are mutually exclusive")
 	}
 	if err != nil {
 		out.Fail(err, "validation", false)
 		return out
 	}
 	// --mine resolves the caller through Herdr's agent.get, as it always has,
-	// then filters like --parent.
+	// then filters like --parent over the store it already opened.
+	var matches []selector.Match
 	if o.Mine {
-		s, err := identity.Existing(ctx, c.Cwd)
-		if err != nil {
+		var s *state.Store
+		var caller identity.Record
+		if s, err = identity.Existing(ctx, c.Cwd); err != nil {
 			out.Fail(err, "state", false)
 			return out
 		}
-		caller, err := identity.RequireCaller(ctx, s, c)
-		if err != nil {
+		if caller, err = identity.RequireCaller(ctx, s, c); err != nil {
 			out.Fail(err, "identity", false)
 			return out
 		}
 		o.Mine, o.Parent = false, caller.ID
+		matches, err = selector.ResolveIn(ctx, s, c, o.Filter)
+	} else {
+		matches, err = selector.Resolve(ctx, c, o.Filter)
 	}
-	matches, err := selector.Resolve(ctx, c, o.Filter)
 	if err != nil {
 		out.Fail(err, "agent.list", false)
 		return out
@@ -79,7 +84,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 }
 
 // Render writes a successful list outcome as a table.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil
@@ -106,7 +111,7 @@ func Render(w io.Writer, o libagent.Outcome) error {
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(table, "ID\tPARENT\tNAME\tHARNESS\tPROFILE\tSTATUS\tWORKSPACE\tTAB\tPANE\tCWD")
 	for _, a := range r.Agents {
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", libagent.Display(a.ID), libagent.Display(a.Parent), libagent.Display(a.Name), libagent.Display(a.Harness), libagent.Display(a.Profile), libagent.Display(a.AgentStatus), libagent.Display(a.WorkspaceID), libagent.Display(a.TabID), libagent.Display(a.PaneID), libagent.Display(a.Cwd))
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", cli.Display(a.ID), cli.Display(a.Parent), cli.Display(a.Name), cli.Display(a.Harness), cli.Display(a.Profile), cli.Display(a.AgentStatus), cli.Display(a.WorkspaceID), cli.Display(a.TabID), cli.Display(a.PaneID), cli.Display(a.Cwd))
 	}
 	return table.Flush()
 }

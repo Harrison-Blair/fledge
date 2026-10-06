@@ -7,7 +7,7 @@ import (
 )
 
 func validOptions() Options {
-	return Options{Name: "worker", Harness: "claude", Timeout: 30 * time.Second, Direction: "right"}
+	return Options{Name: "worker", Harness: "claude", Timeout: 30 * time.Second}
 }
 func TestSpawnValidation(t *testing.T) {
 	for _, tc := range []struct {
@@ -19,11 +19,12 @@ func TestSpawnValidation(t *testing.T) {
 		{"harness", func(o *Options) { o.Harness = "nope" }},
 		{"timeout", func(o *Options) { o.Timeout = 3000 * time.Millisecond }},
 		{"workspace selectors", func(o *Options) { o.Workspace = "a"; o.WorkspaceID = "w1" }},
-		{"pane direction", func(o *Options) { o.Pane = "p"; o.DirectionSet = true }},
+		{"pane tab", func(o *Options) { o.Pane = "p"; o.Tab = "t" }},
+		{"pane cwd", func(o *Options) { o.Pane = "p"; o.Cwd = "/x" }},
+		{"pane env", func(o *Options) { o.Pane = "p"; o.Env = []string{"K=V"} }},
 		{"worktree env", func(o *Options) { o.Worktree = "new"; o.Env = []string{"K=V"} }},
 		{"branch ordinary", func(o *Options) { o.Branch = "x" }},
 		{"bad env", func(o *Options) { o.Env = []string{"bad"} }},
-		{"bad ratio", func(o *Options) { r := 2.0; o.Ratio = &r }},
 		{"no-wait with prompt", func(o *Options) { o.NoWait = true; o.PromptSet = true }},
 		{"no-wait with file", func(o *Options) { o.NoWait = true; o.FileSet = true }},
 	} {
@@ -59,6 +60,11 @@ func TestModelArguments(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := []string{"--model", "a model", "--flag=a,b", "two words"}
+			if h == "claude" {
+				want = append([]string{"--permission-mode", "bypassPermissions"}, want...)
+			} else if h == "codex" {
+				want = append([]string{"--yolo"}, want...)
+			}
 			if h == "hermes" {
 				want = append([]string{"chat"}, want...)
 			}
@@ -89,5 +95,32 @@ func TestModelConflicts(t *testing.T) {
 	got, err := o.Validate()
 	if err != nil || !reflect.DeepEqual(got, []string{"chat", "--model", "mine", "hello"}) {
 		t.Fatalf("%q %v", got, err)
+	}
+}
+
+func TestCodexConfigKey(t *testing.T) {
+	for _, tc := range []struct {
+		args     []string
+		i        int
+		key      string
+		consumed int
+	}{
+		{[]string{"-c", "model='x'"}, 0, "model", 1},
+		{[]string{"--config", `"model" = 'x'`}, 0, "model", 1},
+		{[]string{"--config=sandbox_mode='read-only'"}, 0, "sandbox_mode", 0},
+		{[]string{"-capproval_policy='never'"}, 0, "approval_policy", 0},
+		{[]string{"-c=approval_policy='never'"}, 0, "approval_policy", 0},
+		{[]string{"-c", " 'permissions.x' =1"}, 0, "permissions.x", 1},
+		{[]string{"-c"}, 0, "", 1},
+		{[]string{"--config", "model"}, 0, "", 1},
+		{[]string{"-cmodel"}, 0, "", 0},
+		{[]string{"--search", "-c", "model=x"}, 1, "model", 1},
+		{[]string{"--search"}, 0, "", 0},
+		{[]string{"model=x"}, 0, "", 0},
+	} {
+		key, consumed := codexConfigKey(tc.args, tc.i)
+		if key != tc.key || consumed != tc.consumed {
+			t.Errorf("codexConfigKey(%q, %d) = %q, %d; want %q, %d", tc.args, tc.i, key, consumed, tc.key, tc.consumed)
+		}
 	}
 }

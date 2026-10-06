@@ -9,7 +9,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/brief"
 )
 
-// valid is a filled brief that passes brief.Validate.
+// valid is a brief filled in on the advisory template.
 func valid() string {
 	var b strings.Builder
 	for _, s := range brief.Sections {
@@ -40,6 +40,22 @@ func TestDecodeAccepts(t *testing.T) {
 	}
 	if !slices.Equal(p.Tasks[1].After, []string{"a", "0123abcd"}) {
 		t.Fatalf("after = %v", p.Tasks[1].After)
+	}
+}
+
+// Briefs need not follow the template; decoded text is kept exactly.
+func TestDecodeAcceptsAnyNonblankBrief(t *testing.T) {
+	for _, tc := range []struct{ toml, want string }{
+		{`"one line"`, "one line"},
+		{`"  padded \n\n"`, "  padded \n\n"},
+		{`"　résumé"`, "　résumé"},
+		{"'''\n## Notes\nx\n'''", "## Notes\nx\n"},
+	} {
+		src := header + "[parent]\ntitle = \"E\"\nbrief = " + tc.toml + "\n\n[[tasks]]\nkey = \"a\"\ntitle = \"A\"\nbrief = " + tc.toml + "\n"
+		p, err := Decode([]byte(src))
+		if err != nil || p.Parent.Brief != tc.want || p.Tasks[0].Brief != tc.want {
+			t.Fatalf("%s: %v %+v", tc.toml, err, p)
+		}
 	}
 }
 
@@ -83,10 +99,14 @@ func TestDecodeRejects(t *testing.T) {
 		"id-shaped key":         {header + task("0123abcd", ""), `task "0123abcd": key must not look like a task id`},
 		"empty title":           {header + strings.Replace(good, `title = "Do a"`, `title = ""`, 1), `task "a": title is required`},
 		"multi-line title":      {header + strings.Replace(good, `title = "Do a"`, `title = "Do\na"`, 1), `task "a": title must be a single line`},
-		"bad brief":             {header + strings.Replace(good, "## Scope\n", "", 1), `task "a": task_brief_incomplete: brief is missing sections: Scope`},
-		"empty brief":           {header + strings.Replace(good, "brief = '''\n"+valid()+"'''\n", "", 1), `task "a": task_brief_incomplete: brief is missing sections`},
+		"omitted brief":         {header + withBrief(good, ""), `task "a": brief must not be blank`},
+		"blank brief":           {header + withBrief(good, `brief = " \t\n"`), `task "a": brief must not be blank`},
+		"unicode blank brief":   {header + withBrief(good, `brief = "　  "`), `task "a": brief must not be blank`},
+		"escaped NUL brief":     {header + withBrief(good, `brief = "a\u0000b"`), `task "a": brief must not contain NUL`},
 		"parent title":          {header + "[parent]\ntitle = \"E\\nF\"\nbrief = '''\n" + valid() + "'''\n\n" + good, "parent: title must be a single line"},
-		"parent brief":          {header + "[parent]\ntitle = \"E\"\nbrief = \"x\"\n\n" + good, "parent: task_brief_incomplete: brief is missing sections"},
+		"parent blank brief":    {header + "[parent]\ntitle = \"E\"\nbrief = \"\\u2003\"\n\n" + good, "parent: brief must not be blank"},
+		"parent omitted brief":  {header + "[parent]\ntitle = \"E\"\n\n" + good, "parent: brief must not be blank"},
+		"parent NUL brief":      {header + "[parent]\ntitle = \"E\"\nbrief = \"\\u0000\"\n\n" + good, "parent: brief must not contain NUL"},
 		"unknown after":         {header + task("a", `"zzz"`), `task "a": after names unknown key "zzz"`},
 		"self cycle":            {header + task("a", `"a"`), "cycle: a → a"},
 		"cycle":                 {header + task("a", `"b"`) + task("b", `"a"`), "cycle: a → b → a"},
@@ -126,6 +146,32 @@ func TestOrderDiamond(t *testing.T) {
 	}
 }
 
+func TestDecodeOrderedReturnsCheckedOrder(t *testing.T) {
+	// Dependents listed first; a duplicate prerequisite and an existing id.
+	src := header + task("d", `"b", "c", "b"`) + task("c", `"a"`) + task("b", `"a", "0123abcd"`) + task("a", "") + task("e", "")
+	p, order, err := DecodeOrdered([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := p.Order()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := func(ts []Task) []string {
+		var k []string
+		for _, t := range ts {
+			k = append(k, t.Key)
+		}
+		return k
+	}
+	if got := keys(order); !slices.Equal(got, keys(want)) || !slices.Equal(got, []string{"a", "b", "c", "d", "e"}) {
+		t.Fatalf("order = %v, want %v", got, keys(want))
+	}
+	if _, _, err := DecodeOrdered([]byte(header + task("a", `"b"`) + task("b", `"a"`))); err == nil || !strings.Contains(err.Error(), "cycle: a → b → a") {
+		t.Fatalf("cycle err = %v", err)
+	}
+}
+
 func TestOrderReportsCycle(t *testing.T) {
 	p := Proposal{Tasks: []Task{{Key: "a", After: []string{"b"}}, {Key: "b", After: []string{"a"}}}}
 	if _, err := p.Order(); err == nil || !strings.Contains(err.Error(), "a → b → a") {
@@ -138,14 +184,14 @@ func TestSkeleton(t *testing.T) {
 	if !strings.Contains(s, "[parent]") || !strings.Contains(s, "[[tasks]]") || !strings.Contains(s, brief.Skeleton()) {
 		t.Fatalf("skeleton:\n%s", s)
 	}
-	_, err := Decode([]byte(s))
-	if err == nil || !strings.Contains(err.Error(), "brief section Objective is empty") {
-		t.Fatalf("err = %v", err)
+	// The unfilled skeleton is a valid proposal; its briefs are kept verbatim.
+	p, err := Decode([]byte(s))
+	if err != nil || p.Parent.Brief != brief.Skeleton() || len(p.Tasks) != 1 || p.Tasks[0].Brief != brief.Skeleton() {
+		t.Fatalf("err = %v %+v", err, p)
 	}
-	// Filling every brief makes the skeleton import cleanly, so only the
-	// unfilled briefs keep it from decoding.
-	filled := strings.ReplaceAll(s, brief.Skeleton(), valid())
-	if _, err := Decode([]byte(filled)); err != nil {
-		t.Fatalf("filled skeleton: %v\n%s", err, filled)
-	}
+}
+
+// withBrief replaces the valid brief in a task entry with line.
+func withBrief(entry, line string) string {
+	return strings.Replace(entry, "brief = '''\n"+valid()+"'''\n", line+"\n", 1)
 }

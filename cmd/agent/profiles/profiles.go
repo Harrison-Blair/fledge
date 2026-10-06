@@ -5,14 +5,14 @@ import (
 	"os"
 
 	"github.com/Harrison-Blair/fledge/internal/agent/profiles"
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/spf13/cobra"
 )
 
 func New() *cobra.Command {
 	var asJSON bool
-	cmd := &cobra.Command{Use: "profiles [NAME]", Short: "List agent profiles, or show one resolved profile",
-		Long: "List agent profiles, or show one resolved profile with its source, base, launch settings,\nreads, protocol, and the rendered brief a spawn sends.\n\nShowing a profile does not check its reads; agent spawn checks them in the agent's working\ndirectory and reports a missing file as a skipped read.\n\nBuilt-in profiles (orchestrator, planner, researcher, implementer, debugger, integrator,\nreviewer, verifier) ship with the binary. Files in .fledge/profiles/<name>.toml at the\ninvoking checkout's Git top level override a same-name built-in or add custom profiles.\nListing reads files only; it needs no Herdr session and writes nothing.",
+	cmd := &cobra.Command{Use: "profiles [NAME]", Short: "List agent profiles, or show one profile's brief",
+		Long: "List agent profiles, or show one profile's source and the brief a spawn sends: its\nMarkdown role instructions followed by the shared Fledge protocol. Spawn appends the\ndestination repository's project memory index at launch; the brief shown here omits it.\n\nBuilt-in profiles (orchestrator, planner, researcher, implementer, debugger, integrator,\nreviewer, verifier) ship with the binary. A file .fledge/profiles/NAME.md at the invoking\ncheckout's Git top level replaces a same-name built-in entirely or adds a custom profile;\nits text must be nonblank UTF-8 without NUL. Profiles choose no harness, model, or native\narguments. Legacy TOML profiles are rejected with migration guidance.\nListing reads files only; it needs no Herdr session and writes nothing.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var options profiles.Options
@@ -20,7 +20,7 @@ func New() *cobra.Command {
 				options.Name = args[0]
 			}
 			cwd, _ := os.Getwd()
-			return libagent.Finish(profiles.Run(cmd.Context(), cwd, options), cmd.OutOrStdout(), asJSON, profiles.Render)
+			return cli.Finish(profiles.Run(cmd.Context(), cwd, options), cmd.OutOrStdout(), asJSON, profiles.Render)
 		}}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Emit a structured outcome")
 	return cmd

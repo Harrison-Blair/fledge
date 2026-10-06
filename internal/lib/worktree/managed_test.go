@@ -3,22 +3,18 @@ package worktree
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
 )
 
 func repository(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	for _, args := range [][]string{{"init", "-q"}, {"-c", "user.name=Test", "-c", "user.email=t@example.com", "commit", "-qm", "initial", "--allow-empty"}} {
-		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
-		if b, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("%v %s", err, b)
-		}
-	}
+	gittest.Git(t, root, "init", "-q")
+	gittest.Commit(t, root)
 	return root
 }
 func TestManagedWorktreePreparation(t *testing.T) {
@@ -27,7 +23,7 @@ func TestManagedWorktreePreparation(t *testing.T) {
 	os.MkdirAll(managed, 0755)
 	os.WriteFile(filepath.Join(root, ".fledge", ".gitignore"), []byte("# retained\n!keep\n"), 0644)
 	os.WriteFile(filepath.Join(managed, ".gitignore"), []byte("# legacy"), 0644)
-	out := libagent.Outcome{Effects: []libagent.Effect{}}
+	out := cli.Outcome{Effects: []cli.Effect{}}
 	path, err := Prepare(context.Background(), root, "feature/topic", &out)
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +32,7 @@ func TestManagedWorktreePreparation(t *testing.T) {
 		t.Fatal(path)
 	}
 	b, _ := os.ReadFile(filepath.Join(root, ".fledge", ".gitignore"))
-	if string(b) != "# retained\n!keep\n*\n!/profiles/\n!/profiles/*.toml\n" {
+	if string(b) != "# retained\n!keep\n*\n!/profiles/\n!/profiles/*.md\n" {
 		t.Fatalf("%q", b)
 	}
 	if b, _ = os.ReadFile(filepath.Join(managed, ".gitignore")); string(b) != "# legacy" {
@@ -68,11 +64,9 @@ func TestManagedWorktreeRejectsSymlinksAndCollisions(t *testing.T) {
 			case "destination":
 				os.MkdirAll(filepath.Join(managed, "feature", "topic"), 0755)
 			case "branch":
-				if err := exec.Command("git", "-C", root, "branch", "feature/topic").Run(); err != nil {
-					t.Fatal(err)
-				}
+				gittest.Git(t, root, "branch", "feature/topic")
 			}
-			out := libagent.Outcome{}
+			out := cli.Outcome{}
 			if _, err := Prepare(context.Background(), root, "feature/topic", &out); err == nil {
 				t.Fatal("accepted unsafe path")
 			}
@@ -85,7 +79,7 @@ func TestManagedWorktreeRejectsSymlinksAndCollisions(t *testing.T) {
 func TestBranchShorthandsRejected(t *testing.T) {
 	root := repository(t)
 	for _, branch := range []string{"@{-1}", "../escape", "HEAD", "-flag"} {
-		out := libagent.Outcome{}
+		out := cli.Outcome{}
 		if _, err := Prepare(context.Background(), root, branch, &out); err == nil {
 			t.Fatalf("accepted %s", branch)
 		}
@@ -96,12 +90,12 @@ func TestIgnoreWithoutNewline(t *testing.T) {
 	path := filepath.Join(root, ".fledge")
 	os.MkdirAll(path, 0755)
 	os.WriteFile(filepath.Join(path, ".gitignore"), []byte("# preserve"), 0644)
-	out := libagent.Outcome{}
+	out := cli.Outcome{}
 	if _, err := Prepare(context.Background(), root, "topic", &out); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(filepath.Join(path, ".gitignore"))
-	if string(b) != "# preserve\n*\n!/profiles/\n!/profiles/*.toml\n" {
+	if string(b) != "# preserve\n*\n!/profiles/\n!/profiles/*.md\n" {
 		t.Fatalf("%q", b)
 	}
 }
@@ -110,7 +104,7 @@ func TestBranchValidationRuntimeErrors(t *testing.T) {
 	t.Run("canceled", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		out := libagent.Outcome{}
+		out := cli.Outcome{}
 		_, err := Prepare(ctx, root, "valid", &out)
 		out.Fail(err, "preflight", false)
 		if out.ExitCode() != 1 {
@@ -119,7 +113,7 @@ func TestBranchValidationRuntimeErrors(t *testing.T) {
 	})
 	t.Run("git missing", func(t *testing.T) {
 		t.Setenv("PATH", "")
-		out := libagent.Outcome{}
+		out := cli.Outcome{}
 		_, err := Prepare(context.Background(), root, "valid", &out)
 		out.Fail(err, "preflight", false)
 		if out.ExitCode() != 1 {
@@ -131,10 +125,8 @@ func TestBranchNamespaceCollisionsBeforeWrites(t *testing.T) {
 	for _, tc := range []struct{ existing, requested string }{{"feature", "feature/topic"}, {"feature/topic", "feature"}} {
 		t.Run(tc.requested, func(t *testing.T) {
 			root := repository(t)
-			if err := exec.Command("git", "-C", root, "branch", tc.existing).Run(); err != nil {
-				t.Fatal(err)
-			}
-			out := libagent.Outcome{}
+			gittest.Git(t, root, "branch", tc.existing)
+			out := cli.Outcome{}
 			_, err := Prepare(context.Background(), root, tc.requested, &out)
 			if err == nil {
 				t.Fatal("accepted branch namespace collision")
@@ -154,6 +146,7 @@ func TestManaged(t *testing.T) {
 	for path, want := range map[string]bool{
 		"/repo/.fledge/worktrees/topic":         true,
 		"/repo/.fledge/worktrees/feature/topic": true,
+		"/repo/.fledge/worktrees/..topic":       true,
 		"/repo/.fledge/worktrees":               false,
 		"/repo/.fledge/worktreesX/topic":        false,
 		"/repo/.fledge/topic":                   false,

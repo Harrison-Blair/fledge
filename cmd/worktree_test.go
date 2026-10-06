@@ -7,18 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 )
 
 func TestWorktreeHelp(t *testing.T) {
-	var out bytes.Buffer
-	if err := ExecuteWithArgs([]string{"worktree", "--help"}, &out); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"list", "remove", "create"} {
-		if !strings.Contains(out.String(), "\n  "+name+" ") {
-			t.Fatalf("%s: %s", name, out.String())
-		}
+	for _, name := range childNames(t, "worktree") {
 		var sub bytes.Buffer
 		if err := ExecuteWithArgs([]string{"worktree", name, "--help"}, &sub); err != nil || !strings.Contains(sub.String(), "--json") {
 			t.Fatalf("%s: %v %s", name, err, sub.String())
@@ -46,7 +39,7 @@ func TestWorktreeJSONValidation(t *testing.T) {
 			if !errors.As(err, &status) || status.ExitCode() != 2 {
 				t.Fatalf("wrong exit: %v", err)
 			}
-			var envelope libagent.Outcome
+			var envelope cli.Outcome
 			if err = json.Unmarshal(out.Bytes(), &envelope); err != nil {
 				t.Fatalf("not one JSON object: %q: %v", out.String(), err)
 			}

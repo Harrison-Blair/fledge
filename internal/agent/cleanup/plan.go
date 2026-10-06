@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/gitstatus"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
@@ -14,6 +15,9 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/worktree"
 )
+
+// liveByTerminal is replaceable so tests can count reads of the agent records.
+var liveByTerminal = identity.LiveByTerminal
 
 // planned is a cleanup plan and what executing it needs.
 type planned struct {
@@ -28,23 +32,19 @@ type planned struct {
 func plan(ctx context.Context, c libagent.Client, o Options) (planned, error) {
 	s, err := identity.Existing(ctx, c.Cwd)
 	if err != nil {
-		return planned{}, libagent.AtPhase("state", err)
+		return planned{}, cli.AtPhase("state", err)
 	}
-	caller, err := callerRecord(ctx, c, s)
+	caller, live, err := callerRecord(ctx, c, s)
 	if err != nil {
 		return planned{}, err
 	}
 	children, err := identity.Children(s, caller.ID)
-	var live map[string]identity.Record
-	if err == nil {
-		live, err = identity.LiveByTerminal(s)
-	}
 	var tasks []task.Record
 	if err == nil {
 		tasks, err = task.List(s)
 	}
 	if err != nil {
-		return planned{}, libagent.AtPhase("state", err)
+		return planned{}, cli.AtPhase("state", err)
 	}
 	agents, err := c.List(ctx)
 	if err != nil {
@@ -65,30 +65,33 @@ func plan(ctx context.Context, c libagent.Client, o Options) (planned, error) {
 }
 
 // callerRecord returns the live record of the agent in the caller's pane,
-// matched by terminal, or fails with caller_unregistered.
-func callerRecord(ctx context.Context, c libagent.Client, s *state.Store) (identity.Record, error) {
-	unregistered := libagent.AtPhase("identity", &herdr.Error{Code: "caller_unregistered", Message: "the caller has no live Fledge record; register with fledge agent adopt"})
+// matched by terminal, or fails with caller_unregistered. It also returns
+// the LiveByTerminal map it read, so the plan reads the records once.
+func callerRecord(ctx context.Context, c libagent.Client, s *state.Store) (identity.Record, map[string]identity.Record, error) {
+	unregistered := cli.AtPhase("identity", &cli.Error{Code: "caller_unregistered", Message: "the caller has no live Fledge record; register with fledge agent adopt"})
 	if c.CallerPane == "" {
-		return identity.Record{}, unregistered
+		return identity.Record{}, nil, unregistered
 	}
 	a, err := c.Get(ctx, c.CallerPane)
 	var remote *herdr.Error
 	if errors.As(err, &remote) && remote.Code == "agent_not_found" {
-		return identity.Record{}, unregistered
+		return identity.Record{}, nil, unregistered
 	}
 	if err != nil {
-		return identity.Record{}, err
+		return identity.Record{}, nil, err
 	}
-	var rec *identity.Record
-	if s != nil {
-		if rec, err = identity.Registered(s, a); err != nil {
-			return identity.Record{}, libagent.AtPhase("state", err)
-		}
+	if s == nil {
+		return identity.Record{}, nil, unregistered
 	}
-	if rec == nil {
-		return identity.Record{}, unregistered
+	live, err := liveByTerminal(s)
+	if err != nil {
+		return identity.Record{}, nil, cli.AtPhase("state", err)
 	}
-	return *rec, nil
+	rec, ok := identity.Attributed(live, a)
+	if !ok {
+		return identity.Record{}, nil, unregistered
+	}
+	return rec, live, nil
 }
 
 // spawnedBy reports whether rec is a direct worker that caller spawned.
@@ -122,7 +125,7 @@ func selectWorkers(caller string, records []identity.Record, agents []herdr.Agen
 			reasons = append(reasons, r)
 		}
 		if len(reasons) > 0 {
-			w.Outcome, w.Reason = "skipped", libagent.Pointer(strings.Join(reasons, "; "))
+			w.Outcome, w.Reason = "skipped", cli.Pointer(strings.Join(reasons, "; "))
 		}
 		workers = append(workers, w)
 	}
@@ -231,7 +234,7 @@ func planCheckouts(ctx context.Context, caller string, records []identity.Record
 			c.marker, c.markedBranch = *rec.WorktreeMarker, *rec.WorktreeBranch
 		}
 		if reasons := checkoutHold(ctx, rec, owned, row, listing.Root, outcomes, others, live); len(reasons) > 0 {
-			c.Outcome, c.Reason = "skipped", libagent.Pointer(strings.Join(reasons, "; "))
+			c.Outcome, c.Reason = "skipped", cli.Pointer(strings.Join(reasons, "; "))
 		}
 		checkouts = append(checkouts, c)
 	}

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
@@ -98,12 +99,12 @@ func TestRender(t *testing.T) {
 		{unnamed, "Terminal snapshot of w1:p1 (recent-unwrapped, 0 rows, truncated: no)\n"},
 	} {
 		var b bytes.Buffer
-		if err := Render(&b, libagent.Outcome{Result: tc.r}); err != nil || b.String() != tc.want {
+		if err := Render(&b, cli.Outcome{Result: tc.r}); err != nil || b.String() != tc.want {
 			t.Fatalf("%v %q", err, b.String())
 		}
 	}
 	var b bytes.Buffer
-	if err := (libagent.Outcome{Operation: "agent.read", Status: "success", Result: named, Effects: []libagent.Effect{}}).Write(&b, true, Render); err != nil {
+	if err := (cli.Outcome{Operation: "agent.read", Status: "success", Result: named, Effects: []cli.Effect{}}).Write(&b, true, Render); err != nil {
 		t.Fatal(err)
 	}
 	var decoded map[string]any
@@ -117,7 +118,7 @@ func TestRender(t *testing.T) {
 			t.Fatalf("missing %s: %s", key, b.String())
 		}
 	}
-	herdrscript.CheckOutputFailures(t, Render, libagent.Outcome{Operation: "agent.read", Status: "success", Result: named, Effects: []libagent.Effect{}})
+	herdrscript.CheckOutputFailures(t, Render, cli.Outcome{Operation: "agent.read", Status: "success", Result: named, Effects: []cli.Effect{}})
 }
 
 // TestReadJSONPreservesSnapshotBytes checks that only human output gains a

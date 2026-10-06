@@ -11,7 +11,8 @@ Fledge is a Go CLI built with Cobra.
 ## .gitignore policy
 
 `.gitignore` is allowlist-style: it ignores everything (`*`) and then explicitly allows
-Go source, `go.mod`/`go.sum`, Markdown docs, `LICENSE`, `.github/`, and test fixtures.
+Go source, `go.mod`/`go.sum`, Markdown docs, `LICENSE`, `.github/`, test fixtures,
+and the Herdr raw captures in `reference/herdr/raw/` that `RESYNC.md` keeps.
 Keep it small. Only add a new `!` allow rule when a file the project genuinely needs
 is being ignored, and add the narrowest pattern that covers it. Never remove the
 leading `*`.
@@ -20,6 +21,8 @@ leading `*`.
 
 Develop on `dev` or feature branches off `dev`. Changes reach `main` only through a
 pull request, which the owner approves. Never commit directly to `main`.
+After you clone this repository, run `git config fledge.baseBranch dev`. Git does not
+copy local config to a new clone, and Fledge uses this value to find merged branches.
 
 ## Releases
 
@@ -37,12 +40,9 @@ release may use `gh workflow run release.yml --ref main -f bump=patch` (substitu
 the requested bump), watch the run, and report its release URL. Do not trigger a
 release merely because release automation was implemented or changed.
 
-Release scripts calculate versions from existing tags, package Linux amd64/arm64
-binaries with SHA-256 checksums, and publish only after all assets are verified.
-Retries resume the same unfinished release or no-op for an already-published
-commit. Never force-move release tags or replace published assets. An unfinished
-draft for another commit must be resolved before starting a new release.
-Run `python3 -B -m unittest discover -s .github/scripts -p '*_test.py'` when changing
+[README.md#releases](README.md#releases) gives the release procedure, the retry
+rules, and the rule for an unfinished draft. Never force-move release tags or
+replace published assets. Run `python3 -B -m unittest discover -s .github/scripts -p '*_test.py'` when changing
 release automation. `fledge update` performs explicit, verified binary updates;
 there are no background update checks.
 
@@ -50,10 +50,17 @@ there are no background update checks.
 
 All Go changes are test-first. Write a failing test, run it and confirm it fails for
 the right reason, write the minimal code to pass, refactor, repeat. Before declaring
-a task done, run the [Git-aware formatting check](README.md#development),
+a task done, run the formatting check `bash .github/scripts/gofmt-check.sh`,
 `go vet ./...`, and `go test -race ./...` and report the output. The formatting
 check covers existing tracked and new nonignored Go files in this checkout; it
 must not descend into ignored managed worktrees. Never weaken or skip a test to get green.
+
+## Instruction text
+
+Agent instruction text follows the structural ASD-STE100 rules and the one-meaning
+terms in [STE-GLOSSARY.md](STE-GLOSSARY.md). The root `ste_test.go` ratchet checks
+`AGENTS.md` and the built-in profiles against the per-file counts in
+`testdata/ste-baseline.json`, so an edit may lower a count but never raise one.
 
 ## Layout
 
@@ -103,6 +110,7 @@ it with another tool.
 | Type raw input or keys into an agent (slash commands, dialog answers) | `fledge agent send` | raw `herdr pane send-text`/`send-keys` |
 | Register an already-running agent | `fledge agent adopt` | — |
 | Rename an agent, relabeling its pane and its own tab | `fledge agent rename` | raw `herdr agent`/`pane`/`tab rename` |
+| Record or recall durable project facts | `fledge memory add`/`list`/`get`/`remove` | harness-native memory |
 | Check the environment | `fledge doctor` | ad hoc probes |
 | Discover models | `fledge agent models` | reading harness config |
 | Update the binary | `fledge update` | manual downloads |
@@ -113,7 +121,7 @@ quick read-only lookups inside a single agent, or where Fledge fails.
 Maintain `reference/dogfood/` as the record of dogfooding information for this repository.
 Whenever an agent or one of its subagents hits a Fledge bug, missing capability, or
 workaround, including any fallback to a harness built-in caused by one, append an entry
-to `reference/dogfood/friction.md` using its Issue / Summary / Reproduction steps format.
+to `reference/dogfood/friction.md` using its Issue / Status / Summary / Reproduction steps format.
 
 Before using Fledge, check `--help` for the command groups needed for both the task and
 cleanup (`fledge agent`, `task`, `worktree`). If the installed binary lacks commands
@@ -121,12 +129,13 @@ present in this checkout, build the current source into a temporary directory an
 that binary consistently for the task, including cleanup.
 
 Agent scratch files inside the repository go under `.fledge/tmp/` (gitignored), and
-proposals under `.fledge/tmp/plans/`. Briefs for `fledge task create` follow the
-template printed by `fledge task template`; use `--freeform` only for throwaway tasks.
+proposals under `.fledge/tmp/plans/`. Briefs for `fledge task create` should follow the
+optional template printed by `fledge task template`; fill in its headings, since Fledge
+accepts any nonblank text, including an unfilled skeleton.
 
 Known workarounds: spawn prompts and messages always start with a sender header, so ask
 a spawned agent in plain words to invoke a skill (a leading slash command will not run);
-pass absolute paths to `--cwd`; see `reference/dogfood/friction.md` for current issues.
+see the Open entries in `reference/dogfood/friction.md` for current issues.
 
 Agents in this repository usually run inside a managed Fledge session: a Herdr pane,
 often spawned by an orchestrator and given a Fledge agent record id. Expect messages
@@ -135,26 +144,31 @@ from the orchestrator and other agents. Each starts with a one-line header,
 unnamed senders appear as `unnamed agent (<pane>)` and non-agent panes as `pane <pane>`,
 with no reply command. A `fledge task assign` brief adds a line naming the task, its
 title, and `complete with: fledge task complete --id <task> --summary "..."`, and a
-task's creator, when it is another registered agent, receives a `task completed:`
-notification naming `fledge task verify`. Treat these as coordination input: reply with
+task's creator, when it is another registered agent, receives a short `task completed:`
+notice naming `fledge task get` (which shows the full result) and `fledge task verify`. Treat these as coordination input: reply with
 the header's reply command (or `--pane <pane>` when the header has no reply command),
 and finish assigned tasks with `fledge task complete`.
 
-Every Fledge `agent` command except `models`, plus
-`task create`/`assign`/`complete`/`verify`, the `worktree` commands, and `doctor`,
-connect to Herdr's local Unix socket (`task create`/`verify` only when run inside a
-Herdr pane). In Codex's restricted sandbox, request
+Every Fledge `agent` command except `models`, `profiles`, and `capabilities` without
+`--live`, plus `task create`/`assign`/`complete`/`verify`/`import`, the `worktree`
+commands, and `doctor`, connect to Herdr's local Unix socket. `task create`/`verify`
+connect only when run inside a Herdr pane. `task import` connects only when run inside
+a Herdr pane without `--dry-run`. `task board` shows tasks outside Herdr, but it
+connects to show workers and to go to a worker's pane. In Codex's restricted sandbox, request
 `sandbox_permissions: "require_escalated"` on the first invocation of these commands and
 of Herdr session-control commands, with a task-specific justification and a narrow
 command prefix. Do not first run a socket command in the sandbox to rediscover the known
 `connect: operation not permitted` failure. Use the normal approval mechanism; these
 instructions do not override an approval denial or authorize unrelated session changes.
-Help, version, `agent models`, `task get`/`list`/`cancel`/`depend`, and `update` do not require
-Herdr socket access.
+Help, version, `agent models`/`profiles`, `agent capabilities` without `--live`,
+`task get`/`list`/`cancel`/`depend`/`template`, `task import --dry-run`, the `memory`
+commands, and `update` do not require Herdr socket access.
 
 Agent names label panes and tabs so they are identifiable at a glance. Spawn labels the
-agent's pane, and any tab it creates, with `--name`; pass `--tab` only to choose a different
-tab. An agent started by hand, such as an orchestrator, names itself, which relabels its
+agent's pane, and the new tab it opens, with `--name`; pass `--tab` only to give that new
+tab a different label (it never selects an existing tab, and labels may repeat). Spawn has
+no splits; reuse an existing shell only with `--pane`. Profiles are role instructions only,
+so always pass `--harness`, and `--model` and native arguments as needed. An agent started by hand, such as an orchestrator, names itself, which relabels its
 pane and, when alone there, its tab:
 
 ```sh
@@ -182,3 +196,13 @@ reporting; repairs go back to the implementer through the orchestrator. Verifier
 `fledge task verify` only when no findings remain open. If repairs follow a
 verification, the verifier runs `fledge task verify` again after checking them; this
 replaces the earlier verification, so name the checked commit in `--summary`.
+
+### Memory
+
+Repository memories in `.fledge/memories/`, managed with `fledge memory`, are the
+store for durable, non-obvious facts about this project, Fledge, and Herdr: one fact
+per memory, shared by every checkout and injected into profile-spawned briefs. Check
+`fledge memory list` before rediscovering something, and record new facts with
+`fledge memory add`. Harness-native memory is for the user's personal preferences
+only. Do not store task progress or anything the code, Git history, or this file
+already records.

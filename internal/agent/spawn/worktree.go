@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/fledgedir"
 	"github.com/Harrison-Blair/fledge/internal/lib/gitstatus"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
@@ -13,13 +13,13 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/worktree"
 )
 
-func (s *spawner) worktreePlacement(ctx context.Context, o Options, snap *herdr.Snapshot, out *libagent.Outcome) (herdr.Pane, error) {
+func (s *spawner) worktreePlacement(ctx context.Context, o Options, snap *herdr.Snapshot, out *cli.Outcome) (herdr.Pane, error) {
 	source, err := workspace(snap, o.Workspace, o.WorkspaceID)
 	if err != nil {
 		return herdr.Pane{}, err
 	}
 	if o.Workspace != "" && source == "" {
-		return herdr.Pane{}, libagent.Invalid("source workspace %q does not exist", o.Workspace)
+		return herdr.Pane{}, cli.Invalid("source workspace %q does not exist", o.Workspace)
 	}
 	src := worktree.Source{WorkspaceID: source}
 	if source == "" {
@@ -61,20 +61,6 @@ func (s *spawner) worktreePlacement(ctx context.Context, o Options, snap *herdr.
 		if err != nil {
 			return herdr.Pane{}, err
 		}
-		// Resolve known named-tab conflicts before opening a workspace.
-		for _, w := range listing.Worktrees {
-			if filepath.Clean(w.Path) == path && w.OpenWorkspaceID != nil && o.Tab != "" {
-				t, err := tab(snap, *w.OpenWorkspaceID, o.Tab, "")
-				if err != nil {
-					return herdr.Pane{}, err
-				}
-				if t != nil {
-					if _, err = anchor(snap, *t); err != nil {
-						return herdr.Pane{}, err
-					}
-				}
-			}
-		}
 	}
 	out.Result.(*Result).WorktreePath = &path
 	var r herdr.CreatedResult
@@ -82,7 +68,7 @@ func (s *spawner) worktreePlacement(ctx context.Context, o Options, snap *herdr.
 	if method == "worktree.create" {
 		// Without --base, send the primary checkout's branch explicitly, so the
 		// recorded base is the one used; a detached primary sends none.
-		base = libagent.Pointer(o.Base)
+		base = cli.Pointer(o.Base)
 		if base == nil {
 			base = gitstatus.Branch(ctx, listing.Source.RepoRoot)
 		}
@@ -105,7 +91,7 @@ func (s *spawner) worktreePlacement(ctx context.Context, o Options, snap *herdr.
 	alreadyOpen := r.AlreadyOpen != nil && *r.AlreadyOpen
 	if !alreadyOpen {
 		if method == "worktree.create" {
-			out.Effects = append(out.Effects, libagent.Effect{Action: "created", Kind: "worktree", Path: path})
+			out.Effects = append(out.Effects, cli.Effect{Action: "created", Kind: "worktree", Path: path})
 			// Herdr cannot undo the checkout, so a failure here is partial.
 			if _, err = fledgedir.Ensure(path, out); err != nil {
 				recordCreated(out, r, true)
@@ -123,6 +109,6 @@ func (s *spawner) worktreePlacement(ctx context.Context, o Options, snap *herdr.
 		recordCreated(out, r, true)
 		return s.initialTab(ctx, o, r, out)
 	}
-	out.Effects = append(out.Effects, libagent.Effect{Action: "reused", Kind: "workspace", ID: r.Workspace.ID})
-	return s.placeInWorkspace(ctx, o, r.Workspace.ID, snap, out)
+	out.Effects = append(out.Effects, cli.Effect{Action: "reused", Kind: "workspace", ID: r.Workspace.ID})
+	return s.newTab(ctx, o, r.Workspace.ID, out)
 }

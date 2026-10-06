@@ -7,18 +7,33 @@ import (
 	"strings"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/spf13/cobra"
 )
 
-func TestAgentHelp(t *testing.T) {
-	for _, args := range [][]string{{"agent", "--help"}, {"agent", "spawn", "--help"}, {"agent", "list", "--help"}, {"agent", "message", "--help"}, {"agent", "models", "--help"}, {"agent", "stop", "--help"}, {"agent", "get", "--help"}, {"agent", "read", "--help"}, {"agent", "wait", "--help"}, {"agent", "adopt", "--help"}, {"agent", "current", "--help"}, {"agent", "send", "--help"}, {"agent", "cleanup", "--help"}, {"agent", "capabilities", "--help"}, {"agent", "rename", "--help"}} {
-		var out bytes.Buffer
-		if err := ExecuteWithArgs(args, &out); err != nil {
+// TestAgentFilterFlagsShared checks that every command with filter flags
+// shows the same help line for each one.
+func TestAgentFilterFlagsShared(t *testing.T) {
+	root := NewRootCmd()
+	agent, _, err := root.Find([]string{"agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	usages := map[string]string{}
+	for _, name := range []string{"list", "message", "stop", "usage", "wait"} {
+		sub, _, err := agent.Find([]string{name})
+		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(out.String(), "Usage:") {
-			t.Fatal(out.String())
+		for _, flag := range []string{"mine", "parent", "state", "harness", "profile", "task", "worktree", "registered"} {
+			f := sub.Flags().Lookup(flag)
+			if f == nil {
+				t.Fatalf("%s lacks --%s", name, flag)
+			}
+			if want, ok := usages[flag]; ok && f.Usage != want {
+				t.Errorf("%s --%s: %q, want %q", name, flag, f.Usage, want)
+			}
+			usages[flag] = f.Usage
 		}
 	}
 }
@@ -102,7 +117,7 @@ func TestAgentJSONValidation(t *testing.T) {
 			if !errors.As(err, &status) || status.ExitCode() != 2 {
 				t.Fatalf("wrong exit: %v", err)
 			}
-			var envelope libagent.Outcome
+			var envelope cli.Outcome
 			if err = json.Unmarshal(out.Bytes(), &envelope); err != nil {
 				t.Fatalf("not one JSON object: %q: %v", out.String(), err)
 			}
@@ -110,17 +125,6 @@ func TestAgentJSONValidation(t *testing.T) {
 				t.Fatal(out.String())
 			}
 		})
-	}
-}
-func TestAgentGroupHelpListsSubcommands(t *testing.T) {
-	var out bytes.Buffer
-	if err := ExecuteWithArgs([]string{"agent", "--help"}, &out); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"stop", "get", "read", "wait", "adopt", "rename", "current", "cleanup"} {
-		if !strings.Contains(out.String(), "\n  "+name+" ") {
-			t.Fatalf("%s: %s", name, out.String())
-		}
 	}
 }
 func TestNativeJSONTokenDoesNotSelectOutput(t *testing.T) {

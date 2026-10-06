@@ -9,6 +9,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/profiles"
@@ -79,23 +80,24 @@ func (s *spawner) snapshot(ctx context.Context) (*herdr.Snapshot, error) {
 }
 
 // prompt submits the first prompt to target, recording the submission effect or failure.
-func (s *spawner) prompt(ctx context.Context, target, text string, out *libagent.Outcome) (herdr.AgentDetails, error) {
+func (s *spawner) prompt(ctx context.Context, target, text string, out *cli.Outcome) (herdr.AgentDetails, error) {
 	agent, err := s.Prompt(ctx, target, text)
 	if err != nil {
 		out.Fail(err, "agent.prompt", true)
 		return herdr.AgentDetails{}, err
 	}
-	out.Effects = append(out.Effects, libagent.Effect{Action: "submitted", Kind: "message", ID: agent.PaneID})
+	out.Effects = append(out.Effects, cli.Effect{Action: "submitted", Kind: "message", ID: agent.PaneID})
 	return agent, nil
 }
 
 // Run launches an agent, optionally waits for readiness, and submits a first prompt.
-func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libagent.Outcome {
+func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Outcome {
 	return (&spawner{Client: c}).run(ctx, o, in)
 }
-func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Outcome {
+func (s *spawner) run(ctx context.Context, o Options, in io.Reader) cli.Outcome {
 	result := &Result{Name: o.Name, Harness: o.Harness}
-	out := libagent.Outcome{Operation: "agent.spawn", Status: "success", Result: result, Effects: []libagent.Effect{}}
+	out := cli.NewOutcome("agent.spawn")
+	out.Result = result
 	var profile *profiles.Profile
 	brief := ""
 	if o.Profile != "" {
@@ -104,29 +106,28 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 			out.Fail(err, "validation", false)
 			return out
 		}
-		if o.Harness == "" && p.Harness == "" {
-			out.Fail(libagent.Invalid("--harness is required; profile %s sets no harness", p.Name), "validation", false)
+		if o.Harness == "" {
+			out.Fail(cli.Invalid("--harness is required; profiles supply only a brief"), "validation", false)
 			return out
 		}
-		o, profile, brief = applyProfile(o, p), &p, p.Brief()
-		result.Harness = o.Harness
-		result.Profile = &ProfileRef{Name: p.Name, Source: p.Source, Path: p.Path, Base: p.Base}
+		profile, brief = &p, p.Brief()
+		result.Profile = &ProfileRef{Name: p.Name, Source: p.Source, Path: p.Path}
 	}
 	args, err := o.Validate()
 	if err == nil && o.NoWait && brief != "" {
-		err = libagent.Invalid("--no-wait cannot be combined with a profile brief, which is sent as the first prompt")
+		err = cli.Invalid("--no-wait cannot be combined with a profile brief, which is sent as the first prompt")
 	}
 	if err != nil {
 		out.Fail(err, "validation", false)
 		return out
 	}
-	body, err := libagent.ReadText(in, libagent.TextInput{Body: o.Prompt, BodyFlag: "prompt", BodySet: o.PromptSet, File: o.File, FileFlag: "file", FileSet: o.FileSet, Required: false, Noun: "prompt"})
+	body, err := cli.ReadText(in, cli.TextInput{Body: o.Prompt, BodyFlag: "prompt", BodySet: o.PromptSet, File: o.File, FileFlag: "file", FileSet: o.FileSet, Required: false, Noun: "prompt"})
 	if err != nil {
 		out.Fail(err, "validation", false)
 		return out
 	}
 	// The effective first prompt, including any profile brief, is the only
-	// input to PromptRequested; it is final once reads are checked.
+	// input to PromptRequested.
 	result.PromptRequested = firstPrompt(brief, body) != ""
 	if o.Cwd != "" && !filepath.IsAbs(o.Cwd) {
 		o.Cwd = filepath.Join(s.Cwd, o.Cwd)
@@ -138,7 +139,7 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 	}
 	for _, a := range snapshot.Agents {
 		if a.Name != nil && *a.Name == o.Name {
-			out.Fail(libagent.Invalid("agent name %q is already in use", o.Name), "preflight", false)
+			out.Fail(cli.Invalid("agent name %q is already in use", o.Name), "preflight", false)
 			return out
 		}
 	}
@@ -155,21 +156,20 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 		return out
 	}
 	setPlacement(result, p)
-	var skipped []string
 	if profile != nil {
-		result.readDir = s.Cwd
+		// The memory index comes from where the agent was placed.
+		dir := s.Cwd
 		switch {
 		case result.Cwd != nil && *result.Cwd != "":
-			result.readDir = *result.Cwd
+			dir = *result.Cwd
 		case result.WorktreePath != nil:
-			result.readDir = *result.WorktreePath
+			dir = *result.WorktreePath
 		case o.Cwd != "":
-			result.readDir = o.Cwd
+			dir = o.Cwd
 		}
-		brief, skipped = profileBrief(*profile, result.readDir)
+		brief = profileBrief(ctx, *profile, dir)
 	}
 	prompt := firstPrompt(brief, body)
-	result.PromptRequested = prompt != ""
 	if err = s.customizePane(ctx, o, p, &out); err != nil {
 		return out
 	}
@@ -190,14 +190,9 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 	}
 	setPlacement(result, r.Agent.Pane)
 	result.DetectedHarness = r.Agent.Agent
-	result.AgentStatus = libagent.Pointer(r.Agent.AgentStatus)
+	result.AgentStatus = cli.Pointer(r.Agent.AgentStatus)
 	result.Argv = r.Argv
-	out.Effects = append(out.Effects, libagent.Effect{Action: "started", Kind: "agent", ID: r.Agent.PaneID})
-	// Skipped reads are reported once the launch is a mutation, so they never
-	// turn an otherwise rejected spawn into a partial one.
-	for _, path := range skipped {
-		out.Effects = append(out.Effects, libagent.Effect{Action: "skipped", Kind: "read", Path: path})
-	}
+	out.Effects = append(out.Effects, cli.Effect{Action: "started", Kind: "agent", ID: r.Agent.PaneID})
 	if o.NoWait {
 		s.register(b.ctx, withHarness(r.Agent, o.Harness), &out)
 		return out
@@ -221,15 +216,15 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 	}
 	a, err := s.ready(b, o, r.Agent, w.Agent)
 	if err != nil {
-		out.Fail(libagent.AtPhase("agent.wait", err), "agent.wait", true)
+		out.Fail(cli.AtPhase("agent.wait", err), "agent.wait", true)
 		return out
 	}
 	setPlacement(result, a.Pane)
 	result.DetectedHarness = a.Agent
-	result.AgentStatus = libagent.Pointer(a.AgentStatus)
-	s.register(b.ctx, withHarness(a, o.Harness), &out)
+	result.AgentStatus = cli.Pointer(a.AgentStatus)
+	known := s.register(b.ctx, withHarness(a, o.Harness), &out)
 	if a.AgentStatus == "blocked" {
-		out.Fail(&herdr.Error{Code: "agent_blocked", Message: fmt.Sprintf("agent %s is waiting on a startup prompt", o.Name)}, "agent.wait", true)
+		out.Fail(&cli.Error{Code: "agent_blocked", Message: fmt.Sprintf("agent %s is waiting on a startup prompt", o.Name)}, "agent.wait", true)
 		return out
 	}
 	if !result.PromptRequested {
@@ -245,12 +240,17 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) libagent.Out
 	if unsent() {
 		return out
 	}
-	id, sender := s.newID(), libagent.ResolveSender(b.ctx, s.Client)
+	// Registration's caller lookup gives the sender; resolve it only when that lookup failed or did not run.
+	id, sender := s.newID(), known
+	if sender == nil {
+		resolved := libagent.ResolveSender(b.ctx, s.Client)
+		sender = &resolved
+	}
 	if unsent() {
 		return out
 	}
-	result.MessageID, result.Sender = &id, &sender
-	if _, err := s.prompt(b.ctx, o.Name, libagent.WithHeader(id, sender, prompt), &out); err != nil {
+	result.MessageID, result.Sender = &id, sender
+	if _, err := s.prompt(b.ctx, o.Name, libagent.WithHeader(id, *sender, prompt), &out); err != nil {
 		return out
 	}
 	result.Prompted = true
@@ -280,16 +280,16 @@ func (s *spawner) start(ctx context.Context, params map[string]any, r *herdr.Age
 	}
 }
 func setPlacement(r *Result, p herdr.Pane) {
-	r.WorkspaceID = libagent.Pointer(p.WorkspaceID)
-	r.TabID = libagent.Pointer(p.TabID)
-	r.PaneID = libagent.Pointer(p.PaneID)
+	r.WorkspaceID = cli.Pointer(p.WorkspaceID)
+	r.TabID = cli.Pointer(p.TabID)
+	r.PaneID = cli.Pointer(p.PaneID)
 	r.Cwd = p.Cwd
 }
 
 func samePane(a, b herdr.Pane) bool {
 	return a.PaneID == b.PaneID && a.WorkspaceID == b.WorkspaceID && a.TabID == b.TabID
 }
-func (s *spawner) customizePane(ctx context.Context, o Options, p herdr.Pane, out *libagent.Outcome) error {
+func (s *spawner) customizePane(ctx context.Context, o Options, p herdr.Pane, out *cli.Outcome) error {
 	// The pane takes --label, else the agent's name.
 	label := o.Label
 	if label == "" {
@@ -304,7 +304,7 @@ func (s *spawner) customizePane(ctx context.Context, o Options, p herdr.Pane, ou
 		out.Fail(err, "pane.rename", true)
 		return err
 	}
-	out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "pane_label", ID: p.PaneID})
+	out.Effects = append(out.Effects, cli.Effect{Action: "updated", Kind: "pane_label", ID: p.PaneID})
 	if o.Focus {
 		var r herdr.PaneResult
 		err := s.Call(ctx, "pane.focus", map[string]any{"pane_id": p.PaneID}, &r)
@@ -315,7 +315,7 @@ func (s *spawner) customizePane(ctx context.Context, o Options, p herdr.Pane, ou
 			out.Fail(err, "pane.focus", true)
 			return err
 		}
-		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "focus", ID: p.PaneID})
+		out.Effects = append(out.Effects, cli.Effect{Action: "updated", Kind: "focus", ID: p.PaneID})
 	}
 	return nil
 }

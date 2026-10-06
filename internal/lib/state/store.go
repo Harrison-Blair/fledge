@@ -86,6 +86,13 @@ func OpenExisting(root string) (*Store, error) {
 // new path before removing its old one, so a record is always at one of the
 // two, and one archived after the claim was live and so blocked the claim.
 func (s *Store) Create(kind string, build func(id string) any) (string, error) {
+	return s.create(kind, nil, build)
+}
+
+// create is Create that, when prepare is not nil, first checks that an id is
+// free, with neither a live nor an archived record, and runs prepare(id)
+// before it claims that id. A failed prepare stops the create.
+func (s *Store) create(kind string, prepare func(id string) error, build func(id string) any) (string, error) {
 	dir, err := s.kindDir(kind)
 	if err != nil {
 		return "", err
@@ -103,12 +110,22 @@ func (s *Store) Create(kind string, build func(id string) any) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("state: generate id: %w", err)
 		}
+		path := filepath.Join(dir, id+recordSuffix)
+		if prepare != nil {
+			if free, err := freeID(path); err != nil {
+				return "", err
+			} else if !free {
+				continue
+			}
+			if err := prepare(id); err != nil {
+				return "", err
+			}
+		}
 		data, err := encode(build(id))
 		if err != nil {
 			return "", fmt.Errorf("state: encode %s record %s: %w", kind, id, err)
 		}
-		path := filepath.Join(dir, id+recordSuffix)
-		err = writeExclusive(path, data)
+		err = WriteExclusive(path, data)
 		if errors.Is(err, fs.ErrExist) {
 			continue
 		}
@@ -128,6 +145,56 @@ func (s *Store) Create(kind string, build func(id string) any) (string, error) {
 	return "", fmt.Errorf("state: no free %s id after %d attempts", kind, createAttempts)
 }
 
+// freeID reports whether neither the live record at path nor its archived
+// copy exists.
+func freeID(path string) (bool, error) {
+	for _, p := range []string{path, archivePath(path)} {
+		if _, err := os.Stat(p); err == nil {
+			return false, nil
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return false, fmt.Errorf("state: create %s: %w", p, err)
+		}
+	}
+	return true, nil
+}
+
+// Marked returns the ids marked in set for kind (see Tx.Mark), sorted, or none
+// when set is missing. It reads only directory entries and needs no lock.
+func (s *Store) Marked(kind, set string) ([]string, error) {
+	dir, err := s.markDir(kind, set)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return []string{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("state: list %s: %w", dir, err)
+	}
+	ids := []string{}
+	for _, entry := range entries {
+		if ValidID(entry.Name()) && entry.Type().IsRegular() {
+			ids = append(ids, entry.Name())
+		}
+	}
+	slices.Sort(ids)
+	return ids, nil
+}
+
+// markDir returns <root>/<kind>/index/<set>. set is lowercase letters,
+// digits, and '-'.
+func (s *Store) markDir(kind, set string) (string, error) {
+	dir, err := s.kindDir(kind)
+	if err != nil {
+		return "", err
+	}
+	if set == "" || strings.Trim(set, "abcdefghijklmnopqrstuvwxyz0123456789-") != "" {
+		return "", fmt.Errorf("state: invalid marker set %q", set)
+	}
+	return filepath.Join(dir, indexDir, set), nil
+}
+
 // Get decodes the record into v, live or archived. A missing record returns
 // *NotFoundError. The live path is read first: archiving moves a record from
 // there under the lock, so a lookup racing it still finds the archived copy.
@@ -140,6 +207,22 @@ func (s *Store) Get(kind, id string, v any) error {
 	var missing *NotFoundError
 	if errors.As(err, &missing) {
 		return read(archivePath(path), kind, id, v)
+	}
+	return err
+}
+
+// GetArchived is Get for an id from ListArchived: it reads the archive first,
+// then the live path, where a concurrent Unarchive links the record before
+// removing its archived copy.
+func (s *Store) GetArchived(kind, id string, v any) error {
+	path, err := s.recordPath(kind, id)
+	if err != nil {
+		return err
+	}
+	err = read(archivePath(path), kind, id, v)
+	var missing *NotFoundError
+	if errors.As(err, &missing) {
+		return read(path, kind, id, v)
 	}
 	return err
 }

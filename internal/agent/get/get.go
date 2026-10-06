@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 )
@@ -44,8 +45,8 @@ func resolveTitle(a herdr.AgentDetails) *string {
 }
 
 // Run inspects an agent without focusing its pane or marking output seen.
-func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.get", Status: "success", Effects: []libagent.Effect{}}
+func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
+	out := cli.NewOutcome("agent.get")
 	if err := o.Target.Validate(); err != nil {
 		out.Fail(err, "validation", false)
 		return out
@@ -68,18 +69,19 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 }
 
 // liveRecord finds a's record for display, ending one left by a different
-// harness; an unavailable store only means no record is shown.
+// harness; an unavailable store or a failed end only means no record is
+// shown.
 func liveRecord(ctx context.Context, cwd string, a herdr.AgentDetails) *identity.Record {
 	s, err := identity.Existing(ctx, cwd)
 	if err != nil || s == nil {
 		return nil
 	}
-	rec, _ := identity.Match(s, a)
+	rec, _ := identity.LiveEndingMismatched(s, a)
 	return rec
 }
 
 // Render writes a successful get outcome as labeled lines.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil
@@ -89,13 +91,13 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		session = &SessionIdentity{}
 	}
 	for _, f := range []struct{ label, value string }{
-		{"Name", libagent.Display(r.Name)}, {"Harness", libagent.Display(r.Harness)}, {"Status", libagent.Display(r.AgentStatus)},
-		{"Workspace ID", libagent.Display(r.WorkspaceID)}, {"Tab ID", libagent.Display(r.TabID)}, {"Pane ID", libagent.Display(r.PaneID)},
-		{"Working directory", libagent.Display(r.Cwd)}, {"Foreground working directory", libagent.Display(r.ForegroundCwd)},
+		{"Name", cli.Display(r.Name)}, {"Harness", cli.Display(r.Harness)}, {"Status", cli.Display(r.AgentStatus)},
+		{"Workspace ID", cli.Display(r.WorkspaceID)}, {"Tab ID", cli.Display(r.TabID)}, {"Pane ID", cli.Display(r.PaneID)},
+		{"Working directory", cli.Display(r.Cwd)}, {"Foreground working directory", cli.Display(r.ForegroundCwd)},
 		{"Interactive ready", displayBool(r.InteractiveReady)}, {"Launch pending", displayBool(r.LaunchPending)},
-		{"Focused", displayBool(r.Focused)}, {"Title", libagent.Display(r.Title)},
-		{"Session source", libagent.Display(session.Source)}, {"Session harness", libagent.Display(session.Harness)},
-		{"Session reference kind", libagent.Display(session.Kind)}, {"Session reference value", libagent.Display(session.Value)},
+		{"Focused", displayBool(r.Focused)}, {"Title", cli.Display(r.Title)},
+		{"Session source", cli.Display(session.Source)}, {"Session harness", cli.Display(session.Harness)},
+		{"Session reference kind", cli.Display(session.Kind)}, {"Session reference value", cli.Display(session.Value)},
 	} {
 		if _, err := fmt.Fprintf(w, "%s: %s\n", f.label, f.value); err != nil {
 			return err
@@ -106,7 +108,7 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		if n := rec.NativeSession; n != nil {
 			native = n.Kind + " " + n.Value
 		}
-		_, err := fmt.Fprintf(w, "Fledge ID: %s\nParent: %s\nProfile: %s\nNative session: %s\nRegistered at: %s\nRegistered by: %s\n", rec.ID, libagent.Display(rec.Parent), libagent.Display(rec.Profile), native, rec.RegisteredAt, rec.RegisteredBy)
+		_, err := fmt.Fprintf(w, "Fledge ID: %s\nParent: %s\nProfile: %s\nNative session: %s\nRegistered at: %s\nRegistered by: %s\n", rec.ID, cli.Display(rec.Parent), cli.Display(rec.Profile), native, rec.RegisteredAt, rec.RegisteredBy)
 		return err
 	}
 	return nil

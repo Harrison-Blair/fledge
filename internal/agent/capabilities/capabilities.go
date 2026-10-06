@@ -9,6 +9,7 @@ import (
 	"text/tabwriter"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/harness"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 )
@@ -38,8 +39,8 @@ type Live struct {
 }
 
 // Run reports capabilities; only Live opens the Herdr socket.
-func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.capabilities", Status: "success", Effects: []libagent.Effect{}}
+func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
+	out := cli.NewOutcome("agent.capabilities")
 	if o.Harness != "" {
 		if err := libagent.ValidateHarness(o.Harness); err != nil {
 			out.Fail(err, "validation", false)
@@ -48,11 +49,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	}
 	live := map[string]*Live{}
 	if o.Live {
-		var list herdr.IntegrationListResult
-		err := c.Call(ctx, "integration.list", nil, &list)
-		if err == nil && (list.Type != "integration_list" || list.Integrations == nil) {
-			err = libagent.Protocol("incomplete integration.list result")
-		}
+		list, err := herdr.IntegrationList(ctx, c)
 		if err != nil {
 			out.Fail(err, "integration.list", false)
 			return out
@@ -77,7 +74,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 }
 
 // Render writes the capability table and, for --live, a per-harness facts table.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil

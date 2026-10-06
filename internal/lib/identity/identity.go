@@ -14,9 +14,11 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/fledgedir"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
@@ -27,10 +29,11 @@ const Kind = "agents"
 
 // Record is one registered agent. EndedAt stays null until agent stop closes
 // its pane or a lookup observes its terminal gone; the record then moves to the
-// store's archive. Records are never deleted. WorktreeCreated and WorktreeBase
-// record that the agent's spawn created its checkout and from which ref, and
-// WorktreeBranch and WorktreeMarker identify that very checkout, so one
-// recreated later at the same path is not taken for it; records written
+// store's archive. Records are never deleted. Parent is fixed at create: the
+// store's parent index, which Children reads, records it then. WorktreeCreated
+// and WorktreeBase record that the agent's spawn created its checkout and from
+// which ref, and WorktreeBranch and WorktreeMarker identify that very checkout,
+// so one recreated later at the same path is not taken for it; records written
 // before they existed read as not created or unidentified. Profile names the
 // profile the agent was spawned with; it is null for adopted agents, spawns
 // without a profile, and records written before it existed. NativeSession is
@@ -86,7 +89,7 @@ type Checkout struct {
 
 // OpenStore opens the state store of the repository containing cwd, creating
 // .fledge and its ignore file as needed and recording those effects on out.
-func OpenStore(ctx context.Context, cwd string, out *libagent.Outcome) (*state.Store, error) {
+func OpenStore(ctx context.Context, cwd string, out *cli.Outcome) (*state.Store, error) {
 	root, err := fledgedir.Root(ctx, cwd)
 	if err != nil {
 		return nil, err
@@ -112,6 +115,27 @@ func Existing(ctx context.Context, cwd string) (*state.Store, error) {
 	return s, err
 }
 
+// OpenOnce returns an opener that runs Existing for cwd on its first call and
+// returns the same result to later calls, so a command resolves the
+// repository root once. A failed open is not kept: the next call tries again.
+// The opener is safe for concurrent use.
+func OpenOnce(ctx context.Context, cwd string) func() (*state.Store, error) {
+	var mu sync.Mutex
+	var s *state.Store
+	opened := false
+	return func() (*state.Store, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if opened {
+			return s, nil
+		}
+		var err error
+		s, err = Existing(ctx, cwd)
+		opened = err == nil
+		return s, err
+	}
+}
+
 // Register records details as a new agent. The parent is the caller's live
 // record when the caller's pane hosts a registered terminal; otherwise null.
 // Herdr lookups happen first; one store lock then covers a single scan of the
@@ -121,13 +145,33 @@ func Existing(ctx context.Context, cwd string) (*state.Store, error) {
 // naming it. A live record of the terminal left by a different harness ends
 // under the same lock. A nil checkout records none, and a nil profile no profile.
 func Register(ctx context.Context, s *state.Store, c libagent.Client, details herdr.AgentDetails, by string, checkout *Checkout, profile *string) (Record, error) {
+	rec, _, err := RegisterWithSender(ctx, s, c, details, by, checkout, profile)
+	return rec, err
+}
+
+// RegisterWithSender is Register that also returns the caller as a prompt
+// sender, built from Register's own caller lookup, so a following prompt needs
+// no second lookup. The sender is nil when that lookup did not run or failed.
+func RegisterWithSender(ctx context.Context, s *state.Store, c libagent.Client, details herdr.AgentDetails, by string, checkout *Checkout, profile *string) (Record, *libagent.Sender, error) {
+	return register(ctx, s, c, details, by, checkout, profile, nil)
+}
+
+// RegisterAs is Register that records parent, when it is not nil, in place of
+// the caller's record. A record's parent is fixed at create.
+func RegisterAs(ctx context.Context, s *state.Store, c libagent.Client, details herdr.AgentDetails, by string, checkout *Checkout, profile, parent *string) (Record, error) {
+	rec, _, err := register(ctx, s, c, details, by, checkout, profile, parent)
+	return rec, err
+}
+
+func register(ctx context.Context, s *state.Store, c libagent.Client, details herdr.AgentDetails, by string, checkout *Checkout, profile, fixed *string) (Record, *libagent.Sender, error) {
 	if details.TerminalID == "" || details.PaneID == "" {
-		return Record{}, fmt.Errorf("cannot register an agent without a pane and terminal id")
+		return Record{}, nil, fmt.Errorf("cannot register an agent without a pane and terminal id")
 	}
 	caller, err := callerAgent(ctx, c)
 	if err != nil {
-		return Record{}, err
+		return Record{}, nil, err
 	}
+	sender := libagent.CallerSender(c.CallerPane, caller)
 	var rec Record
 	err = s.Exclusive(func(tx *state.Tx) error {
 		records, err := live(tx)
@@ -142,6 +186,12 @@ func Register(ctx context.Context, s *state.Store, c libagent.Client, details he
 				}
 			}
 		}
+		if fixed != nil {
+			parent = fixed
+		}
+		if err := indexUnindexed(s, tx); err != nil {
+			return err
+		}
 		if existing, ok := records[details.TerminalID]; ok {
 			if !Mismatched(existing, details) {
 				return alreadyRegistered(details, existing)
@@ -150,7 +200,7 @@ func Register(ctx context.Context, s *state.Store, c libagent.Client, details he
 				return err
 			}
 		}
-		_, err = tx.Create(Kind, func(id string) any {
+		_, err = tx.CreatePrepared(Kind, func(id string) error { return index(tx, id, parent) }, func(id string) any {
 			rec = Record{ID: id, Name: details.Name, Pane: details.PaneID, WorkspaceID: details.WorkspaceID, Harness: details.Agent,
 				Session: session(), TerminalID: details.TerminalID, RegisteredAt: time.Now().UTC().Format(time.RFC3339), RegisteredBy: by, Parent: parent, Profile: profile}
 			if checkout != nil {
@@ -162,9 +212,9 @@ func Register(ctx context.Context, s *state.Store, c libagent.Client, details he
 		return err
 	})
 	if err != nil {
-		return Record{}, err
+		return Record{}, &sender, err
 	}
-	return rec, nil
+	return rec, &sender, nil
 }
 
 // attach returns the id of rec, the caller's live record, after pointing it at
@@ -206,7 +256,7 @@ func Registered(s *state.Store, a herdr.AgentDetails) (*Record, error) {
 }
 
 func alreadyRegistered(a herdr.AgentDetails, existing Record) error {
-	return &herdr.Error{Code: "agent_already_registered", Message: fmt.Sprintf("the agent in %s is already registered as %s", a.PaneID, existing.ID)}
+	return &cli.Error{Code: "agent_already_registered", Message: fmt.Sprintf("the agent in %s is already registered as %s", a.PaneID, existing.ID)}
 }
 
 // Caller finds the live record of the agent in the caller's pane, if any. A
@@ -220,19 +270,31 @@ func Caller(ctx context.Context, s *state.Store, c libagent.Client) (*Record, er
 // CallerAgent is Caller that also returns the caller's live agent, which is
 // nil exactly when the record is.
 func CallerAgent(ctx context.Context, s *state.Store, c libagent.Client) (*Record, *herdr.AgentDetails, error) {
+	rec, live, _, err := CallerAgentWithSender(ctx, s, c)
+	return rec, live, err
+}
+
+// CallerAgentWithSender is CallerAgent that also returns the caller as a
+// prompt sender, built from the same lookup, so a following prompt needs no
+// second lookup. The sender is set whenever the error is nil.
+func CallerAgentWithSender(ctx context.Context, s *state.Store, c libagent.Client) (*Record, *herdr.AgentDetails, libagent.Sender, error) {
 	caller, err := callerAgent(ctx, c)
-	if err != nil || caller == nil {
-		return nil, nil, err
+	if err != nil {
+		return nil, nil, libagent.Sender{}, err
 	}
-	rec, err := Match(s, *caller)
+	sender := libagent.CallerSender(c.CallerPane, caller)
+	if caller == nil {
+		return nil, nil, sender, nil
+	}
+	rec, err := LiveEndingMismatched(s, *caller)
 	if err != nil || rec == nil {
-		return nil, nil, err
+		return nil, nil, sender, err
 	}
 	moved, err := Relocate(s, *rec, *caller)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, sender, err
 	}
-	return &moved, caller, nil
+	return &moved, caller, sender, nil
 }
 
 // callerAgent fetches the agent in the caller's pane, or nil for a caller
@@ -265,7 +327,7 @@ func RequireCaller(ctx context.Context, s *state.Store, c libagent.Client) (Reco
 		return Record{}, err
 	}
 	if rec == nil {
-		return Record{}, &herdr.Error{Code: "caller_unregistered", Message: "the caller has no live Fledge record; register with fledge agent adopt"}
+		return Record{}, &cli.Error{Code: "caller_unregistered", Message: "the caller has no live Fledge record; register with fledge agent adopt"}
 	}
 	return *rec, nil
 }
@@ -360,14 +422,14 @@ func end(tx *state.Tx, id string) (bool, error) {
 // session. An unknown id fails with agent_record_not_found. A record that has
 // not ended is left as is without error; that is the only no-op.
 func Reopen(s *state.Store, id string) error {
-	if !state.ValidID(id) {
-		return libagent.Invalid("--id must be 8 lowercase hexadecimal characters")
+	if err := libagent.ValidateID("id", "agent", id); err != nil {
+		return err
 	}
 	return s.Exclusive(func(tx *state.Tx) error {
 		var rec Record
 		var missing *state.NotFoundError
 		if err := tx.Get(Kind, id, &rec); errors.As(err, &missing) {
-			return &herdr.Error{Code: "agent_record_not_found", Message: fmt.Sprintf("no agent record with id %s", id)}
+			return RecordNotFound(id)
 		} else if err != nil {
 			return err
 		}
@@ -382,7 +444,7 @@ func Reopen(s *state.Store, id string) error {
 			return err
 		}
 		if other, ok := records[rec.TerminalID]; ok {
-			return &herdr.Error{Code: "agent_already_registered", Message: fmt.Sprintf("cannot reopen agent record %s: terminal %s is registered as %s", id, rec.TerminalID, other.ID)}
+			return &cli.Error{Code: "agent_already_registered", Message: fmt.Sprintf("cannot reopen agent record %s: terminal %s is registered as %s", id, rec.TerminalID, other.ID)}
 		}
 		// Unarchive first: interrupted here, the record is live but ended,
 		// which the next scan under the lock archives again.
@@ -430,9 +492,31 @@ func ObserveSession(s *state.Store, id string, session herdr.AgentSession, now t
 	return rec, changed, err
 }
 
-// Match returns the live record of a's terminal, or nil when none exists. A
-// record left by a different harness is not a's: Match ends it and returns nil.
-func Match(s *state.Store, a herdr.AgentDetails) (*Record, error) {
+// Observer is ObserveSession, replaceable in tests.
+type Observer func(s *state.Store, id string, session herdr.AgentSession, now time.Time) (Record, bool, error)
+
+// Observe stores live's session ref on rec through observe, as seen at now,
+// and returns the updated record. It is best effort: a failed write is a
+// warning effect and rec is returned as it was.
+func Observe(s *state.Store, observe Observer, rec Record, live *herdr.AgentDetails, now time.Time, out *cli.Outcome) Record {
+	if live == nil || live.AgentSession == nil {
+		return rec
+	}
+	updated, changed, err := observe(s, rec.ID, *live.AgentSession, now)
+	switch {
+	case err != nil:
+		out.Effects = append(out.Effects, cli.Effect{Action: "warning", Kind: "native_session", ID: rec.ID})
+		return rec
+	case changed:
+		out.Effects = append(out.Effects, cli.Effect{Action: "updated", Kind: "native_session", ID: rec.ID})
+	}
+	return updated
+}
+
+// LiveEndingMismatched returns the live record of a's terminal, or nil when
+// none exists. A record left by a different harness is not a's:
+// LiveEndingMismatched ends it and returns nil.
+func LiveEndingMismatched(s *state.Store, a herdr.AgentDetails) (*Record, error) {
 	rec, err := Live(s, a.TerminalID)
 	if err != nil || rec == nil || !Mismatched(*rec, a) {
 		return rec, err
@@ -472,12 +556,16 @@ func LiveByTerminal(s *state.Store) (map[string]Record, error) {
 }
 
 // Children returns every record, live or ended, whose parent is id, oldest
-// first. It never writes. A nil s has none.
+// first. It never writes. A nil s has none. It reads the records the parent
+// index marks as id's children, and every record the index does not hold yet,
+// such as one written by an older Fledge.
 func Children(s *state.Store, id string) ([]Record, error) {
 	children := []Record{}
 	if s == nil {
 		return children, nil
 	}
+	// List the records before the index: Register marks a record before it
+	// writes it, so each listed record that is indexed is already marked.
 	live, err := s.List(Kind)
 	if err != nil {
 		return nil, err
@@ -486,14 +574,35 @@ func Children(s *state.Store, id string) ([]Record, error) {
 	if err != nil {
 		return nil, err
 	}
+	// List indexed before id's children: indexing marks a record's parent
+	// before it marks the record indexed.
+	indexed, err := s.Marked(Kind, indexedSet)
+	if err != nil {
+		return nil, err
+	}
+	marked := []string{}
+	if state.ValidID(id) {
+		if marked, err = s.Marked(Kind, childrenSet(id)); err != nil {
+			return nil, err
+		}
+	}
+	isLive, isArchived, isIndexed, isMarked := set(live), set(archived), set(indexed), set(marked)
 	seen := map[string]bool{}
-	for _, rid := range append(live, archived...) {
-		var rec Record
-		if seen[rid] {
+	for _, rid := range slices.Concat(marked, live, archived) {
+		if seen[rid] || isIndexed[rid] && !isMarked[rid] {
 			continue
 		}
 		seen[rid] = true
-		if err := s.Get(Kind, rid, &rec); err != nil {
+		get := s.Get
+		if !isLive[rid] && isArchived[rid] {
+			get = s.GetArchived
+		}
+		var rec Record
+		var missing *state.NotFoundError
+		if err := fetch(get, rid, &rec); errors.As(err, &missing) {
+			// A marker of a record whose create was interrupted.
+			continue
+		} else if err != nil {
 			return nil, err
 		}
 		if rec.Parent != nil && *rec.Parent == id {
@@ -505,6 +614,78 @@ func Children(s *state.Store, id string) ([]Record, error) {
 	})
 	return children, nil
 }
+
+// set returns ids as a membership map.
+func set(ids []string) map[string]bool {
+	m := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		m[id] = true
+	}
+	return m
+}
+
+// index adds record id with parent to the parent index under the store lock:
+// first its parent marker, then its indexed marker, so an indexed record
+// always has its parent marker. A parent that is not a record id is never
+// asked for by Children and gets no marker.
+func index(tx *state.Tx, id string, parent *string) error {
+	if parent != nil && state.ValidID(*parent) {
+		if err := mark(tx, childrenSet(*parent), id); err != nil {
+			return err
+		}
+	}
+	return mark(tx, indexedSet, id)
+}
+
+// indexUnindexed adds every record that has no indexed marker to the parent
+// index under the store lock: records written before the index existed, by an
+// older Fledge, or by an interrupted index. Once all are indexed it reads no
+// record. A record that fails to read stays unindexed; Children reads it.
+func indexUnindexed(s *state.Store, tx *state.Tx) error {
+	live, err := tx.List(Kind)
+	if err != nil {
+		return err
+	}
+	archived, err := s.ListArchived(Kind)
+	if err != nil {
+		return err
+	}
+	indexed, err := s.Marked(Kind, indexedSet)
+	if err != nil {
+		return err
+	}
+	isIndexed := set(indexed)
+	for _, id := range slices.Concat(live, archived) {
+		if isIndexed[id] {
+			continue
+		}
+		isIndexed[id] = true
+		var rec Record
+		if fetch(tx.Get, id, &rec) != nil {
+			continue
+		}
+		if err := index(tx, id, rec.Parent); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// fetch reads one agent record with get; it is replaceable so tests can
+// count record reads.
+var fetch = func(get func(kind, id string, v any) error, id string, rec *Record) error {
+	return get(Kind, id, rec)
+}
+
+// indexedSet is the marker set of agent records whose parent the index
+// holds; childrenSet(id) is the set of records whose parent is id.
+const indexedSet = "indexed"
+
+func childrenSet(id string) string { return "children-" + id }
+
+// mark is Tx.Mark for agent records; it is replaceable so tests can
+// interrupt indexing.
+var mark = func(tx *state.Tx, set, id string) error { return tx.Mark(Kind, set, id) }
 
 // reader is the read side shared by state.Store and state.Tx.
 type reader interface {
@@ -638,17 +819,17 @@ func harnessChanged(rec Record, a herdr.AgentDetails) error {
 }
 
 func load(s *state.Store, id string) (Record, error) {
-	if !state.ValidID(id) {
-		return Record{}, libagent.Invalid("--id must be 8 lowercase hexadecimal characters")
+	if err := libagent.ValidateID("id", "agent", id); err != nil {
+		return Record{}, err
 	}
 	var rec Record
 	var missing *state.NotFoundError
-	err := errors.New("no agent records exist in this repository")
+	var err error
 	if s != nil {
 		err = s.Get(Kind, id, &rec)
 	}
 	if s == nil || errors.As(err, &missing) {
-		return Record{}, &herdr.Error{Code: "agent_record_not_found", Message: fmt.Sprintf("no agent record with id %s", id)}
+		return Record{}, RecordNotFound(id)
 	}
 	if err != nil {
 		return Record{}, err
@@ -662,8 +843,13 @@ func load(s *state.Store, id string) (Record, error) {
 	return rec, nil
 }
 
+// RecordNotFound is the agent_record_not_found error for an unknown record id.
+func RecordNotFound(id string) error {
+	return &cli.Error{Code: "agent_record_not_found", Message: fmt.Sprintf("no agent record with id %s", id)}
+}
+
 func stale(id, format string, args ...any) error {
-	return &herdr.Error{Code: "agent_identity_stale", Message: fmt.Sprintf("agent record %s is stale: ", id) + fmt.Sprintf(format, args...)}
+	return &cli.Error{Code: "agent_identity_stale", Message: fmt.Sprintf("agent record %s is stale: ", id) + fmt.Sprintf(format, args...)}
 }
 
 // session names the caller's Herdr session, or nil outside one.
@@ -693,7 +879,7 @@ func (t Target) Validate() error {
 		}
 	}
 	if set != 1 {
-		return libagent.Invalid("exactly one of --name, --pane, or --id is required")
+		return cli.Invalid("exactly one of --name, --pane, or --id is required")
 	}
 	return nil
 }
@@ -702,6 +888,13 @@ func (t Target) Validate() error {
 // it: the name or pane as given, or for an id the verified pane. An id lookup
 // also returns its record. Record lookup failures are located at phase identity.
 func (t Target) Get(ctx context.Context, c libagent.Client) (herdr.AgentDetails, string, *Record, error) {
+	return t.GetWith(ctx, c, func() (*state.Store, error) { return Existing(ctx, c.Cwd) })
+}
+
+// GetWith is Get with open supplying the store for an id lookup, so a command
+// that looks up several targets opens it once (see OpenOnce). A name or pane
+// lookup does not call open.
+func (t Target) GetWith(ctx context.Context, c libagent.Client, open func() (*state.Store, error)) (herdr.AgentDetails, string, *Record, error) {
 	if t.ID == "" {
 		target := t.Name
 		if target == "" {
@@ -710,15 +903,14 @@ func (t Target) Get(ctx context.Context, c libagent.Client) (herdr.AgentDetails,
 		a, err := c.Get(ctx, target)
 		return a, target, nil, err
 	}
-	s, err := Existing(ctx, c.Cwd)
+	s, err := open()
 	if err != nil {
-		return herdr.AgentDetails{}, "", nil, libagent.AtPhase("identity", err)
+		return herdr.AgentDetails{}, "", nil, cli.AtPhase("identity", err)
 	}
 	rec, a, err := Resolve(ctx, s, c, t.ID)
-	var remote *herdr.Error
-	var input *libagent.InputError
-	if err != nil && (errors.As(err, &input) || errors.As(err, &remote) && (remote.Code == "agent_identity_stale" || remote.Code == "agent_record_not_found")) {
-		err = libagent.AtPhase("identity", err)
+	var input *cli.InputError
+	if code, _ := cli.Coded(err); err != nil && (errors.As(err, &input) || code == "agent_identity_stale" || code == "agent_record_not_found") {
+		err = cli.AtPhase("identity", err)
 	}
 	if err != nil {
 		return herdr.AgentDetails{}, "", nil, err

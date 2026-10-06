@@ -11,8 +11,10 @@ import (
 	"text/tabwriter"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
+	"github.com/Harrison-Blair/fledge/internal/lib/termtext"
 )
 
 // Options filters by status, by owner agent id, and by parent task id (direct
@@ -37,19 +39,17 @@ type Result struct {
 }
 
 // Run reads tasks from the store without contacting Herdr.
-func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "task.list", Status: "success", Effects: []libagent.Effect{}}
+func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
+	out := cli.NewOutcome("task.list")
 	var err error
 	switch {
 	case o.Status != "" && !slices.Contains(task.Statuses, o.Status):
-		err = libagent.Invalid("--status must be one of %v", task.Statuses)
+		err = cli.Invalid("--status must be one of %s", strings.Join(task.Statuses, ", "))
 	case o.Owner != "":
-		if task.ValidateID(o.Owner) != nil {
-			err = libagent.Invalid("--owner must be an 8 lowercase hexadecimal agent id")
-		}
+		err = libagent.ValidateID("owner", "agent", o.Owner)
 	}
-	if err == nil && o.Parent != "" && task.ValidateID(o.Parent) != nil {
-		err = libagent.Invalid("--parent must be an 8 lowercase hexadecimal task id")
+	if err == nil && o.Parent != "" {
+		err = libagent.ValidateID("parent", "task", o.Parent)
 	}
 	if err != nil {
 		out.Fail(err, "validation", false)
@@ -101,7 +101,7 @@ func load(ctx context.Context, cwd string, o Options) ([]Row, error) {
 }
 
 // Render writes a successful list as a table.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil
@@ -128,7 +128,7 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		if t.Progress != nil {
 			progress = t.Progress.String()
 		}
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", t.ID, t.Status, owner, libagent.Display(t.Parent), waiting, progress, t.Title)
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", t.ID, t.Status, owner, cli.Display(t.Parent), waiting, progress, termtext.Clean(t.Title))
 	}
 	return table.Flush()
 }

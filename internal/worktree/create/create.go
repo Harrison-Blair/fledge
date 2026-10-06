@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/fledgedir"
 	"github.com/Harrison-Blair/fledge/internal/lib/worktree"
 )
@@ -22,10 +23,10 @@ type Result struct {
 	WorkspaceID string `json:"workspace_id"`
 }
 
-func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "worktree.create", Status: "success", Effects: []libagent.Effect{}}
+func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
+	out := cli.NewOutcome("worktree.create")
 	if o.Branch == "" {
-		out.Fail(libagent.Invalid("--branch is required"), "validation", false)
+		out.Fail(cli.Invalid("--branch is required"), "validation", false)
 		return out
 	}
 	cwd := o.Cwd
@@ -57,8 +58,8 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		return out
 	}
 	out.Effects = append(out.Effects,
-		libagent.Effect{Action: "created", Kind: "worktree", Path: r.Worktree.Path},
-		libagent.Effect{Action: "created", Kind: "workspace", ID: r.Workspace.ID})
+		cli.Effect{Action: "created", Kind: "worktree", Path: r.Worktree.Path},
+		cli.Effect{Action: "created", Kind: "workspace", ID: r.Workspace.ID})
 	out.Result = Result{Path: r.Worktree.Path, Branch: o.Branch, WorkspaceID: r.Workspace.ID}
 	if _, err = fledgedir.Ensure(r.Worktree.Path, &out); err != nil {
 		out.Fail(fmt.Errorf("prepare .fledge in new worktree %s: %w", r.Worktree.Path, err), "worktree.ignore", false)
@@ -67,7 +68,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 }
 
 // Render writes a successful create outcome.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil

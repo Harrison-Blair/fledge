@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"reflect"
 	"testing"
 
@@ -99,6 +98,20 @@ func Info(p herdr.Pane) herdr.AgentResult {
 	return herdr.AgentResult{Type: "agent_info", Agent: herdr.AgentDetails{Pane: p, TerminalID: "term_x", Focused: &f, Revision: &rev}}
 }
 
+// List is an agent.list call that returns agents, or an empty list when none
+// are given.
+func List(agents ...herdr.AgentDetails) Call {
+	if agents == nil {
+		agents = []herdr.AgentDetails{}
+	}
+	return Call{Method: "agent.list", Result: herdr.AgentListResult{Type: "agent_list", Agents: agents}}
+}
+
+// Get is an agent.get call for target that returns a.
+func Get(target string, a herdr.AgentDetails) Call {
+	return Call{Method: "agent.get", Params: map[string]any{"target": target}, Result: herdr.AgentResult{Type: "agent_info", Agent: a}}
+}
+
 // Waited builds the agent.wait settled-state result for a pane already hosting an agent.
 func Waited(p herdr.Pane, status string) herdr.AgentResult {
 	p.AgentStatus = status
@@ -107,6 +120,14 @@ func Waited(p herdr.Pane, status string) herdr.AgentResult {
 
 // OK is the bare acknowledgement returned by pane.close and agent.send_keys.
 func OK() map[string]any { return map[string]any{"type": "ok"} }
+
+// countWriter counts the writes of a successful render.
+type countWriter struct{ writes int }
+
+func (w *countWriter) Write(p []byte) (int, error) {
+	w.writes++
+	return len(p), nil
+}
 
 // failAfterWriter checks errors on later writes as well as the initial write.
 type failAfterWriter struct {
@@ -126,30 +147,35 @@ func (w *failAfterWriter) Write(p []byte) (int, error) {
 
 // CheckOutputFailures fails at every write boundary of each outcome, in human
 // and JSON form, and requires Finish to report the write error unchanged.
-func CheckOutputFailures(t *testing.T, render libagent.HumanRenderer, outcomes ...libagent.Outcome) {
+func CheckOutputFailures(t *testing.T, render cli.HumanRenderer, outcomes ...cli.Outcome) {
 	t.Helper()
 	for i, out := range outcomes {
 		for _, asJSON := range []bool{false, true} {
-			if err := out.Write(io.Discard, asJSON, render); err != nil {
+			var count countWriter
+			if err := out.Write(&count, asJSON, render); err != nil {
 				t.Fatal(err)
 			}
-			// Exercise each write boundary without depending on the number of writes.
-			for after := 0; ; after++ {
+			// Fail at each write of the successful render, then confirm that
+			// the render makes no more writes than counted.
+			for after := 0; after <= count.writes; after++ {
 				sentinel := errors.New("output unavailable")
 				w := &failAfterWriter{remaining: after, err: sentinel}
-				err := libagent.Finish(out, w, asJSON, render)
+				err := cli.Finish(out, w, asJSON, render)
+				if after == count.writes {
+					if w.failed {
+						t.Fatalf("case %d json=%v: more than %d writes", i, asJSON, count.writes)
+					}
+					break
+				}
 				var outputErr *cli.OutputError
 				if !w.failed {
-					break
+					t.Fatalf("case %d json=%v: %d writes, want %d", i, asJSON, after, count.writes)
 				}
 				if !errors.As(err, &outputErr) {
 					t.Fatalf("output failure lost: %v", err)
 				}
 				if !errors.Is(err, sentinel) || outputErr.ExitCode() != 1 || outputErr.Error() != sentinel.Error() {
 					t.Fatalf("case %d json=%v write=%d: %v", i, asJSON, after, err)
-				}
-				if after > 100 {
-					t.Fatalf("unbounded writes for case %d", i)
 				}
 			}
 		}

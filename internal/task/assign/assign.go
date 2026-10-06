@@ -12,7 +12,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
-	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
@@ -39,18 +39,18 @@ type Result struct {
 // assignment records the prerequisites it bypassed as UnmetAtAssign. The
 // owner's live session ref is stored on its record, best effort, once the
 // assignment is committed.
-func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
+func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 	return run(ctx, c, o, libagent.NewMessageID())
 }
 
-func run(ctx context.Context, c libagent.Client, o Options, messageID string) libagent.Outcome {
-	out := libagent.Outcome{Operation: "task.assign", Status: "success", Effects: []libagent.Effect{}}
+func run(ctx context.Context, c libagent.Client, o Options, messageID string) cli.Outcome {
+	out := cli.NewOutcome("task.assign")
 	err := task.ValidateID(o.ID)
 	if err == nil {
 		err = o.Agent.Validate()
 	}
-	if err == nil && o.Agent.ID != "" && !state.ValidID(o.Agent.ID) {
-		err = libagent.Invalid("--agent-id must be 8 lowercase hexadecimal characters")
+	if err == nil && o.Agent.ID != "" {
+		err = libagent.ValidateID("agent-id", "agent", o.Agent.ID)
 	}
 	if err != nil {
 		out.Fail(err, "validation", false)
@@ -67,8 +67,14 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) li
 	if err == nil {
 		err = task.Require(&snapshot, "assign", task.Created, task.Assigned)
 	}
+	// Listing every task also refuses a malformed record, even one the task
+	// does not wait on; the locked check reads only the prerequisites.
+	var rs []task.Record
 	if err == nil {
-		_, err = waiting(s, snapshot, o.Force)
+		rs, err = task.List(s)
+	}
+	if err == nil {
+		_, err = waiting(snapshot, task.Index(rs), o.Force)
 	}
 	if err != nil {
 		out.Fail(err, "task", false)
@@ -80,13 +86,13 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) li
 		return out
 	}
 	if owner == nil {
-		owner, err = identity.Match(s, a)
+		owner, err = identity.LiveEndingMismatched(s, a)
 		if err != nil {
 			out.Fail(err, "state", false)
 			return out
 		}
 		if owner == nil {
-			out.Fail(&herdr.Error{Code: "agent_unregistered", Message: fmt.Sprintf("the agent in %s has no Fledge record; register it first with: fledge agent adopt --pane %s", a.PaneID, a.PaneID)}, "identity", false)
+			out.Fail(&cli.Error{Code: "agent_unregistered", Message: fmt.Sprintf("the agent in %s has no Fledge record; register it first with: fledge agent adopt --pane %s", a.PaneID, a.PaneID)}, "identity", false)
 			return out
 		}
 		// The terminal is the identity; the record follows it to a new pane.
@@ -99,9 +105,13 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) li
 	}
 	r, err := task.Update(s, o.ID, func(r *task.Record) error {
 		if !reflect.DeepEqual(*r, snapshot) {
-			return &herdr.Error{Code: "task_state_changed", Message: fmt.Sprintf("task %s changed while it was being assigned; inspect it with fledge task get --id %s", r.ID, r.ID)}
+			return &cli.Error{Code: "task_state_changed", Message: fmt.Sprintf("task %s changed while it was being assigned; inspect it with fledge task get --id %s", r.ID, r.ID)}
 		}
-		unmet, err := waiting(s, *r, o.Force)
+		byID, err := prerequisites(s, *r)
+		if err != nil {
+			return err
+		}
+		unmet, err := waiting(*r, byID, o.Force)
 		if err != nil {
 			return err
 		}
@@ -113,16 +123,16 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) li
 		out.Fail(err, "task", false)
 		return out
 	}
-	out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "task", ID: r.ID})
+	out.Effects = append(out.Effects, cli.Effect{Action: "updated", Kind: "task", ID: r.ID})
 	out.Result = Result{Record: r, OwnerName: owner.Name}
-	task.Observe(s, observeSession, *owner, &a, time.Now(), &out)
+	identity.Observe(s, observeSession, *owner, &a, time.Now(), &out)
 	body := fmt.Sprintf("task: %s · title: %s · complete with: fledge task complete --id %s --summary \"...\"\n%s", r.ID, r.Title, r.ID, r.Brief)
 	assignedAt := r.AssignedAt
-	if r, ok := task.Deliver(ctx, c, s, &out, o.ID, a.PaneID, messageID, body, func(r *task.Record) (*task.Attempt, error) {
+	if r, ok := task.Deliver(ctx, c, s, &out, libagent.ResolveSender(ctx, c), o.ID, a.PaneID, messageID, body, func(r *task.Record) (*task.Attempt, error) {
 		// Record the outcome only for this assignment; the owner may already
 		// have completed the task, so the status is not checked.
 		if r.AssignedAt == nil || *r.AssignedAt != *assignedAt || r.Owner == nil || *r.Owner != owner.ID || r.Delivery == nil || r.Delivery.MessageID != messageID {
-			return nil, &herdr.Error{Code: "task_state_changed", Message: fmt.Sprintf("task %s was reassigned before its delivery could be recorded", r.ID)}
+			return nil, &cli.Error{Code: "task_state_changed", Message: fmt.Sprintf("task %s was reassigned before its delivery could be recorded", r.ID)}
 		}
 		return &r.Delivery.Attempt, nil
 	}); ok {
@@ -131,26 +141,39 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) li
 	return out
 }
 
-// waiting returns r's unmet prerequisites, nil when there are none, and
-// refuses them unless force is set.
-func waiting(s *state.Store, r task.Record, force bool) ([]string, error) {
-	rs, err := task.List(s)
-	if err != nil {
-		return nil, err
+// prerequisites reads r's prerequisites by id. A missing one is left out, so
+// it counts as unmet; any other read error is returned.
+func prerequisites(s *state.Store, r task.Record) (map[string]task.Record, error) {
+	byID := make(map[string]task.Record, len(r.After))
+	for _, id := range r.After {
+		dep, err := task.Get(s, id)
+		if code, _ := cli.Coded(err); code == "task_not_found" {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		byID[id] = dep
 	}
-	unmet := task.Unmet(r, task.Index(rs))
+	return byID, nil
+}
+
+// waiting returns r's prerequisites that are unmet in byID, nil when there are
+// none, and refuses them unless force is set.
+func waiting(r task.Record, byID map[string]task.Record, force bool) ([]string, error) {
+	unmet := task.Unmet(r, byID)
 	switch {
 	case len(unmet) == 0:
 		return nil, nil
 	case !force:
-		return nil, &herdr.Error{Code: "task_dependencies_unmet", Message: fmt.Sprintf("task %s waits on prerequisites that are not verified or cancelled: %s; assign it once they are, or pass --force", r.ID, strings.Join(unmet, ", "))}
+		return nil, &cli.Error{Code: "task_dependencies_unmet", Message: fmt.Sprintf("task %s waits on prerequisites that are not verified or cancelled: %s; assign it once they are, or pass --force", r.ID, strings.Join(unmet, ", "))}
 	}
 	return unmet, nil
 }
 
 // Render writes an assignment, or after a failed delivery, what state the
 // task was left in.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if !ok {
 		return nil
@@ -175,4 +198,4 @@ func Render(w io.Writer, o libagent.Outcome) error {
 }
 
 // observeSession is replaceable so tests can fail its write.
-var observeSession task.Observer = identity.ObserveSession
+var observeSession identity.Observer = identity.ObserveSession

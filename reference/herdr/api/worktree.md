@@ -1,6 +1,6 @@
 # herdr API: worktree methods
 
-> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
+> herdr 0.9.3 · protocol 22 · schema_version 1 · captured 2026-10-06
 > Part of the fledge herdr reference. Index: [README.md](../README.md). Wire format: [protocol.md](../protocol.md).
 
 The `worktree.*` namespace manages Git-worktree-backed workspaces: it enumerates the
@@ -15,8 +15,8 @@ repository's parent (non-linked) checkout: a linked worktree reached through `cw
 `workspace_id`, or as the focused-workspace fallback fails `linked_worktree_source`
 (`New and open worktree actions start from the repo parent workspace.`). `worktree.list`
 has no such restriction — it resolves through to the parent checkout and succeeds. Every
-`cwd` and `path` must be absolute (`~` is expanded; a relative or empty string fails
-`invalid_request` with `worktree path must be absolute`). A worktree becomes a herdr
+`cwd` and `path` must be absolute (a leading `~/` is expanded; a relative or empty string,
+and a `~user/…` form, fail `invalid_request` with `worktree path must be absolute`). A worktree becomes a herdr
 *workspace* when opened — the create and open results therefore return the full
 workspace/tab/pane topology (see [data-model.md](../data-model.md)) in addition to the
 `WorktreeInfo`. `trust_repository` is honoured per request only: a trusted call does not
@@ -45,8 +45,10 @@ repository's parent checkout. If `branch` is omitted the server derives one of t
 `worktree/<adjective>-<noun>-<4 hex>` (observed: `worktree/green-river-c8c3`,
 `worktree/silver-valley-39ff`); `base` selects the ref the new branch/worktree is created
 from; `path` overrides the checkout location (default is under herdr's managed worktree
-directory, `~/.herdr/worktrees/<repo>/<branch>`, where `<branch>` is the branch name with
-`/` flattened to `-`: branch `rvwt/slash-a` lands in `…/worktrees/repo/rvwt-slash-a`).
+directory, `<dir>/<repo>/<branch>`, where `<dir>` is the config's `[worktrees] directory`
+(default `~/.herdr/worktrees`, per [raw/default-config.toml](../raw/default-config.toml))
+and `<branch>` is the branch name with `/` flattened to `-`: branch `rvwt/slash-a` lands
+in `<dir>/wtp/rvwt-slash-a`).
 `label` overrides the workspace label; when it is omitted the label is the **basename of
 the checkout directory**, not the branch — branch `zebra` created at `…/wt/xyzdir` yields
 workspace label `xyzdir`. The two coincide whenever the managed default path is used.
@@ -56,6 +58,7 @@ repository, not as a routine retry for a failed worktree command.
 
 The first `worktree.create` in a repository herdr has not seen before opens **two**
 workspaces: one adopting the repository's parent checkout and one for the new worktree.
+Its subscribers see `worktree_created` followed by two `workspace_created` events.
 
 **Params** (`WorktreeCreateParams`):
 
@@ -82,7 +85,9 @@ workspaces: one adopting the repository's parent checkout and one for the new wo
 
 **Errors**: `worktree_create_failed` (git refused — branch already checked out in another
 worktree, target path occupied, invalid branch name, unknown `base`, a concurrent create of
-the same branch, or an untrusted repository), `linked_worktree_source` (the resolved source
+the same branch, or an untrusted repository; git's message is passed through, e.g.
+`"fatal: 'a..b' is not a valid branch name"` — and when the path is occupied, git has
+already created the new branch, which stays behind after the failure), `linked_worktree_source` (the resolved source
 checkout is itself a linked worktree, including the focused-workspace fallback),
 `not_git_worktree` (`cwd` is not inside a Git work tree), `workspace_not_found` (unknown
 `workspace_id`), `invalid_request` (empty `branch`, non-absolute `cwd` or `path`). A CLI
@@ -105,9 +110,13 @@ The root pane of a freshly created workspace omits `terminal_title` and
 `terminal_title_stripped`; both appear once the pane has settled, as in the
 [worktree.open](#worktreeopen) example below.
 
-Validated 2026-09-19 against herdr 0.9.1. (Run against throwaway `git init` repos on a
-scratch server; the untrusted-repository path was driven with git's own
-`GIT_TEST_ASSUME_DIFFERENT_OWNER=1` rather than a genuinely foreign-owned repository.)
+Example captured 2026-09-19 against herdr 0.9.1. Validated 2026-10-06 against herdr 0.9.3 (throwaway `git init` repos
+on a scratch server whose config set `[worktrees] directory` to a scratch path, so the
+managed-path rule was exercised but the `~/.herdr/worktrees` default itself was not
+written to; the untrusted-repository path was driven with git's own
+`GIT_TEST_ASSUME_DIFFERENT_OWNER=1` in the server's environment rather than a genuinely
+foreign-owned repository; a concurrent create of the same branch was not re-probed and
+keeps its 2026-09-19 / 0.9.1 evidence).
 
 ## worktree.list
 
@@ -138,7 +147,8 @@ the repository, not as a routine retry for a failed worktree command.
 | `worktrees` | array of WorktreeInfo | All worktrees of the repository (see [WorktreeInfo](#worktreeinfo) below). |
 
 **Errors**: `not_git_worktree` (`cwd` is not inside a Git work tree, including a path that
-does not exist and an unexpanded `~`), `workspace_not_found` (unknown or malformed
+does not exist and a path with a literal `~` component such as `/tmp/~`),
+`workspace_not_found` (unknown or malformed
 `workspace_id`), `invalid_request` (neither selector while no workspace is active; a
 non-absolute or empty `cwd`; a param of the wrong type; a missing `params` member),
 `worktree_list_failed` (git itself refused, e.g. dubious repository ownership). Other codes
@@ -160,8 +170,10 @@ This capture is a repository no workspace has opened yet, which is why `source` 
 `source_workspace_id` and the entry has no `open_workspace_id`. Once the primary checkout
 is open as a workspace, `source_workspace_id` appears even for a `cwd`-resolved listing.
 
-Validated 2026-09-19 against herdr 0.9.1. (Run against throwaway `git init` repos on a
-scratch server, including a bare clone and worktrees that are detached, prunable or open.)
+Example captured 2026-09-19 against herdr 0.9.1. Validated 2026-10-06 against herdr 0.9.3 (throwaway `git init` repos on a
+scratch server, including a bare clone and worktrees that are detached, prunable or open,
+a linked-worktree source, a `~/`-relative `cwd`, and an untrusted repository with and
+without `trust_repository`).
 
 ## worktree.open
 
@@ -232,9 +244,12 @@ parent workspace happens to be focused: a `path`-only request run right after
 `worktree.create` — when the new linked worktree is focused — fails
 `linked_worktree_source`.
 
-Validated 2026-09-19 against herdr 0.9.1. (Exercised by path and by branch, on already-open
-worktrees, on a worktree created outside herdr with `git worktree add`, and on a detached
-worktree.)
+Example captured 2026-09-19 against herdr 0.9.1. Validated 2026-10-06 against herdr 0.9.3 (by path and by branch, on
+already-open worktrees — including `label` renaming the live workspace with a
+`workspace_renamed` event and `tab` reporting a non-`:t1` active tab — on a worktree created
+outside herdr with `git worktree add`, on a detached worktree, path-only with the parent
+or a linked workspace focused, a branch that exists without a worktree, and an untrusted
+repository).
 
 ## worktree.remove
 
@@ -273,8 +288,8 @@ linked worktree checkout` for the repository's primary checkout and `workspace i
 Herdr-managed worktree checkout` for a workspace with no worktree at all —
 `workspace_not_found` (unknown workspace, including one whose worktree was already
 removed), `worktree_remove_failed` (git itself refused, e.g. dubious repository ownership),
-`invalid_request` (missing or null `workspace_id`; these are deserialization failures, so
-the response `id` comes back empty). A CLI invocation with an unknown flag exits status 2
+`invalid_request` (missing or null `workspace_id`; these are deserialization failures —
+on 0.9.3 the response echoes the request `id`, where 0.9.1 answered with an empty `id`). A CLI invocation with an unknown flag exits status 2
 (`unknown option: --path` on stderr — `remove` accepts only `--workspace`, `--force`, and
 `--trust-repository`). Other codes possible — see [errors.md](../errors.md).
 
@@ -289,8 +304,10 @@ Omitting `--workspace` exits 2 and prints that usage line.
 {"id":"wr1","result":{"type":"worktree_removed","workspace_id":"w2","path":"/home/penguin/.herdr/worktrees/wt-probe/docs-probe","forced":false}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1. (Run against throwaway `git init` repos on a
-scratch server, over clean, dirty, primary-checkout, worktree-less and untrusted targets.)
+Example captured 2026-09-19 against herdr 0.9.1. Validated 2026-10-06 against herdr 0.9.3 (throwaway `git init` repos on a
+scratch server, over clean, dirty, primary-checkout, worktree-less and untrusted targets;
+removal emitted `worktree_removed` then `workspace_closed`, deleted the checkout, and kept
+the branch).
 
 ## Worktree domain types
 
@@ -343,6 +360,6 @@ worktree-backed workspace). Distinct from `WorktreeInfo`.
 | `checkout_path` | string | yes | Checkout path of this workspace's worktree. |
 | `is_linked_worktree` | boolean | yes | True if the workspace's checkout is a linked worktree. |
 
-Validated 2026-09-19 against herdr 0.9.1. (All three types read from live `worktree.list`,
-`worktree.create` and `worktree.open` responses, including bare, detached and prunable
-entries.)
+Validated 2026-09-19 against herdr 0.9.1 and 2026-10-06 against herdr 0.9.3. (All three types read from
+`worktree.list`, `worktree.create` and `worktree.open` responses, including bare, detached
+and prunable entries.)
