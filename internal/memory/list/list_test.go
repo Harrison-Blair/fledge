@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/memory"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
@@ -14,7 +14,7 @@ import (
 func seed(t *testing.T, root string, ms ...memory.Memory) {
 	t.Helper()
 	for _, m := range ms {
-		if err := memory.Add(context.Background(), root, m, &libagent.Outcome{}); err != nil {
+		if err := memory.Add(context.Background(), root, m, &cli.Outcome{}); err != nil {
 			t.Fatal(err)
 		}
 	}

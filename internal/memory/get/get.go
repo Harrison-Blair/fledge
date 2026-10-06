@@ -5,15 +5,15 @@ import (
 	"context"
 	"io"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/memory"
 )
 
 type Options struct{ Name string }
 
 // Run reads one memory without contacting Herdr.
-func Run(ctx context.Context, cwd string, o Options) libagent.Outcome {
-	out := libagent.NewOutcome("memory.get")
+func Run(ctx context.Context, cwd string, o Options) cli.Outcome {
+	out := cli.NewOutcome("memory.get")
 	if err := memory.ValidateName(o.Name); err != nil {
 		out.Fail(err, "validation", false)
 		return out
@@ -33,7 +33,7 @@ func Run(ctx context.Context, cwd string, o Options) libagent.Outcome {
 }
 
 // Render writes the memory as its file.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	m, ok := o.Result.(memory.Memory)
 	if o.Error != nil || !ok {
 		return nil

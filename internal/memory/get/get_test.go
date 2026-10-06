@@ -5,7 +5,7 @@ import (
 	"context"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/memory"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
@@ -14,7 +14,7 @@ var m = memory.Memory{Name: "herdr-socket", Description: "Herdr commands need so
 
 func TestGetPrintsFullMemory(t *testing.T) {
 	root := identitytest.Repository(t)
-	if err := memory.Add(context.Background(), root, m, &libagent.Outcome{}); err != nil {
+	if err := memory.Add(context.Background(), root, m, &cli.Outcome{}); err != nil {
 		t.Fatal(err)
 	}
 	out := Run(context.Background(), root, Options{Name: "herdr-socket"})

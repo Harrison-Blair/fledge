@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/memory"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
@@ -15,7 +15,7 @@ import (
 func TestRemoveDeletesMemory(t *testing.T) {
 	root := identitytest.Repository(t)
 	m := memory.Memory{Name: "herdr-socket", Description: "d", Type: "project", Body: "b\n"}
-	if err := memory.Add(context.Background(), root, m, &libagent.Outcome{}); err != nil {
+	if err := memory.Add(context.Background(), root, m, &cli.Outcome{}); err != nil {
 		t.Fatal(err)
 	}
 	out := Run(context.Background(), root, Options{Name: "herdr-socket"})

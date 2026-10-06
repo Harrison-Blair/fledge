@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/memory"
 )
 
@@ -19,8 +19,8 @@ type Result struct {
 }
 
 // Run deletes one memory without contacting Herdr.
-func Run(ctx context.Context, cwd string, o Options) libagent.Outcome {
-	out := libagent.NewOutcome("memory.remove")
+func Run(ctx context.Context, cwd string, o Options) cli.Outcome {
+	out := cli.NewOutcome("memory.remove")
 	if err := memory.ValidateName(o.Name); err != nil {
 		out.Fail(err, "validation", false)
 		return out
@@ -34,7 +34,7 @@ func Run(ctx context.Context, cwd string, o Options) libagent.Outcome {
 }
 
 // Render writes a successful removal.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil
