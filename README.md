@@ -1475,21 +1475,8 @@ Internal packages do not import Cobra or `cmd/`.
 Check formatting from the repository root using Bash. This includes tracked and
 new nonignored Go files, skips deleted files, and excludes ignored worktrees:
 
-```bash
-set -euo pipefail
-git ls-files --cached --others --exclude-standard --deduplicate -z -- '*.go' |
-  (
-    status=0
-    while IFS= read -r -d '' file; do
-      [[ -f "$file" ]] || continue
-      unformatted="$(gofmt -l -- "$file")" || exit "$?"
-      if [[ -n "$unformatted" ]]; then
-        printf '%s\n' "$unformatted" >&2
-        status=1
-      fi
-    done
-    exit "$status"
-  )
+```sh
+bash .github/scripts/gofmt-check.sh
 ```
 
 Then run:

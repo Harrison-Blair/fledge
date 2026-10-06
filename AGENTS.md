@@ -50,7 +50,7 @@ there are no background update checks.
 
 All Go changes are test-first. Write a failing test, run it and confirm it fails for
 the right reason, write the minimal code to pass, refactor, repeat. Before declaring
-a task done, run the [Git-aware formatting check](README.md#development),
+a task done, run the formatting check `bash .github/scripts/gofmt-check.sh`,
 `go vet ./...`, and `go test -race ./...` and report the output. The formatting
 check covers existing tracked and new nonignored Go files in this checkout; it
 must not descend into ignored managed worktrees. Never weaken or skip a test to get green.
