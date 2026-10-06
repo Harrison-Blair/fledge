@@ -1266,7 +1266,8 @@ description: Herdr commands need socket access in sandboxes
 type: project
 ---
 
-Every `fledge agent` command except `models` connects to Herdr's socket.
+Every `fledge agent` command except `models`, `profiles`, and `capabilities`
+without `--live` connects to Herdr's socket.
 ```
 
 The name is a kebab-case slug of lowercase letters and digits, at most 64

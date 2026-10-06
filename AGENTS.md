@@ -149,17 +149,20 @@ notice naming `fledge task get` (which shows the full result) and `fledge task v
 the header's reply command (or `--pane <pane>` when the header has no reply command),
 and finish assigned tasks with `fledge task complete`.
 
-Every Fledge `agent` command except `models`, plus
-`task create`/`assign`/`complete`/`verify`, the `worktree` commands, and `doctor`,
-connect to Herdr's local Unix socket (`task create`/`verify` only when run inside a
-Herdr pane). In Codex's restricted sandbox, request
+Every Fledge `agent` command except `models`, `profiles`, and `capabilities` without
+`--live`, plus `task create`/`assign`/`complete`/`verify`/`import`, the `worktree`
+commands, and `doctor`, connect to Herdr's local Unix socket. `task create`/`verify`
+connect only when run inside a Herdr pane. `task import` connects only when run inside
+a Herdr pane without `--dry-run`. `task board` shows tasks outside Herdr, but it
+connects to show workers and to go to a worker's pane. In Codex's restricted sandbox, request
 `sandbox_permissions: "require_escalated"` on the first invocation of these commands and
 of Herdr session-control commands, with a task-specific justification and a narrow
 command prefix. Do not first run a socket command in the sandbox to rediscover the known
 `connect: operation not permitted` failure. Use the normal approval mechanism; these
 instructions do not override an approval denial or authorize unrelated session changes.
-Help, version, `agent models`, `task get`/`list`/`cancel`/`depend`, and `update` do not require
-Herdr socket access.
+Help, version, `agent models`/`profiles`, `agent capabilities` without `--live`,
+`task get`/`list`/`cancel`/`depend`/`template`, `task import --dry-run`, the `memory`
+commands, and `update` do not require Herdr socket access.
 
 Agent names label panes and tabs so they are identifiable at a glance. Spawn labels the
 agent's pane, and the new tab it opens, with `--name`; pass `--tab` only to give that new
