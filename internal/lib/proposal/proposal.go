@@ -53,62 +53,70 @@ var (
 // Decode strictly parses and validates a proposal file, including that its
 // local dependencies form no cycle.
 func Decode(data []byte) (Proposal, error) {
+	p, _, err := DecodeOrdered(data)
+	return p, err
+}
+
+// DecodeOrdered is Decode that also returns the creation order it checked,
+// as Order would.
+func DecodeOrdered(data []byte) (Proposal, []Task, error) {
 	// The typed decoder matches keys case-insensitively, so check exact
 	// names on a raw decode first.
 	var raw map[string]any
 	if _, err := toml.NewDecoder(bytes.NewReader(data)).Decode(&raw); err != nil {
-		return Proposal{}, err
+		return Proposal{}, nil, err
 	}
 	if err := checkKeys(raw); err != nil {
-		return Proposal{}, err
+		return Proposal{}, nil, err
 	}
 	var f file
 	if _, err := toml.NewDecoder(bytes.NewReader(data)).Decode(&f); err != nil {
-		return Proposal{}, err
+		return Proposal{}, nil, err
 	}
 	if f.SchemaVersion == nil {
-		return Proposal{}, fmt.Errorf("schema_version is required")
+		return Proposal{}, nil, fmt.Errorf("schema_version is required")
 	}
 	if *f.SchemaVersion != schemaVersion {
-		return Proposal{}, fmt.Errorf("unsupported schema_version %d; this Fledge reads %d", *f.SchemaVersion, schemaVersion)
+		return Proposal{}, nil, fmt.Errorf("unsupported schema_version %d; this Fledge reads %d", *f.SchemaVersion, schemaVersion)
 	}
 	if f.Parent != nil {
 		if err := checkText(f.Parent.Title, f.Parent.Brief); err != nil {
-			return Proposal{}, fmt.Errorf("parent: %w", err)
+			return Proposal{}, nil, fmt.Errorf("parent: %w", err)
 		}
 	}
 	if len(f.Tasks) == 0 {
-		return Proposal{}, fmt.Errorf("a proposal needs at least one [[tasks]] entry")
+		return Proposal{}, nil, fmt.Errorf("a proposal needs at least one [[tasks]] entry")
 	}
 	keys := map[string]bool{}
 	for i, t := range f.Tasks {
 		switch {
 		case t.Key == "":
-			return Proposal{}, fmt.Errorf("task #%d: key is required", i+1)
+			return Proposal{}, nil, fmt.Errorf("task #%d: key is required", i+1)
 		case strings.ContainsAny(t.Key, "\r\n"):
-			return Proposal{}, fmt.Errorf("task #%d: key must be a single line", i+1)
+			return Proposal{}, nil, fmt.Errorf("task #%d: key must be a single line", i+1)
 		case state.ValidID(t.Key):
-			return Proposal{}, fmt.Errorf("task %q: key must not look like a task id", t.Key)
+			return Proposal{}, nil, fmt.Errorf("task %q: key must not look like a task id", t.Key)
 		case keys[t.Key]:
-			return Proposal{}, fmt.Errorf("task %q: duplicate key", t.Key)
+			return Proposal{}, nil, fmt.Errorf("task %q: duplicate key", t.Key)
 		}
 		keys[t.Key] = true
 		if err := checkText(t.Title, t.Brief); err != nil {
-			return Proposal{}, fmt.Errorf("task %q: %w", t.Key, err)
+			return Proposal{}, nil, fmt.Errorf("task %q: %w", t.Key, err)
 		}
 	}
 	for _, t := range f.Tasks {
 		for _, dep := range t.After {
 			if !keys[dep] && !state.ValidID(dep) {
-				return Proposal{}, fmt.Errorf("task %q: after names unknown key %q", t.Key, dep)
+				return Proposal{}, nil, fmt.Errorf("task %q: after names unknown key %q", t.Key, dep)
 			}
 		}
 	}
 	p := Proposal{Parent: f.Parent, Tasks: f.Tasks}
-	if _, err := p.Order(); err != nil {
-		return Proposal{}, err
+	order, err := p.Order()
+	if err != nil {
+		return Proposal{}, nil, err
 	}
-	return p, nil
+	return p, order, nil
 }
 
 // checkKeys rejects any key outside the documented shape.

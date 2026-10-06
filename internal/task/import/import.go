@@ -170,15 +170,14 @@ func validate(o Options, in io.Reader) (proposal.Proposal, []proposal.Task, erro
 	if err != nil {
 		return proposal.Proposal{}, nil, err
 	}
-	p, err := proposal.Decode([]byte(text))
+	p, order, err := proposal.DecodeOrdered([]byte(text))
 	if err != nil {
 		return proposal.Proposal{}, nil, libagent.Invalid("%v", err)
 	}
 	if p.Parent != nil && o.Parent != "" {
 		return proposal.Proposal{}, nil, libagent.Invalid("--parent conflicts with the file's [parent]; use one")
 	}
-	order, err := p.Order()
-	return p, order, err
+	return p, order, nil
 }
 
 // Render writes the tasks in creation order: a plan on a dry run, one line
