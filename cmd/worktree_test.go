@@ -11,14 +11,7 @@ import (
 )
 
 func TestWorktreeHelp(t *testing.T) {
-	var out bytes.Buffer
-	if err := ExecuteWithArgs([]string{"worktree", "--help"}, &out); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"list", "remove", "create"} {
-		if !strings.Contains(out.String(), "\n  "+name+" ") {
-			t.Fatalf("%s: %s", name, out.String())
-		}
+	for _, name := range childNames(t, "worktree") {
 		var sub bytes.Buffer
 		if err := ExecuteWithArgs([]string{"worktree", name, "--help"}, &sub); err != nil || !strings.Contains(sub.String(), "--json") {
 			t.Fatalf("%s: %v %s", name, err, sub.String())

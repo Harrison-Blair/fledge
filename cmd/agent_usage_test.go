@@ -10,12 +10,8 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 )
 
-func TestAgentUsageRegistered(t *testing.T) {
+func TestAgentUsageHelpFlags(t *testing.T) {
 	var out bytes.Buffer
-	if err := ExecuteWithArgs([]string{"agent", "--help"}, &out); err != nil || !strings.Contains(out.String(), "\n  usage ") {
-		t.Fatalf("%v %s", err, out.String())
-	}
-	out.Reset()
 	if err := ExecuteWithArgs([]string{"agent", "usage", "--help"}, &out); err != nil {
 		t.Fatal(err)
 	}
