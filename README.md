@@ -1335,8 +1335,8 @@ from; see [Cleanup](#cleanup)):
 4. Otherwise, none: every checkout is merged `unknown`.
 
 Set it when work integrates into a branch other than the remote default. Fledge
-itself develops on `dev` and reaches `main` only through pull requests, so its
-checkouts set:
+itself develops on `dev` and reaches `main` only through pull requests, so
+contributors must set it in each clone (Git does not copy local config):
 
 ```sh
 git config fledge.baseBranch dev

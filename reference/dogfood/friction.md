@@ -959,7 +959,7 @@ the same names was rejected with "agent name ... is already in use
 
 **Issue:** `worktree remove` reports branches merged into dev as unmerged.
 
-**Status:** Open
+**Status:** Resolved 2026-10-06
 
 **Summary:** on 2026-09-23 the orchestrator removed three wave-1 checkouts whose
 branches were already merged into `dev` (confirmed with
@@ -970,8 +970,10 @@ and this repository integrates into dev before main. The workaround was --force
 after checking ancestry by hand. `fledge agent cleanup` (feature #12) avoids
 this for checkouts its workers created, by using the base recorded at spawn, but
 plain `worktree remove` and `worktree list`'s MERGED column still use the
-repository-wide policy. Setting `git config fledge.baseBranch dev` would be the
-manual fix.
+repository-wide policy. Setting `git config fledge.baseBranch dev` is the fix.
+Resolved 2026-10-06 by documenting that setup step: AGENTS.md (Branching) and
+README.md (Integration branch) now say that each clone must run it, because Git
+does not copy local config.
 
 **Reproduction steps:**
 1. Merge a feature branch into dev only.
