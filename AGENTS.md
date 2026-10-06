@@ -40,12 +40,9 @@ release may use `gh workflow run release.yml --ref main -f bump=patch` (substitu
 the requested bump), watch the run, and report its release URL. Do not trigger a
 release merely because release automation was implemented or changed.
 
-Release scripts calculate versions from existing tags, package Linux amd64/arm64
-binaries with SHA-256 checksums, and publish only after all assets are verified.
-Retries resume the same unfinished release or no-op for an already-published
-commit. Never force-move release tags or replace published assets. An unfinished
-draft for another commit must be resolved before starting a new release.
-Run `python3 -B -m unittest discover -s .github/scripts -p '*_test.py'` when changing
+[README.md#releases](README.md#releases) gives the release procedure, the retry
+rules, and the rule for an unfinished draft. Never force-move release tags or
+replace published assets. Run `python3 -B -m unittest discover -s .github/scripts -p '*_test.py'` when changing
 release automation. `fledge update` performs explicit, verified binary updates;
 there are no background update checks.
 
