@@ -190,8 +190,7 @@ func TestSpawnDoesNotRegisterUnconfirmedStartup(t *testing.T) {
 func sessionWait(p herdr.Pane) call {
 	w := waitCall("worker", p, "idle")
 	r := w.Result.(herdr.AgentResult)
-	source, harness, kind, value := "herdr:claude", "claude", "id", "s-1"
-	r.Agent.AgentSession = &herdr.AgentSession{Source: &source, Agent: &harness, Kind: &kind, Value: &value}
+	r.Agent = identitytest.WithSession(r.Agent, "s-1")
 	w.Result = r
 	return w
 }
