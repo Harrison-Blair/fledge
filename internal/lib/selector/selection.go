@@ -47,6 +47,22 @@ func (s Selection) Validate() error {
 	return s.Filter.Validate()
 }
 
+// Explicit lists s's explicit targets, unresolved, in flag order: names, then
+// panes, then ids. It is nil for a filter.
+func (s Selection) Explicit() []identity.Target {
+	var targets []identity.Target
+	for _, v := range s.Names {
+		targets = append(targets, identity.Target{Name: v})
+	}
+	for _, v := range s.Panes {
+		targets = append(targets, identity.Target{Pane: v})
+	}
+	for _, v := range s.IDs {
+		targets = append(targets, identity.Target{ID: v})
+	}
+	return targets
+}
+
 // Targets resolves explicit targets in flag order, names then panes then ids,
 // with identity.Target semantics and errors, stopping at the first failure.
 // A filter's matches exclude the caller's own pane and fail with
@@ -56,18 +72,8 @@ func (s Selection) Targets(ctx context.Context, c libagent.Client) ([]Target, er
 		return nil, libagent.AtPhase("validation", err)
 	}
 	if s.Filter.Empty() {
-		var explicit []identity.Target
-		for _, v := range s.Names {
-			explicit = append(explicit, identity.Target{Name: v})
-		}
-		for _, v := range s.Panes {
-			explicit = append(explicit, identity.Target{Pane: v})
-		}
-		for _, v := range s.IDs {
-			explicit = append(explicit, identity.Target{ID: v})
-		}
 		var targets []Target
-		for _, t := range explicit {
+		for _, t := range s.Explicit() {
 			a, target, rec, err := t.Get(ctx, c)
 			if err != nil {
 				return nil, err

@@ -24,11 +24,11 @@ import (
 // Any. Progress, when set, receives a line as soon as an --any target fails
 // while others are still pending.
 type Options struct {
-	Names, Panes, IDs, Until []string
-	Filter                   selector.Filter
-	Timeout                  time.Duration
-	All, Any                 bool
-	Progress                 io.Writer
+	selector.Selection
+	Until    []string
+	Timeout  time.Duration
+	All, Any bool
+	Progress io.Writer
 }
 
 // maxTimeout is the largest finite timeout whose transport margin, added by
@@ -68,7 +68,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		return out
 	}
 	if targets == nil {
-		matches, err := selector.Selection{Filter: o.Filter}.Targets(ctx, c)
+		matches, err := o.Selection.Targets(ctx, c)
 		if err != nil {
 			out.Fail(err, "selection", false)
 			return out
@@ -121,15 +121,12 @@ func waitOne(ctx context.Context, c libagent.Client, t target, o Options) (herdr
 // validate checks o and returns its explicit targets in flag order, names then
 // panes then ids, or nil when a filter selects them.
 func validate(o Options) ([]target, error) {
-	if err := (selector.Selection{Names: o.Names, Panes: o.Panes, IDs: o.IDs, Filter: o.Filter}).Validate(); err != nil {
+	if err := o.Validate(); err != nil {
 		return nil, err
 	}
 	var targets []target
-	for _, v := range slices.Concat(o.Names, o.Panes) {
-		targets = append(targets, target{label: v, pane: v})
-	}
-	for _, v := range o.IDs {
-		targets = append(targets, target{label: v, id: v})
+	for _, t := range o.Explicit() {
+		targets = append(targets, target{label: t.Name + t.Pane + t.ID, pane: t.Name + t.Pane, id: t.ID})
 	}
 	switch {
 	case o.All && o.Any:
