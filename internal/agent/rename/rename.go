@@ -31,7 +31,7 @@ type Result struct {
 // in its tab, the tab. An agent already named To is only labeled. An
 // unavailable store means no record to update, as for agent get.
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.rename", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("agent.rename")
 	if o.Name == "" && o.Pane == "" && o.ID == "" {
 		o.Pane = c.CallerPane
 	}

@@ -27,7 +27,7 @@ type Result struct {
 // Run delivers text and keys verbatim in one pane.send_input call, in any agent
 // state. Nothing is prefixed, so the recipient has no reply channel.
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.send", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("agent.send")
 	err := o.Target.Validate()
 	if err == nil && o.Text == "" && len(o.Keys) == 0 {
 		err = libagent.Invalid("at least one of --text or --key is required")

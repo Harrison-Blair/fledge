@@ -36,7 +36,7 @@ func isTerminal(stream any) bool {
 	return ok && term.IsTerminal(int(fd.Fd()))
 }
 func run(ctx context.Context, c libagent.Client, in io.Reader, out io.Writer, terminal func(any) bool, program func(tea.Model, io.Reader, io.Writer, context.Context) error) libagent.Outcome {
-	result := libagent.Outcome{Operation: "task.board", Status: "success", Effects: []libagent.Effect{}}
+	result := libagent.NewOutcome("task.board")
 	fail := func(err error, phase string) libagent.Outcome {
 		result.Fail(err, phase, false)
 		result.Error.Message = singleLine(result.Error.Message)

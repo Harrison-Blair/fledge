@@ -31,7 +31,7 @@ type Options struct {
 // checked and the task stored under one store lock. Repeated prerequisites
 // are stored once.
 func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libagent.Outcome {
-	out := libagent.Outcome{Operation: "task.create", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("task.create")
 	var text string
 	var after []string
 	var err error

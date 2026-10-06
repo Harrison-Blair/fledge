@@ -13,7 +13,7 @@ type Options struct{ Name string }
 
 // Run reads one memory without contacting Herdr.
 func Run(ctx context.Context, cwd string, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "memory.get", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("memory.get")
 	if err := memory.ValidateName(o.Name); err != nil {
 		out.Fail(err, "validation", false)
 		return out

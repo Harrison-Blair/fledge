@@ -25,7 +25,7 @@ type Result struct {
 
 // Run reads the memories, ordered by name, without contacting Herdr.
 func Run(ctx context.Context, cwd string, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "memory.list", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("memory.list")
 	if o.Type != "" {
 		if err := memory.ValidateType(o.Type); err != nil {
 			out.Fail(err, "validation", false)

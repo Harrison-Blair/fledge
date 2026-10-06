@@ -23,7 +23,7 @@ type Result struct {
 }
 
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "worktree.create", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("worktree.create")
 	if o.Branch == "" {
 		out.Fail(libagent.Invalid("--branch is required"), "validation", false)
 		return out

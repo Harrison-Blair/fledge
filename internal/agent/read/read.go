@@ -37,7 +37,7 @@ var wireSources = map[string]string{"visible": "visible", "recent": "recent", "r
 
 // Run resolves the agent, then reads its pane without focusing it or marking output seen.
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.read", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("agent.read")
 	err := o.Target.Validate()
 	source, known := wireSources[o.Source]
 	if err == nil && !known {

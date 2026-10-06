@@ -171,3 +171,16 @@ func TestDisplayString(t *testing.T) {
 		t.Fatalf("DisplayString(v1) = %q, want v1", got)
 	}
 }
+
+func TestNewOutcomeDefaultsToSuccessWithEmptyEffects(t *testing.T) {
+	a := NewOutcome("task.cancel")
+	a.Effects = append(a.Effects, Effect{Action: "removed", Kind: "task"})
+	var b bytes.Buffer
+	if err := NewOutcome("task.cancel").Write(&b, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	want := `{"operation":"task.cancel","status":"success","result":null,"effects":[],"error":null}` + "\n"
+	if b.String() != want {
+		t.Fatalf("got %s want %s", b.String(), want)
+	}
+}

@@ -38,7 +38,7 @@ type Options struct {
 }
 
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.list", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("agent.list")
 	err := o.Validate()
 	if err == nil && o.IDs && o.JSON {
 		err = libagent.Invalid("--ids and --json are mutually exclusive")

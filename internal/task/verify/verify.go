@@ -40,7 +40,7 @@ type Result struct {
 // latest. A registered verifier's live session ref is then stored. This is
 // a workflow guard, not a security boundary.
 func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libagent.Outcome {
-	out := libagent.Outcome{Operation: "task.verify", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("task.verify")
 	err := task.ValidateID(o.ID)
 	var note string
 	if err == nil {

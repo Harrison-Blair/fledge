@@ -34,7 +34,7 @@ type Row struct {
 // fanOut delivers text to each target in turn, continuing past failures.
 // Any failed row makes the outcome partial.
 func fanOut(ctx context.Context, c libagent.Client, o Options, targets []selector.Target, text, id string, sender *libagent.Sender) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.message", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("agent.message")
 	result := FanOut{Mode: "fan-out", Targets: []Row{}}
 	var failed []libagent.TargetFailure
 	var opened *state.Store
@@ -79,7 +79,7 @@ func fanOut(ctx context.Context, c libagent.Client, o Options, targets []selecto
 // message; the already-working decision needs the status at sending. A failed
 // read rejects the target.
 func reread(ctx context.Context, c libagent.Client, o Options, t *selector.Target, id string, sender *libagent.Sender, store func() (*state.Store, error)) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.message", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("agent.message")
 	a, pane, rec, err := t.Agent, t.Pane, t.Record, error(nil)
 	switch {
 	case t.Record != nil:

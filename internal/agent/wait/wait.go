@@ -59,7 +59,7 @@ type target struct {
 // Run waits for one target, or fans out one agent.wait call per target. A
 // single target's result is its agent row.
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.wait", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("agent.wait")
 	targets, err := validate(o)
 	if err != nil {
 		out.Fail(err, "validation", false)

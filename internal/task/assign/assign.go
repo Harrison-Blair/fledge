@@ -45,7 +45,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 }
 
 func run(ctx context.Context, c libagent.Client, o Options, messageID string) libagent.Outcome {
-	out := libagent.Outcome{Operation: "task.assign", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("task.assign")
 	err := task.ValidateID(o.ID)
 	if err == nil {
 		err = o.Agent.Validate()

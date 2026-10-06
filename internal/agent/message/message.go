@@ -51,7 +51,7 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 	return run(ctx, c, o, in, libagent.NewMessageID())
 }
 func run(ctx context.Context, c libagent.Client, o Options, in io.Reader, id string) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.message", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("agent.message")
 	text, err := o.read(in)
 	if err != nil {
 		out.Fail(err, "validation", false)
@@ -72,7 +72,7 @@ func run(ctx context.Context, c libagent.Client, o Options, in io.Reader, id str
 
 // deliver submits text, which already carries its header, to one target.
 func deliver(ctx context.Context, c libagent.Client, o Options, t selector.Target, text, id string, sender *libagent.Sender) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.message", Status: "success", Effects: []libagent.Effect{}}
+	out := libagent.NewOutcome("agent.message")
 	a, target := t.Agent, t.Pane
 	result := Result{AgentRow: libagent.NewAgentRow(a.Pane), MessageID: id, Sender: sender}
 	if o.Confirm {
