@@ -29,10 +29,11 @@ const Kind = "agents"
 
 // Record is one registered agent. EndedAt stays null until agent stop closes
 // its pane or a lookup observes its terminal gone; the record then moves to the
-// store's archive. Records are never deleted. WorktreeCreated and WorktreeBase
-// record that the agent's spawn created its checkout and from which ref, and
-// WorktreeBranch and WorktreeMarker identify that very checkout, so one
-// recreated later at the same path is not taken for it; records written
+// store's archive. Records are never deleted. Parent is fixed at create: the
+// store's parent index, which Children reads, records it then. WorktreeCreated
+// and WorktreeBase record that the agent's spawn created its checkout and from
+// which ref, and WorktreeBranch and WorktreeMarker identify that very checkout,
+// so one recreated later at the same path is not taken for it; records written
 // before they existed read as not created or unidentified. Profile names the
 // profile the agent was spawned with; it is null for adopted agents, spawns
 // without a profile, and records written before it existed. NativeSession is
@@ -152,6 +153,17 @@ func Register(ctx context.Context, s *state.Store, c libagent.Client, details he
 // sender, built from Register's own caller lookup, so a following prompt needs
 // no second lookup. The sender is nil when that lookup did not run or failed.
 func RegisterWithSender(ctx context.Context, s *state.Store, c libagent.Client, details herdr.AgentDetails, by string, checkout *Checkout, profile *string) (Record, *libagent.Sender, error) {
+	return register(ctx, s, c, details, by, checkout, profile, nil)
+}
+
+// RegisterAs is Register that records parent, when it is not nil, in place of
+// the caller's record. A record's parent is fixed at create.
+func RegisterAs(ctx context.Context, s *state.Store, c libagent.Client, details herdr.AgentDetails, by string, checkout *Checkout, profile, parent *string) (Record, error) {
+	rec, _, err := register(ctx, s, c, details, by, checkout, profile, parent)
+	return rec, err
+}
+
+func register(ctx context.Context, s *state.Store, c libagent.Client, details herdr.AgentDetails, by string, checkout *Checkout, profile, fixed *string) (Record, *libagent.Sender, error) {
 	if details.TerminalID == "" || details.PaneID == "" {
 		return Record{}, nil, fmt.Errorf("cannot register an agent without a pane and terminal id")
 	}
@@ -174,6 +186,12 @@ func RegisterWithSender(ctx context.Context, s *state.Store, c libagent.Client, 
 				}
 			}
 		}
+		if fixed != nil {
+			parent = fixed
+		}
+		if err := indexUnindexed(s, tx); err != nil {
+			return err
+		}
 		if existing, ok := records[details.TerminalID]; ok {
 			if !Mismatched(existing, details) {
 				return alreadyRegistered(details, existing)
@@ -182,7 +200,7 @@ func RegisterWithSender(ctx context.Context, s *state.Store, c libagent.Client, 
 				return err
 			}
 		}
-		_, err = tx.Create(Kind, func(id string) any {
+		_, err = tx.CreatePrepared(Kind, func(id string) error { return index(tx, id, parent) }, func(id string) any {
 			rec = Record{ID: id, Name: details.Name, Pane: details.PaneID, WorkspaceID: details.WorkspaceID, Harness: details.Agent,
 				Session: session(), TerminalID: details.TerminalID, RegisteredAt: time.Now().UTC().Format(time.RFC3339), RegisteredBy: by, Parent: parent, Profile: profile}
 			if checkout != nil {
@@ -538,12 +556,16 @@ func LiveByTerminal(s *state.Store) (map[string]Record, error) {
 }
 
 // Children returns every record, live or ended, whose parent is id, oldest
-// first. It never writes. A nil s has none.
+// first. It never writes. A nil s has none. It reads the records the parent
+// index marks as id's children, and every record the index does not hold yet,
+// such as one written by an older Fledge.
 func Children(s *state.Store, id string) ([]Record, error) {
 	children := []Record{}
 	if s == nil {
 		return children, nil
 	}
+	// List the records before the index: Register marks a record before it
+	// writes it, so each listed record that is indexed is already marked.
 	live, err := s.List(Kind)
 	if err != nil {
 		return nil, err
@@ -552,18 +574,35 @@ func Children(s *state.Store, id string) ([]Record, error) {
 	if err != nil {
 		return nil, err
 	}
+	// List indexed before id's children: indexing marks a record's parent
+	// before it marks the record indexed.
+	indexed, err := s.Marked(Kind, indexedSet)
+	if err != nil {
+		return nil, err
+	}
+	marked := []string{}
+	if state.ValidID(id) {
+		if marked, err = s.Marked(Kind, childrenSet(id)); err != nil {
+			return nil, err
+		}
+	}
+	isLive, isArchived, isIndexed, isMarked := set(live), set(archived), set(indexed), set(marked)
 	seen := map[string]bool{}
-	for i, rid := range append(live, archived...) {
-		var rec Record
-		if seen[rid] {
+	for _, rid := range slices.Concat(marked, live, archived) {
+		if seen[rid] || isIndexed[rid] && !isMarked[rid] {
 			continue
 		}
 		seen[rid] = true
 		get := s.Get
-		if i >= len(live) {
+		if !isLive[rid] && isArchived[rid] {
 			get = s.GetArchived
 		}
-		if err := get(Kind, rid, &rec); err != nil {
+		var rec Record
+		var missing *state.NotFoundError
+		if err := fetch(get, rid, &rec); errors.As(err, &missing) {
+			// A marker of a record whose create was interrupted.
+			continue
+		} else if err != nil {
 			return nil, err
 		}
 		if rec.Parent != nil && *rec.Parent == id {
@@ -575,6 +614,78 @@ func Children(s *state.Store, id string) ([]Record, error) {
 	})
 	return children, nil
 }
+
+// set returns ids as a membership map.
+func set(ids []string) map[string]bool {
+	m := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		m[id] = true
+	}
+	return m
+}
+
+// index adds record id with parent to the parent index under the store lock:
+// first its parent marker, then its indexed marker, so an indexed record
+// always has its parent marker. A parent that is not a record id is never
+// asked for by Children and gets no marker.
+func index(tx *state.Tx, id string, parent *string) error {
+	if parent != nil && state.ValidID(*parent) {
+		if err := mark(tx, childrenSet(*parent), id); err != nil {
+			return err
+		}
+	}
+	return mark(tx, indexedSet, id)
+}
+
+// indexUnindexed adds every record that has no indexed marker to the parent
+// index under the store lock: records written before the index existed, by an
+// older Fledge, or by an interrupted index. Once all are indexed it reads no
+// record. A record that fails to read stays unindexed; Children reads it.
+func indexUnindexed(s *state.Store, tx *state.Tx) error {
+	live, err := tx.List(Kind)
+	if err != nil {
+		return err
+	}
+	archived, err := s.ListArchived(Kind)
+	if err != nil {
+		return err
+	}
+	indexed, err := s.Marked(Kind, indexedSet)
+	if err != nil {
+		return err
+	}
+	isIndexed := set(indexed)
+	for _, id := range slices.Concat(live, archived) {
+		if isIndexed[id] {
+			continue
+		}
+		isIndexed[id] = true
+		var rec Record
+		if fetch(tx.Get, id, &rec) != nil {
+			continue
+		}
+		if err := index(tx, id, rec.Parent); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// fetch reads one agent record with get; it is replaceable so tests can
+// count record reads.
+var fetch = func(get func(kind, id string, v any) error, id string, rec *Record) error {
+	return get(Kind, id, rec)
+}
+
+// indexedSet is the marker set of agent records whose parent the index
+// holds; childrenSet(id) is the set of records whose parent is id.
+const indexedSet = "indexed"
+
+func childrenSet(id string) string { return "children-" + id }
+
+// mark is Tx.Mark for agent records; it is replaceable so tests can
+// interrupt indexing.
+var mark = func(tx *state.Tx, set, id string) error { return tx.Mark(Kind, set, id) }
 
 // reader is the read side shared by state.Store and state.Tx.
 type reader interface {

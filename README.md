@@ -694,6 +694,10 @@ unidentified. The parent is the caller's live record when the
 caller's pane hosts a registered terminal; otherwise it is null. Records are
 never deleted: an ended record moves to `.fledge/state/agents/archive/`, where
 lookups by ID still find it but scans for live agents no longer read it.
+`.fledge/state/agents/index/` holds empty marker files that index each record
+by its parent, which is fixed when the record is created, so `agent cleanup`
+reads only the caller's children. A record without a marker, such as one an
+older Fledge wrote, is still read, and the next registration indexes it.
 
 `native_session` is the harness's own session ref (`source`, `harness`, `kind`,
 `value`, `observed_at`) as Herdr reports it in `agent_session`, so later

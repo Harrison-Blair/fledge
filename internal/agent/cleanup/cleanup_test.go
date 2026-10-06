@@ -75,7 +75,7 @@ func agent(pane, ws, terminal, name, status string) herdr.AgentDetails {
 // within one second.
 var registered int
 
-// register records a in the repository, then sets its parent and a
+// register records a in the repository with parent, then sets a
 // registration time after every earlier one.
 func (r repo) register(t *testing.T, a herdr.AgentDetails, parent *string, by string, checkout *identity.Checkout) identity.Record {
 	t.Helper()
@@ -83,13 +83,13 @@ func (r repo) register(t *testing.T, a herdr.AgentDetails, parent *string, by st
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec, err := identity.Register(context.Background(), st, libagent.Client{}, a, by, checkout, nil)
+	rec, err := identity.RegisterAs(context.Background(), st, libagent.Client{}, a, by, checkout, nil, parent)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Update(identity.Kind, rec.ID, &rec, func() error {
 		registered++
-		rec.Parent, rec.RegisteredAt = parent, fmt.Sprintf("2026-01-01T00:%02d:%02dZ", registered/60%60, registered%60)
+		rec.RegisteredAt = fmt.Sprintf("2026-01-01T00:%02d:%02dZ", registered/60%60, registered%60)
 		return nil
 	}); err != nil {
 		t.Fatal(err)

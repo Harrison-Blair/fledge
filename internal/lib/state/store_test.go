@@ -1009,3 +1009,105 @@ func TestGetArchivedReadsArchiveFirstAndFollowsUnarchive(t *testing.T) {
 		t.Fatalf("GetArchived of a missing record: %v, want *NotFoundError", err)
 	}
 }
+
+func TestMarkIsIdempotentAndMarkedListsSortedIDs(t *testing.T) {
+	store, _ := openStore(t)
+	if got, err := store.Marked("counters", "children-aaaaaaaa"); err != nil || len(got) != 0 {
+		t.Fatalf("Marked on a missing set = %v, %v; want none", got, err)
+	}
+	err := store.Exclusive(func(tx *Tx) error {
+		for _, id := range []string{"bbbbbbbb", "aaaaaaaa", "bbbbbbbb"} {
+			if err := tx.Mark("counters", "children-aaaaaaaa", id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Marked("counters", "children-aaaaaaaa")
+	if err != nil || !reflect.DeepEqual(got, []string{"aaaaaaaa", "bbbbbbbb"}) {
+		t.Fatalf("Marked = %v, %v; want [aaaaaaaa bbbbbbbb]", got, err)
+	}
+	if got, err := store.Marked("counters", "indexed"); err != nil || len(got) != 0 {
+		t.Fatalf("Marked on another set = %v, %v; want none", got, err)
+	}
+}
+
+func TestMarkRejectsInvalidSetsAndIDs(t *testing.T) {
+	store, _ := openStore(t)
+	for _, c := range []struct{ set, id string }{{"", "aaaaaaaa"}, {"../x", "aaaaaaaa"}, {"Upper", "aaaaaaaa"}, {"indexed", "nothex!!"}} {
+		if err := store.Exclusive(func(tx *Tx) error { return tx.Mark("counters", c.set, c.id) }); err == nil {
+			t.Errorf("Mark(%q, %q) succeeded", c.set, c.id)
+		}
+	}
+	if _, err := store.Marked("counters", "../x"); err == nil {
+		t.Error("Marked accepted an invalid set")
+	}
+}
+
+func TestListsSkipMarkers(t *testing.T) {
+	store, _ := openStore(t)
+	id := createCounter(t, store)
+	if err := store.Exclusive(func(tx *Tx) error { return tx.Mark("counters", "indexed", id) }); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.List("counters"); err != nil || !reflect.DeepEqual(got, []string{id}) {
+		t.Fatalf("List = %v, %v; want [%s]", got, err, id)
+	}
+	if got, err := store.ListArchived("counters"); err != nil || len(got) != 0 {
+		t.Fatalf("ListArchived = %v, %v; want none", got, err)
+	}
+}
+
+// CreatePrepared runs prepare for a free id before the record exists, never
+// for an id an archived record holds, and writes nothing when prepare fails.
+func TestCreatePreparedRunsPrepareBeforeTheRecord(t *testing.T) {
+	store, _ := openStore(t)
+	ids := []string{"aaaaaaaa", "aaaaaaaa", "bbbbbbbb", "cccccccc"}
+	store.newID = func() (string, error) {
+		id := ids[0]
+		ids = ids[1:]
+		return id, nil
+	}
+	first := createCounter(t, store)
+	if err := store.Exclusive(func(tx *Tx) error { return tx.Archive("counters", first) }); err != nil {
+		t.Fatal(err)
+	}
+	var prepared []string
+	err := store.Exclusive(func(tx *Tx) error {
+		id, err := tx.CreatePrepared("counters", func(id string) error {
+			prepared = append(prepared, id)
+			var c counter
+			var missing *NotFoundError
+			if err := tx.Get("counters", id, &c); !errors.As(err, &missing) {
+				t.Errorf("prepare saw record %s: %v", id, err)
+			}
+			return nil
+		}, func(string) any { return counter{N: 2} })
+		if err != nil || id != "bbbbbbbb" {
+			t.Errorf("CreatePrepared = %q, %v; want bbbbbbbb", id, err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(prepared, []string{"bbbbbbbb"}) {
+		t.Fatalf("prepared %v; want only bbbbbbbb", prepared)
+	}
+	boom := errors.New("boom")
+	err = store.Exclusive(func(tx *Tx) error {
+		_, err := tx.CreatePrepared("counters", func(string) error { return boom }, func(string) any { return counter{N: 3} })
+		return err
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("CreatePrepared error = %v; want boom", err)
+	}
+	var c counter
+	var missing *NotFoundError
+	if err := store.Get("counters", "cccccccc", &c); !errors.As(err, &missing) {
+		t.Fatalf("failed prepare left record cccccccc: %+v, %v", c, err)
+	}
+}
