@@ -305,7 +305,7 @@ func TestPauseReportsHerdrSettleTimeout(t *testing.T) {
 		return nil, map[string]any{"code": "timeout", "message": "wait timed out"}
 	})
 	for range 5 {
-		out := Run(context.Background(), libagent.FromEnvironment(200*time.Millisecond), Options{Target: identity.Target{Name: "worker"}, Timeout: 200 * time.Millisecond})
+		out := Run(context.Background(), libagent.FromEnvironment(20*time.Millisecond), Options{Target: identity.Target{Name: "worker"}, Timeout: 20 * time.Millisecond})
 		if out.Error == nil || out.Error.Code != "timeout" || out.Error.Phase != "agent.wait" || !out.Result.(Result).Submitted {
 			t.Fatalf("%+v %+v", out, out.Error)
 		}
