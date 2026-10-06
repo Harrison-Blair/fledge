@@ -99,6 +99,20 @@ func Info(p herdr.Pane) herdr.AgentResult {
 	return herdr.AgentResult{Type: "agent_info", Agent: herdr.AgentDetails{Pane: p, TerminalID: "term_x", Focused: &f, Revision: &rev}}
 }
 
+// List is an agent.list call that returns agents, or an empty list when none
+// are given.
+func List(agents ...herdr.AgentDetails) Call {
+	if agents == nil {
+		agents = []herdr.AgentDetails{}
+	}
+	return Call{Method: "agent.list", Result: herdr.AgentListResult{Type: "agent_list", Agents: agents}}
+}
+
+// Get is an agent.get call for target that returns a.
+func Get(target string, a herdr.AgentDetails) Call {
+	return Call{Method: "agent.get", Params: map[string]any{"target": target}, Result: herdr.AgentResult{Type: "agent_info", Agent: a}}
+}
+
 // Waited builds the agent.wait settled-state result for a pane already hosting an agent.
 func Waited(p herdr.Pane, status string) herdr.AgentResult {
 	p.AgentStatus = status
