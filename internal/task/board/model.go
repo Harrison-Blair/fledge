@@ -26,6 +26,7 @@ type model struct {
 	ctx                             context.Context
 	cancel                          context.CancelFunc
 	client                          libagent.Client
+	repository                      *Repository
 	snapshot                        *Snapshot
 	workers                         map[string]Worker
 	workersGood                     bool
@@ -45,8 +46,8 @@ type model struct {
 	cacheOrder                      []string
 }
 
-func newModel(ctx context.Context, cancel context.CancelFunc, c libagent.Client, s *Snapshot) *model {
-	m := &model{ctx: ctx, cancel: cancel, client: c, snapshot: s, expanded: map[string]bool{}, workers: map[string]Worker{}, cache: map[string][]string{}}
+func newModel(ctx context.Context, cancel context.CancelFunc, c libagent.Client, r *Repository, s *Snapshot) *model {
+	m := &model{ctx: ctx, cancel: cancel, client: c, repository: r, snapshot: s, expanded: map[string]bool{}, workers: map[string]Worker{}, cache: map[string][]string{}}
 	m.rebuild()
 	return m
 }
@@ -62,8 +63,8 @@ func (m *model) refresh(source Source, manual bool) tea.Cmd {
 		return nil
 	}
 	m.inFlight[source] = true
-	ctx, c := m.ctx, m.client
-	return func() tea.Msg { return Load(ctx, c, source) }
+	ctx, c, r := m.ctx, m.client, m.repository
+	return func() tea.Msg { return Load(ctx, c, r, source) }
 }
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {

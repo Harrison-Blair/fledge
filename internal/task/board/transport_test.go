@@ -42,7 +42,7 @@ func TestLoadActualTransportDeadlineAndBrokenReplies(t *testing.T) {
 		t.Run(reply, func(t *testing.T) {
 			c := libagent.Client{Cwd: identitytest.Repository(t), API: herdr.Client{Socket: peer(t, reply), Timeout: 20 * time.Second}}
 			start := time.Now()
-			out := Load(context.Background(), c, Workers)
+			out := Load(context.Background(), c, repository(t, c.Cwd), Workers)
 			if out.Err == nil {
 				t.Fatal("broken peer accepted")
 			}

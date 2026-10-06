@@ -21,7 +21,7 @@ func boardModel(t *testing.T, rs ...task.Record) *model {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	m := newModel(ctx, cancel, libagent.Client{}, s)
+	m := newModel(ctx, cancel, libagent.Client{}, nil, s)
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
 	return m
 }
