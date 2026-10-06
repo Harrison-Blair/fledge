@@ -3,9 +3,11 @@ package herdrscript
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"reflect"
 	"testing"
 
+	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 )
 
@@ -47,4 +49,16 @@ func mustJSON(t *testing.T, v any) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+func TestCheckOutputFailuresCoversEveryWriteOfLongRender(t *testing.T) {
+	render := func(w io.Writer, _ libagent.Outcome) error {
+		for range 150 {
+			if _, err := io.WriteString(w, "x\n"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	CheckOutputFailures(t, render, libagent.Outcome{Result: "ok"})
 }

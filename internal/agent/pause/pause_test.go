@@ -5,9 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"net"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -17,6 +14,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/sockettest"
 )
 
 type call = herdrscript.Call
@@ -254,16 +252,7 @@ func TestPauseByIDInterruptsVerifiedPane(t *testing.T) {
 // returns a result or a Herdr error object.
 func serve(t *testing.T, reply func(method string, params map[string]any) (result, err any)) {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "fp-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, "s")
-	l, err := net.Listen("unix", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { l.Close(); os.RemoveAll(dir) })
+	l, path := sockettest.Listen(t)
 	go func() {
 		for {
 			c, err := l.Accept()
