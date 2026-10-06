@@ -1,6 +1,7 @@
 // Package board implements a read-only keyboard task outline and details view.
 //
-// load.go reads independent task/worker snapshots and projects the task graph.
+// load.go resolves the repository once, reads independent task/worker snapshots,
+// and projects the task graph.
 // focus.go revalidates ownership and identity for explicit worker navigation.
 // display.go formats selected details as clean terminal text.
 // model.go owns keyboard state, asynchronous refresh, and the detail cache.

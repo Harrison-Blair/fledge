@@ -120,6 +120,7 @@ func TestInitRefreshesBothSourcesImmediately(t *testing.T) {
 	rec := tasktest.Register(t, cwd, a)
 	m := boardModel(t)
 	m.client = tasktest.Client(t, cwd, "", herdrscript.Call{Method: "agent.list", Result: herdr.AgentListResult{Type: "agent_list", Agents: []herdr.AgentDetails{a.Agent}}})
+	m.repository = repository(t, cwd)
 	cmd := m.Init()
 	if cmd == nil {
 		t.Fatal("Init scheduled no observations")

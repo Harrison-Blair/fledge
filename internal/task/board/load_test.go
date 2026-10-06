@@ -16,9 +16,17 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/tasktest"
 )
 
+func repository(t *testing.T, cwd string) *Repository {
+	t.Helper()
+	r, err := OpenRepository(context.Background(), cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
 func TestLoadEmptyDoesNotCreateState(t *testing.T) {
 	cwd := identitytest.Repository(t)
-	got := Load(context.Background(), libagent.Client{Cwd: cwd}, Tasks)
+	got := Load(context.Background(), libagent.Client{Cwd: cwd}, repository(t, cwd), Tasks)
 	if got.Err != nil || len(got.Snapshot.Records) != 0 {
 		t.Fatalf("%+v", got)
 	}
@@ -64,7 +72,7 @@ func TestLoadMalformedAndAgentStorageErrors(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cwd, ".fledge/state/tasks", id+".json"), []byte("{"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if got := Load(context.Background(), libagent.Client{Cwd: cwd}, Tasks); got.Err == nil {
+	if got := Load(context.Background(), libagent.Client{Cwd: cwd}, repository(t, cwd), Tasks); got.Err == nil {
 		t.Fatal("accepted malformed task")
 	}
 	a := tasktest.Agent("w1:p1", "term", "live")
@@ -73,7 +81,7 @@ func TestLoadMalformedAndAgentStorageErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := tasktest.Client(t, cwd, "", herdrscript.Call{Method: "agent.list", Result: herdr.AgentListResult{Type: "agent_list", Agents: []herdr.AgentDetails{a.Agent}}})
-	if got := Load(context.Background(), c, Workers); got.Err == nil {
+	if got := Load(context.Background(), c, repository(t, c.Cwd), Workers); got.Err == nil {
 		t.Fatal("agent storage error swallowed")
 	}
 }
@@ -87,13 +95,13 @@ func TestLoadWorkersUsesCurrentAttributionReadOnly(t *testing.T) {
 	a.Agent.PaneID = "w2:p9"
 	a.Agent.Name = tasktest.Ptr("current")
 	c := tasktest.Client(t, cwd, "", herdrscript.Call{Method: "agent.list", Result: herdr.AgentListResult{Type: "agent_list", Agents: []herdr.AgentDetails{a.Agent}}})
-	got := Load(context.Background(), c, Workers)
+	got := Load(context.Background(), c, repository(t, c.Cwd), Workers)
 	if got.Err != nil || got.Workers[rec.ID].Name != "current" {
 		t.Fatalf("%+v", got)
 	}
 	a.Agent.Agent = tasktest.Ptr("codex")
 	c = tasktest.Client(t, cwd, "", herdrscript.Call{Method: "agent.list", Result: herdr.AgentListResult{Type: "agent_list", Agents: []herdr.AgentDetails{a.Agent}}})
-	if got = Load(context.Background(), c, Workers); got.Err != nil || len(got.Workers) != 0 {
+	if got = Load(context.Background(), c, repository(t, c.Cwd), Workers); got.Err != nil || len(got.Workers) != 0 {
 		t.Fatalf("mismatch: %+v", got)
 	}
 }
@@ -109,7 +117,7 @@ func TestRefreshHasTotalDeadline(t *testing.T) {
 		}
 		return context.DeadlineExceeded
 	})}
-	if got := Load(context.Background(), c, Workers); got.Err == nil {
+	if got := Load(context.Background(), c, repository(t, c.Cwd), Workers); got.Err == nil {
 		t.Fatal("lost timeout")
 	}
 }

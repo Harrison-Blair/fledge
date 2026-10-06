@@ -4,12 +4,18 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
+	"sync"
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/fledgedir"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/termtext"
 )
@@ -48,14 +54,49 @@ type Observation struct {
 	Err      error
 }
 
+// Repository holds the state store path, resolved once with Git, and the
+// store once it exists. It never creates state.
+type Repository struct {
+	path  string
+	mu    sync.Mutex
+	store *state.Store
+}
+
+// OpenRepository resolves the primary checkout of cwd within the request budget.
+func OpenRepository(ctx context.Context, cwd string) (*Repository, error) {
+	ctx, cancel := context.WithTimeout(ctx, requestBudget)
+	defer cancel()
+	root, err := fledgedir.Root(ctx, cwd)
+	if err != nil {
+		return nil, err
+	}
+	return &Repository{path: filepath.Join(root, ".fledge", "state")}, nil
+}
+
+// existing returns the store, or nil while the repository has no state
+// directory, retrying the open on each call until the store appears.
+func (r *Repository) existing() (*state.Store, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.store != nil {
+		return r.store, nil
+	}
+	s, err := state.OpenExisting(r.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	r.store = s
+	return s, err
+}
+
 // Load is the read-only storage and Herdr observation boundary. Call it off the
 // UI event loop. Workers use a fresh terminal attribution join, never a cached pane.
-func Load(ctx context.Context, c libagent.Client, source Source) Observation {
+func Load(ctx context.Context, c libagent.Client, r *Repository, source Source) Observation {
 	ctx, cancel := context.WithTimeout(ctx, requestBudget)
 	defer cancel()
 	out := Observation{Source: source}
 	if source == Tasks {
-		s, err := task.Existing(ctx, c.Cwd)
+		s, err := r.existing()
 		if err != nil {
 			out.Err = err
 			return out
@@ -72,7 +113,7 @@ func Load(ctx context.Context, c libagent.Client, source Source) Observation {
 		out.Err = err
 		return out
 	}
-	s, err := identity.Existing(ctx, c.Cwd)
+	s, err := r.existing()
 	if err != nil {
 		out.Err = err
 		return out

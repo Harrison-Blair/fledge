@@ -45,13 +45,17 @@ func run(ctx context.Context, c libagent.Client, in io.Reader, out io.Writer, te
 	if !terminal(in) || !terminal(out) {
 		return fail(libagent.Invalid("task board requires terminal input and output"), "validation")
 	}
-	initial := Load(ctx, c, Tasks)
+	r, err := OpenRepository(ctx, c.Cwd)
+	if err != nil {
+		return fail(err, "state")
+	}
+	initial := Load(ctx, c, r, Tasks)
 	if initial.Err != nil {
 		return fail(initial.Err, "state")
 	}
 	workCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	err := program(newModel(workCtx, cancel, c, initial.Snapshot), in, out, ctx)
+	err = program(newModel(workCtx, cancel, c, r, initial.Snapshot), in, out, ctx)
 	if err != nil && ctx.Err() == nil {
 		return fail(err, "terminal")
 	}
