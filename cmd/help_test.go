@@ -75,3 +75,15 @@ func childNames(t *testing.T, group string) []string {
 	}
 	return names
 }
+
+// TestAgentShortFitsHelpRow keeps the agent group summary to one root help row
+// that names the spawn command, instead of a list that repeats the subcommands.
+func TestAgentShortFitsHelpRow(t *testing.T) {
+	c, _, err := NewRootCmd().Find([]string{"agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Short) > 60 || !strings.Contains(strings.ToLower(c.Short), "spawn") {
+		t.Fatalf("agent Short = %q (%d chars); want at most 60 chars naming spawn", c.Short, len(c.Short))
+	}
+}
