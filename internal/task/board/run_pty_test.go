@@ -97,6 +97,11 @@ func TestProgramRestoresTerminal(t *testing.T) {
 			if !reflect.DeepEqual(before, after) {
 				t.Fatal("terminal attributes not restored")
 			}
+			// The copy goroutine can still hold the restore sequence when Run returns.
+			deadline = time.Now().Add(3 * time.Second)
+			for !strings.Contains(output.String(), "\x1b[?1049l") && time.Now().Before(deadline) {
+				time.Sleep(10 * time.Millisecond)
+			}
 			if !strings.Contains(output.String(), "\x1b[?1049l") {
 				t.Fatal("alternate screen not restored")
 			}
