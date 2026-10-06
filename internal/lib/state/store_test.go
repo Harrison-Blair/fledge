@@ -21,6 +21,17 @@ type counter struct {
 	N int `json:"n"`
 }
 
+// skipFsync makes writes skip both file and directory fsyncs until the test
+// ends. Concurrency tests check locking, not durability, and fsyncs dominate
+// their run time. A helper process runs its own copy of the stub.
+func skipFsync(t *testing.T) {
+	t.Helper()
+	realFile, realDir := syncFile, syncDir
+	syncFile = func(*os.File) error { return nil }
+	syncDir = func(string) error { return nil }
+	t.Cleanup(func() { syncFile, syncDir = realFile, realDir })
+}
+
 func openStore(t *testing.T) (*Store, string) {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "state")
@@ -439,6 +450,7 @@ func TestInvalidKindAndIDRejected(t *testing.T) {
 }
 
 func TestConcurrentUpdatesDoNotLoseWrites(t *testing.T) {
+	skipFsync(t)
 	store, root := openStore(t)
 	id := createCounter(t, store)
 	other, err := Open(root)
@@ -482,6 +494,7 @@ func TestHelperProcessIncrement(t *testing.T) {
 	if root == "" {
 		t.Skip("helper process only")
 	}
+	skipFsync(t)
 	count, err := strconv.Atoi(os.Getenv(helperCountEnv))
 	if err != nil {
 		t.Fatal(err)
@@ -501,6 +514,7 @@ func TestConcurrentProcessesDoNotLoseWrites(t *testing.T) {
 	if os.Getenv(helperRootEnv) != "" {
 		t.Skip("inside helper process")
 	}
+	skipFsync(t)
 	store, root := openStore(t)
 	id := createCounter(t, store)
 	const n = 200
@@ -589,6 +603,32 @@ func TestMovesSyncTheNewPathBeforeRemovingTheOld(t *testing.T) {
 	want = []string{"  has " + live, "  has " + archived, "sync " + kind, "  has " + live, "sync " + archive}
 	if !reflect.DeepEqual(*ops, want) {
 		t.Fatalf("Unarchive ops = %q\nwant %q", *ops, want)
+	}
+}
+
+func TestWritesSyncTheTempFileBeforePublishing(t *testing.T) {
+	dir := t.TempDir()
+	realSync := syncFile
+	t.Cleanup(func() { syncFile = realSync })
+	for name, write := range map[string]func(string, []byte) error{
+		"replace":   WriteReplace,
+		"exclusive": WriteExclusive,
+	} {
+		path := filepath.Join(dir, name)
+		var synced []string
+		syncFile = func(f *os.File) error {
+			if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("%s: %s exists before its temp file is synced", name, path)
+			}
+			synced = append(synced, filepath.Base(f.Name()))
+			return realSync(f)
+		}
+		if err := write(path, []byte("{}")); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(synced) != 1 || !strings.HasPrefix(synced[0], tempPrefix) {
+			t.Errorf("%s: synced %v, want one temp file", name, synced)
+		}
 	}
 }
 
@@ -826,6 +866,7 @@ func TestHelperProcessClaim(t *testing.T) {
 	if root == "" {
 		t.Skip("helper process only")
 	}
+	skipFsync(t)
 	store, err := Open(root)
 	if err != nil {
 		t.Fatal(err)
@@ -841,6 +882,7 @@ func TestExclusiveSerializesProcesses(t *testing.T) {
 	if os.Getenv(helperClaimsEnv) != "" {
 		t.Skip("inside helper process")
 	}
+	skipFsync(t)
 	store, root := openStore(t)
 	outputs := make([][]byte, 2)
 	errs := make([]error, 2)
