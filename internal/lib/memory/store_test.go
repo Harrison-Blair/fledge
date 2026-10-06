@@ -15,6 +15,7 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
 
@@ -93,21 +94,11 @@ func TestAddRejectsExistingNameWithoutOverwriting(t *testing.T) {
 	}
 }
 
-// commit gives root an initial commit so linked worktrees can be added.
-func commit(t *testing.T, root string) {
-	t.Helper()
-	if b, err := exec.Command("git", "-C", root, "-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-qm", "init", "--allow-empty").CombinedOutput(); err != nil {
-		t.Fatalf("%v %s", err, b)
-	}
-}
-
 func TestAddFromLinkedWorktreeWritesPrimaryCheckout(t *testing.T) {
 	root := identitytest.Repository(t)
-	commit(t, root)
+	gittest.Commit(t, root)
 	linked := filepath.Join(root, ".fledge", "worktrees", "feat")
-	if b, err := exec.Command("git", "-C", root, "worktree", "add", "-q", "-b", "feat", linked).CombinedOutput(); err != nil {
-		t.Fatalf("%v %s", err, b)
-	}
+	gittest.Git(t, root, "worktree", "add", "-q", "-b", "feat", linked)
 	add(t, linked, valid())
 	if _, err := os.Stat(filepath.Join(root, ".fledge", "memories", "herdr-socket.md")); err != nil {
 		t.Fatal(err)

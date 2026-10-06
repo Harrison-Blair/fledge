@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 )
 
@@ -19,11 +19,8 @@ type call = herdrscript.Call
 func repository(t *testing.T) string {
 	t.Helper()
 	root, _ := filepath.EvalSymlinks(t.TempDir())
-	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"-c", "user.name=Test", "-c", "user.email=t@example.com", "commit", "-qm", "initial", "--allow-empty"}} {
-		if b, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
-			t.Fatalf("%v %s", err, b)
-		}
-	}
+	gittest.Git(t, root, "init", "-q", "-b", "main")
+	gittest.Commit(t, root)
 	return root
 }
 
@@ -43,19 +40,8 @@ func created(path string) herdr.CreatedResult {
 // is served.
 func checkout(t *testing.T, root, branch, path string) func() {
 	return func() {
-		if b, err := exec.Command("git", "-C", root, "worktree", "add", "-q", "-b", branch, path).CombinedOutput(); err != nil {
-			t.Fatalf("%v %s", err, b)
-		}
+		gittest.Git(t, root, "worktree", "add", "-q", "-b", branch, path)
 	}
-}
-
-func git(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	b, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %v: %v %s", args, err, b)
-	}
-	return string(b)
 }
 
 func TestCreatesManagedCheckout(t *testing.T) {
@@ -90,8 +76,8 @@ func TestCreatedCheckoutIgnoresFledgeScratch(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("*\n!*/\n!*.md\n!.gitignore\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	git(t, root, "add", ".gitignore")
-	git(t, root, "-c", "user.name=Test", "-c", "user.email=t@example.com", "commit", "-qm", "allowlist")
+	gittest.Git(t, root, "add", ".gitignore")
+	gittest.Git(t, root, "-c", "user.name=Test", "-c", "user.email=t@example.com", "commit", "-qm", "allowlist")
 	path := filepath.Join(root, ".fledge", "worktrees", "topic")
 	out := Run(context.Background(), herdrscript.Client(t,
 		call{Method: "worktree.list", Result: listing(root)},
@@ -116,17 +102,17 @@ func TestCreatedCheckoutIgnoresFledgeScratch(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(path, ".fledge", "tmp", "report.md"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if s := git(t, path, "status", "--short"); s != "" {
+	if s := gittest.Git(t, path, "status", "--short"); s != "" {
 		t.Fatalf("status %q", s)
 	}
-	git(t, path, "check-ignore", "-q", ".fledge/tmp/report.md")
+	gittest.Git(t, path, "check-ignore", "-q", ".fledge/tmp/report.md")
 	if err := os.WriteFile(filepath.Join(path, ".fledge", "profiles", "p.md"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if s := git(t, path, "status", "--short", "--untracked-files=all"); s != "?? .fledge/profiles/p.md\n" {
+	if s := gittest.Git(t, path, "status", "--short", "--untracked-files=all"); s != "?? .fledge/profiles/p.md\n" {
 		t.Fatalf("status %q", s)
 	}
-	git(t, path, "add", ".fledge/profiles/p.md")
+	gittest.Git(t, path, "add", ".fledge/profiles/p.md")
 }
 
 // A checkout Herdr created that cannot take the managed ignore file leaves a
@@ -157,9 +143,7 @@ func TestIgnoreFailureAfterCreateIsPartial(t *testing.T) {
 
 func TestRefusesExistingBranch(t *testing.T) {
 	root := repository(t)
-	if err := exec.Command("git", "-C", root, "branch", "topic").Run(); err != nil {
-		t.Fatal(err)
-	}
+	gittest.Git(t, root, "branch", "topic")
 	out := Run(context.Background(), herdrscript.Client(t, call{Method: "worktree.list", Result: listing(root)}), Options{Branch: "topic", Cwd: root})
 	if out.ExitCode() != 2 || out.Status != "rejected" || len(out.Effects) != 0 {
 		t.Fatalf("%+v", out)

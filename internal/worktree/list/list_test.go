@@ -13,18 +13,12 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 )
 
 type call = herdrscript.Call
 
-func git(t *testing.T, dir string, args ...string) {
-	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=Test", "-c", "user.email=t@example.com"}, args...)...)
-	if b, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git %v: %v %s", args, err, b)
-	}
-}
 func s(v string) *string { return &v }
 
 // fixture is a primary checkout on main with a managed merged checkout, an
@@ -34,19 +28,19 @@ type fixture struct{ root, merged, unmerged, detached string }
 func newFixture(t *testing.T) fixture {
 	t.Helper()
 	root, _ := filepath.EvalSymlinks(t.TempDir())
-	git(t, root, "init", "-q", "-b", "main")
-	git(t, root, "commit", "-qm", "initial", "--allow-empty")
+	gittest.Git(t, root, "init", "-q", "-b", "main")
+	gittest.Commit(t, root)
 	os.MkdirAll(filepath.Join(root, ".fledge"), 0o755)
 	os.WriteFile(filepath.Join(root, ".fledge", ".gitignore"), []byte("*\n"), 0o644)
 	outside, _ := filepath.EvalSymlinks(t.TempDir())
 	f := fixture{root: root, merged: filepath.Join(root, ".fledge", "worktrees", "merged"), unmerged: filepath.Join(outside, "unmerged"), detached: filepath.Join(outside, "detached")}
-	git(t, root, "worktree", "add", "-q", "-b", "merged", f.merged)
-	git(t, f.merged, "commit", "-qm", "merged work", "--allow-empty")
-	git(t, root, "merge", "-q", "--no-edit", "merged")
-	git(t, root, "worktree", "add", "-q", "-b", "unmerged", f.unmerged)
-	git(t, f.unmerged, "commit", "-qm", "unmerged work", "--allow-empty")
+	gittest.Git(t, root, "worktree", "add", "-q", "-b", "merged", f.merged)
+	gittest.Git(t, f.merged, "commit", "-qm", "merged work", "--allow-empty")
+	gittest.Git(t, root, "merge", "-q", "--no-edit", "merged")
+	gittest.Git(t, root, "worktree", "add", "-q", "-b", "unmerged", f.unmerged)
+	gittest.Git(t, f.unmerged, "commit", "-qm", "unmerged work", "--allow-empty")
 	os.WriteFile(filepath.Join(f.unmerged, "untracked"), []byte("x"), 0o644)
-	git(t, root, "worktree", "add", "-q", "--detach", f.detached, "main")
+	gittest.Git(t, root, "worktree", "add", "-q", "--detach", f.detached, "main")
 	return f
 }
 
@@ -278,7 +272,7 @@ func TestListLeavesIncompleteStoreUnchanged(t *testing.T) {
 // unknown and says why, instead of falling back to another branch.
 func TestListMissingConfiguredBaseBranch(t *testing.T) {
 	f := newFixture(t)
-	git(t, f.root, "config", "fledge.baseBranch", "dev")
+	gittest.Git(t, f.root, "config", "fledge.baseBranch", "dev")
 	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()})
 	out := Run(context.Background(), c, Options{Cwd: f.root})
 	r := out.Result.(Result)
@@ -302,8 +296,8 @@ func TestListMissingConfiguredBaseBranch(t *testing.T) {
 
 func TestListUsesConfiguredBaseBranch(t *testing.T) {
 	f := newFixture(t)
-	git(t, f.root, "branch", "dev", "main~1")
-	git(t, f.root, "config", "fledge.baseBranch", "dev")
+	gittest.Git(t, f.root, "branch", "dev", "main~1")
+	gittest.Git(t, f.root, "config", "fledge.baseBranch", "dev")
 	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()})
 	r := Run(context.Background(), c, Options{Cwd: f.root}).Result.(Result)
 	if r.DefaultBranch == nil || *r.DefaultBranch != "dev" || r.DefaultBranchError != nil {

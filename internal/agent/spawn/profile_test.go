@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"maps"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -15,6 +14,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/memory"
 	"github.com/Harrison-Blair/fledge/internal/lib/profiles"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
@@ -32,9 +32,7 @@ func builtinProfile(t *testing.T, name string) profiles.Profile {
 func profileRepo(t *testing.T, file, content string) string {
 	t.Helper()
 	root := t.TempDir()
-	if b, err := exec.Command("git", "-C", root, "init", "-q").CombinedOutput(); err != nil {
-		t.Fatal(err, string(b))
-	}
+	gittest.Git(t, root, "init", "-q")
 	path := filepath.Join(root, ".fledge", "profiles", file)
 	os.MkdirAll(filepath.Dir(path), 0755)
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
@@ -326,9 +324,7 @@ func TestProfileMemoryComesFromWorktreePrimaryCheckout(t *testing.T) {
 func TestMemoryBriefReadsPrimaryCheckoutFromLinkedCheckout(t *testing.T) {
 	root := repository(t)
 	linked := filepath.Join(root, ".fledge", "worktrees", "feat")
-	if b, err := exec.Command("git", "-C", root, "worktree", "add", "-q", "-b", "feat", linked).CombinedOutput(); err != nil {
-		t.Fatalf("%v %s", err, b)
-	}
+	gittest.Git(t, root, "worktree", "add", "-q", "-b", "feat", linked)
 	alpha(t, root)
 	if got := memoryBrief(context.Background(), linked); got != oneMemory[1:] {
 		t.Fatalf("%q", got)

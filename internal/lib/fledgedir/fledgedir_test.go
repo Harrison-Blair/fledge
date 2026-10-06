@@ -10,29 +10,20 @@ import (
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
 )
 
-func git(t *testing.T, args ...string) {
-	t.Helper()
-	if b, err := exec.Command("git", args...).CombinedOutput(); err != nil {
-		t.Fatalf("git %v: %v %s", args, err, b)
-	}
-}
 func repository(t *testing.T) string {
 	t.Helper()
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	git(t, "-C", root, "init", "-q")
-	git(t, "-C", root, "-c", "user.name=Test", "-c", "user.email=t@example.com", "commit", "-qm", "initial", "--allow-empty")
+	root := gittest.Repository(t)
+	gittest.Commit(t, root)
 	return root
 }
 
 func TestRootResolvesPrimaryFromLinkedWorktree(t *testing.T) {
 	root := repository(t)
 	linked := filepath.Join(t.TempDir(), "linked")
-	git(t, "-C", root, "worktree", "add", "-qb", "linked", linked)
+	gittest.Git(t, root, "worktree", "add", "-qb", "linked", linked)
 	os.MkdirAll(filepath.Join(linked, "sub"), 0755)
 	for _, cwd := range []string{root, linked, filepath.Join(linked, "sub")} {
 		got, err := Root(context.Background(), cwd)
@@ -50,23 +41,23 @@ func TestRootResolvesSeparateGitDirAndSubmodule(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo := filepath.Join(base, "repo")
-	git(t, "init", "-q", "--separate-git-dir", filepath.Join(base, "gitdir"), repo)
-	git(t, "-C", repo, "-c", "user.name=Test", "-c", "user.email=t@example.com", "commit", "-qm", "initial", "--allow-empty")
+	gittest.Git(t, base, "init", "-q", "--separate-git-dir", filepath.Join(base, "gitdir"), repo)
+	gittest.Commit(t, repo)
 	linked := filepath.Join(base, "linked")
-	git(t, "-C", repo, "worktree", "add", "-qb", "linked", linked)
+	gittest.Git(t, repo, "worktree", "add", "-qb", "linked", linked)
 	// A separate git dir named .git must not be mistaken for a checkout's.
 	named := filepath.Join(base, "named")
 	os.Mkdir(filepath.Join(base, "elsewhere"), 0755)
-	git(t, "init", "-q", "--separate-git-dir", filepath.Join(base, "elsewhere", ".git"), named)
+	gittest.Git(t, base, "init", "-q", "--separate-git-dir", filepath.Join(base, "elsewhere", ".git"), named)
 
 	super := repository(t)
 	child := repository(t)
-	git(t, "-C", super, "-c", "protocol.file.allow=always", "submodule", "add", "-q", child, "sub")
+	gittest.Git(t, super, "-c", "protocol.file.allow=always", "submodule", "add", "-q", child, "sub")
 	sub := filepath.Join(super, "sub")
 	os.MkdirAll(filepath.Join(sub, "deep"), 0755)
 
 	subLinked := filepath.Join(base, "sublinked")
-	git(t, "-C", sub, "worktree", "add", "-qb", "sublinked", subLinked)
+	gittest.Git(t, sub, "worktree", "add", "-qb", "sublinked", subLinked)
 
 	for cwd, want := range map[string]string{repo: repo, named: named, sub: sub, filepath.Join(sub, "deep"): sub, subLinked: sub} {
 		got, err := Root(context.Background(), cwd)
@@ -87,7 +78,7 @@ func TestRootResolvesSeparateGitDirAndSubmodule(t *testing.T) {
 	if !strings.Contains(err.Error(), "git config core.worktree <primary checkout path>") {
 		t.Fatalf("%v", err)
 	}
-	git(t, "-C", repo, "config", "core.worktree", repo)
+	gittest.Git(t, repo, "config", "core.worktree", repo)
 	if got, err := Root(context.Background(), linked); err != nil || got != repo {
 		t.Fatalf("Root(%s) = %s, %v want %s", linked, got, err, repo)
 	}
@@ -95,18 +86,18 @@ func TestRootResolvesSeparateGitDirAndSubmodule(t *testing.T) {
 func TestRootRejectsCheckoutOfAnotherRepository(t *testing.T) {
 	root := repository(t)
 	linked := filepath.Join(t.TempDir(), "linked")
-	git(t, "-C", root, "worktree", "add", "-qb", "linked", linked)
-	git(t, "-C", root, "config", "core.worktree", repository(t))
+	gittest.Git(t, root, "worktree", "add", "-qb", "linked", linked)
+	gittest.Git(t, root, "config", "core.worktree", repository(t))
 	if got, err := Root(context.Background(), linked); err == nil {
 		t.Fatalf("accepted foreign checkout %s", got)
 	}
 }
 func TestRootRejectsNonRepositoryAndBare(t *testing.T) {
 	bare := filepath.Join(t.TempDir(), "bare.git")
-	git(t, "init", "-q", "--bare", bare)
+	gittest.Git(t, filepath.Dir(bare), "init", "-q", "--bare", bare)
 	// A bare repository named .git must not pass as a checkout's git directory.
 	dotGit := filepath.Join(t.TempDir(), ".git")
-	git(t, "init", "-q", "--bare", dotGit)
+	gittest.Git(t, filepath.Dir(dotGit), "init", "-q", "--bare", dotGit)
 	for _, cwd := range []string{t.TempDir(), bare, dotGit} {
 		if got, err := Root(context.Background(), cwd); err == nil {
 			t.Fatalf("Root(%s) accepted: %s", cwd, got)
@@ -336,9 +327,9 @@ func TestRootRejectsLinkedWorktreeOfBareRepository(t *testing.T) {
 	// alongside core.bare, so the error must not advise setting it.
 	for _, name := range []string{"repo.git", filepath.Join("named", ".git")} {
 		bare := filepath.Join(base, name)
-		git(t, "init", "-q", "--bare", bare)
+		gittest.Git(t, base, "init", "-q", "--bare", bare)
 		linked := filepath.Join(base, "linked-"+filepath.Base(filepath.Dir(bare)))
-		git(t, "--git-dir", bare, "worktree", "add", "-q", "--orphan", "-b", "linked", linked)
+		gittest.Git(t, base, "--git-dir", bare, "worktree", "add", "-q", "--orphan", "-b", "linked", linked)
 		got, err := Root(context.Background(), linked)
 		if err == nil {
 			t.Fatalf("Root(%s) accepted: %s", linked, got)

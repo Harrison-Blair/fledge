@@ -3,22 +3,18 @@ package worktree
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
 )
 
 func repository(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	for _, args := range [][]string{{"init", "-q"}, {"-c", "user.name=Test", "-c", "user.email=t@example.com", "commit", "-qm", "initial", "--allow-empty"}} {
-		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
-		if b, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("%v %s", err, b)
-		}
-	}
+	gittest.Git(t, root, "init", "-q")
+	gittest.Commit(t, root)
 	return root
 }
 func TestManagedWorktreePreparation(t *testing.T) {
@@ -68,9 +64,7 @@ func TestManagedWorktreeRejectsSymlinksAndCollisions(t *testing.T) {
 			case "destination":
 				os.MkdirAll(filepath.Join(managed, "feature", "topic"), 0755)
 			case "branch":
-				if err := exec.Command("git", "-C", root, "branch", "feature/topic").Run(); err != nil {
-					t.Fatal(err)
-				}
+				gittest.Git(t, root, "branch", "feature/topic")
 			}
 			out := libagent.Outcome{}
 			if _, err := Prepare(context.Background(), root, "feature/topic", &out); err == nil {
@@ -131,9 +125,7 @@ func TestBranchNamespaceCollisionsBeforeWrites(t *testing.T) {
 	for _, tc := range []struct{ existing, requested string }{{"feature", "feature/topic"}, {"feature/topic", "feature"}} {
 		t.Run(tc.requested, func(t *testing.T) {
 			root := repository(t)
-			if err := exec.Command("git", "-C", root, "branch", tc.existing).Run(); err != nil {
-				t.Fatal(err)
-			}
+			gittest.Git(t, root, "branch", tc.existing)
 			out := libagent.Outcome{}
 			_, err := Prepare(context.Background(), root, tc.requested, &out)
 			if err == nil {

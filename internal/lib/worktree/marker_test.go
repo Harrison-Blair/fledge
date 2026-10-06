@@ -2,17 +2,11 @@ package worktree
 
 import (
 	"context"
-	"os/exec"
 	"path/filepath"
 	"testing"
-)
 
-func gitIn(t *testing.T, dir string, args ...string) {
-	t.Helper()
-	if b, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
-		t.Fatalf("git %v: %v %s", args, err, b)
-	}
-}
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
+)
 
 // A marker identifies one checkout incarnation: it reads back from the marked
 // checkout, is never replaced, and a checkout removed and added again at the same path, even on
@@ -21,7 +15,7 @@ func TestMarkerIdentifiesCheckoutIncarnation(t *testing.T) {
 	ctx := context.Background()
 	root := repository(t)
 	path := filepath.Join(t.TempDir(), "topic")
-	gitIn(t, root, "worktree", "add", "-q", "-b", "topic", path)
+	gittest.Git(t, root, "worktree", "add", "-q", "-b", "topic", path)
 	if got := Marker(ctx, path); got != "" {
 		t.Fatalf("unmarked checkout: %q", got)
 	}
@@ -35,8 +29,8 @@ func TestMarkerIdentifiesCheckoutIncarnation(t *testing.T) {
 	if _, err := Mark(ctx, path); err == nil || Marker(ctx, path) != id {
 		t.Fatal("marked checkout marked again")
 	}
-	gitIn(t, root, "worktree", "remove", "--force", path)
-	gitIn(t, root, "worktree", "add", "-q", path, "topic")
+	gittest.Git(t, root, "worktree", "remove", "--force", path)
+	gittest.Git(t, root, "worktree", "add", "-q", path, "topic")
 	if got := Marker(ctx, path); got != "" {
 		t.Fatalf("recreated checkout inherited marker: %q", got)
 	}

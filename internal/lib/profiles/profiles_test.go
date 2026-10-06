@@ -6,7 +6,6 @@ import (
 	"errors"
 	"maps"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -15,22 +14,13 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/proposal"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
 )
 
-func git(t *testing.T, args ...string) {
-	t.Helper()
-	if b, err := exec.Command("git", args...).CombinedOutput(); err != nil {
-		t.Fatalf("git %v: %v %s", args, err, b)
-	}
-}
 func repository(t *testing.T) string {
 	t.Helper()
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	git(t, "-C", root, "init", "-q")
-	git(t, "-C", root, "-c", "user.name=Test", "-c", "user.email=t@example.com", "commit", "-qm", "initial", "--allow-empty")
+	root := gittest.Repository(t)
+	gittest.Commit(t, root)
 	return root
 }
 
@@ -334,7 +324,7 @@ func TestInvalidNamesAndMissingProfilesAreRejected(t *testing.T) {
 func TestProfilesComeFromTheInvokingCheckout(t *testing.T) {
 	root := repository(t)
 	linked := filepath.Join(t.TempDir(), "linked")
-	git(t, "-C", root, "worktree", "add", "-qb", "linked", linked)
+	gittest.Git(t, root, "worktree", "add", "-qb", "linked", linked)
 	os.MkdirAll(filepath.Join(linked, "sub"), 0755)
 	write(t, root, "reviewer.md", "primary\n")
 	write(t, linked, "reviewer.md", "linked\n")

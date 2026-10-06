@@ -10,6 +10,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/brief"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
@@ -55,6 +56,16 @@ func Seed(t *testing.T, cwd string, r task.Record) string {
 		t.Fatal(err)
 	}
 	return id
+}
+
+// Store opens the existing state store of the repository at cwd.
+func Store(t *testing.T, cwd string) *state.Store {
+	t.Helper()
+	s, err := task.Existing(context.Background(), cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
 }
 
 // Load reads task id from the repository at cwd.

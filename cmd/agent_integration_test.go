@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -14,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/sockettest"
 )
 
@@ -410,9 +410,7 @@ func TestGetForwardsTargetAndDecodesDetails(t *testing.T) {
 // gitRepo makes the current directory a fresh Git repository.
 func gitRepo(t *testing.T) {
 	t.Helper()
-	if b, err := exec.Command("git", "init", "-q").CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v %s", err, b)
-	}
+	gittest.Git(t, ".", "init", "-q")
 }
 
 func TestListParentFlagFiltersAgents(t *testing.T) {
