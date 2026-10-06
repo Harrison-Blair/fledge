@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"slices"
-	"strings"
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
@@ -202,23 +200,16 @@ func fanOut(ctx context.Context, c libagent.Client, targets []target, o Options)
 	if ctx.Err() != nil {
 		return result, cancelled()
 	}
-	var failures, codes []string
+	var failed []libagent.TargetFailure
 	for _, row := range result.Targets {
 		if row.Error != nil {
-			failures = append(failures, fmt.Sprintf("%s (%s)", row.Target, row.Error.Code))
-			if !slices.Contains(codes, row.Error.Code) {
-				codes = append(codes, row.Error.Code)
-			}
+			failed = append(failed, libagent.TargetFailure{Target: row.Target, Code: row.Error.Code})
 		}
 	}
-	if len(failures) == 0 {
-		return result, nil
+	if f := libagent.FanOutFailure(failed, len(targets), "failed", ""); f != nil {
+		return result, &herdr.Error{Code: f.Code, Message: f.Message}
 	}
-	code := "operation_failed"
-	if len(codes) == 1 {
-		code = codes[0]
-	}
-	return result, &herdr.Error{Code: code, Message: fmt.Sprintf("%d of %d targets failed: %s", len(failures), len(targets), strings.Join(failures, ", "))}
+	return result, nil
 }
 
 // progress reports a failed --any target while others are pending. It is

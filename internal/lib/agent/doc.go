@@ -1,5 +1,6 @@
 // Package agent is the shared foundation for agent operations.
 // outcome.go defines the result envelope, failure classification, and generic rendering;
+// fanout.go summarizes a fan-out's failed targets as one failure;
 // client.go performs validated Herdr requests;
 // read.go adds agent.read;
 // wait.go adds agent.wait with wait's transport deadline policy;

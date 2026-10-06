@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
-	"strings"
 	"sync"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
@@ -210,28 +208,18 @@ func failure(err error, phase string) *libagent.Failure {
 	return o.Error
 }
 
-// summarize fails out with status when any row is bad, naming each bad row
-// and its code; one shared code is kept, several become operation_failed.
+// summarize fails out with status when any row is bad, as libagent.FanOutFailure
+// describes.
 func summarize(out *libagent.Outcome, rows []Row, bad func(Row) bool, status, what string) {
-	var failures, codes []string
+	var failed []libagent.TargetFailure
 	for _, r := range rows {
-		if !bad(r) {
-			continue
-		}
-		failures = append(failures, fmt.Sprintf("%s (%s)", r.Target, r.Error.Code))
-		if !slices.Contains(codes, r.Error.Code) {
-			codes = append(codes, r.Error.Code)
+		if bad(r) {
+			failed = append(failed, libagent.TargetFailure{Target: r.Target, Code: r.Error.Code})
 		}
 	}
-	if len(failures) == 0 {
-		return
+	if f := libagent.FanOutFailure(failed, len(rows), what, "agent.stop"); f != nil {
+		out.Status, out.Error = status, f
 	}
-	code := "operation_failed"
-	if len(codes) == 1 {
-		code = codes[0]
-	}
-	out.Status = status
-	out.Error = &libagent.Failure{Code: code, Message: fmt.Sprintf("%d of %d targets %s: %s", len(failures), len(rows), what, strings.Join(failures, ", ")), Phase: "agent.stop"}
 }
 
 var verbs = map[string]string{"dry-run": "Dry run: would stop %d of %d agents.\n", "fan-out": "Stopped %d of %d agents.\n"}

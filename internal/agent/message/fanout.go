@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
-	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
@@ -38,7 +36,7 @@ type Row struct {
 func fanOut(ctx context.Context, c libagent.Client, o Options, targets []selector.Target, text, id string, sender *libagent.Sender) libagent.Outcome {
 	out := libagent.Outcome{Operation: "agent.message", Status: "success", Effects: []libagent.Effect{}}
 	result := FanOut{Mode: "fan-out", Targets: []Row{}}
-	var failures, codes []string
+	var failed []libagent.TargetFailure
 	var opened *state.Store
 	var ok bool
 	store := func() (*state.Store, error) {
@@ -61,21 +59,13 @@ func fanOut(ctx context.Context, c libagent.Client, o Options, targets []selecto
 			row.MessageID = &id
 		}
 		if one.Error != nil {
-			failures = append(failures, fmt.Sprintf("%s (%s)", t.Label, one.Error.Code))
-			if !slices.Contains(codes, one.Error.Code) {
-				codes = append(codes, one.Error.Code)
-			}
+			failed = append(failed, libagent.TargetFailure{Target: t.Label, Code: one.Error.Code})
 		}
 		result.Targets = append(result.Targets, row)
 	}
 	out.Result = result
-	if len(failures) > 0 {
-		code := "operation_failed"
-		if len(codes) == 1 {
-			code = codes[0]
-		}
+	if out.Error = libagent.FanOutFailure(failed, len(targets), "failed", "agent.prompt"); out.Error != nil {
 		out.Status = "partial"
-		out.Error = &libagent.Failure{Code: code, Message: fmt.Sprintf("%d of %d targets failed: %s", len(failures), len(targets), strings.Join(failures, ", ")), Phase: "agent.prompt"}
 	}
 	return out
 }
