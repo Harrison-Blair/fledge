@@ -97,3 +97,30 @@ func TestModelConflicts(t *testing.T) {
 		t.Fatalf("%q %v", got, err)
 	}
 }
+
+func TestCodexConfigKey(t *testing.T) {
+	for _, tc := range []struct {
+		args     []string
+		i        int
+		key      string
+		consumed int
+	}{
+		{[]string{"-c", "model='x'"}, 0, "model", 1},
+		{[]string{"--config", `"model" = 'x'`}, 0, "model", 1},
+		{[]string{"--config=sandbox_mode='read-only'"}, 0, "sandbox_mode", 0},
+		{[]string{"-capproval_policy='never'"}, 0, "approval_policy", 0},
+		{[]string{"-c=approval_policy='never'"}, 0, "approval_policy", 0},
+		{[]string{"-c", " 'permissions.x' =1"}, 0, "permissions.x", 1},
+		{[]string{"-c"}, 0, "", 1},
+		{[]string{"--config", "model"}, 0, "", 1},
+		{[]string{"-cmodel"}, 0, "", 0},
+		{[]string{"--search", "-c", "model=x"}, 1, "model", 1},
+		{[]string{"--search"}, 0, "", 0},
+		{[]string{"model=x"}, 0, "", 0},
+	} {
+		key, consumed := codexConfigKey(tc.args, tc.i)
+		if key != tc.key || consumed != tc.consumed {
+			t.Errorf("codexConfigKey(%q, %d) = %q, %d; want %q, %d", tc.args, tc.i, key, consumed, tc.key, tc.consumed)
+		}
+	}
+}

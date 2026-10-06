@@ -90,27 +90,35 @@ func modelArguments(kind, model string, args []string) ([]string, error) {
 		if arg == "--model" || strings.HasPrefix(arg, "--model=") || policy.ShortConflict && strings.HasPrefix(arg, "-m") {
 			return nil, libagent.Invalid("native model option conflicts with --model")
 		}
-		if kind == "codex" {
-			config := ""
-			switch {
-			case arg == "-c" || arg == "--config":
-				if i+1 < len(args) {
-					config = args[i+1]
-				}
-			case strings.HasPrefix(arg, "--config="):
-				config = strings.TrimPrefix(arg, "--config=")
-			case strings.HasPrefix(arg, "-c"):
-				config = strings.TrimPrefix(strings.TrimPrefix(arg, "-c"), "=")
-			}
-			key, _, ok := strings.Cut(config, "=")
-			key = strings.Trim(strings.TrimSpace(key), `"'`)
-			if ok && key == "model" {
-				return nil, libagent.Invalid("native Codex model configuration conflicts with --model")
-			}
+		if key, _ := codexConfigKey(args, i); kind == "codex" && key == "model" {
+			return nil, libagent.Invalid("native Codex model configuration conflicts with --model")
 		}
 	}
 	if slices.Equal(result[:min(len(policy.Prefix), len(result))], policy.Prefix) {
 		result = result[len(policy.Prefix):]
 	}
 	return append(append(policy.Prefix, policy.Flag, model), result...), nil
+}
+
+// codexConfigKey reads the Codex -c or --config option at args[i]. It returns the
+// trimmed key, or "" when args[i] is not such an option or its value has no "=".
+// consumed is 1 when the value is the separate next argument.
+func codexConfigKey(args []string, i int) (key string, consumed int) {
+	arg, config := args[i], ""
+	switch {
+	case arg == "-c" || arg == "--config":
+		consumed = 1
+		if i+1 < len(args) {
+			config = args[i+1]
+		}
+	case strings.HasPrefix(arg, "--config="):
+		config = strings.TrimPrefix(arg, "--config=")
+	case strings.HasPrefix(arg, "-c"):
+		config = strings.TrimPrefix(strings.TrimPrefix(arg, "-c"), "=")
+	}
+	key, _, ok := strings.Cut(config, "=")
+	if !ok {
+		return "", consumed
+	}
+	return strings.Trim(strings.TrimSpace(key), `"'`), consumed
 }
