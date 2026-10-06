@@ -76,10 +76,10 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 		case sub.Error == nil:
 			return "done", nil
 		case sub.Error.Code == "invalid_input" || sub.Error.Code == "agent_identity_stale" || sub.Error.Code == "agent_record_not_found":
-			return "skipped", &sub.Error.Message
+			return "skipped", cli.Pointer(sub.Error.Text())
 		}
 		failures = append(failures, sub)
-		return "failed", &sub.Error.Message
+		return "failed", cli.Pointer(sub.Error.Text())
 	}
 	stopped := map[string]bool{}
 	for i := range p.Workers {
@@ -119,7 +119,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 	out.Result = p.Result
 	if len(failures) > 0 {
 		first := failures[0].Error
-		out.Fail(fmt.Errorf("%d cleanup action(s) failed; first: %s", len(failures), first.Message), first.Phase, false)
+		out.Fail(fmt.Errorf("%d cleanup action(s) failed; first: %s", len(failures), first.Text()), first.Phase, false)
 		for _, f := range failures {
 			if f.Status == "unknown" {
 				out.Status = "unknown"

@@ -12,7 +12,7 @@ func TestAtPhaseLocatesFailures(t *testing.T) {
 	err := AtPhase("worktree.list", cause)
 	o := Outcome{}
 	o.Fail(err, "placement", true)
-	if !errors.Is(err, cause) || err.Error() != cause.Error() || *o.Error != (Failure{Code: "protocol_error", Message: cause.Error(), Phase: "worktree.list"}) || o.Status != "unknown" {
+	if !errors.Is(err, cause) || err.Error() != cause.Error() || o.Error.Code != "protocol_error" || o.Error.Message != cause.Message || o.Error.Phase != "worktree.list" || o.Status != "unknown" {
 		t.Fatalf("%v %s %+v", err, o.Status, o.Error)
 	}
 }

@@ -58,9 +58,8 @@ func notFound() error {
 	return &herdr.Error{Code: "agent_not_found", Message: "no agent"}
 }
 func code(err error) string {
-	var remote *herdr.Error
-	if errors.As(err, &remote) {
-		return remote.Code
+	if c, ok := cli.Coded(err); ok {
+		return c
 	}
 	return ""
 }
@@ -437,8 +436,8 @@ func TestRegisterRefusesTerminalWithLiveRecord(t *testing.T) {
 	c := client(t)
 	first := registered(t, c, details("w1:p3", "term_a"))
 	_, err := Register(context.Background(), store(t, c), libagent.Client{}, details("w1:p3", "term_a"), "spawn", nil, nil)
-	var remote *herdr.Error
-	if !errors.As(err, &remote) || remote.Code != "agent_already_registered" || !strings.Contains(remote.Message, first.ID) {
+	var fledge *cli.Error
+	if !errors.As(err, &fledge) || fledge.Code != "agent_already_registered" || !strings.Contains(fledge.Message, first.ID) {
 		t.Fatalf("%v", err)
 	}
 	if ids, _ := store(t, c).List(Kind); len(ids) != 1 {
@@ -905,8 +904,8 @@ func TestReopenOfLiveRecordIsNoop(t *testing.T) {
 }
 
 func TestRecordNotFoundNamesID(t *testing.T) {
-	var remote *herdr.Error
-	if err := RecordNotFound("0123abcd"); !errors.As(err, &remote) || remote.Code != "agent_record_not_found" || remote.Message != "no agent record with id 0123abcd" {
+	var fledge *cli.Error
+	if err := RecordNotFound("0123abcd"); !errors.As(err, &fledge) || fledge.Code != "agent_record_not_found" || fledge.Message != "no agent record with id 0123abcd" {
 		t.Fatalf("%#v", err)
 	}
 }

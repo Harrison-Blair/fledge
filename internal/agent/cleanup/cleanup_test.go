@@ -597,6 +597,11 @@ func TestStopFailureIsPartial(t *testing.T) {
 	if out.Status != "unknown" || out.ExitCode() != 1 || out.Error == nil || worker(res, wrec.ID).Outcome != "failed" || worker(res, w2rec.ID).Outcome != "done" {
 		t.Fatalf("%+v %+v", out, res)
 	}
+	// The reason and the aggregate message keep the failed stop's code, as
+	// neither the worker row nor the operation_failed summary has it elsewhere.
+	if reason := worker(res, wrec.ID).Reason; reason == nil || *reason != "timeout: no answer" || out.Error.Message != "1 cleanup action(s) failed; first: timeout: no answer" {
+		t.Fatalf("reason %v, message %q", reason, out.Error.Message)
+	}
 	if c := checkout(res, r.topic); c.Outcome != "skipped" {
 		t.Fatalf("%+v", c)
 	}

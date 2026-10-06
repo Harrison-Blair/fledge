@@ -2,6 +2,7 @@ package agent
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Harrison-Blair/fledge/internal/lib/cli"
@@ -22,5 +23,13 @@ func TestFanOutFailureSummarizesFailedTargets(t *testing.T) {
 				t.Fatalf("FanOutFailure = %+v, want %+v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestFanOutFailureHumanLineHasNoCodePrefix(t *testing.T) {
+	o := cli.Outcome{Status: "partial", Error: FanOutFailure([]TargetFailure{{"a", "timeout"}, {"c", "timeout"}}, 3, "failed", "agent.prompt")}
+	var b strings.Builder
+	if err := o.Write(&b, false, nil); err != nil || b.String() != "partial: 2 of 3 targets failed: a (timeout), c (timeout) (agent.prompt)\n" {
+		t.Fatalf("%q %v", b.String(), err)
 	}
 }

@@ -11,7 +11,6 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/cli"
-	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 )
 
@@ -70,13 +69,13 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 				continue
 			}
 			if _, ok := byID[id]; !ok {
-				return &herdr.Error{Code: "task_not_found", Message: fmt.Sprintf("no task with id %s", id)}
+				return &cli.Error{Code: "task_not_found", Message: fmt.Sprintf("no task with id %s", id)}
 			}
 			if id == r.ID {
-				return &herdr.Error{Code: "task_dependency_cycle", Message: fmt.Sprintf("task %s cannot run after itself", id)}
+				return &cli.Error{Code: "task_dependency_cycle", Message: fmt.Sprintf("task %s cannot run after itself", id)}
 			}
 			if path := dependsOn(byID, id, r.ID); path != nil {
-				return &herdr.Error{Code: "task_dependency_cycle", Message: fmt.Sprintf("task %s cannot run after %s, which already runs after it (%s, each after the next)", r.ID, id, strings.Join(path, " → "))}
+				return &cli.Error{Code: "task_dependency_cycle", Message: fmt.Sprintf("task %s cannot run after %s, which already runs after it (%s, each after the next)", r.ID, id, strings.Join(path, " → "))}
 			}
 			r.After = append(r.After, id)
 		}

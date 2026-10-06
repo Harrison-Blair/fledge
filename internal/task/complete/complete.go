@@ -98,7 +98,7 @@ func run(ctx context.Context, c libagent.Client, o Options, in io.Reader, messag
 	if r, ok := task.Deliver(ctx, c, s, &out, sender, o.ID, recipient.PaneID, messageID, body, func(r *task.Record) (*task.Attempt, error) {
 		n := r.CompletionNotification
 		if n == nil || n.MessageID != messageID || n.Recipient != notification.Recipient {
-			return nil, &herdr.Error{Code: "task_state_changed", Message: fmt.Sprintf("task %s's completion notification changed before its delivery could be recorded", r.ID)}
+			return nil, &cli.Error{Code: "task_state_changed", Message: fmt.Sprintf("task %s's completion notification changed before its delivery could be recorded", r.ID)}
 		}
 		return &n.Attempt, nil
 	}); ok {
@@ -112,7 +112,7 @@ func authorize(r *task.Record, caller *identity.Record, force bool) error {
 		return err
 	}
 	if !force && (caller == nil || r.Owner == nil || *r.Owner != caller.ID) {
-		return &herdr.Error{Code: "task_not_owner", Message: fmt.Sprintf("task %s is owned by %s and only its owner may complete it; pass --force to override", r.ID, display(r.Owner))}
+		return &cli.Error{Code: "task_not_owner", Message: fmt.Sprintf("task %s is owned by %s and only its owner may complete it; pass --force to override", r.ID, display(r.Owner))}
 	}
 	return nil
 }

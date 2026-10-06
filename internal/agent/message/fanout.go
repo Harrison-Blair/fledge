@@ -123,11 +123,11 @@ func renderFanOut(w io.Writer, f FanOut) error {
 		case "already_working":
 			line = fmt.Sprintf("Message %s submitted to %s while the agent was already observed working; this prompt's start is not confirmed", id, where)
 		case "unconfirmed":
-			line = fmt.Sprintf("Message %s submitted to %s, but activity was not confirmed; do not resend it: %s", id, where, row.Error.Message)
+			line = fmt.Sprintf("Message %s submitted to %s, but activity was not confirmed; do not resend it: %s", id, where, row.Error.Text())
 		case "unknown":
-			line = fmt.Sprintf("Message %s may have been submitted to %s; do not resend it: %s", id, where, row.Error.Message)
+			line = fmt.Sprintf("Message %s may have been submitted to %s; do not resend it: %s", id, where, row.Error.Text())
 		case "rejected":
-			line = fmt.Sprintf("Message not submitted to %s: %s", where, row.Error.Message)
+			line = fmt.Sprintf("Message not submitted to %s: %s", where, row.Error.Text())
 		default:
 			line = fmt.Sprintf("Message %s submitted to %s", id, where)
 		}

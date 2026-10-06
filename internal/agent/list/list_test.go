@@ -38,7 +38,7 @@ func TestListRejectsIncompleteAgentInfo(t *testing.T) {
 	good, bad := herdrscript.Info(herdrscript.LiveAgent("idle")).Agent, herdrscript.Info(herdrscript.LiveAgent("idle")).Agent
 	bad.PaneID, bad.TerminalID = "w1:p4", ""
 	out := Run(context.Background(), herdrscript.Client(t, call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": []herdr.AgentDetails{good, bad}}}), Options{})
-	if out.Status != "rejected" || out.Result != nil || out.Error == nil || *out.Error != (cli.Failure{Code: "protocol_error", Message: "protocol_error: incomplete agent.list result", Phase: "agent.list"}) {
+	if out.Status != "rejected" || out.Result != nil || out.Error == nil || out.Error.Code != "protocol_error" || out.Error.Message != "incomplete agent.list result" || out.Error.Phase != "agent.list" {
 		t.Fatalf("%+v %+v", out, out.Error)
 	}
 }

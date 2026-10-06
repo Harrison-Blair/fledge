@@ -79,7 +79,7 @@ func (s pauser) run(ctx context.Context, o Options) cli.Outcome {
 	profile, _ := harness.Lookup(*a.Agent)
 	keys := profile.InterruptKeys
 	if deadline.Sub(s.Now()) <= 0 {
-		out.Fail(&herdr.Error{Code: "timeout", Message: "pause timeout expired before interrupt"}, "agent.send_keys", false)
+		out.Fail(&cli.Error{Code: "timeout", Message: "pause timeout expired before interrupt"}, "agent.send_keys", false)
 		return out
 	}
 	var ack struct {
@@ -101,7 +101,7 @@ func (s pauser) run(ctx context.Context, o Options) cli.Outcome {
 	}
 	remaining := deadline.Sub(s.Now())
 	if remaining <= 0 {
-		out.Fail(&herdr.Error{Code: "timeout", Message: "pause timeout expired before settlement"}, "agent.wait", false)
+		out.Fail(&cli.Error{Code: "timeout", Message: "pause timeout expired before settlement"}, "agent.wait", false)
 		return out
 	}
 	// Herdr's default settled set includes blocked so approval dialogs fail promptly.
@@ -118,7 +118,7 @@ func (s pauser) run(ctx context.Context, o Options) cli.Outcome {
 		out.Result = result
 		switch {
 		case settled.Agent.AgentStatus == "blocked":
-			err = &herdr.Error{Code: "agent_blocked", Message: "agent is blocked after interruption"}
+			err = &cli.Error{Code: "agent_blocked", Message: "agent is blocked after interruption"}
 		case settled.Agent.LaunchPending != nil && *settled.Agent.LaunchPending:
 			err = libagent.Protocol("agent launch is pending after interruption")
 		case settled.Agent.AgentStatus != "idle" && settled.Agent.AgentStatus != "done":

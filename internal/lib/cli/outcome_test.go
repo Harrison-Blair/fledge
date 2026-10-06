@@ -14,31 +14,37 @@ import (
 func TestFailClassifiesStatusCodeAndPhase(t *testing.T) {
 	remote := &herdr.Error{Code: "agent_not_found", Message: "missing"}
 	uncertain := &herdr.Error{Code: "transport_error", Message: "lost", Uncertain: true}
+	fledge := &Error{Code: "task_not_found", Message: "no task with id deadbeef"}
 	for _, tc := range []struct {
-		name                string
-		effects             []Effect
-		err                 error
-		phase               string
-		mutating            bool
-		status, code, where string
-		exit                int
+		name                         string
+		effects                      []Effect
+		err                          error
+		phase                        string
+		mutating                     bool
+		status, code, message, where string
+		exit                         int
 	}{
-		{"input", nil, Invalid("bad %s", "flag"), "validation", false, "rejected", "invalid_input", "validation", 2},
-		{"plain", nil, errors.New("boom"), "placement", false, "rejected", "operation_failed", "placement", 1},
-		{"remote", nil, remote, "agent.get", false, "rejected", "agent_not_found", "agent.get", 1},
-		{"uncertain mutation", nil, uncertain, "pane.close", true, "unknown", "transport_error", "pane.close", 1},
-		{"uncertain read", nil, uncertain, "agent.get", false, "rejected", "transport_error", "agent.get", 1},
-		{"start timeout", nil, &herdr.Error{Code: "timeout", Message: "slow"}, "agent.start", false, "partial", "timeout", "agent.start", 1},
-		{"start not ready", nil, &herdr.Error{Code: "agent_not_ready", Message: "slow"}, "agent.start", false, "partial", "agent_not_ready", "agent.start", 1},
-		{"reused only", []Effect{{Action: "reused", Kind: "worktree"}}, errors.New("boom"), "placement", false, "rejected", "operation_failed", "placement", 1},
-		{"prior effect", []Effect{{Action: "created", Kind: "tab"}}, errors.New("boom"), "placement", false, "partial", "operation_failed", "placement", 1},
-		{"located phase", nil, &phaseError{phase: "tab.create", cause: remote}, "placement", false, "rejected", "agent_not_found", "tab.create", 1},
+		{"input", nil, Invalid("bad %s", "flag"), "validation", false, "rejected", "invalid_input", "bad flag", "validation", 2},
+		{"plain", nil, errors.New("boom"), "placement", false, "rejected", "operation_failed", "boom", "placement", 1},
+		{"remote", nil, remote, "agent.get", false, "rejected", "agent_not_found", "missing", "agent.get", 1},
+		{"fledge", nil, fledge, "task", false, "rejected", "task_not_found", "no task with id deadbeef", "task", 1},
+		{"located fledge", nil, AtPhase("identity", fledge), "task", false, "rejected", "task_not_found", "no task with id deadbeef", "identity", 1},
+		{"fledge never uncertain", nil, &Error{Code: "agent_blocked", Message: "waiting"}, "agent.wait", true, "rejected", "agent_blocked", "waiting", "agent.wait", 1},
+		{"coded aggregate", nil, &Error{Code: "operation_failed", Message: "2 of 3 targets failed"}, "agent.wait", false, "rejected", "operation_failed", "2 of 3 targets failed", "agent.wait", 1},
+		{"wrapped code stays in text", nil, fmt.Errorf("read: %w", fledge), "task", false, "rejected", "task_not_found", "read: task_not_found: no task with id deadbeef", "task", 1},
+		{"uncertain mutation", nil, uncertain, "pane.close", true, "unknown", "transport_error", "lost", "pane.close", 1},
+		{"uncertain read", nil, uncertain, "agent.get", false, "rejected", "transport_error", "lost", "agent.get", 1},
+		{"start timeout", nil, &herdr.Error{Code: "timeout", Message: "slow"}, "agent.start", false, "partial", "timeout", "slow", "agent.start", 1},
+		{"fledge start timeout", nil, &Error{Code: "timeout", Message: "slow"}, "agent.start", false, "partial", "timeout", "slow", "agent.start", 1},
+		{"start not ready", nil, &herdr.Error{Code: "agent_not_ready", Message: "slow"}, "agent.start", false, "partial", "agent_not_ready", "slow", "agent.start", 1},
+		{"reused only", []Effect{{Action: "reused", Kind: "worktree"}}, errors.New("boom"), "placement", false, "rejected", "operation_failed", "boom", "placement", 1},
+		{"prior effect", []Effect{{Action: "created", Kind: "tab"}}, errors.New("boom"), "placement", false, "partial", "operation_failed", "boom", "placement", 1},
+		{"located phase", nil, &phaseError{phase: "tab.create", cause: remote}, "placement", false, "rejected", "agent_not_found", "missing", "tab.create", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			o := Outcome{Status: "success", Effects: tc.effects}
 			o.Fail(tc.err, tc.phase, tc.mutating)
-			want := Failure{Code: tc.code, Message: tc.err.Error(), Phase: tc.where}
-			if o.Status != tc.status || o.Error == nil || *o.Error != want || o.ExitCode() != tc.exit {
+			if o.Status != tc.status || o.Error == nil || o.Error.Code != tc.code || o.Error.Message != tc.message || o.Error.Phase != tc.where || o.ExitCode() != tc.exit {
 				t.Fatalf("got %s %+v exit=%d", o.Status, o.Error, o.ExitCode())
 			}
 		})
@@ -124,6 +130,11 @@ func TestFinish(t *testing.T) {
 	if !errors.As(err, &result) || result.ExitCode() != 2 || err.Error() != "bad" || !IsRendered(err) {
 		t.Fatalf("%v", err)
 	}
+	coded := NewOutcome("task.get")
+	coded.Fail(&Error{Code: "task_not_found", Message: "no task"}, "task", false)
+	if err := Finish(coded, &b, true, nil); err == nil || err.Error() != "task_not_found: no task" {
+		t.Fatalf("%v", err)
+	}
 	for _, asJSON := range []bool{false, true} {
 		err = Finish(failed, failingWriter{}, asJSON, nil)
 		var output *OutputError
@@ -148,5 +159,35 @@ func TestNewOutcomeDefaultsToSuccessWithEmptyEffects(t *testing.T) {
 	want := `{"operation":"task.cancel","status":"success","result":null,"effects":[],"error":null}` + "\n"
 	if b.String() != want {
 		t.Fatalf("got %s want %s", b.String(), want)
+	}
+}
+
+func TestWriteHumanKeepsCodeTextOfFailBuiltFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"fledge", AtPhase("task", &Error{Code: "task_not_found", Message: "no task with id deadbeef"}), "rejected: task_not_found: no task with id deadbeef (task)\n"},
+		{"herdr", &herdr.Error{Code: "agent_not_found", Message: "agent target w2S:p999 not found"}, "rejected: agent_not_found: agent target w2S:p999 not found (agent.get)\n"},
+		{"input", Invalid("bad"), "rejected: bad (agent.get)\n"},
+		{"wrapped", fmt.Errorf("read: %w", &Error{Code: "task_not_found", Message: "x"}), "rejected: read: task_not_found: x (agent.get)\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := NewOutcome("agent.get")
+			o.Fail(tc.err, "agent.get", false)
+			var b bytes.Buffer
+			if err := o.Write(&b, false, nil); err != nil || b.String() != tc.want {
+				t.Fatalf("%q %v", b.String(), err)
+			}
+		})
+	}
+}
+
+func TestWriteHumanLeavesHandBuiltCodedFailuresAlone(t *testing.T) {
+	o := Outcome{Status: "partial", Error: &Failure{Code: "agent_prompt_blocked", Message: "agent became blocked after the message was submitted", Phase: "agent.prompt"}}
+	var b bytes.Buffer
+	if err := o.Write(&b, false, nil); err != nil || b.String() != "partial: agent became blocked after the message was submitted (agent.prompt)\n" {
+		t.Fatalf("%q %v", b.String(), err)
 	}
 }

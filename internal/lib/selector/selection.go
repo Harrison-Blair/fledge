@@ -102,7 +102,7 @@ func (s Selection) Targets(ctx context.Context, c libagent.Client, open func() (
 		targets = append(targets, Target{Label: label, Pane: m.Agent.PaneID, Agent: m.Agent, Record: m.Record})
 	}
 	if len(targets) == 0 {
-		return nil, cli.AtPhase("selection", &herdr.Error{Code: "no_agents_matched", Message: "no agents matched the selection"})
+		return nil, cli.AtPhase("selection", &cli.Error{Code: "no_agents_matched", Message: "no agents matched the selection"})
 	}
 	return targets, nil
 }

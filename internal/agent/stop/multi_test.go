@@ -469,13 +469,20 @@ func TestStopFilterDryRunUsesListing(t *testing.T) {
 	}
 }
 
+// failed is the row failure that Fail records for err.
+func failed(err error, phase string) *cli.Failure {
+	o := cli.NewOutcome("")
+	o.Fail(err, phase, false)
+	return o.Error
+}
+
 func TestStopFanOutRendering(t *testing.T) {
 	agent := func(pane, name, status string) *libagent.AgentRow {
 		r := libagent.NewAgentRow(agentIn(pane, name, status))
 		return &r
 	}
-	refused := &cli.Failure{Code: "invalid_input", Message: "agent b is working; pass --force to stop it anyway", Phase: "guard"}
-	missing := &cli.Failure{Code: "agent_not_found", Message: "agent_not_found: no c", Phase: "agent.get"}
+	refused := failed(cli.Invalid("agent b is working; pass --force to stop it anyway"), "guard")
+	missing := failed(&herdr.Error{Code: "agent_not_found", Message: "no c"}, "agent.get")
 	for _, tc := range []struct {
 		name string
 		out  cli.Outcome

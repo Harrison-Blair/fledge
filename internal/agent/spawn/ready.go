@@ -6,6 +6,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 )
 
@@ -27,7 +28,7 @@ func (b budget) expired() bool {
 	return b.parent.Err() == nil && (b.ctx.Err() != nil || !b.now().Before(b.deadline))
 }
 func (b budget) exhausted(name, what string) error {
-	return &herdr.Error{Code: "timeout", Message: fmt.Sprintf("agent %s %s within --timeout %s", name, what, b.timeout)}
+	return &cli.Error{Code: "timeout", Message: fmt.Sprintf("agent %s %s within --timeout %s", name, what, b.timeout)}
 }
 
 // ready polls the started agent from a, its lifecycle wait result, until Herdr
