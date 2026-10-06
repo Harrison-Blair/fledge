@@ -367,7 +367,7 @@ func Reopen(s *state.Store, id string) error {
 		var rec Record
 		var missing *state.NotFoundError
 		if err := tx.Get(Kind, id, &rec); errors.As(err, &missing) {
-			return &herdr.Error{Code: "agent_record_not_found", Message: fmt.Sprintf("no agent record with id %s", id)}
+			return RecordNotFound(id)
 		} else if err != nil {
 			return err
 		}
@@ -669,7 +669,7 @@ func load(s *state.Store, id string) (Record, error) {
 		err = s.Get(Kind, id, &rec)
 	}
 	if s == nil || errors.As(err, &missing) {
-		return Record{}, &herdr.Error{Code: "agent_record_not_found", Message: fmt.Sprintf("no agent record with id %s", id)}
+		return Record{}, RecordNotFound(id)
 	}
 	if err != nil {
 		return Record{}, err
@@ -681,6 +681,11 @@ func load(s *state.Store, id string) (Record, error) {
 		return Record{}, stale(id, "it belongs to another Herdr session")
 	}
 	return rec, nil
+}
+
+// RecordNotFound is the agent_record_not_found error for an unknown record id.
+func RecordNotFound(id string) error {
+	return &herdr.Error{Code: "agent_record_not_found", Message: fmt.Sprintf("no agent record with id %s", id)}
 }
 
 func stale(id, format string, args ...any) error {

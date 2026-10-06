@@ -881,6 +881,13 @@ func TestReopenOfLiveRecordIsNoop(t *testing.T) {
 	}
 }
 
+func TestRecordNotFoundNamesID(t *testing.T) {
+	var remote *herdr.Error
+	if err := RecordNotFound("0123abcd"); !errors.As(err, &remote) || remote.Code != "agent_record_not_found" || remote.Message != "no agent record with id 0123abcd" {
+		t.Fatalf("%#v", err)
+	}
+}
+
 func TestReopenUnknownOrInvalidRecord(t *testing.T) {
 	c := client(t)
 	s := store(t, c)
