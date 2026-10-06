@@ -31,7 +31,7 @@ func TestSpawnPermissionDefaults(t *testing.T) {
 
 func TestSpawnPermissionOptOut(t *testing.T) {
 	for _, kind := range []string{"claude", "codex", "pi"} {
-		for _, args := range [][]string{nil, {"two words", "x,y"}, {"--", "--yolo"}} {
+		for _, args := range [][]string{nil, {"two words", "x,y"}, {"--yolo"}, {"--", "--yolo"}} {
 			o := validOptions()
 			o.Harness, o.Model, o.Args, o.NoPermissionBypass = kind, "chosen", args, true
 			got, err := o.Validate()

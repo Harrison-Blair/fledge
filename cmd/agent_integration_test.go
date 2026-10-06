@@ -129,34 +129,20 @@ func TestSpawnForwardsExactNativeTokens(t *testing.T) {
 	}
 }
 
-func TestSpawnPermissionDefaultsAndOptOut(t *testing.T) {
-	for _, tc := range []struct {
-		name, harness       string
-		flags, native, want []string
-	}{
-		{"codex default", "codex", nil, nil, []string{"--yolo"}},
-		{"claude default", "claude", nil, nil, []string{"--permission-mode", "bypassPermissions"}},
-		{"codex opt out", "codex", []string{"--no-permission-bypass"}, []string{"--search"}, []string{"--search"}},
-		{"claude opt out", "claude", []string{"--no-permission-bypass"}, nil, []string{}},
-		{"native claude mode", "claude", nil, []string{"--permission-mode", "plan"}, []string{"--permission-mode", "plan"}},
-		{"native codex sandbox", "codex", nil, []string{"--sandbox=read-only"}, []string{"--sandbox=read-only"}},
-		{"opt out preserves explicit bypass", "codex", []string{"--no-permission-bypass"}, []string{"--yolo"}, []string{"--yolo"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			l := newSocket(t)
-			done := serveRPCs(l, snapshotResult(), labeledResult(), startedResult(tc.harness), readyAs(tc.harness))
-			flags := append([]string{"agent", "spawn", "--name", "worker", "--harness", tc.harness, "--pane", "w1:p1"}, tc.flags...)
-			flags = append(flags, "--")
-			flags = append(flags, tc.native...)
-			var out bytes.Buffer
-			if err := ExecuteWithArgs(flags, &out); err != nil {
-				t.Fatal(err, out.String())
-			}
-			calls := waitCalls(t, l, done, 4)
-			if kind, args := startArgs(t, calls[2]); kind != tc.harness || !reflect.DeepEqual(args, tc.want) {
-				t.Fatalf("got %s %q; want %s %q", kind, args, tc.harness, tc.want)
-			}
-		})
+// TestSpawnPermissionOptOutReachesStartRequest proves the
+// --no-permission-bypass binding and positional native arguments reach
+// agent.start without a profile. The permission rules are tested in
+// internal/agent/spawn.
+func TestSpawnPermissionOptOutReachesStartRequest(t *testing.T) {
+	l := newSocket(t)
+	done := serveRPCs(l, snapshotResult(), labeledResult(), startedResult("codex"), readyAs("codex"))
+	var out bytes.Buffer
+	if err := ExecuteWithArgs([]string{"agent", "spawn", "--name", "worker", "--harness", "codex", "--pane", "w1:p1", "--no-permission-bypass", "--", "--search"}, &out); err != nil {
+		t.Fatal(err, out.String())
+	}
+	calls := waitCalls(t, l, done, 4)
+	if kind, args := startArgs(t, calls[2]); kind != "codex" || !reflect.DeepEqual(args, []string{"--search"}) {
+		t.Fatalf("got %s %q; want codex [\"--search\"]", kind, args)
 	}
 }
 
