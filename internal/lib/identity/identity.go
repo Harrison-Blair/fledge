@@ -121,13 +121,22 @@ func Existing(ctx context.Context, cwd string) (*state.Store, error) {
 // naming it. A live record of the terminal left by a different harness ends
 // under the same lock. A nil checkout records none, and a nil profile no profile.
 func Register(ctx context.Context, s *state.Store, c libagent.Client, details herdr.AgentDetails, by string, checkout *Checkout, profile *string) (Record, error) {
+	rec, _, err := RegisterWithSender(ctx, s, c, details, by, checkout, profile)
+	return rec, err
+}
+
+// RegisterWithSender is Register that also returns the caller as a prompt
+// sender, built from Register's own caller lookup, so a following prompt needs
+// no second lookup. The sender is nil when that lookup did not run or failed.
+func RegisterWithSender(ctx context.Context, s *state.Store, c libagent.Client, details herdr.AgentDetails, by string, checkout *Checkout, profile *string) (Record, *libagent.Sender, error) {
 	if details.TerminalID == "" || details.PaneID == "" {
-		return Record{}, fmt.Errorf("cannot register an agent without a pane and terminal id")
+		return Record{}, nil, fmt.Errorf("cannot register an agent without a pane and terminal id")
 	}
 	caller, err := callerAgent(ctx, c)
 	if err != nil {
-		return Record{}, err
+		return Record{}, nil, err
 	}
+	sender := libagent.CallerSender(c.CallerPane, caller)
 	var rec Record
 	err = s.Exclusive(func(tx *state.Tx) error {
 		records, err := live(tx)
@@ -162,9 +171,9 @@ func Register(ctx context.Context, s *state.Store, c libagent.Client, details he
 		return err
 	})
 	if err != nil {
-		return Record{}, err
+		return Record{}, &sender, err
 	}
-	return rec, nil
+	return rec, &sender, nil
 }
 
 // attach returns the id of rec, the caller's live record, after pointing it at
@@ -220,19 +229,31 @@ func Caller(ctx context.Context, s *state.Store, c libagent.Client) (*Record, er
 // CallerAgent is Caller that also returns the caller's live agent, which is
 // nil exactly when the record is.
 func CallerAgent(ctx context.Context, s *state.Store, c libagent.Client) (*Record, *herdr.AgentDetails, error) {
+	rec, live, _, err := CallerAgentWithSender(ctx, s, c)
+	return rec, live, err
+}
+
+// CallerAgentWithSender is CallerAgent that also returns the caller as a
+// prompt sender, built from the same lookup, so a following prompt needs no
+// second lookup. The sender is set whenever the error is nil.
+func CallerAgentWithSender(ctx context.Context, s *state.Store, c libagent.Client) (*Record, *herdr.AgentDetails, libagent.Sender, error) {
 	caller, err := callerAgent(ctx, c)
-	if err != nil || caller == nil {
-		return nil, nil, err
+	if err != nil {
+		return nil, nil, libagent.Sender{}, err
+	}
+	sender := libagent.CallerSender(c.CallerPane, caller)
+	if caller == nil {
+		return nil, nil, sender, nil
 	}
 	rec, err := LiveEndingMismatched(s, *caller)
 	if err != nil || rec == nil {
-		return nil, nil, err
+		return nil, nil, sender, err
 	}
 	moved, err := Relocate(s, *rec, *caller)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, sender, err
 	}
-	return &moved, caller, nil
+	return &moved, caller, sender, nil
 }
 
 // callerAgent fetches the agent in the caller's pane, or nil for a caller

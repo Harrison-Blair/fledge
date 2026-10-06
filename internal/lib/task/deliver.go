@@ -31,15 +31,13 @@ func (a Attempt) State() string {
 	return "outcome unknown"
 }
 
-// Deliver submits body to pane as message messageID with the caller's sender
-// header, then records the outcome on task id under the store lock. attempt
+// Deliver submits body to pane as message messageID with sender's header, then records the outcome on task id under the store lock. attempt
 // returns the task's attempt for this message, or an error when the task
 // changed so the outcome is no longer this call's to record. Deliver appends
 // the submitted-message and updated-task effects and fails out at phase
 // agent.prompt for a delivery error, otherwise at phase task for a recording
 // error. It returns the updated task and whether the outcome was recorded.
-func Deliver(ctx context.Context, c libagent.Client, s *state.Store, out *libagent.Outcome, id, pane, messageID, body string, attempt func(*Record) (*Attempt, error)) (Record, bool) {
-	sender := libagent.ResolveSender(ctx, c)
+func Deliver(ctx context.Context, c libagent.Client, s *state.Store, out *libagent.Outcome, sender libagent.Sender, id, pane, messageID, body string, attempt func(*Record) (*Attempt, error)) (Record, bool) {
 	_, deliveryErr := c.Prompt(ctx, pane, libagent.WithHeader(messageID, sender, body))
 	if deliveryErr == nil {
 		out.Effects = append(out.Effects, libagent.Effect{Action: "submitted", Kind: "message", ID: pane})

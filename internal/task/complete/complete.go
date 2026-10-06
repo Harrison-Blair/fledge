@@ -41,8 +41,9 @@ func run(ctx context.Context, c libagent.Client, o Options, in io.Reader, messag
 	s, err := task.Existing(ctx, c.Cwd)
 	var caller *identity.Record
 	var live *herdr.AgentDetails
+	var sender libagent.Sender
 	if err == nil && s != nil {
-		caller, live, err = identity.CallerAgent(ctx, s, c)
+		caller, live, sender, err = identity.CallerAgentWithSender(ctx, s, c)
 	}
 	if err != nil {
 		out.Fail(err, "state", false)
@@ -93,7 +94,7 @@ func run(ctx context.Context, c libagent.Client, o Options, in io.Reader, messag
 		return out
 	}
 	body := fmt.Sprintf("task completed: %s · title: %s · read result: fledge task get --id %s · verify with: fledge task verify --id %s --summary \"...\"", r.ID, r.Title, r.ID, r.ID)
-	if r, ok := task.Deliver(ctx, c, s, &out, o.ID, recipient.PaneID, messageID, body, func(r *task.Record) (*task.Attempt, error) {
+	if r, ok := task.Deliver(ctx, c, s, &out, sender, o.ID, recipient.PaneID, messageID, body, func(r *task.Record) (*task.Attempt, error) {
 		n := r.CompletionNotification
 		if n == nil || n.MessageID != messageID || n.Recipient != notification.Recipient {
 			return nil, &herdr.Error{Code: "task_state_changed", Message: fmt.Sprintf("task %s's completion notification changed before its delivery could be recorded", r.ID)}

@@ -492,6 +492,34 @@ func TestCallerPropagatesLookupFailures(t *testing.T) {
 	}
 }
 
+// The WithSender forms build the caller's sender from their one lookup, and
+// return none when that lookup failed or did not run.
+func TestWithSenderReusesCallerLookup(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	caller := details("old:p1", "term_parent")
+	name := "orchestrator"
+	caller.Name = &name
+	want := libagent.Sender{Name: &name, Pane: libagent.Pointer("old:p1"), Kind: "named"}
+	get := call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: info(caller)}
+
+	c := client(t, get)
+	if _, _, got, err := CallerAgentWithSender(context.Background(), store(t, c), c); err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("caller %+v %v", got, err)
+	}
+	c = client(t, get)
+	if _, got, err := RegisterWithSender(context.Background(), store(t, c), c, details("w1:p3", "term_child"), "spawn", nil, nil); err != nil || got == nil || !reflect.DeepEqual(*got, want) {
+		t.Fatalf("register %+v %v", got, err)
+	}
+	c = client(t, call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Err: &herdr.Error{Code: "timeout", Message: "slow"}})
+	if _, got, err := RegisterWithSender(context.Background(), store(t, c), c, details("w1:p3", "term_child"), "spawn", nil, nil); err == nil || got != nil {
+		t.Fatalf("failed lookup %+v %v", got, err)
+	}
+	c = client(t)
+	if _, got, err := RegisterWithSender(context.Background(), store(t, c), c, details("w1:p3", ""), "spawn", nil, nil); err == nil || got != nil {
+		t.Fatalf("no lookup %+v %v", got, err)
+	}
+}
+
 func TestRelocateRefusesEndedRecord(t *testing.T) {
 	t.Setenv("HERDR_SESSION", "dev")
 	c := client(t)

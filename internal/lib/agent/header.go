@@ -34,21 +34,34 @@ func messageID(r io.Reader) string {
 // ResolveSender identifies the caller's pane through agent.get.
 func ResolveSender(ctx context.Context, c Client) Sender {
 	if c.CallerPane == "" {
-		msg := "HERDR_PANE_ID is not set"
-		return Sender{Kind: "unknown", Error: &msg}
+		return CallerSender("", nil)
 	}
 	a, err := c.Get(ctx, c.CallerPane)
 	var remote *herdr.Error
 	switch {
-	case err == nil && a.Pane.Name != nil && *a.Pane.Name != "":
-		return Sender{Name: a.Pane.Name, Pane: Pointer(a.Pane.PaneID), Kind: "named"}
 	case err == nil:
-		return Sender{Pane: Pointer(a.Pane.PaneID), Kind: "unnamed"}
+		return CallerSender(c.CallerPane, &a)
 	case errors.As(err, &remote) && remote.Code == "agent_not_found":
-		return Sender{Pane: Pointer(c.CallerPane), Kind: "pane"}
+		return CallerSender(c.CallerPane, nil)
 	}
 	msg := err.Error()
 	return Sender{Pane: Pointer(c.CallerPane), Kind: "unknown", Error: &msg}
+}
+
+// CallerSender is ResolveSender from a finished lookup of the caller's pane:
+// caller is the agent there, or nil when the pane hosts none. An empty pane is
+// a caller outside Herdr.
+func CallerSender(pane string, caller *herdr.AgentDetails) Sender {
+	switch {
+	case pane == "":
+		msg := "HERDR_PANE_ID is not set"
+		return Sender{Kind: "unknown", Error: &msg}
+	case caller == nil:
+		return Sender{Pane: Pointer(pane), Kind: "pane"}
+	case caller.Pane.Name != nil && *caller.Pane.Name != "":
+		return Sender{Name: caller.Pane.Name, Pane: Pointer(caller.Pane.PaneID), Kind: "named"}
+	}
+	return Sender{Pane: Pointer(caller.Pane.PaneID), Kind: "unnamed"}
 }
 
 // String describes the sender as it appears in headers and human output.

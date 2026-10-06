@@ -146,7 +146,7 @@ func TestSpawnRegistersBeforeFirstPrompt(t *testing.T) {
 	o.Pane = "w1:p1"
 	o.Prompt, o.PromptSet = "go", true
 	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
-	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), callerNotAgent(), callerNotAgent(),
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), callerNotAgent(),
 		call{Method: "agent.prompt", Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: herdrscript.Waited(p, "working").Agent.Pane}}})
 	s.Cwd = identitytest.Repository(t)
 	out := s.run(context.Background(), o, nil)
@@ -238,5 +238,53 @@ func TestSpawnSessionWriteFailureIsWarning(t *testing.T) {
 	}
 	if rec := stored(t, s.Cwd, *r.ID); rec.NativeSession != nil {
 		t.Fatalf("%+v", rec.NativeSession)
+	}
+}
+
+// The first prompt's sender reuses registration's caller lookup, so spawn asks
+// Herdr for the caller once, and the header matches the one a separate lookup
+// gives for the same caller.
+func TestSpawnPromptSenderReusesRegistrationLookup(t *testing.T) {
+	unnamed := herdrscript.Info(herdrscript.Pane("old:p1", "old", "old:t1"))
+	unnamed.Agent.AgentStatus = "working"
+	for _, tc := range []struct {
+		name   string
+		caller call
+		header string
+	}{
+		{"named", senderCall(), header},
+		{"unnamed", call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Result: unnamed}, "ᛉ fledge message from unnamed agent (old:p1) · id m-0a1b2c\n"},
+		{"not an agent", callerNotAgent(), "ᛉ fledge message from pane old:p1 · id m-0a1b2c\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := validOptions()
+			o.Pane, o.Prompt, o.PromptSet = "w1:p1", "hi\n", true
+			p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
+			p.AgentStatus = "idle"
+			s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), tc.caller,
+				call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": tc.header + "hi\n"}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
+			s.Cwd = identitytest.Repository(t)
+			out := s.run(context.Background(), o, nil)
+			if r := out.Result.(*Result); out.Status != "success" || !r.Registered || !r.Prompted {
+				t.Fatalf("%+v %+v", out, r)
+			}
+		})
+	}
+}
+
+// A failed caller lookup fails registration, and the sender falls back to its
+// own lookup, as before.
+func TestSpawnPromptSenderResolvesAgainAfterFailedLookup(t *testing.T) {
+	o := validOptions()
+	o.Pane, o.Prompt, o.PromptSet = "w1:p1", "hi\n", true
+	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
+	p.AgentStatus = "idle"
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"),
+		call{Method: "agent.get", Params: map[string]any{"target": "old:p1"}, Err: &herdr.Error{Code: "timeout", Message: "slow"}}, senderCall(),
+		call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": header + "hi\n"}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: p}}})
+	s.Cwd = identitytest.Repository(t)
+	out := s.run(context.Background(), o, nil)
+	if r := out.Result.(*Result); out.Status != "success" || r.Registered || r.RegistrationError == nil || !r.Prompted {
+		t.Fatalf("%+v %+v", out, r)
 	}
 }

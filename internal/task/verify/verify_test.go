@@ -65,7 +65,6 @@ func TestLifecycleCreateAssignCompleteVerify(t *testing.T) {
 	completed := complete.Run(ctx, tasktest.Client(t, repo, "w1:p3",
 		tasktest.Get("w1:p3", worker),
 		tasktest.Get("w1:p1", boss),
-		tasktest.Get("w1:p3", worker),
 		herdrscript.Call{Method: "agent.prompt", Result: herdr.AgentResult{Type: "agent_prompted", Agent: boss.Agent}},
 	), complete.Options{ID: id, Summary: "fixed", SummarySet: true}, strings.NewReader(""))
 	if completed.Error != nil {

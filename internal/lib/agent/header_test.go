@@ -62,6 +62,44 @@ func TestResolveSenderWithoutCallerPaneSkipsHerdr(t *testing.T) {
 	}
 }
 
+// CallerSender gives the same sender as ResolveSender for each caller state a
+// successful lookup can report: an agent, no agent (nil), and no caller pane.
+func TestCallerSenderMatchesResolveSender(t *testing.T) {
+	named := agentInfo("working")
+	named.Pane.Name = ptr("orchestrator")
+	emptyName := agentInfo("idle")
+	emptyName.Pane.Name = ptr("")
+	unnamed := agentInfo("idle")
+	notFound := &herdr.Error{Code: "agent_not_found", Message: "no agent"}
+	for _, tc := range []struct {
+		name, pane string
+		caller     *herdr.AgentDetails
+		err        error
+		want       Sender
+	}{
+		{"named agent", "w1:p2", &named, nil, Sender{Name: ptr("orchestrator"), Pane: ptr("w1:p2"), Kind: "named"}},
+		{"unnamed agent", "w1:p2", &unnamed, nil, Sender{Pane: ptr("w1:p2"), Kind: "unnamed"}},
+		{"empty name", "w1:p2", &emptyName, nil, Sender{Pane: ptr("w1:p2"), Kind: "unnamed"}},
+		{"not an agent", "w1:p9", nil, notFound, Sender{Pane: ptr("w1:p9"), Kind: "pane"}},
+		{"no caller pane", "", nil, nil, Sender{Kind: "unknown", Error: ptr("HERDR_PANE_ID is not set")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := CallerSender(tc.pane, tc.caller); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("got %+v want %+v", got, tc.want)
+			}
+			c := Client{CallerPane: tc.pane, API: apiFunc(func(string, any) (any, error) {
+				if tc.caller == nil {
+					return nil, tc.err
+				}
+				return herdr.AgentResult{Type: "agent_info", Agent: *tc.caller}, nil
+			})}
+			if got := ResolveSender(context.Background(), c); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("ResolveSender got %+v want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestWithHeader(t *testing.T) {
 	for _, tc := range []struct {
 		sender      Sender

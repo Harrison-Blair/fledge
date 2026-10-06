@@ -74,7 +74,6 @@ func TestOwnerCompletionNotifiesCreator(t *testing.T) {
 	c := tasktest.Client(t, repo, "w1:p3",
 		tasktest.Get("w1:p3", worker),
 		tasktest.Get("w1:p1", boss),
-		tasktest.Get("w1:p3", worker),
 		herdrscript.Call{Method: "agent.prompt", Params: map[string]any{"target": "w1:p1", "text": completionMessage(id)}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: boss.Agent}},
 	)
 	out := run(context.Background(), c, Options{ID: id, Summary: "all done", SummarySet: true}, strings.NewReader(""), "m-0a1b2c")
@@ -186,7 +185,6 @@ func TestCompletionNotificationFailuresAreRecorded(t *testing.T) {
 			c := tasktest.Client(t, repo, "w1:p3",
 				tasktest.Get("w1:p3", worker),
 				tasktest.Get("w1:p1", boss),
-				tasktest.Get("w1:p3", worker),
 				herdrscript.Call{Method: "agent.prompt", Err: tc.remote},
 			)
 			out := run(context.Background(), c, Options{ID: id, Summary: "all done", SummarySet: true}, strings.NewReader(""), "m-0a1b2c")
@@ -217,7 +215,6 @@ func TestNotificationOutcomeSurvivesLaterTaskState(t *testing.T) {
 			c := tasktest.Client(t, repo, "w1:p3",
 				tasktest.Get("w1:p3", worker),
 				tasktest.Get("w1:p1", boss),
-				tasktest.Get("w1:p3", worker),
 				herdrscript.Call{Method: "agent.prompt", Result: herdr.AgentResult{Type: "agent_prompted", Agent: boss.Agent}, Before: func() {
 					_, err := task.Update(mustStore(t, repo), id, func(r *task.Record) error {
 						r.Status = status
@@ -308,7 +305,6 @@ func TestNotificationNotRecordedAfterChange(t *testing.T) {
 	c := tasktest.Client(t, repo, "w1:p3",
 		tasktest.Get("w1:p3", worker),
 		tasktest.Get("w1:p1", boss),
-		tasktest.Get("w1:p3", worker),
 		herdrscript.Call{Method: "agent.prompt", Result: herdr.AgentResult{Type: "agent_prompted", Agent: boss.Agent}, Before: func() {
 			if _, err := task.Update(mustStore(t, repo), id, func(r *task.Record) error { r.CompletionNotification.MessageID = "m-ffffff"; return nil }); err != nil {
 				t.Fatal(err)
@@ -387,4 +383,39 @@ func loadAgent(t *testing.T, repo, id string) identity.Record {
 		t.Fatal(err)
 	}
 	return rec
+}
+
+// The notice's sender reuses the caller lookup that identified the completer,
+// so completion asks Herdr for the caller once, and the header matches the one
+// a separate lookup gives for the same caller.
+func TestCompletionNoticeSenderReusesCallerLookup(t *testing.T) {
+	unnamed := tasktest.Agent("w1:p5", "term_other", "")
+	unnamed.Agent.Name = nil
+	stranger := tasktest.Agent("w1:p5", "term_other", "stranger")
+	notice := func(id string) string {
+		return "task completed: " + id + " · title: Fix it · read result: fledge task get --id " + id + " · verify with: fledge task verify --id " + id + " --summary \"...\""
+	}
+	for _, tc := range []struct {
+		name, pane string
+		caller     []herdrscript.Call
+		header     string
+	}{
+		{"unregistered named agent", "w1:p5", []herdrscript.Call{tasktest.Get("w1:p5", stranger)}, "ᛉ fledge message from stranger (w1:p5) · id m-0a1b2c · reply: fledge agent message --name stranger"},
+		{"unnamed agent", "w1:p5", []herdrscript.Call{tasktest.Get("w1:p5", unnamed)}, "ᛉ fledge message from unnamed agent (w1:p5) · id m-0a1b2c"},
+		{"not an agent", "w1:p9", []herdrscript.Call{{Method: "agent.get", Params: map[string]any{"target": "w1:p9"}, Err: &herdr.Error{Code: "agent_not_found", Message: "none"}}}, "ᛉ fledge message from pane w1:p9 · id m-0a1b2c"},
+		{"outside Herdr", "", nil, "ᛉ fledge message from unknown sender · id m-0a1b2c"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := identitytest.Repository(t)
+			creator := tasktest.Register(t, repo, boss)
+			owner := tasktest.Register(t, repo, worker)
+			id := tasktest.Seed(t, repo, task.Record{Title: "Fix it", Status: task.Assigned, Owner: &owner.ID, CreatedBy: &creator.ID})
+			calls := append(tc.caller, tasktest.Get("w1:p1", boss),
+				herdrscript.Call{Method: "agent.prompt", Params: map[string]any{"target": "w1:p1", "text": tc.header + "\n" + notice(id)}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: boss.Agent}})
+			out := run(context.Background(), tasktest.Client(t, repo, tc.pane, calls...), Options{ID: id, Summary: "done", SummarySet: true, Force: true}, strings.NewReader(""), "m-0a1b2c")
+			if n := tasktest.Load(t, repo, id).CompletionNotification; out.Error != nil || n == nil || n.DeliveredAt == nil {
+				t.Fatalf("%+v %+v", out.Error, n)
+			}
+		})
+	}
 }
