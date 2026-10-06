@@ -1095,6 +1095,44 @@ func TestRecordWithoutNativeSessionReadsNil(t *testing.T) {
 	}
 }
 
+func TestObserveStoresTheLiveSessionBestEffort(t *testing.T) {
+	rec := Record{ID: "0000aaaa"}
+	s1 := nativeSession("s1")
+	stored := Record{ID: "0000aaaa", NativeSession: &NativeSessionRef{Value: "s1"}}
+	now := time.Date(2026, 9, 24, 5, 0, 0, 0, time.UTC)
+	var seen string
+	ok := func(_ *state.Store, id string, s herdr.AgentSession, at time.Time) (Record, bool, error) {
+		seen = id + " " + *s.Value + " " + at.Format(time.RFC3339)
+		return stored, true, nil
+	}
+	out := libagent.Outcome{}
+	if got := Observe(nil, ok, rec, &herdr.AgentDetails{AgentSession: &s1}, now, &out); !reflect.DeepEqual(got, stored) || seen != "0000aaaa s1 2026-09-24T05:00:00Z" ||
+		!reflect.DeepEqual(out.Effects, []libagent.Effect{{Action: "updated", Kind: "native_session", ID: "0000aaaa"}}) {
+		t.Fatalf("%+v %q %+v", got, seen, out.Effects)
+	}
+	failing := func(*state.Store, string, herdr.AgentSession, time.Time) (Record, bool, error) {
+		return Record{}, false, errors.New("read-only")
+	}
+	out = libagent.Outcome{Status: "success"}
+	if got := Observe(nil, failing, rec, &herdr.AgentDetails{AgentSession: &s1}, now, &out); !reflect.DeepEqual(got, rec) || out.Error != nil ||
+		!reflect.DeepEqual(out.Effects, []libagent.Effect{{Action: "warning", Kind: "native_session", ID: "0000aaaa"}}) {
+		t.Fatalf("%+v %+v", got, out)
+	}
+	unchanged := func(*state.Store, string, herdr.AgentSession, time.Time) (Record, bool, error) {
+		return stored, false, nil
+	}
+	out = libagent.Outcome{}
+	if got := Observe(nil, unchanged, rec, &herdr.AgentDetails{AgentSession: &s1}, now, &out); !reflect.DeepEqual(got, stored) || len(out.Effects) != 0 {
+		t.Fatalf("%+v %+v", got, out)
+	}
+	for _, live := range []*herdr.AgentDetails{nil, {}} {
+		out = libagent.Outcome{}
+		if got := Observe(nil, failing, rec, live, now, &out); !reflect.DeepEqual(got, rec) || len(out.Effects) != 0 {
+			t.Fatalf("%+v %+v", got, out)
+		}
+	}
+}
+
 func TestObserveSessionWritesFirstRef(t *testing.T) {
 	c := client(t)
 	s := store(t, c)

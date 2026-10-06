@@ -18,7 +18,6 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
-	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	libusage "github.com/Harrison-Blair/fledge/internal/lib/usage"
 )
 
@@ -126,7 +125,7 @@ func row(ctx context.Context, s *state.Store, d harnessenv.Env, t selector.Targe
 		}
 	}
 	if live && rec != nil && a.AgentSession != nil {
-		observed := task.Observe(s, identity.ObserveSession, *rec, &a, now(), out)
+		observed := identity.Observe(s, identity.ObserveSession, *rec, &a, now(), out)
 		rec = &observed
 	}
 	var r Row

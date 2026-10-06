@@ -107,7 +107,7 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 	}
 	out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "task", ID: r.ID})
 	if caller != nil {
-		task.Observe(s, observeSession, *caller, live, time.Now(), &out)
+		identity.Observe(s, observeSession, *caller, live, time.Now(), &out)
 	}
 	out.Result = Result{Record: r, OpenSubtasks: open}
 	return out
@@ -150,4 +150,4 @@ func Render(w io.Writer, o libagent.Outcome) error {
 }
 
 // observeSession is replaceable so tests can fail the session write.
-var observeSession task.Observer = identity.ObserveSession
+var observeSession identity.Observer = identity.ObserveSession

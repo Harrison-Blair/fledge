@@ -322,7 +322,7 @@ func TestAssignCapturesOwnerSessionRef(t *testing.T) {
 	failing := func(*state.Store, string, herdr.AgentSession, time.Time) (identity.Record, bool, error) {
 		return identity.Record{}, false, errors.New("read-only store")
 	}
-	for label, observe := range map[string]task.Observer{"stored": identity.ObserveSession, "failing store": failing} {
+	for label, observe := range map[string]identity.Observer{"stored": identity.ObserveSession, "failing store": failing} {
 		t.Run(label, func(t *testing.T) {
 			old := observeSession
 			t.Cleanup(func() { observeSession = old })

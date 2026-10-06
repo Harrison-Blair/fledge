@@ -10,7 +10,6 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
-	"github.com/Harrison-Blair/fledge/internal/lib/task"
 )
 
 // Options selects the agent to adopt: Pane, or the caller's own pane when
@@ -94,7 +93,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			return out
 		}
 		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "agent_record", ID: rec.ID})
-		out.Result = Result{Record: task.Observe(store, observeSession, rec, &a, time.Now(), &out), Renamed: true}
+		out.Result = Result{Record: identity.Observe(store, observeSession, rec, &a, time.Now(), &out), Renamed: true}
 	} else {
 		rec, err := identity.Register(ctx, store, c, a, "adopt", nil, nil)
 		if err != nil {
@@ -102,7 +101,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			return out
 		}
 		out.Effects = append(out.Effects, libagent.Effect{Action: "created", Kind: "agent_record", ID: rec.ID})
-		out.Result = Result{Record: task.Observe(store, observeSession, rec, &a, time.Now(), &out), Renamed: renamed}
+		out.Result = Result{Record: identity.Observe(store, observeSession, rec, &a, time.Now(), &out), Renamed: renamed}
 	}
 	if renamed {
 		// Label records its own failure on out.
@@ -117,7 +116,7 @@ var registered = identity.Registered
 
 // observeSession is replaceable so tests can fail its write. The agent is
 // already adopted, so a failed write is only a warning effect.
-var observeSession task.Observer = identity.ObserveSession
+var observeSession identity.Observer = identity.ObserveSession
 
 // Render writes a successful adoption.
 func Render(w io.Writer, o libagent.Outcome) error {

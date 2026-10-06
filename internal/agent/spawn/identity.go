@@ -6,7 +6,6 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
-	"github.com/Harrison-Blair/fledge/internal/lib/task"
 )
 
 // register records the started agent a with the name of any profile it was
@@ -31,11 +30,11 @@ func (s *spawner) register(ctx context.Context, a herdr.AgentDetails, out *libag
 	}
 	result.ID, result.Registered = &rec.ID, true
 	out.Effects = append(out.Effects, libagent.Effect{Action: "created", Kind: "agent_record", ID: rec.ID})
-	task.Observe(store, observeSession, rec, &a, s.now(), out)
+	identity.Observe(store, observeSession, rec, &a, s.now(), out)
 }
 
 // observeSession is replaceable so tests can fail its write.
-var observeSession task.Observer = identity.ObserveSession
+var observeSession identity.Observer = identity.ObserveSession
 
 // withHarness returns a with the requested harness when Herdr has not
 // classified the agent yet, as after agent.start or an early agent.wait, so a

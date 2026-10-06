@@ -430,6 +430,27 @@ func ObserveSession(s *state.Store, id string, session herdr.AgentSession, now t
 	return rec, changed, err
 }
 
+// Observer is ObserveSession, replaceable in tests.
+type Observer func(s *state.Store, id string, session herdr.AgentSession, now time.Time) (Record, bool, error)
+
+// Observe stores live's session ref on rec through observe, as seen at now,
+// and returns the updated record. It is best effort: a failed write is a
+// warning effect and rec is returned as it was.
+func Observe(s *state.Store, observe Observer, rec Record, live *herdr.AgentDetails, now time.Time, out *libagent.Outcome) Record {
+	if live == nil || live.AgentSession == nil {
+		return rec
+	}
+	updated, changed, err := observe(s, rec.ID, *live.AgentSession, now)
+	switch {
+	case err != nil:
+		out.Effects = append(out.Effects, libagent.Effect{Action: "warning", Kind: "native_session", ID: rec.ID})
+		return rec
+	case changed:
+		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "native_session", ID: rec.ID})
+	}
+	return updated
+}
+
 // Match returns the live record of a's terminal, or nil when none exists. A
 // record left by a different harness is not a's: Match ends it and returns nil.
 func Match(s *state.Store, a herdr.AgentDetails) (*Record, error) {
