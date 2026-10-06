@@ -3,6 +3,7 @@ package create
 import (
 	"bytes"
 	"context"
+	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -197,5 +198,15 @@ func TestCreateRejectsUnknownPrerequisites(t *testing.T) {
 		if want := map[bool]string{true: "invalid_input", false: "task_not_found"}[after[0] == "BAD"]; out.Error.Code != want {
 			t.Fatalf("%v: %+v", after, out.Error)
 		}
+	}
+}
+
+func TestRenderRemovesControlSequences(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Render(&buf, libagent.Outcome{Result: task.Record{ID: "11111111", Title: "X\x1b[2J\x1b]0;pwned\x07"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := buf.String(); strings.ContainsAny(got, "\x1b\x07") || !strings.Contains(got, "X") {
+		t.Fatalf("unsafe human output: %q", got)
 	}
 }

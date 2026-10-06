@@ -4,33 +4,13 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"unicode"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/termtext"
 	"github.com/charmbracelet/x/ansi"
 )
 
-// DisplayText is the sole boundary for dynamic terminal text. Strip established
-// escape sequences before filtering residual controls; preserve Unicode and lines.
-func DisplayText(text string) string {
-	// The ANSI parser accepts byte C1 sequences; normalize Unicode-encoded C1
-	// introductions before stripping, without corrupting other UTF-8 text.
-	text = strings.NewReplacer("\u009b", "\x1b[", "\u009d", "\x1b]", "\u0090", "\x1bP", "\u009c", "\x1b\\", "\u0098", "\x1bX", "\u009e", "\x1b^", "\u009f", "\x1b_").Replace(text)
-	text = ansi.Strip(text)
-	return strings.Map(func(r rune) rune {
-		if r == '\n' {
-			return r
-		}
-		if r == '\t' {
-			return ' '
-		}
-		if unicode.IsControl(r) || (unicode.Is(unicode.Cf, r) && r != '\u200d' && r != '\u200c') {
-			return -1
-		}
-		return r
-	}, text)
-}
-func singleLine(text string) string      { return strings.ReplaceAll(DisplayText(text), "\n", " ") }
+func singleLine(text string) string      { return strings.ReplaceAll(termtext.Clean(text), "\n", " ") }
 func clip(text string, width int) string { return ansi.Truncate(text, max(0, width), "") }
 
 func formatDetail(ctx context.Context, s *Snapshot, id, worker string, width int) []string {
@@ -42,7 +22,7 @@ func formatDetail(ctx context.Context, s *Snapshot, id, worker string, width int
 		return nil
 	}
 	var b strings.Builder
-	field := func(label, value string) { fmt.Fprintf(&b, "%s: %s\n", DisplayText(label), DisplayText(value)) }
+	field := func(label, value string) { fmt.Fprintf(&b, "%s: %s\n", termtext.Clean(label), termtext.Clean(value)) }
 	optional := func(label string, value *string) {
 		if value != nil {
 			field(label, *value)
@@ -97,12 +77,12 @@ func formatDetail(ctx context.Context, s *Snapshot, id, worker string, width int
 		field("Notification message", r.CompletionNotification.MessageID)
 	}
 	b.WriteString("\nBrief:\n")
-	b.WriteString(DisplayText(r.Brief))
+	b.WriteString(termtext.Clean(r.Brief))
 	if ctx.Err() != nil {
 		return nil
 	}
 	b.WriteString("\n\nResult:\n")
-	b.WriteString(DisplayText(libagent.Display(r.Result)))
+	b.WriteString(termtext.Clean(libagent.Display(r.Result)))
 	if ctx.Err() != nil {
 		return nil
 	}

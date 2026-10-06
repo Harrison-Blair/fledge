@@ -14,6 +14,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/proposal"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
+	"github.com/Harrison-Blair/fledge/internal/lib/termtext"
 )
 
 type Options struct {
@@ -215,7 +216,7 @@ func Render(w io.Writer, o libagent.Outcome) error {
 	if r.DryRun {
 		switch {
 		case r.newParent != "":
-			fmt.Fprintf(&b, "Would create parent task: %s\nWould create %s under it:\n", r.newParent, n)
+			fmt.Fprintf(&b, "Would create parent task: %s\nWould create %s under it:\n", termtext.Clean(r.newParent), n)
 		case r.Parent != nil:
 			fmt.Fprintf(&b, "Would create %s under %s:\n", n, *r.Parent)
 		default:
@@ -226,7 +227,7 @@ func Render(w io.Writer, o libagent.Outcome) error {
 			width = max(width, len(t.Key))
 		}
 		for _, t := range r.Tasks {
-			fmt.Fprintf(&b, "  %-*s  %s", width, t.Key, t.Title)
+			fmt.Fprintf(&b, "  %-*s  %s", width, t.Key, termtext.Clean(t.Title))
 			if len(t.After) > 0 {
 				fmt.Fprintf(&b, "  (after: %s)", strings.Join(t.After, ", "))
 			}
@@ -234,10 +235,10 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		}
 	} else {
 		if r.newParent != "" {
-			fmt.Fprintf(&b, "Created task %s: %s\n", *r.Parent, r.newParent)
+			fmt.Fprintf(&b, "Created task %s: %s\n", *r.Parent, termtext.Clean(r.newParent))
 		}
 		for _, t := range r.Tasks {
-			fmt.Fprintf(&b, "Created task %s (%s): %s\n", *t.ID, t.Key, t.Title)
+			fmt.Fprintf(&b, "Created task %s (%s): %s\n", *t.ID, t.Key, termtext.Clean(t.Title))
 		}
 		if r.newParent != "" {
 			fmt.Fprintf(&b, "Created %s under parent %s\n", n, *r.Parent)

@@ -10,6 +10,7 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
+	"github.com/Harrison-Blair/fledge/internal/lib/termtext"
 	"github.com/Harrison-Blair/fledge/internal/lib/usage"
 )
 
@@ -81,7 +82,7 @@ func Render(w io.Writer, o libagent.Outcome) error {
 	if r.CreatedBy != nil {
 		creator = *r.CreatedBy
 	}
-	fmt.Fprintf(&b, "id: %s\ntitle: %s\nstatus: %s\nowner: %s\n", r.ID, r.Title, r.Status, owner)
+	fmt.Fprintf(&b, "id: %s\ntitle: %s\nstatus: %s\nowner: %s\n", r.ID, termtext.Clean(r.Title), r.Status, owner)
 	if r.Parent != nil {
 		fmt.Fprintf(&b, "parent: %s\n", *r.Parent)
 	}
@@ -94,7 +95,7 @@ func Render(w io.Writer, o libagent.Outcome) error {
 			state := d.Status
 			switch {
 			case d.Status == task.Cancelled && d.CancelReason != nil:
-				state += ": " + *d.CancelReason
+				state += ": " + termtext.Clean(*d.CancelReason)
 			case !d.Satisfied:
 				state += ", waiting"
 			}
@@ -136,7 +137,7 @@ func Render(w io.Writer, o libagent.Outcome) error {
 	if r.CancelledAt != nil {
 		reason := ""
 		if r.CancelReason != nil {
-			reason = " (" + *r.CancelReason + ")"
+			reason = " (" + termtext.Clean(*r.CancelReason) + ")"
 		}
 		fmt.Fprintf(&b, "cancelled: %s%s\n", *r.CancelledAt, reason)
 	}
@@ -157,7 +158,7 @@ func text(b *strings.Builder, label string, s *string) {
 		return
 	}
 	fmt.Fprintf(b, "%s:\n", label)
-	for _, line := range strings.Split(strings.TrimRight(*s, "\n"), "\n") {
+	for _, line := range strings.Split(strings.TrimRight(termtext.Clean(*s), "\n"), "\n") {
 		fmt.Fprintf(b, "  %s\n", line)
 	}
 }

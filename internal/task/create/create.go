@@ -15,6 +15,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
+	"github.com/Harrison-Blair/fledge/internal/lib/termtext"
 )
 
 type Options struct {
@@ -114,6 +115,6 @@ func Render(w io.Writer, o libagent.Outcome) error {
 	if o.Error != nil || !ok {
 		return nil
 	}
-	_, err := fmt.Fprintf(w, "Created task %s: %s\n", r.ID, r.Title)
+	_, err := fmt.Fprintf(w, "Created task %s: %s\n", r.ID, termtext.Clean(r.Title))
 	return err
 }
