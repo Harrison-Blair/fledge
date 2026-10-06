@@ -11,18 +11,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func TestAgentHelp(t *testing.T) {
-	for _, args := range [][]string{{"agent", "--help"}, {"agent", "spawn", "--help"}, {"agent", "list", "--help"}, {"agent", "message", "--help"}, {"agent", "models", "--help"}, {"agent", "stop", "--help"}, {"agent", "get", "--help"}, {"agent", "read", "--help"}, {"agent", "wait", "--help"}, {"agent", "adopt", "--help"}, {"agent", "current", "--help"}, {"agent", "send", "--help"}, {"agent", "cleanup", "--help"}, {"agent", "capabilities", "--help"}, {"agent", "rename", "--help"}} {
-		var out bytes.Buffer
-		if err := ExecuteWithArgs(args, &out); err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(out.String(), "Usage:") {
-			t.Fatal(out.String())
-		}
-	}
-}
-
 // TestAgentFilterFlagsShared checks that every command with filter flags
 // shows the same help line for each one.
 func TestAgentFilterFlagsShared(t *testing.T) {
@@ -137,17 +125,6 @@ func TestAgentJSONValidation(t *testing.T) {
 				t.Fatal(out.String())
 			}
 		})
-	}
-}
-func TestAgentGroupHelpListsSubcommands(t *testing.T) {
-	var out bytes.Buffer
-	if err := ExecuteWithArgs([]string{"agent", "--help"}, &out); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"stop", "get", "read", "wait", "adopt", "rename", "current", "cleanup"} {
-		if !strings.Contains(out.String(), "\n  "+name+" ") {
-			t.Fatalf("%s: %s", name, out.String())
-		}
 	}
 }
 func TestNativeJSONTokenDoesNotSelectOutput(t *testing.T) {

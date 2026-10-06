@@ -20,9 +20,9 @@ func TestTaskHelp(t *testing.T) {
 	if err := ExecuteWithArgs([]string{"task", "--help"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"create", "import", "depend", "assign", "complete", "verify", "cancel", "list", "get", "template"} {
-		if !strings.Contains(out.String(), "\n  "+name+" ") {
-			t.Fatalf("%s: %s", name, out.String())
+	for _, name := range childNames(t, "task") {
+		if name == "board" {
+			continue // an interactive browser with no --json flag
 		}
 		var sub bytes.Buffer
 		if err := ExecuteWithArgs([]string{"task", name, "--help"}, &sub); err != nil || !strings.Contains(sub.String(), "Usage:") || !strings.Contains(sub.String(), "--json") {

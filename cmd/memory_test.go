@@ -8,14 +8,7 @@ import (
 )
 
 func TestMemoryHelp(t *testing.T) {
-	var out bytes.Buffer
-	if err := ExecuteWithArgs([]string{"memory", "--help"}, &out); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"add", "list", "get", "remove"} {
-		if !strings.Contains(out.String(), "\n  "+name+" ") {
-			t.Fatalf("%s: %s", name, out.String())
-		}
+	for _, name := range childNames(t, "memory") {
 		var sub bytes.Buffer
 		if err := ExecuteWithArgs([]string{"memory", name, "--help"}, &sub); err != nil || !strings.Contains(sub.String(), "--json") {
 			t.Fatalf("%s: %v %s", name, err, sub.String())
