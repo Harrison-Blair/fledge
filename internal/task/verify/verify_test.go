@@ -19,7 +19,6 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/tasktest"
-	"github.com/Harrison-Blair/fledge/internal/lib/usage"
 	"github.com/Harrison-Blair/fledge/internal/task/assign"
 	"github.com/Harrison-Blair/fledge/internal/task/complete"
 	"github.com/Harrison-Blair/fledge/internal/task/create"
@@ -376,43 +375,6 @@ func withSession(a herdr.AgentResult, value string) herdr.AgentResult {
 	return a
 }
 
-// Verification never records usage: a fresh task keeps null usage and any
-// historical usage stays exactly as it was, through first and repeat
-// verifications by registered and forced unregistered verifiers.
-func TestVerificationLeavesUsageUnchanged(t *testing.T) {
-	historical := &task.UsageSnapshot{Basis: usage.Measured, Turns: 9, CollectedAt: "2026-09-01T00:00:00Z"}
-	for label, u := range map[string]*task.Usage{
-		"fresh":         nil,
-		"worker only":   {Worker: historical},
-		"verifier only": {Verifier: historical},
-		"both":          {Worker: historical, Verifier: historical},
-	} {
-		repo, id := setup(t, task.Completed)
-		if _, err := task.Update(mustStore(t, repo), id, func(r *task.Record) error { r.Usage = u; return nil }); err != nil {
-			t.Fatal(err)
-		}
-		tasktest.Register(t, repo, boss)
-		for i, c := range []struct {
-			client libagent.Client
-			force  bool
-		}{
-			{tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p1", withSession(boss, "verify-1"))), false},
-			{tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p1", withSession(boss, "verify-2"))), false},
-			{tasktest.Client(t, repo, ""), true},
-		} {
-			before := tasktest.Load(t, repo, id)
-			out := Run(context.Background(), c.client, Options{ID: id, Force: c.force}, strings.NewReader(""))
-			r := tasktest.Load(t, repo, id)
-			if out.Error != nil || r.Status != task.Verified || !reflect.DeepEqual(r.Usage, before.Usage) || !reflect.DeepEqual(r.Usage, u) || !reflect.DeepEqual(out.Result, Result{Record: r, OpenSubtasks: []string{}}) {
-				t.Fatalf("%s #%d: %+v %+v", label, i, out.Error, r.Usage)
-			}
-			if slices.ContainsFunc(out.Effects, func(e libagent.Effect) bool { return e.Kind == "usage" }) {
-				t.Fatalf("%s #%d: %+v", label, i, out.Effects)
-			}
-		}
-	}
-}
-
 // A registered verifier's live session ref is stored on each verification;
 // an unregistered forced verifier observes nothing.
 func TestVerificationCapturesVerifierSessionRef(t *testing.T) {
@@ -446,7 +408,7 @@ func TestVerificationSucceedsWhenSessionWriteFails(t *testing.T) {
 	bossRec := tasktest.Register(t, repo, boss)
 	out := Run(context.Background(), tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p1", withSession(boss, "s"))), Options{ID: id}, strings.NewReader(""))
 	r := tasktest.Load(t, repo, id)
-	if out.Error != nil || r.Status != task.Verified || *r.Verifier != bossRec.ID || r.Usage != nil ||
+	if out.Error != nil || r.Status != task.Verified || *r.Verifier != bossRec.ID ||
 		!slices.Contains(out.Effects, libagent.Effect{Action: "warning", Kind: "native_session", ID: bossRec.ID}) {
 		t.Fatalf("%+v %+v %+v", out.Error, r, out.Effects)
 	}

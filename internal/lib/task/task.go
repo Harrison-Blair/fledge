@@ -34,7 +34,6 @@ var Statuses = []string{Created, Assigned, Completed, Verified, Cancelled}
 // is the task this one was created under; it never changes. After lists the
 // prerequisite task ids in declaration order. UnmetAtAssign is set only when
 // a forced assign bypassed prerequisites, naming the ones still unmet then.
-// Usage is null except on records given snapshots by earlier versions.
 type Record struct {
 	ID                     string                  `json:"id"`
 	Title                  string                  `json:"title"`
@@ -57,7 +56,6 @@ type Record struct {
 	VerifiedAt             *string                 `json:"verified_at"`
 	CancelledAt            *string                 `json:"cancelled_at"`
 	Delivery               *Delivery               `json:"delivery"`
-	Usage                  *Usage                  `json:"usage"`
 }
 
 // CompletionNotification is the outcome of notifying a task's registered

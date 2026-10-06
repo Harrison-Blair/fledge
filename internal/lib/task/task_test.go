@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
@@ -150,5 +151,36 @@ func TestOldestFirstBreaksTimeTiesByID(t *testing.T) {
 	}
 	if want := []string{"000000ff", "0000000a", "0000000b", "0000000c"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+// legacyUsage is a usage snapshot as unreleased development builds stored it.
+const legacyUsage = `{"worker":{"agent_id":"aaaaaaaa","harness":"claude","session":{"kind":"id","value":"s"},"window":{"from":"a","to":"b"},"elapsed_seconds":40,"tokens":{"input":1,"output":2,"cache_read":3,"cache_write":4},"cost":null,"models":["m"],"turns":9,"basis":"measured","reason":null,"collected_at":"2026-09-01T00:00:00Z"},"verifier":null}`
+
+// A record with a stored usage snapshot still loads and updates; the update
+// drops the snapshot.
+func TestUpdateDropsLegacyUsage(t *testing.T) {
+	s, err := identity.OpenStore(context.Background(), identitytest.Repository(t), &libagent.Outcome{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.Create(Kind, func(id string) any {
+		return map[string]any{"id": id, "title": "t", "status": Assigned, "usage": json.RawMessage(legacyUsage)}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Get(s, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Update(s, id, func(r *Record) error { r.Status = Completed; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	var stored map[string]json.RawMessage
+	if err := s.Get(Kind, id, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stored["usage"]; ok || string(stored["status"]) != `"completed"` {
+		t.Fatalf("%s", stored)
 	}
 }

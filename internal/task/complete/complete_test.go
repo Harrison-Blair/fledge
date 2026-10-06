@@ -18,7 +18,6 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/tasktest"
-	"github.com/Harrison-Blair/fledge/internal/lib/usage"
 )
 
 var (
@@ -332,48 +331,12 @@ func withSession(a herdr.AgentResult, value string) herdr.AgentResult {
 	return a
 }
 
-// Completion never records usage: a fresh task keeps null usage and any
-// historical usage stays exactly as it was, for owner and forced completions.
-func TestCompletionLeavesUsageUnchanged(t *testing.T) {
-	historical := &task.UsageSnapshot{Basis: usage.Measured, Turns: 9, CollectedAt: "2026-09-01T00:00:00Z"}
-	for label, u := range map[string]*task.Usage{
-		"fresh":         nil,
-		"worker only":   {Worker: historical},
-		"verifier only": {Verifier: historical},
-		"both":          {Worker: historical, Verifier: historical},
-	} {
-		for _, force := range []bool{false, true} {
-			repo := identitytest.Repository(t)
-			tasktest.Register(t, repo, boss)
-			owner := tasktest.Register(t, repo, worker)
-			id := tasktest.Seed(t, repo, task.Record{Title: "t", Status: task.Assigned, Owner: &owner.ID, Usage: u})
-			before := tasktest.Load(t, repo, id)
-			var c libagent.Client
-			if force {
-				c = tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p1", boss))
-			} else {
-				c = tasktest.Client(t, repo, "w1:p3", tasktest.Get("w1:p3", withSession(worker, "sess-1")))
-			}
-			out := Run(context.Background(), c, Options{ID: id, Summary: "done", SummarySet: true, Force: force}, strings.NewReader(""))
-			r := tasktest.Load(t, repo, id)
-			want := before
-			want.Status, want.Result, want.CompletedAt = task.Completed, tasktest.Ptr("done"), r.CompletedAt
-			if out.Error != nil || !reflect.DeepEqual(r, want) || !reflect.DeepEqual(out.Result, r) {
-				t.Fatalf("%s force=%v: %+v\ngot  %+v\nwant %+v", label, force, out.Error, r, want)
-			}
-			if slices.ContainsFunc(out.Effects, func(e libagent.Effect) bool { return e.Kind == "usage" }) {
-				t.Fatalf("%s force=%v: %+v", label, force, out.Effects)
-			}
-		}
-	}
-}
-
 // The owner completing its task stores its live session ref.
 func TestOwnerCompletionCapturesSessionRef(t *testing.T) {
 	repo, id := setup(t, task.Assigned)
 	owner := *tasktest.Load(t, repo, id).Owner
 	out := Run(context.Background(), tasktest.Client(t, repo, "w1:p3", tasktest.Get("w1:p3", withSession(worker, "sess-1"))), Options{ID: id, Summary: "done", SummarySet: true}, strings.NewReader(""))
-	if out.Error != nil || tasktest.Load(t, repo, id).Usage != nil {
+	if out.Error != nil {
 		t.Fatalf("%+v", out.Error)
 	}
 	if rec := loadAgent(t, repo, owner); rec.NativeSession == nil || rec.NativeSession.Value != "sess-1" {
@@ -409,7 +372,7 @@ func TestCompletionSucceedsWhenSessionWriteFails(t *testing.T) {
 	owner := *tasktest.Load(t, repo, id).Owner
 	out := Run(context.Background(), tasktest.Client(t, repo, "w1:p3", tasktest.Get("w1:p3", withSession(worker, "sess-1"))), Options{ID: id, Summary: "done", SummarySet: true}, strings.NewReader(""))
 	r := tasktest.Load(t, repo, id)
-	if out.Error != nil || out.Status != "success" || r.Status != task.Completed || r.Usage != nil {
+	if out.Error != nil || out.Status != "success" || r.Status != task.Completed {
 		t.Fatalf("%+v %+v", out.Error, r)
 	}
 	if !slices.Contains(out.Effects, libagent.Effect{Action: "warning", Kind: "native_session", ID: owner}) {
