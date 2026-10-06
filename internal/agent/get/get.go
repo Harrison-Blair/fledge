@@ -68,13 +68,14 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 }
 
 // liveRecord finds a's record for display, ending one left by a different
-// harness; an unavailable store only means no record is shown.
+// harness; an unavailable store or a failed end only means no record is
+// shown.
 func liveRecord(ctx context.Context, cwd string, a herdr.AgentDetails) *identity.Record {
 	s, err := identity.Existing(ctx, cwd)
 	if err != nil || s == nil {
 		return nil
 	}
-	rec, _ := identity.Match(s, a)
+	rec, _ := identity.LiveEndingMismatched(s, a)
 	return rec
 }
 

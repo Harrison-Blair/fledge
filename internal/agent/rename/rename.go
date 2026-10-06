@@ -67,7 +67,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	out.Result = result
 	s, err := identity.Existing(ctx, c.Cwd)
 	if err == nil && s != nil && rec == nil {
-		rec, err = identity.Match(s, a)
+		rec, err = identity.LiveEndingMismatched(s, a)
 		if err != nil {
 			out.Fail(err, "state", false)
 			return out

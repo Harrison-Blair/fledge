@@ -224,7 +224,7 @@ func CallerAgent(ctx context.Context, s *state.Store, c libagent.Client) (*Recor
 	if err != nil || caller == nil {
 		return nil, nil, err
 	}
-	rec, err := Match(s, *caller)
+	rec, err := LiveEndingMismatched(s, *caller)
 	if err != nil || rec == nil {
 		return nil, nil, err
 	}
@@ -451,9 +451,10 @@ func Observe(s *state.Store, observe Observer, rec Record, live *herdr.AgentDeta
 	return updated
 }
 
-// Match returns the live record of a's terminal, or nil when none exists. A
-// record left by a different harness is not a's: Match ends it and returns nil.
-func Match(s *state.Store, a herdr.AgentDetails) (*Record, error) {
+// LiveEndingMismatched returns the live record of a's terminal, or nil when
+// none exists. A record left by a different harness is not a's:
+// LiveEndingMismatched ends it and returns nil.
+func LiveEndingMismatched(s *state.Store, a herdr.AgentDetails) (*Record, error) {
 	rec, err := Live(s, a.TerminalID)
 	if err != nil || rec == nil || !Mismatched(*rec, a) {
 		return rec, err
