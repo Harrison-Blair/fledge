@@ -1417,35 +1417,27 @@ as a `fail`, not a crash.
 
 ## Layout
 
-- `main.go` delegates to `cmd.Execute()` and handles the exit status.
-- `cmd/` constructs fresh command trees with `NewRootCmd()` and provides
-  `ExecuteWithArgs()` for tests.
-- `cmd/<name>/` and `cmd/<parent>/<subcommand>/` contain thin Cobra wiring;
-  `internal/` mirrors that command nesting as `internal/<name>/` and
-  `internal/<parent>/<subcommand>/`.
-- Each internal command leaf owns its options, orchestration, result types,
-  human rendering, and tests. Internal parent packages may coordinate nested
-  components, as `doctor` does with `checks`/`report` and `update` with
-  `release`/`archive`/`install`/`confirm`; child packages do not import their
-  parents.
-- `internal/lib/<capability>/` contains focused shared code used by multiple
-  commands or packages; do not create one flat grab-bag lib package and do not
-  extract speculative utilities.
-- `internal/lib/version` reports the release tag or Go build metadata through
-  `--version` and `-V`, without a maintained version file.
-- `internal/lib/harness` is the single source of per-harness facts: the kinds,
-  one typed profile per kind that `agent pause`, `agent spawn`, and `agent models`
-  read, and the fixed capability rows derived from it. It imports nothing from Fledge.
-- `internal/lib/memory` stores memory files and their generated index for the
-  `memory` commands and the spawn brief.
-- `internal/lib/usage` reads a harness session's measured tokens and
-  harness-recorded cost estimate from claude, codex, and pi session files and
-  `opencode export`, optionally filtered to a time window, for `agent usage`;
-  missing or unreadable data is
-  `unavailable` with a reason.
+[AGENTS.md](AGENTS.md#layout) holds the contributor rules for package structure.
+This map is a starting point. A package with several files has a `doc.go` that
+summarizes them.
 
-New subcommands export `New() *cobra.Command` and are registered by their parent.
-Internal packages do not import Cobra or `cmd/`.
+- `main.go` is the installable entrypoint; `cmd/` holds the root command and the
+  thin Cobra wiring for each subcommand.
+- `internal/<name>/` and `internal/<parent>/<subcommand>/` implement each command.
+- `internal/lib/<capability>/` holds code that several commands share. Some
+  examples:
+  - `internal/lib/version` reports the release tag or Go build metadata through
+    `--version` and `-V`, without a maintained version file.
+  - `internal/lib/harness` is the single source of per-harness facts: the kinds,
+    one typed profile per kind that `agent pause`, `agent spawn`, and `agent models`
+    read, and the fixed capability rows derived from it. It imports nothing from Fledge.
+  - `internal/lib/memory` stores memory files and their generated index for the
+    `memory` commands and the spawn brief.
+  - `internal/lib/usage` reads a harness session's measured tokens and
+    harness-recorded cost estimate from claude, codex, and pi session files and
+    `opencode export`, optionally filtered to a time window, for `agent usage`;
+    missing or unreadable data is
+    `unavailable` with a reason.
 
 ## Development
 
