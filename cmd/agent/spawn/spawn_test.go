@@ -6,14 +6,13 @@ import (
 	"testing"
 )
 
-func TestNoFlagsWithoutTerminalKeepsValidationError(t *testing.T) {
+func TestNoFlagsRequiresName(t *testing.T) {
 	// Never reach a live Herdr socket, even if the terminal guard regresses.
 	t.Setenv("HERDR_ENV", "")
 	t.Setenv("HERDR_SOCKET_PATH", "")
 	var out bytes.Buffer
 	cmd := New()
 	cmd.SetArgs([]string{})
-	cmd.SetIn(strings.NewReader("claude\n\nworker\n\n"))
 	cmd.SetOut(&out)
 	cmd.SilenceUsage, cmd.SilenceErrors = true, true
 	if err := cmd.Execute(); err == nil {
