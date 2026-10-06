@@ -7,7 +7,6 @@ import (
 	"io"
 	"slices"
 	"strings"
-	"sync"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
@@ -40,7 +39,16 @@ func fanOut(ctx context.Context, c libagent.Client, o Options, targets []selecto
 	out := libagent.Outcome{Operation: "agent.message", Status: "success", Effects: []libagent.Effect{}}
 	result := FanOut{Mode: "fan-out", Targets: []Row{}}
 	var failures, codes []string
-	store := sync.OnceValues(func() (*state.Store, error) { return identity.Existing(ctx, c.Cwd) })
+	var opened *state.Store
+	var ok bool
+	store := func() (*state.Store, error) {
+		if ok {
+			return opened, nil
+		}
+		s, err := identity.Existing(ctx, c.Cwd)
+		opened, ok = s, err == nil
+		return s, err
+	}
 	for _, t := range targets {
 		one := reread(ctx, c, o, &t, id, sender, store)
 		if one.Error == nil {
@@ -76,9 +84,10 @@ func fanOut(ctx context.Context, c libagent.Client, o Options, targets []selecto
 // deliveries give it time to change. A registered target is resolved again
 // from its record, following its terminal to a new pane and rejecting one
 // gone or now running another harness, so the message never reaches whatever
-// replaced it; store opens the store once for every such reread. Any other
-// target's status is reread for a confirmed message; the already-working
-// decision needs the status at sending. A failed read rejects the target.
+// replaced it; store opens the store for these rereads and keeps it only once
+// an open succeeds. Any other target's status is reread for a confirmed
+// message; the already-working decision needs the status at sending. A failed
+// read rejects the target.
 func reread(ctx context.Context, c libagent.Client, o Options, t *selector.Target, id string, sender *libagent.Sender, store func() (*state.Store, error)) libagent.Outcome {
 	out := libagent.Outcome{Operation: "agent.message", Status: "success", Effects: []libagent.Effect{}}
 	a, pane, rec, err := t.Agent, t.Pane, t.Record, error(nil)
