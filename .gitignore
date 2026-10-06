@@ -11,6 +11,11 @@
 !*.md
 !LICENSE
 
+# Herdr reference captures kept by reference/herdr/RESYNC.md
+!reference/herdr/raw/schema.json
+!reference/herdr/raw/llms.txt
+!reference/herdr/raw/default-config.toml
+
 # Repo config
 !.gitignore
 !.github/**

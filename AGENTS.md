@@ -11,7 +11,8 @@ Fledge is a Go CLI built with Cobra.
 ## .gitignore policy
 
 `.gitignore` is allowlist-style: it ignores everything (`*`) and then explicitly allows
-Go source, `go.mod`/`go.sum`, Markdown docs, `LICENSE`, `.github/`, and test fixtures.
+Go source, `go.mod`/`go.sum`, Markdown docs, `LICENSE`, `.github/`, test fixtures,
+and the Herdr raw captures in `reference/herdr/raw/` that `RESYNC.md` keeps.
 Keep it small. Only add a new `!` allow rule when a file the project genuinely needs
 is being ignored, and add the narrowest pattern that covers it. Never remove the
 leading `*`.
