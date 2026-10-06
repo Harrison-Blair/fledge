@@ -13,6 +13,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/harnessenv"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
@@ -50,7 +51,7 @@ var now = time.Now
 // come from the live agent when present, else from its record, so an --id
 // whose agent has ended still reports. A live ref is persisted on the agent's
 // record; a failed write is only a warning effect.
-func Run(ctx context.Context, c libagent.Client, d libusage.Discovery, o Options) libagent.Outcome {
+func Run(ctx context.Context, c libagent.Client, d harnessenv.Env, o Options) libagent.Outcome {
 	out := libagent.Outcome{Operation: "agent.usage", Status: "success", Effects: []libagent.Effect{}}
 	if err := o.Selection.Validate(); err != nil {
 		out.Fail(err, "validation", false)
@@ -116,7 +117,7 @@ func stored(ctx context.Context, cwd, id string) (*identity.Record, error) {
 	return &rec, nil
 }
 
-func row(ctx context.Context, s *state.Store, d libusage.Discovery, t selector.Target, out *libagent.Outcome) Row {
+func row(ctx context.Context, s *state.Store, d harnessenv.Env, t selector.Target, out *libagent.Outcome) Row {
 	a, rec := t.Agent, t.Record
 	live := a.TerminalID != ""
 	if rec == nil && live && s != nil {

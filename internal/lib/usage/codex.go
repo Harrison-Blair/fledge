@@ -6,6 +6,8 @@ import (
 	"errors"
 	"slices"
 	"time"
+
+	"github.com/Harrison-Blair/fledge/internal/lib/harnessenv"
 )
 
 // errAmbiguousCodex reports local totals followed by a fork's inherited total,
@@ -43,7 +45,7 @@ func (u codexUsage) minus(o codexUsage) codexUsage {
 // whose first session_meta names a parent_thread_id, totals before the first
 // valid turn_context are the parent's: they are a baseline, never usage. A
 // local total followed by such an inherited total makes usage unavailable.
-func readCodex(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error) {
+func readCodex(_ context.Context, d harnessenv.Env, ref Ref, w Window) (*tally, error) {
 	path, err := Locate(d, "codex", ref)
 	if err != nil {
 		return nil, err

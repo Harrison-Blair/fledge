@@ -4,7 +4,7 @@ package usage
 import (
 	"github.com/Harrison-Blair/fledge/internal/agent/usage"
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
-	libusage "github.com/Harrison-Blair/fledge/internal/lib/usage"
+	"github.com/Harrison-Blair/fledge/internal/lib/harnessenv"
 	"github.com/spf13/cobra"
 )
 
@@ -14,7 +14,7 @@ func New() *cobra.Command {
 	cmd := &cobra.Command{Use: "usage", Short: "Report token and cost usage per agent from harness session stores", Args: cobra.NoArgs,
 		Long: "Report each selected agent's whole-session usage: models, turns, input,\noutput, and cache tokens, harness-recorded cost, and elapsed time since\nregistration. Tokens are measured from the harness's own session store; a\ncost is only what the harness recorded, shown as an estimate. An agent whose\nusage cannot be read has basis unavailable and the reason.\n\nEach agent's harness and native session ref come from the live agent, else\nfrom its Fledge record, so --id also reports an agent that has ended. A live\nref is recorded on the agent's record. Harness-internal sub-agents count in\nthe agent's totals and appear as subagents in --json.\n\nRepeat --name, --pane, or --id, or use filter flags instead. Filter flags AND\ntogether; repeating one ORs its values; matches never include the caller.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return libagent.Finish(usage.Run(cmd.Context(), libagent.FromEnvironment(0), libusage.LocalDiscovery(), options), cmd.OutOrStdout(), asJSON, usage.Render)
+			return libagent.Finish(usage.Run(cmd.Context(), libagent.FromEnvironment(0), harnessenv.Local(), options), cmd.OutOrStdout(), asJSON, usage.Render)
 		}}
 	f := cmd.Flags()
 	f.StringArrayVar(&options.Names, "name", nil, "Live agent name (repeatable)")

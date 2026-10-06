@@ -11,6 +11,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/harnessenv"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
@@ -32,7 +33,7 @@ const piSession = `{"type":"session","version":3,"id":"pi-1","timestamp":"2026-0
 type fixture struct {
 	cwd     string
 	session string
-	d       libusage.Discovery
+	d       harnessenv.Env
 }
 
 func newFixture(t *testing.T) fixture {
@@ -50,7 +51,7 @@ func newFixture(t *testing.T) fixture {
 		t.Fatal("file readers must not run commands")
 		return nil, nil
 	}
-	return fixture{cwd: identitytest.Repository(t), session: session, d: libusage.Discovery{Home: home, Run: run}}
+	return fixture{cwd: identitytest.Repository(t), session: session, d: harnessenv.Env{Home: home, Run: run}}
 }
 
 // piAgent is a live pi agent named name in pane with terminal, reporting
