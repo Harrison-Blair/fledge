@@ -14,8 +14,20 @@ func (c Client) Ping(ctx context.Context) (PongResult, error) {
 	return r, nil
 }
 
+// Caller sends one Herdr request; Client and operation clients that locate
+// failures by phase both satisfy it.
+type Caller interface {
+	Call(ctx context.Context, method string, params any, result any) error
+}
+
 // IntegrationList reads every known integration target and its install state.
 func (c Client) IntegrationList(ctx context.Context) (IntegrationListResult, error) {
+	return IntegrationList(ctx, c)
+}
+
+// IntegrationList sends integration.list through c, returning c's error
+// unchanged and rejecting an incomplete result as an uncertain protocol error.
+func IntegrationList(ctx context.Context, c Caller) (IntegrationListResult, error) {
 	var r IntegrationListResult
 	if err := c.Call(ctx, "integration.list", nil, &r); err != nil {
 		return IntegrationListResult{}, err
