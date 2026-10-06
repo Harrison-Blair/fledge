@@ -72,21 +72,9 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 	var r task.Record
 	phase := "state"
 	err = s.Exclusive(func(tx *state.Tx) error {
-		if o.Parent != "" {
-			parent, err := task.Get(s, o.Parent)
-			if err == nil {
-				err = task.Require(&parent, "adding a subtask", task.Created, task.Assigned, task.Completed)
-			}
-			if err != nil {
-				phase = "task"
-				return err
-			}
-		}
-		for _, id := range after {
-			if _, err := task.Get(s, id); err != nil {
-				phase = "task"
-				return err
-			}
+		if err := task.CheckLinks(s, o.Parent, after); err != nil {
+			phase = "task"
+			return err
 		}
 		_, err := tx.Create(task.Kind, func(id string) any {
 			r = task.Record{ID: id, Title: o.Title, Brief: text, After: after, Status: task.Created, CreatedAt: *task.Now()}
