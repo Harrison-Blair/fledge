@@ -3,8 +3,6 @@ package rename
 import (
 	"bytes"
 	"context"
-	"os/exec"
-	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -12,6 +10,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
 
 type call = herdrscript.Call
@@ -90,13 +89,7 @@ func TestRenameRegisteredAgentKeepsRecord(t *testing.T) {
 		{Method: "agent.rename", Result: agent("w1:p3", named("reviewer"))},
 	}, labels("w1:p3", 2)...)
 	c := herdrscript.Client(t, calls...)
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if b, err := exec.Command("git", "-C", root, "init", "-q").CombinedOutput(); err != nil {
-		t.Fatalf("%v %s", err, b)
-	}
+	root := identitytest.Repository(t)
 	c.Cwd = root
 	s, err := identity.OpenStore(context.Background(), root, &libagent.Outcome{})
 	if err != nil {

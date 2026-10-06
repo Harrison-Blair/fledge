@@ -413,19 +413,10 @@ func TestVerificationSucceedsWhenSessionWriteFails(t *testing.T) {
 	}
 }
 
-func mustStore(t *testing.T, repo string) *state.Store {
-	t.Helper()
-	s, err := task.Existing(context.Background(), repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return s
-}
-
 func loadAgent(t *testing.T, repo, id string) identity.Record {
 	t.Helper()
 	var rec identity.Record
-	if err := mustStore(t, repo).Get(identity.Kind, id, &rec); err != nil {
+	if err := tasktest.Store(t, repo).Get(identity.Kind, id, &rec); err != nil {
 		t.Fatal(err)
 	}
 	return rec

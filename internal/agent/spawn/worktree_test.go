@@ -11,6 +11,7 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/worktree"
 )
@@ -18,12 +19,8 @@ import (
 func repository(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	for _, args := range [][]string{{"init", "-q"}, {"-c", "user.name=Test", "-c", "user.email=t@example.com", "commit", "-qm", "initial", "--allow-empty"}} {
-		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
-		if b, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("%v %s", err, b)
-		}
-	}
+	gittest.Git(t, root, "init", "-q")
+	gittest.Commit(t, root)
 	return root
 }
 func branchOf(t *testing.T, root string) string {
@@ -39,9 +36,7 @@ func branchOf(t *testing.T, root string) string {
 // is served.
 func checkout(t *testing.T, root, branch, path string) func() {
 	return func() {
-		if b, err := exec.Command("git", "-C", root, "worktree", "add", "-q", "-b", branch, path).CombinedOutput(); err != nil {
-			t.Fatalf("%v %s", err, b)
-		}
+		gittest.Git(t, root, "worktree", "add", "-q", "-b", branch, path)
 	}
 }
 
@@ -81,9 +76,7 @@ func TestNewWorktreeRecordsCheckoutIdentity(t *testing.T) {
 	o.Worktree = "new"
 	create := call{Method: "worktree.create", Result: herdr.CreatedResult{Type: "worktree_created", Workspace: herdr.Workspace{ID: "w2"}, Tab: herdr.Tab{ID: "w2:t1", WorkspaceID: "w2"}, RootPane: p, Worktree: herdr.Worktree{Path: path}}}
 	create.Before = func() {
-		if b, err := exec.Command("git", "-C", root, "worktree", "add", "-q", "-b", "worker", path).CombinedOutput(); err != nil {
-			t.Fatalf("%v %s", err, b)
-		}
+		gittest.Git(t, root, "worktree", "add", "-q", "-b", "worker", path)
 	}
 	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, call{Method: "worktree.list", Result: newWorktreeListing(root)}, create, namedTab(p), labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), callerNotAgent())
 	s.Cwd = root
@@ -102,9 +95,7 @@ func TestNewWorktreeRecordsCheckoutIdentity(t *testing.T) {
 // manual handling.
 func TestNewWorktreeFromDetachedPrimarySendsNoBase(t *testing.T) {
 	root := repository(t)
-	if b, err := exec.Command("git", "-C", root, "checkout", "-q", "--detach").CombinedOutput(); err != nil {
-		t.Fatalf("%v %s", err, b)
-	}
+	gittest.Git(t, root, "checkout", "-q", "--detach")
 	path := filepath.Join(root, ".fledge", "worktrees", "worker")
 	p := herdrscript.Pane("w2:p1", "w2", "w2:t1")
 	o := validOptions()
@@ -227,9 +218,7 @@ func TestWorktreeFailurePreservesLocalEffects(t *testing.T) {
 func TestNewWorktreeFromLinkedCheckoutUsesPrimaryRoot(t *testing.T) {
 	root := repository(t)
 	linked := filepath.Join(t.TempDir(), "linked")
-	if b, err := exec.Command("git", "-C", root, "worktree", "add", "-qb", "linked", linked).CombinedOutput(); err != nil {
-		t.Fatalf("%v %s", err, b)
-	}
+	gittest.Git(t, root, "worktree", "add", "-qb", "linked", linked)
 	path := filepath.Join(root, ".fledge", "worktrees", "worker")
 	p := herdrscript.Pane("w2:p1", "w2", "w2:t1")
 	o := validOptions()

@@ -6,13 +6,13 @@ import (
 	"encoding/json"
 	"maps"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
 )
 
 func render(t *testing.T, out libagent.Outcome, asJSON bool) string {
@@ -26,7 +26,7 @@ func render(t *testing.T, out libagent.Outcome, asJSON bool) string {
 func repoWith(t *testing.T, file, content string) (string, string) {
 	t.Helper()
 	root := t.TempDir()
-	exec.Command("git", "-C", root, "init", "-q").Run()
+	gittest.Git(t, root, "init", "-q")
 	path := filepath.Join(root, ".fledge", "profiles", file)
 	os.MkdirAll(filepath.Dir(path), 0755)
 	os.WriteFile(path, []byte(content), 0644)

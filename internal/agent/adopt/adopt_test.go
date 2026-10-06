@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -27,14 +26,7 @@ type call = herdrscript.Call
 func client(t *testing.T, calls ...call) libagent.Client {
 	t.Helper()
 	c := herdrscript.Client(t, calls...)
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if b, err := exec.Command("git", "-C", root, "init", "-q").CombinedOutput(); err != nil {
-		t.Fatalf("%v %s", err, b)
-	}
-	c.Cwd = root
+	c.Cwd = identitytest.Repository(t)
 	return c
 }
 

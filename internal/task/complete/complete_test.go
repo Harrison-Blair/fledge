@@ -216,7 +216,7 @@ func TestNotificationOutcomeSurvivesLaterTaskState(t *testing.T) {
 				tasktest.Get("w1:p3", worker),
 				tasktest.Get("w1:p1", boss),
 				herdrscript.Call{Method: "agent.prompt", Result: herdr.AgentResult{Type: "agent_prompted", Agent: boss.Agent}, Before: func() {
-					_, err := task.Update(mustStore(t, repo), id, func(r *task.Record) error {
+					_, err := task.Update(tasktest.Store(t, repo), id, func(r *task.Record) error {
 						r.Status = status
 						if status == task.Verified {
 							r.VerifiedAt = task.Now()
@@ -237,15 +237,6 @@ func TestNotificationOutcomeSurvivesLaterTaskState(t *testing.T) {
 			}
 		})
 	}
-}
-
-func mustStore(t *testing.T, repo string) *state.Store {
-	t.Helper()
-	s, err := task.Existing(context.Background(), repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return s
 }
 
 func TestCompleteRefusesNonOwner(t *testing.T) {
@@ -306,7 +297,7 @@ func TestNotificationNotRecordedAfterChange(t *testing.T) {
 		tasktest.Get("w1:p3", worker),
 		tasktest.Get("w1:p1", boss),
 		herdrscript.Call{Method: "agent.prompt", Result: herdr.AgentResult{Type: "agent_prompted", Agent: boss.Agent}, Before: func() {
-			if _, err := task.Update(mustStore(t, repo), id, func(r *task.Record) error { r.CompletionNotification.MessageID = "m-ffffff"; return nil }); err != nil {
+			if _, err := task.Update(tasktest.Store(t, repo), id, func(r *task.Record) error { r.CompletionNotification.MessageID = "m-ffffff"; return nil }); err != nil {
 				t.Fatal(err)
 			}
 		}},
@@ -379,7 +370,7 @@ func TestCompletionSucceedsWhenSessionWriteFails(t *testing.T) {
 func loadAgent(t *testing.T, repo, id string) identity.Record {
 	t.Helper()
 	var rec identity.Record
-	if err := mustStore(t, repo).Get(identity.Kind, id, &rec); err != nil {
+	if err := tasktest.Store(t, repo).Get(identity.Kind, id, &rec); err != nil {
 		t.Fatal(err)
 	}
 	return rec

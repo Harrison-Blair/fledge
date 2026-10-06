@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/tasktest"
 	"github.com/Harrison-Blair/fledge/internal/lib/worktree"
@@ -26,16 +26,6 @@ type call = herdrscript.Call
 
 func s(v string) *string { return &v }
 
-func git(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=Test", "-c", "user.email=t@example.com"}, args...)...)
-	b, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %v: %v %s", args, err, b)
-	}
-	return string(b)
-}
-
 // repo is a primary checkout on main with a dev branch and a managed linked
 // checkout "topic" created from dev, clean and merged into dev.
 type repo struct{ root, topic string }
@@ -44,13 +34,13 @@ func newRepo(t *testing.T) repo {
 	t.Helper()
 	t.Setenv("HERDR_SESSION", "")
 	root, _ := filepath.EvalSymlinks(t.TempDir())
-	git(t, root, "init", "-q", "-b", "main")
-	git(t, root, "commit", "-qm", "initial", "--allow-empty")
-	git(t, root, "branch", "dev")
+	gittest.Git(t, root, "init", "-q", "-b", "main")
+	gittest.Commit(t, root)
+	gittest.Git(t, root, "branch", "dev")
 	topic := filepath.Join(root, ".fledge", "worktrees", "topic")
 	os.MkdirAll(filepath.Join(root, ".fledge"), 0o755)
 	os.WriteFile(filepath.Join(root, ".fledge", ".gitignore"), []byte("*\n"), 0o644)
-	git(t, root, "worktree", "add", "-q", "-b", "topic", topic, "dev")
+	gittest.Git(t, root, "worktree", "add", "-q", "-b", "topic", topic, "dev")
 	return repo{root, topic}
 }
 
@@ -354,7 +344,7 @@ func TestCleanupStopsWorkerAndRemovesItsCheckout(t *testing.T) {
 	if _, err := os.Stat(r.topic); !os.IsNotExist(err) {
 		t.Fatal("checkout kept")
 	}
-	if !strings.Contains(git(t, r.root, "branch", "--list", "topic"), "topic") {
+	if !strings.Contains(gittest.Git(t, r.root, "branch", "--list", "topic"), "topic") {
 		t.Fatal("branch deleted")
 	}
 	if rec := r.load(t, wrec.ID); rec.EndedAt == nil {
@@ -377,17 +367,17 @@ func TestCheckoutGuards(t *testing.T) {
 		{"clean and merged", "", func(*testing.T, repo, *string, **identity.Checkout, *[]herdr.AgentDetails) {}},
 		{"dirty", "dirty: yes", func(t *testing.T, r repo, _ *string, _ **identity.Checkout, _ *[]herdr.AgentDetails) {
 			os.WriteFile(filepath.Join(r.topic, "tracked"), []byte("x"), 0o644)
-			git(t, r.topic, "add", "tracked")
+			gittest.Git(t, r.topic, "add", "tracked")
 		}},
 		{"untracked", "dirty: yes", func(t *testing.T, r repo, _ *string, _ **identity.Checkout, _ *[]herdr.AgentDetails) {
 			os.WriteFile(filepath.Join(r.topic, "untracked"), []byte("x"), 0o644)
 		}},
 		{"unmerged", "merged into dev: no", func(t *testing.T, r repo, _ *string, _ **identity.Checkout, _ *[]herdr.AgentDetails) {
-			git(t, r.topic, "commit", "-qm", "work", "--allow-empty")
+			gittest.Git(t, r.topic, "commit", "-qm", "work", "--allow-empty")
 		}},
 		{"merged only into main", "merged into dev: no", func(t *testing.T, r repo, _ *string, _ **identity.Checkout, _ *[]herdr.AgentDetails) {
-			git(t, r.topic, "commit", "-qm", "work", "--allow-empty")
-			git(t, r.root, "merge", "-q", "--ff-only", "topic")
+			gittest.Git(t, r.topic, "commit", "-qm", "work", "--allow-empty")
+			gittest.Git(t, r.root, "merge", "-q", "--ff-only", "topic")
 		}},
 		{"unknown base", "merged into gone: unknown", func(t *testing.T, r repo, _ *string, c **identity.Checkout, _ *[]herdr.AgentDetails) {
 			*c = created(t, r.topic, "gone")
@@ -401,13 +391,13 @@ func TestCheckoutGuards(t *testing.T) {
 			*c = &identity.Checkout{Path: r.topic, Created: true, Base: &base, Branch: s("topic")}
 		}},
 		{"empty recorded marker on an unmarked checkout", "replaced since the worker's spawn", func(t *testing.T, r repo, _ *string, c **identity.Checkout, _ *[]herdr.AgentDetails) {
-			git(t, r.root, "worktree", "remove", r.topic)
-			git(t, r.root, "worktree", "add", "-q", r.topic, "topic")
+			gittest.Git(t, r.root, "worktree", "remove", r.topic)
+			gittest.Git(t, r.root, "worktree", "add", "-q", r.topic, "topic")
 			base := "dev"
 			*c = &identity.Checkout{Path: r.topic, Created: true, Base: &base, Branch: s("topic"), Marker: s("")}
 		}},
 		{"branch switched", "replaced since the worker's spawn", func(t *testing.T, r repo, _ *string, _ **identity.Checkout, _ *[]herdr.AgentDetails) {
-			git(t, r.topic, "switch", "-q", "-c", "other")
+			gittest.Git(t, r.topic, "switch", "-q", "-c", "other")
 		}},
 		{"borrowed", "not created by its worker's spawn", func(t *testing.T, r repo, _ *string, c **identity.Checkout, _ *[]herdr.AgentDetails) {
 			*c = &identity.Checkout{Path: r.topic}
@@ -415,7 +405,7 @@ func TestCheckoutGuards(t *testing.T) {
 		{"external", "not a managed checkout under .fledge/worktrees", func(t *testing.T, r repo, path *string, c **identity.Checkout, _ *[]herdr.AgentDetails) {
 			ext, _ := filepath.EvalSymlinks(t.TempDir())
 			ext = filepath.Join(ext, "ext")
-			git(t, r.root, "worktree", "add", "-q", "-b", "ext", ext, "dev")
+			gittest.Git(t, r.root, "worktree", "add", "-q", "-b", "ext", ext, "dev")
 			*path, *c = ext, created(t, ext, "dev")
 		}},
 		{"primary", "primary checkout", func(t *testing.T, r repo, path *string, c **identity.Checkout, _ *[]herdr.AgentDetails) {
@@ -550,7 +540,7 @@ func TestReplacementTerminalUntouched(t *testing.T) {
 // removes it once it is safe.
 func TestRerunRemovesCheckoutOfStoppedWorker(t *testing.T) {
 	r := newRepo(t)
-	git(t, r.topic, "commit", "-qm", "work", "--allow-empty")
+	gittest.Git(t, r.topic, "commit", "-qm", "work", "--allow-empty")
 	callerAgent := agent("w1:p1", "w1", "t_caller", "orchestrator", "working")
 	callerRec := r.register(t, callerAgent, nil, "adopt", nil)
 	w := agent("w2:p1", "w2", "t_worker", "worker", "idle")
@@ -564,7 +554,7 @@ func TestRerunRemovesCheckoutOfStoppedWorker(t *testing.T) {
 	if out.Status != "success" || worker(res, wrec.ID).Outcome != "done" || checkout(res, r.topic).Outcome != "skipped" {
 		t.Fatalf("%+v %+v", out, res)
 	}
-	git(t, r.root, "branch", "-f", "dev", "topic")
+	gittest.Git(t, r.root, "branch", "-f", "dev", "topic")
 	out = Run(context.Background(), client(t, r,
 		herdrscript.Get(callerAgent.PaneID, callerAgent), herdrscript.List(callerAgent), call{Method: "worktree.list", Result: r.listing(nil, r.topic)},
 		call{Method: "worktree.list", Result: r.listing(nil, r.topic)}, herdrscript.List(callerAgent), herdrscript.List(callerAgent),
@@ -711,11 +701,11 @@ func TestArchivedProvenanceDoesNotOwnReplacement(t *testing.T) {
 				w := agent("w2:p1", "w2", "t_old", "old", "done")
 				old := r.register(t, w, &caller.ID, "spawn", created(t, r.topic, "dev"))
 				r.endRecord(t, old.ID)
-				git(t, r.root, "worktree", "remove", r.topic)
+				gittest.Git(t, r.root, "worktree", "remove", r.topic)
 				if branch == "topic" {
-					git(t, r.root, "worktree", "add", "-q", r.topic, "topic")
+					gittest.Git(t, r.root, "worktree", "add", "-q", r.topic, "topic")
 				} else {
-					git(t, r.root, "worktree", "add", "-q", "-b", branch, r.topic, "dev")
+					gittest.Git(t, r.root, "worktree", "add", "-q", "-b", branch, r.topic, "dev")
 				}
 				listing := r.listing(nil, r.topic)
 				listing.Worktrees[1].Branch = s(branch)
@@ -776,8 +766,8 @@ func TestReplacementDuringStopIsKept(t *testing.T) {
 	rec := r.register(t, w, &caller.ID, "spawn", created(t, r.topic, "dev"))
 	tasktest.Seed(t, r.root, task.Record{Title: "accepted", Owner: &rec.ID, Status: task.Verified})
 	replace := func() {
-		git(t, r.root, "worktree", "remove", r.topic)
-		git(t, r.root, "worktree", "add", "-q", r.topic, "topic")
+		gittest.Git(t, r.root, "worktree", "remove", r.topic)
+		gittest.Git(t, r.root, "worktree", "add", "-q", r.topic, "topic")
 	}
 	listing := r.listing(nil, r.topic)
 	out := Run(context.Background(), client(t, r,
@@ -807,7 +797,7 @@ func TestMovedOutsideManagedTreeIsKept(t *testing.T) {
 	tasktest.Seed(t, r.root, task.Record{Title: "accepted", Owner: &rec.ID, Status: task.Verified})
 	outside := filepath.Join(t.TempDir(), "outside")
 	move := func() {
-		git(t, r.root, "worktree", "move", r.topic, outside)
+		gittest.Git(t, r.root, "worktree", "move", r.topic, outside)
 		if err := os.Symlink(outside, r.topic); err != nil {
 			t.Fatal(err)
 		}
