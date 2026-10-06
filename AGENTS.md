@@ -55,6 +55,13 @@ a task done, run the [Git-aware formatting check](README.md#development),
 check covers existing tracked and new nonignored Go files in this checkout; it
 must not descend into ignored managed worktrees. Never weaken or skip a test to get green.
 
+## Instruction text
+
+Agent instruction text follows the structural ASD-STE100 rules and the one-meaning
+terms in [STE-GLOSSARY.md](STE-GLOSSARY.md). The root `ste_test.go` ratchet checks
+`AGENTS.md` and the built-in profiles against the per-file counts in
+`testdata/ste-baseline.json`, so an edit may lower a count but never raise one.
+
 ## Layout
 
 The module root's `main.go` is the installable entrypoint and delegates to
