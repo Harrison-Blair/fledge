@@ -1358,7 +1358,7 @@ to the ordering that requires an assignee.
 
 **Issue:** Codex workers spawned by Fledge run tool calls without `HERDR_*` variables
 
-**Summary:** On 2026-10-05 two `gpt-6.1-sol` Codex verifiers, spawned with `fledge agent spawn --harness codex` (bypass defaults on), reported that their tool calls had no `HERDR_*` environment variables. The first one could not send `fledge agent message` and reported "the Herdr environment is unavailable". The second one found the socket path by hand and set `HERDR_SOCKET_PATH` and `HERDR_PANE_ID` on each command, and then coordination worked. Observed in 2 of 2 Codex spawns this session. The cause, for example whether Codex filters the environment of its tool shell, is not established.
+**Summary:** On 2026-10-05 two `gpt-6.1-sol` Codex verifiers, spawned with `fledge agent spawn --harness codex` (bypass defaults on), reported that their tool calls had no `HERDR_*` environment variables. The first one could not send `fledge agent message` and reported "the Herdr environment is unavailable". The second one found the socket path by hand and set `HERDR_SOCKET_PATH` and `HERDR_PANE_ID` on each command, and then coordination worked. Observed in 6 of 6 Codex spawns this session: two STE verifiers and four audit verifiers. Each one that set the variables by hand then coordinated normally. The cause, for example whether Codex filters the environment of its tool shell, is not established.
 
 **Reproduction steps:**
 1. Spawn a Codex agent with `fledge agent spawn --harness codex --model gpt-6.1-sol --name probe`.
