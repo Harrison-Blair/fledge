@@ -129,7 +129,7 @@ one live agent's pane, with `--source` and `--lines` options.
 
 **Issue:** No command to answer a blocked agent
 
-**Status:** Open
+**Status:** Resolved 2026-09-22
 
 **Summary:** A worker waiting on a permission prompt or question can only
 be answered with `herdr pane send-text` / `herdr pane send-keys`, not with
@@ -137,7 +137,9 @@ any Fledge command. Observed 2026-09-18, Fledge 0.0.3 built from `dev`
 (`fc4538b`), Herdr 0.9.1, binary `/tmp/fledge-dev`. Since 2026-09-22
 (`1bb9b98`), `fledge agent send --name w --key down --key enter` (or `--text`)
 is the Fledge workaround; it types raw input without detecting the dialog or
-its choices.
+its choices. Resolved 2026-09-22: `agent send` (`1bb9b98`) is the Fledge
+command to answer a blocked agent with raw text and keys. It does not detect the
+dialog or its choices.
 
 **Reproduction steps:**
 1. Give a Claude worker a task that needs a command outside its allowlist.
@@ -1306,7 +1308,7 @@ many panes share the tab. Observed 2026-09-24 on `feat/agent-rename`.
 
 **Issue:** No way to close a parent task when its subtasks are verified
 
-**Status:** Open
+**Status:** Resolved 2026-09-23
 
 **Summary:** Parent tasks created only to group subtasks stay `created` after all
 their subtasks are verified. `fledge task complete` accepts only `assigned` tasks,
@@ -1319,7 +1321,12 @@ machine restart. Note: the current source lets `task verify` close a finished
 `created` or `assigned` parent directly (README Lifecycle;
 `internal/task/verify/verify.go:152`); whether the binary in use during this work
 included that was not checked, so the friction may be limited to `complete` and
-to the ordering that requires an assignee.
+to the ordering that requires an assignee. Resolved 2026-09-23: `553e3dc` lets
+`fledge task verify --id <parent>` close a `created` or `assigned` parent once
+every direct subtask is verified or cancelled and at least one is verified; this
+is the current route, with no assignment or `complete` step. `task complete`
+still accepts only `assigned` tasks, as intended. The binary version used for the four parents above remains
+unknown.
 
 **Reproduction steps:**
 1. `fledge task create` a parent task, then create subtasks under it with `--parent`.
@@ -1346,9 +1353,9 @@ to the ordering that requires an assignee.
 
 **Issue:** Built-in orchestrator profile still prescribes the resolved pi first-prompt retry workaround
 
-**Status:** Open
+**Status:** Resolved 2026-09-29
 
-**Summary:** During the adversarial feature review on 2026-09-29 at `33c6301`, `internal/lib/profiles/builtin/orchestrator.toml:49-51` still tells agents that pi usually rejects its first prompt and to resend the brief after a short pause. The current readiness gate in `internal/agent/spawn/ready.go:39-50` waits for settled, interactive readiness with launch no longer pending; this log already records that fix on 2026-09-23. Both pi reviewer spawns in this review accepted their first prompt successfully without a retry. This is stale embedded workflow guidance, not a newly reproduced startup failure. Following it mechanically could duplicate an assignment. The review followed the actual spawn outcome and did not resend successful prompts.
+**Summary:** During the adversarial feature review on 2026-09-29 at `33c6301`, `internal/lib/profiles/builtin/orchestrator.toml:49-51` still tells agents that pi usually rejects its first prompt and to resend the brief after a short pause. The current readiness gate in `internal/agent/spawn/ready.go:39-50` waits for settled, interactive readiness with launch no longer pending; this log already records that fix on 2026-09-23. Both pi reviewer spawns in this review accepted their first prompt successfully without a retry. This is stale embedded workflow guidance, not a newly reproduced startup failure. Following it mechanically could duplicate an assignment. The review followed the actual spawn outcome and did not resend successful prompts. Resolved 2026-09-29: `1560fc8` replaced `orchestrator.toml` with `internal/lib/profiles/builtin/orchestrator.md` and removed the pi resend advice. The profile now says spawn submits the brief once, not to resend it after a successful spawn, and to follow spawn's recovery hint when the prompt was not submitted.
 
 **Reproduction steps:**
 1. Run `fledge agent profiles orchestrator` on a binary built from `33c6301` and inspect its Fledge protocol section.
@@ -1388,9 +1395,9 @@ to the ordering that requires an assignee.
 
 **Issue:** Task-group help retained mandatory-template wording after briefs became advisory
 
-**Status:** Open
+**Status:** Resolved 2026-09-29
 
-**Summary:** Independent verification of task simplification commit `383d52a` on 2026-09-29 found that a temporary built binary's `task --help` still said briefs follow a six-heading template, while create and template help described the approved advisory behavior. The implementation was withheld from acceptance. Repair `424045c` updates the parent help and adds a regression assertion; its author demonstrated failure with the old wording and passing checks after restoration. Independent re-verification `5a5a4365` confirmed the old-wording regression test fails, the repaired help is advisory, and formatting/vet/race checks pass; the fix is accepted at `424045c`.
+**Summary:** Independent verification of task simplification commit `383d52a` on 2026-09-29 found that a temporary built binary's `task --help` still said briefs follow a six-heading template, while create and template help described the approved advisory behavior. The implementation was withheld from acceptance. Repair `424045c` updates the parent help and adds a regression assertion; its author demonstrated failure with the old wording and passing checks after restoration. Independent re-verification `5a5a4365` confirmed the old-wording regression test fails, the repaired help is advisory, and formatting/vet/race checks pass; the fix is accepted at `424045c`. Resolved 2026-09-29: `424045c`; current `task --help` says `task template` prints an optional six-heading skeleton.
 
 **Reproduction steps:**
 1. Build a temporary binary from `383d52a` and run `task --help`.
@@ -1453,9 +1460,9 @@ to the ordering that requires an assignee.
 
 **Issue:** Historical Claude bypass workaround became stale after profiles were simplified
 
-**Status:** Open
+**Status:** Resolved 2026-10-05
 
-**Summary:** The 2026-09-22 entry above says Claude built-in profiles supply bypass arguments. Profiles now contain instructions only. The permission-default implementation moves this behavior into `agent spawn` for every Claude and Codex launch, independent of profiles: Claude receives `--permission-mode bypassPermissions`, and Codex receives `--yolo`. Explicit native permission options take precedence, and `--no-permission-bypass` suppresses injection. The old project memory requiring manual Claude flags is migrated to the user's shared worker-permission preference. Startup dialogs are still handled by the user; no harness settings are changed.
+**Summary:** The 2026-09-22 entry above says Claude built-in profiles supply bypass arguments. Profiles now contain instructions only. The permission-default implementation moves this behavior into `agent spawn` for every Claude and Codex launch, independent of profiles: Claude receives `--permission-mode bypassPermissions`, and Codex receives `--yolo`. Explicit native permission options take precedence, and `--no-permission-bypass` suppresses injection. The old project memory requiring manual Claude flags is migrated to the user's shared worker-permission preference. Startup dialogs are still handled by the user; no harness settings are changed. Resolved 2026-10-05: `010b799` injects the permission defaults in `agent spawn`.
 
 **Reproduction steps:**
 1. With an older instruction-only-profile build, spawn a Claude agent without native permission arguments and observe that the profile supplies none.
