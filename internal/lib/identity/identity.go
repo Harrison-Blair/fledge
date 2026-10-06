@@ -18,6 +18,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/fledgedir"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
@@ -87,7 +88,7 @@ type Checkout struct {
 
 // OpenStore opens the state store of the repository containing cwd, creating
 // .fledge and its ignore file as needed and recording those effects on out.
-func OpenStore(ctx context.Context, cwd string, out *libagent.Outcome) (*state.Store, error) {
+func OpenStore(ctx context.Context, cwd string, out *cli.Outcome) (*state.Store, error) {
 	root, err := fledgedir.Root(ctx, cwd)
 	if err != nil {
 		return nil, err
@@ -479,17 +480,17 @@ type Observer func(s *state.Store, id string, session herdr.AgentSession, now ti
 // Observe stores live's session ref on rec through observe, as seen at now,
 // and returns the updated record. It is best effort: a failed write is a
 // warning effect and rec is returned as it was.
-func Observe(s *state.Store, observe Observer, rec Record, live *herdr.AgentDetails, now time.Time, out *libagent.Outcome) Record {
+func Observe(s *state.Store, observe Observer, rec Record, live *herdr.AgentDetails, now time.Time, out *cli.Outcome) Record {
 	if live == nil || live.AgentSession == nil {
 		return rec
 	}
 	updated, changed, err := observe(s, rec.ID, *live.AgentSession, now)
 	switch {
 	case err != nil:
-		out.Effects = append(out.Effects, libagent.Effect{Action: "warning", Kind: "native_session", ID: rec.ID})
+		out.Effects = append(out.Effects, cli.Effect{Action: "warning", Kind: "native_session", ID: rec.ID})
 		return rec
 	case changed:
-		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "native_session", ID: rec.ID})
+		out.Effects = append(out.Effects, cli.Effect{Action: "updated", Kind: "native_session", ID: rec.ID})
 	}
 	return updated
 }
@@ -767,7 +768,7 @@ func (t Target) Validate() error {
 		}
 	}
 	if set != 1 {
-		return libagent.Invalid("exactly one of --name, --pane, or --id is required")
+		return cli.Invalid("exactly one of --name, --pane, or --id is required")
 	}
 	return nil
 }
@@ -793,13 +794,13 @@ func (t Target) GetWith(ctx context.Context, c libagent.Client, open func() (*st
 	}
 	s, err := open()
 	if err != nil {
-		return herdr.AgentDetails{}, "", nil, libagent.AtPhase("identity", err)
+		return herdr.AgentDetails{}, "", nil, cli.AtPhase("identity", err)
 	}
 	rec, a, err := Resolve(ctx, s, c, t.ID)
 	var remote *herdr.Error
-	var input *libagent.InputError
+	var input *cli.InputError
 	if err != nil && (errors.As(err, &input) || errors.As(err, &remote) && (remote.Code == "agent_identity_stale" || remote.Code == "agent_record_not_found")) {
-		err = libagent.AtPhase("identity", err)
+		err = cli.AtPhase("identity", err)
 	}
 	if err != nil {
 		return herdr.AgentDetails{}, "", nil, err

@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
@@ -19,7 +19,7 @@ func code(err error) string {
 	if errors.As(err, &remote) {
 		return remote.Code
 	}
-	var input *libagent.InputError
+	var input *cli.InputError
 	if errors.As(err, &input) {
 		return "invalid_input"
 	}
@@ -40,7 +40,7 @@ func TestGetBeforeAnyStateIsNotFound(t *testing.T) {
 }
 
 func TestUpdateStoresMutationAndRejectsOnError(t *testing.T) {
-	s, err := identity.OpenStore(context.Background(), identitytest.Repository(t), &libagent.Outcome{})
+	s, err := identity.OpenStore(context.Background(), identitytest.Repository(t), &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestListIsOldestFirst(t *testing.T) {
 	if rs, err := List(nil); err != nil || rs == nil || len(rs) != 0 {
 		t.Fatalf("%v %v", rs, err)
 	}
-	s, err := identity.OpenStore(context.Background(), cwd, &libagent.Outcome{})
+	s, err := identity.OpenStore(context.Background(), cwd, &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func titles(t *testing.T, s *state.Store) []string {
 }
 
 func TestListOrdersBurstCreatesByCreation(t *testing.T) {
-	s, err := identity.OpenStore(context.Background(), identitytest.Repository(t), &libagent.Outcome{})
+	s, err := identity.OpenStore(context.Background(), identitytest.Repository(t), &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestListOrdersBurstCreatesByCreation(t *testing.T) {
 }
 
 func TestListOrdersMixedPrecisionTimesByInstant(t *testing.T) {
-	s, err := identity.OpenStore(context.Background(), identitytest.Repository(t), &libagent.Outcome{})
+	s, err := identity.OpenStore(context.Background(), identitytest.Repository(t), &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ const legacyUsage = `{"worker":{"agent_id":"aaaaaaaa","harness":"claude","sessio
 // A record with a stored usage snapshot still loads and updates; the update
 // drops the snapshot.
 func TestUpdateDropsLegacyUsage(t *testing.T) {
-	s, err := identity.OpenStore(context.Background(), identitytest.Repository(t), &libagent.Outcome{})
+	s, err := identity.OpenStore(context.Background(), identitytest.Repository(t), &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestValidateIDNamesATaskID(t *testing.T) {
 	if err := ValidateID("0123abcd"); err != nil {
 		t.Fatal(err)
 	}
-	var input *libagent.InputError
+	var input *cli.InputError
 	if err := ValidateID("nope"); !errors.As(err, &input) || err.Error() != "--id must be an 8 lowercase hexadecimal task id" {
 		t.Fatalf("%v", err)
 	}

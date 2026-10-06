@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
 )
 
@@ -107,7 +107,7 @@ func TestRootRejectsNonRepositoryAndBare(t *testing.T) {
 
 func TestEnsureCreatesIgnoredDirectory(t *testing.T) {
 	root := repository(t)
-	out := libagent.Outcome{}
+	out := cli.Outcome{}
 	dir, err := Ensure(root, &out)
 	if err != nil {
 		t.Fatal(err)
@@ -119,13 +119,13 @@ func TestEnsureCreatesIgnoredDirectory(t *testing.T) {
 	if string(b) != managedBlock {
 		t.Fatalf("%q", b)
 	}
-	if len(out.Effects) != 2 || out.Effects[0] != (libagent.Effect{Action: "created", Kind: "directory", Path: dir}) || out.Effects[1] != (libagent.Effect{Action: "created", Kind: "file", Path: filepath.Join(dir, ".gitignore")}) {
+	if len(out.Effects) != 2 || out.Effects[0] != (cli.Effect{Action: "created", Kind: "directory", Path: dir}) || out.Effects[1] != (cli.Effect{Action: "created", Kind: "file", Path: filepath.Join(dir, ".gitignore")}) {
 		t.Fatalf("%+v", out.Effects)
 	}
 	if _, err = os.Stat(filepath.Join(root, ".gitignore")); !os.IsNotExist(err) {
 		t.Fatal("root ignore changed")
 	}
-	out = libagent.Outcome{}
+	out = cli.Outcome{}
 	if _, err = Ensure(root, &out); err != nil || len(out.Effects) != 0 {
 		t.Fatalf("second ensure: %v %+v", err, out.Effects)
 	}
@@ -136,7 +136,7 @@ func TestEnsureAppendsOnly(t *testing.T) {
 		dir := filepath.Join(root, ".fledge")
 		os.Mkdir(dir, 0755)
 		os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(existing), 0644)
-		out := libagent.Outcome{}
+		out := cli.Outcome{}
 		if _, err := Ensure(root, &out); err != nil {
 			t.Fatal(err)
 		}
@@ -166,10 +166,10 @@ func TestEnsureRejectsSymlinksWithoutMutation(t *testing.T) {
 			case "not regular":
 				os.MkdirAll(filepath.Join(dir, ".gitignore"), 0755)
 			}
-			out := libagent.Outcome{}
+			out := cli.Outcome{}
 			if _, err := Ensure(root, &out); err == nil {
 				t.Fatal("accepted unsafe path")
-			} else if !errors.As(err, new(*libagent.InputError)) {
+			} else if !errors.As(err, new(*cli.InputError)) {
 				t.Fatalf("%T %v", err, err)
 			}
 			if len(out.Effects) != 0 {
@@ -186,7 +186,7 @@ func TestEnsureLeavesWorktreesIgnoreAlone(t *testing.T) {
 	legacy := filepath.Join(root, ".fledge", "worktrees", ".gitignore")
 	os.MkdirAll(filepath.Dir(legacy), 0755)
 	os.WriteFile(legacy, []byte("# old"), 0644)
-	if _, err := Ensure(root, &libagent.Outcome{}); err != nil {
+	if _, err := Ensure(root, &cli.Outcome{}); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(legacy); string(b) != "# old" {
@@ -198,7 +198,7 @@ func TestEnsureVerifiesIgnored(t *testing.T) {
 	// A later root rule cannot override .fledge/.gitignore, so simulate a
 	// failed verification by making git unavailable after the writes.
 	t.Setenv("PATH", "")
-	out := libagent.Outcome{}
+	out := cli.Outcome{}
 	if _, err := Ensure(root, &out); err == nil {
 		t.Fatal("skipped verification")
 	}
@@ -212,7 +212,7 @@ func TestParentsCreatedBeneathRoot(t *testing.T) {
 	if err := CheckParents(root, parent); err != nil {
 		t.Fatal(err)
 	}
-	out := libagent.Outcome{}
+	out := cli.Outcome{}
 	if err := MakeParents(root, parent, &out); err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestIgnoreUpdateAppendsWithoutRewritingExistingBytes(t *testing.T) {
 	if err := os.WriteFile(path, existing, 0644); err != nil {
 		t.Fatal(err)
 	}
-	out := libagent.Outcome{}
+	out := cli.Outcome{}
 	if err := appendIgnoreRule(path, observed, false, &out); err != nil {
 		t.Fatal(err)
 	}
@@ -268,8 +268,8 @@ func TestIgnoreWriteEffectsReflectActualMutation(t *testing.T) {
 		{"close failure", "updated", failingIgnoreWriter{n: 2, closeErr: failure}, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			out := libagent.Outcome{}
-			err := writeIgnoreRule(tc.writer, []byte("*\n"), libagent.Effect{Action: tc.action, Kind: "file", Path: "ignore"}, &out)
+			out := cli.Outcome{}
+			err := writeIgnoreRule(tc.writer, []byte("*\n"), cli.Effect{Action: tc.action, Kind: "file", Path: "ignore"}, &out)
 			if err == nil {
 				t.Fatal("lost write or close error")
 			}
@@ -297,7 +297,7 @@ func TestMakeParentsToleratesConcurrentCreator(t *testing.T) {
 	root := t.TempDir()
 	parent := filepath.Join(root, "a")
 	racedMkdir(t, func(path string) error { return os.Mkdir(path, 0o755) })
-	out := libagent.Outcome{}
+	out := cli.Outcome{}
 	if err := MakeParents(root, parent, &out); err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestMakeParentsRefusesSymlinkFromConcurrentCreator(t *testing.T) {
 	parent := filepath.Join(root, "a")
 	target := t.TempDir()
 	racedMkdir(t, func(path string) error { return os.Symlink(target, path) })
-	out := libagent.Outcome{}
+	out := cli.Outcome{}
 	if err := MakeParents(root, parent, &out); err == nil || len(out.Effects) != 0 {
 		t.Fatalf("accepted symlink: %v %+v", err, out.Effects)
 	}
@@ -373,7 +373,7 @@ func TestEnsureLeavesOnlyProfileFilesTrackable(t *testing.T) {
 				os.WriteFile(ignore, []byte(tc.existing), 0644)
 			}
 			for range 3 {
-				if _, err := Ensure(root, &libagent.Outcome{}); err != nil {
+				if _, err := Ensure(root, &cli.Outcome{}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -408,11 +408,11 @@ func TestEnsureRepeatedHasNoEffects(t *testing.T) {
 	dir := filepath.Join(root, ".fledge")
 	os.Mkdir(dir, 0755)
 	os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("*\n"), 0644)
-	out := libagent.Outcome{}
+	out := cli.Outcome{}
 	if _, err := Ensure(root, &out); err != nil || len(out.Effects) != 1 || out.Effects[0].Action != "updated" {
 		t.Fatalf("migration: %v %+v", err, out.Effects)
 	}
-	out = libagent.Outcome{}
+	out = cli.Outcome{}
 	if _, err := Ensure(root, &out); err != nil || len(out.Effects) != 0 {
 		t.Fatalf("repeat: %v %+v", err, out.Effects)
 	}

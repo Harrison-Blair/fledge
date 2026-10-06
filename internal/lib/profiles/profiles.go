@@ -14,8 +14,8 @@ import (
 	"slices"
 	"strings"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/brief"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 )
 
 //go:embed builtin/*.md
@@ -72,7 +72,7 @@ func builtins() (map[string]Profile, error) {
 // invalid or legacy file fails rather than falling back.
 func Load(ctx context.Context, cwd, name string) (Profile, error) {
 	if !namePattern.MatchString(name) {
-		return Profile{}, libagent.Invalid("profile name must match [a-z][a-z0-9_-]{0,31}")
+		return Profile{}, cli.Invalid("profile name must match [a-z][a-z0-9_-]{0,31}")
 	}
 	bases, err := builtins()
 	if err != nil {
@@ -93,7 +93,7 @@ func Load(ctx context.Context, cwd, name string) (Profile, error) {
 	if p, ok := bases[name]; ok {
 		return p, nil
 	}
-	return Profile{}, libagent.Invalid("unknown profile %q; list profiles with: fledge agent profiles", name)
+	return Profile{}, cli.Invalid("unknown profile %q; list profiles with: fledge agent profiles", name)
 }
 
 // List returns every effective profile for cwd, sorted by name. Any legacy
@@ -157,7 +157,7 @@ func legacyError(dir, name string) error {
 	if _, err := os.Lstat(md); err == nil {
 		conflict = fmt.Sprintf(" and conflicts with %s", md)
 	}
-	return libagent.Invalid("profile %s is a legacy TOML profile%s; profiles are now plain Markdown instructions: move its brief text into %s, pass launch settings to agent spawn (--harness, --model, native arguments after --), and delete the TOML file", path, conflict, md)
+	return cli.Invalid("profile %s is a legacy TOML profile%s; profiles are now plain Markdown instructions: move its brief text into %s, pass launch settings to agent spawn (--harness, --model, native arguments after --), and delete the TOML file", path, conflict, md)
 }
 
 // read reads the repository profile at path, reporting whether it exists.
@@ -183,7 +183,7 @@ func read(name, path string) (Profile, bool, error) {
 }
 
 // invalid reports a profile file problem as invalid input naming the file.
-func invalid(path string, err error) error { return libagent.Invalid("profile %s: %v", path, err) }
+func invalid(path string, err error) error { return cli.Invalid("profile %s: %v", path, err) }
 
 // repoDir returns the profile directory of the Git checkout containing cwd,
 // or "" outside a checkout. It never creates anything.

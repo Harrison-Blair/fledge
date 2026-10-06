@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
@@ -29,16 +30,16 @@ func (s Selection) Validate() error {
 	explicit := slices.Concat(s.Names, s.Panes, s.IDs)
 	switch {
 	case len(explicit) > 0 && !s.Filter.Empty():
-		return libagent.Invalid("explicit targets (--name, --pane, --id) and filter flags are mutually exclusive")
+		return cli.Invalid("explicit targets (--name, --pane, --id) and filter flags are mutually exclusive")
 	case len(explicit) == 0 && s.Filter.Empty():
-		return libagent.Invalid("at least one --name, --pane, --id, or filter flag is required")
+		return cli.Invalid("at least one --name, --pane, --id, or filter flag is required")
 	}
 	for i, t := range explicit {
 		if blank(t) {
-			return libagent.Invalid("targets must be nonempty")
+			return cli.Invalid("targets must be nonempty")
 		}
 		if slices.Contains(explicit[:i], t) {
-			return libagent.Invalid("duplicate target %q", t)
+			return cli.Invalid("duplicate target %q", t)
 		}
 	}
 	for _, id := range s.IDs {
@@ -72,7 +73,7 @@ func (s Selection) Explicit() []identity.Target {
 // identity.Target.GetWith and Resolve; identity.OpenOnce opens it once.
 func (s Selection) Targets(ctx context.Context, c libagent.Client, open func() (*state.Store, error)) ([]Target, error) {
 	if err := s.Validate(); err != nil {
-		return nil, libagent.AtPhase("validation", err)
+		return nil, cli.AtPhase("validation", err)
 	}
 	if s.Filter.Empty() {
 		var targets []Target
@@ -101,7 +102,7 @@ func (s Selection) Targets(ctx context.Context, c libagent.Client, open func() (
 		targets = append(targets, Target{Label: label, Pane: m.Agent.PaneID, Agent: m.Agent, Record: m.Record})
 	}
 	if len(targets) == 0 {
-		return nil, libagent.AtPhase("selection", &herdr.Error{Code: "no_agents_matched", Message: "no agents matched the selection"})
+		return nil, cli.AtPhase("selection", &herdr.Error{Code: "no_agents_matched", Message: "no agents matched the selection"})
 	}
 	return targets, nil
 }

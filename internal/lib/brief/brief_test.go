@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 )
 
 func TestSections(t *testing.T) {
@@ -48,7 +48,7 @@ func TestValidateRejects(t *testing.T) {
 		"NUL and blank":   {" \x00 ", "brief must not contain NUL"},
 	} {
 		err := Validate(c.text)
-		var input *libagent.InputError
+		var input *cli.InputError
 		if !errors.As(err, &input) || input.Message != c.message {
 			t.Errorf("%s: %v", label, err)
 		}
@@ -68,7 +68,7 @@ func TestCheckText(t *testing.T) {
 		if got := fmt.Sprint(err); want == "" && err != nil || want != "" && got != want {
 			t.Errorf("%q: %v", text, err)
 		}
-		if errors.As(err, new(*libagent.InputError)) {
+		if errors.As(err, new(*cli.InputError)) {
 			t.Errorf("%q: classified %T", text, err)
 		}
 	}

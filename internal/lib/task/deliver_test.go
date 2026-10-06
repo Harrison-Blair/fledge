@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
@@ -55,14 +56,14 @@ func pending(r *task.Record) (*task.Attempt, error) {
 	return &r.Delivery.Attempt, nil
 }
 
-func deliver(t *testing.T, repo, id string, prompt herdrscript.Call, attempt func(*task.Record) (*task.Attempt, error)) (libagent.Outcome, task.Record, bool) {
+func deliver(t *testing.T, repo, id string, prompt herdrscript.Call, attempt func(*task.Record) (*task.Attempt, error)) (cli.Outcome, task.Record, bool) {
 	t.Helper()
 	c := tasktest.Client(t, repo, "", prompt)
 	s, err := task.Existing(context.Background(), repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := libagent.Outcome{Operation: "task.test", Status: "success", Effects: []libagent.Effect{}}
+	out := cli.Outcome{Operation: "task.test", Status: "success", Effects: []cli.Effect{}}
 	r, ok := task.Deliver(context.Background(), c, s, &out, libagent.ResolveSender(context.Background(), c), id, "w1:p3", "m-0a1b2c", "body", attempt)
 	return out, r, ok
 }
@@ -71,7 +72,7 @@ func TestDeliverRecordsDelivery(t *testing.T) {
 	repo, id := seeded(t)
 	prompt := herdrscript.Call{Method: "agent.prompt", Result: herdr.AgentResult{Type: "agent_prompted", Agent: tasktest.Agent("w1:p3", "term_w", "worker").Agent}}
 	out, r, ok := deliver(t, repo, id, prompt, pending)
-	want := []libagent.Effect{{Action: "submitted", Kind: "message", ID: "w1:p3"}, {Action: "updated", Kind: "task", ID: id}}
+	want := []cli.Effect{{Action: "submitted", Kind: "message", ID: "w1:p3"}, {Action: "updated", Kind: "task", ID: id}}
 	if !ok || out.Error != nil || !reflect.DeepEqual(out.Effects, want) || r.Delivery.DeliveredAt == nil || r.Delivery.Error != nil {
 		t.Fatalf("%v %+v %+v", ok, out, r.Delivery)
 	}
@@ -97,7 +98,7 @@ func TestDeliverRecordsFailures(t *testing.T) {
 			if !ok || d.DeliveredAt != nil || d.Error == nil || *d.Error != tc.err.Error() || d.Uncertain != tc.uncertain {
 				t.Fatalf("%v %+v", ok, d)
 			}
-			want := []libagent.Effect{{Action: "updated", Kind: "task", ID: id}}
+			want := []cli.Effect{{Action: "updated", Kind: "task", ID: id}}
 			if out.Status != tc.status || out.Error.Phase != "agent.prompt" || !reflect.DeepEqual(out.Effects, want) {
 				t.Fatalf("%+v %+v", out, out.Error)
 			}
@@ -114,7 +115,7 @@ func TestDeliverLookupFailure(t *testing.T) {
 		return nil, &herdr.Error{Code: "task_state_changed", Message: "changed"}
 	}
 	out, _, ok := deliver(t, repo, id, prompt, changed)
-	want := []libagent.Effect{{Action: "submitted", Kind: "message", ID: "w1:p3"}}
+	want := []cli.Effect{{Action: "submitted", Kind: "message", ID: "w1:p3"}}
 	if ok || out.Status != "partial" || out.Error.Code != "task_state_changed" || out.Error.Phase != "task" || !reflect.DeepEqual(out.Effects, want) {
 		t.Fatalf("%v %+v %+v", ok, out, out.Error)
 	}

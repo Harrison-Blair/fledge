@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 )
 
 func TestFilterValidateRejects(t *testing.T) {
@@ -24,7 +24,7 @@ func TestFilterValidateRejects(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.f.Validate()
-			var input *libagent.InputError
+			var input *cli.InputError
 			if !errors.As(err, &input) || !strings.Contains(err.Error(), tc.flag) {
 				t.Fatalf("got %v, want an input error naming %s", err, tc.flag)
 			}

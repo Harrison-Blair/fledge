@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
@@ -33,7 +33,7 @@ func TestSelectionValidateRejects(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.s.Validate()
-			var input *libagent.InputError
+			var input *cli.InputError
 			if !errors.As(err, &input) || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want an input error containing %q", err, tc.want)
 			}
@@ -156,7 +156,7 @@ func TestTargetsFilterNoMatch(t *testing.T) {
 			c := f.client(t)
 			c.CallerPane = tc.caller
 			ts, err := Selection{Filter: tc.flt}.Targets(context.Background(), c, identity.OpenOnce(context.Background(), c.Cwd))
-			var out libagent.Outcome
+			var out cli.Outcome
 			out.Fail(err, "x", false)
 			if ts != nil || out.Error.Code != "no_agents_matched" || out.Error.Phase != "selection" || out.Status != "rejected" || out.ExitCode() != 1 {
 				t.Fatalf("%v %+v %s", ts, out.Error, out.Status)

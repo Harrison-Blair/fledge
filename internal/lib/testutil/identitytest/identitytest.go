@@ -18,6 +18,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
@@ -44,7 +45,7 @@ func RegisterProfile(t *testing.T, cwd string, a herdr.AgentDetails, profile str
 
 func register(t *testing.T, cwd string, a herdr.AgentDetails, profile *string) identity.Record {
 	t.Helper()
-	s, err := identity.OpenStore(context.Background(), cwd, &libagent.Outcome{})
+	s, err := identity.OpenStore(context.Background(), cwd, &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 )
 
@@ -52,7 +52,7 @@ func mustJSON(t *testing.T, v any) string {
 }
 
 func TestCheckOutputFailuresCoversEveryWriteOfLongRender(t *testing.T) {
-	render := func(w io.Writer, _ libagent.Outcome) error {
+	render := func(w io.Writer, _ cli.Outcome) error {
 		for range 150 {
 			if _, err := io.WriteString(w, "x\n"); err != nil {
 				return err
@@ -60,5 +60,5 @@ func TestCheckOutputFailuresCoversEveryWriteOfLongRender(t *testing.T) {
 		}
 		return nil
 	}
-	CheckOutputFailures(t, render, libagent.Outcome{Result: "ok"})
+	CheckOutputFailures(t, render, cli.Outcome{Result: "ok"})
 }

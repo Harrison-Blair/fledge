@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 )
@@ -37,10 +38,10 @@ func (a Attempt) State() string {
 // the submitted-message and updated-task effects and fails out at phase
 // agent.prompt for a delivery error, otherwise at phase task for a recording
 // error. It returns the updated task and whether the outcome was recorded.
-func Deliver(ctx context.Context, c libagent.Client, s *state.Store, out *libagent.Outcome, sender libagent.Sender, id, pane, messageID, body string, attempt func(*Record) (*Attempt, error)) (Record, bool) {
+func Deliver(ctx context.Context, c libagent.Client, s *state.Store, out *cli.Outcome, sender libagent.Sender, id, pane, messageID, body string, attempt func(*Record) (*Attempt, error)) (Record, bool) {
 	_, deliveryErr := c.Prompt(ctx, pane, libagent.WithHeader(messageID, sender, body))
 	if deliveryErr == nil {
-		out.Effects = append(out.Effects, libagent.Effect{Action: "submitted", Kind: "message", ID: pane})
+		out.Effects = append(out.Effects, cli.Effect{Action: "submitted", Kind: "message", ID: pane})
 	}
 	r, err := Update(s, id, func(r *Record) error {
 		a, err := attempt(r)
@@ -57,7 +58,7 @@ func Deliver(ctx context.Context, c libagent.Client, s *state.Store, out *libage
 		return nil
 	})
 	if err == nil {
-		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "task", ID: r.ID})
+		out.Effects = append(out.Effects, cli.Effect{Action: "updated", Kind: "task", ID: r.ID})
 	}
 	switch {
 	case deliveryErr != nil:
