@@ -7,6 +7,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
@@ -48,21 +49,21 @@ func (o Options) EffectiveGrace() time.Duration {
 
 // Run stops the selected agents one after another. A single target keeps its
 // own result; several, or any dry run, report one row per target.
-func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
+func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 	return RunWith(ctx, c, o, identity.OpenOnce(ctx, c.Cwd))
 }
 
 // RunWith is Run with open supplying the store for every record lookup and
 // end, so a caller that already opened it, such as cleanup, passes it on.
-func RunWith(ctx context.Context, c libagent.Client, o Options, open func() (*state.Store, error)) libagent.Outcome {
-	out := libagent.NewOutcome("agent.stop")
+func RunWith(ctx context.Context, c libagent.Client, o Options, open func() (*state.Store, error)) cli.Outcome {
+	out := cli.NewOutcome("agent.stop")
 	err := o.Selection.Validate()
 	if err == nil && o.GraceSet {
 		switch {
 		case o.Force:
-			err = libagent.Invalid("--grace cannot be used with --force, which never waits")
+			err = cli.Invalid("--grace cannot be used with --force, which never waits")
 		case o.Grace < 0 || o.Grace > MaxGrace:
-			err = libagent.Invalid("--grace must be between 0s and %gs", MaxGrace.Seconds())
+			err = cli.Invalid("--grace must be between 0s and %gs", MaxGrace.Seconds())
 		}
 	}
 	if err != nil {
@@ -84,14 +85,14 @@ func RunWith(ctx context.Context, c libagent.Client, o Options, open func() (*st
 }
 
 // stopOne looks up one target afresh and stops it unless the guard refuses.
-func stopOne(ctx context.Context, c libagent.Client, o Options, p pending, open func() (*state.Store, error)) libagent.Outcome {
+func stopOne(ctx context.Context, c libagent.Client, o Options, p pending, open func() (*state.Store, error)) cli.Outcome {
 	a, target, rec, err := p.get(ctx, c, open)
 	return stopFound(ctx, c, o, a, target, rec, err, open)
 }
 
 // stopFound stops the agent a lookup found, or reports the lookup's error.
-func stopFound(ctx context.Context, c libagent.Client, o Options, a herdr.AgentDetails, target string, rec *identity.Record, err error, open func() (*state.Store, error)) libagent.Outcome {
-	out := libagent.NewOutcome("agent.stop")
+func stopFound(ctx context.Context, c libagent.Client, o Options, a herdr.AgentDetails, target string, rec *identity.Record, err error, open func() (*state.Store, error)) cli.Outcome {
+	out := cli.NewOutcome("agent.stop")
 	if err != nil {
 		out.Fail(err, "agent.get", false)
 		return out
@@ -131,13 +132,13 @@ func stopFound(ctx context.Context, c libagent.Client, o Options, a herdr.AgentD
 		return out
 	}
 	out.Result = Result{AgentRow: libagent.NewAgentRow(a.Pane), Stopped: true}
-	out.Effects = append(out.Effects, libagent.Effect{Action: "closed", Kind: "pane", ID: a.PaneID})
+	out.Effects = append(out.Effects, cli.Effect{Action: "closed", Kind: "pane", ID: a.PaneID})
 	if endErr != nil {
 		out.Fail(endErr, "state", false)
 		return out
 	}
 	if reopen {
-		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "agent_record", ID: ended})
+		out.Effects = append(out.Effects, cli.Effect{Action: "updated", Kind: "agent_record", ID: ended})
 	}
 	return out
 }
@@ -167,14 +168,14 @@ func end(open func() (*state.Store, error), a herdr.AgentDetails, rec *identity.
 // guard refuses an agent that is not idle or done unless forced.
 func (o Options) guard(a herdr.AgentDetails, target string) error {
 	if status := a.AgentStatus; status != "idle" && status != "done" && !o.Force {
-		return libagent.Invalid("agent %s is %s; pass --force to stop it anyway", target, status)
+		return cli.Invalid("agent %s is %s; pass --force to stop it anyway", target, status)
 	}
 	return nil
 }
 
 // Render writes a successful stop outcome, or each row of a multi-target stop
 // or dry run.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	if f, ok := o.Result.(FanOut); ok {
 		return renderFanOut(w, f)
 	}
@@ -182,6 +183,6 @@ func Render(w io.Writer, o libagent.Outcome) error {
 	if o.Error != nil || !ok {
 		return nil
 	}
-	_, err := fmt.Fprintf(w, "Stopped %s (%s) in %s.\n", libagent.Display(r.Name), libagent.Display(r.Harness), libagent.Display(r.PaneID))
+	_, err := fmt.Fprintf(w, "Stopped %s (%s) in %s.\n", cli.Display(r.Name), cli.Display(r.Harness), cli.Display(r.PaneID))
 	return err
 }

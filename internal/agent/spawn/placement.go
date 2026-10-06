@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 )
 
@@ -19,7 +20,7 @@ func workspace(snap *herdr.Snapshot, name, id string) (string, error) {
 				return id, nil
 			}
 		}
-		return "", libagent.Invalid("workspace ID %q does not exist", id)
+		return "", cli.Invalid("workspace ID %q does not exist", id)
 	}
 	matches := []string{}
 	for _, w := range snap.Workspaces {
@@ -28,7 +29,7 @@ func workspace(snap *herdr.Snapshot, name, id string) (string, error) {
 		}
 	}
 	if len(matches) > 1 {
-		return "", libagent.Invalid("workspace name %q is ambiguous: %s", name, strings.Join(matches, ", "))
+		return "", cli.Invalid("workspace name %q is ambiguous: %s", name, strings.Join(matches, ", "))
 	}
 	if len(matches) == 1 {
 		return matches[0], nil
@@ -37,12 +38,12 @@ func workspace(snap *herdr.Snapshot, name, id string) (string, error) {
 }
 func (s *spawner) caller(ctx context.Context) (herdr.Pane, error) {
 	if s.CallerPane == "" {
-		return herdr.Pane{}, libagent.Invalid("implicit placement requires HERDR_PANE_ID; provide an explicit target")
+		return herdr.Pane{}, cli.Invalid("implicit placement requires HERDR_PANE_ID; provide an explicit target")
 	}
 	var r herdr.PaneResult
 	err := s.Call(ctx, "pane.current", map[string]any{"caller_pane_id": s.CallerPane}, &r)
 	if err == nil && (r.Type != "pane_current" || !libagent.ValidPane(r.Pane)) {
-		err = libagent.AtPhase("pane.current", libagent.Protocol("incomplete pane.current result"))
+		err = cli.AtPhase("pane.current", libagent.Protocol("incomplete pane.current result"))
 	}
 	return r.Pane, err
 }
@@ -61,15 +62,15 @@ func shellParams(o Options) map[string]any {
 	}
 	return p
 }
-func (s *spawner) ordinaryPlacement(ctx context.Context, o Options, snap *herdr.Snapshot, out *libagent.Outcome) (herdr.Pane, error) {
+func (s *spawner) ordinaryPlacement(ctx context.Context, o Options, snap *herdr.Snapshot, out *cli.Outcome) (herdr.Pane, error) {
 	if o.Pane != "" {
 		for _, p := range snap.Panes {
 			if p.PaneID == o.Pane {
-				out.Effects = append(out.Effects, libagent.Effect{Action: "reused", Kind: "pane", ID: p.PaneID})
+				out.Effects = append(out.Effects, cli.Effect{Action: "reused", Kind: "pane", ID: p.PaneID})
 				return p, nil
 			}
 		}
-		return herdr.Pane{}, libagent.Invalid("pane ID %q does not exist", o.Pane)
+		return herdr.Pane{}, cli.Invalid("pane ID %q does not exist", o.Pane)
 	}
 	ws, err := workspace(snap, o.Workspace, o.WorkspaceID)
 	if err != nil {
@@ -114,15 +115,15 @@ func (s *spawner) ordinaryPlacement(ctx context.Context, o Options, snap *herdr.
 func validCreated(r herdr.CreatedResult, workspace bool) bool {
 	return libagent.ValidPane(r.RootPane) && r.Tab.ID == r.RootPane.TabID && r.Tab.WorkspaceID == r.RootPane.WorkspaceID && (!workspace || r.Workspace.ID == r.RootPane.WorkspaceID)
 }
-func recordCreated(out *libagent.Outcome, r herdr.CreatedResult, workspace bool) {
+func recordCreated(out *cli.Outcome, r herdr.CreatedResult, workspace bool) {
 	if workspace && r.Workspace.ID != "" {
-		out.Effects = append(out.Effects, libagent.Effect{Action: "created", Kind: "workspace", ID: r.Workspace.ID})
+		out.Effects = append(out.Effects, cli.Effect{Action: "created", Kind: "workspace", ID: r.Workspace.ID})
 	}
 	if r.Tab.ID != "" {
-		out.Effects = append(out.Effects, libagent.Effect{Action: "created", Kind: "tab", ID: r.Tab.ID})
+		out.Effects = append(out.Effects, cli.Effect{Action: "created", Kind: "tab", ID: r.Tab.ID})
 	}
 	if r.RootPane.PaneID != "" {
-		out.Effects = append(out.Effects, libagent.Effect{Action: "created", Kind: "pane", ID: r.RootPane.PaneID})
+		out.Effects = append(out.Effects, cli.Effect{Action: "created", Kind: "pane", ID: r.RootPane.PaneID})
 		setPlacement(out.Result.(*Result), r.RootPane)
 	}
 }
@@ -134,7 +135,7 @@ func (o Options) tabLabel() string {
 	}
 	return o.Name
 }
-func (s *spawner) initialTab(ctx context.Context, o Options, r herdr.CreatedResult, out *libagent.Outcome) (herdr.Pane, error) {
+func (s *spawner) initialTab(ctx context.Context, o Options, r herdr.CreatedResult, out *cli.Outcome) (herdr.Pane, error) {
 	if label := o.tabLabel(); r.Tab.Label != label {
 		var renamed herdr.TabResult
 		err := s.Call(ctx, "tab.rename", map[string]any{"tab_id": r.Tab.ID, "label": label}, &renamed)
@@ -145,14 +146,14 @@ func (s *spawner) initialTab(ctx context.Context, o Options, r herdr.CreatedResu
 			out.Fail(err, "tab.rename", true)
 			return herdr.Pane{}, err
 		}
-		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "tab", ID: r.Tab.ID})
+		out.Effects = append(out.Effects, cli.Effect{Action: "updated", Kind: "tab", ID: r.Tab.ID})
 	}
 	return r.RootPane, nil
 }
 
 // newTab creates a tab labeled --tab, else the agent's name, in workspace
 // ws. Labels need not be unique; spawn never reuses or splits a tab.
-func (s *spawner) newTab(ctx context.Context, o Options, ws string, out *libagent.Outcome) (herdr.Pane, error) {
+func (s *spawner) newTab(ctx context.Context, o Options, ws string, out *cli.Outcome) (herdr.Pane, error) {
 	if ws == "" {
 		return herdr.Pane{}, fmt.Errorf("destination workspace could not be resolved")
 	}

@@ -6,6 +6,7 @@ import (
 	"io"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
@@ -26,14 +27,14 @@ type Row struct {
 	Outcome   string             `json:"outcome"`
 	MessageID *string            `json:"message_id"`
 	Agent     *libagent.AgentRow `json:"agent"`
-	Error     *libagent.Failure  `json:"error"`
+	Error     *cli.Failure       `json:"error"`
 }
 
 // fanOut delivers text to each target in turn, continuing past failures.
 // Any failed row makes the outcome partial. Rereads take the store from open,
 // the opener that selected the targets.
-func fanOut(ctx context.Context, c libagent.Client, o Options, targets []selector.Target, text, id string, sender *libagent.Sender, open func() (*state.Store, error)) libagent.Outcome {
-	out := libagent.NewOutcome("agent.message")
+func fanOut(ctx context.Context, c libagent.Client, o Options, targets []selector.Target, text, id string, sender *libagent.Sender, open func() (*state.Store, error)) cli.Outcome {
+	out := cli.NewOutcome("agent.message")
 	result := FanOut{Mode: "fan-out", Targets: []Row{}}
 	var failed []libagent.TargetFailure
 	for _, t := range targets {
@@ -66,8 +67,8 @@ func fanOut(ctx context.Context, c libagent.Client, o Options, targets []selecto
 // replaced it; store supplies the store for these rereads. Any other target's
 // status is reread for a confirmed message; the already-working decision
 // needs the status at sending. A failed read rejects the target.
-func reread(ctx context.Context, c libagent.Client, o Options, t *selector.Target, id string, sender *libagent.Sender, store func() (*state.Store, error)) libagent.Outcome {
-	out := libagent.NewOutcome("agent.message")
+func reread(ctx context.Context, c libagent.Client, o Options, t *selector.Target, id string, sender *libagent.Sender, store func() (*state.Store, error)) cli.Outcome {
+	out := cli.NewOutcome("agent.message")
 	a, pane, rec, err := t.Agent, t.Pane, t.Record, error(nil)
 	switch {
 	case t.Record != nil:
@@ -113,12 +114,12 @@ func renderFanOut(w io.Writer, f FanOut) error {
 			id = *row.MessageID
 		}
 		if row.Agent != nil {
-			where += " (" + libagent.Display(row.Agent.PaneID) + ")"
+			where += " (" + cli.Display(row.Agent.PaneID) + ")"
 		}
 		var line string
 		switch row.Outcome {
 		case "confirmed":
-			line = fmt.Sprintf("Message %s submitted to %s; activity confirmed (%s)", id, where, libagent.Display(row.Agent.AgentStatus))
+			line = fmt.Sprintf("Message %s submitted to %s; activity confirmed (%s)", id, where, cli.Display(row.Agent.AgentStatus))
 		case "already_working":
 			line = fmt.Sprintf("Message %s submitted to %s while the agent was already observed working; this prompt's start is not confirmed", id, where)
 		case "unconfirmed":

@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/harness"
 )
 
@@ -26,7 +27,7 @@ func (o Options) Validate() ([]string, error) {
 	values := map[string]string{"name": o.Name, "harness": o.Harness, "model": o.Model, "workspace": o.Workspace, "workspace-id": o.WorkspaceID, "tab": o.Tab, "pane": o.Pane, "worktree": o.Worktree, "branch": o.Branch, "base": o.Base, "cwd": o.Cwd, "label": o.Label}
 	for _, flag := range o.Provided {
 		if value, ok := values[flag]; ok && value == "" {
-			return nil, libagent.Invalid("--%s cannot be empty", flag)
+			return nil, cli.Invalid("--%s cannot be empty", flag)
 		}
 	}
 	if err := libagent.ValidateName(o.Name); err != nil {
@@ -36,32 +37,32 @@ func (o Options) Validate() ([]string, error) {
 		return nil, err
 	}
 	if o.Timeout.Milliseconds() <= 3000 || o.Timeout.Milliseconds() > 300000 {
-		return nil, libagent.Invalid("--timeout must convert to 3001 through 300000 milliseconds")
+		return nil, cli.Invalid("--timeout must convert to 3001 through 300000 milliseconds")
 	}
 	if o.Workspace != "" && o.WorkspaceID != "" {
-		return nil, libagent.Invalid("--workspace and --workspace-id are mutually exclusive")
+		return nil, cli.Invalid("--workspace and --workspace-id are mutually exclusive")
 	}
 	if o.Pane != "" && (o.Workspace != "" || o.WorkspaceID != "" || o.Tab != "" || o.Worktree != "" || o.Cwd != "" || len(o.Env) > 0) {
-		return nil, libagent.Invalid("--pane cannot be combined with placement, cwd, or env settings")
+		return nil, cli.Invalid("--pane cannot be combined with placement, cwd, or env settings")
 	}
 	if o.Worktree != "" && len(o.Env) > 0 {
-		return nil, libagent.Invalid("--worktree cannot be combined with --env")
+		return nil, cli.Invalid("--worktree cannot be combined with --env")
 	}
 	if o.NoWait && (o.PromptSet || o.FileSet) {
-		return nil, libagent.Invalid("--no-wait cannot be combined with --prompt or --file")
+		return nil, cli.Invalid("--no-wait cannot be combined with --prompt or --file")
 	}
 	if o.Worktree != "new" && (o.Branch != "" || o.Base != "") {
-		return nil, libagent.Invalid("--branch and --base require --worktree new")
+		return nil, cli.Invalid("--branch and --base require --worktree new")
 	}
 	for _, e := range o.Env {
 		key, _, ok := strings.Cut(e, "=")
 		if !ok || key == "" || strings.ContainsRune(e, 0) || !utf8.ValidString(e) {
-			return nil, libagent.Invalid("--env requires a nonempty KEY=VALUE without NUL")
+			return nil, cli.Invalid("--env requires a nonempty KEY=VALUE without NUL")
 		}
 	}
 	for _, s := range append([]string{o.Workspace, o.WorkspaceID, o.Tab, o.Pane, o.Model, o.Cwd, o.Worktree, o.Branch, o.Base, o.Label}, o.Args...) {
 		if !utf8.ValidString(s) || strings.ContainsRune(s, 0) {
-			return nil, libagent.Invalid("arguments must be valid UTF-8 without NUL")
+			return nil, cli.Invalid("arguments must be valid UTF-8 without NUL")
 		}
 	}
 	args, err := modelArguments(o.Harness, o.Model, o.Args)
@@ -81,17 +82,17 @@ func modelArguments(kind, model string, args []string) ([]string, error) {
 	profile, _ := harness.Lookup(kind)
 	policy := profile.Model
 	if policy.Flag == "" {
-		return nil, libagent.Invalid("--model is not verified for %s; pass native arguments explicitly", kind)
+		return nil, cli.Invalid("--model is not verified for %s; pass native arguments explicitly", kind)
 	}
 	for i, arg := range args {
 		if arg == "--" {
 			break
 		}
 		if arg == "--model" || strings.HasPrefix(arg, "--model=") || policy.ShortConflict && strings.HasPrefix(arg, "-m") {
-			return nil, libagent.Invalid("native model option conflicts with --model")
+			return nil, cli.Invalid("native model option conflicts with --model")
 		}
 		if key, _ := codexConfigKey(args, i); kind == "codex" && key == "model" {
-			return nil, libagent.Invalid("native Codex model configuration conflicts with --model")
+			return nil, cli.Invalid("native Codex model configuration conflicts with --model")
 		}
 	}
 	if slices.Equal(result[:min(len(policy.Prefix), len(result))], policy.Prefix) {

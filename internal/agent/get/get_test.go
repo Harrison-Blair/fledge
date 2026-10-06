@@ -11,6 +11,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
@@ -254,7 +255,7 @@ func TestGetOutput(t *testing.T) {
 }
 
 func TestOutputFailuresPropagate(t *testing.T) {
-	herdrscript.CheckOutputFailures(t, Render, libagent.Outcome{Result: Result{}})
+	herdrscript.CheckOutputFailures(t, Render, cli.Outcome{Result: Result{}})
 }
 
 func TestGetByIDShowsRecord(t *testing.T) {

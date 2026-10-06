@@ -13,6 +13,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/harnessenv"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
@@ -54,8 +55,8 @@ var liveByTerminal = identity.LiveByTerminal
 // come from the live agent when present, else from its record, so an --id
 // whose agent has ended still reports. A live ref is persisted on the agent's
 // record; a failed write is only a warning effect.
-func Run(ctx context.Context, c libagent.Client, d harnessenv.Env, o Options) libagent.Outcome {
-	out := libagent.NewOutcome("agent.usage")
+func Run(ctx context.Context, c libagent.Client, d harnessenv.Env, o Options) cli.Outcome {
+	out := cli.NewOutcome("agent.usage")
 	if err := o.Selection.Validate(); err != nil {
 		out.Fail(err, "validation", false)
 		return out
@@ -114,11 +115,11 @@ func resolve(ctx context.Context, c libagent.Client, sel selector.Selection, ope
 func stored(open func() (*state.Store, error), id string) (*identity.Record, error) {
 	s, err := open()
 	if err != nil {
-		return nil, libagent.AtPhase("identity", err)
+		return nil, cli.AtPhase("identity", err)
 	}
 	var rec identity.Record
 	if err := s.Get(identity.Kind, id, &rec); err != nil {
-		return nil, libagent.AtPhase("identity", err)
+		return nil, cli.AtPhase("identity", err)
 	}
 	return &rec, nil
 }
@@ -144,7 +145,7 @@ func attributable(s *state.Store, targets []selector.Target) map[string]identity
 
 // row reports t's usage. A live target without a record is attributed to its
 // record in records, an attributable map.
-func row(ctx context.Context, s *state.Store, records map[string]identity.Record, d harnessenv.Env, t selector.Target, out *libagent.Outcome) Row {
+func row(ctx context.Context, s *state.Store, records map[string]identity.Record, d harnessenv.Env, t selector.Target, out *cli.Outcome) Row {
 	a, rec := t.Agent, t.Record
 	live := a.TerminalID != ""
 	if rec == nil {
@@ -162,7 +163,7 @@ func row(ctx context.Context, s *state.Store, records map[string]identity.Record
 	// t.Pane is the address used to reach the agent, a name for --name; the
 	// row reports the resolved pane instead.
 	if live {
-		r.Pane = libagent.Pointer(a.PaneID)
+		r.Pane = cli.Pointer(a.PaneID)
 		r.Name, kind = a.Name, deref(a.Agent)
 		if as := a.AgentSession; as != nil && deref(as.Value) != "" {
 			ref = &libusage.Ref{Kind: deref(as.Kind), Value: *as.Value, Cwd: deref(a.Cwd)}
@@ -171,7 +172,7 @@ func row(ctx context.Context, s *state.Store, records map[string]identity.Record
 	if rec != nil {
 		r.AgentID, r.ElapsedSeconds = &rec.ID, elapsed(*rec)
 		if !live {
-			r.Pane = libagent.Pointer(rec.Pane)
+			r.Pane = cli.Pointer(rec.Pane)
 			r.Name, kind = rec.Name, deref(rec.Harness)
 		}
 		if ns := rec.NativeSession; ref == nil && ns != nil {
@@ -213,7 +214,7 @@ func deref(p *string) string {
 }
 
 // Render writes one table row per agent, then any persist warnings.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil
@@ -222,7 +223,7 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 		fmt.Fprintln(table, "NAME\tHARNESS\tMODELS\tTURNS\tINPUT\tOUTPUT\tCACHE-R\tCACHE-W\tCOST\tELAPSED\tBASIS")
 		for _, a := range r.Agents {
-			cells := []string{libagent.Display(a.Name), libagent.DisplayString(a.Harness), libagent.DisplayString(strings.Join(a.Models, ","))}
+			cells := []string{cli.Display(a.Name), cli.DisplayString(a.Harness), cli.DisplayString(strings.Join(a.Models, ","))}
 			if a.Basis == libusage.Measured {
 				t := a.Tokens
 				cells = append(cells, strconv.Itoa(a.Turns), libusage.Count(t.Input), libusage.Count(t.Output), libusage.Count(t.CacheRead), libusage.Count(t.CacheWrite))

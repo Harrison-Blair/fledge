@@ -4,6 +4,7 @@ package stop
 import (
 	"github.com/Harrison-Blair/fledge/internal/agent/stop"
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 	"github.com/spf13/cobra"
 )
@@ -14,7 +15,7 @@ func New() *cobra.Command {
 	cmd := &cobra.Command{Use: "stop", Short: "Stop live agents by closing their panes", Args: cobra.NoArgs,
 		Long: "Stop live agents by closing their panes and ending their Fledge records.\n\nAn agent that is working, blocked, or unknown is refused unless --force is\ngiven; a working agent is first given --grace to finish its turn.\n\nRepeat --name, --pane, or --id, or use filter flags instead, to stop several\nagents: each is looked up and stopped in turn, and the result has one row per\ntarget. --force and --grace apply to each target, so the worst-case wait is\n--grace times the number of targets. Filter flags AND together; repeating one\nORs its values; matches never include the caller. Any refused or failed\ntarget makes the outcome partial with exit status 1.\n\n--dry-run lists each target with its state and whether it would be stopped,\nrefused, or could not be looked up, without changing anything.", RunE: func(cmd *cobra.Command, _ []string) error {
 			options.GraceSet = cmd.Flags().Changed("grace")
-			return libagent.Finish(stop.Run(cmd.Context(), client(options), options), cmd.OutOrStdout(), asJSON, stop.Render)
+			return cli.Finish(stop.Run(cmd.Context(), client(options), options), cmd.OutOrStdout(), asJSON, stop.Render)
 		}}
 	f := cmd.Flags()
 	f.StringArrayVar(&options.Names, "name", nil, "Live agent name (repeatable)")

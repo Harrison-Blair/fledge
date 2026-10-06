@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
@@ -29,7 +30,7 @@ type Row struct {
 	Target  string             `json:"target"`
 	Outcome string             `json:"outcome"`
 	Agent   *libagent.AgentRow `json:"agent"`
-	Error   *libagent.Failure  `json:"error"`
+	Error   *cli.Failure       `json:"error"`
 }
 
 // pending is one target, looked up afresh when its turn comes.
@@ -70,7 +71,7 @@ func (o Options) targets(ctx context.Context, c libagent.Client, open func() (*s
 func (p pending) get(ctx context.Context, c libagent.Client, open func() (*state.Store, error)) (herdr.AgentDetails, string, *identity.Record, error) {
 	a, target, rec, err := p.target.GetWith(ctx, c, open)
 	if err == nil && p.terminal != "" && a.TerminalID != p.terminal {
-		err = libagent.AtPhase("identity", &herdr.Error{Code: "agent_identity_stale", Message: fmt.Sprintf("pane %s now hosts a different agent than the one matched", target)})
+		err = cli.AtPhase("identity", &herdr.Error{Code: "agent_identity_stale", Message: fmt.Sprintf("pane %s now hosts a different agent than the one matched", target)})
 	}
 	return a, target, rec, err
 }
@@ -104,14 +105,14 @@ func (p pending) peek(ctx context.Context, c libagent.Client, r records) (herdr.
 	}
 	s, err := r.store()
 	if err != nil {
-		return herdr.AgentDetails{}, "", libagent.AtPhase("identity", err)
+		return herdr.AgentDetails{}, "", cli.AtPhase("identity", err)
 	}
 	var missing *state.NotFoundError
 	if s != nil {
 		err = s.Get(identity.Kind, p.target.ID, &identity.Record{})
 	}
 	if s == nil || errors.As(err, &missing) {
-		return herdr.AgentDetails{}, "", libagent.AtPhase("identity", identity.RecordNotFound(p.target.ID))
+		return herdr.AgentDetails{}, "", cli.AtPhase("identity", identity.RecordNotFound(p.target.ID))
 	}
 	if err != nil {
 		return herdr.AgentDetails{}, "", err
@@ -125,13 +126,13 @@ func (p pending) peek(ctx context.Context, c libagent.Client, r records) (herdr.
 			return m.Agent, m.Agent.PaneID, nil
 		}
 	}
-	return herdr.AgentDetails{}, "", libagent.AtPhase("identity", &herdr.Error{Code: "agent_identity_stale", Message: fmt.Sprintf("agent record %s has no live agent in this Herdr session", p.target.ID)})
+	return herdr.AgentDetails{}, "", cli.AtPhase("identity", &herdr.Error{Code: "agent_identity_stale", Message: fmt.Sprintf("agent record %s has no live agent in this Herdr session", p.target.ID)})
 }
 
 // plan reports what stopping each target would do. It only reads: explicit
 // targets are looked up without writing, filter matches come from the listing.
-func plan(ctx context.Context, c libagent.Client, o Options, targets []pending, open func() (*state.Store, error)) libagent.Outcome {
-	out := libagent.NewOutcome("agent.stop")
+func plan(ctx context.Context, c libagent.Client, o Options, targets []pending, open func() (*state.Store, error)) cli.Outcome {
+	out := cli.NewOutcome("agent.stop")
 	result := FanOut{Mode: "dry-run", Targets: []Row{}}
 	recs := newRecords(ctx, c, open)
 	for _, p := range targets {
@@ -164,10 +165,10 @@ func plan(ctx context.Context, c libagent.Client, o Options, targets []pending, 
 // fanOut stops each target in turn, continuing past refusals and failures.
 // The caller's own pane is stopped last, as closing it ends this process;
 // rows keep target order.
-func fanOut(ctx context.Context, c libagent.Client, o Options, targets []pending, open func() (*state.Store, error)) libagent.Outcome {
-	out := libagent.NewOutcome("agent.stop")
+func fanOut(ctx context.Context, c libagent.Client, o Options, targets []pending, open func() (*state.Store, error)) cli.Outcome {
+	out := cli.NewOutcome("agent.stop")
 	result := FanOut{Mode: "fan-out", Targets: make([]Row, len(targets))}
-	report := func(i int, one libagent.Outcome) {
+	report := func(i int, one cli.Outcome) {
 		p := targets[i]
 		out.Effects = append(out.Effects, one.Effects...)
 		row := Row{Target: p.label, Outcome: "failed", Error: one.Error}
@@ -203,15 +204,15 @@ func fanOut(ctx context.Context, c libagent.Client, o Options, targets []pending
 }
 
 // failure classifies err as a single stop's outcome would.
-func failure(err error, phase string) *libagent.Failure {
-	var o libagent.Outcome
+func failure(err error, phase string) *cli.Failure {
+	var o cli.Outcome
 	o.Fail(err, phase, false)
 	return o.Error
 }
 
 // summarize fails out with status when any row is bad, as libagent.FanOutFailure
 // describes.
-func summarize(out *libagent.Outcome, rows []Row, bad func(Row) bool, status, what string) {
+func summarize(out *cli.Outcome, rows []Row, bad func(Row) bool, status, what string) {
 	var failed []libagent.TargetFailure
 	for _, r := range rows {
 		if bad(r) {
@@ -241,9 +242,9 @@ func renderFanOut(w io.Writer, f FanOut) error {
 	for _, r := range f.Targets {
 		subject := r.Target
 		if r.Agent != nil {
-			where := libagent.Display(r.Agent.PaneID)
+			where := cli.Display(r.Agent.PaneID)
 			if f.Mode == "dry-run" {
-				where += ", " + libagent.Display(r.Agent.AgentStatus)
+				where += ", " + cli.Display(r.Agent.AgentStatus)
 			}
 			subject += " (" + where + ")"
 		}

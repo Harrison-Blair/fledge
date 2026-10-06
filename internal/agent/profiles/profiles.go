@@ -9,7 +9,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	libprofiles "github.com/Harrison-Blair/fledge/internal/lib/profiles"
 )
 
@@ -27,8 +27,8 @@ type ShowResult struct {
 }
 
 // Run resolves profiles for the checkout containing cwd.
-func Run(ctx context.Context, cwd string, o Options) libagent.Outcome {
-	out := libagent.NewOutcome("agent.profiles")
+func Run(ctx context.Context, cwd string, o Options) cli.Outcome {
+	out := cli.NewOutcome("agent.profiles")
 	if o.Name != "" {
 		p, err := libprofiles.Load(ctx, cwd, o.Name)
 		if err != nil {
@@ -48,7 +48,7 @@ func Run(ctx context.Context, cwd string, o Options) libagent.Outcome {
 }
 
 // Render writes a profile table, or one profile's source and brief.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	if o.Error != nil {
 		return nil
 	}

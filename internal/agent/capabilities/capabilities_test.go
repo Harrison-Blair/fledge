@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/harness"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
@@ -163,7 +164,7 @@ func squash(s string) string {
 
 func TestOutputFailuresPropagate(t *testing.T) {
 	herdrscript.CheckOutputFailures(t, Render,
-		libagent.Outcome{Result: Result{Harnesses: []Harness{{Kind: "pi", Capabilities: harness.Capabilities("pi")}}}},
-		libagent.Outcome{Result: Result{live: true, Harnesses: []Harness{{Kind: "pi", Capabilities: harness.Capabilities("pi")}}}},
+		cli.Outcome{Result: Result{Harnesses: []Harness{{Kind: "pi", Capabilities: harness.Capabilities("pi")}}}},
+		cli.Outcome{Result: Result{live: true, Harnesses: []Harness{{Kind: "pi", Capabilities: harness.Capabilities("pi")}}}},
 	)
 }

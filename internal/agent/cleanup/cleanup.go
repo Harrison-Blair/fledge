@@ -6,6 +6,7 @@ import (
 
 	"github.com/Harrison-Blair/fledge/internal/agent/stop"
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
@@ -57,8 +58,8 @@ type Checkout struct {
 // removes each planned checkout whose worker is gone, never forcing either.
 // Guards are refreshed before each action. Safety skips still succeed;
 // failed actions fail the outcome after every other action has run.
-func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.NewOutcome("agent.cleanup")
+func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
+	out := cli.NewOutcome("agent.cleanup")
 	p, err := plan(ctx, c, o)
 	if err != nil {
 		out.Fail(err, "identity", false)
@@ -68,8 +69,8 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	if o.DryRun {
 		return out
 	}
-	var failures []libagent.Outcome
-	record := func(sub libagent.Outcome) (string, *string) {
+	var failures []cli.Outcome
+	record := func(sub cli.Outcome) (string, *string) {
 		out.Effects = append(out.Effects, sub.Effects...)
 		switch {
 		case sub.Error == nil:
@@ -94,7 +95,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			tasks, err = task.List(p.store)
 		}
 		if err != nil {
-			w.Outcome, w.Reason = record(libagent.Outcome{Error: &libagent.Failure{Code: "operation_failed", Message: err.Error(), Phase: "state"}})
+			w.Outcome, w.Reason = record(cli.Outcome{Error: &cli.Failure{Code: "operation_failed", Message: err.Error(), Phase: "state"}})
 			continue
 		}
 		if r := hold(live, tasks, w.ID, o.ResultsCollected); r != "" {
@@ -110,7 +111,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			continue
 		}
 		if done, ok := stopped[ch.Worker]; ok && !done {
-			ch.Outcome, ch.Reason = "skipped", libagent.Pointer("its worker "+ch.Worker+" was not stopped")
+			ch.Outcome, ch.Reason = "skipped", cli.Pointer("its worker "+ch.Worker+" was not stopped")
 			continue
 		}
 		ch.Outcome, ch.Reason = record(remove.Run(ctx, c, remove.Options{Path: ch.Path, Cwd: p.root, Base: *ch.Base, Marker: ch.marker, MarkedBranch: ch.markedBranch, PlannedPath: ch.Path}))

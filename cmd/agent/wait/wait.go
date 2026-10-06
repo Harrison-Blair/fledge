@@ -7,6 +7,7 @@ import (
 
 	"github.com/Harrison-Blair/fledge/internal/agent/wait"
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 	"github.com/spf13/cobra"
 )
@@ -40,7 +41,7 @@ outcome.`,
 			if !asJSON {
 				options.Progress = cmd.ErrOrStderr()
 			}
-			return libagent.Finish(wait.Run(ctx, libagent.WaitFromEnvironment(options.Timeout), options), cmd.OutOrStdout(), asJSON, wait.Render)
+			return cli.Finish(wait.Run(ctx, libagent.WaitFromEnvironment(options.Timeout), options), cmd.OutOrStdout(), asJSON, wait.Render)
 		},
 	}
 	f := cmd.Flags()

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
@@ -30,7 +31,7 @@ func lateSpawn(t *testing.T, calls func(late func()) []call) *spawner {
 	s.Now, s.Wait = clock.now, clock.wait
 	return s
 }
-func render(t *testing.T, out libagent.Outcome) string {
+func render(t *testing.T, out cli.Outcome) string {
 	t.Helper()
 	var b strings.Builder
 	if err := out.Write(&b, false, Render); err != nil {

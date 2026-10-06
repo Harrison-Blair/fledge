@@ -7,6 +7,7 @@ import (
 	"io"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 )
 
@@ -26,11 +27,11 @@ type Result struct {
 
 // Run delivers text and keys verbatim in one pane.send_input call, in any agent
 // state. Nothing is prefixed, so the recipient has no reply channel.
-func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.NewOutcome("agent.send")
+func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
+	out := cli.NewOutcome("agent.send")
 	err := o.Target.Validate()
 	if err == nil && o.Text == "" && len(o.Keys) == 0 {
-		err = libagent.Invalid("at least one of --text or --key is required")
+		err = cli.Invalid("at least one of --text or --key is required")
 	}
 	if err != nil {
 		out.Fail(err, "validation", false)
@@ -63,16 +64,16 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	}
 	result.Submitted = true
 	out.Result = result
-	out.Effects = append(out.Effects, libagent.Effect{Action: "submitted", Kind: "input", ID: a.PaneID})
+	out.Effects = append(out.Effects, cli.Effect{Action: "submitted", Kind: "input", ID: a.PaneID})
 	return out
 }
 
 // Render writes a successful send outcome.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil
 	}
-	_, err := fmt.Fprintf(w, "Sent input to %s (%s) in %s; it was %s before sending.\n", libagent.Display(r.Name), libagent.Display(r.Harness), libagent.Display(r.PaneID), libagent.Display(r.AgentStatus))
+	_, err := fmt.Fprintf(w, "Sent input to %s (%s) in %s; it was %s before sending.\n", cli.Display(r.Name), cli.Display(r.Harness), cli.Display(r.PaneID), cli.Display(r.AgentStatus))
 	return err
 }

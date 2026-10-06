@@ -11,11 +11,11 @@ import (
 	"strings"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
 )
 
-func render(t *testing.T, out libagent.Outcome, asJSON bool) string {
+func render(t *testing.T, out cli.Outcome, asJSON bool) string {
 	t.Helper()
 	var b bytes.Buffer
 	out.Write(&b, asJSON, Render)

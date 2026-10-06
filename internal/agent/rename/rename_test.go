@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
@@ -46,7 +47,7 @@ func TestRenameCallerByDefaultRenamesAndLabels(t *testing.T) {
 	if out.Status != "success" || out.Error != nil {
 		t.Fatalf("%+v", out.Error)
 	}
-	want := []libagent.Effect{{Action: "updated", Kind: "agent_name", ID: "old:p1"}, {Action: "updated", Kind: "pane_label", ID: "old:p1"}, {Action: "updated", Kind: "tab", ID: "w1:t2"}}
+	want := []cli.Effect{{Action: "updated", Kind: "agent_name", ID: "old:p1"}, {Action: "updated", Kind: "pane_label", ID: "old:p1"}, {Action: "updated", Kind: "tab", ID: "w1:t2"}}
 	if !reflect.DeepEqual(out.Effects, want) {
 		t.Fatalf("%+v", out.Effects)
 	}
@@ -91,7 +92,7 @@ func TestRenameRegisteredAgentKeepsRecord(t *testing.T) {
 	c := herdrscript.Client(t, calls...)
 	root := identitytest.Repository(t)
 	c.Cwd = root
-	s, err := identity.OpenStore(context.Background(), root, &libagent.Outcome{})
+	s, err := identity.OpenStore(context.Background(), root, &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +101,7 @@ func TestRenameRegisteredAgentKeepsRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := Run(context.Background(), c, Options{Target: identity.Target{Name: "worker"}, To: "reviewer"})
-	if out.Error != nil || !reflect.DeepEqual(out.Effects[1], libagent.Effect{Action: "updated", Kind: "agent_record", ID: rec.ID}) {
+	if out.Error != nil || !reflect.DeepEqual(out.Effects[1], cli.Effect{Action: "updated", Kind: "agent_record", ID: rec.ID}) {
 		t.Fatalf("%+v %+v", out.Error, out.Effects)
 	}
 	var got identity.Record

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/gitstatus"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
@@ -78,7 +79,7 @@ var registered int
 // registration time after every earlier one.
 func (r repo) register(t *testing.T, a herdr.AgentDetails, parent *string, by string, checkout *identity.Checkout) identity.Record {
 	t.Helper()
-	st, err := identity.OpenStore(context.Background(), r.root, &libagent.Outcome{})
+	st, err := identity.OpenStore(context.Background(), r.root, &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +120,7 @@ func created(t *testing.T, path, base string) *identity.Checkout {
 	if id == "" {
 		id, _ = worktree.Mark(context.Background(), path)
 	}
-	c.Marker = libagent.Pointer(id)
+	c.Marker = cli.Pointer(id)
 	return c
 }
 
@@ -351,7 +352,7 @@ func TestCleanupStopsWorkerAndRemovesItsCheckout(t *testing.T) {
 	if rec := r.load(t, wrec.ID); rec.EndedAt == nil {
 		t.Fatalf("worker record not ended: %+v", rec)
 	}
-	want := []libagent.Effect{{Action: "closed", Kind: "pane", ID: "w2:p1"}, {Action: "updated", Kind: "agent_record", ID: wrec.ID}, {Action: "removed", Kind: "worktree", Path: r.topic}}
+	want := []cli.Effect{{Action: "closed", Kind: "pane", ID: "w2:p1"}, {Action: "updated", Kind: "agent_record", ID: wrec.ID}, {Action: "removed", Kind: "worktree", Path: r.topic}}
 	if !reflect.DeepEqual(out.Effects, want) {
 		t.Fatalf("%+v", out.Effects)
 	}
@@ -626,13 +627,13 @@ func TestRender(t *testing.T) {
 		{Result{Workers: []Worker{}, Checkouts: []Checkout{}}, "No spawned workers or created checkouts to clean up.\n"},
 	} {
 		var b bytes.Buffer
-		if err := (libagent.Outcome{Status: "success", Result: tc.result}).Write(&b, false, Render); err != nil {
+		if err := (cli.Outcome{Status: "success", Result: tc.result}).Write(&b, false, Render); err != nil {
 			t.Fatal(err)
 		}
 		if b.String() != tc.want {
 			t.Fatalf("got\n%s\nwant\n%s", b.String(), tc.want)
 		}
-		herdrscript.CheckOutputFailures(t, Render, libagent.Outcome{Result: tc.result})
+		herdrscript.CheckOutputFailures(t, Render, cli.Outcome{Result: tc.result})
 	}
 }
 

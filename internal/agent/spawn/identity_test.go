@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
@@ -49,7 +49,7 @@ func TestSpawnRegistersAfterWait(t *testing.T) {
 	if rec.TerminalID != "term_x" || rec.Pane != "w1:p1" || rec.RegisteredBy != "spawn" || rec.Parent != nil || rec.WorktreePath != nil || rec.Profile != nil {
 		t.Fatalf("%+v", rec)
 	}
-	if last := out.Effects[len(out.Effects)-1]; last != (libagent.Effect{Action: "created", Kind: "agent_record", ID: *r.ID}) {
+	if last := out.Effects[len(out.Effects)-1]; last != (cli.Effect{Action: "created", Kind: "agent_record", ID: *r.ID}) {
 		t.Fatalf("%+v", out.Effects)
 	}
 	var b bytes.Buffer
@@ -165,7 +165,7 @@ func TestSpawnWithoutStoreStillSucceeds(t *testing.T) {
 	if out.Status != "success" || out.Error != nil || r.Registered || r.ID != nil || r.RegistrationError == nil {
 		t.Fatalf("%+v %+v", out, r)
 	}
-	if !reflect.DeepEqual(out.Effects, []libagent.Effect{{Action: "reused", Kind: "pane", ID: "w1:p1"}, {Action: "updated", Kind: "pane_label", ID: "w1:p1"}, {Action: "started", Kind: "agent", ID: "w1:p1"}}) {
+	if !reflect.DeepEqual(out.Effects, []cli.Effect{{Action: "reused", Kind: "pane", ID: "w1:p1"}, {Action: "updated", Kind: "pane_label", ID: "w1:p1"}, {Action: "started", Kind: "agent", ID: "w1:p1"}}) {
 		t.Fatalf("%+v", out.Effects)
 	}
 	var b bytes.Buffer
@@ -212,7 +212,7 @@ func TestSpawnRecordsNativeSessionAfterReadiness(t *testing.T) {
 	if rec := stored(t, s.Cwd, *r.ID); rec.NativeSession == nil || *rec.NativeSession != want {
 		t.Fatalf("%+v", rec.NativeSession)
 	}
-	if last := out.Effects[len(out.Effects)-1]; last != (libagent.Effect{Action: "updated", Kind: "native_session", ID: *r.ID}) {
+	if last := out.Effects[len(out.Effects)-1]; last != (cli.Effect{Action: "updated", Kind: "native_session", ID: *r.ID}) {
 		t.Fatalf("%+v", out.Effects)
 	}
 }
@@ -233,7 +233,7 @@ func TestSpawnSessionWriteFailureIsWarning(t *testing.T) {
 	if out.Status != "success" || out.Error != nil || !r.Registered || r.RegistrationError != nil {
 		t.Fatalf("%+v %+v", out, r)
 	}
-	if last := out.Effects[len(out.Effects)-1]; last != (libagent.Effect{Action: "warning", Kind: "native_session", ID: *r.ID}) {
+	if last := out.Effects[len(out.Effects)-1]; last != (cli.Effect{Action: "warning", Kind: "native_session", ID: *r.ID}) {
 		t.Fatalf("%+v", out.Effects)
 	}
 	if rec := stored(t, s.Cwd, *r.ID); rec.NativeSession != nil {

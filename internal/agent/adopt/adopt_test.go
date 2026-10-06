@@ -14,6 +14,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
@@ -75,7 +76,7 @@ func TestAdoptSelfRenamesUnnamedAgent(t *testing.T) {
 		t.Fatalf("%+v %v", stored, err)
 	}
 	last := out.Effects[len(out.Effects)-4:]
-	if !reflect.DeepEqual(last, []libagent.Effect{{Action: "updated", Kind: "agent_name", ID: "old:p1"}, {Action: "created", Kind: "agent_record", ID: r.ID}, {Action: "updated", Kind: "pane_label", ID: "old:p1"}, {Action: "updated", Kind: "tab", ID: "w1:t2"}}) {
+	if !reflect.DeepEqual(last, []cli.Effect{{Action: "updated", Kind: "agent_name", ID: "old:p1"}, {Action: "created", Kind: "agent_record", ID: r.ID}, {Action: "updated", Kind: "pane_label", ID: "old:p1"}, {Action: "updated", Kind: "tab", ID: "w1:t2"}}) {
 		t.Fatalf("%+v", out.Effects)
 	}
 	var b bytes.Buffer
@@ -149,7 +150,7 @@ func TestAdoptRejectionBeforeRegistrationLeavesNoFiles(t *testing.T) {
 	}
 }
 
-func records(t *testing.T, out libagent.Outcome) []string {
+func records(t *testing.T, out cli.Outcome) []string {
 	for _, e := range out.Effects {
 		if e.Kind == "agent_record" {
 			return []string{e.ID}
@@ -227,10 +228,10 @@ func TestConcurrentAdoptsRegisterOnce(t *testing.T) {
 	c := client(t)
 	c.API = fake
 	// Create .fledge up front: concurrent first-time creation is not under test.
-	if _, err := identity.OpenStore(context.Background(), c.Cwd, &libagent.Outcome{}); err != nil {
+	if _, err := identity.OpenStore(context.Background(), c.Cwd, &cli.Outcome{}); err != nil {
 		t.Fatal(err)
 	}
-	outs := make([]libagent.Outcome, n)
+	outs := make([]cli.Outcome, n)
 	var wg sync.WaitGroup
 	for i := range outs {
 		wg.Go(func() { outs[i] = Run(context.Background(), c, Options{Pane: "w1:p3"}) })
@@ -338,7 +339,7 @@ func TestAdoptScansOnceUnlessItMustRenameFirst(t *testing.T) {
 // worktree, and returns it.
 func seed(t *testing.T, c libagent.Client, name *string) identity.Record {
 	t.Helper()
-	s, err := identity.OpenStore(context.Background(), c.Cwd, &libagent.Outcome{})
+	s, err := identity.OpenStore(context.Background(), c.Cwd, &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,7 +398,7 @@ func TestAdoptNamesRegisteredUnnamedAgentKeepingRecord(t *testing.T) {
 			if got := stored(t, c, existing.ID); !reflect.DeepEqual(got, want) {
 				t.Fatalf("%+v", got)
 			}
-			if !reflect.DeepEqual(out.Effects, []libagent.Effect{{Action: "updated", Kind: "agent_name", ID: "w1:p3"}, {Action: "updated", Kind: "agent_record", ID: existing.ID}, {Action: "updated", Kind: "pane_label", ID: "w1:p3"}, {Action: "updated", Kind: "tab", ID: "w1:t2"}}) {
+			if !reflect.DeepEqual(out.Effects, []cli.Effect{{Action: "updated", Kind: "agent_name", ID: "w1:p3"}, {Action: "updated", Kind: "agent_record", ID: existing.ID}, {Action: "updated", Kind: "pane_label", ID: "w1:p3"}, {Action: "updated", Kind: "tab", ID: "w1:t2"}}) {
 				t.Fatalf("%+v", out.Effects)
 			}
 			var b bytes.Buffer
@@ -462,7 +463,7 @@ func TestAdoptRenamedButRecordEndedIsPartial(t *testing.T) {
 	if out.Status != "partial" || out.Error == nil || out.Error.Code != "agent_identity_stale" || out.Error.Phase != "state" {
 		t.Fatalf("%+v %+v", out, out.Error)
 	}
-	if !reflect.DeepEqual(out.Effects, []libagent.Effect{{Action: "updated", Kind: "agent_name", ID: "w1:p3"}}) {
+	if !reflect.DeepEqual(out.Effects, []cli.Effect{{Action: "updated", Kind: "agent_name", ID: "w1:p3"}}) {
 		t.Fatalf("%+v", out.Effects)
 	}
 	s, err := identity.Existing(context.Background(), c.Cwd)
@@ -500,7 +501,7 @@ func TestAdoptRecordsNativeSession(t *testing.T) {
 	if err := s.Get(identity.Kind, r.ID, &stored); err != nil || !reflect.DeepEqual(stored, r.Record) {
 		t.Fatalf("%+v %v", stored, err)
 	}
-	if last := out.Effects[len(out.Effects)-1]; last != (libagent.Effect{Action: "updated", Kind: "native_session", ID: r.ID}) {
+	if last := out.Effects[len(out.Effects)-1]; last != (cli.Effect{Action: "updated", Kind: "native_session", ID: r.ID}) {
 		t.Fatalf("%+v", out.Effects)
 	}
 }
@@ -510,7 +511,7 @@ func TestAdoptNamingRegisteredAgentRecordsNativeSession(t *testing.T) {
 		{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: agent("w1:p3", nil)},
 		{Method: "agent.rename", Params: map[string]any{"target": "w1:p3", "name": "helper"}, Result: withSession("w1:p3", named("helper"))},
 	}, labels("w1:p3", "w1:t2")...)...)
-	s, err := identity.OpenStore(context.Background(), c.Cwd, &libagent.Outcome{})
+	s, err := identity.OpenStore(context.Background(), c.Cwd, &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -540,7 +541,7 @@ func TestAdoptSessionWriteFailureIsWarning(t *testing.T) {
 	if out.Status != "success" || out.Error != nil || out.ExitCode() != 0 || r.NativeSession != nil {
 		t.Fatalf("%+v %+v", out, out.Error)
 	}
-	if last := out.Effects[len(out.Effects)-1]; last != (libagent.Effect{Action: "warning", Kind: "native_session", ID: r.ID}) {
+	if last := out.Effects[len(out.Effects)-1]; last != (cli.Effect{Action: "warning", Kind: "native_session", ID: r.ID}) {
 		t.Fatalf("%+v", out.Effects)
 	}
 }

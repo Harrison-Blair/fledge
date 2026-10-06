@@ -13,6 +13,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
@@ -226,7 +227,7 @@ func TestWaitLargestTimeout(t *testing.T) {
 	}
 }
 
-func rowsByTarget(t *testing.T, out libagent.Outcome) map[string]Row {
+func rowsByTarget(t *testing.T, out cli.Outcome) map[string]Row {
 	t.Helper()
 	f, ok := out.Result.(FanOut)
 	if !ok {
@@ -329,7 +330,7 @@ func TestWaitAnyReportsFailureWhileOthersPending(t *testing.T) {
 	release := make(chan struct{})
 	_, c := newFake(t, map[string]reply{"a": {err: herr("agent_not_running")}, "b": {release: release, status: "idle"}, "c": {block: true}})
 	lines := make(lineWriter, 4)
-	outs := make(chan libagent.Outcome, 1)
+	outs := make(chan cli.Outcome, 1)
 	go func() {
 		outs <- Run(context.Background(), c, Options{Selection: selector.Selection{Names: []string{"a", "b", "c"}}, Any: true, Progress: lines})
 	}()
@@ -385,18 +386,18 @@ func TestRender(t *testing.T) {
 	fan := FanOut{Mode: "any", Winner: &winner, Targets: []Row{
 		{Target: "a", Outcome: "matched", Agent: &idle},
 		{Target: "w1:p2", Outcome: "matched", Agent: &blocked},
-		{Target: "b", Outcome: "errored", Error: &libagent.Failure{Code: "agent_not_running", Message: "agent_not_running: gone", Phase: "agent.wait"}},
+		{Target: "b", Outcome: "errored", Error: &cli.Failure{Code: "agent_not_running", Message: "agent_not_running: gone", Phase: "agent.wait"}},
 		{Target: "c", Outcome: "cancelled"},
 	}}
 	for _, tc := range []struct {
-		out  libagent.Outcome
+		out  cli.Outcome
 		want string
 	}{
-		{libagent.Outcome{Result: row}, "worker is idle.\n"},
-		{libagent.Outcome{Result: unnamed}, "w1:p1 is idle.\n"},
-		{libagent.Outcome{Result: fan}, "a is idle (first match).\nw1:p2 is blocked.\nb failed: agent_not_running: gone.\nc was cancelled.\n"},
-		{libagent.Outcome{Result: FanOut{Mode: "all", Targets: fan.Targets[2:]}, Error: &libagent.Failure{}}, "b failed: agent_not_running: gone.\nc was cancelled.\n"},
-		{libagent.Outcome{Result: row, Error: &libagent.Failure{}}, ""},
+		{cli.Outcome{Result: row}, "worker is idle.\n"},
+		{cli.Outcome{Result: unnamed}, "w1:p1 is idle.\n"},
+		{cli.Outcome{Result: fan}, "a is idle (first match).\nw1:p2 is blocked.\nb failed: agent_not_running: gone.\nc was cancelled.\n"},
+		{cli.Outcome{Result: FanOut{Mode: "all", Targets: fan.Targets[2:]}, Error: &cli.Failure{}}, "b failed: agent_not_running: gone.\nc was cancelled.\n"},
+		{cli.Outcome{Result: row, Error: &cli.Failure{}}, ""},
 	} {
 		var b bytes.Buffer
 		if err := Render(&b, tc.out); err != nil || b.String() != tc.want {
@@ -404,8 +405,8 @@ func TestRender(t *testing.T) {
 		}
 	}
 	herdrscript.CheckOutputFailures(t, Render,
-		libagent.Outcome{Operation: "agent.wait", Status: "success", Result: row, Effects: []libagent.Effect{}},
-		libagent.Outcome{Operation: "agent.wait", Status: "success", Result: fan, Effects: []libagent.Effect{}})
+		cli.Outcome{Operation: "agent.wait", Status: "success", Result: row, Effects: []cli.Effect{}},
+		cli.Outcome{Operation: "agent.wait", Status: "success", Result: fan, Effects: []cli.Effect{}})
 }
 
 func TestWaitByIDWaitsOnVerifiedPane(t *testing.T) {
@@ -450,7 +451,7 @@ func fleet(t *testing.T, f *fanFake, c *libagent.Client) (idA, idB string) {
 	return identitytest.Register(t, c.Cwd, f.live[0]).ID, identitytest.Register(t, c.Cwd, f.live[1]).ID
 }
 
-func targets(out libagent.Outcome) []string {
+func targets(out cli.Outcome) []string {
 	var got []string
 	fan, _ := out.Result.(FanOut)
 	for _, r := range fan.Targets {

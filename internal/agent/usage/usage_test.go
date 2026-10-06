@@ -13,6 +13,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/harnessenv"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
@@ -91,7 +92,7 @@ func record(t *testing.T, cwd, id string) identity.Record {
 	return rec
 }
 
-func rows(t *testing.T, out libagent.Outcome) []Row {
+func rows(t *testing.T, out cli.Outcome) []Row {
 	t.Helper()
 	r, ok := out.Result.(Result)
 	if out.Error != nil || !ok {
@@ -119,7 +120,7 @@ func TestUsageFilterMeasuresAndPersistsLiveRef(t *testing.T) {
 	if stored := record(t, f.cwd, rec.ID).NativeSession; stored == nil || stored.Value != f.session || stored.Kind != "path" {
 		t.Fatalf("ref not persisted: %+v", stored)
 	}
-	if len(out.Effects) != 1 || out.Effects[0] != (libagent.Effect{Action: "updated", Kind: "native_session", ID: rec.ID}) {
+	if len(out.Effects) != 1 || out.Effects[0] != (cli.Effect{Action: "updated", Kind: "native_session", ID: rec.ID}) {
 		t.Fatalf("%+v", out.Effects)
 	}
 }
@@ -371,7 +372,7 @@ func TestUsagePersistFailureWarns(t *testing.T) {
 	if got := rows(t, out); len(got) != 1 || got[0].Basis != libusage.Measured || got[0].AgentID == nil || *got[0].AgentID != rec.ID || out.Status != "success" {
 		t.Fatalf("%+v", out)
 	}
-	if len(out.Effects) != 1 || out.Effects[0] != (libagent.Effect{Action: "warning", Kind: "native_session", ID: rec.ID}) {
+	if len(out.Effects) != 1 || out.Effects[0] != (cli.Effect{Action: "warning", Kind: "native_session", ID: rec.ID}) {
 		t.Fatalf("%+v", out.Effects)
 	}
 	unchanged()
@@ -410,7 +411,7 @@ func TestRenderTable(t *testing.T) {
 		{Pane: &pane, Summary: libusage.Summary{Harness: "cursor", Basis: libusage.Unavailable, Reason: "no native session ref observed"}},
 	}}
 	var b bytes.Buffer
-	if err := Render(&b, libagent.Outcome{Status: "success", Result: result}); err != nil {
+	if err := Render(&b, cli.Outcome{Status: "success", Result: result}); err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimRight(b.String(), "\n"), "\n")
@@ -431,7 +432,7 @@ func TestRenderTable(t *testing.T) {
 
 func TestRenderWarning(t *testing.T) {
 	var b bytes.Buffer
-	out := libagent.Outcome{Status: "success", Result: Result{Agents: []Row{}}, Effects: []libagent.Effect{{Action: "warning", Kind: "native_session", ID: "0000beef"}}}
+	out := cli.Outcome{Status: "success", Result: Result{Agents: []Row{}}, Effects: []cli.Effect{{Action: "warning", Kind: "native_session", ID: "0000beef"}}}
 	if err := Render(&b, out); err != nil {
 		t.Fatal(err)
 	}
@@ -467,7 +468,7 @@ func TestJSONFields(t *testing.T) {
 }
 
 // jsonPanes is the raw pane field of each --json row, as serialized.
-func jsonPanes(t *testing.T, out libagent.Outcome) []string {
+func jsonPanes(t *testing.T, out cli.Outcome) []string {
 	t.Helper()
 	var b bytes.Buffer
 	if err := out.Write(&b, true, Render); err != nil {

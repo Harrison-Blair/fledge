@@ -10,6 +10,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
@@ -54,7 +55,7 @@ func noGrace(o Options) Options {
 func filter(f selector.Filter) Options { return Options{Selection: selector.Selection{Filter: f}} }
 
 // rows summarizes a multi-target result as target=outcome/pane per row.
-func rows(t *testing.T, out libagent.Outcome, mode string) string {
+func rows(t *testing.T, out cli.Outcome, mode string) string {
 	t.Helper()
 	r, ok := out.Result.(FanOut)
 	if !ok || r.Mode != mode {
@@ -64,7 +65,7 @@ func rows(t *testing.T, out libagent.Outcome, mode string) string {
 	for _, row := range r.Targets {
 		pane := "-"
 		if row.Agent != nil {
-			pane = libagent.Display(row.Agent.PaneID)
+			pane = cli.Display(row.Agent.PaneID)
 		}
 		parts = append(parts, row.Target+"="+row.Outcome+"/"+pane)
 	}
@@ -112,7 +113,7 @@ func TestStopSeveralTargetsReportsEachRow(t *testing.T) {
 	if r.Targets[0].Error != nil || r.Targets[1].Error.Phase != "guard" || !strings.Contains(r.Targets[1].Error.Message, "--force") || r.Targets[2].Error.Code != "internal_error" {
 		t.Fatalf("%+v", r.Targets)
 	}
-	if len(out.Effects) != 1 || out.Effects[0] != (libagent.Effect{Action: "closed", Kind: "pane", ID: "w1:p1"}) {
+	if len(out.Effects) != 1 || out.Effects[0] != (cli.Effect{Action: "closed", Kind: "pane", ID: "w1:p1"}) {
 		t.Fatalf("effects %+v", out.Effects)
 	}
 }
@@ -473,25 +474,25 @@ func TestStopFanOutRendering(t *testing.T) {
 		r := libagent.NewAgentRow(agentIn(pane, name, status))
 		return &r
 	}
-	refused := &libagent.Failure{Code: "invalid_input", Message: "agent b is working; pass --force to stop it anyway", Phase: "guard"}
-	missing := &libagent.Failure{Code: "agent_not_found", Message: "agent_not_found: no c", Phase: "agent.get"}
+	refused := &cli.Failure{Code: "invalid_input", Message: "agent b is working; pass --force to stop it anyway", Phase: "guard"}
+	missing := &cli.Failure{Code: "agent_not_found", Message: "agent_not_found: no c", Phase: "agent.get"}
 	for _, tc := range []struct {
 		name string
-		out  libagent.Outcome
+		out  cli.Outcome
 		want string
 	}{
-		{"fan-out", libagent.Outcome{Status: "partial", Result: FanOut{Mode: "fan-out", Targets: []Row{
+		{"fan-out", cli.Outcome{Status: "partial", Result: FanOut{Mode: "fan-out", Targets: []Row{
 			{Target: "a", Outcome: "stopped", Agent: agent("w1:p1", "a", "idle")},
 			{Target: "b", Outcome: "refused", Agent: agent("w1:p2", "b", "working"), Error: refused},
 			{Target: "c", Outcome: "failed", Error: missing},
-		}}, Error: &libagent.Failure{Code: "operation_failed", Message: "2 of 3 targets not stopped cleanly: b (invalid_input), c (agent_not_found)", Phase: "agent.stop"}},
+		}}, Error: &cli.Failure{Code: "operation_failed", Message: "2 of 3 targets not stopped cleanly: b (invalid_input), c (agent_not_found)", Phase: "agent.stop"}},
 			`partial: 2 of 3 targets not stopped cleanly: b (invalid_input), c (agent_not_found) (agent.stop)
 Stopped 1 of 3 agents.
   stopped  a (w1:p1)
   refused  b (w1:p2): agent b is working; pass --force to stop it anyway
   failed   c: agent_not_found: no c
 `},
-		{"dry-run", libagent.Outcome{Status: "success", Result: FanOut{Mode: "dry-run", Targets: []Row{
+		{"dry-run", cli.Outcome{Status: "success", Result: FanOut{Mode: "dry-run", Targets: []Row{
 			{Target: "a", Outcome: "stop", Agent: agent("w1:p1", "a", "idle")},
 			{Target: "b", Outcome: "refuse", Agent: agent("w1:p2", "b", "working"), Error: refused},
 		}}},

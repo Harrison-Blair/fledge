@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 )
 
@@ -36,15 +37,15 @@ type Result struct {
 var wireSources = map[string]string{"visible": "visible", "recent": "recent", "recent-unwrapped": "recent_unwrapped", "detection": "detection"}
 
 // Run resolves the agent, then reads its pane without focusing it or marking output seen.
-func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.NewOutcome("agent.read")
+func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
+	out := cli.NewOutcome("agent.read")
 	err := o.Target.Validate()
 	source, known := wireSources[o.Source]
 	if err == nil && !known {
-		err = libagent.Invalid("--source must be visible, recent, recent-unwrapped, or detection")
+		err = cli.Invalid("--source must be visible, recent, recent-unwrapped, or detection")
 	}
 	if err == nil && o.LinesSet && (o.Lines < 0 || o.Lines > math.MaxUint32) {
-		err = libagent.Invalid("--lines must be between 0 and %d", uint32(math.MaxUint32))
+		err = cli.Invalid("--lines must be between 0 and %d", uint32(math.MaxUint32))
 	}
 	if err != nil {
 		out.Fail(err, "validation", false)
@@ -80,7 +81,7 @@ func rows(text string) int {
 }
 
 // Render writes a labeled snapshot followed by its text, ending in a newline.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil
@@ -97,6 +98,6 @@ func Render(w io.Writer, o libagent.Outcome) error {
 	if text != "" && !strings.HasSuffix(text, "\n") {
 		text += "\n"
 	}
-	_, err := fmt.Fprintf(w, "Terminal snapshot of %s (%s, %d rows, truncated: %s)\n%s", libagent.Display(who), r.Source, r.Lines, truncated, text)
+	_, err := fmt.Fprintf(w, "Terminal snapshot of %s (%s, %d rows, truncated: %s)\n%s", cli.Display(who), r.Source, r.Lines, truncated, text)
 	return err
 }

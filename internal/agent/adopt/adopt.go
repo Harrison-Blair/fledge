@@ -9,6 +9,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 )
 
@@ -28,8 +29,8 @@ type Result struct {
 // the new name. Naming an agent also labels its pane, and its tab when the
 // pane is alone there. Run never renames a named agent, and refuses one whose
 // terminal already has a live record.
-func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.NewOutcome("agent.adopt")
+func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
+	out := cli.NewOutcome("agent.adopt")
 	target := o.Pane
 	if target == "" {
 		target = c.CallerPane
@@ -37,7 +38,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	var err error
 	switch {
 	case target == "":
-		err = libagent.Invalid("--pane is required outside a Herdr pane")
+		err = cli.Invalid("--pane is required outside a Herdr pane")
 	case o.Name != "":
 		err = libagent.ValidateName(o.Name)
 	}
@@ -56,9 +57,9 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 	}
 	switch {
 	case current == "" && o.Name == "":
-		err = libagent.Invalid("the agent in %s is unnamed; pass --name", a.PaneID)
+		err = cli.Invalid("the agent in %s is unnamed; pass --name", a.PaneID)
 	case current != "" && o.Name != "" && o.Name != current:
-		err = libagent.Invalid("the agent in %s is already named %s", a.PaneID, current)
+		err = cli.Invalid("the agent in %s is already named %s", a.PaneID, current)
 	}
 	if err != nil {
 		out.Fail(err, "validation", false)
@@ -84,7 +85,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			out.Fail(err, "agent.rename", true)
 			return out
 		}
-		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "agent_name", ID: a.PaneID})
+		out.Effects = append(out.Effects, cli.Effect{Action: "updated", Kind: "agent_name", ID: a.PaneID})
 	}
 	if existing != nil {
 		rec, err := identity.Rename(store, *existing, a)
@@ -92,7 +93,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			out.Fail(err, "state", false)
 			return out
 		}
-		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "agent_record", ID: rec.ID})
+		out.Effects = append(out.Effects, cli.Effect{Action: "updated", Kind: "agent_record", ID: rec.ID})
 		out.Result = Result{Record: identity.Observe(store, observeSession, rec, &a, time.Now(), &out), Renamed: true}
 	} else {
 		rec, err := identity.Register(ctx, store, c, a, "adopt", nil, nil)
@@ -100,7 +101,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			out.Fail(err, "state", false)
 			return out
 		}
-		out.Effects = append(out.Effects, libagent.Effect{Action: "created", Kind: "agent_record", ID: rec.ID})
+		out.Effects = append(out.Effects, cli.Effect{Action: "created", Kind: "agent_record", ID: rec.ID})
 		out.Result = Result{Record: identity.Observe(store, observeSession, rec, &a, time.Now(), &out), Renamed: renamed}
 	}
 	if renamed {
@@ -119,7 +120,7 @@ var registered = identity.Registered
 var observeSession identity.Observer = identity.ObserveSession
 
 // Render writes a successful adoption.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil
