@@ -22,7 +22,8 @@ Read `AGENTS.md` and `README.md` in your working directory before starting, if p
 
 ## Always
 - Separate verified facts from assumptions. Make every acceptance criterion a concrete check.
-- Name the documentation each task must update (README, --help, backlog check-off).
+- Name the documentation each task must update (README, --help, and the backlog
+  check-off if the repository has a backlog).
 
 ## Never
 - Edit, create, or delete repository files. Spawn agents.

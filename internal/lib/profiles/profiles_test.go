@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -111,6 +112,32 @@ func TestBuiltinRolesReadRepositoryInstructionsIfPresent(t *testing.T) {
 	for _, name := range []string{"orchestrator", "planner"} {
 		if !strings.Contains(builtin(t, name).Role, "`README.md`") {
 			t.Errorf("%s dropped README.md", name)
+		}
+	}
+}
+
+// Built-ins ship to every repository, so they name no repository's branch or
+// backlog: the integration branch comes from the brief, else the documented
+// fledge.baseBranch, origin/HEAD, main fallback.
+func TestBuiltinRolesNameNoRepositoryBranch(t *testing.T) {
+	dev := regexp.MustCompile(`\bdev\b`)
+	for _, name := range roles {
+		role := builtin(t, name).Role
+		if dev.MatchString(role) || strings.Contains(role, "Touch main") || strings.Contains(role, "backlog check-off") {
+			t.Errorf("%s names a repository-specific branch or backlog:\n%s", name, role)
+		}
+	}
+	for _, name := range []string{"integrator", "orchestrator", "implementer", "debugger"} {
+		if !strings.Contains(builtin(t, name).Role, "integration branch") {
+			t.Errorf("%s does not name the integration branch", name)
+		}
+	}
+	for _, name := range []string{"integrator", "orchestrator"} {
+		role := builtin(t, name).Role
+		for _, want := range []string{"fledge.baseBranch", "origin/HEAD", "stop"} {
+			if !strings.Contains(role, want) {
+				t.Errorf("%s lacks %q", name, want)
+			}
 		}
 	}
 }
