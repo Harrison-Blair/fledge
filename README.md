@@ -107,9 +107,8 @@ This release removes several interfaces without a compatibility layer:
   configuration.
 - **Tasks.** Briefs are free text; the six-heading template is optional and
   `--freeform` is gone, so drop the flag. `complete` and `verify` no longer
-  record usage snapshots (existing ones stay readable); use
-  `fledge agent usage` instead. Completion notices no longer include the
-  report; read it with `fledge task get`. See [Tasks](#tasks).
+  record usage snapshots; use `fledge agent usage` instead. Completion notices
+  no longer include the report; read it with `fledge task get`. See [Tasks](#tasks).
 
 ## Agents
 
@@ -1073,47 +1072,22 @@ its subtasks, and a subtask is not a prerequisite of its parent.
   tasks whose prerequisites are all satisfied. Filters combine. `get --id TASK`
   prints the full record with its parent, subtask progress, and each
   prerequisite's state, for example
-  `after: 1a2b3c4d (verified), 5e6f7a8b (cancelled: superseded), 9c0d1e2f (assigned, waiting)`,
-  and a `usage:` block when the record holds historical usage (see [Usage history](#usage-history)).
-
-### Usage history
+  `after: 1a2b3c4d (verified), 5e6f7a8b (cancelled: superseded), 9c0d1e2f (assigned, waiting)`.
 
 Task commands do not collect usage. `complete` and `verify` read no harness
-transcripts and write no usage snapshots; new tasks keep `usage: null`. For
-token and cost figures, ask for them explicitly with
+transcripts. For token and cost figures, ask for them explicitly with
 [`fledge agent usage`](#usage), which reads an agent's whole native session on
 demand. `assign`, the owner's own `complete`, and `verify` still record the
 live native session ref they observe on the owner's or verifier's agent record,
 best effort (a failed write is a `warning` effect), so `agent usage` can find
 the session later.
 
-Records written by earlier Fledge versions may hold `usage.worker` (taken at
-completion) and `usage.verifier` (taken at verification). They stay readable
-and unchanged, including across a later re-verification, and `task get` still
-shows them:
-
-```text
-usage:
-  worker: 1h02m, 14 turns, in 1.2k out 18.4k cache-r 410k cache-w 96k, cost -, measured
-  verifier: 5m12s, 3 turns, in 840 out 2.1k cache-r 88k cache-w 12k, cost $0.04 (est), measured
-```
-
-Each historical snapshot covered a time window on the agent's session (from
-`assigned_at` to `completed_at` for the worker, from `completed_at` to
-`verified_at` for the verifier), so it counted anything else that session did
-in that window.
-
 Each record holds `id`, `title`, `brief`, `parent`, `after`, `owner`, `status`,
 `result`, `verifier`, `verification_note`, `forced`, `cancel_reason`,
 `created_at`, `created_by`, `assigned_at`, `unmet_at_assign`, `completed_at`,
-`completion_notification`, `verified_at`, `cancelled_at`, `delivery`, and
-`usage`. Records written before subtasks and dependencies load with a null
-`parent`, `after`, and `unmet_at_assign`; `usage` is null except on historical
-records that hold snapshots. Each snapshot holds `agent_id`, `harness`,
-`session` (`kind`, `value`), `window` (`from`, `to`), `elapsed_seconds`,
-`tokens` (`input`, `output`, `cache_read`, `cache_write`, `reasoning`), `cost`
-(null, or `amount`, `currency`, `basis: estimate`, `source`), `models`,
-`turns`, `basis` (`measured` or `unavailable`), `reason`, and `collected_at`. A completion notification records
+`completion_notification`, `verified_at`, `cancelled_at`, and `delivery`.
+Records written before subtasks and dependencies load with a null `parent`,
+`after`, and `unmet_at_assign`. A completion notification records
 its `recipient`, `message_id`, optional `pane`, `delivered_at`, `error`, and
 `uncertain` state. Every noninteractive task command supports `--json` with the same outcome envelope
 as the agent commands. JSON results add derived fields: list rows `progress`
