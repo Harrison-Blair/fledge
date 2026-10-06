@@ -28,6 +28,18 @@ var liveByTerminal = identity.LiveByTerminal
 // unattributed. Mine finds the caller in the listing, so a caller outside
 // Herdr or without a live record fails with caller_unregistered.
 func Resolve(ctx context.Context, c libagent.Client, f Filter) ([]Match, error) {
+	return resolve(ctx, c, f, func() (*state.Store, error) { return identity.Existing(ctx, c.Cwd) })
+}
+
+// ResolveIn is Resolve over s, a store the caller already opened with
+// identity.Existing, so the repository is not looked up again. A nil s is a
+// repository without state.
+func ResolveIn(ctx context.Context, s *state.Store, c libagent.Client, f Filter) ([]Match, error) {
+	return resolve(ctx, c, f, func() (*state.Store, error) { return s, nil })
+}
+
+// resolve is Resolve with open supplying the store after the listing.
+func resolve(ctx context.Context, c libagent.Client, f Filter, open func() (*state.Store, error)) ([]Match, error) {
 	if err := f.Validate(); err != nil {
 		return nil, libagent.AtPhase("validation", err)
 	}
@@ -35,7 +47,7 @@ func Resolve(ctx context.Context, c libagent.Client, f Filter) ([]Match, error) 
 	if err != nil {
 		return nil, err
 	}
-	s, records, err := load(ctx, c.Cwd)
+	s, records, err := load(open)
 	if err != nil && f.NeedsRecords() {
 		return nil, libagent.AtPhase("state", err)
 	}
@@ -85,10 +97,10 @@ func Resolve(ctx context.Context, c libagent.Client, f Filter) ([]Match, error) 
 	return matches, nil
 }
 
-// load opens the store without creating it and reads its live records. A
-// repository without state has neither.
-func load(ctx context.Context, cwd string) (*state.Store, map[string]identity.Record, error) {
-	s, err := identity.Existing(ctx, cwd)
+// load opens the store with open, which creates nothing, and reads its live
+// records. A repository without state has neither.
+func load(open func() (*state.Store, error)) (*state.Store, map[string]identity.Record, error) {
+	s, err := open()
 	if err != nil || s == nil {
 		return nil, nil, err
 	}

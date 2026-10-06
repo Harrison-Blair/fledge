@@ -11,6 +11,7 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
 )
 
 type Result struct {
@@ -47,21 +48,24 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		return out
 	}
 	// --mine resolves the caller through Herdr's agent.get, as it always has,
-	// then filters like --parent.
+	// then filters like --parent over the store it already opened.
+	var matches []selector.Match
 	if o.Mine {
-		s, err := identity.Existing(ctx, c.Cwd)
-		if err != nil {
+		var s *state.Store
+		var caller identity.Record
+		if s, err = identity.Existing(ctx, c.Cwd); err != nil {
 			out.Fail(err, "state", false)
 			return out
 		}
-		caller, err := identity.RequireCaller(ctx, s, c)
-		if err != nil {
+		if caller, err = identity.RequireCaller(ctx, s, c); err != nil {
 			out.Fail(err, "identity", false)
 			return out
 		}
 		o.Mine, o.Parent = false, caller.ID
+		matches, err = selector.ResolveIn(ctx, s, c, o.Filter)
+	} else {
+		matches, err = selector.Resolve(ctx, c, o.Filter)
 	}
-	matches, err := selector.Resolve(ctx, c, o.Filter)
 	if err != nil {
 		out.Fail(err, "agent.list", false)
 		return out
