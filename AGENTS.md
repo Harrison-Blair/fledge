@@ -21,6 +21,8 @@ leading `*`.
 
 Develop on `dev` or feature branches off `dev`. Changes reach `main` only through a
 pull request, which the owner approves. Never commit directly to `main`.
+After you clone this repository, run `git config fledge.baseBranch dev`. Git does not
+copy local config to a new clone, and Fledge uses this value to find merged branches.
 
 ## Releases
 
