@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/lib/cli"
-	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
@@ -29,9 +28,8 @@ func readFile(t *testing.T, path string) string {
 }
 
 func code(err error) string {
-	var remote *herdr.Error
-	if errors.As(err, &remote) {
-		return remote.Code
+	if c, ok := cli.Coded(err); ok {
+		return c
 	}
 	return ""
 }

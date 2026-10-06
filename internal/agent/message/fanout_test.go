@@ -256,15 +256,22 @@ func TestFanOutExplicitCallerIsMessaged(t *testing.T) {
 	}
 }
 
+// failure is the row failure that Fail records for err.
+func failure(err error, phase string) *cli.Failure {
+	o := cli.NewOutcome("")
+	o.Fail(err, phase, false)
+	return o.Error
+}
+
 func TestFanOutRendering(t *testing.T) {
 	id := "m-0a1b2c"
 	agent := func(pane, status string) *libagent.AgentRow {
 		r := libagent.NewAgentRow(livePane(pane, status))
 		return &r
 	}
-	blocked := &cli.Failure{Code: "agent_blocked", Message: "agent_blocked: approval", Phase: "agent.prompt"}
-	stalled := &cli.Failure{Code: "agent_prompt_stalled", Message: "agent_prompt_stalled: no activity", Phase: "agent.prompt"}
-	uncertain := &cli.Failure{Code: "transport_error", Message: "transport_error: EOF", Phase: "agent.prompt"}
+	blocked := failure(&herdr.Error{Code: "agent_blocked", Message: "approval"}, "agent.prompt")
+	stalled := failure(&herdr.Error{Code: "agent_prompt_stalled", Message: "no activity"}, "agent.prompt")
+	uncertain := failure(&herdr.Error{Code: "transport_error", Message: "EOF", Uncertain: true}, "agent.prompt")
 	result := FanOut{Mode: "fan-out", Targets: []Row{
 		{Target: "a", Outcome: "submitted", MessageID: &id, Agent: agent("w1:p1", "idle")},
 		{Target: "b", Outcome: "confirmed", MessageID: &id, Agent: agent("w1:p2", "working")},

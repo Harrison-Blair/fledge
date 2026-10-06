@@ -224,7 +224,7 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) cli.Outcome 
 	result.AgentStatus = cli.Pointer(a.AgentStatus)
 	known := s.register(b.ctx, withHarness(a, o.Harness), &out)
 	if a.AgentStatus == "blocked" {
-		out.Fail(&herdr.Error{Code: "agent_blocked", Message: fmt.Sprintf("agent %s is waiting on a startup prompt", o.Name)}, "agent.wait", true)
+		out.Fail(&cli.Error{Code: "agent_blocked", Message: fmt.Sprintf("agent %s is waiting on a startup prompt", o.Name)}, "agent.wait", true)
 		return out
 	}
 	if !result.PromptRequested {

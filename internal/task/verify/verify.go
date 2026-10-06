@@ -78,11 +78,11 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 		switch {
 		case o.Force:
 		case caller == nil:
-			return &herdr.Error{Code: "caller_unregistered", Message: "the caller has no live Fledge record, so it cannot be recorded as the verifier; register with fledge agent adopt, or pass --force"}
+			return &cli.Error{Code: "caller_unregistered", Message: "the caller has no live Fledge record, so it cannot be recorded as the verifier; register with fledge agent adopt, or pass --force"}
 		case r.Owner != nil && *r.Owner == caller.ID:
-			return &herdr.Error{Code: "task_self_verification", Message: fmt.Sprintf("task %s is owned by the caller (%s); another agent should verify it, or pass --force", r.ID, caller.ID)}
+			return &cli.Error{Code: "task_self_verification", Message: fmt.Sprintf("task %s is owned by the caller (%s); another agent should verify it, or pass --force", r.ID, caller.ID)}
 		case len(open) > 0:
-			return &herdr.Error{Code: "task_open_subtasks", Message: fmt.Sprintf("task %s has subtasks that are not verified or cancelled: %s; finish them first, or pass --force", r.ID, strings.Join(open, ", "))}
+			return &cli.Error{Code: "task_open_subtasks", Message: fmt.Sprintf("task %s has subtasks that are not verified or cancelled: %s; finish them first, or pass --force", r.ID, strings.Join(open, ", "))}
 		}
 		r.Status, r.VerifiedAt, r.Forced, r.Verifier, r.VerificationNote = task.Verified, task.Now(), o.Force, nil, nil
 		if caller != nil {
@@ -113,10 +113,10 @@ func requireVerifiable(r *task.Record, p *task.Progress, open []string) error {
 		return task.Require(r, "verify", task.Completed, task.Verified)
 	}
 	if len(open) > 0 {
-		return &herdr.Error{Code: "task_open_subtasks", Message: fmt.Sprintf("task %s is %s and has subtasks that are not verified or cancelled: %s; finish them first", r.ID, r.Status, strings.Join(open, ", "))}
+		return &cli.Error{Code: "task_open_subtasks", Message: fmt.Sprintf("task %s is %s and has subtasks that are not verified or cancelled: %s; finish them first", r.ID, r.Status, strings.Join(open, ", "))}
 	}
 	if p.Verified == 0 {
-		return &herdr.Error{Code: "task_invalid_state", Message: fmt.Sprintf("task %s is %s and all its subtasks were cancelled; cancel it instead with fledge task cancel --id %s", r.ID, r.Status, r.ID)}
+		return &cli.Error{Code: "task_invalid_state", Message: fmt.Sprintf("task %s is %s and all its subtasks were cancelled; cancel it instead with fledge task cancel --id %s", r.ID, r.Status, r.ID)}
 	}
 	return nil
 }

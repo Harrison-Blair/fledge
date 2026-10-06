@@ -71,7 +71,7 @@ func (o Options) targets(ctx context.Context, c libagent.Client, open func() (*s
 func (p pending) get(ctx context.Context, c libagent.Client, open func() (*state.Store, error)) (herdr.AgentDetails, string, *identity.Record, error) {
 	a, target, rec, err := p.target.GetWith(ctx, c, open)
 	if err == nil && p.terminal != "" && a.TerminalID != p.terminal {
-		err = cli.AtPhase("identity", &herdr.Error{Code: "agent_identity_stale", Message: fmt.Sprintf("pane %s now hosts a different agent than the one matched", target)})
+		err = cli.AtPhase("identity", &cli.Error{Code: "agent_identity_stale", Message: fmt.Sprintf("pane %s now hosts a different agent than the one matched", target)})
 	}
 	return a, target, rec, err
 }
@@ -126,7 +126,7 @@ func (p pending) peek(ctx context.Context, c libagent.Client, r records) (herdr.
 			return m.Agent, m.Agent.PaneID, nil
 		}
 	}
-	return herdr.AgentDetails{}, "", cli.AtPhase("identity", &herdr.Error{Code: "agent_identity_stale", Message: fmt.Sprintf("agent record %s has no live agent in this Herdr session", p.target.ID)})
+	return herdr.AgentDetails{}, "", cli.AtPhase("identity", &cli.Error{Code: "agent_identity_stale", Message: fmt.Sprintf("agent record %s has no live agent in this Herdr session", p.target.ID)})
 }
 
 // plan reports what stopping each target would do. It only reads: explicit
@@ -249,7 +249,7 @@ func renderFanOut(w io.Writer, f FanOut) error {
 			subject += " (" + where + ")"
 		}
 		if r.Error != nil {
-			subject += ": " + r.Error.Message
+			subject += ": " + r.Error.Text()
 		}
 		if _, err := fmt.Fprintf(w, "  %-*s  %s\n", width, r.Outcome, subject); err != nil {
 			return err

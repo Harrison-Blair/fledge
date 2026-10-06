@@ -211,7 +211,7 @@ func fanOut(ctx context.Context, c libagent.Client, targets []target, o Options,
 		}
 	}
 	if f := libagent.FanOutFailure(failed, len(targets), "failed", ""); f != nil {
-		return result, &herdr.Error{Code: f.Code, Message: f.Message}
+		return result, &cli.Error{Code: f.Code, Message: f.Message}
 	}
 	return result, nil
 }
@@ -223,16 +223,17 @@ func progress(w io.Writer, row Row, pending int) {
 	if pending == 1 {
 		unit = "target"
 	}
-	fmt.Fprintf(w, "%s failed: %s (still waiting on %d %s).\n", row.Target, row.Error.Message, pending, unit)
+	fmt.Fprintf(w, "%s failed: %s (still waiting on %d %s).\n", row.Target, row.Error.Text(), pending, unit)
 }
 
-// serverError reports a definite Herdr answer, as opposed to a local transport
-// failure such as the connection closing on cancellation.
+// serverError reports a definite answer, Fledge's own or Herdr's, as opposed
+// to a local transport failure such as the connection closing on cancellation.
 func serverError(err error) bool {
+	var fledge *cli.Error
 	var remote *herdr.Error
-	return errors.As(err, &remote) && !remote.Uncertain && remote.Code != "connection_error"
+	return errors.As(err, &fledge) || errors.As(err, &remote) && !remote.Uncertain && remote.Code != "connection_error"
 }
-func cancelled() error { return &herdr.Error{Code: "cancelled", Message: "wait cancelled"} }
+func cancelled() error { return &cli.Error{Code: "cancelled", Message: "wait cancelled"} }
 
 // Render writes a single target's settled state, or one line per fan-out
 // target. Fan-out rows are also written after a failure.
@@ -258,7 +259,7 @@ func Render(w io.Writer, o cli.Outcome) error {
 					line += " (first match)"
 				}
 			case "errored":
-				line = fmt.Sprintf("%s failed: %s", row.Target, row.Error.Message)
+				line = fmt.Sprintf("%s failed: %s", row.Target, row.Error.Text())
 			default:
 				line = row.Target + " was cancelled"
 			}

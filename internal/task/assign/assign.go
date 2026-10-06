@@ -5,7 +5,6 @@ package assign
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -14,7 +13,6 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/cli"
-	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
@@ -94,7 +92,7 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) cl
 			return out
 		}
 		if owner == nil {
-			out.Fail(&herdr.Error{Code: "agent_unregistered", Message: fmt.Sprintf("the agent in %s has no Fledge record; register it first with: fledge agent adopt --pane %s", a.PaneID, a.PaneID)}, "identity", false)
+			out.Fail(&cli.Error{Code: "agent_unregistered", Message: fmt.Sprintf("the agent in %s has no Fledge record; register it first with: fledge agent adopt --pane %s", a.PaneID, a.PaneID)}, "identity", false)
 			return out
 		}
 		// The terminal is the identity; the record follows it to a new pane.
@@ -107,7 +105,7 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) cl
 	}
 	r, err := task.Update(s, o.ID, func(r *task.Record) error {
 		if !reflect.DeepEqual(*r, snapshot) {
-			return &herdr.Error{Code: "task_state_changed", Message: fmt.Sprintf("task %s changed while it was being assigned; inspect it with fledge task get --id %s", r.ID, r.ID)}
+			return &cli.Error{Code: "task_state_changed", Message: fmt.Sprintf("task %s changed while it was being assigned; inspect it with fledge task get --id %s", r.ID, r.ID)}
 		}
 		byID, err := prerequisites(s, *r)
 		if err != nil {
@@ -134,7 +132,7 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) cl
 		// Record the outcome only for this assignment; the owner may already
 		// have completed the task, so the status is not checked.
 		if r.AssignedAt == nil || *r.AssignedAt != *assignedAt || r.Owner == nil || *r.Owner != owner.ID || r.Delivery == nil || r.Delivery.MessageID != messageID {
-			return nil, &herdr.Error{Code: "task_state_changed", Message: fmt.Sprintf("task %s was reassigned before its delivery could be recorded", r.ID)}
+			return nil, &cli.Error{Code: "task_state_changed", Message: fmt.Sprintf("task %s was reassigned before its delivery could be recorded", r.ID)}
 		}
 		return &r.Delivery.Attempt, nil
 	}); ok {
@@ -149,8 +147,7 @@ func prerequisites(s *state.Store, r task.Record) (map[string]task.Record, error
 	byID := make(map[string]task.Record, len(r.After))
 	for _, id := range r.After {
 		dep, err := task.Get(s, id)
-		var e *herdr.Error
-		if errors.As(err, &e) && e.Code == "task_not_found" {
+		if code, _ := cli.Coded(err); code == "task_not_found" {
 			continue
 		}
 		if err != nil {
@@ -169,7 +166,7 @@ func waiting(r task.Record, byID map[string]task.Record, force bool) ([]string, 
 	case len(unmet) == 0:
 		return nil, nil
 	case !force:
-		return nil, &herdr.Error{Code: "task_dependencies_unmet", Message: fmt.Sprintf("task %s waits on prerequisites that are not verified or cancelled: %s; assign it once they are, or pass --force", r.ID, strings.Join(unmet, ", "))}
+		return nil, &cli.Error{Code: "task_dependencies_unmet", Message: fmt.Sprintf("task %s waits on prerequisites that are not verified or cancelled: %s; assign it once they are, or pass --force", r.ID, strings.Join(unmet, ", "))}
 	}
 	return unmet, nil
 }

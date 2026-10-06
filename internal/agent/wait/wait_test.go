@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"reflect"
 	"slices"
@@ -557,5 +558,24 @@ func TestWaitSeveralIDsResolveRootOnce(t *testing.T) {
 	}
 	if got := roots(); got != 1 {
 		t.Fatalf("resolved the repository root %d times, want 1", got)
+	}
+}
+
+// TestServerErrorTreatsFledgeErrorsAsDefinite keeps a Fledge failure, such as a
+// missing record, reported as errored rather than cancelled after --all cancels.
+func TestServerErrorTreatsFledgeErrorsAsDefinite(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{cli.AtPhase("identity", &cli.Error{Code: "agent_record_not_found", Message: "x"}), true},
+		{&herdr.Error{Code: "agent_not_found", Message: "x"}, true},
+		{&herdr.Error{Code: "transport_error", Message: "x", Uncertain: true}, false},
+		{&herdr.Error{Code: "connection_error", Message: "x"}, false},
+		{errors.New("closed"), false},
+	} {
+		if got := serverError(tc.err); got != tc.want {
+			t.Errorf("serverError(%v) = %v, want %v", tc.err, got, tc.want)
+		}
 	}
 }

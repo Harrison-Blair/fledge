@@ -4,7 +4,6 @@ package usage
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -97,8 +96,7 @@ func resolve(ctx context.Context, c libagent.Client, sel selector.Selection, ope
 	}
 	for _, id := range sel.IDs {
 		a, pane, rec, err := identity.Target{ID: id}.GetWith(ctx, c, open)
-		var remote *herdr.Error
-		if errors.As(err, &remote) && remote.Code == "agent_identity_stale" {
+		if code, _ := cli.Coded(err); code == "agent_identity_stale" {
 			if rec, err = stored(open, id); err == nil {
 				a, pane = herdr.AgentDetails{}, rec.Pane
 			}

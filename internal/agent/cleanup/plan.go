@@ -68,7 +68,7 @@ func plan(ctx context.Context, c libagent.Client, o Options) (planned, error) {
 // matched by terminal, or fails with caller_unregistered. It also returns
 // the LiveByTerminal map it read, so the plan reads the records once.
 func callerRecord(ctx context.Context, c libagent.Client, s *state.Store) (identity.Record, map[string]identity.Record, error) {
-	unregistered := cli.AtPhase("identity", &herdr.Error{Code: "caller_unregistered", Message: "the caller has no live Fledge record; register with fledge agent adopt"})
+	unregistered := cli.AtPhase("identity", &cli.Error{Code: "caller_unregistered", Message: "the caller has no live Fledge record; register with fledge agent adopt"})
 	if c.CallerPane == "" {
 		return identity.Record{}, nil, unregistered
 	}

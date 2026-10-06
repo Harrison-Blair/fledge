@@ -10,7 +10,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
-	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 )
@@ -161,11 +161,11 @@ func Require(r *Record, action string, allowed ...string) error {
 	if slices.Contains(allowed, r.Status) {
 		return nil
 	}
-	return &herdr.Error{Code: "task_invalid_state", Message: fmt.Sprintf("task %s is %s; %s requires %s", r.ID, r.Status, action, strings.Join(allowed, " or "))}
+	return &cli.Error{Code: "task_invalid_state", Message: fmt.Sprintf("task %s is %s; %s requires %s", r.ID, r.Status, action, strings.Join(allowed, " or "))}
 }
 
 func notFound(id string) error {
-	return &herdr.Error{Code: "task_not_found", Message: fmt.Sprintf("no task with id %s", id)}
+	return &cli.Error{Code: "task_not_found", Message: fmt.Sprintf("no task with id %s", id)}
 }
 
 func mapMissing(err error, id string) error {

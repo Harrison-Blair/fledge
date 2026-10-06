@@ -238,7 +238,7 @@ func Registered(s *state.Store, a herdr.AgentDetails) (*Record, error) {
 }
 
 func alreadyRegistered(a herdr.AgentDetails, existing Record) error {
-	return &herdr.Error{Code: "agent_already_registered", Message: fmt.Sprintf("the agent in %s is already registered as %s", a.PaneID, existing.ID)}
+	return &cli.Error{Code: "agent_already_registered", Message: fmt.Sprintf("the agent in %s is already registered as %s", a.PaneID, existing.ID)}
 }
 
 // Caller finds the live record of the agent in the caller's pane, if any. A
@@ -309,7 +309,7 @@ func RequireCaller(ctx context.Context, s *state.Store, c libagent.Client) (Reco
 		return Record{}, err
 	}
 	if rec == nil {
-		return Record{}, &herdr.Error{Code: "caller_unregistered", Message: "the caller has no live Fledge record; register with fledge agent adopt"}
+		return Record{}, &cli.Error{Code: "caller_unregistered", Message: "the caller has no live Fledge record; register with fledge agent adopt"}
 	}
 	return *rec, nil
 }
@@ -426,7 +426,7 @@ func Reopen(s *state.Store, id string) error {
 			return err
 		}
 		if other, ok := records[rec.TerminalID]; ok {
-			return &herdr.Error{Code: "agent_already_registered", Message: fmt.Sprintf("cannot reopen agent record %s: terminal %s is registered as %s", id, rec.TerminalID, other.ID)}
+			return &cli.Error{Code: "agent_already_registered", Message: fmt.Sprintf("cannot reopen agent record %s: terminal %s is registered as %s", id, rec.TerminalID, other.ID)}
 		}
 		// Unarchive first: interrupted here, the record is live but ended,
 		// which the next scan under the lock archives again.
@@ -734,11 +734,11 @@ func load(s *state.Store, id string) (Record, error) {
 
 // RecordNotFound is the agent_record_not_found error for an unknown record id.
 func RecordNotFound(id string) error {
-	return &herdr.Error{Code: "agent_record_not_found", Message: fmt.Sprintf("no agent record with id %s", id)}
+	return &cli.Error{Code: "agent_record_not_found", Message: fmt.Sprintf("no agent record with id %s", id)}
 }
 
 func stale(id, format string, args ...any) error {
-	return &herdr.Error{Code: "agent_identity_stale", Message: fmt.Sprintf("agent record %s is stale: ", id) + fmt.Sprintf(format, args...)}
+	return &cli.Error{Code: "agent_identity_stale", Message: fmt.Sprintf("agent record %s is stale: ", id) + fmt.Sprintf(format, args...)}
 }
 
 // session names the caller's Herdr session, or nil outside one.
@@ -797,9 +797,8 @@ func (t Target) GetWith(ctx context.Context, c libagent.Client, open func() (*st
 		return herdr.AgentDetails{}, "", nil, cli.AtPhase("identity", err)
 	}
 	rec, a, err := Resolve(ctx, s, c, t.ID)
-	var remote *herdr.Error
 	var input *cli.InputError
-	if err != nil && (errors.As(err, &input) || errors.As(err, &remote) && (remote.Code == "agent_identity_stale" || remote.Code == "agent_record_not_found")) {
+	if code, _ := cli.Coded(err); err != nil && (errors.As(err, &input) || code == "agent_identity_stale" || code == "agent_record_not_found") {
 		err = cli.AtPhase("identity", err)
 	}
 	if err != nil {

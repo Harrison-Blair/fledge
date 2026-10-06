@@ -8,16 +8,14 @@ import (
 	"testing"
 
 	"github.com/Harrison-Blair/fledge/internal/lib/cli"
-	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
 
 func code(err error) string {
-	var remote *herdr.Error
-	if errors.As(err, &remote) {
-		return remote.Code
+	if c, ok := cli.Coded(err); ok {
+		return c
 	}
 	var input *cli.InputError
 	if errors.As(err, &input) {

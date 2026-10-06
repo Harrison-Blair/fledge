@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 )
@@ -29,7 +30,19 @@ type Failure struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	Phase   string `json:"phase"`
+	// coded records that Fail removed the code prefix from Message.
+	coded bool
 }
+
+// Text is the failure for humans: Message with the "code: " prefix that Fail
+// removed from it, so human text keeps the code that JSON keeps in Code.
+func (f Failure) Text() string {
+	if f.coded {
+		return f.Code + ": " + f.Message
+	}
+	return f.Message
+}
+
 type Effect struct {
 	Action string `json:"action"`
 	Kind   string `json:"kind"`
@@ -53,20 +66,22 @@ func (o *Outcome) Fail(err error, phase string, mutating bool) {
 	}
 	code := "operation_failed"
 	var input *InputError
-	var remote *herdr.Error
 	if errors.As(err, &input) {
 		code = "invalid_input"
 		o.input = true
 	}
-	if errors.As(err, &remote) {
-		code = remote.Code
-		if mutating && remote.Uncertain {
+	message, coded := err.Error(), false
+	if c, ok := Coded(err); ok {
+		code = c
+		message, coded = strings.CutPrefix(message, code+": ")
+		var remote *herdr.Error
+		if mutating && errors.As(err, &remote) && remote.Uncertain {
 			o.Status = "unknown"
 		} else if phase == "agent.start" && (code == "timeout" || code == "agent_not_ready") {
 			o.Status = "partial"
 		}
 	}
-	o.Error = &Failure{Code: code, Message: err.Error(), Phase: phase}
+	o.Error = &Failure{Code: code, Message: message, Phase: phase, coded: coded}
 }
 func (o Outcome) ExitCode() int {
 	if o.Error == nil {
@@ -91,7 +106,7 @@ func (e *InputError) Error() string { return e.Message }
 // ResultError carries a rendered operation's exit status without duplicate output.
 type ResultError struct{ Outcome Outcome }
 
-func (e *ResultError) Error() string { return e.Outcome.Error.Message }
+func (e *ResultError) Error() string { return e.Outcome.Error.Text() }
 func (e *ResultError) ExitCode() int { return e.Outcome.ExitCode() }
 func (e *ResultError) Rendered()     {}
 
@@ -113,7 +128,7 @@ func (o Outcome) Write(w io.Writer, asJSON bool, render HumanRenderer) error {
 		return json.NewEncoder(w).Encode(o)
 	}
 	if o.Error != nil {
-		if _, err := fmt.Fprintf(w, "%s: %s (%s)\n", o.Status, o.Error.Message, o.Error.Phase); err != nil {
+		if _, err := fmt.Fprintf(w, "%s: %s (%s)\n", o.Status, o.Error.Text(), o.Error.Phase); err != nil {
 			return err
 		}
 		for _, effect := range o.Effects {

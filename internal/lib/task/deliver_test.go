@@ -51,7 +51,7 @@ func seeded(t *testing.T) (string, string) {
 // pending locates the seeded delivery, as a caller's attempt function does.
 func pending(r *task.Record) (*task.Attempt, error) {
 	if r.Delivery == nil || r.Delivery.MessageID != "m-0a1b2c" {
-		return nil, &herdr.Error{Code: "task_state_changed", Message: "changed"}
+		return nil, &cli.Error{Code: "task_state_changed", Message: "changed"}
 	}
 	return &r.Delivery.Attempt, nil
 }
@@ -112,7 +112,7 @@ func TestDeliverLookupFailure(t *testing.T) {
 	repo, id := seeded(t)
 	prompt := herdrscript.Call{Method: "agent.prompt", Result: herdr.AgentResult{Type: "agent_prompted", Agent: tasktest.Agent("w1:p3", "term_w", "worker").Agent}}
 	changed := func(*task.Record) (*task.Attempt, error) {
-		return nil, &herdr.Error{Code: "task_state_changed", Message: "changed"}
+		return nil, &cli.Error{Code: "task_state_changed", Message: "changed"}
 	}
 	out, _, ok := deliver(t, repo, id, prompt, changed)
 	want := []cli.Effect{{Action: "submitted", Kind: "message", ID: "w1:p3"}}

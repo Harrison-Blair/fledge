@@ -12,7 +12,6 @@ import (
 
 	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/fledgedir"
-	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 )
 
@@ -90,7 +89,7 @@ func Add(ctx context.Context, cwd string, m Memory, out *cli.Outcome) error {
 		path := filepath.Join(dir, m.Name+".md")
 		err := state.WriteExclusive(path, Format(m))
 		if errors.Is(err, fs.ErrExist) {
-			return &herdr.Error{Code: "memory_exists", Message: fmt.Sprintf("memory %s already exists; remove it first to replace it", m.Name)}
+			return &cli.Error{Code: "memory_exists", Message: fmt.Sprintf("memory %s already exists; remove it first to replace it", m.Name)}
 		}
 		if err != nil {
 			return err
@@ -165,14 +164,13 @@ func writeIndex(dir string, ms []Memory, out *cli.Outcome) error {
 }
 
 func notFound(name string) error {
-	return &herdr.Error{Code: "memory_not_found", Message: fmt.Sprintf("no memory named %s", name)}
+	return &cli.Error{Code: "memory_not_found", Message: fmt.Sprintf("no memory named %s", name)}
 }
 
 // Phase is the outcome phase of an error from this package: memory for a
 // missing or existing memory, state otherwise.
 func Phase(err error) string {
-	var known *herdr.Error
-	if errors.As(err, &known) {
+	if _, ok := cli.Coded(err); ok {
 		return "memory"
 	}
 	return "state"
