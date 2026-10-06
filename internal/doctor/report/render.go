@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 )
 
 // nameGap is the space between the widest check name and the status column.
@@ -145,7 +145,7 @@ func wrapText(s string) []string {
 
 // compatLines shows the version and protocol; the capability list is verbose-only.
 func compatLines(d CompatibilityData, verbose bool) []string {
-	lines := []string{fmt.Sprintf("version %s · protocol %d (expected %d)", libagent.DisplayString(d.Version), d.Protocol, d.Expected)}
+	lines := []string{fmt.Sprintf("version %s · protocol %d (expected %d)", cli.DisplayString(d.Version), d.Protocol, d.Expected)}
 	if verbose {
 		lines = append(lines, wrapList("capabilities", d.CapabilityNames())...)
 	}
@@ -232,7 +232,7 @@ func configLines(d ConfigData) []string {
 	}
 	lines := make([]string, len(rows))
 	for i, row := range rows {
-		lines[i] = fmt.Sprintf("%-*s%s", configKeyWidth, row.key, libagent.DisplayString(row.val))
+		lines[i] = fmt.Sprintf("%-*s%s", configKeyWidth, row.key, cli.DisplayString(row.val))
 	}
 	return lines
 }
