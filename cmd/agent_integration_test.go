@@ -38,29 +38,7 @@ type rpcCall struct {
 // closes l so an unexpected extra request fails fast (connection refused)
 // instead of hanging the test.
 func serveRPCs(l net.Listener, results ...any) <-chan []rpcCall {
-	done := make(chan []rpcCall, 1)
-	go func() {
-		var calls []rpcCall
-		for _, result := range results {
-			conn, err := l.Accept()
-			if err != nil {
-				done <- calls
-				return
-			}
-			var req struct {
-				ID     string          `json:"id"`
-				Method string          `json:"method"`
-				Params json.RawMessage `json:"params"`
-			}
-			json.NewDecoder(conn).Decode(&req)
-			calls = append(calls, rpcCall{Method: req.Method, Params: req.Params})
-			json.NewEncoder(conn).Encode(map[string]any{"id": req.ID, "result": result})
-			conn.Close()
-		}
-		l.Close()
-		done <- calls
-	}()
-	return done
+	return serveLateRPC(l, -1, results...)
 }
 
 // waitCalls closes l first, so a serveRPCs goroutine blocked in Accept on an
@@ -390,10 +368,7 @@ func TestSpawnBlockedWaitWithPromptIsPartialWithFledgeHints(t *testing.T) {
 func TestGetForwardsTargetAndDecodesDetails(t *testing.T) {
 	for _, flag := range []string{"--name", "--pane"} {
 		t.Run(flag, func(t *testing.T) {
-			l, path := sockettest.Listen(t)
-			t.Setenv("HERDR_ENV", "1")
-			t.Setenv("HERDR_SOCKET_PATH", path)
-			t.Chdir(t.TempDir())
+			l := newSocket(t)
 			target := "reviewer"
 			if flag == "--pane" {
 				target = "w2:p3"
