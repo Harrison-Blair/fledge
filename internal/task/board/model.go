@@ -15,6 +15,9 @@ type row struct {
 	depth int
 }
 type tickMsg struct{}
+
+const refreshInterval = 2 * time.Second
+
 type focusMsg struct{ err error }
 type detailMsg struct {
 	generation uint64
@@ -44,16 +47,19 @@ type model struct {
 	detailCancel                    context.CancelFunc
 	cache                           map[string][]string
 	cacheOrder                      []string
+	interval                        time.Duration
 }
 
 func newModel(ctx context.Context, cancel context.CancelFunc, c libagent.Client, r *Repository, s *Snapshot) *model {
-	m := &model{ctx: ctx, cancel: cancel, client: c, repository: r, snapshot: s, expanded: map[string]bool{}, workers: map[string]Worker{}, cache: map[string][]string{}}
+	m := &model{ctx: ctx, cancel: cancel, client: c, repository: r, snapshot: s, expanded: map[string]bool{}, workers: map[string]Worker{}, cache: map[string][]string{}, interval: refreshInterval}
 	m.rebuild()
 	return m
 }
-func tick() tea.Cmd { return tea.Tick(2*time.Second, func(time.Time) tea.Msg { return tickMsg{} }) }
+func (m *model) tick() tea.Cmd {
+	return tea.Tick(m.interval, func(time.Time) tea.Msg { return tickMsg{} })
+}
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.refresh(Tasks, false), m.refresh(Workers, false), tick())
+	return tea.Batch(m.refresh(Tasks, false), m.refresh(Workers, false), m.tick())
 }
 func (m *model) refresh(source Source, manual bool) tea.Cmd {
 	if m.inFlight[source] {
@@ -75,7 +81,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return m, m.key(v.String())
 	case tickMsg:
-		return m, tea.Batch(m.refresh(Tasks, false), m.refresh(Workers, false), tick())
+		return m, tea.Batch(m.refresh(Tasks, false), m.refresh(Workers, false), m.tick())
 	case Observation:
 		m.inFlight[v.Source] = false
 		if v.Source == Tasks {

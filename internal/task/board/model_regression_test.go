@@ -161,23 +161,39 @@ func TestInitRefreshesBothSourcesImmediately(t *testing.T) {
 	}
 }
 
-func TestPeriodicTickArrivesAfterTwoSeconds(t *testing.T) {
-	start := time.Now()
-	cmd := tick()
-	result := make(chan tea.Msg, 1)
-	go func() { result <- cmd() }()
-	deadline := time.NewTimer(4 * time.Second)
-	defer deadline.Stop()
-	select {
-	case msg := <-result:
-		if _, ok := msg.(tickMsg); !ok {
-			t.Fatalf("periodic command returned %T, want tickMsg", msg)
+func TestPeriodicRefreshUsesTwoSecondInterval(t *testing.T) {
+	if m := boardModel(t); m.interval != 2*time.Second {
+		t.Fatalf("refresh interval = %s, want 2s", m.interval)
+	}
+}
+
+func TestInitAndTickScheduleNextTickAfterInterval(t *testing.T) {
+	m := boardModel(t)
+	m.interval = 20 * time.Millisecond
+	m.inFlight = [2]bool{true, true}
+	schedulers := map[string]func() tea.Cmd{
+		"Init":    m.Init,
+		"tickMsg": func() tea.Cmd { _, cmd := m.Update(tickMsg{}); return cmd },
+	}
+	for name, schedule := range schedulers {
+		start := time.Now()
+		cmd := schedule()
+		if cmd == nil {
+			t.Fatalf("%s scheduled no periodic tick", name)
 		}
-		if elapsed := time.Since(start); elapsed < 1500*time.Millisecond || elapsed > 4*time.Second {
-			t.Fatalf("periodic tick arrived after %s, want about two seconds", elapsed)
+		result := make(chan tea.Msg, 1)
+		go func() { result <- cmd() }()
+		select {
+		case msg := <-result:
+			if _, ok := msg.(tickMsg); !ok {
+				t.Fatalf("%s periodic command returned %T, want tickMsg", name, msg)
+			}
+			if elapsed := time.Since(start); elapsed < m.interval {
+				t.Fatalf("%s periodic tick arrived after %s, want at least %s", name, elapsed, m.interval)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s periodic tick did not arrive within one second of a %s interval", name, m.interval)
 		}
-	case <-deadline.C:
-		t.Fatal("periodic tick did not arrive within four seconds")
 	}
 }
 
