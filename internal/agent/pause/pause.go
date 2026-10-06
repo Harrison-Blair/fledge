@@ -59,7 +59,7 @@ func (s pauser) run(ctx context.Context, o Options) libagent.Outcome {
 	}
 	result := Result{AgentRow: libagent.NewAgentRow(a.Pane)}
 	out.Result = result
-	if a.Agent == nil || !libagent.IsHarness(*a.Agent) {
+	if a.Agent == nil || !harness.IsKind(*a.Agent) {
 		out.Fail(libagent.Invalid("pause requires a known harness"), "guard", false)
 		return out
 	}

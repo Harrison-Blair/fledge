@@ -12,6 +12,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/harness"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
@@ -26,7 +27,7 @@ func fake(t *testing.T, calls ...call) *pauser {
 }
 
 func TestPauseMappings(t *testing.T) {
-	for _, h := range libagent.Harnesses() {
+	for _, h := range harness.Kinds() {
 		t.Run(h, func(t *testing.T) {
 			keys := []string{"esc"}
 			switch h {

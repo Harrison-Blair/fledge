@@ -4,7 +4,7 @@
 // read.go adds agent.read;
 // wait.go adds agent.wait with wait's transport deadline policy;
 // input.go reads inline, file, or stdin text;
-// harness.go holds canonical harness membership;
+// harness.go validates --harness values against lib/harness;
 // name.go holds the agent-name rule;
 // label.go renames an agent and labels its pane and, when alone, its tab;
 // header.go attributes delivered prompts to their sender;

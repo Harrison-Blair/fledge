@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/harness"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 )
 
@@ -48,7 +49,7 @@ func (f Filter) Validate() error {
 		return libagent.Invalid("--task must be an 8 lowercase hexadecimal task id")
 	case slices.ContainsFunc(f.States, func(s string) bool { return !slices.Contains(states, s) }):
 		return libagent.Invalid("--state must be idle, working, blocked, done, or unknown")
-	case slices.ContainsFunc(f.Harnesses, func(h string) bool { return !libagent.IsHarness(h) }):
+	case slices.ContainsFunc(f.Harnesses, func(h string) bool { return !harness.IsKind(h) }):
 		return libagent.Invalid("--harness must be a documented Herdr harness kind")
 	case slices.ContainsFunc(f.Profiles, blank):
 		return libagent.Invalid("--profile must be nonempty")
