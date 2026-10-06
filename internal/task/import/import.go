@@ -84,7 +84,7 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 				out.Fail(err, "state", false)
 				return out
 			}
-			if err := check(s, o.Parent, existing); err != nil {
+			if err := task.CheckLinks(s, o.Parent, existing); err != nil {
 				out.Fail(err, "task", false)
 				return out
 			}
@@ -104,7 +104,7 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 	}
 	phase := "state"
 	err = s.Exclusive(func(tx *state.Tx) error {
-		if err := check(s, o.Parent, existing); err != nil {
+		if err := task.CheckLinks(s, o.Parent, existing); err != nil {
 			phase = "task"
 			return err
 		}
@@ -179,26 +179,6 @@ func validate(o Options, in io.Reader) (proposal.Proposal, []proposal.Task, erro
 	}
 	order, err := p.Order()
 	return p, order, err
-}
-
-// check requires parent, when set, to accept subtasks and every existing
-// prerequisite to exist.
-func check(s *state.Store, parent string, existing []string) error {
-	if parent != "" {
-		r, err := task.Get(s, parent)
-		if err == nil {
-			err = task.Require(&r, "adding a subtask", task.Created, task.Assigned, task.Completed)
-		}
-		if err != nil {
-			return err
-		}
-	}
-	for _, id := range existing {
-		if _, err := task.Get(s, id); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // Render writes the tasks in creation order: a plan on a dry run, one line

@@ -75,3 +75,43 @@ func TestUnmetKeepsOrderAndTreatsCancelledAsSatisfied(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckLinks(t *testing.T) {
+	s, err := identity.OpenStore(context.Background(), identitytest.Repository(t), &libagent.Outcome{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]string{}
+	for _, status := range []string{Created, Assigned, Completed, Verified, Cancelled} {
+		ids[status], err = s.Create(Kind, func(id string) any {
+			return Record{ID: id, Title: status, Brief: "b", Status: status, CreatedAt: *Now()}
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, status := range []string{Created, Assigned, Completed} {
+		if err := CheckLinks(s, ids[status], []string{ids[Verified], ids[Cancelled]}); err != nil {
+			t.Fatalf("%s parent: %v", status, err)
+		}
+	}
+	if err := CheckLinks(s, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []string{Verified, Cancelled} {
+		err := CheckLinks(s, ids[status], nil)
+		if want := "task_invalid_state: task " + ids[status] + " is " + status + "; adding a subtask requires created or assigned or completed"; code(err) != "task_invalid_state" || err.Error() != want {
+			t.Fatalf("%s parent: %v", status, err)
+		}
+	}
+	// The parent is checked before prerequisites, and prerequisites in order.
+	if err := CheckLinks(s, ids[Verified], []string{"0123abcd"}); code(err) != "task_invalid_state" {
+		t.Fatalf("%v", err)
+	}
+	if err := CheckLinks(s, ids[Created], []string{ids[Created], "0123abcd", "0123abce"}); code(err) != "task_not_found" || err.Error() != "task_not_found: no task with id 0123abcd" {
+		t.Fatalf("%v", err)
+	}
+	if err := CheckLinks(s, "0123abcd", nil); code(err) != "task_not_found" {
+		t.Fatalf("%v", err)
+	}
+}
