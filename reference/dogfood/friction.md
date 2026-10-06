@@ -949,6 +949,13 @@ registration; this is not confirmed. Workaround: `fledge agent adopt --pane
 worktree association, because adopt does not record one. A later `spawn` with
 the same names was rejected with "agent name ... is already in use
 (preflight)", which showed that the agents existed.
+Update 2026-10-06: reproduced in the audit-fix run (orchestrator notes). The
+orchestrator's tool call that ran `fledge agent spawn --name ver-runtime-11 ...`
+stopped with a harness internal error. The Codex pane `w3M:p2` started and had
+the name, but it had no Fledge record. A new spawn with the same name was
+rejected as "already in use (preflight)", and `task assign --name` rejected the
+name with `agent_unregistered`. A second recovery also works:
+`fledge agent stop --pane w3M:p2`, then spawn again.
 
 **Reproduction steps:**
 1. Run `fledge agent spawn --harness claude --worktree new --branch <b> --base dev ...`.
@@ -1099,6 +1106,16 @@ retried. Workaround: each planner ran `fledge agent wait` and re-sent the notice
 by hand with `fledge agent message --name orchestrator`. An orchestrator that
 uses a question dialog therefore routinely misses completions unless workers
 resend them.
+Update 2026-10-06: reproduced many times in the audit-fix run while the
+orchestrator (`w2S:p1`) showed an AskUserQuestion dialog. `task complete`
+stored each completion but exited 1 with `partial: agent_blocked: agent w2S:p1
+is blocked and requires interactive input (agent.prompt)`. The resend
+workaround above also fails while the dialog stays open: `fledge agent message
+--name orchestrator` was rejected with the same `agent_blocked`. The
+orchestrator gets no wake-up and must find completions with `fledge task
+list`/`get`. Seen by ver-code-16, ver-code-17, ver-code-21, ver-code-23,
+impl-code-18, impl-runtime-10, and the orchestrator notes (impl-code-08,
+impl-code-20, ver-code-17).
 
 **Reproduction steps:**
 1. Register a creator pane, then create a task and assign it to a worker.
@@ -1170,6 +1187,9 @@ must go in `--body` or `--file`. `impl-d4` copied the hint and appended the text
 as a positional argument, and `fledge agent message` failed with `unknown
 command`. Observed once. Workaround: pass the text with `--body "..."` or
 `--file <path>`.
+Update 2026-10-06: seen again by rs-w1 (docs-07). The full rejection is
+`rejected: unknown command "<text>" for "fledge agent message" (validation)`,
+exit 2.
 
 **Reproduction steps:**
 1. Receive a message from a named agent and copy the reply command from its header.
@@ -1504,6 +1524,7 @@ unknown.
 **Status:** Open
 
 **Summary:** On 2026-10-05 two `gpt-6.1-sol` Codex verifiers, spawned with `fledge agent spawn --harness codex` (bypass defaults on), reported that their tool calls had no `HERDR_*` environment variables. The first one could not send `fledge agent message` and reported "the Herdr environment is unavailable". The second one found the socket path by hand and set `HERDR_SOCKET_PATH` and `HERDR_PANE_ID` on each command, and then coordination worked. Observed in 6 of 6 Codex spawns this session: two STE verifiers and four audit verifiers. Each one that set the variables by hand then coordinated normally. The cause, for example whether Codex filters the environment of its tool shell, is not established.
+Update 2026-10-06: reproduced in all 66 Codex verifiers of the audit-fix run (ver-code-01 to ver-code-28, ver-docs-01 to ver-docs-20, ver-runtime-01 to ver-runtime-11, ver-tests-01 to ver-tests-17; not every number ran). In each one, `fledge agent current` returned `rejected: caller_unregistered`, and `fledge agent list` returned `run inside Herdr with HERDR_ENV=1 and HERDR_SOCKET_PATH set`. `HERDR_SOCKET_PATH` alone is not sufficient; `HERDR_ENV=1` is also necessary (ver-code-03, -04, -15, -16, -17, -20, ver-docs-02, -04, -06, -17, ver-runtime-05, ver-tests-12, -17). With those two set, each verifier found its own pane in `agent list`, then set `HERDR_PANE_ID` to that pane. `agent current` then returned the existing record, so no `adopt` was necessary. ver-runtime-05: a variable prefix applies only to its own command, so each command group must export all three values.
 
 **Reproduction steps:**
 1. Spawn a Codex agent with `fledge agent spawn --harness codex --model gpt-6.1-sol --name probe`.
@@ -1522,3 +1543,16 @@ unknown.
 1. Plan N independent read-only reviewers whose results one merge step needs together.
 2. Try to express it with `fledge agent spawn`, `fledge agent wait --all`, and `fledge task get`.
 3. Observe no result schema and no single combined result.
+
+---
+
+**Issue:** Sibling workers have no shared channel for cross-page findings
+
+**Status:** Open
+
+**Summary:** On 2026-10-06, in the docs-07 Herdr reference resync, several workers each edited a different page under one parent. Findings that touched other pages reached rs-w2 as two parent messages while it was already editing. Each message pointed to a different report file and heading (`rs-w4/report.md` and `rs-w1-result.md`). Fledge has no shared findings channel for a group of tasks, so the parent relays file paths by message and each worker reads the other reports by hand. Seen by rs-w2 (docs-07).
+
+**Reproduction steps:**
+1. Assign several workers to disjoint pages under one parent.
+2. Let each worker write its findings about other pages into its own report.
+3. Observe that the parent must relay each report path by message, and the recipient must search each file by hand.
