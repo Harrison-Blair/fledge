@@ -16,7 +16,7 @@ for an unknown top-level group, `unknown command: layout`.
 ## Mapping table (all 103 socket methods)
 
 Methods are listed in the schema's method-name order. "API-only" means no CLI subcommand
-reaches the method — a client must speak the socket directly (see `raw/` probes). CLI flag
+reaches the method — a client must speak the socket directly. CLI flag
 lists below are abbreviated; consult each subcommand's `--help` for the exhaustive set.
 
 | socket method | CLI equivalent | notes |
@@ -30,23 +30,23 @@ lists below are abbreviated; consult each subcommand's `--help` for the exhausti
 | `agent.rename` | `herdr agent rename <target> <name>\|--clear` | positional NAME or `--clear` |
 | `agent.send_keys` | `herdr agent send-keys <target> <key>…` | `esc` is the canonical Escape name (`escape` also accepted) |
 | `agent.start` | `herdr agent start <name> --kind KIND --pane ID [--timeout MS] [-- AGENT_ARG…]` | KIND is a supported agent kind; pane must be at an interactive shell prompt |
-| `agent.view.clear` | API-only (no CLI subcommand) | raw socket only (`raw/agent-view-clear.json`) |
-| `agent.view.set` | API-only (no CLI subcommand) | raw socket only (`raw/agent-view-set.json`) |
+| `agent.view.clear` | API-only (no CLI subcommand) | raw socket only (live probe, capture not stored) |
+| `agent.view.set` | API-only (no CLI subcommand) | raw socket only (live probe, capture not stored) |
 | `agent.wait` | `herdr agent wait <target> [--until STATE]… [--timeout MS]` | without `--until`, matches idle/done/blocked |
 | `client.window_title.clear` | API-only (no CLI subcommand) | |
-| `client.window_title.set` | API-only (no CLI subcommand) | raw socket only (`raw/client-window-title-set.json`) |
+| `client.window_title.set` | API-only (no CLI subcommand) | raw socket only (live probe, capture not stored) |
 | `client_shell.surface.set` | API-only (no CLI subcommand) | toggles whether the requesting client shell endpoint receives/controls pane presentation; returns `connection_local_only` outside a client-shell endpoint |
 | `command.invoke` | API-only (no CLI subcommand) | invokes an opaque `command_id` from the client-shell command projection; used by `herdr command`-less integrations, not the CLI |
 | `events.subscribe` | API-only (no CLI subcommand) | connection stays open and receives pushed `{"event":…,"data":…}` lines |
-| `events.wait` | API-only (no CLI subcommand) | raw socket only (`raw/events-wait.json`) |
+| `events.wait` | API-only (no CLI subcommand) | raw socket only (live probe, capture not stored) |
 | `integration.install` | `herdr integration install <target>` | target ∈ pi, omp, claude, codex, copilot, devin, droid, kimi, opencode, kilo, hermes, qodercli, qwen, cursor, mastracode, antigravity-cli, grok, letta; note: `letta` is accepted by the CLI's usage text but is absent from the schema's `IntegrationTarget` enum and from a live `integration.list` response (0.9.1 drift) |
 | `integration.list` | API-only (no CLI subcommand) | returns one `IntegrationInfo`/`IntegrationState` entry per built-in integration (17 in 0.9.1, `letta` not among them); `herdr integration status` (CLI-only, see below) is a separate report |
 | `integration.uninstall` | `herdr integration uninstall <target>` | same target set |
 | `layout.apply` | API-only (no CLI subcommand) | `herdr layout …` → `unknown command: layout` |
-| `layout.export` | API-only (no CLI subcommand) | raw socket only (`raw/layout-export.json`) |
-| `layout.set_split_ratio` | API-only (no CLI subcommand) | raw socket only (`raw/layout-set-split-ratio.json`) |
+| `layout.export` | API-only (no CLI subcommand) | raw socket only (live probe, capture not stored) |
+| `layout.set_split_ratio` | API-only (no CLI subcommand) | raw socket only (live probe, capture not stored) |
 | `notification.show` | `herdr notification show <title> [--body TEXT] [--position POS] [--sound SOUND]` | POS ∈ top-left, top-right, bottom-left, bottom-right; SOUND ∈ none, done, request |
-| `pane.clear_agent_authority` | API-only (no CLI subcommand) | distinct from `pane release-agent`; raw socket only (`raw/pane-clear-agent-authority.json`) |
+| `pane.clear_agent_authority` | API-only (no CLI subcommand) | distinct from `pane release-agent`; raw socket only (live probe, capture not stored) |
 | `pane.close` | `herdr pane close <pane_id>` | |
 | `pane.copy_motion` | API-only (no CLI subcommand) | moves a copy-mode cursor by a `PaneCopyMotion` (word/line/paragraph); no CLI copy-mode exists |
 | `pane.copy_search` | API-only (no CLI subcommand) | searches scrollback from a copy-mode cursor in a `PaneCopySearchDirection`; no CLI copy-mode exists |
@@ -57,7 +57,7 @@ lists below are abbreviated; consult each subcommand's `--help` for the exhausti
 | `pane.focus_direction` | `herdr pane focus --direction DIR [--pane ID \| --current]` | DIR ∈ left, right, up, down |
 | `pane.get` | `herdr pane get <pane_id>` | positional id (not `--pane`) |
 | `pane.graphics.clear` | API-only (no CLI subcommand) | |
-| `pane.graphics.info` | API-only (no CLI subcommand) | raw socket only (`raw/pane-graphics-info.json`) |
+| `pane.graphics.info` | API-only (no CLI subcommand) | raw socket only (live probe, capture not stored) |
 | `pane.graphics.set` | API-only (no CLI subcommand) | |
 | `pane.input.set` | `herdr pane input --right-click TARGET [PANE_ID] [--pane ID \| --current]` | CLI subcommand is `pane input`; TARGET ∈ herdr, pane (right-click routing) |
 | `pane.layout` | `herdr pane layout [--pane ID \| --current]` | |
@@ -76,7 +76,7 @@ lists below are abbreviated; consult each subcommand's `--help` for the exhausti
 | `pane.resize` | `herdr pane resize --direction DIR [--amount F] [--pane ID \| --current]` | DIR ∈ left, right, up, down |
 | `pane.scroll` | API-only (no CLI subcommand) | sets absolute scrollback `offset_from_bottom`; no CLI scroll command exists |
 | `pane.selection.read` | API-only (no CLI subcommand) | reads text between an anchor and cursor `PaneTextPoint`; no CLI equivalent |
-| `pane.send_input` | API-only (no CLI subcommand) | raw socket only (`raw/pane-send-input.json`); `pane run` composes `send-text` rather than calling this |
+| `pane.send_input` | API-only (no CLI subcommand) | raw socket only (live probe, capture not stored); `pane run` composes `send-text` rather than calling this |
 | `pane.send_keys` | `herdr pane send-keys <pane_id> <key>…` | `esc` canonical Escape |
 | `pane.send_text` | `herdr pane send-text <pane_id> <text>` | literal text, no trailing Enter |
 | `pane.split` | `herdr pane split [PANE_ID] [--pane ID\|--current] [--direction right\|down] [--ratio F] [--cwd] [--env KEY=VALUE] [--right-click herdr\|pane] [--focus\|--no-focus]` | |
@@ -95,7 +95,7 @@ lists below are abbreviated; consult each subcommand's `--help` for the exhausti
 | `plugin.pane.focus` | `herdr plugin pane focus <PANE_ID>` | new CLI group in 0.9.1 |
 | `plugin.pane.open` | `herdr plugin pane open --plugin <ID> --entrypoint <ID> [--placement <overlay\|split\|tab\|zoomed>] [--workspace <ID>] [--target-pane <PANE>] [--direction <right\|down>] [--cwd <PATH>] [--env <KEY=VALUE>]... [--focus \| --no-focus]` | CLI `--placement` omits `popup`, which remains valid on the wire |
 | `plugin.unlink` | `herdr plugin unlink <PLUGIN_ID>` | new CLI group in 0.9.1 |
-| `popup.close` | API-only (no CLI subcommand) | raw socket only (`raw/popup-close.json`) |
+| `popup.close` | API-only (no CLI subcommand) | raw socket only (live probe, capture not stored) |
 | `product_announcement.dismiss` | API-only (no CLI subcommand) | dismisses an in-app product announcement by `id`/`version`; errors `stale_announcement` once it is no longer current |
 | `release_notes.dismiss` | API-only (no CLI subcommand) | dismisses the in-app release-notes prompt for a given `version` |
 | `server.agent_manifests` | `herdr server agent-manifests [--json]` | thin 1:1 wrapper; default output (no `--json`) is a human-readable table, not the JSON envelope |
@@ -117,7 +117,7 @@ lists below are abbreviated; consult each subcommand's `--help` for the exhausti
 | `workspace.get` | `herdr workspace get <workspace_id>` | |
 | `workspace.list` | `herdr workspace list` | |
 | `workspace.move` | API-only (no CLI subcommand) | `herdr workspace move` prints the `workspace` usage list, exit 2 |
-| `workspace.move_block` | API-only (no CLI subcommand) | raw socket only (`raw/workspace-move-block.json`) |
+| `workspace.move_block` | API-only (no CLI subcommand) | raw socket only (live probe, capture not stored) |
 | `workspace.rename` | `herdr workspace rename <workspace_id> <label>…` | LABEL variadic |
 | `workspace.report_metadata` | `herdr workspace report-metadata <workspace_id> --source ID [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]` | |
 | `worktree.create` | `herdr worktree create [--workspace ID] [--cwd] [--branch] [--base] [--path] [--label] [--focus\|--no-focus]` | |
@@ -188,7 +188,7 @@ running binary, so their descriptions remain constructed from `--help` text).
 
 ## CLI conventions
 
-Observed from the help sweep and probe captures (`probes/`, `probes/scratch/*.err`):
+Observed from the help sweep and live probes, including `.err` usage strings (captures not stored):
 
 - **JSON result on stdout.** A method-backed subcommand prints the socket `result` object
   verbatim as one JSON line on stdout, with the envelope `id` set to
