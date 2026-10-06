@@ -66,21 +66,12 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 		if err != nil {
 			return err
 		}
-		children, verified := 0, 0
 		for _, child := range rs {
-			if child.Parent == nil || *child.Parent != r.ID {
-				continue
-			}
-			children++
-			switch child.Status {
-			case task.Verified:
-				verified++
-			case task.Cancelled:
-			default:
+			if child.Parent != nil && *child.Parent == r.ID && !task.Satisfied(child.Status) {
 				open = append(open, child.ID)
 			}
 		}
-		if err := requireVerifiable(r, children, verified, open); err != nil {
+		if err := requireVerifiable(r, task.ChildProgress(r.ID, rs), open); err != nil {
 			return err
 		}
 		switch {
@@ -116,14 +107,14 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 // requireVerifiable accepts a completed or verified task, or a created or
 // assigned parent whose direct subtasks are all verified or cancelled with at
 // least one verified. Force never widens this.
-func requireVerifiable(r *task.Record, children, verified int, open []string) error {
-	if children == 0 || (r.Status != task.Created && r.Status != task.Assigned) {
+func requireVerifiable(r *task.Record, p *task.Progress, open []string) error {
+	if p == nil || (r.Status != task.Created && r.Status != task.Assigned) {
 		return task.Require(r, "verify", task.Completed, task.Verified)
 	}
 	if len(open) > 0 {
 		return &herdr.Error{Code: "task_open_subtasks", Message: fmt.Sprintf("task %s is %s and has subtasks that are not verified or cancelled: %s; finish them first", r.ID, r.Status, strings.Join(open, ", "))}
 	}
-	if verified == 0 {
+	if p.Verified == 0 {
 		return &herdr.Error{Code: "task_invalid_state", Message: fmt.Sprintf("task %s is %s and all its subtasks were cancelled; cancel it instead with fledge task cancel --id %s", r.ID, r.Status, r.ID)}
 	}
 	return nil
