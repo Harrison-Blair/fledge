@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 	libusage "github.com/Harrison-Blair/fledge/internal/lib/usage"
@@ -272,6 +275,89 @@ func TestUsageNameAttributesRecord(t *testing.T) {
 	got := rows(t, Run(context.Background(), client(t, f.cwd, herdrscript.Get("worker", a)), f.d, Options{Selection: selector.Selection{Names: []string{"worker"}}}))
 	if len(got) != 1 || got[0].AgentID == nil || *got[0].AgentID != rec.ID || record(t, f.cwd, rec.ID).NativeSession == nil {
 		t.Fatalf("%+v", got)
+	}
+}
+
+// countScans counts calls of liveByTerminal, which then returns records and
+// err when either is set, else scans the store.
+func countScans(t *testing.T, records map[string]identity.Record, err error) *int {
+	t.Helper()
+	scans := 0
+	t.Cleanup(func() { liveByTerminal = identity.LiveByTerminal })
+	liveByTerminal = func(s *state.Store) (map[string]identity.Record, error) {
+		scans++
+		if records != nil || err != nil {
+			return records, err
+		}
+		return identity.LiveByTerminal(s)
+	}
+	return &scans
+}
+
+// Several --name targets share one scan of the live records, and each is
+// attributed to its own record.
+func TestUsageNamesScanLiveRecordsOnce(t *testing.T) {
+	f := newFixture(t)
+	names := []string{"one", "two", "three"}
+	var calls []call
+	ids := map[string]string{}
+	for i, name := range names {
+		a := piAgent("w1:p"+strconv.Itoa(i+3), "term_"+name, name, f.session)
+		ids[name] = identitytest.Register(t, f.cwd, a).ID
+		calls = append(calls, herdrscript.Get(name, a))
+	}
+	scans := countScans(t, nil, nil)
+	got := rows(t, Run(context.Background(), client(t, f.cwd, calls...), f.d, Options{Selection: selector.Selection{Names: names}}))
+	if *scans != 1 {
+		t.Fatalf("scans = %d, want 1", *scans)
+	}
+	if len(got) != len(names) {
+		t.Fatalf("%+v", got)
+	}
+	for i, r := range got {
+		if r.AgentID == nil || *r.AgentID != ids[names[i]] {
+			t.Fatalf("row %d: %+v", i, r)
+		}
+	}
+}
+
+// Targets that already carry records need no scan.
+func TestUsageRecordedTargetsSkipScan(t *testing.T) {
+	f := newFixture(t)
+	a := piAgent("w1:p3", "term_a", "worker", f.session)
+	identitytest.Register(t, f.cwd, a)
+	scans := countScans(t, nil, nil)
+	got := rows(t, Run(context.Background(), client(t, f.cwd, herdrscript.List(a)), f.d, Options{Selection: selector.Selection{Filter: selector.Filter{Registered: true}}}))
+	if *scans != 0 || len(got) != 1 || got[0].AgentID == nil {
+		t.Fatalf("scans = %d, rows %+v", *scans, got)
+	}
+}
+
+// A live record of a different harness in the target's terminal is not the
+// target's record.
+func TestUsageNameMismatchedHarnessIsUnattributed(t *testing.T) {
+	f := newFixture(t)
+	a := piAgent("w1:p3", "term_a", "worker", f.session)
+	identitytest.Register(t, f.cwd, a)
+	other := "claude"
+	a.Agent = &other
+	got := rows(t, Run(context.Background(), client(t, f.cwd, herdrscript.Get("worker", a)), f.d, Options{Selection: selector.Selection{Names: []string{"worker"}}}))
+	if len(got) != 1 || got[0].AgentID != nil || got[0].Harness != "claude" {
+		t.Fatalf("%+v", got)
+	}
+}
+
+// A failed scan is not fatal: no target is attributed, even to a record the
+// partial scan returned, and every row is still reported.
+func TestUsageScanErrorLeavesNamesUnattributed(t *testing.T) {
+	f := newFixture(t)
+	a := piAgent("w1:p3", "term_a", "worker", f.session)
+	rec := identitytest.Register(t, f.cwd, a)
+	scans := countScans(t, map[string]identity.Record{"term_a": rec}, errors.New("unreadable record"))
+	out := Run(context.Background(), client(t, f.cwd, herdrscript.Get("worker", a)), f.d, Options{Selection: selector.Selection{Names: []string{"worker"}}})
+	got := rows(t, out)
+	if *scans != 1 || len(got) != 1 || got[0].AgentID != nil || got[0].Basis != libusage.Measured || out.Status != "success" || len(out.Effects) != 0 {
+		t.Fatalf("scans = %d, %+v", *scans, out)
 	}
 }
 
