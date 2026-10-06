@@ -4,11 +4,13 @@ package identitytest
 
 import (
 	"context"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -151,5 +153,26 @@ func NoObserveSession(t *testing.T) {
 			}
 			return true
 		})
+	}
+}
+
+// CountRoots puts a git wrapper first on PATH that counts repository root
+// resolutions (the first Git command of each identity.Existing) and returns
+// a function that reads the count.
+func CountRoots(t *testing.T) func() int {
+	t.Helper()
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin, log := t.TempDir(), filepath.Join(t.TempDir(), "roots")
+	script := fmt.Sprintf("#!/bin/sh\ncase \"$*\" in *--is-bare-repository*) echo >>%q;; esac\nexec %q \"$@\"\n", log, git)
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return func() int {
+		b, _ := os.ReadFile(log)
+		return strings.Count(string(b), "\n")
 	}
 }

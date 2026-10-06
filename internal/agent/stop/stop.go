@@ -49,6 +49,12 @@ func (o Options) EffectiveGrace() time.Duration {
 // Run stops the selected agents one after another. A single target keeps its
 // own result; several, or any dry run, report one row per target.
 func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
+	return RunWith(ctx, c, o, identity.OpenOnce(ctx, c.Cwd))
+}
+
+// RunWith is Run with open supplying the store for every record lookup and
+// end, so a caller that already opened it, such as cleanup, passes it on.
+func RunWith(ctx context.Context, c libagent.Client, o Options, open func() (*state.Store, error)) libagent.Outcome {
 	out := libagent.NewOutcome("agent.stop")
 	err := o.Selection.Validate()
 	if err == nil && o.GraceSet {
@@ -63,28 +69,28 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Fail(err, "validation", false)
 		return out
 	}
-	targets, err := o.targets(ctx, c)
+	targets, err := o.targets(ctx, c, open)
 	if err != nil {
 		out.Fail(err, "agent.get", false)
 		return out
 	}
 	switch {
 	case o.DryRun:
-		return plan(ctx, c, o, targets)
+		return plan(ctx, c, o, targets, open)
 	case len(targets) > 1:
-		return fanOut(ctx, c, o, targets)
+		return fanOut(ctx, c, o, targets, open)
 	}
-	return stopOne(ctx, c, o, targets[0])
+	return stopOne(ctx, c, o, targets[0], open)
 }
 
 // stopOne looks up one target afresh and stops it unless the guard refuses.
-func stopOne(ctx context.Context, c libagent.Client, o Options, p pending) libagent.Outcome {
-	a, target, rec, err := p.get(ctx, c)
-	return stopFound(ctx, c, o, a, target, rec, err)
+func stopOne(ctx context.Context, c libagent.Client, o Options, p pending, open func() (*state.Store, error)) libagent.Outcome {
+	a, target, rec, err := p.get(ctx, c, open)
+	return stopFound(ctx, c, o, a, target, rec, err, open)
 }
 
 // stopFound stops the agent a lookup found, or reports the lookup's error.
-func stopFound(ctx context.Context, c libagent.Client, o Options, a herdr.AgentDetails, target string, rec *identity.Record, err error) libagent.Outcome {
+func stopFound(ctx context.Context, c libagent.Client, o Options, a herdr.AgentDetails, target string, rec *identity.Record, err error, open func() (*state.Store, error)) libagent.Outcome {
 	out := libagent.NewOutcome("agent.stop")
 	if err != nil {
 		out.Fail(err, "agent.get", false)
@@ -107,7 +113,7 @@ func stopFound(ctx context.Context, c libagent.Client, o Options, a herdr.AgentD
 	}
 	// End the record before closing: an agent stopping its own pane is hung up
 	// by pane.close before control returns here.
-	store, ended, reopen, endErr := end(ctx, c, a, rec)
+	store, ended, reopen, endErr := end(open, a, rec)
 	var closed struct {
 		Type string `json:"type"`
 	}
@@ -136,12 +142,13 @@ func stopFound(ctx context.Context, c libagent.Client, o Options, a herdr.AgentD
 	return out
 }
 
-// end marks the agent's live record ended and returns its store and id, or ""
-// when the agent has no record, and whether this call ended it, so a failed
-// close reopens only its own end. Like agent get, it treats an unavailable
-// store as holding no record, so stop works outside a repository.
-func end(ctx context.Context, c libagent.Client, a herdr.AgentDetails, rec *identity.Record) (*state.Store, string, bool, error) {
-	s, err := identity.Existing(ctx, c.Cwd)
+// end marks the agent's live record ended in the store open supplies and
+// returns that store and the id, or "" when the agent has no record, and
+// whether this call ended it, so a failed close reopens only its own end.
+// Like agent get, it treats an unavailable store as holding no record, so
+// stop works outside a repository.
+func end(open func() (*state.Store, error), a herdr.AgentDetails, rec *identity.Record) (*state.Store, string, bool, error) {
+	s, err := open()
 	if err != nil || s == nil {
 		return nil, "", false, nil
 	}

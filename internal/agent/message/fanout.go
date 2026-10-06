@@ -2,12 +2,10 @@ package message
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
-	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
@@ -32,23 +30,14 @@ type Row struct {
 }
 
 // fanOut delivers text to each target in turn, continuing past failures.
-// Any failed row makes the outcome partial.
-func fanOut(ctx context.Context, c libagent.Client, o Options, targets []selector.Target, text, id string, sender *libagent.Sender) libagent.Outcome {
+// Any failed row makes the outcome partial. Rereads take the store from open,
+// the opener that selected the targets.
+func fanOut(ctx context.Context, c libagent.Client, o Options, targets []selector.Target, text, id string, sender *libagent.Sender, open func() (*state.Store, error)) libagent.Outcome {
 	out := libagent.NewOutcome("agent.message")
 	result := FanOut{Mode: "fan-out", Targets: []Row{}}
 	var failed []libagent.TargetFailure
-	var opened *state.Store
-	var ok bool
-	store := func() (*state.Store, error) {
-		if ok {
-			return opened, nil
-		}
-		s, err := identity.Existing(ctx, c.Cwd)
-		opened, ok = s, err == nil
-		return s, err
-	}
 	for _, t := range targets {
-		one := reread(ctx, c, o, &t, id, sender, store)
+		one := reread(ctx, c, o, &t, id, sender, open)
 		if one.Error == nil {
 			one = deliver(ctx, c, o, t, text, id, sender)
 		}
@@ -74,16 +63,15 @@ func fanOut(ctx context.Context, c libagent.Client, o Options, targets []selecto
 // deliveries give it time to change. A registered target is resolved again
 // from its record, following its terminal to a new pane and rejecting one
 // gone or now running another harness, so the message never reaches whatever
-// replaced it; store opens the store for these rereads and keeps it only once
-// an open succeeds. Any other target's status is reread for a confirmed
-// message; the already-working decision needs the status at sending. A failed
-// read rejects the target.
+// replaced it; store supplies the store for these rereads. Any other target's
+// status is reread for a confirmed message; the already-working decision
+// needs the status at sending. A failed read rejects the target.
 func reread(ctx context.Context, c libagent.Client, o Options, t *selector.Target, id string, sender *libagent.Sender, store func() (*state.Store, error)) libagent.Outcome {
 	out := libagent.NewOutcome("agent.message")
 	a, pane, rec, err := t.Agent, t.Pane, t.Record, error(nil)
 	switch {
 	case t.Record != nil:
-		a, pane, rec, err = resolve(ctx, c, t.Record.ID, store)
+		a, pane, rec, err = identity.Target{ID: t.Record.ID}.GetWith(ctx, c, store)
 	case o.Confirm:
 		a, err = c.Get(ctx, t.Pane)
 	default:
@@ -100,25 +88,6 @@ func reread(ctx context.Context, c libagent.Client, o Options, t *selector.Targe
 	}
 	t.Agent, t.Pane, t.Record = a, pane, rec
 	return out
-}
-
-// resolve is identity.Target{ID: id}.Get with the store opened by store, so
-// rereads share one store; its errors are located at the same phases.
-func resolve(ctx context.Context, c libagent.Client, id string, store func() (*state.Store, error)) (herdr.AgentDetails, string, *identity.Record, error) {
-	s, err := store()
-	if err != nil {
-		return herdr.AgentDetails{}, "", nil, libagent.AtPhase("identity", err)
-	}
-	rec, a, err := identity.Resolve(ctx, s, c, id)
-	var remote *herdr.Error
-	var input *libagent.InputError
-	if err != nil && (errors.As(err, &input) || errors.As(err, &remote) && (remote.Code == "agent_identity_stale" || remote.Code == "agent_record_not_found")) {
-		err = libagent.AtPhase("identity", err)
-	}
-	if err != nil {
-		return herdr.AgentDetails{}, "", nil, err
-	}
-	return a, rec.Pane, &rec, nil
 }
 
 func rowOutcome(status string, r Result) string {

@@ -547,3 +547,27 @@ func TestStopFilterRegisteredMatchFollowsMovedTerminal(t *testing.T) {
 		t.Fatalf("%+v %+v", out, out.Error)
 	}
 }
+
+// A stop resolves the repository root once, however many id targets it ends.
+func TestStopByIDsResolvesRootOnce(t *testing.T) {
+	a, b := withTerminal(agentIn("w1:p1", "a", "idle"), "term_a"), withTerminal(agentIn("w1:p2", "b", "idle"), "term_b")
+	for name, n := range map[string]int{"one id": 1, "two ids": 2} {
+		t.Run(name, func(t *testing.T) {
+			calls := []call{
+				{Method: "agent.get", Params: map[string]any{"target": "w1:p1"}, Result: herdr.AgentResult{Type: "agent_info", Agent: a}}, closeCall("w1:p1", nil),
+				{Method: "agent.get", Params: map[string]any{"target": "w1:p2"}, Result: herdr.AgentResult{Type: "agent_info", Agent: b}}, closeCall("w1:p2", nil),
+			}
+			s := fake(t, calls[:2*n]...)
+			s.Cwd = identitytest.Repository(t)
+			ids := []string{identitytest.Register(t, s.Cwd, a).ID, identitytest.Register(t, s.Cwd, b).ID}[:n]
+			roots := identitytest.CountRoots(t)
+			out := Run(context.Background(), s, Options{Selection: selector.Selection{IDs: ids}})
+			if out.Status != "success" || len(out.Effects) != 2*n {
+				t.Fatalf("%+v", out)
+			}
+			if got := roots(); got != 1 {
+				t.Fatalf("resolved the repository root %d times, want 1", got)
+			}
+		})
+	}
+}

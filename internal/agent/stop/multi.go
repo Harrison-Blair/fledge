@@ -45,7 +45,7 @@ type pending struct {
 
 // targets lists explicit targets in flag order, names then panes then ids, or
 // resolves the filter, whose matches exclude the caller.
-func (o Options) targets(ctx context.Context, c libagent.Client) ([]pending, error) {
+func (o Options) targets(ctx context.Context, c libagent.Client, open func() (*state.Store, error)) ([]pending, error) {
 	var ps []pending
 	if o.Filter.Empty() {
 		for _, t := range o.Explicit() {
@@ -53,7 +53,7 @@ func (o Options) targets(ctx context.Context, c libagent.Client) ([]pending, err
 		}
 		return ps, nil
 	}
-	matches, err := o.Selection.Targets(ctx, c)
+	matches, err := o.Selection.Targets(ctx, c, open)
 	if err != nil {
 		return nil, err
 	}
@@ -67,8 +67,8 @@ func (o Options) targets(ctx context.Context, c libagent.Client) ([]pending, err
 	return ps, nil
 }
 
-func (p pending) get(ctx context.Context, c libagent.Client) (herdr.AgentDetails, string, *identity.Record, error) {
-	a, target, rec, err := p.target.Get(ctx, c)
+func (p pending) get(ctx context.Context, c libagent.Client, open func() (*state.Store, error)) (herdr.AgentDetails, string, *identity.Record, error) {
+	a, target, rec, err := p.target.GetWith(ctx, c, open)
 	if err == nil && p.terminal != "" && a.TerminalID != p.terminal {
 		err = libagent.AtPhase("identity", &herdr.Error{Code: "agent_identity_stale", Message: fmt.Sprintf("pane %s now hosts a different agent than the one matched", target)})
 	}
@@ -76,15 +76,16 @@ func (p pending) get(ctx context.Context, c libagent.Client) (herdr.AgentDetails
 }
 
 // records is a dry run's read-only view of the agent records, shared by its
-// targets: the store is opened, and the registered agents Herdr lists are
-// resolved, at most once each and only when a target first needs them.
+// targets: the store is opened through the command's opener, and the
+// registered agents Herdr lists are resolved, at most once each and only when
+// a target first needs them.
 type records struct {
 	store   func() (*state.Store, error)
 	matches func() ([]selector.Match, error)
 }
 
-func newRecords(ctx context.Context, c libagent.Client) records {
-	r := records{store: sync.OnceValues(func() (*state.Store, error) { return identity.Existing(ctx, c.Cwd) })}
+func newRecords(ctx context.Context, c libagent.Client, open func() (*state.Store, error)) records {
+	r := records{store: sync.OnceValues(open)}
 	r.matches = sync.OnceValues(func() ([]selector.Match, error) {
 		// peek resolves only after the store opened without error.
 		s, _ := r.store()
@@ -98,7 +99,7 @@ func newRecords(ctx context.Context, c libagent.Client) records {
 // neither ended nor moved. An unknown id fails as get's does.
 func (p pending) peek(ctx context.Context, c libagent.Client, r records) (herdr.AgentDetails, string, error) {
 	if p.target.ID == "" {
-		a, target, _, err := p.get(ctx, c)
+		a, target, _, err := p.get(ctx, c, r.store)
 		return a, target, err
 	}
 	s, err := r.store()
@@ -129,10 +130,10 @@ func (p pending) peek(ctx context.Context, c libagent.Client, r records) (herdr.
 
 // plan reports what stopping each target would do. It only reads: explicit
 // targets are looked up without writing, filter matches come from the listing.
-func plan(ctx context.Context, c libagent.Client, o Options, targets []pending) libagent.Outcome {
+func plan(ctx context.Context, c libagent.Client, o Options, targets []pending, open func() (*state.Store, error)) libagent.Outcome {
 	out := libagent.NewOutcome("agent.stop")
 	result := FanOut{Mode: "dry-run", Targets: []Row{}}
-	recs := newRecords(ctx, c)
+	recs := newRecords(ctx, c, open)
 	for _, p := range targets {
 		row := Row{Target: p.label, Outcome: "stop"}
 		var a herdr.AgentDetails
@@ -163,7 +164,7 @@ func plan(ctx context.Context, c libagent.Client, o Options, targets []pending) 
 // fanOut stops each target in turn, continuing past refusals and failures.
 // The caller's own pane is stopped last, as closing it ends this process;
 // rows keep target order.
-func fanOut(ctx context.Context, c libagent.Client, o Options, targets []pending) libagent.Outcome {
+func fanOut(ctx context.Context, c libagent.Client, o Options, targets []pending, open func() (*state.Store, error)) libagent.Outcome {
 	out := libagent.NewOutcome("agent.stop")
 	result := FanOut{Mode: "fan-out", Targets: make([]Row, len(targets))}
 	report := func(i int, one libagent.Outcome) {
@@ -186,12 +187,12 @@ func fanOut(ctx context.Context, c libagent.Client, o Options, targets []pending
 	}
 	var last []func()
 	for i, p := range targets {
-		a, target, rec, err := p.get(ctx, c)
+		a, target, rec, err := p.get(ctx, c, open)
 		if err == nil && c.CallerPane != "" && a.PaneID == c.CallerPane {
-			last = append(last, func() { report(i, stopFound(ctx, c, o, a, target, rec, nil)) })
+			last = append(last, func() { report(i, stopFound(ctx, c, o, a, target, rec, nil, open)) })
 			continue
 		}
-		report(i, stopFound(ctx, c, o, a, target, rec, err))
+		report(i, stopFound(ctx, c, o, a, target, rec, err, open))
 	}
 	for _, stop := range last {
 		stop()

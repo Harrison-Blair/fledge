@@ -9,6 +9,7 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 )
 
@@ -57,7 +58,8 @@ func run(ctx context.Context, c libagent.Client, o Options, in io.Reader, id str
 		out.Fail(err, "validation", false)
 		return out
 	}
-	targets, err := o.Selection.Targets(ctx, c)
+	open := identity.OpenOnce(ctx, c.Cwd)
+	targets, err := o.Selection.Targets(ctx, c, open)
 	if err != nil {
 		out.Fail(err, "agent.get", false)
 		return out
@@ -65,7 +67,7 @@ func run(ctx context.Context, c libagent.Client, o Options, in io.Reader, id str
 	sender := libagent.ResolveSender(ctx, c)
 	text = libagent.WithHeader(id, sender, text)
 	if len(targets) > 1 {
-		return fanOut(ctx, c, o, targets, text, id, &sender)
+		return fanOut(ctx, c, o, targets, text, id, &sender, open)
 	}
 	return deliver(ctx, c, o, targets[0], text, id, &sender)
 }

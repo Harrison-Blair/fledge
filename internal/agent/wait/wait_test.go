@@ -544,3 +544,17 @@ func TestWaitWithReadOnlyStoreWritesNothing(t *testing.T) {
 
 // The read-only test proves no write succeeds; this proves none is attempted.
 func TestNeverObservesSession(t *testing.T) { identitytest.NoObserveSession(t) }
+
+// A wait on several ids resolves the repository root once.
+func TestWaitSeveralIDsResolveRootOnce(t *testing.T) {
+	f, c := newFake(t, map[string]reply{"w1:p3": {status: "idle"}, "w1:p4": {status: "done"}})
+	idA, idB := fleet(t, f, &c)
+	roots := identitytest.CountRoots(t)
+	out := Run(context.Background(), c, Options{Selection: selector.Selection{IDs: []string{idA, idB}}, All: true})
+	if want := []string{idA + "=matched", idB + "=matched"}; out.Error != nil || !reflect.DeepEqual(targets(out), want) {
+		t.Fatalf("%+v %v", out, targets(out))
+	}
+	if got := roots(); got != 1 {
+		t.Fatalf("resolved the repository root %d times, want 1", got)
+	}
+}

@@ -60,13 +60,14 @@ func Run(ctx context.Context, c libagent.Client, d harnessenv.Env, o Options) li
 		out.Fail(err, "validation", false)
 		return out
 	}
-	targets, err := resolve(ctx, c, o.Selection)
+	open := identity.OpenOnce(ctx, c.Cwd)
+	targets, err := resolve(ctx, c, o.Selection, open)
 	if err != nil {
 		out.Fail(err, "agent.get", false)
 		return out
 	}
 	// Like agent get, an unavailable store holds no records.
-	s, err := identity.Existing(ctx, c.Cwd)
+	s, err := open()
 	if err != nil {
 		s = nil
 	}
@@ -79,24 +80,25 @@ func Run(ctx context.Context, c libagent.Client, d harnessenv.Env, o Options) li
 	return out
 }
 
-// resolve returns the selected targets. An explicit --id whose agent is no
-// longer live resolves to its record alone, with a zero Agent.
-func resolve(ctx context.Context, c libagent.Client, sel selector.Selection) ([]selector.Target, error) {
+// resolve returns the selected targets, reading records from the store open
+// supplies. An explicit --id whose agent is no longer live resolves to its
+// record alone, with a zero Agent.
+func resolve(ctx context.Context, c libagent.Client, sel selector.Selection, open func() (*state.Store, error)) ([]selector.Target, error) {
 	if !sel.Filter.Empty() || len(sel.IDs) == 0 {
-		return sel.Targets(ctx, c)
+		return sel.Targets(ctx, c, open)
 	}
 	var targets []selector.Target
 	if len(sel.Names)+len(sel.Panes) > 0 {
 		var err error
-		if targets, err = (selector.Selection{Names: sel.Names, Panes: sel.Panes}).Targets(ctx, c); err != nil {
+		if targets, err = (selector.Selection{Names: sel.Names, Panes: sel.Panes}).Targets(ctx, c, open); err != nil {
 			return nil, err
 		}
 	}
 	for _, id := range sel.IDs {
-		a, pane, rec, err := identity.Target{ID: id}.Get(ctx, c)
+		a, pane, rec, err := identity.Target{ID: id}.GetWith(ctx, c, open)
 		var remote *herdr.Error
 		if errors.As(err, &remote) && remote.Code == "agent_identity_stale" {
-			if rec, err = stored(ctx, c.Cwd, id); err == nil {
+			if rec, err = stored(open, id); err == nil {
 				a, pane = herdr.AgentDetails{}, rec.Pane
 			}
 		}
@@ -108,9 +110,9 @@ func resolve(ctx context.Context, c libagent.Client, sel selector.Selection) ([]
 	return targets, nil
 }
 
-// stored reads record id, live or archived.
-func stored(ctx context.Context, cwd, id string) (*identity.Record, error) {
-	s, err := identity.Existing(ctx, cwd)
+// stored reads record id, live or archived, from the store open supplies.
+func stored(open func() (*state.Store, error), id string) (*identity.Record, error) {
+	s, err := open()
 	if err != nil {
 		return nil, libagent.AtPhase("identity", err)
 	}

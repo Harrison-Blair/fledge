@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
@@ -110,6 +111,27 @@ func Existing(ctx context.Context, cwd string) (*state.Store, error) {
 		return nil, nil
 	}
 	return s, err
+}
+
+// OpenOnce returns an opener that runs Existing for cwd on its first call and
+// returns the same result to later calls, so a command resolves the
+// repository root once. A failed open is not kept: the next call tries again.
+// The opener is safe for concurrent use.
+func OpenOnce(ctx context.Context, cwd string) func() (*state.Store, error) {
+	var mu sync.Mutex
+	var s *state.Store
+	opened := false
+	return func() (*state.Store, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if opened {
+			return s, nil
+		}
+		var err error
+		s, err = Existing(ctx, cwd)
+		opened = err == nil
+		return s, err
+	}
 }
 
 // Register records details as a new agent. The parent is the caller's live
@@ -754,6 +776,13 @@ func (t Target) Validate() error {
 // it: the name or pane as given, or for an id the verified pane. An id lookup
 // also returns its record. Record lookup failures are located at phase identity.
 func (t Target) Get(ctx context.Context, c libagent.Client) (herdr.AgentDetails, string, *Record, error) {
+	return t.GetWith(ctx, c, func() (*state.Store, error) { return Existing(ctx, c.Cwd) })
+}
+
+// GetWith is Get with open supplying the store for an id lookup, so a command
+// that looks up several targets opens it once (see OpenOnce). A name or pane
+// lookup does not call open.
+func (t Target) GetWith(ctx context.Context, c libagent.Client, open func() (*state.Store, error)) (herdr.AgentDetails, string, *Record, error) {
 	if t.ID == "" {
 		target := t.Name
 		if target == "" {
@@ -762,7 +791,7 @@ func (t Target) Get(ctx context.Context, c libagent.Client) (herdr.AgentDetails,
 		a, err := c.Get(ctx, target)
 		return a, target, nil, err
 	}
-	s, err := Existing(ctx, c.Cwd)
+	s, err := open()
 	if err != nil {
 		return herdr.AgentDetails{}, "", nil, libagent.AtPhase("identity", err)
 	}

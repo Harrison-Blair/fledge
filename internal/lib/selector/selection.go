@@ -7,6 +7,7 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
 )
 
 // Selection is either explicit targets or a filter; mixing is invalid.
@@ -67,15 +68,16 @@ func (s Selection) Explicit() []identity.Target {
 // Targets resolves explicit targets in flag order, names then panes then ids,
 // with identity.Target semantics and errors, stopping at the first failure.
 // A filter's matches exclude the caller's own pane and fail with
-// no_agents_matched when none remain.
-func (s Selection) Targets(ctx context.Context, c libagent.Client) ([]Target, error) {
+// no_agents_matched when none remain. open supplies the store, as for
+// identity.Target.GetWith and Resolve; identity.OpenOnce opens it once.
+func (s Selection) Targets(ctx context.Context, c libagent.Client, open func() (*state.Store, error)) ([]Target, error) {
 	if err := s.Validate(); err != nil {
 		return nil, libagent.AtPhase("validation", err)
 	}
 	if s.Filter.Empty() {
 		var targets []Target
 		for _, t := range s.Explicit() {
-			a, target, rec, err := t.Get(ctx, c)
+			a, target, rec, err := t.GetWith(ctx, c, open)
 			if err != nil {
 				return nil, err
 			}
@@ -83,7 +85,7 @@ func (s Selection) Targets(ctx context.Context, c libagent.Client) ([]Target, er
 		}
 		return targets, nil
 	}
-	matches, err := Resolve(ctx, c, s.Filter)
+	matches, err := resolve(ctx, c, s.Filter, open)
 	if err != nil {
 		return nil, err
 	}
