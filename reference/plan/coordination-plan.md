@@ -2,7 +2,9 @@
 
 **File:** `reference/plan/coordination-plan.md`
 
-**Status:** Agreed 2026-09-21; not implemented. Independently reviewed before agreement; review findings are folded in.
+**Status:** Historical. Agreed 2026-09-21 and implemented: the message header, `agent read`, `agent wait`, agent identity, `agent adopt`, tasks, and the worktree commands exist. The spawn picker and split placement were implemented and later removed. Independently reviewed before agreement; review findings are folded in.
+
+> **Historical record.** This plan is superseded by the current command contracts in the README: [Agents](../../README.md#agents), [Tasks](../../README.md#tasks), [Worktrees](../../README.md#worktrees), and [Migrating from earlier versions](../../README.md#migrating-from-earlier-versions). Where this plan and the README differ, the README is correct.
 
 **Review status:** The design review was performed by a pi agent on `openai-codex/gpt-6-astra`. Its report is not checked in; its findings are incorporated below.
 

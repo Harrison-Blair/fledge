@@ -1,5 +1,7 @@
 # Claude Code Fable — implementation review
 
+> **Historical record.** This is a review of the superseded [agent command plan](agent-command.md). The current command contracts are in the README: [Agents](../../README.md#agents), [Tasks](../../README.md#tasks), [Worktrees](../../README.md#worktrees), and [Migrating from earlier versions](../../README.md#migrating-from-earlier-versions).
+
 Read-only review by the existing `fable-review` agent in Herdr pane `wQ:p5`.
 Session: `f0dad138-bf66-46a6-8dc6-ddf54ebfb9d6`.
 Source: final assistant text in that session transcript; thinking and tool blocks are excluded.
