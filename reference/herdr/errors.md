@@ -196,4 +196,5 @@ their rows above).
 - Reserve exit-2 handling for CLI syntax errors; every server error is exit 1 with a JSON
   body on stderr.
 - After any response — success or error — the connection is closed; open a fresh connection
-  per request (except a `events.subscribe` connection, which stays open).
+  per request (except an `events.subscribe` connection or a
+  [`server.ssh_agent.register`](api/server.md#serverssh_agentregister) connection, which stays open).

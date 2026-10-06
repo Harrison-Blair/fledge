@@ -3,7 +3,7 @@
 > herdr 0.9.3 · protocol 22 · schema_version 1 · captured 2026-10-06
 > Part of the fledge herdr reference. Index: [README.md](README.md). IDs: [addressing.md](addressing.md). Access model: [environment.md](environment.md).
 
-herdr exposes a running server through a Unix domain socket that speaks newline-delimited JSON. A client opens the socket, writes exactly one request line, reads one response line, and the server closes the connection — except for a connection that called `events.subscribe`, which stays open to receive pushed event lines. There is no HTTP, no framing header, and no multiplexing: each connection carries one request/response exchange (or one long-lived subscription). This file documents the transport, the three envelope shapes, connection semantics, the ping/pong handshake, protocol/version negotiation, and how subscription connections differ. Per-method params and results live in the `api/*.md` files.
+herdr exposes a running server through a Unix domain socket that speaks newline-delimited JSON. A client opens the socket, writes exactly one request line, reads one response line, and the server closes the connection — except for two calls that keep it open after the response: `events.subscribe`, which stays open to receive pushed event lines, and [`server.ssh_agent.register`](api/server.md#serverssh_agentregister) (new in 0.9.3), whose registration lasts as long as the connection stays open. There is no HTTP, no framing header, and no multiplexing: each connection carries one request/response exchange (or one long-lived subscription or SSH agent registration). This file documents the transport, the three envelope shapes, connection semantics, the ping/pong handshake, protocol/version negotiation, and how subscription connections differ. Per-method params and results live in the `api/*.md` files.
 
 ## Transport
 
@@ -92,7 +92,7 @@ Validated 2026-10-06 against herdr 0.9.3 (all examples replayed on a scratch ser
 
 ## One request per connection
 
-The server serves **exactly one request per connection** and then closes it. After the single response line is written, the socket is closed; a second request written on the same connection is never read and never answered.
+The server serves **exactly one request per connection** and then closes it (the two exceptions, `events.subscribe` and [`server.ssh_agent.register`](api/server.md#serverssh_agentregister), are below). After the single response line is written, the socket is closed; a second request written on the same connection is never read and never answered.
 
 Probe: two requests were written back-to-back on one connection. Only the first produced a response; the second produced nothing before close.
 
@@ -103,7 +103,7 @@ Probe: two requests were written back-to-back on one connection. Only the first 
 }
 ```
 
-The capture above is from herdr 0.8.2 (2026-08-19). Validated 2026-10-06 against herdr 0.9.3: the re-run answered the first `ping`, then reset the connection without answering the second line. A client that needs to issue N calls must open N connections (this is exactly what the CLI does per invocation). The sole exception is `events.subscribe` — see below — and that exception is read-only: writing any second line on a subscribe connection resets it (the next read fails with a connection reset), losing the subscription. Validated 2026-10-06 against herdr 0.9.3.
+The capture above is from herdr 0.8.2 (2026-08-19). Validated 2026-10-06 against herdr 0.9.3: the re-run answered the first `ping`, then reset the connection without answering the second line. A client that needs to issue N calls must open N connections (this is exactly what the CLI does per invocation). There are two exceptions. `events.subscribe` (see below) is read-only: writing any second line on a subscribe connection resets it (the next read fails with a connection reset), losing the subscription. Validated 2026-10-06 against herdr 0.9.3. [`server.ssh_agent.register`](api/server.md#serverssh_agentregister) answers `{"type":"ok"}` and then keeps the connection open with nothing more sent on it; the registration lasts until the client closes that connection, so a caller holds the connection open for as long as the registration is needed (see [SSH agent registration connections](#ssh-agent-registration-connections)).
 
 ## Ping/pong handshake
 
@@ -161,9 +161,13 @@ herdr does not negotiate the protocol mid-connection; a client instead **reads**
 
 - `grep expected_protocol schema.json` matches only inside `ServerLiveHandoffParams`; it is the sole request field that carries a caller-asserted protocol. General method calls do not send a protocol and are not version-gated at the envelope level — a wrong-protocol client simply risks a method the server does not recognize or a required field it does not send, which surfaces as `invalid_request`. An extra field the server does not recognize does not surface at all: it is silently ignored (see Request envelope), so a field added in a newer protocol is dropped without an error by an older server. Validated 2026-10-06 against herdr 0.9.3 (`raw/schema.json` re-checked).
 
+## SSH agent registration connections
+
+[`server.ssh_agent.register`](api/server.md#serverssh_agentregister) (new in 0.9.3) is the second exception to one-request-per-connection. The server answers `{"type":"ok"}`, then keeps the connection open and writes nothing more on it. The registration is connection-scoped: per the schema it "lasts until this API connection closes", so the caller keeps that connection open for as long as the registration should last and closes it to end the registration. Unlike a subscription, the connection carries no pushes. Whether a second request line on a registration connection is read was not probed. Validated 2026-10-06 against herdr 0.9.3 (on scratch servers, by the [api/server.md](api/server.md#serverssh_agentregister) pass and again by the docs-07 verifier); the second-line case is not live-validated.
+
 ## Subscription connections
 
-`events.subscribe` turns the connection into a long-lived push channel — the one exception to one-request-per-connection. The client sends a subscribe request; the server replies with an acknowledgement result and then keeps the connection open, writing one JSON line per matching event until the client disconnects.
+`events.subscribe` turns the connection into a long-lived push channel — one of the two exceptions to one-request-per-connection (the other is [`server.ssh_agent.register`](api/server.md#serverssh_agentregister), below). The client sends a subscribe request; the server replies with an acknowledgement result and then keeps the connection open, writing one JSON line per matching event until the client disconnects.
 
 Request `params` (`EventsSubscribeParams`): `subscriptions` (array, required) — a list of `Subscription` objects. 24 of the 27 selectors are bare `{"type": <event-name>}` objects, but the three streaming pane selectors need more fields: `pane.agent_status_changed` and `pane.scroll_changed` also require `pane_id`, and `pane.output_matched` also requires `pane_id`, `source`, and `match`. Omitting a required field is rejected with `invalid_request` (e.g. `{"type":"pane.output_matched"}` alone fails with `missing field \`pane_id\``). Validated 2026-10-06 against herdr 0.9.3 (the `pane.output_matched` case; the `pane_id` requirement of the other two is from `raw/schema.json`). The acknowledgement result type is `subscription_started`.
 
