@@ -135,7 +135,7 @@ accepts any nonblank text, including an unfilled skeleton.
 
 Known workarounds: spawn prompts and messages always start with a sender header, so ask
 a spawned agent in plain words to invoke a skill (a leading slash command will not run);
-pass absolute paths to `--cwd`; see `reference/dogfood/friction.md` for current issues.
+see `reference/dogfood/friction.md` for current issues.
 
 Agents in this repository usually run inside a managed Fledge session: a Herdr pane,
 often spawned by an orchestrator and given a Fledge agent record id. Expect messages
