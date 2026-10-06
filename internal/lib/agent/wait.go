@@ -33,7 +33,7 @@ func (c Client) Wait(ctx context.Context, target string, until []string, timeout
 	}
 	matches := until
 	if len(matches) == 0 {
-		matches = []string{"idle", "done", "blocked"}
+		matches = SettledStatuses()
 	}
 	var r herdr.AgentResult
 	err := c.Call(ctx, "agent.wait", params, &r)

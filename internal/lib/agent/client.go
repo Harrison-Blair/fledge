@@ -96,11 +96,7 @@ func ValidAgent(p herdr.Pane) bool {
 	if !ValidPane(p) {
 		return false
 	}
-	switch p.AgentStatus {
-	case "idle", "working", "blocked", "done", "unknown":
-		return true
-	}
-	return false
+	return IsStatus(p.AgentStatus)
 }
 func ValidAgentInfo(a herdr.AgentDetails) bool {
 	if !ValidAgent(a.Pane) || a.TerminalID == "" || a.Focused == nil || a.Revision == nil {
