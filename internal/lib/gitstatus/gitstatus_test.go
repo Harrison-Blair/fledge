@@ -28,6 +28,15 @@ func commit(t *testing.T, dir, file string) {
 	gittest.Git(t, dir, "commit", "-qm", file)
 }
 
+// configure writes content as root's .fledge/config.toml.
+func configure(t *testing.T, root, content string) {
+	t.Helper()
+	os.MkdirAll(filepath.Join(root, ".fledge"), 0o755)
+	if err := os.WriteFile(filepath.Join(root, ".fledge", "config.toml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDirty(t *testing.T) {
 	ctx := context.Background()
 	root := repository(t)
@@ -83,8 +92,37 @@ func TestDefaultBranch(t *testing.T) {
 		root := repository(t)
 		gittest.Git(t, root, "branch", "integration")
 		originHEAD(t, root)
-		gittest.Git(t, root, "config", "fledge.baseBranch", "integration")
+		configure(t, root, "schema_version = 1\nbase_branch = \"integration\"\n")
 		check(t, root, "refs/heads/integration")
+	})
+	// Git configuration is never read, in any scope.
+	t.Run("git config ignored", func(t *testing.T) {
+		root := repository(t)
+		gittest.Git(t, root, "branch", "wrong")
+		originHEAD(t, root)
+		gittest.Git(t, root, "config", "fledge.baseBranch", "wrong")
+		check(t, root, "refs/remotes/origin/trunk")
+	})
+	t.Run("file without base branch", func(t *testing.T) {
+		root := repository(t)
+		originHEAD(t, root)
+		configure(t, root, "schema_version = 1\n")
+		check(t, root, "refs/remotes/origin/trunk")
+	})
+	// A fresh clone has origin/<name> but no local branch yet.
+	t.Run("configured remote tracking only", func(t *testing.T) {
+		root := repository(t)
+		gittest.Git(t, root, "update-ref", "refs/remotes/origin/dev", "HEAD")
+		originHEAD(t, root)
+		configure(t, root, "schema_version = 1\nbase_branch = \"dev\"\n")
+		check(t, root, "refs/remotes/origin/dev")
+	})
+	t.Run("configured local before remote tracking", func(t *testing.T) {
+		root := repository(t)
+		gittest.Git(t, root, "branch", "dev")
+		gittest.Git(t, root, "update-ref", "refs/remotes/origin/dev", "HEAD")
+		configure(t, root, "schema_version = 1\nbase_branch = \"dev\"\n")
+		check(t, root, "refs/heads/dev")
 	})
 	t.Run("dev is not preferred unconfigured", func(t *testing.T) {
 		root := repository(t)
@@ -108,30 +146,34 @@ func TestDefaultBranch(t *testing.T) {
 		gittest.Commit(t, root)
 		check(t, root, "")
 	})
-	// A configured branch that does not exist is an error, not a fallback.
+	// A configured branch that does not exist locally or on origin is an
+	// error, not a fallback.
 	t.Run("configured missing", func(t *testing.T) {
 		root := repository(t)
 		originHEAD(t, root)
-		gittest.Git(t, root, "config", "fledge.baseBranch", "missing")
+		configure(t, root, "schema_version = 1\nbase_branch = \"missing\"\n")
 		got, err := DefaultBranch(ctx, root)
-		if got != "" || err == nil || !strings.Contains(err.Error(), "fledge.baseBranch") || !strings.Contains(err.Error(), "missing") {
+		if got != "" || err == nil || !strings.Contains(err.Error(), ".fledge/config.toml") || !strings.Contains(err.Error(), "missing") {
 			t.Fatalf("got %q, %v", got, err)
 		}
 	})
-	// Unreadable config is an error that carries git's explanation.
-	t.Run("config unreadable", func(t *testing.T) {
-		// Git's message is asserted below, so keep it untranslated.
-		t.Setenv("LC_ALL", "C")
-		t.Setenv("LANGUAGE", "")
+	// An invalid file is an error carrying the reader's explanation.
+	t.Run("config invalid", func(t *testing.T) {
 		root := repository(t)
-		f, err := os.OpenFile(filepath.Join(root, ".git", "config"), os.O_APPEND|os.O_WRONLY, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		f.WriteString("[broken\n")
-		f.Close()
+		originHEAD(t, root)
+		configure(t, root, "schema_version = 1\nbase_branch = \"-x\"\n")
 		got, err := DefaultBranch(ctx, root)
-		if got != "" || err == nil || !strings.Contains(err.Error(), "fledge.baseBranch") || !strings.Contains(err.Error(), "bad config line") {
+		if got != "" || err == nil || !strings.Contains(err.Error(), ".fledge/config.toml") || !strings.Contains(err.Error(), "starts with -") {
+			t.Fatalf("got %q, %v", got, err)
+		}
+	})
+	// An unreadable file is an error, not a fallback.
+	t.Run("config unreadable", func(t *testing.T) {
+		root := repository(t)
+		originHEAD(t, root)
+		os.MkdirAll(filepath.Join(root, ".fledge", "config.toml"), 0o755)
+		got, err := DefaultBranch(ctx, root)
+		if got != "" || err == nil || !strings.Contains(err.Error(), ".fledge/config.toml") || !strings.Contains(err.Error(), "not a regular file") {
 			t.Fatalf("got %q, %v", got, err)
 		}
 	})

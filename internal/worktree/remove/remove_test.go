@@ -365,10 +365,45 @@ func TestIncompleteAgentInfoRefusesRemoval(t *testing.T) {
 // A configured base branch that does not exist refuses removal with its reason.
 func TestMissingConfiguredBaseBranchExplainsRefusal(t *testing.T) {
 	r := newRepo(t)
-	gittest.Git(t, r.root, "config", "fledge.baseBranch", "dev")
+	configure(t, r.root, "schema_version = 1\nbase_branch = \"dev\"\n")
 	out := Run(context.Background(), herdrscript.Client(t, call{Method: "worktree.list", Result: r.listing(false)}, agentList()), Options{Branch: "topic", Cwd: r.root})
-	if out.ExitCode() != 2 || out.Error.Phase != "guard" || !strings.Contains(out.Error.Message, "merged: unknown (git config fledge.baseBranch names refs/heads/dev") {
+	if out.ExitCode() != 2 || out.Error.Phase != "guard" || !strings.Contains(out.Error.Message, "merged: unknown (.fledge/config.toml base_branch names dev, which does not exist") {
 		t.Fatalf("%+v", out)
+	}
+}
+
+// An unreadable configuration file refuses removal with its reason.
+func TestUnreadableConfigFileExplainsRefusal(t *testing.T) {
+	r := newRepo(t)
+	if err := os.MkdirAll(filepath.Join(r.root, ".fledge", "config.toml"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out := Run(context.Background(), herdrscript.Client(t, call{Method: "worktree.list", Result: r.listing(false)}, agentList()), Options{Branch: "topic", Cwd: r.root})
+	if out.ExitCode() != 2 || out.Error.Phase != "guard" || !strings.Contains(out.Error.Message, "merged: unknown (.fledge/config.toml: not a regular file)") {
+		t.Fatalf("%+v", out)
+	}
+}
+
+// Git configuration does not name the base branch: a wrong
+// fledge.baseBranch leaves the merged-into-main checkout removable.
+func TestGitConfigBaseBranchIgnored(t *testing.T) {
+	r := newRepo(t)
+	// wrong is an unrelated root commit, so topic is not merged into it.
+	wrong := strings.TrimSpace(gittest.Git(t, r.root, "commit-tree", "-m", "wrong", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"))
+	gittest.Git(t, r.root, "branch", "wrong", wrong)
+	gittest.Git(t, r.root, "config", "fledge.baseBranch", "wrong")
+	out := Run(context.Background(), herdrscript.Client(t, call{Method: "worktree.list", Result: r.listing(false)}, agentList(), agentList()), Options{Branch: "topic", Cwd: r.root})
+	if out.Status != "success" {
+		t.Fatalf("%+v %+v", out, out.Error)
+	}
+}
+
+// configure writes content as root's .fledge/config.toml.
+func configure(t *testing.T, root, content string) {
+	t.Helper()
+	os.MkdirAll(filepath.Join(root, ".fledge"), 0o755)
+	if err := os.WriteFile(filepath.Join(root, ".fledge", "config.toml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

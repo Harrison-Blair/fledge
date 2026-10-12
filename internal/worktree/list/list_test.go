@@ -272,11 +272,11 @@ func TestListLeavesIncompleteStoreUnchanged(t *testing.T) {
 // unknown and says why, instead of falling back to another branch.
 func TestListMissingConfiguredBaseBranch(t *testing.T) {
 	f := newFixture(t)
-	gittest.Git(t, f.root, "config", "fledge.baseBranch", "dev")
+	configure(t, f.root, "schema_version = 1\nbase_branch = \"dev\"\n")
 	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()})
 	out := Run(context.Background(), c, Options{Cwd: f.root})
 	r := out.Result.(Result)
-	if r.DefaultBranch != nil || r.DefaultBranchError == nil || !strings.Contains(*r.DefaultBranchError, "refs/heads/dev") {
+	if r.DefaultBranch != nil || r.DefaultBranchError == nil || !strings.Contains(*r.DefaultBranchError, ".fledge/config.toml base_branch names dev") {
 		t.Fatalf("%+v", r)
 	}
 	for _, row := range r.Worktrees {
@@ -297,7 +297,7 @@ func TestListMissingConfiguredBaseBranch(t *testing.T) {
 func TestListUsesConfiguredBaseBranch(t *testing.T) {
 	f := newFixture(t)
 	gittest.Git(t, f.root, "branch", "dev", "main~1")
-	gittest.Git(t, f.root, "config", "fledge.baseBranch", "dev")
+	configure(t, f.root, "schema_version = 1\nbase_branch = \"dev\"\n")
 	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()})
 	r := Run(context.Background(), c, Options{Cwd: f.root}).Result.(Result)
 	if r.DefaultBranch == nil || *r.DefaultBranch != "dev" || r.DefaultBranchError != nil {
@@ -305,6 +305,45 @@ func TestListUsesConfiguredBaseBranch(t *testing.T) {
 	}
 	if row := r.Worktrees[1]; row.Merged != "no" {
 		t.Fatalf("merged into main but not dev: %+v", row)
+	}
+}
+
+// Without a local branch, the configured branch's remote-tracking ref is
+// the integration branch, as in a fresh clone.
+func TestListUsesConfiguredRemoteTrackingBranch(t *testing.T) {
+	f := newFixture(t)
+	gittest.Git(t, f.root, "update-ref", "refs/remotes/origin/dev", "main~1")
+	configure(t, f.root, "schema_version = 1\nbase_branch = \"dev\"\n")
+	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()})
+	r := Run(context.Background(), c, Options{Cwd: f.root}).Result.(Result)
+	if r.DefaultBranch == nil || *r.DefaultBranch != "origin/dev" || r.DefaultBranchError != nil {
+		t.Fatalf("%+v", r)
+	}
+	if row := r.Worktrees[1]; row.Merged != "no" {
+		t.Fatalf("merged into main but not origin/dev: %+v", row)
+	}
+}
+
+// An invalid configuration file makes merged checks unknown with its reason.
+func TestListInvalidConfigFile(t *testing.T) {
+	f := newFixture(t)
+	configure(t, f.root, "schema_version = 1\nbase_branch = \"..\"\n")
+	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()})
+	r := Run(context.Background(), c, Options{Cwd: f.root}).Result.(Result)
+	if r.DefaultBranch != nil || r.DefaultBranchError == nil || !strings.Contains(*r.DefaultBranchError, "not a valid branch name") {
+		t.Fatalf("%+v", r)
+	}
+	if row := r.Worktrees[1]; row.Merged != "unknown" {
+		t.Fatalf("%+v", row)
+	}
+}
+
+// configure writes content as root's .fledge/config.toml.
+func configure(t *testing.T, root, content string) {
+	t.Helper()
+	os.MkdirAll(filepath.Join(root, ".fledge"), 0o755)
+	if err := os.WriteFile(filepath.Join(root, ".fledge", "config.toml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

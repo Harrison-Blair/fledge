@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/Harrison-Blair/fledge/internal/lib/repoconfig"
 )
 
 // Dirty reports whether the checkout at path has modified, staged, or
@@ -38,26 +40,24 @@ func samePath(a, b string) bool {
 }
 
 // DefaultBranch returns the full ref of the repository integration branch:
-// the branch named by git config fledge.baseBranch, else the target of
-// refs/remotes/origin/HEAD, else refs/heads/main, or "" when none of them
-// exists. A configured branch that does not exist, or unreadable config, is an
-// error rather than a fallback, so merged checks become "unknown".
+// the branch that base_branch in .fledge/config.toml of the primary checkout
+// repo names, as refs/heads/<name> or else refs/remotes/origin/<name>; else
+// the target of refs/remotes/origin/HEAD, else refs/heads/main, or "" when
+// none of them exists. Git configuration is not read. A configured branch
+// that does not exist, or an unreadable or invalid file, is an error rather
+// than a fallback, so merged checks become "unknown".
 func DefaultBranch(ctx context.Context, repo string) (string, error) {
-	name, err := exec.CommandContext(ctx, "git", "-C", repo, "config", "--get", "fledge.baseBranch").Output()
-	var exit *exec.ExitError
-	switch {
-	case err == nil:
-		ref := "refs/heads/" + strings.TrimSpace(string(name))
-		if !exists(ctx, repo, ref) {
-			return "", fmt.Errorf("git config fledge.baseBranch names %s, which does not exist", ref)
+	c, err := repoconfig.Read(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	if c.BaseBranch != "" {
+		for _, ref := range []string{"refs/heads/" + c.BaseBranch, "refs/remotes/origin/" + c.BaseBranch} {
+			if exists(ctx, repo, ref) {
+				return ref, nil
+			}
 		}
-		return ref, nil
-	case !errors.As(err, &exit) || exit.ExitCode() != 1:
-		detail := err.Error()
-		if exit != nil && len(exit.Stderr) > 0 {
-			detail = strings.TrimSpace(string(exit.Stderr))
-		}
-		return "", fmt.Errorf("read git config fledge.baseBranch: %s", detail)
+		return "", fmt.Errorf("%s base_branch names %s, which does not exist locally or on origin", repoconfig.Path, c.BaseBranch)
 	}
 	if b, err := exec.CommandContext(ctx, "git", "-C", repo, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD").Output(); err == nil {
 		return strings.TrimSpace(string(b)), nil
