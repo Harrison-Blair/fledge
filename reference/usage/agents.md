@@ -508,6 +508,7 @@ Nothing else deletes records.
 
 One supervision daemon per Herdr session, `fledge supervise run`, watches workers and writes **wakes**: inbox records of kind `wake` from `fledge supervisor`, rung at once.
 `agent spawn`, `task assign`, and any message stored but not rung start it in the background when none runs.
+A `task complete` notice whose creator's doorbell does not ring also starts it.
 The child runs detached in the primary checkout with only the Herdr socket and session from the environment, so it never acts as the starting pane.
 A starter whose daemon reports another Fledge version stops it and starts a new one.
 
@@ -533,6 +534,7 @@ Wakes go to the worker's parent, else to the creator of a task it owns; with nei
 | `unacknowledged` | A rung record is still unread after `ack_timeout`: the daemon rings it once more. After another `ack_timeout`, it tells a registered sender. A wake or an unregistered sender is only logged. | The record and the recipient's pane |
 
 `ack_timeout` comes from `[inbox] ack_timeout` in `.fledge/config.toml` (10s to 1h, default 5m).
+At the end of the `quiet` grace period the daemon asks Herdr for the worker's live status and wakes only if it is still `idle` or `done`, so a missed status event cannot cause a false `quiet` wake.
 A worker waiting on a background job can look idle, so some `quiet` wakes are benign: read the worker's pane before acting.
 The daemon stores which wakes it sent under `.fledge/state/supervise/<session>/`, so a restarted daemon does not repeat them.
 The daemon leaves ending records to the lookups that already do it.
