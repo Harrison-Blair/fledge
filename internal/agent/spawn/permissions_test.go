@@ -10,13 +10,13 @@ func TestSpawnPermissionDefaults(t *testing.T) {
 		name, harness, model string
 		args, want           []string
 	}{
-		{"codex", "codex", "", nil, []string{"--yolo"}},
+		{"codex", "codex", "", nil, []string{"--yolo", "--no-daemon"}},
 		{"claude", "claude", "", nil, []string{"--permission-mode", "bypassPermissions"}},
-		{"codex model", "codex", "chosen", []string{"--search"}, []string{"--yolo", "--model", "chosen", "--search"}},
+		{"codex model", "codex", "chosen", []string{"--search"}, []string{"--yolo", "--no-daemon", "--model", "chosen", "--search"}},
 		{"claude model", "claude", "chosen", []string{"two words", "x,y"}, []string{"--permission-mode", "bypassPermissions", "--model", "chosen", "two words", "x,y"}},
-		{"codex terminator", "codex", "", []string{"--", "--sandbox", "read-only"}, []string{"--yolo", "--", "--sandbox", "read-only"}},
+		{"codex terminator", "codex", "", []string{"--", "--sandbox", "read-only"}, []string{"--yolo", "--no-daemon", "--", "--sandbox", "read-only"}},
 		{"claude terminator", "claude", "", []string{"--", "--permission-mode", "plan"}, []string{"--permission-mode", "bypassPermissions", "--", "--permission-mode", "plan"}},
-		{"model value is not an option", "codex", "--sandbox", nil, []string{"--yolo", "--model", "--sandbox"}},
+		{"model value is not an option", "codex", "--sandbox", nil, []string{"--yolo", "--no-daemon", "--model", "--sandbox"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			o := validOptions()
@@ -36,6 +36,9 @@ func TestSpawnPermissionOptOut(t *testing.T) {
 			o.Harness, o.Model, o.Args, o.NoPermissionBypass = kind, "chosen", args, true
 			got, err := o.Validate()
 			want := append([]string{"--model", "chosen"}, args...)
+			if kind == "codex" {
+				want = append([]string{"--no-daemon"}, want...)
+			}
 			if err != nil || !reflect.DeepEqual(got, want) {
 				t.Fatalf("%s: got %q, %v; want %q", kind, got, err, want)
 			}
@@ -61,9 +64,13 @@ func TestSpawnNativePermissionsOverrideDefaults(t *testing.T) {
 			t.Run(harness+" "+args[0]+" "+args[len(args)-1], func(t *testing.T) {
 				o := validOptions()
 				o.Harness, o.Args = harness, args
+				want := args
+				if harness == "codex" {
+					want = append([]string{"--no-daemon"}, args...)
+				}
 				got, err := o.Validate()
-				if err != nil || !reflect.DeepEqual(got, args) {
-					t.Fatalf("got %q, %v; want unchanged %q", got, err, args)
+				if err != nil || !reflect.DeepEqual(got, want) {
+					t.Fatalf("got %q, %v; want %q", got, err, want)
 				}
 			})
 		}
@@ -81,7 +88,7 @@ func TestSpawnPermissionDefaultsPreserveUnrelatedOptions(t *testing.T) {
 		o := validOptions()
 		o.Harness, o.Args = "codex", args
 		got, err := o.Validate()
-		want := append([]string{"--yolo"}, args...)
+		want := append([]string{"--yolo", "--no-daemon"}, args...)
 		if err != nil || !reflect.DeepEqual(got, want) {
 			t.Fatalf("got %q, %v; want %q", got, err, want)
 		}
