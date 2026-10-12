@@ -86,6 +86,21 @@ base_branch = "dev"
 Keys are case-sensitive, and an unknown key or a wrong type makes the file invalid.
 Give a branch name: `dev`, rather than `origin/dev` or `refs/heads/dev`.
 The name must be a valid branch name on one line and must not start with `-`.
+
+The file accepts two more optional settings.
+`task land` and the supervision daemon read them once those ship:
+
+```toml
+delivery_mode = "local"
+
+[inbox]
+ack_timeout = "5m"
+```
+
+`delivery_mode` must be the string `local`, `pr`, or `none`.
+`[inbox]` is the only table, and `ack_timeout` is its only key.
+`ack_timeout` must be a Go duration string, such as `90s` or `5m`, from `10s` to `1h` inclusive.
+
 There is no command to edit the file. Edit it by hand and commit it.
 The working-tree copy in the primary checkout applies, uncommitted edits included, and Fledge ignores the copies in linked checkouts.
 

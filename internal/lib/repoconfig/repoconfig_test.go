@@ -38,6 +38,38 @@ func TestRead(t *testing.T) {
 			}
 		})
 	}
+	t.Run("all keys", func(t *testing.T) {
+		got, err := Read(ctx, write(t, "schema_version = 1\nbase_branch = \"dev\"\ndelivery_mode = \"pr\"\n[inbox]\nack_timeout = \"5m\"\n"))
+		want := Config{BaseBranch: "dev", DeliveryMode: "pr"}
+		want.Inbox.AckTimeout = 5 * time.Minute
+		if err != nil || got != want {
+			t.Fatalf("got %+v, %v want %+v", got, err, want)
+		}
+	})
+	for _, mode := range []string{"local", "pr", "none"} {
+		t.Run("delivery mode "+mode, func(t *testing.T) {
+			got, err := Read(ctx, write(t, "schema_version = 1\ndelivery_mode = \""+mode+"\"\n"))
+			if err != nil || got.DeliveryMode != mode {
+				t.Fatalf("got %+v, %v", got, err)
+			}
+		})
+	}
+	for _, d := range []string{"10s", "1h", "60m"} {
+		t.Run("ack timeout "+d, func(t *testing.T) {
+			want, _ := time.ParseDuration(d)
+			got, err := Read(ctx, write(t, "schema_version = 1\n[inbox]\nack_timeout = \""+d+"\"\n"))
+			if err != nil || got.Inbox.AckTimeout != want {
+				t.Fatalf("got %+v, %v", got, err)
+			}
+		})
+	}
+	t.Run("absent keys", func(t *testing.T) {
+		for _, content := range []string{"schema_version = 1\n", "schema_version = 1\n[inbox]\n"} {
+			if got, err := Read(ctx, write(t, content)); err != nil || got != (Config{}) {
+				t.Fatalf("%q: got %+v, %v", content, got, err)
+			}
+		}
+	})
 	t.Run("absent file", func(t *testing.T) {
 		if got, err := Read(ctx, t.TempDir()); err != nil || got != (Config{}) {
 			t.Fatalf("got %+v, %v", got, err)
@@ -53,7 +85,7 @@ func TestReadRejectsInvalidFiles(t *testing.T) {
 		{"unsupported version", "schema_version = 2\n", "unsupported schema_version"},
 		{"string version", "schema_version = \"1\"\n", "schema_version"},
 		{"integer branch", "schema_version = 1\nbase_branch = 1\n", "base_branch"},
-		{"unknown key", "schema_version = 1\ndelivery_mode = \"x\"\n", `unknown key "delivery_mode"`},
+		{"unknown key", "schema_version = 1\nmerge_mode = \"x\"\n", `unknown key "merge_mode"`},
 		{"case variant", "schema_version = 1\nBase_Branch = \"dev\"\n", `unknown key "Base_Branch"`},
 		{"upper case variant", "schema_version = 1\nBASE_BRANCH = \"dev\"\n", `unknown key "BASE_BRANCH"`},
 		{"unknown nested key", "schema_version = 1\n[extra]\nx = 1\n", `unknown key "extra"`},
@@ -63,6 +95,21 @@ func TestReadRejectsInvalidFiles(t *testing.T) {
 		{"dot dot", "schema_version = 1\nbase_branch = \"a..b\"\n", "base_branch"},
 		{"previous branch", "schema_version = 1\nbase_branch = \"@{-1}\"\n", "base_branch"},
 		{"trailing newline", "schema_version = 1\nbase_branch = \"dev\\n\"\n", "base_branch"},
+		{"unknown delivery mode", "schema_version = 1\ndelivery_mode = \"push\"\n", "delivery_mode \"push\" is not local, pr, or none"},
+		{"empty delivery mode", "schema_version = 1\ndelivery_mode = \"\"\n", "delivery_mode \"\" is not local, pr, or none"},
+		{"upper delivery mode", "schema_version = 1\ndelivery_mode = \"PR\"\n", "delivery_mode \"PR\" is not local, pr, or none"},
+		{"integer delivery mode", "schema_version = 1\ndelivery_mode = 1\n", "delivery_mode must be a string: local, pr, or none"},
+		{"case delivery mode", "schema_version = 1\nDelivery_Mode = \"pr\"\n", `unknown key "Delivery_Mode"`},
+		{"case inbox", "schema_version = 1\n[Inbox]\nack_timeout = \"5m\"\n", `unknown key "Inbox"`},
+		{"case ack timeout", "schema_version = 1\n[inbox]\nAck_Timeout = \"5m\"\n", `unknown key "inbox.Ack_Timeout"`},
+		{"unknown inbox key", "schema_version = 1\n[inbox]\nretries = 3\n", `unknown key "inbox.retries"`},
+		{"inbox not a table", "schema_version = 1\ninbox = \"5m\"\n", "inbox must be a table"},
+		{"inbox array of tables", "schema_version = 1\n[[inbox]]\nack_timeout = \"5m\"\n", "inbox must be a table"},
+		{"integer ack timeout", "schema_version = 1\n[inbox]\nack_timeout = 300\n", "inbox.ack_timeout must be a duration string from 10s to 1h"},
+		{"unparsable ack timeout", "schema_version = 1\n[inbox]\nack_timeout = \"5 minutes\"\n", "inbox.ack_timeout \"5 minutes\" is not a duration from 10s to 1h"},
+		{"short ack timeout", "schema_version = 1\n[inbox]\nack_timeout = \"9s\"\n", "inbox.ack_timeout \"9s\" is not a duration from 10s to 1h"},
+		{"long ack timeout", "schema_version = 1\n[inbox]\nack_timeout = \"1h0m1s\"\n", "inbox.ack_timeout \"1h0m1s\" is not a duration from 10s to 1h"},
+		{"negative ack timeout", "schema_version = 1\n[inbox]\nack_timeout = \"-5m\"\n", "inbox.ack_timeout \"-5m\" is not a duration from 10s to 1h"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := Read(ctx, write(t, tc.content))
