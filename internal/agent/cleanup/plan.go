@@ -159,7 +159,7 @@ func hold(live map[string]identity.Record, tasks []task.Record, id string, colle
 }
 
 // taskHold explains why the tasks owned by owner hold it, or returns "": any
-// task not verified or cancelled holds it, whoever created the task, and
+// task not verified, landed, or cancelled holds it, whoever created the task, and
 // owning none holds it unless the caller collected its results.
 func taskHold(tasks []task.Record, owner string, collected bool) string {
 	var owned bool
@@ -169,7 +169,7 @@ func taskHold(tasks []task.Record, owner string, collected bool) string {
 			continue
 		}
 		owned = true
-		if t.Status != task.Verified && t.Status != task.Cancelled {
+		if !task.Satisfied(t.Status) {
 			open = append(open, "task "+t.ID+" is "+t.Status)
 		}
 	}
