@@ -7,6 +7,7 @@ import (
 	doctorcmd "github.com/Harrison-Blair/fledge/cmd/doctor"
 	inboxcmd "github.com/Harrison-Blair/fledge/cmd/inbox"
 	memorycmd "github.com/Harrison-Blair/fledge/cmd/memory"
+	supervisecmd "github.com/Harrison-Blair/fledge/cmd/supervise"
 	taskcmd "github.com/Harrison-Blair/fledge/cmd/task"
 	updatecmd "github.com/Harrison-Blair/fledge/cmd/update"
 	worktreecmd "github.com/Harrison-Blair/fledge/cmd/worktree"
@@ -34,5 +35,6 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(taskcmd.New())
 	root.AddCommand(memorycmd.New())
 	root.AddCommand(inboxcmd.New())
+	root.AddCommand(supervisecmd.New())
 	return root
 }
