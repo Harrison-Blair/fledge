@@ -30,7 +30,11 @@ A checked item means its main capability is implemented; accompanying notes reco
 
    **Implementation decisions and remaining gaps:** `agent wait` blocks until agents reach a lifecycle state. Repeatable `--until` chooses among `idle`, `working`, `blocked`, `done`, and `unknown` (default: `idle`/`done`/`blocked`); `--timeout` bounds the wait, otherwise it is indefinite. `--name`/`--pane` are repeatable and mixable; a single target waits directly, two or more require `--all` or `--any`. With `--any`, a target that fails (for example `agent_not_running` after its pane is closed) while others are still waited on is reported at once as one stderr line, such as `b failed: ... (still waiting on 1 target).`; JSON output stays a single final outcome. A settled state means the agent's turn ended, not that its assigned work succeeded. [Current behavior](../usage/agents.md#agents)
 
-4. [ ] **Watch activity as it happens.** An event stream for agent starts, state changes, exits, and blockers, with readable output for people and streaming JSON for automation.
+4. [x] **Watch activity as it happens.** An event stream for agent starts, state changes, exits, and blockers, with readable output for people and streaming JSON for automation.
+
+   **Implemented:** [4ef38f8](https://github.com/Harrison-Blair/fledge/commit/4ef38f8111b3ae4a087438fa2c85b0a708ec2648) (merge of `feat/wave2a-supervise-inbox`) · **Author:** Harrison-Blair · **Author date:** 2026-10-12
+
+   **Implementation decisions and remaining gaps:** Borrowed from firstmate ([comparison](firstmate-comparison.md)). Implemented as the supervision daemon's Herdr subscriptions (agent status, pane exits, closes, and moves, and agent detection), which it turns into `blocked`, `exited`, `quiet`, and `unacknowledged` wakes in the parent's inbox, plus the read-only `fledge attention` summary. There is no user-facing stream: no command prints events as they happen in text or streaming JSON, and agent starts produce no wake. [Current behavior](../usage/agents.md#supervision)
 
 5. [x] **Create durable tasks.** Give each assignment an ID, description, owner, and status that survives the worker exiting or its pane closing.
 
@@ -54,7 +58,11 @@ A checked item means its main capability is implemented; accompanying notes reco
 
    **Implementation decisions and remaining gaps:** `agent spawn --prompt TEXT` or `--file PATH|-` submits the first prompt after readiness: Herdr must report `interactive_ready`, no pending launch, and `idle` or `done`, because pi reports `idle` seconds before it accepts a prompt. `--timeout` is one budget from launch through the first prompt, and no prompt is sent after its deadline; Herdr's start reservation is the larger of `--timeout` and 30s, so a short `--timeout` no longer drops the agent's name mid-launch. Input is validated before resources are created, and these flags cannot be combined with `--no-wait`. Outcomes report the failing phase and known resource effects if launch or delivery fails. Success confirms prompt submission, not completion of the assigned work; durable task tracking and result verification remain separate ideas. Remaining gap: registration's local state lock and record write cannot be interrupted, so spawn can overrun `--timeout` while another Fledge process holds the lock. [Current behavior](../usage/agents.md#agents)
 
-9. [ ] **Show everything needing attention.** A single queue of approval dialogs, unanswered questions, failed checks, and stalled assignments, each linked to the relevant agent.
+9. [x] **Show everything needing attention.** A single queue of approval dialogs, unanswered questions, failed checks, and stalled assignments, each linked to the relevant agent.
+
+   **Implemented:** [4ef38f8](https://github.com/Harrison-Blair/fledge/commit/4ef38f8111b3ae4a087438fa2c85b0a708ec2648) (merge of `feat/wave2a-supervise-inbox`) · **Author:** Harrison-Blair · **Author date:** 2026-10-12
+
+   **Implementation decisions and remaining gaps:** Borrowed from firstmate ([comparison](firstmate-comparison.md)). `fledge attention` shows, for the caller only, unread inbox records, its spawned workers grouped as `blocked`, `quiet` (while the daemon runs), `working`, `idle`, `done`, and `unknown`, the tasks it created that are completed but not verified, and the daemon's state. Approval dialogs appear only as `blocked` workers. Failed checks, unanswered questions as a separate kind, and a queue across agents remain unimplemented. [Current behavior](../usage/agents.md#supervision)
 
 10. [x] **Interrupt without destroying the pane.** Stop the current turn where the harness supports it, preserve the conversation, and allow revised instructions. Today's `stop` closes the pane.
 
@@ -180,9 +188,17 @@ A checked item means its main capability is implemented; accompanying notes reco
 
 ## Communication and shared context
 
-40. [ ] **A durable agent mailbox.** Preserve messages until they are consumed, including messages sent while the recipient is restarting or temporarily unavailable.
+40. [x] **A durable agent mailbox.** Preserve messages until they are consumed, including messages sent while the recipient is restarting or temporarily unavailable.
 
-41. [ ] **Meaningful delivery states.** Distinguish queued, submitted to the harness, acknowledged by the worker, and answered—where each can actually be observed.
+   **Implemented:** [4ef38f8](https://github.com/Harrison-Blair/fledge/commit/4ef38f8111b3ae4a087438fa2c85b0a708ec2648) (merge of `feat/wave2a-supervise-inbox`) · **Author:** Harrison-Blair · **Author date:** 2026-10-12
+
+   **Implementation decisions and remaining gaps:** Borrowed from firstmate ([comparison](firstmate-comparison.md)). Every message, task assignment brief, and completion notice to a registered agent is stored as an inbox record in the primary checkout's `.fledge/state/inbox/`, and the pane gets only a one-line doorbell; `fledge inbox` and `fledge inbox read` list and read it. A message to a blocked or not-ready recipient is stored but not rung, and the supervision daemon rings it later. `agent cleanup` archives the records of retired workers. A spawn's first prompt and messages to unregistered panes are still typed directly. [Current behavior](../usage/agents.md#inbox)
+
+41. [x] **Meaningful delivery states.** Distinguish queued, submitted to the harness, acknowledged by the worker, and answered—where each can actually be observed.
+
+   **Implemented:** [4ef38f8](https://github.com/Harrison-Blair/fledge/commit/4ef38f8111b3ae4a087438fa2c85b0a708ec2648) (merge of `feat/wave2a-supervise-inbox`) · **Author:** Harrison-Blair · **Author date:** 2026-10-12
+
+   **Implementation decisions and remaining gaps:** Borrowed from firstmate ([comparison](firstmate-comparison.md)). Each inbox record derives `queued` (no successful doorbell), `rung`, `read` (the recipient ran `fledge inbox read`), and `answered` (a reply sent with `agent message --reply-to`), from its `rings`, `read_at`, and `answered_at` fields. The daemon rings an unread record once more after `ack_timeout`, then tells a registered sender. `read` records that the recipient printed the body, not that it acted on it. [Current behavior](../usage/agents.md#inbox)
 
     **Existing support:** `agent message --confirm` ([8dc6b66](https://github.com/Harrison-Blair/fledge/commit/8dc6b6635e175e3c44c8001d0593a700e9095f15)) waits, up to `--timeout`, for Herdr to observe the agent become active after submission and reports `confirmed`; a post-submission `blocked` or stall is `partial` with a `submitted` effect, and a wait timeout or lost acknowledgement is `unknown`. Herdr tracks lifecycle state, not individual prompts, so a target already working reports `already_working` without confirming this prompt's start. Without per-prompt correlation, queued, acknowledged, and answered states remain open.
 
@@ -234,7 +250,11 @@ A checked item means its main capability is implemented; accompanying notes reco
 
 60. [ ] **Request independent review.** Launch a reviewer against a specific revision, with the task's acceptance criteria and previous findings.
 
-61. [ ] **Queue integration of completed changes.** Bring approved branches together in a controlled order and verify the combined result.
+61. [x] **Queue integration of completed changes.** Bring approved branches together in a controlled order and verify the combined result.
+
+   **Implemented:** [420dde3](https://github.com/Harrison-Blair/fledge/commit/420dde3919092dc64dc7611d31f06c82a5a26754) (merge of `feat/wave2b-task-land`) · **Author:** Harrison-Blair · **Author date:** 2026-10-12
+
+   **Implementation decisions and remaining gaps:** Borrowed from firstmate ([comparison](firstmate-comparison.md)). Partially implemented: `fledge task land` merges one verified task's branch into its target, bound to the task's `verified_commit`, either as a local `--no-ff` merge in the primary checkout or through a pull request merged only when it is not a draft, is mergeable, has the verified head, and every check passed. A repository lock lets one landing run at a time. Ordering several approved branches and verifying their combined result remain unimplemented. [Current behavior](../usage/tasks.md#landing)
 
 62. [ ] **Support dependent branches.** Allow one task to build on another task's pending changes, while making the dependency visible.
 
@@ -288,7 +308,11 @@ A checked item means its main capability is implemented; accompanying notes reco
 
 84. [ ] **Preview operations.** Show the intended harness invocation, resource placement, task assignment, or cleanup targets before execution.
 
-85. [ ] **An optional persistent supervisor.** Keep queues and subscriptions active when no coordinating agent is running. Introduce it when those features justify an ongoing process.
+85. [x] **An optional persistent supervisor.** Keep queues and subscriptions active when no coordinating agent is running. Introduce it when those features justify an ongoing process.
+
+   **Implemented:** [4ef38f8](https://github.com/Harrison-Blair/fledge/commit/4ef38f8111b3ae4a087438fa2c85b0a708ec2648) (merge of `feat/wave2a-supervise-inbox`) · **Author:** Harrison-Blair · **Author date:** 2026-10-12
+
+   **Implementation decisions and remaining gaps:** Borrowed from firstmate ([comparison](firstmate-comparison.md)). `fledge supervise run` is one daemon per Herdr session, started in the background by `agent spawn`, `task assign`, and any message stored but not rung, and managed with `supervise status` and `stop`. It keeps its subscriptions and wake state without a coordinating agent and exits after 60 seconds with nothing to watch. It dispatches no queued work. Herdr 0.9.3 does not export `HERDR_SESSION` into panes, so in practice the daemon runs once per repository (see `reference/dogfood/friction.md`). [Current behavior](../usage/agents.md#supervision)
 
 86. [ ] **Explicit operating permissions.** Give tasks defined access to repositories, commands, and external actions, backed by actual enforcement where available.
 
