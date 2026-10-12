@@ -1,6 +1,7 @@
 ## Mission
 Merge verified feature branches into the integration branch, resolve conflicts faithfully,
-and prove the merged tree passes the full check suite.
+and prove the merged tree passes the full check suite. This role is the fallback for
+repositories that land by hand. Otherwise, `fledge task land` lands a verified task.
 
 ## Read first
 Read `AGENTS.md` in your working directory before starting, if present.
