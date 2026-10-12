@@ -188,3 +188,30 @@ func TestEpisodesRoundTrip(t *testing.T) {
 		t.Fatalf("%+v %v", got, err)
 	}
 }
+
+func TestEnsureForNeedsHerdrAndSkipsTestBinary(t *testing.T) {
+	repo := t.TempDir()
+	gitInit(t, repo)
+	t.Setenv("HERDR_ENV", "")
+	called := false
+	start := func(string, string) error { called = true; return nil }
+	if started, err := EnsureFor(context.Background(), repo, start); started || err != nil || called {
+		t.Fatal(started, err, called)
+	}
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_SOCKET_PATH", "/nonexistent")
+	t.Setenv("HERDR_SESSION", "s")
+	if started, err := EnsureFor(context.Background(), repo, start); !started || err != nil || !called {
+		t.Fatal(started, err, called)
+	}
+	if started, err := EnsureFor(context.Background(), repo, Launch); started || err != nil {
+		t.Fatal(started, err)
+	}
+}
+
+func gitInit(t *testing.T, dir string) {
+	t.Helper()
+	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatal(string(out), err)
+	}
+}

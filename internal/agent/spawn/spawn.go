@@ -13,6 +13,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/profiles"
+	"github.com/Harrison-Blair/fledge/internal/lib/supervise"
 )
 
 type spawner struct {
@@ -94,10 +95,17 @@ func (s *spawner) prompt(ctx context.Context, target, text string, out *cli.Outc
 func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Outcome {
 	return (&spawner{Client: c}).run(ctx, o, in)
 }
-func (s *spawner) run(ctx context.Context, o Options, in io.Reader) cli.Outcome {
+func (s *spawner) run(ctx context.Context, o Options, in io.Reader) (out cli.Outcome) {
 	result := &Result{Name: o.Name, Harness: o.Harness}
-	out := cli.NewOutcome("agent.spawn")
+	out = cli.NewOutcome("agent.spawn")
 	out.Result = result
+	// A registered agent is supervised, however the spawn ends.
+	defer func() {
+		if result.Registered {
+			started, err := supervise.EnsureFor(ctx, s.Cwd, startSupervisor)
+			supervise.Note(&out, started, err)
+		}
+	}()
 	var profile *profiles.Profile
 	brief := ""
 	if o.Profile != "" {
@@ -256,6 +264,9 @@ func (s *spawner) run(ctx context.Context, o Options, in io.Reader) cli.Outcome 
 	result.Prompted = true
 	return out
 }
+
+// startSupervisor launches the supervision daemon; tests replace it.
+var startSupervisor supervise.Starter = supervise.Launch
 
 // startReservation is the least startup time agent.start asks Herdr for. Herdr
 // drops the agent's name when that reservation expires before launch completes,

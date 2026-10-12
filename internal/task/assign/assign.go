@@ -16,6 +16,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/inbox"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
+	"github.com/Harrison-Blair/fledge/internal/lib/supervise"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 )
 
@@ -142,8 +143,13 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 	}); ok {
 		out.Result = Result{Record: r, OwnerName: owner.Name}
 	}
+	started, err := supervise.EnsureFor(ctx, c.Cwd, startSupervisor)
+	supervise.Note(&out, started, err)
 	return out
 }
+
+// startSupervisor launches the supervision daemon; tests replace it.
+var startSupervisor supervise.Starter = supervise.Launch
 
 // prerequisites reads r's prerequisites by id. A missing one is left out, so
 // it counts as unmet; any other read error is returned.

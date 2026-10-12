@@ -495,3 +495,22 @@ func TestAssignCapturesOwnerSessionRef(t *testing.T) {
 		})
 	}
 }
+
+// Assignment starts the supervision daemon.
+func TestAssignStartsSupervisor(t *testing.T) {
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_SOCKET_PATH", "/nonexistent")
+	t.Setenv("HERDR_SESSION", "")
+	starts := 0
+	old := startSupervisor
+	startSupervisor = func(string, string) error { starts++; return nil }
+	t.Cleanup(func() { startSupervisor = old })
+	repo := identitytest.Repository(t)
+	tasktest.Register(t, repo, worker)
+	id := seed(t, repo)
+	c := tasktest.Client(t, repo, "w1:p1", tasktest.Get("worker", worker), tasktest.Get("w1:p1", boss), call{Method: "agent.prompt", Result: prompted(worker)})
+	out := Run(context.Background(), c, Options{Agent: identity.Target{Name: "worker"}, ID: id})
+	if out.Error != nil || starts != 1 || !slices.Contains(out.Effects, cli.Effect{Action: "started", Kind: "supervisor"}) {
+		t.Fatalf("%d %+v", starts, out.Effects)
+	}
+}

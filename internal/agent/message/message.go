@@ -15,6 +15,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/inbox"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
+	"github.com/Harrison-Blair/fledge/internal/lib/supervise"
 )
 
 // Options selects one or more targets by name, pane, record ID, or filter.
@@ -119,8 +120,31 @@ func run(ctx context.Context, c libagent.Client, o Options, in io.Reader, id str
 	if o.ReplyTo != "" {
 		answer(&out, s, o.ReplyTo, *from.ID)
 	}
+	if queued(out) {
+		started, err := supervise.EnsureFor(ctx, c.Cwd, startSupervisor)
+		supervise.Note(&out, started, err)
+	}
 	return out
 }
+
+// queued reports whether out left a stored message unrung, which the
+// supervisor must ring.
+func queued(out cli.Outcome) bool {
+	switch r := out.Result.(type) {
+	case Result:
+		return r.InboxID != nil && r.State == "queued"
+	case FanOut:
+		for _, row := range r.Targets {
+			if row.InboxID != nil && row.State != nil && *row.State == "queued" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// startSupervisor launches the supervision daemon; tests replace it.
+var startSupervisor supervise.Starter = supervise.Launch
 
 // registry opens the store that decides who is registered. Outside every
 // repository there is none, so every recipient is unregistered; any other

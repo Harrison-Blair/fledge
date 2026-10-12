@@ -78,6 +78,9 @@ func OpenExisting(root string) (*Store, error) {
 	return &Store{root: root, newID: randomID}, nil
 }
 
+// Dir is the store's root directory.
+func (s *Store) Dir() string { return s.root }
+
 // Create stores the value returned by build under a new random id and returns
 // that id. An existing record, live or archived, is never overwritten or
 // shadowed; colliding ids are retried a bounded number of times. Create

@@ -11,6 +11,10 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
+	"github.com/Harrison-Blair/fledge/internal/lib/fledgedir"
+	"github.com/Harrison-Blair/fledge/internal/lib/version"
 )
 
 // stopWait bounds how long Stop waits for the daemon to release its lock.
@@ -18,6 +22,38 @@ const stopWait = 10 * time.Second
 
 // Starter launches one detached daemon for the session; see Launch.
 type Starter func(root, session string) error
+
+// ErrTestBinary is Launch's refusal inside a test binary.
+var ErrTestBinary = errors.New("supervise: refusing to launch the daemon from a test binary")
+
+// EnsureFor is Ensure for the caller's Herdr session and this binary's
+// version in the repository containing cwd. Outside Herdr it does nothing,
+// and a starter refusing a test binary counts as not started.
+func EnsureFor(ctx context.Context, cwd string, start Starter) (bool, error) {
+	if os.Getenv("HERDR_ENV") != "1" || os.Getenv("HERDR_SOCKET_PATH") == "" {
+		return false, nil
+	}
+	root, err := fledgedir.Root(ctx, cwd)
+	if err != nil {
+		return false, err
+	}
+	started, err := Ensure(ctx, root, os.Getenv("HERDR_SESSION"), version.Version(), start)
+	if errors.Is(err, ErrTestBinary) {
+		return false, nil
+	}
+	return started, err
+}
+
+// Note records an EnsureFor outcome on out: a started effect, or a warning
+// when the daemon could not be started. Neither fails the command.
+func Note(out *cli.Outcome, started bool, err error) {
+	switch {
+	case err != nil:
+		out.Effects = append(out.Effects, cli.Effect{Action: "warning", Kind: "supervisor", ID: err.Error()})
+	case started:
+		out.Effects = append(out.Effects, cli.Effect{Action: "started", Kind: "supervisor", ID: os.Getenv("HERDR_SESSION")})
+	}
+}
 
 // Ensure starts the daemon of session in the repository whose primary
 // checkout is root when none is live, or when the live one reports another
@@ -88,7 +124,7 @@ func Stop(ctx context.Context, dir string) error {
 // refuses inside a test binary, which would rerun the tests.
 func Launch(root, session string) error {
 	if testing.Testing() {
-		return errors.New("supervise: refusing to launch the daemon from a test binary")
+		return ErrTestBinary
 	}
 	exe, err := os.Executable()
 	if err != nil {

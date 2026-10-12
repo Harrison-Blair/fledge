@@ -20,6 +20,11 @@ const lockName = "lock"
 // checkout is root. Characters other than letters, digits, '.', '_', and '-'
 // become '_'; an empty session is _none.
 func Dir(root, session string) string {
+	return DirIn(filepath.Join(root, ".fledge", "state"), session)
+}
+
+// DirIn is Dir for the repository whose state store directory is stateDir.
+func DirIn(stateDir, session string) string {
 	name := strings.Map(func(r rune) rune {
 		if 'a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9' || r == '.' || r == '_' || r == '-' {
 			return r
@@ -32,7 +37,7 @@ func Dir(root, session string) string {
 	if strings.Trim(name, ".") == "" {
 		name = "_" + name
 	}
-	return filepath.Join(root, ".fledge", "state", "supervise", name)
+	return filepath.Join(stateDir, "supervise", name)
 }
 
 // Status is what a live daemon reports in its lock file. HeartbeatAt is

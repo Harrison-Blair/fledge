@@ -3,13 +3,17 @@ package cleanup
 import (
 	"context"
 	"fmt"
+	"os"
+	"slices"
 
 	"github.com/Harrison-Blair/fledge/internal/agent/stop"
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/inbox"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
+	"github.com/Harrison-Blair/fledge/internal/lib/supervise"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/worktree/remove"
 )
@@ -117,6 +121,13 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 		ch.Outcome, ch.Reason = record(remove.Run(ctx, c, remove.Options{Path: ch.Path, Cwd: p.root, Base: *ch.Base, Marker: ch.marker, MarkedBranch: ch.markedBranch, PlannedPath: ch.Path}))
 	}
 	out.Result = p.Result
+	var retired []string
+	for id, done := range stopped {
+		if done {
+			retired = append(retired, id)
+		}
+	}
+	retire(ctx, &out, p.store, retired)
 	if len(failures) > 0 {
 		first := failures[0].Error
 		out.Fail(fmt.Errorf("%d cleanup action(s) failed; first: %s", len(failures), first.Text()), first.Phase, false)
@@ -128,3 +139,36 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 	}
 	return out
 }
+
+// retire archives the inbox records to or from the retired workers, then
+// stops the session's supervision daemon when every agent it watches was
+// retired. Failures are warnings: the workers are already stopped.
+func retire(ctx context.Context, out *cli.Outcome, s *state.Store, retired []string) {
+	if len(retired) == 0 {
+		return
+	}
+	archived, err := inbox.Archive(s, retired)
+	for _, id := range archived {
+		out.Effects = append(out.Effects, cli.Effect{Action: "archived", Kind: "inbox", ID: id})
+	}
+	if err != nil {
+		out.Effects = append(out.Effects, cli.Effect{Action: "warning", Kind: "inbox", ID: err.Error()})
+	}
+	session := os.Getenv("HERDR_SESSION")
+	dir := supervise.DirIn(s.Dir(), session)
+	st, live, err := supervise.Read(dir)
+	if err == nil && (!live || slices.ContainsFunc(st.Watched, func(id string) bool { return !slices.Contains(retired, id) })) {
+		return
+	}
+	if err == nil {
+		err = stopSupervisor(ctx, dir)
+	}
+	action := "stopped"
+	if err != nil {
+		action, session = "warning", err.Error()
+	}
+	out.Effects = append(out.Effects, cli.Effect{Action: action, Kind: "supervisor", ID: session})
+}
+
+// stopSupervisor stops the supervision daemon; tests replace it.
+var stopSupervisor = supervise.Stop

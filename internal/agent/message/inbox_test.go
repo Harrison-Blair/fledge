@@ -277,3 +277,44 @@ func TestRenderInboxResult(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// fakeStarter replaces the daemon starter, counting launches.
+func fakeStarter(t *testing.T) *int {
+	t.Helper()
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_SOCKET_PATH", "/nonexistent")
+	t.Setenv("HERDR_SESSION", "")
+	n := 0
+	old := startSupervisor
+	startSupervisor = func(string, string) error { n++; return nil }
+	t.Cleanup(func() { startSupervisor = old })
+	return &n
+}
+
+// A deferred message starts the supervisor; a rung one does not.
+func TestDeferredMessageStartsSupervisor(t *testing.T) {
+	for _, blocked := range []bool{true, false} {
+		starts := fakeStarter(t)
+		repo := identitytest.Repository(t)
+		w := worker("w1:p3", "term_w", "worker")
+		tasktest.Register(t, repo, w)
+		prompt := call{Method: "agent.prompt", Result: promptedAs(w)}
+		if blocked {
+			prompt = call{Method: "agent.prompt", Err: &herdr.Error{Code: "agent_blocked", Message: "dialog"}}
+		}
+		c := herdrscript.Client(t, tasktest.Get("worker", w), senderCall(), prompt)
+		c.Cwd = repo
+		out := run(context.Background(), c, names("worker"), nil, "m-0a1b2c")
+		want := 0
+		if blocked {
+			want = 1
+		}
+		started := false
+		for _, e := range out.Effects {
+			started = started || e == (cli.Effect{Action: "started", Kind: "supervisor"})
+		}
+		if *starts != want || started != blocked {
+			t.Fatalf("blocked=%v: %d starts, effects %+v", blocked, *starts, out.Effects)
+		}
+	}
+}

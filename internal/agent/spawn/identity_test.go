@@ -288,3 +288,23 @@ func TestSpawnPromptSenderResolvesAgainAfterFailedLookup(t *testing.T) {
 		t.Fatalf("%+v %+v", out, r)
 	}
 }
+
+// A spawn that registers its agent starts the supervision daemon.
+func TestSpawnStartsSupervisor(t *testing.T) {
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_SOCKET_PATH", "/nonexistent")
+	t.Setenv("HERDR_SESSION", "")
+	starts := 0
+	old := startSupervisor
+	startSupervisor = func(string, string) error { starts++; return nil }
+	t.Cleanup(func() { startSupervisor = old })
+	o := validOptions()
+	o.Pane = "w1:p1"
+	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
+	s := fake(t, call{Method: "session.snapshot", Result: snapshot()}, labeled(p), call{Method: "agent.start", Result: started(p)}, waitCall("worker", p, "idle"), callerNotAgent())
+	s.Cwd = identitytest.Repository(t)
+	out := s.run(context.Background(), o, nil)
+	if out.Status != "success" || starts != 1 || out.Effects[len(out.Effects)-1] != (cli.Effect{Action: "started", Kind: "supervisor"}) {
+		t.Fatalf("%d %+v", starts, out.Effects)
+	}
+}
