@@ -502,6 +502,104 @@ func TestAdoptRecheckFailures(t *testing.T) {
 	}
 }
 
+// A name the recheck sees that differs from the first lookup's stops adoption
+// before any rename, record, or label, so a name change cannot let adopt
+// rename a named agent or register an unnamed one without --name. Names
+// compare by value, and an empty name is unnamed. Effects report only the
+// setup the store made.
+func TestAdoptRecheckNameChanges(t *testing.T) {
+	long := strings.Repeat("w", 4096)
+	for label, tc := range map[string]struct {
+		before, after *string
+		name          string
+	}{
+		"unnamed to named":             {nil, named("other"), "helper"},
+		"unnamed to named as --name":   {nil, named("helper"), "helper"},
+		"empty to named":               {named(""), named("other"), "helper"},
+		"named to unnamed":             {named("worker"), nil, ""},
+		"named to empty":               {named("worker"), named(""), ""},
+		"named to unnamed with --name": {named("worker"), nil, "worker"},
+		"named to other":               {named("worker"), named("other"), ""},
+		"named to other with --name":   {named("worker"), named("other"), "worker"},
+		"named to padded":              {named("worker"), named(" worker"), ""},
+		"named to newline":             {named("worker"), named("worker\n"), ""},
+		"named to non-ASCII":           {named("worker"), named("wörker"), ""},
+		"named to long":                {named("worker"), &long, ""},
+	} {
+		for _, store := range []string{"fresh", "existing", "registered"} {
+			t.Run(label+" "+store, func(t *testing.T) {
+				c := client(t, calls(verified(agent("w1:p3", tc.before)), []call{get("w1:p3", agent("w1:p3", tc.after))})...)
+				var seeded []string
+				if store != "fresh" {
+					if _, err := identity.OpenStore(context.Background(), c.Cwd, &cli.Outcome{}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if store == "registered" {
+					seeded = []string{seed(t, c, nil).ID}
+				}
+				out := Run(context.Background(), c, Options{Name: tc.name})
+				if out.Error == nil || out.Error.Code != "caller_identity_unverified" || out.Error.Phase != "identity" || out.Result != nil {
+					t.Fatalf("%+v %+v", out, out.Error)
+				}
+				if strings.Contains(out.Error.Message, *named("other")) || strings.Contains(out.Error.Message, long) {
+					t.Fatalf("message repeats the observed name: %q", out.Error.Message)
+				}
+				for _, e := range out.Effects {
+					if e.Kind != "directory" && e.Kind != "file" {
+						t.Fatalf("effect beyond setup: %+v", out.Effects)
+					}
+				}
+				if store == "fresh" && (out.Status != "partial" || len(out.Effects) == 0) || store != "fresh" && (out.Status != "rejected" || len(out.Effects) != 0) {
+					t.Fatalf("%s %+v", out.Status, out.Effects)
+				}
+				s, err := identity.Existing(context.Background(), c.Cwd)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if ids, err := s.List(identity.Kind); err != nil || !reflect.DeepEqual(ids, seeded) && len(ids)+len(seeded) != 0 {
+					t.Fatalf("records %v %v", ids, err)
+				}
+				if store == "registered" {
+					if got := stored(t, c, seeded[0]); got.Name != nil || got.Pane != "w1:p9" {
+						t.Fatalf("record changed: %+v", got)
+					}
+				}
+			})
+		}
+	}
+}
+
+// The recheck accepts the same name, and an empty name where the first lookup
+// saw none or the reverse.
+func TestAdoptRecheckSameName(t *testing.T) {
+	for label, tc := range map[string]struct {
+		before, after *string
+		name          string
+		rename        bool
+	}{
+		"same name":               {named("worker"), named("worker"), "", false},
+		"same name with --name":   {named("worker"), named("worker"), "worker", false},
+		"unnamed then empty":      {nil, named(""), "helper", true},
+		"empty then unnamed":      {named(""), nil, "helper", true},
+		"unnamed then still none": {nil, nil, "helper", true},
+	} {
+		t.Run(label, func(t *testing.T) {
+			t.Setenv("HERDR_SESSION", "")
+			script := calls(verified(agent("w1:p3", tc.before)), verified(agent("w1:p3", tc.after)))
+			if tc.rename {
+				script = calls(script, []call{renaming("w1:p3")}, labels("w1:p3", "w1:t2"))
+			}
+			c := client(t, script...)
+			out := Run(context.Background(), c, Options{Name: tc.name})
+			if out.Status != "success" || out.Error != nil || out.Result.(Result).Renamed != tc.rename {
+				t.Fatalf("%+v %+v", out, out.Error)
+			}
+			stored(t, c, out.Result.(Result).ID)
+		})
+	}
+}
+
 type adopterKey struct{}
 
 // barrierHerdr serves concurrent adopters of the named agent in w1:p3. Each

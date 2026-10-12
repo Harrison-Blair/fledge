@@ -1661,3 +1661,16 @@ tracking task with its result in the reason. No other agent received the task.
 1. Plan a Pi spawn with `--model` naming a provider that has no configured authentication.
 2. Observe that the agent cannot use that model.
 3. Respawn with an authenticated provider model and observe normal startup.
+
+---
+
+**Issue:** A worker messaged a guessed orchestrator name when its coordinator was unregistered
+
+**Status:** Open
+
+**Summary:** On 2026-10-12, an unregistered coordinator sent a verifier its brief, so the message header showed `unknown sender` with no reply command. The verifier guessed a target and sent a status message to `orchestrator`, an existing agent name that belonged to an unrelated agent. Fledge refused the message with `agent_blocked`, so the message was not delivered and no intervention in that agent is confirmed. The verifier then made no fallback attempt. The correct return channel for a worker with an unregistered sender is its assigned task record (`fledge task complete`), which the coordinator reads with `fledge task get`.
+
+**Reproduction steps:**
+1. From a pane with no Fledge record, assign a task to a registered worker. Observe `unknown sender` and no reply command in the worker's message header.
+2. From the worker, run `fledge agent message --name orchestrator` when an unrelated agent has that name. Observe `agent_blocked`.
+3. Complete the task with `fledge task complete` and observe the result in `fledge task get`.

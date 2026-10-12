@@ -51,10 +51,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 		out.Fail(err, "agent.get", false)
 		return out
 	}
-	current := ""
-	if a.Name != nil {
-		current = *a.Name
-	}
+	current := agentName(a)
 	switch {
 	case current == "" && o.Name == "":
 		err = cli.Invalid("the agent in %s is unnamed; pass --name", a.PaneID)
@@ -126,17 +123,26 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 }
 
 // recheck looks up the caller's agent again and verifies that it is the same
-// terminal running the same harness, still owned by this command, and returns
-// it as it is now, in the pane where it now runs.
+// terminal running the same harness with the same name, still owned by this
+// command, and returns it as it is now, in the pane where it now runs. An
+// empty name is no name.
 func recheck(ctx context.Context, c libagent.Client, before herdr.AgentDetails) (herdr.AgentDetails, error) {
 	a, err := c.Get(ctx, c.CallerPane)
 	if err != nil {
 		return a, err
 	}
-	if a.TerminalID != before.TerminalID || (a.Agent == nil) != (before.Agent == nil) || a.Agent != nil && *a.Agent != *before.Agent {
+	if a.TerminalID != before.TerminalID || (a.Agent == nil) != (before.Agent == nil) || a.Agent != nil && *a.Agent != *before.Agent || agentName(a) != agentName(before) {
 		return a, unverified("the agent in %s changed during adoption", c.CallerPane)
 	}
 	return a, owns(ctx, c, a)
+}
+
+// agentName is a's name, empty when it has none.
+func agentName(a herdr.AgentDetails) string {
+	if a.Name == nil {
+		return ""
+	}
+	return *a.Name
 }
 
 // registered is replaceable so tests can count adopt's scans of the agent
