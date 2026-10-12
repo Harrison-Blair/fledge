@@ -3,6 +3,7 @@ package task
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -18,22 +19,39 @@ import (
 // Kind is the state store kind holding task records.
 const Kind = "tasks"
 
-// The five task states. Verified and cancelled are terminal.
+// The six task states. Cancelled and landed are final; verified is final
+// unless task land moves it to landed.
 const (
 	Created   = "created"
 	Assigned  = "assigned"
 	Completed = "completed"
 	Verified  = "verified"
 	Cancelled = "cancelled"
+	Landed    = "landed"
 )
 
 // Statuses lists every state in lifecycle order.
-var Statuses = []string{Created, Assigned, Completed, Verified, Cancelled}
+var Statuses = []string{Created, Assigned, Completed, Verified, Cancelled, Landed}
+
+// The delivery modes: how task land delivers a verified task's branch.
+const (
+	ModeLocal = "local"
+	ModePR    = "pr"
+	ModeNone  = "none"
+)
+
+// DeliveryModes lists every delivery mode.
+var DeliveryModes = []string{ModeLocal, ModePR, ModeNone}
 
 // Record is one task. Agent references are Fledge agent record ids. Parent
 // is the task this one was created under; it never changes. After lists the
 // prerequisite task ids in declaration order. UnmetAtAssign is set only when
 // a forced assign bypassed prerequisites, naming the ones still unmet then.
+// DeliveryMode is how task land delivers the task; a record written before it
+// existed loads as none. Branch is resolved and stored by task land;
+// VerifiedCommit is the commit the latest verification bound. The landing
+// fields stay null until task land records them; LandStep is the last land
+// step reached, for refusals.
 type Record struct {
 	ID                     string                  `json:"id"`
 	Title                  string                  `json:"title"`
@@ -56,6 +74,27 @@ type Record struct {
 	VerifiedAt             *string                 `json:"verified_at"`
 	CancelledAt            *string                 `json:"cancelled_at"`
 	Delivery               *Delivery               `json:"delivery"`
+	DeliveryMode           string                  `json:"delivery_mode"`
+	Branch                 *string                 `json:"branch"`
+	BaseBranch             *string                 `json:"base_branch"`
+	VerifiedCommit         *string                 `json:"verified_commit"`
+	LandedAt               *string                 `json:"landed_at"`
+	LandedBy               *string                 `json:"landed_by"`
+	MergeCommit            *string                 `json:"merge_commit"`
+	TargetBranch           *string                 `json:"target_branch"`
+	PRURL                  *string                 `json:"pr_url"`
+	LandStep               *string                 `json:"land_step"`
+}
+
+// UnmarshalJSON decodes a record, defaulting an absent delivery_mode to none.
+func (r *Record) UnmarshalJSON(b []byte) error {
+	type plain Record
+	p := plain{DeliveryMode: ModeNone}
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	*r = Record(p)
+	return nil
 }
 
 // CompletionNotification is the outcome of notifying a task's registered
