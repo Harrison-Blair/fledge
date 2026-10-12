@@ -64,7 +64,7 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 		err = landing.ValidMode("--delivery-mode", o.DeliveryMode)
 	}
 	if err == nil && o.BaseBranchSet {
-		err = landing.ValidBranch(ctx, "--base-branch", o.BaseBranch)
+		err = landing.ValidTarget(ctx, "--base-branch", o.BaseBranch)
 	}
 	if err != nil {
 		out.Fail(err, "validation", false)

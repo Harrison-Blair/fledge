@@ -195,7 +195,7 @@ func validate(ctx context.Context, o Options, in io.Reader) (proposal.Proposal, 
 		if t.BaseBranch == nil {
 			continue
 		}
-		if err := landing.ValidBranch(ctx, fmt.Sprintf("task %q: base_branch", t.Key), *t.BaseBranch); err != nil {
+		if err := landing.ValidTarget(ctx, fmt.Sprintf("task %q: base_branch", t.Key), *t.BaseBranch); err != nil {
 			return proposal.Proposal{}, nil, err
 		}
 	}

@@ -13,15 +13,17 @@ import (
 )
 
 // fakeGH is a gh on PATH that logs its arguments and answers from files in
-// dir: list (before a create) and listed (after), checks, merged, and an
-// optional merge-fails.
+// dir: list (before a create) and listed (after), checks, merged, and the
+// optional merge-fails and list-after-create-fails.
 type fakeGH struct{ dir string }
 
 const ghScript = `#!/bin/sh
 d=%q
 printf '%s\n' "$*" >> "$d/log"
 case "$1 $2" in
-"pr list") if [ -f "$d/created" ]; then cat "$d/listed"; else cat "$d/list"; fi ;;
+"pr list") if [ -f "$d/created" ]; then
+    if [ -f "$d/list-after-create-fails" ]; then echo "lookup failed" >&2; exit 1; fi
+    cat "$d/listed"; else cat "$d/list"; fi ;;
 "pr create") touch "$d/created"
   for a in "$@"; do case "$a" in --body-file=*) cp "${a#--body-file=}" "$d/body" ;; esac; done
   echo https://example.com/pr/7 ;;
@@ -238,5 +240,78 @@ func TestLandPRGuards(t *testing.T) {
 	id = tasktest.Seed(t, f.repo, task.Record{Title: "t", Status: task.Verified, Owner: &f.worker.ID, VerifiedCommit: &f.head, DeliveryMode: task.ModePR, BaseBranch: tasktest.Ptr("nosuch")})
 	if out := f.land(t, Options{ID: id, Branch: "feat", BranchSet: true}); out.Error == nil || out.Error.Code != "land_target_missing" {
 		t.Fatalf("%+v", out.Error)
+	}
+}
+
+func TestLandPRRefusesInvalidTargetBeforeGH(t *testing.T) {
+	f, g := setupPR(t)
+	git(t, f.repo, "update-ref", "refs/remotes/origin/-foo", "main")
+	check := func(id string) {
+		t.Helper()
+		out := f.land(t, Options{ID: id, Branch: "feat", BranchSet: true})
+		if out.Error == nil || out.Error.Code != "land_target_invalid" || *out.Result.(Result).LandStep != "check" {
+			t.Fatalf("%+v %+v", out.Error, out.Result)
+		}
+		if _, err := os.Stat(filepath.Join(g.dir, "log")); err == nil {
+			t.Fatalf("gh ran: %q", g.log(t))
+		}
+	}
+	// A stored base_branch, short or as a remote ref.
+	for _, base := range []string{"-foo", "refs/remotes/origin/-foo", "refs/heads/-foo"} {
+		check(tasktest.Seed(t, f.repo, task.Record{Title: "t", Status: task.Verified, Owner: &f.worker.ID, VerifiedCommit: &f.head, DeliveryMode: task.ModePR, BaseBranch: tasktest.Ptr(base)}))
+	}
+	// The integration branch derived from origin/HEAD.
+	git(t, f.repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/-foo")
+	check(f.id)
+}
+
+func TestLandPRRecordsCreatedURLWhenLookupFails(t *testing.T) {
+	f, g := setupPR(t)
+	g.set(t, "list-after-create-fails", "")
+	out := f.land(t, Options{Branch: "feat", BranchSet: true})
+	if r := f.refused(t, out, "land_gh_failed"); *r.LandStep != "pr" || r.PRURL == nil || *r.PRURL != "https://example.com/pr/7" {
+		t.Fatalf("%+v", r)
+	}
+	// The rerun finds the pull request and does not open a second one.
+	os.Remove(filepath.Join(g.dir, "list-after-create-fails"))
+	if out := f.land(t, Options{}); out.Error != nil {
+		t.Fatalf("%+v", out.Error)
+	}
+	creates := 0
+	for _, l := range g.log(t) {
+		if strings.HasPrefix(l, "pr create") {
+			creates++
+		}
+	}
+	if r := f.load(t); creates != 1 || r.Status != task.Landed {
+		t.Fatalf("%d creates, %+v", creates, r)
+	}
+}
+
+func TestLandEarlyRefusalsNameCheckStep(t *testing.T) {
+	f, g := setupPR(t)
+	for _, tc := range []struct {
+		name string
+		pane string
+		o    Options
+		code string
+	}{
+		{"invalid branch", "w1:p1", Options{Branch: "-foo", BranchSet: true}, "invalid_input"},
+		{"invalid mode", "w1:p1", Options{Mode: "merge", ModeSet: true}, "invalid_input"},
+		{"unregistered caller", "", Options{Branch: "feat", BranchSet: true}, "caller_unregistered"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := f.landAs(t, tasktest.Client(t, f.repo, tc.pane), tc.o)
+			res, ok := out.Result.(Result)
+			if out.Error == nil || out.Error.Code != tc.code || !ok || res.LandStep == nil || *res.LandStep != "check" {
+				t.Fatalf("%+v %+v", out.Error, out.Result)
+			}
+			if got := render(t, out); !strings.Contains(got, "Land step reached: check.") {
+				t.Fatalf("%q", got)
+			}
+			if _, err := os.Stat(filepath.Join(g.dir, "log")); err == nil {
+				t.Fatalf("gh ran: %q", g.log(t))
+			}
+		})
 	}
 }

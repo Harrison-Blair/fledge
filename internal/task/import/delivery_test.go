@@ -41,7 +41,7 @@ func TestImportStoresDeliveryKeysAndConfigDefault(t *testing.T) {
 
 func TestImportRejectsInvalidBaseBranch(t *testing.T) {
 	repo := identitytest.Repository(t)
-	for _, branch := range []string{"", "-dev", "a..b"} {
+	for _, branch := range []string{"", "-dev", "a..b", "refs/remotes/origin/-foo", "refs/heads/-foo"} {
 		path := write(t, "schema_version = 1\n"+withKeys(taskTOML("a", "A"), "a", "base_branch = \""+branch+"\"\n"))
 		for _, dry := range []bool{true, false} {
 			out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{File: path, FileSet: true, DryRun: dry}, strings.NewReader(""))

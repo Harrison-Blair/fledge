@@ -55,6 +55,8 @@ func TestCreateRejectsInvalidDeliveryOptions(t *testing.T) {
 		{BaseBranch: "-dev", BaseBranchSet: true},
 		{BaseBranch: "a..b", BaseBranchSet: true},
 		{BaseBranch: "a\nb", BaseBranchSet: true},
+		{BaseBranch: "refs/remotes/origin/-foo", BaseBranchSet: true},
+		{BaseBranch: "refs/heads/-foo", BaseBranchSet: true},
 	} {
 		if _, code := created(t, repo, o); code != "invalid_input" {
 			t.Fatalf("%+v: %s", o, code)

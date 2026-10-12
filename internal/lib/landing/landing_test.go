@@ -34,6 +34,18 @@ func TestValidBranchAndMode(t *testing.T) {
 			t.Fatalf("%q: %v", bad, err)
 		}
 	}
+	// A target is checked after it is reduced to a short name.
+	for _, ok := range []string{"dev", "refs/heads/dev", "refs/remotes/origin/a/b"} {
+		if err := ValidTarget(ctx, "--base-branch", ok); err != nil {
+			t.Fatalf("%s: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"-dev", "refs/heads/-dev", "refs/remotes/origin/-dev", "refs/remotes/origin/a..b"} {
+		var input *cli.InputError
+		if err := ValidTarget(ctx, "--base-branch", bad); err == nil || !asInput(err, &input) {
+			t.Fatalf("%q: %v", bad, err)
+		}
+	}
 	if ValidMode("--mode", "pr") != nil || ValidMode("--mode", "") == nil || ValidMode("--mode", "merge") == nil {
 		t.Fatal("mode")
 	}

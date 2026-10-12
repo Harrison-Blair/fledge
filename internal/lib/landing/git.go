@@ -47,6 +47,12 @@ func ValidBranch(ctx context.Context, flag, name string) error {
 	return nil
 }
 
+// ValidTarget checks a landing target with ValidBranch after ShortBranch
+// reduces it, so refs/remotes/origin/-dev is refused like -dev.
+func ValidTarget(ctx context.Context, flag, ref string) error {
+	return ValidBranch(ctx, flag, ShortBranch(ref))
+}
+
 // ShortBranch reduces refs/heads/<name> or refs/remotes/origin/<name> to
 // <name>; any other value is returned unchanged.
 func ShortBranch(ref string) string {

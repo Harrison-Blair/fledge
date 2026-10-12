@@ -200,6 +200,7 @@ The task must be `verified` (`task_invalid_state`) with a non-null `verified_com
 
 The branch is `--branch`, else the branch that an earlier `task land` stored, else the branch checked out in the owner's recorded checkout, else the branch its spawn created (`land_branch_unknown`).
 The target is the task's `base_branch`, else the repository integration branch, reduced to a short name.
+`land` refuses a target whose short name is not a valid branch name with `land_target_invalid`, before any git or gh command runs.
 `land` stores `--branch` and `--mode` even when it refuses the landing.
 
 One `task land` runs at a time per repository: it holds an exclusive lock on `.fledge/state/land.lock` for the whole command.
@@ -226,7 +227,7 @@ It passes every value to `gh` as `--flag=value`, and runs these steps, each reco
 1. `push`: if `origin/<branch>` is not the verified commit, push the verified commit to the branch on origin (`land_push_rejected`).
 2. `pr`: find the open pull request from the branch into the target, or open one with the task title and a body that names the task, commit, verifier, note, and owner.
    More than one open pull request is `land_pr_ambiguous`.
-   `land` records `pr_url`.
+   `land` records `pr_url` as soon as the pull request exists, so a failed lookup after `gh pr create` keeps it.
 3. `checks`: refuse a draft (`land_pr_draft`), a `CONFLICTING` pull request (`land_pr_not_mergeable`), an `UNKNOWN` one (`land_mergeable_unknown`, retry later), or another head (`land_head_mismatch`).
    Refuse checks that are still running or a status context that is `PENDING` or `EXPECTED` (`land_checks_pending`).
    Refuse a check run that concluded other than `SUCCESS`, `NEUTRAL`, or `SKIPPED`, or a status context other than `SUCCESS` (`land_checks_failed`).

@@ -62,6 +62,15 @@ type lander struct {
 // deletes a branch.
 func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 	out := cli.NewOutcome("task.land")
+	l := &lander{step: stepCheck}
+	// fail refuses with the record as last read and the step reached.
+	fail := func(err error, phase string) cli.Outcome {
+		out.Fail(err, phase, false)
+		result := Result{Record: l.r, Mode: l.mode}
+		result.LandStep = &l.step
+		out.Result = result
+		return out
+	}
 	err := task.ValidateID(o.ID)
 	if err == nil && o.BranchSet {
 		err = landing.ValidBranch(ctx, "--branch", o.Branch)
@@ -70,8 +79,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 		err = cli.Invalid("--mode must be local or pr")
 	}
 	if err != nil {
-		out.Fail(err, "validation", false)
-		return out
+		return fail(err, "validation")
 	}
 	s, err := task.Existing(ctx, c.Cwd)
 	var caller *identity.Record
@@ -79,12 +87,10 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 		caller, _, err = identity.CallerAgent(ctx, s, c)
 	}
 	if err != nil {
-		out.Fail(err, "state", false)
-		return out
+		return fail(err, "state")
 	}
 	if caller == nil {
-		out.Fail(&cli.Error{Code: "caller_unregistered", Message: "the caller has no live Fledge record, so it cannot be recorded as the lander; register with fledge agent adopt"}, "identity", false)
-		return out
+		return fail(&cli.Error{Code: "caller_unregistered", Message: "the caller has no live Fledge record, so it cannot be recorded as the lander; register with fledge agent adopt"}, "identity")
 	}
 	root, err := fledgedir.Root(ctx, c.Cwd)
 	var unlock func()
@@ -92,24 +98,15 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 		unlock, err = landing.Lock(root)
 	}
 	if err != nil {
-		out.Fail(err, "state", false)
-		return out
+		return fail(err, "state")
 	}
 	defer unlock()
-	l := &lander{s: s, root: root, caller: caller.ID, step: stepCheck}
-	err = l.land(ctx, o)
-	result := Result{Record: l.r, Mode: l.mode, Warnings: l.warnings}
-	if err != nil {
-		result.LandStep = &l.step
-		result.Warnings = nil
-		out.Fail(err, "land", false)
-		if l.r.ID != "" {
-			out.Result = result
-		}
-		return out
+	l.s, l.root, l.caller = s, root, caller.ID
+	if err := l.land(ctx, o); err != nil {
+		return fail(err, "land")
 	}
 	out.Effects = append(out.Effects, cli.Effect{Action: "updated", Kind: "task", ID: l.r.ID})
-	out.Result = result
+	out.Result = Result{Record: l.r, Mode: l.mode, Warnings: l.warnings}
 	return out
 }
 
@@ -236,17 +233,22 @@ func (l *lander) guard(ctx context.Context) error {
 }
 
 // resolveTarget returns the short name of the task's base branch, else of
-// the repository integration branch.
+// the repository integration branch, once it is a valid branch name.
 func (l *lander) resolveTarget(ctx context.Context) (string, error) {
+	ref := ""
 	if l.r.BaseBranch != nil {
-		return landing.ShortBranch(*l.r.BaseBranch), nil
+		ref = *l.r.BaseBranch
+	} else {
+		var err error
+		if ref, err = gitstatus.DefaultBranch(ctx, l.root); err != nil {
+			return "", refuse("land_target_missing", "%v", err)
+		}
+		if ref == "" {
+			return "", refuse("land_target_missing", "no integration branch: set base_branch in .fledge/config.toml or create the task with --base-branch")
+		}
 	}
-	ref, err := gitstatus.DefaultBranch(ctx, l.root)
-	if err != nil {
-		return "", refuse("land_target_missing", "%v", err)
-	}
-	if ref == "" {
-		return "", refuse("land_target_missing", "no integration branch: set base_branch in .fledge/config.toml or create the task with --base-branch")
+	if err := landing.ValidTarget(ctx, "target", ref); err != nil {
+		return "", refuse("land_target_invalid", "%v", err)
 	}
 	return landing.ShortBranch(ref), nil
 }

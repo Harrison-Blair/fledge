@@ -83,11 +83,16 @@ func (l *lander) reach(step string, prURL *string) error {
 }
 
 // pullRequest returns the one open pull request from the branch into the
-// target, opening it when there is none.
+// target, opening it when there is none. The URL of an opened pull request is
+// stored before it is listed again, so a failed lookup keeps it.
 func (l *lander) pullRequest(ctx context.Context, gh landing.GH) (landing.PR, error) {
 	prs, err := gh.List(ctx, l.branch, l.target)
 	if err == nil && len(prs) == 0 {
-		if err = l.open(ctx, gh); err == nil {
+		var url string
+		if url, err = l.open(ctx, gh); err == nil && url != "" {
+			err = l.reach(stepPR, &url)
+		}
+		if err == nil {
 			prs, err = gh.List(ctx, l.branch, l.target)
 		}
 	}
@@ -107,11 +112,11 @@ func (l *lander) pullRequest(ctx context.Context, gh landing.GH) (landing.PR, er
 }
 
 // open creates the pull request with a body naming the task, the verified
-// commit, its verifier and note, and its owner.
-func (l *lander) open(ctx context.Context, gh landing.GH) error {
+// commit, its verifier and note, and its owner, and returns its URL.
+func (l *lander) open(ctx context.Context, gh landing.GH) (string, error) {
 	f, err := os.CreateTemp("", "fledge-land-*.md")
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer os.Remove(f.Name())
 	body := fmt.Sprintf("Fledge task %s, verified at commit %s.\n\n- Verifier: %s\n- Owner: %s\n", l.r.ID, l.commit, cli.Display(l.r.Verifier), cli.Display(l.r.Owner))
@@ -123,7 +128,7 @@ func (l *lander) open(ctx context.Context, gh landing.GH) error {
 		err = closeErr
 	}
 	if err != nil {
-		return err
+		return "", err
 	}
 	return gh.Create(ctx, l.branch, l.target, l.r.Title, f.Name())
 }

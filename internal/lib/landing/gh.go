@@ -84,10 +84,10 @@ func (g GH) List(ctx context.Context, head, base string) ([]PR, error) {
 }
 
 // Create opens a pull request from head into base with title and the body
-// in bodyFile.
-func (g GH) Create(ctx context.Context, head, base, title, bodyFile string) error {
-	_, err := g.run(ctx, "pr", "create", "--base="+base, "--head="+head, "--title="+title, "--body-file="+bodyFile)
-	return err
+// in bodyFile, and returns the URL gh prints for it.
+func (g GH) Create(ctx context.Context, head, base, title, bodyFile string) (string, error) {
+	b, err := g.run(ctx, "pr", "create", "--base="+base, "--head="+head, "--title="+title, "--body-file="+bodyFile)
+	return strings.TrimSpace(string(b)), err
 }
 
 // Checks reads the draft, mergeable, head, and check state of pull request n.
