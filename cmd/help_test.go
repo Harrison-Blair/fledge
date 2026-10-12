@@ -12,11 +12,13 @@ import (
 // wantCommandTree names the expected children of each command group. A walk of
 // the registered tree cannot notice a removed child, so this list stays explicit.
 var wantCommandTree = map[string][]string{
-	"fledge":          {"agent", "doctor", "memory", "task", "update", "worktree"},
-	"fledge agent":    {"adopt", "capabilities", "cleanup", "current", "get", "list", "message", "models", "pause", "profiles", "read", "rename", "send", "spawn", "stop", "usage", "wait"},
-	"fledge memory":   {"add", "get", "list", "remove"},
-	"fledge task":     {"assign", "cancel", "complete", "create", "depend", "get", "import", "land", "list", "template", "verify"},
-	"fledge worktree": {"create", "list", "remove"},
+	"fledge":           {"agent", "attention", "doctor", "inbox", "memory", "supervise", "task", "update", "worktree"},
+	"fledge agent":     {"adopt", "capabilities", "cleanup", "current", "get", "list", "message", "models", "pause", "profiles", "read", "rename", "send", "spawn", "stop", "usage", "wait"},
+	"fledge inbox":     {"read"},
+	"fledge memory":    {"add", "get", "list", "remove"},
+	"fledge supervise": {"run", "status", "stop"},
+	"fledge task":      {"assign", "cancel", "complete", "create", "depend", "get", "import", "land", "list", "template", "verify"},
+	"fledge worktree":  {"create", "list", "remove"},
 }
 
 // walkCommands calls visit for c and every command registered below it.

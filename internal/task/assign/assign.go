@@ -1,6 +1,6 @@
 // Package assign implements task assign: recording a registered agent as the
-// owner of a task whose prerequisites are satisfied, then delivering the brief
-// to it as a headed message.
+// owner of a task whose prerequisites are satisfied, then storing the brief in
+// its inbox and ringing its doorbell.
 package assign
 
 import (
@@ -14,7 +14,9 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/inbox"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
+	"github.com/Harrison-Blair/fledge/internal/lib/supervise"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 )
 
@@ -32,18 +34,16 @@ type Result struct {
 	OwnerName *string `json:"owner_name"`
 }
 
-// Run assigns the task and delivers its brief. Assignment and delivery are
-// stored separately: a failed delivery leaves the task assigned with the
-// failure recorded, and is never retried. A task with unmet prerequisites is
+// Run assigns the task, stores its brief as an inbox assignment for the
+// owner, and rings the owner's doorbell. Assignment and delivery are stored
+// separately: a doorbell that did not ring leaves the task assigned with the
+// failure recorded, and the supervisor may ring it again; the brief itself is
+// never typed. A task with unmet prerequisites is
 // refused before the agent is resolved unless Force is set; a forced
 // assignment records the prerequisites it bypassed as UnmetAtAssign. The
 // owner's live session ref is stored on its record, best effort, once the
 // assignment is committed.
 func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
-	return run(ctx, c, o, libagent.NewMessageID())
-}
-
-func run(ctx context.Context, c libagent.Client, o Options, messageID string) cli.Outcome {
 	out := cli.NewOutcome("task.assign")
 	err := task.ValidateID(o.ID)
 	if err == nil {
@@ -116,7 +116,7 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) cl
 			return err
 		}
 		r.Owner, r.Status, r.AssignedAt, r.UnmetAtAssign = &owner.ID, task.Assigned, task.Now(), unmet
-		r.Delivery = &task.Delivery{MessageID: messageID, Pane: a.PaneID}
+		r.Delivery = &task.Delivery{Pane: a.PaneID}
 		return nil
 	})
 	if err != nil {
@@ -128,18 +128,28 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) cl
 	identity.Observe(s, observeSession, *owner, &a, time.Now(), &out)
 	body := fmt.Sprintf("task: %s · title: %s · complete with: fledge task complete --id %s --summary \"...\"\n%s", r.ID, r.Title, r.ID, r.Brief)
 	assignedAt := r.AssignedAt
-	if r, ok := task.Deliver(ctx, c, s, &out, libagent.ResolveSender(ctx, c), o.ID, a.PaneID, messageID, body, func(r *task.Record) (*task.Attempt, error) {
-		// Record the outcome only for this assignment; the owner may already
-		// have completed the task, so the status is not checked.
-		if r.AssignedAt == nil || *r.AssignedAt != *assignedAt || r.Owner == nil || *r.Owner != owner.ID || r.Delivery == nil || r.Delivery.MessageID != messageID {
+	// A store error only leaves the sender without its record id.
+	_, from, _ := inbox.Sender(ctx, c, s)
+	msg := inbox.Record{Kind: inbox.Assignment, From: from, To: owner.ID, Task: &r.ID, Body: body}
+	if r, ok := task.Deliver(ctx, c, s, &out, msg, a.PaneID, r.Title, func(r *task.Record, messageID string) (*task.Attempt, error) {
+		// Record the outcome only for this assignment, whose delivery has no
+		// inbox id yet; the owner may already have completed the task, so the
+		// status is not checked.
+		if r.AssignedAt == nil || *r.AssignedAt != *assignedAt || r.Owner == nil || *r.Owner != owner.ID || r.Delivery == nil || r.Delivery.MessageID != "" {
 			return nil, &cli.Error{Code: "task_state_changed", Message: fmt.Sprintf("task %s was reassigned before its delivery could be recorded", r.ID)}
 		}
+		r.Delivery.MessageID = messageID
 		return &r.Delivery.Attempt, nil
 	}); ok {
 		out.Result = Result{Record: r, OwnerName: owner.Name}
 	}
+	started, err := supervise.EnsureFor(ctx, c.Cwd, startSupervisor)
+	supervise.Note(&out, started, err)
 	return out
 }
+
+// startSupervisor launches the supervision daemon; tests replace it.
+var startSupervisor supervise.Starter = supervise.Launch
 
 // prerequisites reads r's prerequisites by id. A missing one is left out, so
 // it counts as unmet; any other read error is returned.
@@ -185,14 +195,16 @@ func Render(w io.Writer, o cli.Outcome) error {
 	var err error
 	switch {
 	case o.Error == nil:
-		_, err = fmt.Fprintf(w, "Assigned task %s to %s; brief delivered to %s as message %s.\n", r.ID, owner, r.Delivery.Pane, r.Delivery.MessageID)
+		_, err = fmt.Fprintf(w, "Assigned task %s to %s; brief stored as inbox message %s and doorbell rung in %s.\n", r.ID, owner, r.Delivery.MessageID, r.Delivery.Pane)
 		if err == nil && r.UnmetAtAssign != nil {
 			_, err = fmt.Fprintf(w, "Assigned with --force before prerequisites %s were satisfied.\n", strings.Join(r.UnmetAtAssign, ", "))
 		}
 	case o.Error.Phase == "agent.prompt" && o.Status == "unknown":
-		_, err = fmt.Fprintf(w, "Task %s remains assigned to %s; the delivery outcome is unknown and will not be retried.\n", r.ID, owner)
+		_, err = fmt.Fprintf(w, "Task %s remains assigned to %s; the brief is stored as inbox message %s and the doorbell outcome is unknown; the doorbell may be rung again by the supervisor; the body is never typed.\n", r.ID, owner, r.Delivery.MessageID)
 	case o.Error.Phase == "agent.prompt":
-		_, err = fmt.Fprintf(w, "Task %s remains assigned to %s; the brief was not delivered and will not be retried.\n", r.ID, owner)
+		_, err = fmt.Fprintf(w, "Task %s remains assigned to %s; the brief is stored as inbox message %s but the doorbell did not ring; the doorbell may be rung again by the supervisor; the body is never typed.\n", r.ID, owner, r.Delivery.MessageID)
+	case o.Error.Phase == "inbox":
+		_, err = fmt.Fprintf(w, "Task %s remains assigned to %s; the brief could not be stored, so nothing was delivered.\n", r.ID, owner)
 	}
 	return err
 }

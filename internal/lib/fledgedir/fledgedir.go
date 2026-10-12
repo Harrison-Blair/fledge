@@ -16,6 +16,9 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 )
 
+// ErrNotRepository marks Root's error for a cwd outside every Git repository.
+var ErrNotRepository = errors.New("not inside a git repository")
+
 // Root resolves the primary (non-linked) checkout of the repository containing
 // cwd. In the primary checkout the git dir is the common dir, so the answer is
 // its top level. From a linked worktree the candidate comes from the common
@@ -27,7 +30,7 @@ func Root(ctx context.Context, cwd string) (string, error) {
 	if err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
-			return "", fmt.Errorf("%s is not inside a git repository: %s", cwd, strings.TrimSpace(string(exit.Stderr)))
+			return "", fmt.Errorf("%s is %w: %s", cwd, ErrNotRepository, strings.TrimSpace(string(exit.Stderr)))
 		}
 		return "", fmt.Errorf("resolve repository: %w", err)
 	}

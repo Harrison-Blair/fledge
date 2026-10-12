@@ -20,33 +20,38 @@ type FanOut struct {
 
 // Row reports one target's delivery. Outcome is submitted, confirmed,
 // already_working, unconfirmed (submitted without confirmed activity),
-// unknown (may have been submitted), or rejected (not submitted). MessageID
-// is null only for rejected rows.
+// unknown (may have been submitted), deferred (stored but its doorbell not
+// rung), or rejected (nothing stored or submitted). MessageID is the row's
+// inbox id, or for an unregistered recipient the header id shared by every
+// such row; it, InboxID, and State are null for rejected rows.
 type Row struct {
 	Target    string             `json:"target"`
 	Outcome   string             `json:"outcome"`
 	MessageID *string            `json:"message_id"`
+	InboxID   *string            `json:"inbox_id"`
+	State     *string            `json:"state"`
 	Agent     *libagent.AgentRow `json:"agent"`
 	Error     *cli.Failure       `json:"error"`
 }
 
-// fanOut delivers text to each target in turn, continuing past failures.
-// Any failed row makes the outcome partial. Rereads take the store from open,
-// the opener that selected the targets.
-func fanOut(ctx context.Context, c libagent.Client, o Options, targets []selector.Target, text, id string, sender *libagent.Sender, open func() (*state.Store, error)) cli.Outcome {
+// fanOut delivers the message to each target in turn, continuing past
+// failures; each registered target gets its own record. Any failed row makes
+// the outcome partial. Rereads take the store from d.open, the opener that
+// selected the targets.
+func fanOut(ctx context.Context, c libagent.Client, d delivery, targets []selector.Target) cli.Outcome {
 	out := cli.NewOutcome("agent.message")
 	result := FanOut{Mode: "fan-out", Targets: []Row{}}
 	var failed []libagent.TargetFailure
 	for _, t := range targets {
-		one := reread(ctx, c, o, &t, id, sender, open)
+		one := reread(ctx, c, d.o, &t, d.id, d.sender, d.open)
 		if one.Error == nil {
-			one = deliver(ctx, c, o, t, text, id, sender)
+			one = deliver(ctx, c, d, t)
 		}
 		out.Effects = append(out.Effects, one.Effects...)
 		r := one.Result.(Result)
 		row := Row{Target: t.Label, Outcome: rowOutcome(one.Status, r), Agent: &r.AgentRow, Error: one.Error}
 		if row.Outcome != "rejected" {
-			row.MessageID = &id
+			row.MessageID, row.InboxID, row.State = &r.MessageID, r.InboxID, &r.State
 		}
 		if one.Error != nil {
 			failed = append(failed, libagent.TargetFailure{Target: t.Label, Code: one.Error.Code})
@@ -61,7 +66,8 @@ func fanOut(ctx context.Context, c libagent.Client, o Options, targets []selecto
 }
 
 // reread refreshes t just before a message goes to it, as earlier targets'
-// deliveries give it time to change. A registered target is resolved again
+// deliveries give it time to change; deliver then classifies it by terminal.
+// A target selected by record id is resolved again
 // from its record, following its terminal to a new pane and rejecting one
 // gone or now running another harness, so the message never reaches whatever
 // replaced it; store supplies the store for these rereads. Any other target's
@@ -93,6 +99,8 @@ func reread(ctx context.Context, c libagent.Client, o Options, t *selector.Targe
 
 func rowOutcome(status string, r Result) string {
 	switch {
+	case status == "partial" && r.State == "queued":
+		return "deferred"
 	case status == "partial":
 		return "unconfirmed"
 	case status == "unknown":
@@ -118,6 +126,8 @@ func renderFanOut(w io.Writer, f FanOut) error {
 		}
 		var line string
 		switch row.Outcome {
+		case "deferred":
+			line = fmt.Sprintf("Message %s stored for %s but its doorbell was not rung; the supervisor rings it when the agent is ready: %s", id, where, row.Error.Text())
 		case "confirmed":
 			line = fmt.Sprintf("Message %s submitted to %s; activity confirmed (%s)", id, where, cli.Display(row.Agent.AgentStatus))
 		case "already_working":

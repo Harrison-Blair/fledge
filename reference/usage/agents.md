@@ -209,6 +209,8 @@ List includes unnamed agents and agents started outside Fledge.
 Message takes one or more targets and exactly one of `--body`/`--file`.
 It preserves newlines and rejects empty or invalid UTF-8 content.
 Success acknowledges **submission**, without waiting for the agent to begin or finish.
+A registered recipient (one with a Fledge record) gets the body stored in its [inbox](#inbox) and only a one-line doorbell typed into its pane.
+An unregistered recipient gets the sender header and the body typed directly, with `inbox_id: null` and `state: "direct"`, and human output says so.
 
 Blocked agents require the user to handle their approval dialog.
 
@@ -223,14 +225,20 @@ An explicit target naming the caller is still messaged.
 Fledge rejects duplicate targets.
 One resolved target gives the single result described here.
 Several targets are all resolved first, so a lookup failure is `rejected` with nothing sent.
-Then each gets the same sender header and message ID, one after another, with `--confirm` and `--timeout` applied to each.
+Then each is delivered in turn, with `--confirm` and `--timeout` applied to each.
+Each registered target gets its own inbox record with its own id.
+Unregistered targets share one sender header and message ID.
 
 The result is `{"mode": "fan-out", "targets": [...]}`.
-Each target has one row, in target order, with `target`, `outcome`, `message_id`, `agent`, and `error`.
+Each target has one row, in target order, with `target`, `outcome`, `message_id`, `inbox_id`, `state`, `agent`, and `error`.
 `target` holds the explicit flag value, a filter match's record ID, or its pane if unregistered.
-`message_id` is `null` when nothing was sent.
+For a registered target, `message_id` and `inbox_id` are the row's own inbox record id, and `state` is `queued` or `rung`.
+For an unregistered target, `inbox_id` is `null`, `state` is `direct`, and `message_id` is the shared header id.
+All three are `null` when nothing was stored or sent.
 
-Outcomes are `submitted`, `confirmed`, `already_working`, `unconfirmed` (submitted, but activity was not acknowledged), `unknown` (may have been submitted), and `rejected` (not sent).
+Outcomes are `submitted`, `confirmed`, `already_working`, `unconfirmed` (submitted, but activity was not acknowledged), `unknown` (may have been submitted), `deferred` (stored, but the doorbell did not ring), and `rejected` (nothing stored or sent).
+For a registered recipient, `submitted` and its neighbors describe the doorbell.
+`rejected` is only for validation and target-resolution failures.
 Delivery continues past failures.
 Any failed row makes the outcome `partial` with exit status 1, and human output prints one line per target.
 
@@ -249,11 +257,13 @@ Herdr tracks lifecycle state, not individual prompts, so it cannot acknowledge t
 An agent that turns `blocked` after submission, or Herdr's `agent_prompt_stalled` (no activity seen within five seconds), is `partial` with a `submitted` effect.
 
 A wait `timeout` or lost acknowledgement is `unknown`.
-Fledge retries none of these cases.
+This command does not retry these cases.
 The message was, or may have been, delivered, so read the pane instead of resending.
-Refusals made before input (`agent_blocked`, `agent_not_ready`) stay `rejected`.
+For an unregistered recipient, refusals made before input (`agent_blocked`, `agent_not_ready`) stay `rejected`.
+For a registered recipient, any doorbell failure leaves the record stored: the outcome is `partial` with `deferred`, or `unknown` when the doorbell may have rung.
+The command then starts the [supervision daemon](#supervision) if none runs, and the daemon rings the doorbell when the agent is ready.
 
-Every prompt Fledge delivers, from `message` or from spawn's `--prompt`/`--file`, starts with one header line naming the sender and a correlation ID, e.g.
+Every prompt Fledge types with a body, from `message` to an unregistered recipient or from spawn's `--prompt`/`--file`, starts with one header line naming the sender and a correlation ID, e.g.
 `ᛉ fledge message from reviewer (w1:p2) · id m-0a1b2c · reply: fledge agent message --name reviewer`.
 Herdr resolves the sender from the caller's `HERDR_PANE_ID`.
 An unnamed agent appears as `unnamed agent (PANE)`.
@@ -263,7 +273,7 @@ An unresolvable caller appears as `unknown sender`.
 Only named agents get the reply command.
 
 Attribution failures never block delivery.
-JSON results include `message_id` and `sender` (`name`, `pane`, `kind`, `error`).
+JSON results include `message_id`, `inbox_id`, `state`, and `sender` (`name`, `pane`, `kind`, `error`).
 
 `fledge agent send` types raw input into a live agent's terminal with **no** sender header, so the recipient sees no sender and has no reply channel.
 Use it for input a harness must see verbatim, such as a slash command, or to answer a dialog that blocks an agent.
@@ -453,6 +463,86 @@ Pass the `MODEL` value to `--model`.
 
 `--harness` limits output to one documented kind.
 An unsupported or uninstalled kind yields an empty list, and a missing file, unreadable cache, or failing command silently contributes no rows.
+
+## Inbox
+
+Fledge stores the body of every `agent message` to a registered recipient, every `task assign` brief, and every `task complete` notice to a registered creator as an inbox record.
+The recipient's pane gets only a one-line doorbell, typed through Herdr `agent.prompt`:
+
+```text
+ᛉ fledge inbox · message from orchestrator (w1:p1) · id 0a1b2c3d · read: fledge inbox read --id 0a1b2c3d
+```
+
+The sender is `<name> (<pane>)`, `unnamed agent (<pane>)`, `pane <pane>`, or `fledge supervisor`.
+An assignment's doorbell adds ` · task: <id> · <title>`.
+The doorbell never contains the body.
+
+The delivery guarantee: a body is typed at most once, and never for an inbox recipient; a doorbell may be rung again.
+The [supervision daemon](#supervision) rings a doorbell that did not ring, and rings an unread one once more after `ack_timeout`.
+A spawn's first prompt (its profile brief and `--prompt`/`--file`) is still typed with a header, and `agent send` is unchanged.
+
+Each record has `id`, `kind` (`message`, `assignment`, or `wake`), `from` (`id`, `name`, `pane`), `to` (the recipient's record id), `task`, `body`, `created_at`, `rings`, `read_at`, `reply_to`, `answered_at`, and `answered_by`.
+`from.id` is the sender's record id when it has one.
+`from.name` is empty for an unnamed agent and `null` for a pane without an agent; a wake has only `name`, `fledge supervisor`.
+Each entry in `rings` is one doorbell attempt: `at`, `pane`, `ok`, and `error`.
+A failed attempt has `ok: false` and does not count as rung.
+The derived `state` is `queued` (no successful ring), `rung` (rung and unread), `read`, or `answered`.
+
+- `fledge inbox [--all] [--json]` lists the caller's records: unread first, each group oldest first, as `ID STATE KIND FROM TASK AGE` with the first body line beneath, cut to the terminal width.
+  `--all` adds read records.
+- `fledge inbox read [--id ID]... [--json]` prints each record's header, body, and a ready-made reply command, then sets `read_at`.
+  Without `--id` it reads every unread record, oldest first.
+  Reading again keeps the first `read_at`.
+  Only the recipient may read a record (`inbox_not_recipient`), and a caller without a live record fails with `caller_unregistered`.
+- The reply command is `fledge agent message --id <sender-id> --reply-to <inbox-id> --body "..."` for a registered sender and `--pane <pane>` for an unregistered one.
+  A wake has no reply command.
+- `agent message --reply-to <inbox-id>` links the reply to that record and sets its `answered_at` and `answered_by` (the reply's message id).
+  Only the record's recipient may use it (`inbox_not_recipient`).
+
+Bodies and names are printed through a terminal-control filter.
+Records live in the primary checkout's `.fledge/state/inbox/`, one file each, so every linked worktree sees the same inbox.
+`agent cleanup` moves the records to or from the workers it retires into `.fledge/state/inbox/archive/`, where `fledge inbox read --id` still finds them.
+Nothing else deletes records.
+
+## Supervision
+
+One supervision daemon per Herdr session, `fledge supervise run`, watches workers and writes **wakes**: inbox records of kind `wake` from `fledge supervisor`, rung at once.
+`agent spawn`, `task assign`, and any message stored but not rung start it in the background when none runs.
+A `task complete` notice whose creator's doorbell does not ring also starts it.
+The child runs detached in the primary checkout with only the Herdr socket and session from the environment, so it never acts as the starting pane.
+A starter whose daemon reports another Fledge version stops it and starts a new one.
+
+- `fledge supervise status [--json]` reports whether the daemon runs, with its pid, version, start time, heartbeat, and the agent records it watches.
+  The heartbeat is rewritten every 10 seconds; one older than 30 seconds is reported as stale, which means the daemon may be hung.
+- `fledge supervise stop [--json]` sends SIGTERM and waits up to 10 seconds.
+- Liveness is an exclusive lock on `.fledge/state/supervise/<session>/lock`, held for the daemon's lifetime; the file also holds the status.
+  A second daemon for the session exits at once.
+  The daemon logs one line per event, wake, ring, reconnect, start, and exit to `.fledge/state/supervise/<session>/log`.
+  It types nothing into any pane except doorbells.
+
+Every 30 seconds the daemon rebuilds its watched set from `agent.list`: live agents whose record has a parent, agents owning an `assigned` task, and recipients of unread records.
+It subscribes to each watched pane's agent status, and to pane exits, closes, moves, and agent detection.
+After a lost socket connection it reconnects with a backoff from 1 second doubling to 30 seconds, then rebuilds the watched set.
+
+Wakes go to the worker's parent, else to the creator of a task it owns; with neither, the daemon only logs the event.
+
+| Wake | When | Body names |
+| --- | --- | --- |
+| `blocked` | The worker's status becomes `blocked`. One per blocked episode. | `fledge agent read --pane P` and `fledge agent send --pane P --key ...` |
+| `exited` | The worker's pane exits or closes while its record is live. Once per worker. Not sent when `agent stop` or `agent cleanup` ended the record first. | Its tasks and `fledge task list --owner <id>` |
+| `quiet` | 30 seconds after the worker becomes `idle` or `done`, it is still idle, still owns an `assigned` task, and has sent its parent nothing since its last doorbell. One per idle episode. | The task and `fledge agent read --name N` |
+| `unacknowledged` | A rung record is still unread after `ack_timeout`: the daemon rings it once more. After another `ack_timeout`, it tells a registered sender. A wake or an unregistered sender is only logged. | The record and the recipient's pane |
+
+`ack_timeout` comes from `[inbox] ack_timeout` in `.fledge/config.toml` (10s to 1h, default 5m).
+At the end of the `quiet` grace period the daemon asks Herdr for the worker's live status and wakes only if it is still `idle` or `done`, so a missed status event cannot cause a false `quiet` wake.
+A worker waiting on a background job can look idle, so some `quiet` wakes are benign: read the worker's pane before acting.
+The daemon stores which wakes it sent under `.fledge/state/supervise/<session>/`, so a restarted daemon does not repeat them.
+The daemon leaves ending records to the lookups that already do it.
+
+The daemon exits after 60 seconds with nothing watched and no unread record.
+`agent cleanup` stops it when every agent it watches was just retired.
+
+`fledge attention [--json]` is a read-only summary for the caller: unread inbox records, the live workers it spawned grouped as `blocked`, `quiet` (shown only while the daemon runs), `working`, `idle`, `done`, and `unknown`, the tasks it created that are completed but not verified, and the daemon's state.
 
 ## Capabilities
 
@@ -811,6 +901,7 @@ The agent registers itself with `fledge agent adopt` in its own pane.
 It acts only on direct workers the caller spawned: records whose parent is the caller's live record and whose `registered_by` is `spawn`.
 The caller itself, siblings, grandchildren, adopted agents, and unregistered agents are never touched.
 The caller must have a live record (`caller_unregistered` otherwise).
+After stopping workers, cleanup archives their inbox records (to or from them) and stops the supervision daemon when nothing it watches remains (see [Supervision](#supervision)).
 
 Cleanup stops a worker with a live record only when all these conditions hold:
 

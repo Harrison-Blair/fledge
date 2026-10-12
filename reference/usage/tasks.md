@@ -98,26 +98,27 @@ A subtask is not a prerequisite of its parent.
   The agent must be registered.
   Otherwise it fails with `agent_unregistered`: the agent must register itself with `fledge agent adopt` in its own pane, or be started with `fledge agent spawn`.
   Fledge first stores the `created` or `assigned` task as assigned to the agent.
-  It then submits the brief like `agent message`, with these parts in order:
+  It then stores the brief in the owner's [inbox](agents.md#inbox) as an `assignment` record and rings its doorbell, which adds ` · task: <id> · <title>`.
+  The stored body is these parts in order:
 
-  1. The sender header.
-  2. `task: <id> · title: <title> · complete with: fledge task complete --id <id> --summary "..."`.
-  3. The brief.
+  1. `task: <id> · title: <title> · complete with: fledge task complete --id <id> --summary "..."`.
+  2. The brief.
 
-  Fledge records delivery (`message_id`, `pane`, `delivered_at`, `error`, `uncertain`) in a second step.
-  A failed delivery leaves the task assigned with `delivery.error` set and a `partial` outcome.
-  If Herdr cannot determine whether the brief arrived, `delivery.uncertain` is true and the outcome is `unknown`.
-  The output says the delivery outcome is unknown. Fledge never retries delivery.
+  Fledge records delivery (`message_id`, the inbox record id; `pane`; `delivered_at`; `error`; `uncertain`) in a second step.
+  A doorbell that did not ring leaves the task assigned with `delivery.error` set and a `partial` outcome.
+  If Herdr cannot determine whether the doorbell rang, `delivery.uncertain` is true and the outcome is `unknown`.
+  The brief itself is never typed; the supervision daemon, which assign starts, may ring the doorbell again.
   If the task changes between lookup and the locked update, for example through another assignment, assign fails with `task_state_changed`.
 - `complete --id TASK` (`--summary` or `--file`) requires an `assigned` task and a caller whose live agent record is the owner (`task_not_owner` otherwise).
   `--force` overrides the owner check.
   The result is stored on the task first.
-  Then the distinct registered creator is sent a short notice, without the report body: `task completed: <id> · title: <title> · read result: fledge task get --id <id> · verify with: fledge task verify --id <id> --summary "..."`.
+  Then a short notice, without the report body, is stored in the inbox of the distinct registered creator as a `message` record with `task` set, and its doorbell is rung: `task completed: <id> · title: <title> · read result: fledge task get --id <id> · verify with: fledge task verify --id <id> --summary "..."`.
   Read the full result with `task get`.
   An unregistered creator or a creator completing its own task needs no notification.
   A stale creator or acknowledged delivery failure returns `partial`.
   An uncertain delivery returns `unknown`.
-  The task remains completed, the notification outcome is recorded, and delivery is never retried automatically.
+  The task remains completed and the notification outcome is recorded, with the inbox record id as `message_id`.
+  The notice itself is never typed; the supervision daemon may ring its doorbell again.
 - `verify --id TASK [--summary TEXT | --file PATH] [--commit REV]` requires a `completed` or `verified` task and a registered caller other than the owner.
   The owner is refused with `task_self_verification` and an unregistered caller with `caller_unregistered`.
   `--force` overrides both and records `forced: true`.
