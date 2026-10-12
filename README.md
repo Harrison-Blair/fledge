@@ -91,6 +91,8 @@ fledge agent usage --name worker
 Spawn opens a new tab unless you pass `--pane` to reuse an existing shell.
 `--tab` labels the new tab. It does not select an existing tab.
 Use `--file brief.md` on spawn to send an initial task after the agent becomes ready.
+Messages and task briefs to registered agents are stored in their inbox and announced by a one-line doorbell; recipients run `fledge inbox read`.
+A background supervision daemon wakes parents when a worker blocks, exits, or goes quiet; `fledge attention` summarizes what needs you.
 
 Codex spawns default to `--yolo`. Claude spawns default to `--permission-mode bypassPermissions`.
 Explicit native permission options take precedence.

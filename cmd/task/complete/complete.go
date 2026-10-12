@@ -12,7 +12,7 @@ func New() *cobra.Command {
 	var options complete.Options
 	var asJSON bool
 	cmd := &cobra.Command{Use: "complete", Short: "Record an assigned task's result as its owner", Args: cobra.NoArgs,
-		Long: "Record an assigned task's result and mark it completed.\n\nThe caller must be the task's owner, identified by the caller pane's agent record,\nunless --force is given. A distinct registered task creator is then sent a short\nnotice naming the task and the fledge task get and fledge task verify commands;\nthe result stays on the task record. Notification failures never roll\ncompletion back and are not retried automatically."}
+		Long: "Record an assigned task's result and mark it completed.\n\nThe caller must be the task's owner, identified by the caller pane's agent record,\nunless --force is given. A short notice naming the task and the fledge task get\nand fledge task verify commands is then stored in the inbox of a distinct\nregistered task creator, and its doorbell is rung; the result stays on the task\nrecord. Notification failures never roll completion back; the notice is never\ntyped, and the supervision daemon may ring its doorbell again."}
 	f := cmd.Flags()
 	f.StringVar(&options.ID, "id", "", "Task ID")
 	f.StringVar(&options.Summary, "summary", "", "Result text")
