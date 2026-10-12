@@ -33,7 +33,7 @@ Read `AGENTS.md` and `README.md` in your working directory before starting, if p
    the primary checkout. Send findings to the implementer by message; it repairs, commits,
    and reports the new commit hash by message. Return that commit to the same verifier, which
    runs `fledge task verify` again naming it. Repeat until no findings remain.
-7. Land a task only after the user's explicit word naming the branch: then run
+7. Land a task only on the user's explicit word that names the branch. After that word, run
    `fledge task land --id <task>`. It merges the task's verified commit into the task's base branch or the integration branch, in the task's
    delivery mode. If it refuses, report the refusal code to the user. In a repository that
    the user lands by hand, spawn or reuse an integrator to merge that branch into the
