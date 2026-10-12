@@ -11,6 +11,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/inbox"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 )
 
@@ -21,14 +22,10 @@ type Options struct {
 
 // Run moves an assigned task to completed with the summary as its result,
 // stores the owner's live session ref when the owner is the caller, then
-// notifies a distinct registered creator with a short notice naming the
-// commands to read the result and verify it. Only the owner, identified by
+// stores for a distinct registered creator a short inbox notice naming the
+// commands to read the result and verify it, and rings its doorbell. Only the owner, identified by
 // the caller's live record, may complete it unless Force is set.
 func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Outcome {
-	return run(ctx, c, o, in, libagent.NewMessageID())
-}
-
-func run(ctx context.Context, c libagent.Client, o Options, in io.Reader, messageID string) cli.Outcome {
 	out := cli.NewOutcome("task.complete")
 	err := task.ValidateID(o.ID)
 	var summary string
@@ -62,7 +59,7 @@ func run(ctx context.Context, c libagent.Client, o Options, in io.Reader, messag
 	var notification *task.CompletionNotification
 	var notificationErr error
 	if snapshot.CreatedBy != nil && (caller == nil || *snapshot.CreatedBy != caller.ID) {
-		notification = &task.CompletionNotification{Recipient: *snapshot.CreatedBy, MessageID: messageID}
+		notification = &task.CompletionNotification{Recipient: *snapshot.CreatedBy}
 		_, recipient, notificationErr = identity.Resolve(ctx, s, c, *snapshot.CreatedBy)
 		if notificationErr != nil {
 			msg := notificationErr.Error()
@@ -95,11 +92,17 @@ func run(ctx context.Context, c libagent.Client, o Options, in io.Reader, messag
 		return out
 	}
 	body := fmt.Sprintf("task completed: %s · title: %s · read result: fledge task get --id %s · verify with: fledge task verify --id %s --summary \"...\"", r.ID, r.Title, r.ID, r.ID)
-	if r, ok := task.Deliver(ctx, c, s, &out, sender, o.ID, recipient.PaneID, messageID, body, func(r *task.Record) (*task.Attempt, error) {
+	var callerID *string
+	if caller != nil {
+		callerID = &caller.ID
+	}
+	msg := inbox.Record{Kind: inbox.Message, From: inbox.FromSender(sender, callerID), To: notification.Recipient, Task: &r.ID, Body: body}
+	if r, ok := task.Deliver(ctx, c, s, &out, msg, recipient.PaneID, r.Title, func(r *task.Record, messageID string) (*task.Attempt, error) {
 		n := r.CompletionNotification
-		if n == nil || n.MessageID != messageID || n.Recipient != notification.Recipient {
+		if n == nil || n.MessageID != "" || n.Recipient != notification.Recipient {
 			return nil, &cli.Error{Code: "task_state_changed", Message: fmt.Sprintf("task %s's completion notification changed before its delivery could be recorded", r.ID)}
 		}
+		n.MessageID = messageID
 		return &n.Attempt, nil
 	}); ok {
 		out.Result = r
@@ -127,15 +130,19 @@ func Render(w io.Writer, o cli.Outcome) error {
 	var text string
 	switch {
 	case o.Error == nil && n != nil && n.DeliveredAt != nil && n.Pane != nil:
-		text = fmt.Sprintf("Completed task %s; notified creator %s in %s as message %s.\n", r.ID, n.Recipient, *n.Pane, n.MessageID)
+		text = fmt.Sprintf("Completed task %s; stored a notice for creator %s as inbox message %s and rang its doorbell in %s.\n", r.ID, n.Recipient, n.MessageID, *n.Pane)
 	case o.Error == nil:
 		text = fmt.Sprintf("Completed task %s.\n", r.ID)
 	case o.Status == "unknown" && o.Error.Phase == "agent.prompt":
-		text = fmt.Sprintf("Task %s is completed; the notification outcome is unknown and will not be retried.\n", r.ID)
+		text = fmt.Sprintf("Task %s is completed; the notice is stored as inbox message %s and the doorbell outcome is unknown; the doorbell may be rung again by the supervisor; the body is never typed.\n", r.ID, n.MessageID)
+	case o.Error.Phase == "agent.prompt":
+		text = fmt.Sprintf("Task %s is completed; the notice is stored as inbox message %s but its creator's doorbell did not ring; the doorbell may be rung again by the supervisor; the body is never typed.\n", r.ID, n.MessageID)
+	case o.Error.Phase == "inbox":
+		text = fmt.Sprintf("Task %s is completed; its creator was not notified because the notice could not be stored.\n", r.ID)
 	// A creator lookup failure is stored on the notification; its phase names
 	// whichever Herdr call failed.
-	case o.Error.Phase == "agent.prompt" || n != nil && n.Error != nil:
-		text = fmt.Sprintf("Task %s is completed; its creator was not notified and the notification will not be retried.\n", r.ID)
+	case n != nil && n.Error != nil:
+		text = fmt.Sprintf("Task %s is completed; its creator could not be reached, so no notice was stored.\n", r.ID)
 	case o.Error.Phase == "task":
 		text = fmt.Sprintf("Task %s is completed; the notification outcome could not be recorded.\n", r.ID)
 	}

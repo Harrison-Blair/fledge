@@ -6,13 +6,17 @@ package inbox
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"time"
 
+	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/cli"
+	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/termtext"
 )
@@ -31,11 +35,53 @@ const (
 const SupervisorName = "fledge supervisor"
 
 // From is the sender: its agent record id when registered, its pane name, and
-// its pane. A wake has only Name, SupervisorName.
+// its pane. Name is empty for an unnamed agent and null for a pane that hosts
+// no agent. A wake has only Name, SupervisorName.
 type From struct {
 	ID   *string `json:"id"`
 	Name *string `json:"name"`
 	Pane *string `json:"pane"`
+}
+
+// Sender resolves the caller's pane as libagent.ResolveSender does, without
+// failing on an attribution error, and as an inbox sender that carries the
+// caller's live record id when s, which may be nil, holds one. Only a store
+// failure is returned.
+func Sender(ctx context.Context, c libagent.Client, s *state.Store) (libagent.Sender, From, error) {
+	if c.CallerPane == "" {
+		return libagent.CallerSender("", nil), From{}, nil
+	}
+	a, err := c.Get(ctx, c.CallerPane)
+	var remote *herdr.Error
+	switch {
+	case errors.As(err, &remote) && remote.Code == "agent_not_found":
+		sender := libagent.CallerSender(c.CallerPane, nil)
+		return sender, FromSender(sender, nil), nil
+	case err != nil:
+		msg := err.Error()
+		sender := libagent.Sender{Pane: cli.Pointer(c.CallerPane), Kind: "unknown", Error: &msg}
+		return sender, FromSender(sender, nil), nil
+	}
+	sender := libagent.CallerSender(c.CallerPane, &a)
+	if s == nil {
+		return sender, FromSender(sender, nil), nil
+	}
+	rec, err := identity.LiveEndingMismatched(s, a)
+	var id *string
+	if rec != nil {
+		id = &rec.ID
+	}
+	return sender, FromSender(sender, id), err
+}
+
+// FromSender is the inbox sender for a resolved prompt sender and the
+// caller's live record id, if any.
+func FromSender(s libagent.Sender, id *string) From {
+	f := From{ID: id, Name: s.Name, Pane: s.Pane}
+	if s.Kind == "unnamed" {
+		f.Name = new(string)
+	}
+	return f
 }
 
 // Supervisor is the sender of wakes.
@@ -55,7 +101,7 @@ func (f From) String() string {
 		return "unknown sender"
 	case f.Name != nil && *f.Name != "":
 		return fmt.Sprintf("%s (%s)", *f.Name, *f.Pane)
-	case f.ID != nil:
+	case f.ID != nil || f.Name != nil:
 		return fmt.Sprintf("unnamed agent (%s)", *f.Pane)
 	}
 	return "pane " + *f.Pane

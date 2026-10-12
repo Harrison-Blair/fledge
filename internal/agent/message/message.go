@@ -94,17 +94,18 @@ func run(ctx context.Context, c libagent.Client, o Options, in io.Reader, id str
 		out.Fail(err, "agent.get", false)
 		return out
 	}
-	sender, caller, err := resolveSender(ctx, c, open)
+	s, err := registry(open)
+	var sender libagent.Sender
+	var from inbox.From
+	if err == nil {
+		sender, from, err = inbox.Sender(ctx, c, s)
+	}
 	if err != nil {
 		out.Fail(err, "state", false)
 		return out
 	}
-	from := inbox.From{Name: sender.Name, Pane: sender.Pane}
-	if caller != nil {
-		from.ID = &caller.ID
-	}
 	if o.ReplyTo != "" {
-		if err := checkReply(open, o.ReplyTo, caller); err != nil {
+		if err := checkReply(s, o.ReplyTo, from.ID); err != nil {
 			out.Fail(err, "inbox", false)
 			return out
 		}
@@ -116,33 +117,9 @@ func run(ctx context.Context, c libagent.Client, o Options, in io.Reader, id str
 		out = deliver(ctx, c, d, targets[0])
 	}
 	if o.ReplyTo != "" {
-		answer(&out, open, o.ReplyTo, caller)
+		answer(&out, s, o.ReplyTo, *from.ID)
 	}
 	return out
-}
-
-// resolveSender identifies the caller's pane as ResolveSender does, and its
-// live record when it has one.
-func resolveSender(ctx context.Context, c libagent.Client, open func() (*state.Store, error)) (libagent.Sender, *identity.Record, error) {
-	if c.CallerPane == "" {
-		return libagent.CallerSender("", nil), nil, nil
-	}
-	a, err := c.Get(ctx, c.CallerPane)
-	var remote *herdr.Error
-	switch {
-	case errors.As(err, &remote) && remote.Code == "agent_not_found":
-		return libagent.CallerSender(c.CallerPane, nil), nil, nil
-	case err != nil:
-		msg := err.Error()
-		return libagent.Sender{Pane: cli.Pointer(c.CallerPane), Kind: "unknown", Error: &msg}, nil, nil
-	}
-	sender := libagent.CallerSender(c.CallerPane, &a)
-	s, err := registry(open)
-	if err != nil || s == nil {
-		return sender, nil, err
-	}
-	rec, err := identity.LiveEndingMismatched(s, a)
-	return sender, rec, err
 }
 
 // registry opens the store that decides who is registered. Outside every
@@ -172,21 +149,17 @@ func classify(t selector.Target, open func() (*state.Store, error)) (*identity.R
 	return &moved, s, err
 }
 
-func checkReply(open func() (*state.Store, error), id string, caller *identity.Record) error {
-	s, err := registry(open)
-	if err != nil {
-		return err
-	}
+func checkReply(s *state.Store, id string, caller *string) error {
 	if s == nil || caller == nil {
 		return &cli.Error{Code: "inbox_not_recipient", Message: fmt.Sprintf("--reply-to %s requires the caller to be that inbox record's registered recipient", id)}
 	}
-	_, err = inbox.CheckRecipient(s, id, caller.ID)
+	_, err := inbox.CheckRecipient(s, id, *caller)
 	return err
 }
 
 // answer marks the original answered by this message's first stored or typed
 // id; a failure is a warning, as the reply itself went out.
-func answer(out *cli.Outcome, open func() (*state.Store, error), id string, caller *identity.Record) {
+func answer(out *cli.Outcome, s *state.Store, id, caller string) {
 	var reply string
 	switch r := out.Result.(type) {
 	case Result:
@@ -204,10 +177,7 @@ func answer(out *cli.Outcome, open func() (*state.Store, error), id string, call
 	if reply == "" {
 		return
 	}
-	s, err := registry(open)
-	if err == nil {
-		_, err = inbox.Answer(s, id, caller.ID, reply)
-	}
+	_, err := inbox.Answer(s, id, caller, reply)
 	action := "updated"
 	if err != nil {
 		action = "warning"

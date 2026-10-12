@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/inbox"
@@ -97,6 +98,8 @@ func TestDoorbellNamesSenderAndNeverTheBody(t *testing.T) {
 		{inbox.Record{ID: id, Kind: inbox.Message, From: inbox.From{ID: &rec, Name: &name, Pane: &pane}, Body: "SECRET"}, "",
 			"ᛉ fledge inbox · message from orchestrator (w1:p1) · id 0a1b2c3d · read: fledge inbox read --id 0a1b2c3d"},
 		{inbox.Record{ID: id, Kind: inbox.Message, From: inbox.From{ID: &rec, Pane: &pane}, Body: "SECRET"}, "",
+			"ᛉ fledge inbox · message from unnamed agent (w1:p1) · id 0a1b2c3d · read: fledge inbox read --id 0a1b2c3d"},
+		{inbox.Record{ID: id, Kind: inbox.Message, From: inbox.From{Name: tasktest.Ptr(""), Pane: &pane}, Body: "SECRET"}, "",
 			"ᛉ fledge inbox · message from unnamed agent (w1:p1) · id 0a1b2c3d · read: fledge inbox read --id 0a1b2c3d"},
 		{inbox.Record{ID: id, Kind: inbox.Message, From: inbox.From{Pane: &pane}, Body: "SECRET"}, "",
 			"ᛉ fledge inbox · message from pane w1:p1 · id 0a1b2c3d · read: fledge inbox read --id 0a1b2c3d"},
@@ -212,6 +215,31 @@ func TestArchiveMovesRecordsToOrFromRetiredAgents(t *testing.T) {
 	for _, id := range []string{to.ID, from.ID} {
 		if _, err := inbox.Get(s, id); err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+func TestFromSenderKeepsEachSenderForm(t *testing.T) {
+	name, pane, id := "orchestrator", "w1:p1", "aaaaaaaa"
+	for _, tc := range []struct {
+		s    libagent.Sender
+		id   *string
+		want string
+	}{
+		{libagent.Sender{Name: &name, Pane: &pane, Kind: "named"}, &id, "orchestrator (w1:p1)"},
+		{libagent.Sender{Pane: &pane, Kind: "unnamed"}, nil, "unnamed agent (w1:p1)"},
+		{libagent.Sender{Pane: &pane, Kind: "pane"}, nil, "pane w1:p1"},
+		{libagent.Sender{Kind: "unknown"}, nil, "unknown sender"},
+	} {
+		f := inbox.FromSender(tc.s, tc.id)
+		if got := f.String(); got != tc.want || f.ID != tc.id {
+			t.Errorf("%+v: got %q want %q", tc.s, got, tc.want)
+		}
+		data, _ := json.Marshal(f)
+		var back inbox.From
+		json.Unmarshal(data, &back)
+		if back.String() != tc.want {
+			t.Errorf("round trip %s: got %q", data, back.String())
 		}
 	}
 }
