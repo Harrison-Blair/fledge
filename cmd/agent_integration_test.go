@@ -141,8 +141,8 @@ func TestSpawnPermissionOptOutReachesStartRequest(t *testing.T) {
 		t.Fatal(err, out.String())
 	}
 	calls := waitCalls(t, l, done, 4)
-	if kind, args := startArgs(t, calls[2]); kind != "codex" || !reflect.DeepEqual(args, []string{"--search"}) {
-		t.Fatalf("got %s %q; want codex [\"--search\"]", kind, args)
+	if kind, args := startArgs(t, calls[2]); kind != "codex" || !reflect.DeepEqual(args, []string{"--no-daemon", "--search"}) {
+		t.Fatalf("got %s %q; want codex [\"--no-daemon\" \"--search\"]", kind, args)
 	}
 }
 

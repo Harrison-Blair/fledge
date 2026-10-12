@@ -122,7 +122,11 @@ func TestSpawnProfileHonorsPermissionOptOut(t *testing.T) {
 				t.Fatal(err, out.String())
 			}
 			calls := waitCalls(t, l, done, 5)
-			if kind, args := startArgs(t, calls[2]); kind != harness || !reflect.DeepEqual(args, []string{}) {
+			want := []string{}
+			if harness == "codex" {
+				want = []string{"--no-daemon"}
+			}
+			if kind, args := startArgs(t, calls[2]); kind != harness || !reflect.DeepEqual(args, want) {
 				t.Fatalf("%s %q", kind, args)
 			}
 			if !headered(t, calls[4], builtinProfile(t, "reviewer").Brief()+noMemories) {
