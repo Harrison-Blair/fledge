@@ -74,6 +74,7 @@ The integration branch uses this order:
 4. Otherwise, none: every checkout reports merged `unknown`.
 
 Set it when work integrates into a branch other than the remote default.
+[`fledge task land`](tasks.md#landing) merges a verified task's branch into this branch, or into the task's own base branch, and never removes a checkout.
 Fledge develops on `dev` and reaches `main` only through pull requests, so this repository commits the file:
 
 ```toml
