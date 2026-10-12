@@ -67,29 +67,40 @@ It judges the merge against the [integration branch](#integration-branch).
 `agent cleanup` instead uses each checkout's recorded creation base (see [Cleanup](agents.md#cleanup)).
 The integration branch uses this order:
 
-1. The local branch named by Git configuration `fledge.baseBranch`, resolved as `refs/heads/<name>`.
+1. The branch that `base_branch` in `.fledge/config.toml` names, read from the primary checkout's working tree.
+   Fledge uses the local branch `refs/heads/<name>` when it exists, else `refs/remotes/origin/<name>`, as in a fresh clone.
 2. Otherwise, the branch `origin/HEAD` points to, usually the remote default such as `origin/main`.
 3. Otherwise, the local `main` branch.
 4. Otherwise, none: every checkout reports merged `unknown`.
 
 Set it when work integrates into a branch other than the remote default.
-Fledge develops on `dev` and reaches `main` only through pull requests.
-Contributors must set it in each clone because Git does not copy local configuration:
+Fledge develops on `dev` and reaches `main` only through pull requests, so this repository commits the file:
 
-```sh
-git config fledge.baseBranch dev
+```toml
+schema_version = 1
+base_branch = "dev"
 ```
 
-Fledge reads `fledge.baseBranch` from ordinary Git configuration scopes, like `git config fledge.baseBranch`.
-The repository value applies to every linked checkout and takes precedence over the global value.
-`git config --global fledge.baseBranch dev` applies to every repository without its own setting.
-If a repository lacks that branch, it reports `does not exist` as described below, without a fallback.
+`schema_version = 1` is required.
+`base_branch` is optional: without it, or without the file, Fledge continues with `origin/HEAD`.
+Keys are case-sensitive, and an unknown key or a wrong type makes the file invalid.
+Give a branch name: `dev`, rather than `origin/dev` or `refs/heads/dev`.
+The name must be a valid branch name on one line and must not start with `-`.
+There is no command to edit the file. Edit it by hand and commit it.
+The working-tree copy in the primary checkout applies, uncommitted edits included, and Fledge ignores the copies in linked checkouts.
 
-Unset it with `git config --unset fledge.baseBranch`. Add `--global` for the global value.
-If Git cannot read its configuration, merged is `unknown` with Git's error as the reason.
-Give a local branch name: `dev`, rather than `origin/dev` or `refs/heads/dev`.
+Fledge no longer reads `fledge.baseBranch` from Git configuration in any scope, repository or `--global`.
+If you set it, create `.fledge/config.toml` instead, and remove the old setting with `git config --unset fledge.baseBranch`.
 
-If the configured branch does not exist, Fledge does not fall back to `origin/HEAD` or `main`.
+The managed `.fledge/.gitignore` allows `config.toml`.
+After you update Fledge, run any command that writes Fledge state in the primary checkout, such as `fledge task create` or `fledge memory add`.
+That command appends `!/config.toml` to the primary checkout's `.fledge/.gitignore`.
+Read-only commands such as `fledge memory list` do not.
+A linked checkout keeps the ignore file that its creation wrote, so append `!/config.toml` to its `.fledge/.gitignore` by hand to commit the file from it.
+An older Fledge binary does not know the rule: it appends its own block, which ignores the file again until a current binary runs.
+
+If the configured branch exists neither locally nor on `origin`, Fledge does not fall back to `origin/HEAD` or `main`.
+An unreadable or invalid file has the same result, with its own reason.
 Every checkout reports merged `unknown`.
 `worktree list` ends with `MERGED is unknown: ...` and the reason.
 JSON sets `default_branch` to null and puts the reason in `default_branch_error`.
