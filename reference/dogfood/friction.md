@@ -1687,3 +1687,42 @@ tracking task with its result in the reason. No other agent received the task.
 1. In a linked checkout that an older Fledge created, run a current binary's `fledge memory add` or `fledge task create`.
 2. Observe that the primary checkout's `.fledge/.gitignore` gains `!/config.toml` and the linked checkout's file does not.
 3. In the linked checkout, run `git check-ignore .fledge/config.toml`. Observe exit status 0 (ignored).
+
+---
+
+**Issue:** Doorbells name plain `fledge inbox read`, which a worker on an older installed binary cannot run
+
+**Status:** Open
+
+**Summary:** On 2026-10-12, during the wave 2A end-to-end probe with a binary built from
+`feat/wave2a-supervise-inbox`, every doorbell said `read: fledge inbox read --id <id>`.
+The worker's `PATH` resolved `fledge` to the installed release, which has no `inbox`
+command, so a worker that followed the doorbell literally could not read its brief. The
+probe worked around it by typing a bootstrap instruction with `fledge agent send`, telling
+the worker to use the absolute path of the dev build. This affects only dev-build probes
+until a release ships the inbox; after that, any worker on an older binary than its
+orchestrator has the same gap.
+
+**Reproduction steps:**
+1. Build the branch to a scratch path and use it as the orchestrator's `fledge`.
+2. Spawn a worker whose `PATH` has an older `fledge`, then `task assign` it a task.
+3. Observe the doorbell in the worker's pane and run `fledge inbox read` there: the older binary reports an unknown command.
+
+---
+
+**Issue:** Claude's folder-trust dialog in a fresh directory blocks a spawn's first prompt
+
+**Status:** Open
+
+**Summary:** On 2026-10-12, `fledge agent spawn --harness claude --cwd <new scratch repo>
+--prompt ... -- --permission-mode bypassPermissions` ended `partial` with
+`agent_blocked` because Claude asked whether to trust the new folder. The supervision
+daemon, auto-started by the spawn, rang a `blocked` wake to the parent within a second, and
+`fledge agent send --pane <p> --key down --key enter` answered it. The first prompt was
+not submitted and had to be sent again. Same family as the cursor-agent workspace-trust
+entry above.
+
+**Reproduction steps:**
+1. Create a new Git repository under `.fledge/tmp/`.
+2. Spawn a Claude worker there with an absolute `--cwd` and a `--prompt`.
+3. Observe the `agent_blocked` outcome, the trust dialog in `fledge agent read`, and a `blocked` wake in the parent's inbox.
