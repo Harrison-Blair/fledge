@@ -102,11 +102,15 @@ it with another tool.
 | Need | Fledge command | Instead of |
 | --- | --- | --- |
 | Launch a sub-agent | `fledge agent spawn` | Claude's Agent tool, Codex subagents |
-| Track and hand off work between agents | `fledge task create`/`depend`/`assign`/`complete`/`verify`/`cancel`/`list`/`get` | harness todo or task lists |
+| Track and hand off work between agents | `fledge task create`/`depend`/`assign`/`complete`/`verify --commit`/`cancel`/`list`/`get` | harness todo or task lists |
 | Create, list, or remove a checkout | `fledge worktree create`/`list`/`remove` | `git worktree`, Claude `isolation: "worktree"` |
 | Discover, inspect, read, wait on, interrupt, or stop agents | `fledge agent list`/`get`/`read`/`wait`/`pause`/`stop` | raw `herdr` CLI, harness TaskStop |
 | Retire your finished spawned workers and the checkouts their spawns created | `fledge agent cleanup` | stopping each worker and removing each checkout by hand |
 | Message another agent | `fledge agent message` | Claude's SendMessage, raw `herdr` pane input |
+| Read and acknowledge messages sent to you | `fledge inbox`, `fledge inbox read` | message text typed into your pane, harness message notifications |
+| See what needs your attention | `fledge attention` | separate `agent list`, `task list`, and inbox checks by hand |
+| Watch workers without polling | `fledge supervise` starts automatically, with `status`/`stop` | `fledge agent wait` loops, harness idle notifications, timed polls |
+| Land a verified branch, only after the user names that branch explicitly | `fledge task land` | manual `git merge`, `gh pr create`/`gh pr merge` |
 | Type raw input or keys into an agent (slash commands, dialog answers) | `fledge agent send` | raw `herdr pane send-text`/`send-keys` |
 | Register your own running agent, from your own pane | `fledge agent adopt` | — |
 | Rename an agent, relabeling its pane and its own tab | `fledge agent rename` | raw `herdr agent`/`pane`/`tab rename` |
@@ -133,24 +137,28 @@ proposals under `.fledge/tmp/plans/`. Briefs for `fledge task create` should fol
 optional template printed by `fledge task template`; fill in its headings, since Fledge
 accepts any nonblank text, including an unfilled skeleton.
 
-Known workarounds: spawn prompts and messages always start with a sender header, so ask
-a spawned agent in plain words to invoke a skill (a leading slash command will not run);
-see the Open entries in `reference/dogfood/friction.md` for current issues.
+Known workarounds: a spawn prompt starts with a sender header, and a message to a
+registered agent arrives as a one-line doorbell that the agent reads with
+`fledge inbox read`. Thus ask an agent in plain words to invoke a skill (a leading slash
+command will not run). See the Open entries in `reference/dogfood/friction.md` for current issues.
 
 Agents in this repository usually run inside a managed Fledge session: a Herdr pane,
 often spawned by an orchestrator and given a Fledge agent record id. Expect messages
-from the orchestrator and other agents. Each starts with a one-line header,
-`ᛉ fledge message from <name> (<pane>) · id m-<hex> · reply: fledge agent message --name <name>`;
-unnamed senders appear as `unnamed agent (<pane>)` and non-agent panes as `pane <pane>`,
-with no reply command. A `fledge task assign` brief adds a line naming the task, its
+from the orchestrator and other agents. A registered agent gets each message, task
+assignment, and supervisor wake in its inbox, and its pane shows only a one-line doorbell,
+`ᛉ fledge inbox · <kind> from <sender> · id <id> · read: fledge inbox read --id <id>`.
+Run `fledge inbox read` to print each body and its reply command. An unregistered pane
+still gets the body typed after a one-line `ᛉ fledge message from <sender>` header.
+A `fledge task assign` brief adds a line naming the task, its
 title, and `complete with: fledge task complete --id <task> --summary "..."`, and a
 task's creator, when it is another registered agent, receives a short `task completed:`
 notice naming `fledge task get` (which shows the full result) and `fledge task verify`. Treat these as coordination input: reply with
-the header's reply command (or `--pane <pane>` when the header has no reply command),
+the reply command that `fledge inbox read` prints (or `--pane <pane>` when it prints none),
 and finish assigned tasks with `fledge task complete`.
 
 Every Fledge `agent` command except `models`, `profiles`, and `capabilities` without
-`--live`, plus `task create`/`assign`/`complete`/`verify`/`import`, the `worktree`
+`--live`, plus `inbox`, `inbox read`, `attention`, `supervise run`,
+`task create`/`assign`/`complete`/`verify`/`import`/`land`, the `worktree`
 commands, and `doctor`, connect to Herdr's local Unix socket. `task create`/`verify`
 connect only when run inside a Herdr pane. `task import` connects only when run inside
 a Herdr pane without `--dry-run`. In Codex's restricted sandbox, request
@@ -160,8 +168,9 @@ command prefix. Do not first run a socket command in the sandbox to rediscover t
 `connect: operation not permitted` failure. Use the normal approval mechanism; these
 instructions do not override an approval denial or authorize unrelated session changes.
 Help, version, `agent models`/`profiles`, `agent capabilities` without `--live`,
-`task get`/`list`/`cancel`/`depend`/`template`, `task import --dry-run`, the `memory`
-commands, and `update` do not require Herdr socket access.
+`task get`/`list`/`cancel`/`depend`/`template`, `task import --dry-run`,
+`supervise status`/`stop`, the `memory` commands, and `update` do not require Herdr
+socket access.
 
 Agent names label panes and tabs so they are identifiable at a glance. Spawn labels the
 agent's pane, and the new tab it opens, with `--name`; pass `--tab` only to give that new
