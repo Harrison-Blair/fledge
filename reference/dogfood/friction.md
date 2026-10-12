@@ -1726,3 +1726,41 @@ entry above.
 1. Create a new Git repository under `.fledge/tmp/`.
 2. Spawn a Claude worker there with an absolute `--cwd` and a `--prompt`.
 3. Observe the `agent_blocked` outcome, the trust dialog in `fledge agent read`, and a `blocked` wake in the parent's inbox.
+
+---
+
+**Issue:** Codex worker's escalated commands inherit a stale `HERDR_PANE_ID` from a closed pane
+
+**Status:** Open
+
+**Summary:** During wave-one and wave-1.5 verification on 2026-10-12, a Codex verifier's
+escalated tool commands carried `HERDR_PANE_ID=w2Q:p1`, a pane closed on 2026-10-05, instead
+of the pane the verifier ran in. Fledge resolved the caller as an unregistered pane:
+`fledge agent current` returned `caller_unregistered`, and messages appeared to come from the
+dead pane. Prefixing each Fledge command with the worker's real `HERDR_PANE_ID`,
+`HERDR_TAB_ID`, and `HERDR_WORKSPACE_ID` restored the correct identity. Observed three times:
+task 23ae98ff (record c3e7feb6 in `w2Z:p2`), task d20474d1 (record 2034f829 in `w33:p1`), and
+task fe67a631 (record 2ca12f20 in `w35:p1`); each verifier report records the workaround.
+Same family as the 2026-10-04 orchestrator entry above, now seen in spawned Codex workers.
+
+**Reproduction steps:**
+1. Spawn a Codex worker from an orchestrator whose Codex environment once ran in a pane that is now closed.
+2. In the worker, run `fledge agent current` through an escalated command: observe `caller_unregistered`, and `env` shows the old `HERDR_PANE_ID`.
+3. Repeat with `HERDR_PANE_ID=<pane> HERDR_TAB_ID=<tab> HERDR_WORKSPACE_ID=<workspace>` set to the worker's real pane: the worker's record and assigned task appear.
+
+---
+
+**Issue:** `HERDR_SESSION` is not exported into panes, so the supervision daemon keys its state under `-`
+
+**Status:** Open
+
+**Summary:** On 2026-10-12, with Herdr 0.9.3, `HERDR_SESSION` was absent from the orchestrator
+pane `w2T:p5`, from the daemon it started, and from the Fledge-spawned worker pane `w3J:p1`.
+`fledge supervise status` reports `Supervisor for session -`, and the daemon keys its lock and
+episode state under `.fledge/state/supervise/_none/`, the directory for an empty session. The result is one daemon per repository
+whatever the session. That works for one session per repository, but it defeats the
+per-session keying that wave 2A designed.
+
+**Reproduction steps:**
+1. In a Fledge-spawned pane, run `env | grep HERDR_SESSION`: no output.
+2. Run `fledge supervise status`: it reports `Supervisor for session -`.
