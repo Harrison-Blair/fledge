@@ -93,10 +93,11 @@ Fledge no longer reads `fledge.baseBranch` from Git configuration in any scope, 
 If you set it, create `.fledge/config.toml` instead, and remove the old setting with `git config --unset fledge.baseBranch`.
 
 The managed `.fledge/.gitignore` allows `config.toml`.
-After you update Fledge, run any command that writes Fledge state in the primary checkout, such as `fledge task create` or `fledge memory add`.
+After you update Fledge, run one command that writes Fledge state in the repository: `fledge task create`, `fledge task import` without `--dry-run`, `fledge memory add`, `fledge agent adopt`, `fledge agent spawn`, or `fledge worktree create`.
 That command appends `!/config.toml` to the primary checkout's `.fledge/.gitignore`.
-Read-only commands such as `fledge memory list` do not.
-A linked checkout keeps the ignore file that its creation wrote, so append `!/config.toml` to its `.fledge/.gitignore` by hand to commit the file from it.
+Read-only commands such as `fledge memory list`, `fledge agent current`, and `fledge task list` do not.
+No command upgrades a linked checkout: it keeps the ignore file that its creation wrote.
+For a linked checkout that an older binary created, append `!/config.toml` to its `.fledge/.gitignore` by hand, or recreate the checkout.
 An older Fledge binary does not know the rule: it appends its own block, which ignores the file again until a current binary runs.
 
 If the configured branch exists neither locally nor on `origin`, Fledge does not fall back to `origin/HEAD` or `main`.
