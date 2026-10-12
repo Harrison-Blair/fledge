@@ -159,6 +159,18 @@ func TestOrchestratorIsDispatcher(t *testing.T) {
 	}
 }
 
+// The assembled orchestrator brief keeps the delegate-all rule: the shared
+// protocol defers investigation to the role instead of ordering it.
+func TestOrchestratorBriefDefersInvestigationToRole(t *testing.T) {
+	brief := builtin(t, "orchestrator").Brief()
+	if !strings.Contains(brief, "Delegate all investigation") {
+		t.Error("orchestrator brief lacks \"Delegate all investigation\"")
+	}
+	if strings.Contains(brief, "Investigate discoverable facts yourself.") {
+		t.Error("orchestrator brief orders \"Investigate discoverable facts yourself.\"")
+	}
+}
+
 // Built-in guidance matches current Fledge: spawn waits for readiness before
 // sending the first prompt, profiles choose no harness, and task brief
 // headings are advisory.
