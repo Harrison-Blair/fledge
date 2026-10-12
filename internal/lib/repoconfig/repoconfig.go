@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -37,7 +38,11 @@ var (
 // Config is a decoded, validated configuration file. A zero field is not
 // configured.
 type Config struct {
-	BaseBranch string
+	BaseBranch   string
+	DeliveryMode string
+	Inbox        struct {
+		AckTimeout time.Duration
+	}
 }
 
 // file is the TOML shape; a pointer distinguishes an omitted version.
@@ -87,7 +92,7 @@ func read(ctx context.Context, root string) (Config, error) {
 		return Config{}, err
 	}
 	for k := range raw {
-		if k != "schema_version" && k != "base_branch" {
+		if k != "schema_version" && k != "base_branch" && k != "delivery_mode" && k != "inbox" {
 			return Config{}, fmt.Errorf("unknown key %q", k)
 		}
 	}
@@ -106,7 +111,57 @@ func read(ctx context.Context, root string) (Config, error) {
 			return Config{}, err
 		}
 	}
-	return Config{BaseBranch: fl.BaseBranch}, nil
+	c := Config{BaseBranch: fl.BaseBranch}
+	if v, ok := raw["delivery_mode"]; ok {
+		if c.DeliveryMode, err = checkDeliveryMode(v); err != nil {
+			return Config{}, err
+		}
+	}
+	if v, ok := raw["inbox"]; ok {
+		if c.Inbox.AckTimeout, err = checkInbox(v); err != nil {
+			return Config{}, err
+		}
+	}
+	return c, nil
+}
+
+// checkDeliveryMode accepts the string local, pr, or none.
+func checkDeliveryMode(v any) (string, error) {
+	s, ok := v.(string)
+	if !ok {
+		return "", errors.New("delivery_mode must be a string: local, pr, or none")
+	}
+	if s != "local" && s != "pr" && s != "none" {
+		return "", fmt.Errorf("delivery_mode %q is not local, pr, or none", s)
+	}
+	return s, nil
+}
+
+// checkInbox accepts an [inbox] table whose only key is ack_timeout, a
+// duration string from 10s to 1h; it returns that duration or zero.
+func checkInbox(v any) (time.Duration, error) {
+	t, ok := v.(map[string]any)
+	if !ok {
+		return 0, errors.New("inbox must be a table")
+	}
+	for k := range t {
+		if k != "ack_timeout" {
+			return 0, fmt.Errorf("unknown key %q", "inbox."+k)
+		}
+	}
+	v, ok = t["ack_timeout"]
+	if !ok {
+		return 0, nil
+	}
+	s, ok := v.(string)
+	if !ok {
+		return 0, errors.New("inbox.ack_timeout must be a duration string from 10s to 1h")
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d < 10*time.Second || d > time.Hour {
+		return 0, fmt.Errorf("inbox.ack_timeout %q is not a duration from 10s to 1h", s)
+	}
+	return d, nil
 }
 
 // checkBranch accepts a branch name git would accept as refs/heads/<name>.
