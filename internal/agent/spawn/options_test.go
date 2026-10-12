@@ -63,7 +63,7 @@ func TestModelArguments(t *testing.T) {
 			if h == "claude" {
 				want = append([]string{"--permission-mode", "bypassPermissions"}, want...)
 			} else if h == "codex" {
-				want = append([]string{"--yolo"}, want...)
+				want = append([]string{"--yolo", "--no-daemon"}, want...)
 			}
 			if h == "hermes" {
 				want = append([]string{"chat"}, want...)

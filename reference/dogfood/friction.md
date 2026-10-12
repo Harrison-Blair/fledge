@@ -1563,11 +1563,13 @@ Update 2026-10-06: reproduced in all 66 Codex verifiers of the audit-fix run (ve
 
 **Issue:** The tool environment can identify a different Herdr agent as the caller
 
-**Status:** Open
+**Status:** Resolved 2026-10-12
 
 **Summary:** On 2026-10-12, during task-board removal, the tool environment pointed to pane `w2Q:p1`. `fledge agent current` returned `caller_unregistered`. The agent incorrectly assumed that pane belonged to this conversation, then adopted it as `task-board-removal` and assigned task `a763cbff` to record `6cb91c8f`. The user identified it as a separate skills agent and stopped it. The mistaken task was cancelled. The cause of the mismatched tool environment is not established. Workaround: do not adopt a pane until its session identity has been checked against the current conversation. This work continued without live agent registration.
 
 Update 2026-10-12: `agent adopt` now refuses this case. It has no `--pane` flag, and it registers or names the caller's agent only when one of that pane's Herdr foreground processes is the `fledge` process or one of its ancestors in Linux `/proc`. It checks again just before its first change. A stale or foreign `HERDR_PANE_ID` fails with `caller_identity_unverified` and creates no files, record, name, or label. Other commands still trust the caller pane, so this entry stays Open.
+
+Resolved 2026-10-12: the cause was Codex's shared app-server daemon, which runs every Codex tool command with the environment of the pane that first started it (here `w2Q:p1`). `fledge agent spawn` now starts Codex with `--no-daemon` (task 4d9c48d1, branch `feat/wave4-codex-no-daemon`); a Codex started by hand still needs `codex --no-daemon`.
 
 **Reproduction steps:**
 1. Use a tool environment whose Herdr caller pane belongs to a separate agent.
@@ -1591,7 +1593,7 @@ Update 2026-10-12: `agent adopt` now refuses this case. It has no `--pane` flag,
 
 **Issue:** Stale inherited Herdr pane ID prevents local task ownership (repeat observation)
 
-**Status:** Open 2026-10-12
+**Status:** Resolved 2026-10-12
 
 **Summary:** During README maintenance, `doctor` reached Herdr and reported
 `HERDR_PANE_ID=w2Q:p1`. However, `agent get --pane w2Q:p1 --json` returned
@@ -1602,6 +1604,8 @@ issue recorded on 2026-10-04. The cause remains unexplained.
 The workaround was to do the documentation work locally, keep
 check results under `.fledge/tmp/readme-shortening/`, and cancel the unassigned
 tracking task with its result in the reason. No other agent received the task.
+
+Resolved 2026-10-12: the cause was Codex's shared app-server daemon, which runs every Codex tool command with the environment of the pane that first started it (here `w2Q:p1`). `fledge agent spawn` now starts Codex with `--no-daemon` (task 4d9c48d1, branch `feat/wave4-codex-no-daemon`); a Codex started by hand still needs `codex --no-daemon`.
 
 **Reproduction steps:**
 1. Run `fledge doctor --json` from the caller's checkout.
@@ -1626,9 +1630,11 @@ tracking task with its result in the reason. No other agent received the task.
 
 **Issue:** An unregistered coordinator with a stale caller pane must coordinate without adopting
 
-**Status:** Open
+**Status:** Resolved 2026-10-12
 
 **Summary:** On 2026-10-12, the root coordinator's tool runner was detached and inherited a stale `HERDR_PANE_ID=w2Q:p1`. It stayed unregistered on purpose: it cleared the injected pane, tab, and workspace context for each Fledge command, created an explicit feature workspace and worktree (`fledge worktree create` works this way), and used Fledge tasks and spawns without adopting any existing agent. Its spawned workers have no parent record, and its messages arrive from "unknown sender" with no reply command. `fledge agent cleanup` finds workers through the caller's record, so it cannot find this caller's workers; only workers whose IDs the coordinator recorded at spawn may be stopped, one by one.
+
+Resolved 2026-10-12: the cause was Codex's shared app-server daemon, which runs every Codex tool command with the environment of the pane that first started it (here `w2Q:p1`). `fledge agent spawn` now starts Codex with `--no-daemon` (task 4d9c48d1, branch `feat/wave4-codex-no-daemon`); a Codex started by hand still needs `codex --no-daemon`.
 
 **Reproduction steps:**
 1. Run Fledge from a tool runner whose `HERDR_PANE_ID` does not resolve, and clear the injected Herdr pane context.
@@ -1639,9 +1645,11 @@ tracking task with its result in the reason. No other agent received the task.
 
 **Issue:** Codex shared-daemon tool commands cannot adopt their own agent
 
-**Status:** Open
+**Status:** Resolved 2026-10-12
 
 **Summary:** On 2026-10-12, a native Codex agent started with the default shared daemon ran its shell tools under the daemon (PID 93043, a root process) rather than under its own pane's Codex process, and inherited the stale `HERDR_PANE_ID=w2Q:p1`. The pane's foreground PID was not in the tool command's ancestry, so `agent adopt` must refuse it with `caller_identity_unverified`. A fresh Codex started with `codex --no-daemon` passed 4 of 4 with its own pane `w2Y:p5`. The user chose to document `--no-daemon` and to keep spawn defaults unchanged: start Codex with `codex --no-daemon`, and with spawn append `-- --no-daemon`. A Codex version without that flag cannot adopt itself and must be started with `fledge agent spawn`. There is no identity bypass.
+
+Resolved 2026-10-12: the cause was Codex's shared app-server daemon, which runs every Codex tool command with the environment of the pane that first started it (here `w2Q:p1`). `fledge agent spawn` now starts Codex with `--no-daemon` (task 4d9c48d1, branch `feat/wave4-codex-no-daemon`); a Codex started by hand still needs `codex --no-daemon`.
 
 **Reproduction steps:**
 1. Start Codex in a Herdr pane with its default shared daemon.
@@ -1731,7 +1739,7 @@ entry above.
 
 **Issue:** Codex worker's escalated commands inherit a stale `HERDR_PANE_ID` from a closed pane
 
-**Status:** Open
+**Status:** Resolved 2026-10-12
 
 **Summary:** During wave-one and wave-1.5 verification on 2026-10-12, a Codex verifier's
 escalated tool commands carried `HERDR_PANE_ID=w2Q:p1`, a pane closed on 2026-10-05, instead
@@ -1742,6 +1750,8 @@ dead pane. Prefixing each Fledge command with the worker's real `HERDR_PANE_ID`,
 task 23ae98ff (record c3e7feb6 in `w2Z:p2`), task d20474d1 (record 2034f829 in `w33:p1`), and
 task fe67a631 (record 2ca12f20 in `w35:p1`); each verifier report records the workaround.
 Same family as the 2026-10-04 orchestrator entry above, now seen in spawned Codex workers.
+
+Resolved 2026-10-12: the cause was Codex's shared app-server daemon, which runs every Codex tool command with the environment of the pane that first started it (here `w2Q:p1`). `fledge agent spawn` now starts Codex with `--no-daemon` (task 4d9c48d1, branch `feat/wave4-codex-no-daemon`); a Codex started by hand still needs `codex --no-daemon`.
 
 **Reproduction steps:**
 1. Spawn a Codex worker from an orchestrator whose Codex environment once ran in a pane that is now closed.
@@ -1764,3 +1774,56 @@ per-session keying that wave 2A designed.
 **Reproduction steps:**
 1. In a Fledge-spawned pane, run `env | grep HERDR_SESSION`: no output.
 2. Run `fledge supervise status`: it reports `Supervisor for session -`.
+
+---
+
+**Issue:** The installed binary lacks `inbox` while doorbells name it
+
+**Status:** Open
+
+**Summary:** On 2026-10-12, during the stale-pane research (task f66917b0) and again at the start of task 4d9c48d1, the `fledge` on `PATH` had no `inbox` command, but every doorbell said `read: fledge inbox read --id <id>`. Two Codex probes could not read their messages. Workarounds: type the instruction with `fledge agent send --text ... --key enter`, or build the checkout to `.fledge/tmp/` and use that binary. This is the same gap as the wave 2A doorbell entry above, now hit in ordinary work.
+
+**Reproduction steps:**
+1. Use an installed `fledge` older than the orchestrator's build.
+2. Receive a doorbell and run `fledge inbox read --id <id>`.
+3. Observe `unknown command "inbox" for "fledge"`.
+
+---
+
+**Issue:** Codex's folder-trust dialog blocks the first prompt and saves the folder in `~/.codex/config.toml`
+
+**Status:** Open
+
+**Summary:** On 2026-10-12, during the stale-pane research (task f66917b0), a Codex spawn into a new scratch folder stopped on the "Trust this folder?" dialog. Spawn reported the block correctly, but the first prompt was not submitted. Accepting the dialog also wrote the scratch folder into `~/.codex/config.toml`, a lasting change to the user's Codex configuration. Same family as the Claude folder-trust entry above.
+
+**Reproduction steps:**
+1. Create a new Git repository under `.fledge/tmp/`.
+2. Spawn a Codex worker there with an absolute `--cwd` and a `--prompt`.
+3. Observe the trust dialog and that the prompt is not submitted.
+4. Accept trust and observe the folder path added to `~/.codex/config.toml`.
+
+---
+
+**Issue:** A spawn run from outside the target repository stores the record in the invoking repository
+
+**Status:** Open
+
+**Summary:** On 2026-10-12, during the stale-pane research (task f66917b0), a spawn run from the Fledge checkout with `--cwd` inside a scratch repository stored the worker's record in the Fledge store (`f30e6193`). In the scratch repository the worker then saw `caller_unregistered` and adopted a second record for the same terminal there (`fdfcb039`). This is documented behavior (spawn help and the probe-agents memory), but the result looks like the stale-pane bug and can mislead an investigation.
+
+**Reproduction steps:**
+1. From the Fledge checkout, spawn a worker with `--cwd <scratch repo>`.
+2. In the worker, run `fledge agent current` in the scratch repository. Observe `caller_unregistered`.
+3. Run `fledge agent adopt` there. Observe a second record for the same terminal in the scratch store.
+
+---
+
+**Issue:** `agent cleanup --results-collected` holds a record whose terminal is gone
+
+**Status:** Open
+
+**Summary:** On 2026-10-12, during the stale-pane research (task f66917b0), after the probe pane was stopped, `fledge agent cleanup --results-collected` still held record `f30e6193` with "no live Herdr agent hosts its terminal". The record stays live, so cleanup cannot retire the record of a worker that is already gone.
+
+**Reproduction steps:**
+1. Spawn a worker, then stop its pane outside cleanup.
+2. Run `fledge agent cleanup --results-collected --dry-run`.
+3. Observe the record held with "no live Herdr agent hosts its terminal".

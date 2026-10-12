@@ -69,6 +69,7 @@ func (o Options) Validate() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	args = daemonArguments(o.Harness, args)
 	if o.NoPermissionBypass {
 		return args, nil
 	}

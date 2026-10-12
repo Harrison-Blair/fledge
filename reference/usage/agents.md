@@ -187,6 +187,12 @@ Claude spawns default to `--permission-mode bypassPermissions`.
 These defaults apply with or without a profile.
 Other harnesses receive no permission defaults.
 
+Codex spawns also default to `--no-daemon`, with or without a profile.
+Codex's shared app-server daemon runs every tool command with the environment of the pane that first started the daemon, so a worker's Fledge commands would identify another pane.
+With `--no-daemon`, tool commands run under the worker's own Codex process and get its pane's `HERDR_*` values.
+Spawn does not add a second `--no-daemon` when the native arguments already contain it, and `--no-permission-bypass` does not remove it.
+There is no opt-out.
+
 Explicit native permission choices override these defaults:
 
 - Claude: `--permission-mode` or `--dangerously-skip-permissions`.
@@ -815,8 +821,8 @@ Herdr and the operating system have no transaction, so a change after the last c
 
 Tool commands must run as descendants of the agent's process.
 Claude and Pi tool commands do.
-Codex tools run by its default shared daemon do not, so adopt refuses them: start Codex with `codex --no-daemon`, and with spawn append `-- --no-daemon` to the native arguments.
-A Codex version without `--no-daemon` cannot adopt itself; start it with `fledge agent spawn`, which registers it.
+Codex tools run by its default shared daemon do not, so adopt refuses them: start Codex with `codex --no-daemon`. `fledge agent spawn` adds `--no-daemon` for Codex.
+Codex workers need a Codex version that supports `--no-daemon` (0.162.1 does); an older Codex cannot adopt itself and fails to start under `fledge agent spawn`.
 
 An unnamed agent needs `--name`, which adopt sets through Herdr (`agent_name_taken` and `agent_launch_pending` are reported as is).
 A named agent keeps its name.

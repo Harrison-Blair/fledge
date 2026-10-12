@@ -80,7 +80,7 @@ func TestEveryBuiltinSendsItsBriefWithHarnessPermissionDefaults(t *testing.T) {
 				if kind == "claude" {
 					args = []string{"--permission-mode", "bypassPermissions"}
 				} else if kind == "codex" {
-					args = []string{"--yolo"}
+					args = []string{"--yolo", "--no-daemon"}
 				}
 				s := profileSpawn(t, kind, args, header+builtinProfile(t, name).Brief()+noMemories+"\n\nDo #14.")
 				out := s.run(context.Background(), o, nil)
