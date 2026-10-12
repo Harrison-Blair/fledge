@@ -157,11 +157,13 @@ func MakeParents(root, parent string, out *cli.Outcome) error {
 	return nil
 }
 
-// managedRules ignore everything in .fledge except versioned profile files.
-var managedRules = []string{"*", "!/profiles/", "!/profiles/*.md"}
+// managedRules ignore everything in .fledge except versioned profile files
+// and the repository configuration file.
+var managedRules = []string{"*", "!/profiles/", "!/profiles/*.md", "!/config.toml"}
 
 // missingRules returns the managed rules to append so that content ends with
-// the managed block. A legacy file ending in "*" needs only the exceptions.
+// the managed block. A legacy file ending in "*", or in the managed block
+// before "!/config.toml", needs only the rules after it.
 func missingRules(content []byte) []string {
 	var rules []string
 	for _, line := range strings.Split(string(content), "\n") {
@@ -171,6 +173,9 @@ func missingRules(content []byte) []string {
 	}
 	if slices.Equal(rules[max(len(rules)-len(managedRules), 0):], managedRules) {
 		return nil
+	}
+	if previous := managedRules[:3]; slices.Equal(rules[max(len(rules)-len(previous), 0):], previous) {
+		return managedRules[3:]
 	}
 	if len(rules) > 0 && rules[len(rules)-1] == "*" {
 		return managedRules[1:]
