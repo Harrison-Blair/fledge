@@ -87,7 +87,7 @@ func TestLifecycleCreateAssignCompleteVerify(t *testing.T) {
 	}
 	r = tasktest.Load(t, repo, id)
 	want.Status, want.Verifier, want.VerificationNote, want.VerifiedAt = task.Verified, &bossRec.ID, tasktest.Ptr("looks right"), r.VerifiedAt
-	if !reflect.DeepEqual(r, want) || r.VerifiedAt == nil || !reflect.DeepEqual(verified.Result, Result{Record: r, OpenSubtasks: []string{}}) {
+	if !reflect.DeepEqual(r, want) || r.VerifiedAt == nil || !reflect.DeepEqual(verified.Result, Result{Record: r, OpenSubtasks: []string{}, Warnings: []string{}}) {
 		t.Fatalf("after verify %+v", r)
 	}
 	var b bytes.Buffer
@@ -160,7 +160,7 @@ func TestParentWithOpenSubtasksNeedsForce(t *testing.T) {
 	}
 	out = Run(context.Background(), c(), Options{ID: id, Force: true}, strings.NewReader(""))
 	r := tasktest.Load(t, repo, id)
-	if out.Error != nil || r.Status != task.Verified || !r.Forced || !reflect.DeepEqual(out.Result, Result{Record: r, OpenSubtasks: []string{open}}) {
+	if out.Error != nil || r.Status != task.Verified || !r.Forced || !reflect.DeepEqual(out.Result, Result{Record: r, OpenSubtasks: []string{open}, Warnings: []string{}}) {
 		t.Fatalf("%+v %+v", out.Error, out.Result)
 	}
 	var b bytes.Buffer
@@ -308,7 +308,7 @@ func TestFinishedParentVerifiesFromCreatedOrAssigned(t *testing.T) {
 			}
 			want := before
 			want.Status, want.Verifier, want.VerificationNote, want.VerifiedAt = task.Verified, r.Verifier, tasktest.Ptr("all done"), r.VerifiedAt
-			if !reflect.DeepEqual(r, want) || !reflect.DeepEqual(out.Result, Result{Record: r, OpenSubtasks: []string{}}) {
+			if !reflect.DeepEqual(r, want) || !reflect.DeepEqual(out.Result, Result{Record: r, OpenSubtasks: []string{}, Warnings: []string{}}) {
 				t.Fatalf("got %+v\nwant %+v", r, want)
 			}
 		})

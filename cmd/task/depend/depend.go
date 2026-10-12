@@ -12,7 +12,7 @@ func New() *cobra.Command {
 	var options depend.Options
 	var asJSON bool
 	cmd := &cobra.Command{Use: "depend", Short: "Add or remove the tasks a task runs after", Args: cobra.NoArgs,
-		Long: "Add or remove prerequisites of a task that is not verified or cancelled.\n\nA prerequisite is satisfied once it is verified or cancelled; task assign refuses\na task with unmet prerequisites unless --force. Removals apply before additions.\nAdding a present prerequisite or removing an absent one changes nothing. A\nprerequisite must exist and must not already run after the task, directly or\nindirectly (task_dependency_cycle)."}
+		Long: "Add or remove prerequisites of a task that is not verified, landed, or cancelled.\n\nA prerequisite is satisfied once it is verified, landed, or cancelled; task assign refuses\na task with unmet prerequisites unless --force. Removals apply before additions.\nAdding a present prerequisite or removing an absent one changes nothing. A\nprerequisite must exist and must not already run after the task, directly or\nindirectly (task_dependency_cycle)."}
 	f := cmd.Flags()
 	f.StringVar(&options.ID, "id", "", "Task ID")
 	f.StringArrayVar(&options.After, "after", nil, "Prerequisite task ID to add (repeatable)")

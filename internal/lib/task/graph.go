@@ -50,7 +50,9 @@ func (p Progress) String() string {
 
 // Satisfied reports whether a prerequisite in status no longer holds back its
 // dependents: it is verified, landed, or cancelled.
-func Satisfied(status string) bool { return status == Verified || status == Landed || status == Cancelled }
+func Satisfied(status string) bool {
+	return status == Verified || status == Landed || status == Cancelled
+}
 
 // Index maps rs by id.
 func Index(rs []Record) map[string]Record {
