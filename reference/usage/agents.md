@@ -822,7 +822,7 @@ Herdr and the operating system have no transaction, so a change after the last c
 Tool commands must run as descendants of the agent's process.
 Claude and Pi tool commands do.
 Codex tools run by its default shared daemon do not, so adopt refuses them: start Codex with `codex --no-daemon`. `fledge agent spawn` adds `--no-daemon` for Codex.
-A Codex version without `--no-daemon` cannot adopt itself; start it with `fledge agent spawn`, which registers it.
+Codex workers need a Codex version that supports `--no-daemon` (0.162.1 does); an older Codex cannot adopt itself and fails to start under `fledge agent spawn`.
 
 An unnamed agent needs `--name`, which adopt sets through Herdr (`agent_name_taken` and `agent_launch_pending` are reported as is).
 A named agent keeps its name.
