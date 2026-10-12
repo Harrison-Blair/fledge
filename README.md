@@ -200,11 +200,7 @@ Never move an existing release tag or replace published assets.
 
 Develop on `dev` or a feature branch based on `dev`.
 Changes reach `main` through a pull request that the owner approves.
-Set the integration branch in each clone:
-
-```sh
-git config fledge.baseBranch dev
-```
+The committed `.fledge/config.toml` names `dev` as the [integration branch](reference/usage/worktrees.md#integration-branch).
 
 Read [AGENTS.md](AGENTS.md) for contributor rules and package structure.
 Go changes require tests before implementation.

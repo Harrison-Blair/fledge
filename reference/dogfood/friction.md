@@ -1674,3 +1674,16 @@ tracking task with its result in the reason. No other agent received the task.
 1. From a pane with no Fledge record, assign a task to a registered worker. Observe `unknown sender` and no reply command in the worker's message header.
 2. From the worker, run `fledge agent message --name orchestrator` when an unrelated agent has that name. Observe `agent_blocked`.
 3. Complete the task with `fledge task complete` and observe the result in `fledge task get`.
+
+---
+
+**Issue:** No command upgrades the managed ignore file of an existing linked checkout
+
+**Status:** Open
+
+**Summary:** On 2026-10-12, task 92ac9b19 added `!/config.toml` to the managed `.fledge/.gitignore` block. Every `fledgedir.Ensure` call from identity, memory, and worktree commands targets the primary checkout. A linked checkout gets its ignore file only when `fledge worktree create` or `fledge agent spawn --worktree new` creates it. So a linked checkout that an older binary created keeps the old block, and Git ignores `.fledge/config.toml` there. The implementer appended the line to its own checkout's ignore file by hand. Read-only commands such as `fledge memory list` do not upgrade the primary checkout either.
+
+**Reproduction steps:**
+1. In a linked checkout that an older Fledge created, run a current binary's `fledge memory add` or `fledge task create`.
+2. Observe that the primary checkout's `.fledge/.gitignore` gains `!/config.toml` and the linked checkout's file does not.
+3. In the linked checkout, run `git check-ignore .fledge/config.toml`. Observe exit status 0 (ignored).

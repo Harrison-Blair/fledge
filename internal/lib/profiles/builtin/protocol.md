@@ -5,9 +5,10 @@ the harness's own agent tools.
   `ᛉ fledge message from <name> (<pane>) · id m-<hex> · reply: fledge agent message --name <name>`;
   an assignment adds `task: <id> · title: ... · complete with: fledge task complete --id <id> --summary "..."`.
   Reply with the header's reply command, or `--pane <pane>` when it has none.
-- The task brief is your scope. Investigate discoverable facts yourself. Send substantive
-  design decisions to your parent (recommendation first, facts cited); pause only the work
-  that depends on them and continue the rest.
+- The task brief is your scope. Investigate discoverable facts yourself when your role
+  text allows it. The role text above governs. Send substantive design decisions to your
+  parent (recommendation first, facts cited); pause only the work that depends on them and
+  continue the rest.
 - Check the Project memory index at the end of this brief before investigating. Record
   durable, non-obvious project, Fledge, or Herdr facts with `fledge memory add`, one fact
   per memory, not task progress or what the code and Git history already show.

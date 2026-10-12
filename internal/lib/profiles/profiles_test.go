@@ -108,7 +108,7 @@ func TestBuiltinRolesReadRepositoryInstructionsIfPresent(t *testing.T) {
 
 // Built-ins ship to every repository, so they name no repository's branch or
 // backlog: the integration branch comes from the brief, else the documented
-// fledge.baseBranch, origin/HEAD, main fallback.
+// .fledge/config.toml, origin/HEAD, main fallback. Git config is not read.
 func TestBuiltinRolesNameNoRepositoryBranch(t *testing.T) {
 	dev := regexp.MustCompile(`\bdev\b`)
 	for _, name := range roles {
@@ -124,11 +124,50 @@ func TestBuiltinRolesNameNoRepositoryBranch(t *testing.T) {
 	}
 	for _, name := range []string{"integrator", "orchestrator"} {
 		role := builtin(t, name).Role
-		for _, want := range []string{"fledge.baseBranch", "origin/HEAD", "stop"} {
+		for _, want := range []string{".fledge/config.toml", "origin/HEAD", "stop"} {
 			if !strings.Contains(role, want) {
 				t.Errorf("%s lacks %q", name, want)
 			}
 		}
+		for _, stale := range []string{"fledge.baseBranch", "git config"} {
+			if strings.Contains(role, stale) {
+				t.Errorf("%s still names %q", name, stale)
+			}
+		}
+	}
+}
+
+// The orchestrator is a dispatcher: it edits no repository file, delegates
+// all investigation, and dispatches a merge only on the user's word naming
+// the branch.
+func TestOrchestratorIsDispatcher(t *testing.T) {
+	role := builtin(t, "orchestrator").Role
+	for _, want := range []string{
+		"Edit repository files yourself, however small the change.",
+		"Delegate all investigation",
+		"`researcher`",
+		"explicit word that names the branch",
+	} {
+		if !strings.Contains(role, want) {
+			t.Errorf("orchestrator lacks %q", want)
+		}
+	}
+	for _, stale := range []string{"investigate directly", "routine", "merge each verified feature"} {
+		if strings.Contains(role, stale) {
+			t.Errorf("orchestrator still says %q", stale)
+		}
+	}
+}
+
+// The assembled orchestrator brief keeps the delegate-all rule: the shared
+// protocol defers investigation to the role instead of ordering it.
+func TestOrchestratorBriefDefersInvestigationToRole(t *testing.T) {
+	brief := builtin(t, "orchestrator").Brief()
+	if !strings.Contains(brief, "Delegate all investigation") {
+		t.Error("orchestrator brief lacks \"Delegate all investigation\"")
+	}
+	if strings.Contains(brief, "Investigate discoverable facts yourself.") {
+		t.Error("orchestrator brief orders \"Investigate discoverable facts yourself.\"")
 	}
 }
 
