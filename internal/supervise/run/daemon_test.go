@@ -348,3 +348,40 @@ func TestIdleExitAfterSixtySeconds(t *testing.T) {
 		t.Fatal("idle with unread record")
 	}
 }
+
+// An agent that stops qualifying while still live is unwatched, not exited:
+// no wake goes to its task's creator.
+func TestUnqualifiedAgentIsUnwatchedNotExited(t *testing.T) {
+	w := newWorld(t)
+	owner := agent("w1:p6", "term_owner", "owner", "working")
+	ownerRec := identitytest.Register(t, w.repo, owner)
+	id := tasktest.Seed(t, w.repo, task.Record{Title: "t", Status: task.Assigned, Owner: &ownerRec.ID, CreatedBy: &w.boss.ID})
+	d := w.daemon(t, herdrscript.List(w.bossA, w.wrkA, owner), herdrscript.List(w.bossA, w.wrkA, owner))
+	ctx := context.Background()
+	d.reconcile(ctx, t0)
+	if d.watched["w1:p6"] == nil {
+		t.Fatal("owner not watched")
+	}
+	if _, err := task.Update(w.store, id, func(r *task.Record) error { r.Status = task.Completed; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	d.reconcile(ctx, t0.Add(30*time.Second))
+	if d.watched["w1:p6"] != nil || d.ep.Exited[ownerRec.ID] {
+		t.Fatalf("watched %v exited %v", d.watched, d.ep.Exited)
+	}
+	if ws := wakes(t, w.store, w.boss.ID); len(ws) != 0 || strings.Contains(w.logs.String(), "wake exited") {
+		t.Fatalf("%+v\n%s", ws, w.logs)
+	}
+}
+
+// A watched worker gone from agent.list exited unseen.
+func TestVanishedWorkerIsExited(t *testing.T) {
+	w := newWorld(t)
+	d := w.daemon(t, herdrscript.List(w.bossA, w.wrkA), herdrscript.List(w.bossA), prompt("w1:p1"))
+	ctx := context.Background()
+	d.reconcile(ctx, t0)
+	d.reconcile(ctx, t0.Add(30*time.Second))
+	if ws := wakes(t, w.store, w.boss.ID); len(ws) != 1 || !strings.Contains(ws[0].Body, "exited") {
+		t.Fatalf("%+v", ws)
+	}
+}

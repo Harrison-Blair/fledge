@@ -145,8 +145,13 @@ func (d *daemon) reconcile(ctx context.Context, now time.Time) error {
 		delete(byID, rec.ID)
 	}
 	d.watched = next
-	// A watched agent gone from agent.list exited unseen.
+	// A watched agent gone from agent.list exited unseen; one still listed
+	// only stopped qualifying, so it is no longer watched.
 	for _, w := range byID {
+		if _, listed := d.agents[w.rec.TerminalID]; listed {
+			d.log.Printf("unwatch %s (%s)", w.rec.ID, w.pane)
+			continue
+		}
 		d.exited(ctx, w)
 	}
 	d.ringQueued(ctx, msgs, now)

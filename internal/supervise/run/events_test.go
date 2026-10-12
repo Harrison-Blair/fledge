@@ -219,3 +219,44 @@ func TestRunExitsSilentlyWhenLockHeld(t *testing.T) {
 		t.Fatal(err, logs.String())
 	}
 }
+
+// The status right after start already names the watched agents.
+func TestRunReportsWatchedSetAtStart(t *testing.T) {
+	w := newWorld(t)
+	t.Setenv("HERDR_SESSION", "")
+	c := libagent.Client{API: listHerdr{agents: []herdr.AgentDetails{w.bossA, w.wrkA}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	idle := func(ctx context.Context, _ []map[string]any, out chan<- event) error { <-ctx.Done(); return ctx.Err() }
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, c, Options{Cwd: w.repo, Version: "v", Log: &syncWriter{w: &bytes.Buffer{}}, subscribe: idle})
+	}()
+	defer func() { cancel(); <-done }()
+	dir := supervise.Dir(w.repo, "")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if st, live, _ := supervise.Read(dir); live && st.PID != 0 {
+			if len(st.Watched) == 1 && st.Watched[0] == w.work.ID {
+				return
+			}
+			if st.HeartbeatAt != "" && time.Now().After(deadline) {
+				t.Fatalf("%+v", st)
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no status")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// listHerdr answers agent.list with agents and nothing else.
+type listHerdr struct{ agents []herdr.AgentDetails }
+
+func (h listHerdr) Call(_ context.Context, method string, _, result any) error {
+	if method != "agent.list" {
+		return errors.New("unexpected " + method)
+	}
+	*result.(*herdr.AgentListResult) = herdr.AgentListResult{Type: "agent_list", Agents: h.agents}
+	return nil
+}

@@ -117,6 +117,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) error {
 	}
 	now := o.now()
 	reconcile(now)
+	beat(d.watchedIDs())
 	lastReconcile, lastBeat := now, now
 	ticker := time.NewTicker(tickEvery)
 	defer ticker.Stop()
