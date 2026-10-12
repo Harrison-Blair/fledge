@@ -444,3 +444,35 @@ func TestCompletionNoticeSenderReusesCallerLookup(t *testing.T) {
 		})
 	}
 }
+
+// A completion notice stored but not rung starts the supervisor; a rung one
+// does not.
+func TestDeferredNoticeStartsSupervisor(t *testing.T) {
+	for _, blocked := range []bool{true, false} {
+		t.Setenv("HERDR_ENV", "1")
+		t.Setenv("HERDR_SOCKET_PATH", "/nonexistent")
+		t.Setenv("HERDR_SESSION", "")
+		starts := 0
+		old := startSupervisor
+		startSupervisor = func(string, string) error { starts++; return nil }
+		t.Cleanup(func() { startSupervisor = old })
+		repo := identitytest.Repository(t)
+		creator := tasktest.Register(t, repo, boss)
+		owner := tasktest.Register(t, repo, worker)
+		id := tasktest.Seed(t, repo, task.Record{Title: "Fix it", Status: task.Assigned, Owner: &owner.ID, CreatedBy: &creator.ID})
+		prompt := herdrscript.Call{Method: "agent.prompt", Result: herdr.AgentResult{Type: "agent_prompted", Agent: boss.Agent}}
+		if blocked {
+			prompt = herdrscript.Call{Method: "agent.prompt", Err: &herdr.Error{Code: "agent_blocked", Message: "dialog"}}
+		}
+		c := tasktest.Client(t, repo, "w1:p3", tasktest.Get("w1:p3", worker), tasktest.Get("w1:p1", boss), prompt)
+		out := Run(context.Background(), c, Options{ID: id, Summary: "all done", SummarySet: true}, strings.NewReader(""))
+		want := 0
+		if blocked {
+			want = 1
+		}
+		started := slices.Contains(out.Effects, cli.Effect{Action: "started", Kind: "supervisor"})
+		if starts != want || started != blocked {
+			t.Fatalf("blocked=%v: %d starts, effects %+v", blocked, starts, out.Effects)
+		}
+	}
+}

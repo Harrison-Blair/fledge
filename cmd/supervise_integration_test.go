@@ -20,6 +20,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/inbox"
 	"github.com/Harrison-Blair/fledge/internal/lib/supervise"
+	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/sockettest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/tasktest"
@@ -169,5 +170,54 @@ func TestDeferredMessageLaunchesRealDaemon(t *testing.T) {
 	s, _ := identity.Existing(context.Background(), repo)
 	if all, _ := inbox.ForRecipient(s, rec.ID); len(all) != 1 || inbox.State(all[0]) != "queued" {
 		t.Fatalf("%+v", all)
+	}
+}
+
+// A completion notice its blocked creator cannot take yet starts the
+// supervision daemon, which then reports itself running.
+func TestDeferredCompletionLaunchesRealDaemon(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and runs the binary")
+	}
+	bin := fledgeBinary(t)
+	l, socket := sockettest.Listen(t)
+	t.Setenv("HERDR_SESSION", "itest")
+	repo := identitytest.Repository(t)
+	w := tasktest.Agent("w1:p3", "term_worker", "worker").Agent
+	w.AgentStatus = "blocked"
+	rec := identitytest.Register(t, repo, w)
+	id := tasktest.Seed(t, repo, task.Record{Title: "completion", Status: task.Assigned, Owner: &rec.ID, CreatedBy: &rec.ID})
+	fakeHerdr(t, l, w)
+	env := append(os.Environ(), "HERDR_ENV=1", "HERDR_SOCKET_PATH="+socket, "HERDR_SESSION=itest", "HERDR_PANE_ID=w9:p9")
+	run := func(args ...string) (string, error) {
+		cmd := exec.Command(bin, args...)
+		cmd.Dir, cmd.Env = repo, env
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	dir := supervise.Dir(repo, "itest")
+	t.Cleanup(func() { supervise.Stop(context.Background(), dir) })
+
+	out, err := run("task", "complete", "--id", id, "--summary", "done", "--force", "--json")
+	if err == nil || !strings.Contains(out, `"action":"started","kind":"supervisor","id":"itest"`) {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	s, _ := identity.Existing(context.Background(), repo)
+	if all, _ := inbox.ForRecipient(s, rec.ID); len(all) != 1 || inbox.State(all[0]) != "queued" {
+		t.Fatalf("%+v", all)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if _, live, _ := supervise.Read(dir); live {
+			break
+		}
+		if time.Now().After(deadline) {
+			log, _ := os.ReadFile(filepath.Join(dir, "log"))
+			t.Fatalf("daemon not running\n%s", log)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if out, err := run("supervise", "status"); err != nil || !strings.Contains(out, "running (pid ") {
+		t.Fatalf("%v %s", err, out)
 	}
 }

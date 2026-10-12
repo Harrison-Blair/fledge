@@ -12,6 +12,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/inbox"
+	"github.com/Harrison-Blair/fledge/internal/lib/supervise"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 )
 
@@ -23,7 +24,8 @@ type Options struct {
 // Run moves an assigned task to completed with the summary as its result,
 // stores the owner's live session ref when the owner is the caller, then
 // stores for a distinct registered creator a short inbox notice naming the
-// commands to read the result and verify it, and rings its doorbell. Only the owner, identified by
+// commands to read the result and verify it, and rings its doorbell, starting
+// the supervisor when the doorbell does not ring. Only the owner, identified by
 // the caller's live record, may complete it unless Force is set.
 func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Outcome {
 	out := cli.NewOutcome("task.complete")
@@ -107,6 +109,11 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 	}); ok {
 		out.Result = r
 	}
+	// A notice stored but not rung waits for the supervisor to ring it.
+	if out.Error != nil && out.Error.Phase == "agent.prompt" {
+		started, err := supervise.EnsureFor(ctx, c.Cwd, startSupervisor)
+		supervise.Note(&out, started, err)
+	}
 	return out
 }
 
@@ -156,6 +163,9 @@ func display(s *string) string {
 	}
 	return *s
 }
+
+// startSupervisor launches the supervision daemon; tests replace it.
+var startSupervisor supervise.Starter = supervise.Launch
 
 // observeSession is replaceable so tests can fail the session write.
 var observeSession identity.Observer = identity.ObserveSession
