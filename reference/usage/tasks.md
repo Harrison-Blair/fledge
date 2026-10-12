@@ -19,7 +19,8 @@ fledge task depend --id 9c0d1e2f --after 1a2b3c4d --remove 5e6f7a8b
 fledge task list --ready                                        # created and unblocked
 fledge task assign --id 1a2b3c4d --name worker
 fledge task complete --id 1a2b3c4d --summary "Fixed in abc123"  # run by the owner
-fledge task verify --id 1a2b3c4d --summary "Tests pass"         # run by another agent
+fledge task verify --id 1a2b3c4d --commit HEAD --summary "Tests pass"  # run by another agent
+fledge task land --id 1a2b3c4d                                  # after the user's word
 fledge task list --status completed
 fledge task get --id 1a2b3c4d
 ```
@@ -53,10 +54,11 @@ Write the brief before creating the task.
 
 ## Lifecycle
 
-A task moves `created` → `assigned` → `completed` → `verified`.
+A task moves `created` → `assigned` → `completed` → `verified` → `landed`.
 `task cancel [--reason TEXT]` ends a `created`, `assigned`, or `completed` task as `cancelled`.
 A `created` or `assigned` parent can also go straight to `verified` once its subtasks are finished (see `verify` below).
-A verified task can only be verified again, cancelled tasks are final, and other out-of-order transitions fail with `task_invalid_state`.
+A verified task can only be verified again or landed with `task land` (see [Landing](#landing)).
+Cancelled and landed tasks are final, and other out-of-order transitions fail with `task_invalid_state`.
 
 There are no progress updates within a task and no recorded checks.
 
@@ -67,20 +69,21 @@ A subtask is not a prerequisite of its parent.
 
 - **Subtasks.** `create --parent TASK` fixes the parent at creation.
   It cannot change later.
-  The parent must exist and be neither verified nor cancelled (`task_not_found` or `task_invalid_state`).
+  The parent must exist and be neither verified, landed, nor cancelled (`task_not_found` or `task_invalid_state`).
   Nesting depth is unlimited and cycles cannot form because a parent always predates its subtasks.
   `list` and `get` show the progress of direct subtasks as `2/3 verified`, adding `, 1 cancelled` when any were cancelled: cancelled subtasks are shown but not counted toward the total.
-  `verify` refuses a parent whose direct subtasks are not all verified or cancelled with `task_open_subtasks`.
+  A `landed` subtask counts as verified in the `verified` count and the `2/3 verified` text.
+  `verify` refuses a parent whose direct subtasks are not all verified, landed, or cancelled with `task_open_subtasks`.
   `--force` verifies a completed parent anyway, records `forced: true`, and lists the open subtasks.
   Cancelling a parent leaves its subtasks unchanged.
-- **Dependencies.** A prerequisite is satisfied once it is `verified`.
+- **Dependencies.** A prerequisite is satisfied once it is `verified` or `landed`.
   A `cancelled` prerequisite also counts as satisfied but stays on its dependents and is shown with its state and reason, never dropped.
   Declare prerequisites with repeatable `create --after TASK`.
   Change them later with `depend --id TASK --after PREREQ --remove PREREQ`.
   Both flags are repeatable.
   Removals apply first.
   Adding a present prerequisite or removing an absent one changes nothing.
-  `depend` refuses verified or cancelled tasks with `task_invalid_state` and unknown prerequisites with `task_not_found`.
+  `depend` refuses verified, landed, or cancelled tasks with `task_invalid_state` and unknown prerequisites with `task_not_found`.
   It refuses additions that would form a cycle, including self-dependencies, with `task_dependency_cycle`.
   The error names the chain.
   `assign` refuses a task with unmet prerequisites with `task_dependencies_unmet`, naming them, before it contacts the agent.
@@ -89,6 +92,7 @@ A subtask is not a prerequisite of its parent.
   These checks and the changes they guard run under the state store lock, so concurrent commands cannot form a cycle or lose an edit.
 
 - `create` requires a single-line `--title` and a brief (`--body`, or `--file` with `-` for stdin), and takes optional `--parent` and repeatable `--after`.
+  `--delivery-mode` and `--base-branch` set how and where the task lands (see [Delivery modes](#delivery-modes)).
   `created_by` is the caller's agent record, or null when the caller is unregistered.
 - `assign --id TASK` takes exactly one of `--name`, `--pane`, or `--agent-id`.
   The agent must be registered.
@@ -114,13 +118,13 @@ A subtask is not a prerequisite of its parent.
   A stale creator or acknowledged delivery failure returns `partial`.
   An uncertain delivery returns `unknown`.
   The task remains completed, the notification outcome is recorded, and delivery is never retried automatically.
-- `verify --id TASK [--summary TEXT | --file PATH]` requires a `completed` or `verified` task and a registered caller other than the owner.
+- `verify --id TASK [--summary TEXT | --file PATH] [--commit REV]` requires a `completed` or `verified` task and a registered caller other than the owner.
   The owner is refused with `task_self_verification` and an unregistered caller with `caller_unregistered`.
   `--force` overrides both and records `forced: true`.
   This is a workflow guard, not a security boundary.
-  Verifying an already-verified task, for example after fixes, applies the same checks and replaces `verifier` (null for an unregistered `--force`), `verification_note` (null when omitted), `forced`, and `verified_at`.
+  Verifying an already-verified task, for example after fixes, applies the same checks and replaces `verifier` (null for an unregistered `--force`), `verification_note` (null when omitted), `forced`, `verified_at`, and `verified_commit`.
   Only the latest verification is kept, and the result, completion, and owner are unchanged.
-  Verification is not tied to a Git revision, so name the checked commit in `--summary` when it matters.
+  `--commit` binds the verification to a commit (see [Verified commit](#verified-commit)).
   A grouping task in `created` or `assigned` can go directly to `verified` under the same caller checks.
   Every direct subtask must be `verified` or `cancelled`, and at least one must be `verified`.
   Its owner, if any, is unchanged and not notified.
@@ -144,7 +148,9 @@ Capture is best effort: a failed write produces a `warning` effect.
 This lets `agent usage` find the session later.
 
 Each record holds `id`, `title`, `brief`, `parent`, `after`, `owner`, `status`, `result`, `verifier`, `verification_note`, `forced`, `cancel_reason`, `created_at`, `created_by`, `assigned_at`, `unmet_at_assign`, `completed_at`, `completion_notification`, `verified_at`, `cancelled_at`, and `delivery`.
+It also holds `delivery_mode`, `branch`, `base_branch`, `verified_commit`, `landed_at`, `landed_by`, `merge_commit`, `target_branch`, `pr_url`, and `land_step`.
 Records written before subtasks and dependencies load with a null `parent`, `after`, and `unmet_at_assign`.
+Records written before landing load with `delivery_mode` `none` and null landing fields.
 A completion notification records its `recipient`, `message_id`, optional `pane`, `delivered_at`, `error`, and `uncertain` state.
 Every task command supports `--json` with the same outcome envelope as the agent commands.
 
@@ -152,11 +158,93 @@ JSON results add these derived fields:
 
 - List rows: `progress` (`verified`, `total`, `cancelled`, or null) and `waiting`.
 - Get: `progress` and `dependencies` (`id`, `title`, `status`, `cancel_reason`, `satisfied`).
-- Verify: `open_subtasks`.
+- Verify: `open_subtasks` and `warnings`.
+- Land: `mode` and `warnings`, beside the record's `land_step`.
 - Cancel: `unblocked`.
 - Template: `kind` and `text`.
 
 `task list`, `task get`, `task depend`, and `task template` never contact Herdr.
+
+## Verified commit
+
+`verify --commit REV` resolves `REV` with `git rev-parse --verify --end-of-options REV^{commit}` in the caller's checkout.
+It stores the 40-hex commit as `verified_commit`.
+A revision that names no commit is invalid input, and the task is unchanged.
+Without `--commit`, `verified_commit` is null, and a later verification replaces it like the other verification fields.
+When the caller's checkout has staged, unstaged, or untracked changes, verify prints a warning that the bound commit is not exactly what was tested, and continues.
+`task get` prints `verified commit: <hash>`.
+`task land` lands only the verified commit.
+
+## Delivery modes
+
+A task's `delivery_mode` decides how `task land` delivers its branch:
+
+- `local` merges the branch into the target branch in the primary checkout.
+- `pr` pushes the branch, then opens and merges a GitHub pull request with `gh`.
+- `none` refuses to land the task (`task_no_delivery_mode`).
+
+`create --delivery-mode MODE` sets the mode.
+Without it, the mode is `delivery_mode` in `.fledge/config.toml`, else `none`.
+`task land --mode local|pr` overrides the mode for a landing and stores it on the task.
+`create --base-branch BRANCH` names the branch the task lands into instead of the repository integration branch.
+The branch must be nonblank and a single line, must not start with `-`, and must pass `git check-ref-format refs/heads/BRANCH`.
+Otherwise it is invalid input.
+A proposal entry takes the same `delivery_mode` and `base_branch` keys, and `import` checks them in the same way.
+
+## Landing
+
+`task land --id TASK [--branch BRANCH] [--mode local|pr] [--json]` merges a verified task's branch into its target branch.
+Then the task moves to `landed`.
+The caller must be a registered agent other than the owner (`caller_unregistered`, `task_self_landing`, no `--force`).
+The task must be `verified` (`task_invalid_state`) with a non-null `verified_commit` (`land_unverified_commit`).
+
+The branch is `--branch`, else the branch that an earlier `task land` stored, else the branch checked out in the owner's recorded checkout, else the branch its spawn created (`land_branch_unknown`).
+The target is the task's `base_branch`, else the repository integration branch, reduced to a short name.
+`land` refuses a target whose short name is not a valid branch name with `land_target_invalid`, before any git or gh command runs.
+`land` stores `--branch` and `--mode` even when it refuses the landing.
+
+One `task land` runs at a time per repository: it holds an exclusive lock on `.fledge/state/land.lock` for the whole command.
+Before it merges or pushes, it requires all of these:
+
+- The branch is valid (`land_branch_invalid`) and differs from the target (`land_same_branch`).
+- `refs/heads/<branch>` is the verified commit (`land_head_mismatch`).
+- No checkout of the branch has staged or unstaged changes (`land_dirty`).
+- The target exists: `refs/heads/<target>` in local mode, `refs/remotes/origin/<target>` in pr mode (`land_target_missing`).
+- The target does not already contain the verified commit (`land_already_merged`, with nothing recorded).
+
+In **local** mode, the primary checkout must have the target checked out with no staged or unstaged changes (`land_primary_not_ready`).
+Untracked files are allowed.
+`land` runs `git merge --no-ff -m "Merge branch '<branch>' (verified task <id>)" <verified_commit>` there.
+It never stashes, resets, or checks out.
+When the merge fails, `land` aborts it and requires `HEAD` and the full `git status` output to match the state before the merge, byte for byte (`land_restore_failed` otherwise).
+A conflict is `land_merge_conflict`.
+Git's refusal to overwrite untracked files, or a failed hook, is `land_merge_refused` with git's message.
+A merge overwrites ignored files that the branch starts to track, but git refuses to overwrite untracked files.
+
+In **pr** mode, `land` requires `gh` on `PATH` (`land_gh_missing`) and an `origin` remote.
+It passes every value to `gh` as `--flag=value`, and runs these steps, each recorded in `land_step`:
+
+1. `push`: if `origin/<branch>` is not the verified commit, push the verified commit to the branch on origin (`land_push_rejected`).
+2. `pr`: find the open pull request from the branch into the target, or open one with the task title and a body that names the task, commit, verifier, note, and owner.
+   More than one open pull request is `land_pr_ambiguous`.
+   `land` records `pr_url` as soon as the pull request exists, so a failed lookup after `gh pr create` keeps it.
+3. `checks`: refuse a draft (`land_pr_draft`), a `CONFLICTING` pull request (`land_pr_not_mergeable`), an `UNKNOWN` one (`land_mergeable_unknown`, retry later), or another head (`land_head_mismatch`).
+   Refuse checks that are still running or a status context that is `PENDING` or `EXPECTED` (`land_checks_pending`).
+   Refuse a check run that concluded other than `SUCCESS`, `NEUTRAL`, or `SKIPPED`, or a status context other than `SUCCESS` (`land_checks_failed`).
+   Zero checks pass.
+4. `merge`: `gh pr merge --merge --match-head-commit=<verified_commit>` (`land_merge_failed` with gh's message).
+5. `confirm`: only a `MERGED` pull request with a merge commit is recorded as landed (`land_unconfirmed` otherwise, for example under a merge queue).
+   Then `land` runs `git fetch origin <target>` so that `agent cleanup` sees the merge.
+
+Every step can run again, so run `task land` again after a refusal.
+A refusal in pr mode after step 1 leaves the pushed branch, the pull request, `pr_url`, and `land_step`.
+`land` decodes `gh` JSON strictly, and a missing field is `land_gh_output_invalid`.
+
+Before it records the landing, `land` checks under the store lock that the task is still `verified` with the same `verified_commit` (`task_state_changed`).
+It records `merge_commit`, `target_branch`, `landed_at`, `landed_by`, and status `landed`.
+Every refusal is `rejected` with its code, and the JSON result shows the `land_step` reached.
+`land` never removes a checkout, stops an agent, or deletes a branch.
+`agent cleanup` does that and counts a `landed` task as finished.
 
 ## Proposals
 
@@ -181,6 +269,8 @@ brief = '''
 ...
 '''
 after = []                   # local keys or existing 8-hex task ids
+delivery_mode = "local"      # optional: local, pr, or none
+base_branch = "dev"          # optional: the branch it lands into
 
 [[tasks]]
 key = "import"
@@ -210,7 +300,7 @@ Where dependencies allow, it uses file order.
 It resolves each `after` key to the new task's ID and sets every task's `parent`.
 
 `--parent TASK` places the tasks under an existing task instead.
-It must be neither verified nor cancelled, and it conflicts with a `[parent]` in the file.
+It must be neither verified, landed, nor cancelled, and it conflicts with a `[parent]` in the file.
 
 `created_by` is the caller, as for `create`.
 Import never assigns.

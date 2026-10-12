@@ -14,15 +14,16 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/brief"
 	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/landing"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/termtext"
 )
 
 type Options struct {
-	Title, Body, File, Parent string
-	After                     []string
-	BodySet, FileSet          bool
+	Title, Body, File, Parent, DeliveryMode, BaseBranch string
+	After                                               []string
+	BodySet, FileSet, DeliveryModeSet, BaseBranchSet    bool
 }
 
 // Run stores a new task. The brief is any nonblank, NUL-free UTF-8 text,
@@ -30,7 +31,9 @@ type Options struct {
 // null when the caller is unregistered. A Parent must exist and be neither
 // verified nor cancelled, and every After prerequisite must exist; both are
 // checked and the task stored under one store lock. Repeated prerequisites
-// are stored once.
+// are stored once. The delivery mode is DeliveryMode when set, else the
+// repository's configured delivery_mode, else none; BaseBranch, when set, is
+// stored as the task's landing target.
 func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Outcome {
 	out := cli.NewOutcome("task.create")
 	var text string
@@ -57,9 +60,22 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 			err = brief.Validate(text)
 		}
 	}
+	if err == nil && o.DeliveryModeSet {
+		err = landing.ValidMode("--delivery-mode", o.DeliveryMode)
+	}
+	if err == nil && o.BaseBranchSet {
+		err = landing.ValidTarget(ctx, "--base-branch", o.BaseBranch)
+	}
 	if err != nil {
 		out.Fail(err, "validation", false)
 		return out
+	}
+	mode := o.DeliveryMode
+	if !o.DeliveryModeSet {
+		if mode, err = landing.DefaultMode(ctx, c.Cwd); err != nil {
+			out.Fail(err, "config", false)
+			return out
+		}
 	}
 	s, err := identity.OpenStore(ctx, c.Cwd, &out)
 	if err != nil {
@@ -79,7 +95,10 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 			return err
 		}
 		_, err := tx.Create(task.Kind, func(id string) any {
-			r = task.Record{ID: id, Title: o.Title, Brief: text, After: after, Status: task.Created, CreatedAt: *task.Now()}
+			r = task.Record{ID: id, Title: o.Title, Brief: text, After: after, Status: task.Created, CreatedAt: *task.Now(), DeliveryMode: mode}
+			if o.BaseBranchSet {
+				r.BaseBranch = &o.BaseBranch
+			}
 			if o.Parent != "" {
 				r.Parent = &o.Parent
 			}

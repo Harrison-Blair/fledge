@@ -7,28 +7,33 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os/exec"
 	"strings"
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/cli"
+	"github.com/Harrison-Blair/fledge/internal/lib/gitstatus"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/landing"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 )
 
-// Options names the task, an optional verification note, and whether to
-// override the verifier checks.
+// Options names the task, an optional verification note, an optional
+// revision to bind, and whether to override the verifier checks.
 type Options struct {
-	ID, Summary, File          string
-	SummarySet, FileSet, Force bool
+	ID, Summary, File, Commit             string
+	SummarySet, FileSet, CommitSet, Force bool
 }
 
 // Result is the verified task with its direct subtasks that were neither
-// verified nor cancelled, which only a forced verification leaves.
+// verified nor cancelled, which only a forced verification leaves, and any
+// warnings about the bound commit.
 type Result struct {
 	task.Record
 	OpenSubtasks []string `json:"open_subtasks"`
+	Warnings     []string `json:"warnings"`
 }
 
 // Run moves a completed task to verified, or verifies a verified task again.
@@ -37,8 +42,10 @@ type Result struct {
 // The verifier must be a registered agent other than the owner, and every
 // direct subtask must be verified or cancelled, unless Force is set; the
 // verifier and whether Force was used are recorded. A repeat verification
-// replaces the previous verifier, note, time, and Force flag, keeping only the
-// latest. A registered verifier's live session ref is then stored. This is
+// replaces the previous verifier, note, time, Force flag, and bound commit,
+// keeping only the latest. CommitSet resolves Commit in the caller's checkout
+// and binds the commit as VerifiedCommit; a dirty checkout adds a warning,
+// since the bound commit is then not exactly what was tested. A registered verifier's live session ref is then stored. This is
 // a workflow guard, not a security boundary.
 func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Outcome {
 	out := cli.NewOutcome("task.verify")
@@ -46,6 +53,16 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 	var note string
 	if err == nil {
 		note, err = cli.ReadText(in, cli.TextInput{Body: o.Summary, BodyFlag: "summary", BodySet: o.SummarySet, File: o.File, FileFlag: "file", FileSet: o.FileSet, Noun: "summary"})
+	}
+	var commit *string
+	warnings := []string{}
+	if err == nil && o.CommitSet {
+		var hash string
+		hash, err = landing.ResolveCommit(ctx, c.Cwd, o.Commit)
+		commit = &hash
+		if err == nil && dirty(ctx, c.Cwd) {
+			warnings = append(warnings, "the checkout has uncommitted changes, so the bound commit "+hash+" is not exactly what was tested")
+		}
 	}
 	if err != nil {
 		out.Fail(err, "validation", false)
@@ -84,7 +101,7 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 		case len(open) > 0:
 			return &cli.Error{Code: "task_open_subtasks", Message: fmt.Sprintf("task %s has subtasks that are not verified or cancelled: %s; finish them first, or pass --force", r.ID, strings.Join(open, ", "))}
 		}
-		r.Status, r.VerifiedAt, r.Forced, r.Verifier, r.VerificationNote = task.Verified, task.Now(), o.Force, nil, nil
+		r.Status, r.VerifiedAt, r.Forced, r.Verifier, r.VerificationNote, r.VerifiedCommit = task.Verified, task.Now(), o.Force, nil, nil, commit
 		if caller != nil {
 			r.Verifier = &caller.ID
 		}
@@ -101,8 +118,15 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 	if caller != nil {
 		identity.Observe(s, observeSession, *caller, live, time.Now(), &out)
 	}
-	out.Result = Result{Record: r, OpenSubtasks: open}
+	out.Result = Result{Record: r, OpenSubtasks: open, Warnings: warnings}
 	return out
+}
+
+// dirty reports whether the checkout containing dir has staged, unstaged, or
+// untracked changes.
+func dirty(ctx context.Context, dir string) bool {
+	top, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--show-toplevel").Output()
+	return err == nil && gitstatus.Dirty(ctx, strings.TrimSpace(string(top))) == "yes"
 }
 
 // requireVerifiable accepts a completed or verified task, or a created or
@@ -134,8 +158,20 @@ func Render(w io.Writer, o cli.Outcome) error {
 	if r.Forced {
 		forced = " (forced)"
 	}
-	if _, err := fmt.Fprintf(w, "Verified task %s as %s%s.\n", r.ID, verifier, forced); err != nil || len(r.OpenSubtasks) == 0 {
+	bound := ""
+	if r.VerifiedCommit != nil {
+		bound = " at commit " + *r.VerifiedCommit
+	}
+	if _, err := fmt.Fprintf(w, "Verified task %s as %s%s%s.\n", r.ID, verifier, forced, bound); err != nil {
 		return err
+	}
+	for _, warning := range r.Warnings {
+		if _, err := fmt.Fprintf(w, "Warning: %s.\n", warning); err != nil {
+			return err
+		}
+	}
+	if len(r.OpenSubtasks) == 0 {
+		return nil
 	}
 	_, err := fmt.Fprintf(w, "Open subtasks: %s.\n", strings.Join(r.OpenSubtasks, ", "))
 	return err

@@ -15,7 +15,7 @@ func New() *cobra.Command {
 	var options list.Options
 	var asJSON bool
 	cmd := &cobra.Command{Use: "list", Short: "List tasks, oldest first", Args: cobra.NoArgs,
-		Long: "List tasks, oldest first. The owner column shows the owner's name while its\nagent record is live, otherwise its record ID. PROGRESS counts a task's direct\nsubtasks, for example \"2/3 verified, 1 cancelled\"; cancelled subtasks are shown\nbut not counted toward the total. WAITING lists prerequisites that are not yet\nverified or cancelled."}
+		Long: "List tasks, oldest first. The owner column shows the owner's name while its\nagent record is live, otherwise its record ID. PROGRESS counts a task's direct\nsubtasks, for example \"2/3 verified, 1 cancelled\"; landed subtasks count as\nverified, and cancelled subtasks are shown but not counted toward the total. WAITING lists prerequisites that are not yet\nverified, landed, or cancelled."}
 	f := cmd.Flags()
 	f.StringVar(&options.Status, "status", "", "Only tasks in this state: "+strings.Join(task.Statuses, ", "))
 	f.StringVar(&options.Owner, "owner", "", "Only tasks owned by this agent record ID")

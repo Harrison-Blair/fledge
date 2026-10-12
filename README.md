@@ -107,8 +107,10 @@ See the [agent guide](reference/usage/agents.md) for targeting, profiles, identi
 Tasks store briefs and results in `.fledge/state/tasks/` under the primary checkout.
 They survive an agent's pane closing. All linked worktrees share them.
 
-A task normally moves through `created` → `assigned` → `completed` → `verified`.
+A task normally moves through `created` → `assigned` → `completed` → `verified` → `landed`.
 Completion and verification require separate commands. Cancellation ends a task early.
+`fledge task verify --commit REV` binds a verification to a commit.
+`fledge task land --id TASK_ID` then merges that commit locally or through a pull request, as the task's delivery mode says.
 
 ```sh
 fledge task template
@@ -121,7 +123,7 @@ Briefs accept any nonblank UTF-8 text without NUL. The six-heading template is o
 Use `--parent` for subtasks. Use `--after` for prerequisites.
 Use `fledge task import --file plan.toml --dry-run` to inspect a proposal before creating its tasks.
 
-See the [task guide](reference/usage/tasks.md) for assignment, verification, dependencies, and proposals.
+See the [task guide](reference/usage/tasks.md) for assignment, verification, landing, dependencies, and proposals.
 
 ## Memory
 

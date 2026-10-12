@@ -103,6 +103,12 @@ func Render(w io.Writer, o cli.Outcome) error {
 		}
 		fmt.Fprintf(&b, "after: %s\n", strings.Join(deps, ", "))
 	}
+	if r.DeliveryMode != "" && r.DeliveryMode != task.ModeNone {
+		fmt.Fprintf(&b, "delivery mode: %s\n", r.DeliveryMode)
+	}
+	if r.BaseBranch != nil {
+		fmt.Fprintf(&b, "base branch: %s\n", termtext.Clean(*r.BaseBranch))
+	}
 	fmt.Fprintf(&b, "created: %s by %s\n", r.CreatedAt, creator)
 	if r.AssignedAt != nil {
 		forced := ""
@@ -133,6 +139,21 @@ func Render(w io.Writer, o cli.Outcome) error {
 			forced = " (forced)"
 		}
 		fmt.Fprintf(&b, "verified: %s by %s%s\n", *r.VerifiedAt, verifier, forced)
+	}
+	if r.VerifiedCommit != nil {
+		fmt.Fprintf(&b, "verified commit: %s\n", termtext.Clean(*r.VerifiedCommit))
+	}
+	if r.Branch != nil {
+		fmt.Fprintf(&b, "branch: %s\n", termtext.Clean(*r.Branch))
+	}
+	if r.PRURL != nil {
+		fmt.Fprintf(&b, "pull request: %s\n", termtext.Clean(*r.PRURL))
+	}
+	switch {
+	case r.LandedAt != nil:
+		fmt.Fprintf(&b, "landed: %s by %s into %s as %s\n", *r.LandedAt, cli.Display(r.LandedBy), termtext.Clean(cli.Display(r.TargetBranch)), cli.Display(r.MergeCommit))
+	case r.LandStep != nil:
+		fmt.Fprintf(&b, "land step: %s\n", *r.LandStep)
 	}
 	if r.CancelledAt != nil {
 		reason := ""

@@ -3,7 +3,7 @@
 // store, so they outlive their agents' panes. No status is ever derived from
 // Herdr idle or done.
 //
-//	task.go     records, statuses, and locked store access
+//	task.go     records, statuses, delivery modes, and locked store access
 //	graph.go    subtask progress, dependency satisfaction, and link checks
 //	deliver.go  message attempts: submitting, recording, and describing their outcome
 package task

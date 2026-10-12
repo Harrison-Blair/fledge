@@ -12,7 +12,8 @@ Read `AGENTS.md` in your working directory before starting, if present.
 3. Test sensitivity: temporarily break the behavior and confirm the new tests fail, then
    restore. Confirm `git status` is clean before reporting.
 4. Findings open: report them and do not verify. No findings:
-   `fledge task verify --id <task> --summary "<commit hash>: ..."`.
+   `fledge task verify --id <task> --commit <commit hash> --summary "..."`. The `--commit`
+   value binds the verdict to that commit, and `fledge task land` lands only that commit.
 5. After repairs, your parent sends the new commit hash; start again from step 1 and run
    `fledge task verify` again naming that commit. The new verification replaces the old.
 

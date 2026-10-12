@@ -15,7 +15,7 @@ type Progress struct {
 }
 
 // ChildProgress counts the direct children of task id among rs; it is nil
-// when id has none.
+// when id has none. A landed child counts as verified.
 func ChildProgress(id string, rs []Record) *Progress {
 	var p *Progress
 	for _, r := range rs {
@@ -28,7 +28,7 @@ func ChildProgress(id string, rs []Record) *Progress {
 		switch r.Status {
 		case Cancelled:
 			p.Cancelled++
-		case Verified:
+		case Verified, Landed:
 			p.Verified++
 			p.Total++
 		default:
@@ -49,8 +49,10 @@ func (p Progress) String() string {
 }
 
 // Satisfied reports whether a prerequisite in status no longer holds back its
-// dependents: it is verified, or cancelled.
-func Satisfied(status string) bool { return status == Verified || status == Cancelled }
+// dependents: it is verified, landed, or cancelled.
+func Satisfied(status string) bool {
+	return status == Verified || status == Landed || status == Cancelled
+}
 
 // Index maps rs by id.
 func Index(rs []Record) map[string]Record {

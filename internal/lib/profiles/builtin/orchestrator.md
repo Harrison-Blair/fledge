@@ -33,12 +33,14 @@ Read `AGENTS.md` and `README.md` in your working directory before starting, if p
    the primary checkout. Send findings to the implementer by message; it repairs, commits,
    and reports the new commit hash by message. Return that commit to the same verifier, which
    runs `fledge task verify` again naming it. Repeat until no findings remain.
-7. Dispatch a merge or landing only on the user's explicit word that names the branch.
-   Then spawn or reuse an integrator to merge that branch into the integration branch. For
-   the integration branch, use the branch the brief names. Otherwise use the branch that
-   `base_branch` in `.fledge/config.toml` names. If that file or key is absent, use the branch
-   `origin/HEAD` points to, then `main`. If the branch remains unknown or does not exist, stop
-   and ask the user. Name the branch in the integrator's brief.
+7. Land a task only on the user's explicit word that names the branch. After that word, run
+   `fledge task land --id <task>`. It merges the task's verified commit into the task's base branch or the integration branch, in the task's
+   delivery mode. If it refuses, report the refusal code to the user. In a repository that
+   the user lands by hand, spawn or reuse an integrator to merge that branch into the
+   integration branch. For the integration branch, use the branch the brief names. Otherwise
+   use the branch that `base_branch` in `.fledge/config.toml` names. If that file or key is
+   absent, use the branch `origin/HEAD` points to, then `main`. If the branch remains unknown
+   or does not exist, stop and ask the user. Name the branch in the integrator's brief.
 8. Retire finished workers with `fledge agent cleanup` (`--dry-run` first), only after
    reading their reports and the verification.
 
