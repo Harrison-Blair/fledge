@@ -92,7 +92,7 @@ func run(ctx context.Context, c libagent.Client, o Options, messageID string) cl
 			return out
 		}
 		if owner == nil {
-			out.Fail(&cli.Error{Code: "agent_unregistered", Message: fmt.Sprintf("the agent in %s has no Fledge record; register it first with: fledge agent adopt --pane %s", a.PaneID, a.PaneID)}, "identity", false)
+			out.Fail(&cli.Error{Code: "agent_unregistered", Message: fmt.Sprintf("the agent in %s has no Fledge record; the agent must register itself with fledge agent adopt in its own pane, or be started with fledge agent spawn", a.PaneID)}, "identity", false)
 			return out
 		}
 		// The terminal is the identity; the record follows it to a new pane.

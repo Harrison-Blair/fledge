@@ -14,7 +14,7 @@ fledge agent spawn --name review-1 --harness pi --model openai-codex/gpt-6-astra
 fledge agent profiles
 fledge agent profiles reviewer --json
 fledge agent adopt --name helper
-fledge agent adopt --pane w2:p3 --name builder --json
+fledge agent adopt --name builder --json
 fledge agent rename --to orchestrator
 fledge agent rename --name builder --to reviewer --json
 fledge agent list --json
@@ -111,7 +111,8 @@ It reports that it did not submit the prompt.
 
 If the budget expires during submission, the outcome is `unknown`.
 Inspect with `fledge agent read --pane P` before resending.
-A spawn that times out before the agent is ready does not register it (register it later with `fledge agent adopt --pane P`).
+A spawn that times out before the agent is ready does not register it.
+Only that agent can register itself later, by running `fledge agent adopt` in its own pane; another pane cannot register it.
 Fledge keeps and reports any record it already wrote.
 A registration interrupted by the deadline reports `registration_error`.
 Herdr reserves the startup name for the larger of `--timeout` and 30s.
@@ -686,10 +687,10 @@ A later lookup compares the record's `harness` with Herdr's live agent kind.
 
 If both are known and differ, Fledge ends the record and `--id` fails with `agent_identity_stale`.
 The terminal then counts as unregistered.
-Its new agent has no parent record and can be adopted.
+Its new agent has no parent record and can adopt itself.
 Listings never attribute such a record to the live agent.
 
-A Herdr server handoff reissues every `terminal_id`, so records from before it end on their next lookup and their agents need `fledge agent adopt`.
+A Herdr server handoff reissues every `terminal_id`, so records from before it end on their next lookup and each agent must run `fledge agent adopt` again in its own pane.
 
 Spawn registers the agent once startup settles (or once start begins with `--no-wait`) and before any first prompt.
 Its result adds `id`, `registered`, and `registration_error`.
@@ -707,8 +708,26 @@ A caller outside any Git repository gets an unregistered spawn even when `--cwd`
 
 A worker started into B that should use A's records must run those commands from A, for example `cd /abs/path/to/A && fledge task complete --id <task> --summary "..."`.
 
-`fledge agent adopt` registers an agent that is already running.
-Without `--pane` it targets the caller's own pane.
+`fledge agent adopt` registers the caller's own running agent: the agent in the caller's pane (`HERDR_PANE_ID`).
+Run it inside that agent, for example from its shell tool.
+It has no flag to select another pane, and `--pane` is refused as an unknown flag.
+To register a different agent, run adopt in that agent's own pane, or start the agent with `fledge agent spawn`.
+
+Adopt verifies the caller before it writes anything.
+It asks Herdr (`pane.process_info`) for the foreground processes of the pane where the caller's terminal now runs, which follows a moved pane.
+One of them, other than PID 1, must be this `fledge` process or one of its ancestors, read from Linux `/proc`.
+The pane's shell PID, working directories, process names, the environment, and native session IDs prove nothing.
+Missing or malformed evidence, an unreadable or reused ancestor, and other platforms fail with `caller_identity_unverified` (phase `identity`, exit 1) before Fledge creates any state.
+A caller outside a Herdr pane fails with `invalid_input` (exit 2).
+Just before its first change, adopt looks up the caller again and verifies the same terminal, the same harness, and the same ownership.
+A failed recheck reports only the `.fledge` setup it created; it registers and names nothing.
+Herdr and the operating system have no transaction, so a change after the last check is not detected.
+
+Tool commands must run as descendants of the agent's process.
+Claude and Pi tool commands do.
+Codex tools run by its default shared daemon do not, so adopt refuses them: start Codex with `codex --no-daemon`, and with spawn append `-- --no-daemon` to the native arguments.
+A Codex version without `--no-daemon` cannot adopt itself; start it with `fledge agent spawn`, which registers it.
+
 An unnamed agent needs `--name`, which adopt sets through Herdr (`agent_name_taken` and `agent_launch_pending` are reported as is).
 A named agent keeps its name.
 
@@ -717,11 +736,12 @@ A named agent whose terminal already has a live record is refused with `agent_al
 The check and the record creation share one store lock, so concurrent adopts or spawn registrations of one terminal produce exactly one record.
 An unnamed agent can already have a live record, for example after losing its Herdr name.
 
-Adopt names it through Herdr and keeps its ID, parent, and registration.
+Adopt names it through Herdr and keeps its ID, parent, profile, registration, and checkout.
 It stores the new name and current pane, with an `updated` `agent_record` effect.
 
 If the record ends after the rename, the outcome is `partial`: the agent is named but the record is unchanged.
 Naming an agent also labels its pane, and its tab when the pane is the only one there, as `agent rename` does.
+A new record has no parent.
 Success prints `Adopted <name> (<pane>) as <id>.`
 
 `fledge agent rename --to NAME` renames a live agent: the caller's own without `--name`, `--pane`, or `--id`.
@@ -783,7 +803,7 @@ It can differ from the parent's live Herdr name.
 JSON flattens the record into `result` and adds `parent_name` and `tasks` (`id` and `title`).
 
 `agent current` and `agent list --mine` fail with `caller_unregistered` when the caller's pane hosts no registered agent, including outside a Herdr agent pane.
-Register it with `fledge agent adopt`.
+The agent registers itself with `fledge agent adopt` in its own pane.
 
 ## Cleanup
 

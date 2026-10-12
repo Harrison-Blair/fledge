@@ -125,7 +125,7 @@ func TestAssignRefusesUnregisteredAgent(t *testing.T) {
 	id := seed(t, repo)
 	before := tasktest.Load(t, repo, id)
 	out := Run(context.Background(), tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p3", worker)), Options{Agent: identity.Target{Pane: "w1:p3"}, ID: id})
-	if out.Error == nil || out.Error.Code != "agent_unregistered" || out.Status != "rejected" || !strings.Contains(out.Error.Message, "fledge agent adopt --pane w1:p3") {
+	if out.Error == nil || out.Error.Code != "agent_unregistered" || out.Status != "rejected" || out.Error.Message != "the agent in w1:p3 has no Fledge record; the agent must register itself with fledge agent adopt in its own pane, or be started with fledge agent spawn" {
 		t.Fatalf("%+v", out.Error)
 	}
 	if r := tasktest.Load(t, repo, id); !reflect.DeepEqual(r, before) {

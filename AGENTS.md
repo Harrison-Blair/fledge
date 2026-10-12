@@ -108,7 +108,7 @@ it with another tool.
 | Retire your finished spawned workers and the checkouts their spawns created | `fledge agent cleanup` | stopping each worker and removing each checkout by hand |
 | Message another agent | `fledge agent message` | Claude's SendMessage, raw `herdr` pane input |
 | Type raw input or keys into an agent (slash commands, dialog answers) | `fledge agent send` | raw `herdr pane send-text`/`send-keys` |
-| Register an already-running agent | `fledge agent adopt` | — |
+| Register your own running agent, from your own pane | `fledge agent adopt` | — |
 | Rename an agent, relabeling its pane and its own tab | `fledge agent rename` | raw `herdr agent`/`pane`/`tab rename` |
 | Record or recall durable project facts | `fledge memory add`/`list`/`get`/`remove` | harness-native memory |
 | Check the environment | `fledge doctor` | ad hoc probes |

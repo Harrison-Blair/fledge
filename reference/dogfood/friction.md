@@ -1567,6 +1567,8 @@ Update 2026-10-06: reproduced in all 66 Codex verifiers of the audit-fix run (ve
 
 **Summary:** On 2026-10-12, during task-board removal, the tool environment pointed to pane `w2Q:p1`. `fledge agent current` returned `caller_unregistered`. The agent incorrectly assumed that pane belonged to this conversation, then adopted it as `task-board-removal` and assigned task `a763cbff` to record `6cb91c8f`. The user identified it as a separate skills agent and stopped it. The mistaken task was cancelled. The cause of the mismatched tool environment is not established. Workaround: do not adopt a pane until its session identity has been checked against the current conversation. This work continued without live agent registration.
 
+Update 2026-10-12: `agent adopt` now refuses this case. It has no `--pane` flag, and it registers or names the caller's agent only when one of that pane's Herdr foreground processes is the `fledge` process or one of its ancestors in Linux `/proc`. It checks again just before its first change. A stale or foreign `HERDR_PANE_ID` fails with `caller_identity_unverified` and creates no files, record, name, or label. Other commands still trust the caller pane, so this entry stays Open.
+
 **Reproduction steps:**
 1. Use a tool environment whose Herdr caller pane belongs to a separate agent.
 2. Run `fledge agent current` and observe `caller_unregistered`.
@@ -1606,3 +1608,56 @@ tracking task with its result in the reason. No other agent received the task.
 2. Run `fledge agent get --pane w2Q:p1 --json` using the reported caller pane.
 3. Observe `agent_not_found`, although the socket connectivity check passes.
 4. Create a task. Observe `created_by: null` and `owner: null`.
+
+---
+
+**Issue:** Fledge cannot show a pane's processes, so caller ownership needed a raw Herdr probe
+
+**Status:** Open
+
+**Summary:** On 2026-10-12, planning for safe self-adoption could not trust the caller pane: the root tool runner inherited a stale `HERDR_PANE_ID=w2Q:p1` that no longer resolved, and an earlier run had registered a different agent from wrong caller evidence. Planning therefore used a read-only harness reviewer instead of a registered Fledge agent. Fledge has no command that reports a pane's foreground processes, so preflight workers ran a bounded, read-only raw Herdr `pane.process_info` probe (`.fledge/tmp/adopt-self/ownership-probe.py`: five-second socket timeout, bounded reply, at most 128 ancestry reads) to compare foreground PIDs with the tool command's `/proc` ancestry. Results: Claude 6 of 6 matched; Pi 4 of 4 matched (pane `w2Y:p7`); Codex with its default shared daemon did not match. `agent adopt` now performs this check internally, but there is still no user-facing process introspection command.
+
+**Reproduction steps:**
+1. Run in a tool environment with a stale or foreign `HERDR_PANE_ID`.
+2. Look for a Fledge command that shows the pane's foreground processes. Observe that none exists.
+3. Use a raw read-only `pane.process_info` request and `/proc/<pid>/stat` reads to check ownership.
+
+---
+
+**Issue:** An unregistered coordinator with a stale caller pane must coordinate without adopting
+
+**Status:** Open
+
+**Summary:** On 2026-10-12, the root coordinator's tool runner was detached and inherited a stale `HERDR_PANE_ID=w2Q:p1`. It stayed unregistered on purpose: it cleared the injected pane, tab, and workspace context for each Fledge command, created an explicit feature workspace and worktree (`fledge worktree create` works this way), and used Fledge tasks and spawns without adopting any existing agent. Its spawned workers have no parent record, and its messages arrive from "unknown sender" with no reply command. `fledge agent cleanup` finds workers through the caller's record, so it cannot find this caller's workers; only workers whose IDs the coordinator recorded at spawn may be stopped, one by one.
+
+**Reproduction steps:**
+1. Run Fledge from a tool runner whose `HERDR_PANE_ID` does not resolve, and clear the injected Herdr pane context.
+2. Spawn workers and assign tasks. Observe `parent: null` and "unknown sender" message headers.
+3. Run `fledge agent cleanup --dry-run`. Observe `caller_unregistered`; stop each recorded worker by ID instead.
+
+---
+
+**Issue:** Codex shared-daemon tool commands cannot adopt their own agent
+
+**Status:** Open
+
+**Summary:** On 2026-10-12, a native Codex agent started with the default shared daemon ran its shell tools under the daemon (PID 93043, a root process) rather than under its own pane's Codex process, and inherited the stale `HERDR_PANE_ID=w2Q:p1`. The pane's foreground PID was not in the tool command's ancestry, so `agent adopt` must refuse it with `caller_identity_unverified`. A fresh Codex started with `codex --no-daemon` passed 4 of 4 with its own pane `w2Y:p5`. The user chose to document `--no-daemon` and to keep spawn defaults unchanged: start Codex with `codex --no-daemon`, and with spawn append `-- --no-daemon`. A Codex version without that flag cannot adopt itself and must be started with `fledge agent spawn`. There is no identity bypass.
+
+**Reproduction steps:**
+1. Start Codex in a Herdr pane with its default shared daemon.
+2. From a Codex shell tool, compare the pane's `pane.process_info` foreground PIDs with the tool's `/proc` ancestry. Observe no match and a stale inherited `HERDR_PANE_ID`.
+3. Run `fledge agent adopt --name <name>`. Observe `caller_identity_unverified` and no files.
+4. Restart Codex with `codex --no-daemon` and repeat. Observe a match with the agent's own pane.
+
+---
+
+**Issue:** Pi preflight needed a different model because one provider had no authentication
+
+**Status:** Open
+
+**Summary:** On 2026-10-12, the coordinator reported that the planned Pi preflight model `opencode/claude-opus-5-5` could not be used because that provider had no authentication configured. The retry used the authenticated `openai-codex/gpt-6.1-sol` model, and its ownership preflight passed 4 of 4 with its own pane `w2Y:p7` and a live Pi foreground PID in each tool command's ancestry. How the failure appeared at startup was not recorded; Fledge has no pre-spawn check for provider authentication.
+
+**Reproduction steps:**
+1. Plan a Pi spawn with `--model` naming a provider that has no configured authentication.
+2. Observe that the agent cannot use that model.
+3. Respawn with an authenticated provider model and observe normal startup.

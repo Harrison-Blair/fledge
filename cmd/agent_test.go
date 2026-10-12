@@ -84,7 +84,7 @@ func TestAgentJSONValidation(t *testing.T) {
 		{"agent", "wait", "--name", "a", "--timeout", "-1s", "--json"},
 		{"agent", "wait", "extra", "--json"},
 		{"agent", "spawn", "--name", "worker", "--harness", "claude", "--pane", "p", "--cwd=", "--json"},
-		{"agent", "adopt", "--pane", "p", "--name", "Bad", "--json"},
+		{"agent", "adopt", "--name", "Bad", "--json"},
 		{"agent", "adopt", "extra", "--json"},
 		{"agent", "rename", "--json"},
 		{"agent", "rename", "--to", "Bad", "--json"},
@@ -186,5 +186,42 @@ func TestRecordIDFlagHelp(t *testing.T) {
 	walk(NewRootCmd())
 	if found != 10 {
 		t.Fatalf("found %d record ID flags, want 10", found)
+	}
+}
+
+// Adopt registers only the caller's own pane: --pane is refused as unknown
+// input before any Herdr request, even when it names the caller's own pane.
+func TestAdoptRejectsPane(t *testing.T) {
+	t.Setenv("HERDR_ENV", "")
+	t.Setenv("HERDR_SOCKET_PATH", "")
+	t.Setenv("HERDR_PANE_ID", "w1:p3")
+	for _, pane := range [][]string{{"--pane", "w1:p3"}, {"--pane=w1:p3"}, {"--pane", ""}, {"--pane="}, {"--pane", "w9:p9"}} {
+		for _, asJSON := range []bool{false, true} {
+			args := append([]string{"agent", "adopt", "--name", "helper"}, pane...)
+			if asJSON {
+				args = append(args, "--json")
+			}
+			t.Run(strings.Join(args, " "), func(t *testing.T) {
+				var out bytes.Buffer
+				err := ExecuteWithArgs(args, &out)
+				var status interface{ ExitCode() int }
+				if !errors.As(err, &status) || status.ExitCode() != 2 {
+					t.Fatalf("wrong exit: %v", err)
+				}
+				if !asJSON {
+					if out.String() != "rejected: unknown flag: --pane (validation)\n" {
+						t.Fatalf("%q", out.String())
+					}
+					return
+				}
+				var envelope cli.Outcome
+				if err := json.Unmarshal(out.Bytes(), &envelope); err != nil {
+					t.Fatalf("not one JSON object: %q: %v", out.String(), err)
+				}
+				if envelope.Operation != "agent.adopt" || envelope.Status != "rejected" || envelope.Error == nil || envelope.Error.Code != "invalid_input" || envelope.Error.Message != "unknown flag: --pane" || envelope.Error.Phase != "validation" || len(envelope.Effects) != 0 {
+					t.Fatalf("%s", out.String())
+				}
+			})
+		}
 	}
 }

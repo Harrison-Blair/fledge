@@ -96,7 +96,8 @@ Codex spawns default to `--yolo`. Claude spawns default to `--permission-mode by
 Explicit native permission options take precedence.
 Use `--no-permission-bypass` to leave permissions to native arguments and harness configuration.
 
-To register an agent you started yourself, use `fledge agent adopt`.
+An agent you started yourself registers itself: run `fledge agent adopt` inside that agent, in its own pane.
+Adopt verifies that it runs inside the agent and cannot register another pane. Start Codex with `codex --no-daemon` so its tools can adopt it.
 An unnamed agent requires `--name`. Use `fledge agent rename --to NAME` to change an existing name.
 
 See the [agent guide](reference/usage/agents.md) for targeting, profiles, identity, usage, interruption, and recovery.

@@ -1,21 +1,20 @@
-// Package adopt implements agent adopt: registering an already-running agent
-// with a durable Fledge identity.
 package adopt
 
 import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/cli"
+	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 )
 
-// Options selects the agent to adopt: Pane, or the caller's own pane when
-// empty. Name names an unnamed agent, or must match an existing name.
-type Options struct{ Name, Pane string }
+// Options names an unnamed agent, or must match an existing name.
+type Options struct{ Name string }
 
 // Result is the agent's record, new or named, and whether adopt named the
 // agent.
@@ -24,21 +23,22 @@ type Result struct {
 	Renamed bool `json:"renamed"`
 }
 
-// Run registers the live agent in the selected pane. An unnamed agent whose
-// terminal already has a live record is named and keeps that record, storing
-// the new name. Naming an agent also labels its pane, and its tab when the
-// pane is alone there. Run never renames a named agent, and refuses one whose
-// terminal already has a live record.
+// Run registers the caller's own live agent, which runs in the caller's pane.
+// It first verifies that this command runs inside that agent (see owns) and
+// verifies it again just before the first change, so a wrong or stale caller
+// pane registers and names nothing. An unnamed agent whose terminal already
+// has a live record is named and keeps that record, storing the new name.
+// Naming an agent also labels its pane, and its tab when the pane is alone
+// there. Run never renames a named agent, and refuses one whose terminal
+// already has a live record. A new record has no parent. Herdr and the
+// operating system offer no transaction: a change between the last check and
+// a Herdr request is not detected.
 func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 	out := cli.NewOutcome("agent.adopt")
-	target := o.Pane
-	if target == "" {
-		target = c.CallerPane
-	}
 	var err error
 	switch {
-	case target == "":
-		err = cli.Invalid("--pane is required outside a Herdr pane")
+	case strings.TrimSpace(c.CallerPane) == "":
+		err = cli.Invalid("adopt registers the caller's own agent; run it inside that agent's Herdr pane")
 	case o.Name != "":
 		err = libagent.ValidateName(o.Name)
 	}
@@ -46,7 +46,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 		out.Fail(err, "validation", false)
 		return out
 	}
-	a, err := c.Get(ctx, target)
+	a, err := c.Get(ctx, c.CallerPane)
 	if err != nil {
 		out.Fail(err, "agent.get", false)
 		return out
@@ -65,7 +65,12 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 		out.Fail(err, "validation", false)
 		return out
 	}
-	// The store is created only once Herdr and the options allow adoption.
+	if err := owns(ctx, c, a); err != nil {
+		out.Fail(err, "identity", false)
+		return out
+	}
+	// The store is created only once Herdr, the options, and the caller's
+	// processes allow adoption.
 	store, err := identity.OpenStore(ctx, c.Cwd, &out)
 	if err != nil {
 		out.Fail(err, "state", false)
@@ -81,6 +86,12 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 			out.Fail(err, "state", false)
 			return out
 		}
+	}
+	if a, err = recheck(ctx, c, a); err != nil {
+		out.Fail(err, "identity", false)
+		return out
+	}
+	if renamed {
 		if a, err = c.Rename(ctx, a, o.Name); err != nil {
 			out.Fail(err, "agent.rename", true)
 			return out
@@ -96,7 +107,10 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 		out.Effects = append(out.Effects, cli.Effect{Action: "updated", Kind: "agent_record", ID: rec.ID})
 		out.Result = Result{Record: identity.Observe(store, observeSession, rec, &a, time.Now(), &out), Renamed: true}
 	} else {
-		rec, err := identity.Register(ctx, store, c, a, "adopt", nil, nil)
+		// The agent is the caller itself, so it is no parent of its record.
+		self := c
+		self.CallerPane = ""
+		rec, err := identity.Register(ctx, store, self, a, "adopt", nil, nil)
 		if err != nil {
 			out.Fail(err, "state", false)
 			return out
@@ -109,6 +123,20 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 		_ = c.Label(ctx, a.Pane, o.Name, &out)
 	}
 	return out
+}
+
+// recheck looks up the caller's agent again and verifies that it is the same
+// terminal running the same harness, still owned by this command, and returns
+// it as it is now, in the pane where it now runs.
+func recheck(ctx context.Context, c libagent.Client, before herdr.AgentDetails) (herdr.AgentDetails, error) {
+	a, err := c.Get(ctx, c.CallerPane)
+	if err != nil {
+		return a, err
+	}
+	if a.TerminalID != before.TerminalID || (a.Agent == nil) != (before.Agent == nil) || a.Agent != nil && *a.Agent != *before.Agent {
+		return a, unverified("the agent in %s changed during adoption", c.CallerPane)
+	}
+	return a, owns(ctx, c, a)
 }
 
 // registered is replaceable so tests can count adopt's scans of the agent

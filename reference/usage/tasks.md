@@ -92,7 +92,7 @@ A subtask is not a prerequisite of its parent.
   `created_by` is the caller's agent record, or null when the caller is unregistered.
 - `assign --id TASK` takes exactly one of `--name`, `--pane`, or `--agent-id`.
   The agent must be registered.
-  Otherwise it fails with `agent_unregistered` and suggests `fledge agent adopt`.
+  Otherwise it fails with `agent_unregistered`: the agent must register itself with `fledge agent adopt` in its own pane, or be started with `fledge agent spawn`.
   Fledge first stores the `created` or `assigned` task as assigned to the agent.
   It then submits the brief like `agent message`, with these parts in order:
 
