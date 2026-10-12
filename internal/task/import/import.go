@@ -12,6 +12,7 @@ import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/landing"
 	"github.com/Harrison-Blair/fledge/internal/lib/proposal"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
@@ -48,10 +49,11 @@ type Result struct {
 // nor cancelled and every existing prerequisite id must exist; a dry run
 // checks the same without creating anything. The creator is the caller's
 // live agent record, or null when the caller is unregistered. Repeated
-// prerequisites are stored once.
+// prerequisites are stored once. A task without delivery_mode, and the
+// file's parent, take the repository's configured delivery_mode, else none.
 func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Outcome {
 	out := cli.NewOutcome("task.import")
-	p, order, err := validate(o, in)
+	p, order, err := validate(ctx, o, in)
 	if err != nil {
 		out.Fail(err, "validation", false)
 		return out
@@ -93,6 +95,11 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 		out.Result = r
 		return out
 	}
+	mode, err := landing.DefaultMode(ctx, c.Cwd)
+	if err != nil {
+		out.Fail(err, "config", false)
+		return out
+	}
 	s, err := identity.OpenStore(ctx, c.Cwd, &out)
 	if err != nil {
 		out.Fail(err, "state", false)
@@ -111,6 +118,9 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 		}
 		create := func(rec task.Record) (string, error) {
 			rec.Status, rec.CreatedAt = task.Created, *task.Now()
+			if rec.DeliveryMode == "" {
+				rec.DeliveryMode = mode
+			}
 			if caller != nil {
 				rec.CreatedBy = &caller.ID
 			}
@@ -138,7 +148,11 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 					after = append(after, dep)
 				}
 			}
-			id, err := create(task.Record{Title: t.Title, Brief: t.Brief, Parent: r.Parent, After: after})
+			rec := task.Record{Title: t.Title, Brief: t.Brief, Parent: r.Parent, After: after, BaseBranch: t.BaseBranch}
+			if t.DeliveryMode != nil {
+				rec.DeliveryMode = *t.DeliveryMode
+			}
+			id, err := create(rec)
 			if err != nil {
 				return err
 			}
@@ -158,9 +172,9 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 	return out
 }
 
-// validate reads and decodes the proposal and checks the flags against it.
-// Every problem is an input error.
-func validate(o Options, in io.Reader) (proposal.Proposal, []proposal.Task, error) {
+// validate reads and decodes the proposal, checks each base_branch, and
+// checks the flags against it. Every problem is an input error.
+func validate(ctx context.Context, o Options, in io.Reader) (proposal.Proposal, []proposal.Task, error) {
 	switch {
 	case !o.FileSet:
 		return proposal.Proposal{}, nil, cli.Invalid("--file is required")
@@ -176,6 +190,14 @@ func validate(o Options, in io.Reader) (proposal.Proposal, []proposal.Task, erro
 	p, order, err := proposal.DecodeOrdered([]byte(text))
 	if err != nil {
 		return proposal.Proposal{}, nil, cli.Invalid("%v", err)
+	}
+	for _, t := range order {
+		if t.BaseBranch == nil {
+			continue
+		}
+		if err := landing.ValidBranch(ctx, fmt.Sprintf("task %q: base_branch", t.Key), *t.BaseBranch); err != nil {
+			return proposal.Proposal{}, nil, err
+		}
 	}
 	if p.Parent != nil && o.Parent != "" {
 		return proposal.Proposal{}, nil, cli.Invalid("--parent conflicts with the file's [parent]; use one")
