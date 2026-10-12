@@ -521,7 +521,8 @@ with `linked_worktree_source`. The unit test
 `TestNewWorktreeFromLinkedCheckoutUsesPrimaryRoot` scripts a successful response
 for that request, so it does not catch it. Suspected from code and docs on
 2026-09-21 at `dccfdf1`; not reproduced live. A fix is planned in the worktree
-library extraction ([coordination plan](../plan/coordination-plan.md)).
+library extraction in the coordination plan, now removed. See the current
+[worktree guide](../usage/worktrees.md).
 Confirmed live on 2026-09-22 for the `worktree.open` path; see the next entry.
 
 Resolved 2026-09-22: `worktree.Source.changeParams` (in
@@ -585,8 +586,9 @@ removed them with `git worktree remove --force` and `git branch -D`. Observed
 once, reliably explained by Herdr's documented behaviour
 (`reference/herdr/api/worktree.md`: remove requires `workspace_id`; a closed
 worktree has no `open_workspace_id`). This is why the planned
-`fledge worktree remove` ([coordination plan](../plan/coordination-plan.md))
+`fledge worktree remove` in the coordination plan, now removed,
 must handle closed checkouts through git.
+See the current [removal rules](../usage/worktrees.md#remove).
 
 Resolved 2026-09-22: `fledge worktree remove` (`f116a62`, guarded against
 live-agent use in `d96e91c`) removes an open checkout through Herdr and a
@@ -1582,3 +1584,25 @@ Update 2026-10-06: reproduced in all 66 Codex verifiers of the audit-fix run (ve
 1. Remove the board registration while leaving the task group without a handler.
 2. Build the CLI and run `fledge task board`.
 3. Observe task help and exit 0. With the help handler, observe an unknown-command error and exit 1.
+
+---
+
+**Issue:** Stale inherited Herdr pane ID prevents local task ownership (repeat observation)
+
+**Status:** Open 2026-10-12
+
+**Summary:** During README maintenance, `doctor` reached Herdr and reported
+`HERDR_PANE_ID=w2Q:p1`. However, `agent get --pane w2Q:p1 --json` returned
+`agent_not_found`. `task create` succeeded with `created_by: null` and no owner.
+Task completion requires an assigned task, so this caller could not use the
+normal assignment and completion lifecycle. This repeats the stale caller-pane
+issue recorded on 2026-10-04. The cause remains unexplained.
+The workaround was to do the documentation work locally, keep
+check results under `.fledge/tmp/readme-shortening/`, and cancel the unassigned
+tracking task with its result in the reason. No other agent received the task.
+
+**Reproduction steps:**
+1. Run `fledge doctor --json` from the caller's checkout.
+2. Run `fledge agent get --pane w2Q:p1 --json` using the reported caller pane.
+3. Observe `agent_not_found`, although the socket connectivity check passes.
+4. Create a task. Observe `created_by: null` and `owner: null`.
