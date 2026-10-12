@@ -12,7 +12,7 @@ import (
 // wantCommandTree names the expected children of each command group. A walk of
 // the registered tree cannot notice a removed child, so this list stays explicit.
 var wantCommandTree = map[string][]string{
-	"fledge":           {"agent", "doctor", "inbox", "memory", "supervise", "task", "update", "worktree"},
+	"fledge":           {"agent", "attention", "doctor", "inbox", "memory", "supervise", "task", "update", "worktree"},
 	"fledge agent":     {"adopt", "capabilities", "cleanup", "current", "get", "list", "message", "models", "pause", "profiles", "read", "rename", "send", "spawn", "stop", "usage", "wait"},
 	"fledge inbox":     {"read"},
 	"fledge memory":    {"add", "get", "list", "remove"},

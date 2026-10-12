@@ -4,6 +4,7 @@ import (
 	"github.com/spf13/cobra"
 
 	agentcmd "github.com/Harrison-Blair/fledge/cmd/agent"
+	attentioncmd "github.com/Harrison-Blair/fledge/cmd/attention"
 	doctorcmd "github.com/Harrison-Blair/fledge/cmd/doctor"
 	inboxcmd "github.com/Harrison-Blair/fledge/cmd/inbox"
 	memorycmd "github.com/Harrison-Blair/fledge/cmd/memory"
@@ -36,5 +37,6 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(memorycmd.New())
 	root.AddCommand(inboxcmd.New())
 	root.AddCommand(supervisecmd.New())
+	root.AddCommand(attentioncmd.New())
 	return root
 }
