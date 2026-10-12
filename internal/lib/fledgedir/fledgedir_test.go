@@ -105,6 +105,21 @@ func TestRootRejectsNonRepositoryAndBare(t *testing.T) {
 	}
 }
 
+// Only a directory outside every repository reports ErrNotRepository, so
+// callers can tell "no Fledge state here" from a broken repository.
+func TestRootMarksNonRepository(t *testing.T) {
+	cwd := t.TempDir()
+	_, err := Root(context.Background(), cwd)
+	if !errors.Is(err, ErrNotRepository) || !strings.HasPrefix(err.Error(), cwd+" is not inside a git repository: ") {
+		t.Fatal(err)
+	}
+	bare := filepath.Join(t.TempDir(), "bare.git")
+	gittest.Git(t, filepath.Dir(bare), "init", "-q", "--bare", bare)
+	if _, err := Root(context.Background(), bare); err == nil || errors.Is(err, ErrNotRepository) {
+		t.Fatal(err)
+	}
+}
+
 func TestEnsureCreatesIgnoredDirectory(t *testing.T) {
 	root := repository(t)
 	out := cli.Outcome{}

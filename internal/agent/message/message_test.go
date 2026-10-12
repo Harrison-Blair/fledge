@@ -106,18 +106,18 @@ func TestMessageBlockedIsRejectedWithoutMutation(t *testing.T) {
 func TestHumanOperationResults(t *testing.T) {
 	var b bytes.Buffer
 	name, pane := "orchestrator", "wA:p1"
-	result := Result{AgentRow: herdrscript.Row(), Submitted: true, MessageID: "m-0a1b2c", Sender: &libagent.Sender{Name: &name, Pane: &pane, Kind: "named"}}
+	result := Result{AgentRow: herdrscript.Row(), Submitted: true, MessageID: "m-0a1b2c", State: "direct", Sender: &libagent.Sender{Name: &name, Pane: &pane, Kind: "named"}}
 	if err := (cli.Outcome{Status: "success", Result: result}).Write(&b, false, Render); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := strings.Join(strings.Fields(b.String()), " "), "Message m-0a1b2c submitted to w1:p1 from orchestrator (wA:p1)."; got != want {
+	if got, want := strings.Join(strings.Fields(b.String()), " "), "Message m-0a1b2c submitted to w1:p1 from orchestrator (wA:p1). The recipient has no Fledge record, so the message was typed into its pane directly."; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 	b.Reset()
 	if err := (cli.Outcome{Status: "success", Result: result}).Write(&b, true, Render); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(b.String(), `"message_id":"m-0a1b2c","sender":{"name":"orchestrator","pane":"wA:p1","kind":"named","error":null}`) {
+	if !strings.Contains(b.String(), `"message_id":"m-0a1b2c","inbox_id":null,"state":"direct","sender":{"name":"orchestrator","pane":"wA:p1","kind":"named","error":null}`) {
 		t.Fatal(b.String())
 	}
 }
@@ -129,12 +129,14 @@ func TestMessageByIDPromptsVerifiedPane(t *testing.T) {
 	live := herdrscript.Info(herdrscript.LiveAgent("idle"))
 	prompted := herdr.AgentResult{Type: "agent_prompted", Agent: live.Agent}
 	s := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: live}, senderCall(),
-		call{Method: "agent.prompt", Params: map[string]any{"target": "w1:p3", "text": header + "hi"}, Result: prompted})
+		call{Method: "agent.prompt", Result: prompted})
 	s.Cwd = identitytest.Repository(t)
 	rec := identitytest.Register(t, s.Cwd, live.Agent)
+	r := &recorder{inner: s.API}
+	s.API = r
 	out := run(context.Background(), s, Options{Selection: selector.Selection{IDs: []string{rec.ID}}, Body: "hi", BodySet: true}, nil, "m-0a1b2c")
-	if out.Status != "success" || !out.Result.(Result).Submitted {
-		t.Fatalf("%+v", out)
+	if out.Status != "success" || !out.Result.(Result).Submitted || len(r.prompts) != 1 || !strings.HasPrefix(r.prompts[0], "ᛉ fledge inbox · message from orchestrator (old:p1)") {
+		t.Fatalf("%+v %q", out, r.prompts)
 	}
 }
 
@@ -260,9 +262,9 @@ func TestConfirmHumanOutput(t *testing.T) {
 		want string
 	}{
 		{cli.Outcome{Status: "success", Result: Result{AgentRow: row, Submitted: true, Confirmed: &yes, MessageID: "m-0a1b2c", Sender: sender}},
-			"Message m-0a1b2c submitted to w1:p1 from orchestrator (wA:p1); activity confirmed (working)."},
+			"Message m-0a1b2c submitted to w1:p1 from orchestrator (wA:p1); activity confirmed (working). The recipient has no Fledge record, so the message was typed into its pane directly."},
 		{cli.Outcome{Status: "success", Result: Result{AgentRow: row, Submitted: true, Confirmed: &no, AlreadyWorking: true, MessageID: "m-0a1b2c", Sender: sender}},
-			"Message m-0a1b2c submitted to w1:p1 from orchestrator (wA:p1) while the agent was already observed working; this prompt's start is not confirmed."},
+			"Message m-0a1b2c submitted to w1:p1 from orchestrator (wA:p1) while the agent was already observed working; this prompt's start is not confirmed. The recipient has no Fledge record, so the message was typed into its pane directly."},
 		{cli.Outcome{Status: "partial", Error: &cli.Failure{Code: "agent_prompt_stalled", Message: "agent_prompt_stalled: no activity", Phase: "agent.prompt"}, Result: Result{AgentRow: row, Submitted: true, Confirmed: &no, MessageID: "m-0a1b2c", Sender: sender}},
 			"partial: agent_prompt_stalled: no activity (agent.prompt) The message was submitted, but activity was not confirmed; do not resend it. Inspect: fledge agent read --pane w1:p1"},
 		{cli.Outcome{Status: "unknown", Error: &cli.Failure{Code: "timeout", Message: "timeout: slow", Phase: "agent.prompt"}, Result: Result{AgentRow: row, Confirmed: &no, MessageID: "m-0a1b2c", Sender: sender}},

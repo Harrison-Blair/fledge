@@ -41,7 +41,8 @@ func names(v ...string) Options {
 	return Options{Selection: selector.Selection{Names: v}, Body: "hi", BodySet: true}
 }
 
-// rows summarizes a fan-out as target=outcome/message_id/pane per row.
+// rows summarizes a fan-out as target=outcome/message_id/pane per row; a
+// stored row's message id, which is its inbox id, shows as inbox.
 func rows(t *testing.T, out cli.Outcome) string {
 	t.Helper()
 	r, ok := out.Result.(FanOut)
@@ -53,6 +54,12 @@ func rows(t *testing.T, out cli.Outcome) string {
 		id, pane := "-", "-"
 		if row.MessageID != nil {
 			id = *row.MessageID
+		}
+		if row.InboxID != nil {
+			if *row.InboxID != id {
+				t.Fatalf("row %+v: message id is not its inbox id", row)
+			}
+			id = "inbox"
 		}
 		if row.Agent != nil {
 			pane = cli.Display(row.Agent.PaneID)
@@ -309,8 +316,8 @@ Message not submitted to f (w1:p6): agent_blocked: approval.
 	if err := json.Unmarshal(b.Bytes(), &decoded); err != nil || decoded.Result.Mode != "fan-out" || len(decoded.Result.Targets) != 6 {
 		t.Fatalf("%v %s", err, b.String())
 	}
-	for _, key := range []string{"target", "outcome", "message_id", "agent", "error"} {
-		if _, ok := decoded.Result.Targets[5][key]; !ok || len(decoded.Result.Targets[5]) != 5 {
+	for _, key := range []string{"target", "outcome", "message_id", "inbox_id", "state", "agent", "error"} {
+		if _, ok := decoded.Result.Targets[5][key]; !ok || len(decoded.Result.Targets[5]) != 7 {
 			t.Fatalf("row keys %v lack %s", decoded.Result.Targets[5], key)
 		}
 	}
@@ -390,7 +397,7 @@ func TestFanOutReresolvesRegisteredTargetsBeforeEachDelivery(t *testing.T) {
 			moved := hosted("w1:p9", "term_b", "claude")
 			moved.AgentStatus = "working"
 			m["w1:p9"], m["w1:p2"] = moved, hosted("w1:p2", "term_c", "claude")
-		}, "submitted/m-0a1b2c/w1:p9", "already_working/m-0a1b2c/w1:p9", "w1:p1 w1:p9"},
+		}, "submitted/inbox/w1:p9", "already_working/inbox/w1:p9", "w1:p1 w1:p9"},
 		{"terminal replaced", func(m map[string]herdr.AgentDetails) {
 			m["w1:p2"] = hosted("w1:p2", "term_c", "claude")
 		}, "rejected/-/w1:p2", "rejected/-/w1:p2", "w1:p1"},
@@ -415,13 +422,19 @@ func TestFanOutReresolvesRegisteredTargetsBeforeEachDelivery(t *testing.T) {
 						want, first = tc.wantConfirm, "confirmed"
 					}
 					out := run(context.Background(), c, o, nil, "m-0a1b2c")
-					if got, want := rows(t, out), a.ID+"="+first+"/m-0a1b2c/w1:p1 "+b.ID+"="+want; got != want {
+					if got, want := rows(t, out), a.ID+"="+first+"/inbox/w1:p1 "+b.ID+"="+want; got != want {
 						t.Fatalf("got %q, want %q", got, want)
 					}
 					if got := strings.Join(prompts, " "); got != tc.prompted {
 						t.Fatalf("prompted %q, want %q", got, tc.prompted)
 					}
-					if len(out.Effects) != len(prompts) || out.Effects[len(prompts)-1].ID != prompts[len(prompts)-1] {
+					var submitted []cli.Effect
+					for _, e := range out.Effects {
+						if e.Action == "submitted" {
+							submitted = append(submitted, e)
+						}
+					}
+					if len(submitted) != len(prompts) || submitted[len(prompts)-1].ID != prompts[len(prompts)-1] {
 						t.Fatalf("effects %+v for prompts %v", out.Effects, prompts)
 					}
 					if row := out.Result.(FanOut).Targets[1]; row.Outcome == "rejected" &&
