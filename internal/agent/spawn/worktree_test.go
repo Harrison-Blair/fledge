@@ -296,7 +296,7 @@ func TestNewWorktreeGetsManagedIgnore(t *testing.T) {
 		t.Fatal(out)
 	}
 	ignore := filepath.Join(path, ".fledge", ".gitignore")
-	if b, err := os.ReadFile(ignore); err != nil || string(b) != "*\n!/profiles/\n!/profiles/*.md\n" {
+	if b, err := os.ReadFile(ignore); err != nil || string(b) != "*\n!/profiles/\n!/profiles/*.md\n!/config.toml\n" {
 		t.Fatalf("%q %v", b, err)
 	}
 	want := []cli.Effect{{Action: "created", Kind: "worktree", Path: path}, {Action: "created", Kind: "directory", Path: filepath.Join(path, ".fledge")}, {Action: "created", Kind: "file", Path: ignore}}

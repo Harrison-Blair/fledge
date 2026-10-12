@@ -87,7 +87,7 @@ func TestCreatedCheckoutIgnoresFledgeScratch(t *testing.T) {
 		t.Fatalf("%+v", out)
 	}
 	ignore := filepath.Join(path, ".fledge", ".gitignore")
-	if b, err := os.ReadFile(ignore); err != nil || string(b) != "*\n!/profiles/\n!/profiles/*.md\n" {
+	if b, err := os.ReadFile(ignore); err != nil || string(b) != "*\n!/profiles/\n!/profiles/*.md\n!/config.toml\n" {
 		t.Fatalf("%q %v", b, err)
 	}
 	n := len(out.Effects)
