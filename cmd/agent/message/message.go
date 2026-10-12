@@ -23,7 +23,7 @@ func New() *cobra.Command {
 	selector.BindFlags(f, &options.Filter)
 	f.StringVar(&options.Body, "body", "", "Message text")
 	f.StringVar(&options.File, "file", "", "UTF-8 message file, or - for stdin")
-	f.StringVar(&options.ReplyTo, "reply-to", "", "Inbox record ID this message answers (you must be its recipient)")
+	f.StringVar(&options.ReplyTo, "reply-to", "", "Inbox message ID this message answers (you must be its recipient)")
 	f.BoolVar(&options.Confirm, "confirm", false, "Wait for observed agent activity after submission")
 	f.DurationVar(&options.Timeout, "timeout", 10*time.Second, "Confirmation timeout (requires --confirm)")
 	f.BoolVar(&asJSON, "json", false, "Emit a structured outcome")
