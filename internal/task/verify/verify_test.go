@@ -41,7 +41,7 @@ func TestLifecycleCreateAssignCompleteVerify(t *testing.T) {
 		t.Fatalf("create: %+v", created.Error)
 	}
 	id := created.Result.(task.Record).ID
-	want := task.Record{ID: id, Title: "Fix it", Brief: tasktest.Brief(), Status: task.Created, CreatedBy: &bossRec.ID}
+	want := task.Record{ID: id, Title: "Fix it", Brief: tasktest.Brief(), Status: task.Created, CreatedBy: &bossRec.ID, DeliveryMode: task.ModeNone}
 	r := tasktest.Load(t, repo, id)
 	want.CreatedAt = r.CreatedAt
 	if !reflect.DeepEqual(r, want) || r.CreatedAt == "" {
