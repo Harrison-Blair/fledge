@@ -3,6 +3,7 @@ package create
 import (
 	"bytes"
 	"context"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -50,14 +51,14 @@ func TestCreateByUnregisteredCallerFromFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "brief.md")
 	os.WriteFile(path, []byte("from file"), 0o600)
 	c := tasktest.Client(t, repo, "w1:p9", herdrscript.Call{Method: "agent.get", Err: &herdr.Error{Code: "agent_not_found", Message: "none"}})
-	out := Run(context.Background(), c, Options{Title: "T", File: path, FileSet: true, Freeform: true}, strings.NewReader(""))
+	out := Run(context.Background(), c, Options{Title: "T", File: path, FileSet: true}, strings.NewReader(""))
 	if out.Error != nil {
 		t.Fatalf("%+v", out.Error)
 	}
 	if r := out.Result.(task.Record); r.CreatedBy != nil || r.Brief != "from file" {
 		t.Fatalf("%+v", r)
 	}
-	stdin := Run(context.Background(), tasktest.Client(t, repo, ""), Options{Title: "T", File: "-", FileSet: true, Freeform: true}, strings.NewReader("piped"))
+	stdin := Run(context.Background(), tasktest.Client(t, repo, ""), Options{Title: "T", File: "-", FileSet: true}, strings.NewReader("piped"))
 	if stdin.Error != nil || stdin.Result.(task.Record).Brief != "piped" {
 		t.Fatalf("%+v", stdin)
 	}
@@ -82,22 +83,66 @@ func TestCreateRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-func TestCreateEnforcesBriefTemplate(t *testing.T) {
-	for body, message := range map[string]string{
-		"one line":       "brief is missing sections: Objective, Acceptance criteria, Scope, Known facts, Deliverables, Constraints",
-		brief.Skeleton(): "brief section Objective is empty",
+func TestCreateRejectsMalformedIDs(t *testing.T) {
+	repo := identitytest.Repository(t)
+	for label, tc := range map[string]struct {
+		o    Options
+		want string
+	}{
+		"after":  {Options{Title: "t", Body: "b", BodySet: true, After: []string{"nope"}}, "--after must be an 8 lowercase hexadecimal task id"},
+		"parent": {Options{Title: "t", Body: "b", BodySet: true, Parent: "nope"}, "--parent must be an 8 lowercase hexadecimal task id"},
 	} {
+		out := Run(context.Background(), tasktest.Client(t, repo, ""), tc.o, strings.NewReader(""))
+		if out.Error == nil || out.Error.Code != "invalid_input" || out.Error.Message != tc.want || out.ExitCode() != 2 {
+			t.Fatalf("%s: %+v", label, out.Error)
+		}
+	}
+}
+
+// Any nonblank, NUL-free UTF-8 brief is stored exactly as given, whether
+// inline, from a file, or from stdin; the template is advisory.
+func TestCreateAcceptsAnyNonblankBrief(t *testing.T) {
+	for _, body := range []string{"one line", brief.Skeleton(), "  padded\n\n", "\u3000résumé", "## Notes\nnot the template\n"} {
 		repo := identitytest.Repository(t)
-		out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{Title: "T", Body: body, BodySet: true}, strings.NewReader(""))
-		if out.Error == nil || out.Error.Code != "task_brief_incomplete" || out.Error.Phase != "validation" || !strings.HasSuffix(out.Error.Message, message) || out.ExitCode() != 1 || out.Status != "rejected" {
-			t.Fatalf("%q: %+v", body, out.Error)
+		path := filepath.Join(t.TempDir(), "brief.md")
+		os.WriteFile(path, []byte(body), 0o600)
+		for label, o := range map[string]Options{
+			"inline": {Title: "T", Body: body, BodySet: true},
+			"file":   {Title: "T", File: path, FileSet: true},
+			"stdin":  {Title: "T", File: "-", FileSet: true},
+		} {
+			out := Run(context.Background(), tasktest.Client(t, repo, ""), o, strings.NewReader(body))
+			if out.Error != nil || tasktest.Load(t, repo, out.Result.(task.Record).ID).Brief != body {
+				t.Fatalf("%s %q: %+v", label, body, out.Error)
+			}
 		}
-		if _, err := os.Stat(filepath.Join(repo, ".fledge")); err == nil {
-			t.Fatalf("%q: state created", body)
-		}
-		freeform := Run(context.Background(), tasktest.Client(t, repo, ""), Options{Title: "T", Body: body, BodySet: true, Freeform: true}, strings.NewReader(""))
-		if freeform.Error != nil || tasktest.Load(t, repo, freeform.Result.(task.Record).ID).Brief != body {
-			t.Fatalf("%q: %+v", body, freeform.Error)
+	}
+}
+
+// A blank or NUL-bearing brief is an input error from every source, before
+// any state is created.
+func TestCreateRejectsInvalidBrief(t *testing.T) {
+	for body, message := range map[string]string{
+		" \t\r\n":              "brief must not be blank",
+		"\u00a0\u2003\u3000\n": "brief must not be blank",
+		"a\x00b":               "brief must not contain NUL",
+		"ok \xff":              "brief must be nonempty UTF-8",
+	} {
+		path := filepath.Join(t.TempDir(), "brief.md")
+		os.WriteFile(path, []byte(body), 0o600)
+		for label, o := range map[string]Options{
+			"inline": {Title: "T", Body: body, BodySet: true},
+			"file":   {Title: "T", File: path, FileSet: true},
+			"stdin":  {Title: "T", File: "-", FileSet: true},
+		} {
+			repo := identitytest.Repository(t)
+			out := Run(context.Background(), tasktest.Client(t, repo, ""), o, strings.NewReader(body))
+			if out.Error == nil || out.Error.Code != "invalid_input" || out.Error.Phase != "validation" || out.Error.Message != message || out.ExitCode() != 2 {
+				t.Fatalf("%s %q: %+v", label, body, out.Error)
+			}
+			if _, err := os.Stat(filepath.Join(repo, ".fledge")); err == nil {
+				t.Fatalf("%s %q: state created", label, body)
+			}
 		}
 	}
 }
@@ -120,7 +165,7 @@ func TestCreateSubtaskAtAnyDepth(t *testing.T) {
 	top := tasktest.Seed(t, repo, task.Record{Title: "goal", Status: task.Assigned})
 	parent := top
 	for _, title := range []string{"child", "grandchild"} {
-		out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{Title: title, Body: "b", BodySet: true, Freeform: true, Parent: parent}, strings.NewReader(""))
+		out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{Title: title, Body: "b", BodySet: true, Parent: parent}, strings.NewReader(""))
 		if out.Error != nil {
 			t.Fatalf("%s: %+v", title, out.Error)
 		}
@@ -137,7 +182,7 @@ func TestCreateSubtaskRejectsMissingOrFinishedParent(t *testing.T) {
 	verified := tasktest.Seed(t, repo, task.Record{Title: "v", Status: task.Verified})
 	cancelled := tasktest.Seed(t, repo, task.Record{Title: "c", Status: task.Cancelled})
 	for parent, code := range map[string]string{"0123abcd": "task_not_found", verified: "task_invalid_state", cancelled: "task_invalid_state", "BAD": "invalid_input"} {
-		out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{Title: "t", Body: "b", BodySet: true, Freeform: true, Parent: parent}, strings.NewReader(""))
+		out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{Title: "t", Body: "b", BodySet: true, Parent: parent}, strings.NewReader(""))
 		if out.Error == nil || out.Error.Code != code || count(t, repo) != 2 {
 			t.Fatalf("%s: %+v", parent, out.Error)
 		}
@@ -148,7 +193,7 @@ func TestCreateWithPrerequisites(t *testing.T) {
 	repo := identitytest.Repository(t)
 	research := tasktest.Seed(t, repo, task.Record{Title: "research", Status: task.Assigned})
 	dropped := tasktest.Seed(t, repo, task.Record{Title: "dropped", Status: task.Cancelled})
-	out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{Title: "implement", Body: "b", BodySet: true, Freeform: true, After: []string{research, dropped, research}}, strings.NewReader(""))
+	out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{Title: "implement", Body: "b", BodySet: true, After: []string{research, dropped, research}}, strings.NewReader(""))
 	if out.Error != nil {
 		t.Fatalf("%+v", out.Error)
 	}
@@ -162,12 +207,22 @@ func TestCreateRejectsUnknownPrerequisites(t *testing.T) {
 	repo := identitytest.Repository(t)
 	known := tasktest.Seed(t, repo, task.Record{Title: "known", Status: task.Created})
 	for _, after := range [][]string{{known, "0123abcd"}, {"BAD"}} {
-		out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{Title: "t", Body: "b", BodySet: true, Freeform: true, After: after}, strings.NewReader(""))
+		out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{Title: "t", Body: "b", BodySet: true, After: after}, strings.NewReader(""))
 		if out.Error == nil || count(t, repo) != 1 {
 			t.Fatalf("%v: %+v", after, out.Error)
 		}
 		if want := map[bool]string{true: "invalid_input", false: "task_not_found"}[after[0] == "BAD"]; out.Error.Code != want {
 			t.Fatalf("%v: %+v", after, out.Error)
 		}
+	}
+}
+
+func TestRenderRemovesControlSequences(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Render(&buf, cli.Outcome{Result: task.Record{ID: "11111111", Title: "X\x1b[2J\x1b]0;pwned\x07"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := buf.String(); strings.ContainsAny(got, "\x1b\x07") || !strings.Contains(got, "X") {
+		t.Fatalf("unsafe human output: %q", got)
 	}
 }

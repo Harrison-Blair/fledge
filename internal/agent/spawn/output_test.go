@@ -2,16 +2,17 @@ package spawn
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 )
 
 func TestHumanSpawnIncludesDirectories(t *testing.T) {
 	cwd := "/repo/.fledge/worktrees/topic"
-	out := libagent.Outcome{Status: "success", Result: &Result{Name: "worker", Harness: "claude", Cwd: &cwd, WorktreePath: &cwd}}
+	out := cli.Outcome{Status: "success", Result: &Result{Name: "worker", Harness: "claude", Cwd: &cwd, WorktreePath: &cwd}}
 	var b bytes.Buffer
 	if err := out.Write(&b, false, Render); err != nil {
 		t.Fatal(err)
@@ -22,7 +23,7 @@ func TestHumanSpawnIncludesDirectories(t *testing.T) {
 }
 func TestHumanSpawnIncludesPromptSubmission(t *testing.T) {
 	pid := "w1:p1"
-	out := libagent.Outcome{Status: "success", Result: &Result{Name: "worker", Harness: "claude", PaneID: &pid, Prompted: true}}
+	out := cli.Outcome{Status: "success", Result: &Result{Name: "worker", Harness: "claude", PaneID: &pid, Prompted: true}}
 	var b bytes.Buffer
 	if err := out.Write(&b, false, Render); err != nil {
 		t.Fatal(err)
@@ -32,7 +33,7 @@ func TestHumanSpawnIncludesPromptSubmission(t *testing.T) {
 	}
 }
 func TestHumanSpawnOmitsPromptLineWithoutSubmission(t *testing.T) {
-	out := libagent.Outcome{Status: "success", Result: &Result{Name: "worker", Harness: "claude"}}
+	out := cli.Outcome{Status: "success", Result: &Result{Name: "worker", Harness: "claude"}}
 	var b bytes.Buffer
 	if err := out.Write(&b, false, Render); err != nil {
 		t.Fatal(err)
@@ -43,13 +44,29 @@ func TestHumanSpawnOmitsPromptLineWithoutSubmission(t *testing.T) {
 }
 func TestSpawnJSONIncludesPromptedField(t *testing.T) {
 	pid := "w1:p1"
-	out := libagent.Outcome{Operation: "agent.spawn", Status: "success", Effects: []libagent.Effect{}, Result: &Result{Name: "worker", Harness: "claude", PaneID: &pid, Prompted: true}}
+	out := cli.Outcome{Operation: "agent.spawn", Status: "success", Effects: []cli.Effect{}, Result: &Result{Name: "worker", Harness: "claude", PaneID: &pid, Prompted: true}}
 	var b bytes.Buffer
 	if err := out.Write(&b, true, Render); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(b.String(), `"prompted":true,"prompt_requested":false`) || !strings.Contains(b.String(), `"message_id":null,"sender":null`) {
 		t.Fatalf("%q", b.String())
+	}
+}
+
+// Spawn JSON keeps actual placement IDs and has no split key.
+func TestSpawnJSONHasPlacementIDsAndNoSplitKey(t *testing.T) {
+	ws, tab, pane := "w1", "w1:t2", "w1:p2"
+	b, err := json.Marshal(&Result{Name: "worker", Harness: "claude", WorkspaceID: &ws, TabID: &tab, PaneID: &pane})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got["split"]; ok || got["workspace_id"] != ws || got["tab_id"] != tab || got["pane_id"] != pane {
+		t.Fatalf("%s", b)
 	}
 }
 
@@ -70,7 +87,7 @@ func TestPartialHintKeyedOnPhaseNotCode(t *testing.T) {
 		{"rejected start hides both hints", "agent_pane_not_found", "rejected", "agent.start", "", "Startup was not confirmed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			out := libagent.Outcome{Status: tc.status, Result: &Result{Name: "worker"}, Error: &libagent.Failure{Code: tc.code, Message: "failure", Phase: tc.phase}}
+			out := cli.Outcome{Status: tc.status, Result: &Result{Name: "worker"}, Error: &cli.Failure{Code: tc.code, Message: "failure", Phase: tc.phase}}
 			var b bytes.Buffer
 			if err := out.Write(&b, false, Render); err != nil {
 				t.Fatal(err)
@@ -89,7 +106,7 @@ func TestPartialHintKeyedOnPhaseNotCode(t *testing.T) {
 }
 
 func TestHumanFailureEffects(t *testing.T) {
-	out := libagent.Outcome{Status: "partial", Error: &libagent.Failure{Message: "rename failed", Phase: "tab.rename"}, Effects: []libagent.Effect{
+	out := cli.Outcome{Status: "partial", Error: &cli.Failure{Message: "rename failed", Phase: "tab.rename"}, Effects: []cli.Effect{
 		{Action: "created", Kind: "pane", ID: "w2:p1"},
 		{Action: "created", Kind: "worktree", Path: "/repo/topic"},
 	}}
@@ -105,15 +122,15 @@ func TestHumanFailureEffects(t *testing.T) {
 
 func TestOutputFailuresPropagate(t *testing.T) {
 	herdrscript.CheckOutputFailures(t, Render,
-		libagent.Outcome{Result: &Result{Name: "worker", Prompted: true}},
-		libagent.Outcome{Status: "partial", Error: &libagent.Failure{Message: "failed"}, Effects: []libagent.Effect{{Action: "created", Kind: "pane", ID: "w1:p1"}}},
-		libagent.Outcome{Status: "partial", Result: &Result{Name: "worker"}, Error: &libagent.Failure{Message: "blocked", Code: "agent_blocked", Phase: "agent.wait"}},
-		libagent.Outcome{Status: "partial", Result: &Result{Name: "worker", PromptRequested: true}, Error: &libagent.Failure{Message: "blocked", Code: "agent_blocked", Phase: "agent.wait"}},
-		libagent.Outcome{Status: "partial", Result: &Result{Name: "worker", PromptRequested: true}, Error: &libagent.Failure{Message: "timeout", Code: "timeout", Phase: "agent.start"}},
+		cli.Outcome{Result: &Result{Name: "worker", Prompted: true}},
+		cli.Outcome{Status: "partial", Error: &cli.Failure{Message: "failed"}, Effects: []cli.Effect{{Action: "created", Kind: "pane", ID: "w1:p1"}}},
+		cli.Outcome{Status: "partial", Result: &Result{Name: "worker"}, Error: &cli.Failure{Message: "blocked", Code: "agent_blocked", Phase: "agent.wait"}},
+		cli.Outcome{Status: "partial", Result: &Result{Name: "worker", PromptRequested: true}, Error: &cli.Failure{Message: "blocked", Code: "agent_blocked", Phase: "agent.wait"}},
+		cli.Outcome{Status: "partial", Result: &Result{Name: "worker", PromptRequested: true}, Error: &cli.Failure{Message: "timeout", Code: "timeout", Phase: "agent.start"}},
 	)
 }
 
-func renderHuman(t *testing.T, out libagent.Outcome) string {
+func renderHuman(t *testing.T, out cli.Outcome) string {
 	t.Helper()
 	var b bytes.Buffer
 	if err := out.Write(&b, false, Render); err != nil {
@@ -127,7 +144,7 @@ func renderHuman(t *testing.T, out libagent.Outcome) string {
 func TestBlockedWaitHintsUseFledgeByPane(t *testing.T) {
 	pid := "w1:p4"
 	for _, requested := range []bool{true, false} {
-		out := libagent.Outcome{Status: "partial", Result: &Result{Name: "worker", PaneID: &pid, PromptRequested: requested}, Error: &libagent.Failure{Code: "agent_blocked", Message: "agent worker is waiting on a startup prompt", Phase: "agent.wait"}}
+		out := cli.Outcome{Status: "partial", Result: &Result{Name: "worker", PaneID: &pid, PromptRequested: requested}, Error: &cli.Failure{Code: "agent_blocked", Message: "agent worker is waiting on a startup prompt", Phase: "agent.wait"}}
 		s := renderHuman(t, out)
 		for _, want := range []string{"fledge agent read --pane w1:p4", "fledge agent send --pane w1:p4 --key <key>"} {
 			if !strings.Contains(s, want) {
@@ -149,7 +166,7 @@ func TestStartupNotConfirmedHintsUseFledgeByPane(t *testing.T) {
 	pid := "w1:p4"
 	for _, phase := range []string{"agent.wait", "agent.start"} {
 		for _, requested := range []bool{true, false} {
-			out := libagent.Outcome{Status: "partial", Result: &Result{Name: "worker", PaneID: &pid, PromptRequested: requested}, Error: &libagent.Failure{Code: "timeout", Message: "timed out", Phase: phase}}
+			out := cli.Outcome{Status: "partial", Result: &Result{Name: "worker", PaneID: &pid, PromptRequested: requested}, Error: &cli.Failure{Code: "timeout", Message: "timed out", Phase: phase}}
 			s := renderHuman(t, out)
 			if !strings.Contains(s, "fledge agent get --pane w1:p4") || !strings.Contains(s, "fledge agent read --pane w1:p4") || strings.Contains(s, "herdr ") {
 				t.Fatalf("%s requested=%v: %q", phase, requested, s)
@@ -165,7 +182,7 @@ func TestStartupNotConfirmedHintsUseFledgeByPane(t *testing.T) {
 func TestPromptFailureNotCalledUnsubmitted(t *testing.T) {
 	pid := "w1:p4"
 	for _, status := range []string{"unknown", "partial"} {
-		out := libagent.Outcome{Status: status, Result: &Result{Name: "worker", PaneID: &pid, PromptRequested: true}, Error: &libagent.Failure{Code: "transport_error", Message: "lost", Phase: "agent.prompt"}}
+		out := cli.Outcome{Status: status, Result: &Result{Name: "worker", PaneID: &pid, PromptRequested: true}, Error: &cli.Failure{Code: "transport_error", Message: "lost", Phase: "agent.prompt"}}
 		if s := renderHuman(t, out); strings.Contains(s, "not submitted") || strings.Contains(s, "not delivered") {
 			t.Fatalf("%q", s)
 		}
@@ -173,17 +190,16 @@ func TestPromptFailureNotCalledUnsubmitted(t *testing.T) {
 }
 
 func TestHumanSpawnNamesProfileSource(t *testing.T) {
-	path, base := "/repo/.fledge/profiles/go-review.toml", "builtin:reviewer"
+	path := "/repo/.fledge/profiles/go-review.md"
 	for _, tc := range []struct {
 		profile *ProfileRef
 		want    string
 	}{
 		{&ProfileRef{Name: "reviewer", Source: "builtin"}, "  profile: reviewer (built-in)\n"},
-		{&ProfileRef{Name: "go-review", Source: "repo", Path: &path, Base: &base}, "  profile: go-review (" + path + ", extends builtin:reviewer)\n"},
-		{&ProfileRef{Name: "scout", Source: "repo", Path: &path}, "  profile: scout (" + path + ")\n"},
+		{&ProfileRef{Name: "go-review", Source: "repo", Path: &path}, "  profile: go-review (" + path + ")\n"},
 		{nil, ""},
 	} {
-		out := libagent.Outcome{Status: "success", Result: &Result{Name: "worker", Harness: "claude", Profile: tc.profile}}
+		out := cli.Outcome{Status: "success", Result: &Result{Name: "worker", Harness: "claude", Profile: tc.profile}}
 		var b bytes.Buffer
 		if err := out.Write(&b, false, Render); err != nil {
 			t.Fatal(err)

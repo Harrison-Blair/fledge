@@ -3,6 +3,7 @@ package herdr
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"testing"
@@ -98,4 +99,48 @@ func TestIntegrationListWrongType(t *testing.T) {
 	if !errors.As(err, &e) || e.Code != "protocol_error" {
 		t.Fatalf("got %#v", err)
 	}
+}
+
+// caller answers one request with result and records the method it received.
+type caller struct {
+	method string
+	result string
+	err    error
+}
+
+func (c *caller) Call(_ context.Context, method string, _ any, result any) error {
+	c.method = method
+	if c.err != nil {
+		return c.err
+	}
+	return json.Unmarshal([]byte(c.result), result)
+}
+
+func TestIntegrationListCaller(t *testing.T) {
+	c := &caller{result: `{"type":"integration_list","integrations":[{"target":"pi","available":true,"state":"current"}]}`}
+	list, err := IntegrationList(context.Background(), c)
+	if err != nil || c.method != "integration.list" || len(list.Integrations) != 1 || list.Integrations[0].Target != "pi" {
+		t.Fatalf("method %q list %+v err %v", c.method, list, err)
+	}
+}
+
+func TestIntegrationListCallerErrors(t *testing.T) {
+	sentinel := errors.New("located")
+	for name, c := range map[string]*caller{
+		"wrong type":    {result: `{"type":"pong"}`},
+		"missing array": {result: `{"type":"integration_list"}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			list, err := IntegrationList(context.Background(), c)
+			var e *Error
+			if !errors.As(err, &e) || e.Code != "protocol_error" || e.Message != "incomplete integration.list result" || !e.Uncertain || list.Type != "" {
+				t.Fatalf("list %+v err %#v", list, err)
+			}
+		})
+	}
+	t.Run("call error", func(t *testing.T) {
+		if _, err := IntegrationList(context.Background(), &caller{err: sentinel}); err != sentinel {
+			t.Fatalf("got %#v, want the caller's error unchanged", err)
+		}
+	})
 }

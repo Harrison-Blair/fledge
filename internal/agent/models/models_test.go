@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	libmodels "github.com/Harrison-Blair/fledge/internal/lib/models"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 )
@@ -198,7 +198,7 @@ func TestModelsJSONEnvelope(t *testing.T) {
 	if b.String() != want {
 		t.Fatalf("got %s\nwant %s", b.String(), want)
 	}
-	var round libagent.Outcome
+	var round cli.Outcome
 	if err := json.Unmarshal([]byte(b.String()), &round); err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +215,7 @@ func TestModelsEmptyResultIsNotNull(t *testing.T) {
 }
 func TestHumanModelsTable(t *testing.T) {
 	label := "Opus 5"
-	out := libagent.Outcome{Status: "success", Result: Result{Models: []libmodels.Row{{Harness: "claude", Model: "claude-opus-5", Name: &label}, {Harness: "opencode", Model: "opencode/big-pickle"}}}}
+	out := cli.Outcome{Status: "success", Result: Result{Models: []libmodels.Row{{Harness: "claude", Model: "claude-opus-5", Name: &label}, {Harness: "opencode", Model: "opencode/big-pickle"}}}}
 	var b bytes.Buffer
 	if err := out.Write(&b, false, Render); err != nil {
 		t.Fatal(err)
@@ -229,7 +229,7 @@ func TestHumanModelsTable(t *testing.T) {
 	}
 }
 func TestHumanModelsEmpty(t *testing.T) {
-	out := libagent.Outcome{Status: "success", Result: Result{Models: []libmodels.Row{}}}
+	out := cli.Outcome{Status: "success", Result: Result{Models: []libmodels.Row{}}}
 	var b bytes.Buffer
 	if err := out.Write(&b, false, Render); err != nil {
 		t.Fatal(err)
@@ -240,7 +240,7 @@ func TestHumanModelsEmpty(t *testing.T) {
 }
 func TestOutputFailuresPropagate(t *testing.T) {
 	herdrscript.CheckOutputFailures(t, Render,
-		libagent.Outcome{Result: Result{}},
-		libagent.Outcome{Result: Result{Models: []libmodels.Row{{Harness: "claude", Model: "sonnet"}}}},
+		cli.Outcome{Result: Result{}},
+		cli.Outcome{Result: Result{Models: []libmodels.Row{{Harness: "claude", Model: "sonnet"}}}},
 	)
 }

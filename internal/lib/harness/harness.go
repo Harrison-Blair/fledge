@@ -1,15 +1,17 @@
 package harness
 
-import (
-	"slices"
-	"strings"
-)
-
-// kinds lists the documented Herdr harness kinds.
-var kinds = strings.Fields("pi claude codex gemini cursor devin agy cline omp mastracode opencode copilot kimi kiro droid amp grok hermes kilo qodercli qwen letta maki muse")
-
-// Kinds returns the documented Herdr harness kinds as a fresh slice.
-func Kinds() []string { return slices.Clone(kinds) }
+// Kinds returns the documented Herdr harness kinds, in registry order, as a
+// fresh slice.
+func Kinds() []string {
+	kinds := make([]string, len(profiles))
+	for i, p := range profiles {
+		kinds[i] = p.Kind
+	}
+	return kinds
+}
 
 // IsKind reports whether kind is a documented Herdr harness kind.
-func IsKind(kind string) bool { return slices.Contains(kinds, kind) }
+func IsKind(kind string) bool {
+	_, ok := Lookup(kind)
+	return ok
+}

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/Harrison-Blair/fledge/internal/lib/harnessenv"
 )
 
 // opencodeTimeout bounds opencode export, which starts the opencode runtime.
@@ -36,7 +38,7 @@ type opencodeExport struct {
 
 // readOpencode sums assistant messages from opencode export; it never opens
 // opencode's database, which also holds account tokens.
-func readOpencode(ctx context.Context, d Discovery, ref Ref, w Window) (*tally, error) {
+func readOpencode(ctx context.Context, d harnessenv.Env, ref Ref, w Window) (*tally, error) {
 	if ref.Kind != "id" || ref.Value == "" {
 		return nil, fmt.Errorf("opencode needs a session id ref, got %q", ref.Kind)
 	}

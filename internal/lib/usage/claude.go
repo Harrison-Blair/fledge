@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/Harrison-Blair/fledge/internal/lib/harnessenv"
 )
 
 // claudeSlug is claude's project directory name for cwd: every character but
@@ -36,7 +38,7 @@ type claudeLine struct {
 }
 
 // readClaude sums a transcript and its sub-agent transcripts.
-func readClaude(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error) {
+func readClaude(_ context.Context, d harnessenv.Env, ref Ref, w Window) (*tally, error) {
 	path, err := Locate(d, "claude", ref)
 	if err != nil {
 		return nil, err

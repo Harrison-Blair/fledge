@@ -1,6 +1,6 @@
 # Re-syncing these docs after a herdr update
 
-> Docs describe herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-19
+> Docs describe herdr 0.9.3 · protocol 22 · schema_version 1 · captured 2026-10-06
 
 herdr self-updates (`herdr update`, channel via `herdr channel set <stable|preview>`), so
 the installed binary will drift ahead of these docs. The raw artifacts in `raw/` are the
@@ -84,6 +84,23 @@ behaviourally re-probe every page, update what changed, re-stamp.
    **not probed**, with the reason, instead of guessing at their live behavior.
    `server.stop` and `server.live_handoff` may only ever be sent to a scratch server you
    started yourself.
+
+   Isolation aids that let more methods be probed safely (used in the 0.9.3 pass):
+
+   - `worktree.create` in its managed directory: start the scratch server with
+     `HERDR_CONFIG_PATH` set to a copy of the config that sets `[worktrees] directory` to
+     a scratch path, so nothing is written under `~/.herdr/worktrees`. Use throwaway Git
+     repositories, never this one. To probe untrusted repositories, also start it with
+     `GIT_TEST_ASSUME_DIFFERENT_OWNER=1`.
+   - `plugin.*` calls that write `plugins.json`: start a second scratch server with
+     `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `XDG_DATA_HOME`, and `XDG_CACHE_HOME` all under
+     one private directory, so the registry write stays there. Socket paths are limited
+     to 107 bytes (`sun_path`); if the private directory's path is too long, reach it
+     through a short symlink and remove the symlink afterwards.
+   - After a real `server.live_handoff`, the replacement process runs as
+     `herdr server --handoff-import …` without `--session`, so
+     `pgrep -af "session <name>"` no longer finds it. Stop it through its socket and
+     confirm with `ss -xlp | grep <name>`.
 
 5. **Update the affected pages.** Added/removed/changed methods map to their namespace
    file in `api/` (see the README table); event changes go to `events.md`; envelope or

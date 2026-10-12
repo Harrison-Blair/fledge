@@ -5,18 +5,21 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/gitstatus"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/tasktest"
 	"github.com/Harrison-Blair/fledge/internal/lib/worktree"
 )
@@ -24,16 +27,6 @@ import (
 type call = herdrscript.Call
 
 func s(v string) *string { return &v }
-
-func git(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=Test", "-c", "user.email=t@example.com"}, args...)...)
-	b, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %v: %v %s", args, err, b)
-	}
-	return string(b)
-}
 
 // repo is a primary checkout on main with a dev branch and a managed linked
 // checkout "topic" created from dev, clean and merged into dev.
@@ -43,13 +36,13 @@ func newRepo(t *testing.T) repo {
 	t.Helper()
 	t.Setenv("HERDR_SESSION", "")
 	root, _ := filepath.EvalSymlinks(t.TempDir())
-	git(t, root, "init", "-q", "-b", "main")
-	git(t, root, "commit", "-qm", "initial", "--allow-empty")
-	git(t, root, "branch", "dev")
+	gittest.Git(t, root, "init", "-q", "-b", "main")
+	gittest.Commit(t, root)
+	gittest.Git(t, root, "branch", "dev")
 	topic := filepath.Join(root, ".fledge", "worktrees", "topic")
 	os.MkdirAll(filepath.Join(root, ".fledge"), 0o755)
 	os.WriteFile(filepath.Join(root, ".fledge", ".gitignore"), []byte("*\n"), 0o644)
-	git(t, root, "worktree", "add", "-q", "-b", "topic", topic, "dev")
+	gittest.Git(t, root, "worktree", "add", "-q", "-b", "topic", topic, "dev")
 	return repo{root, topic}
 }
 
@@ -82,21 +75,21 @@ func agent(pane, ws, terminal, name, status string) herdr.AgentDetails {
 // within one second.
 var registered int
 
-// register records a in the repository, then sets its parent and a
+// register records a in the repository with parent, then sets a
 // registration time after every earlier one.
 func (r repo) register(t *testing.T, a herdr.AgentDetails, parent *string, by string, checkout *identity.Checkout) identity.Record {
 	t.Helper()
-	st, err := identity.OpenStore(context.Background(), r.root, &libagent.Outcome{})
+	st, err := identity.OpenStore(context.Background(), r.root, &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec, err := identity.Register(context.Background(), st, libagent.Client{}, a, by, checkout, nil)
+	rec, err := identity.RegisterAs(context.Background(), st, libagent.Client{}, a, by, checkout, nil, parent)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Update(identity.Kind, rec.ID, &rec, func() error {
 		registered++
-		rec.Parent, rec.RegisteredAt = parent, fmt.Sprintf("2026-01-01T00:%02d:%02dZ", registered/60%60, registered%60)
+		rec.RegisteredAt = fmt.Sprintf("2026-01-01T00:%02d:%02dZ", registered/60%60, registered%60)
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -127,7 +120,7 @@ func created(t *testing.T, path, base string) *identity.Checkout {
 	if id == "" {
 		id, _ = worktree.Mark(context.Background(), path)
 	}
-	c.Marker = libagent.Pointer(id)
+	c.Marker = cli.Pointer(id)
 	return c
 }
 
@@ -135,17 +128,6 @@ func client(t *testing.T, r repo, calls ...call) libagent.Client {
 	c := herdrscript.Client(t, calls...)
 	c.Cwd, c.CallerPane = r.root, "w1:p1"
 	return c
-}
-
-func agentList(agents ...herdr.AgentDetails) call {
-	if agents == nil {
-		agents = []herdr.AgentDetails{}
-	}
-	return call{Method: "agent.list", Result: herdr.AgentListResult{Type: "agent_list", Agents: agents}}
-}
-
-func get(a herdr.AgentDetails) call {
-	return call{Method: "agent.get", Params: map[string]any{"target": a.PaneID}, Result: herdr.AgentResult{Type: "agent_info", Agent: a}}
 }
 
 // snapshot reads every file under dir, so tests can prove a run wrote nothing.
@@ -281,7 +263,7 @@ func TestDryRunPlansWithoutWrites(t *testing.T) {
 	wrec := r.register(t, w, &callerRec.ID, "spawn", created(t, r.topic, "dev"))
 	tasktest.Seed(t, r.root, task.Record{Title: "t", Owner: &wrec.ID, Status: task.Verified})
 	before := snapshot(t, filepath.Join(r.root, ".fledge", "state"))
-	out := Run(context.Background(), client(t, r, get(callerAgent), agentList(callerAgent, w), call{Method: "worktree.list", Result: r.listing(map[string]string{r.topic: "w2"}, r.topic)}), Options{DryRun: true})
+	out := Run(context.Background(), client(t, r, herdrscript.Get(callerAgent.PaneID, callerAgent), herdrscript.List(callerAgent, w), call{Method: "worktree.list", Result: r.listing(map[string]string{r.topic: "w2"}, r.topic)}), Options{DryRun: true})
 	if out.Status != "success" || out.Operation != "agent.cleanup" || len(out.Effects) != 0 {
 		t.Fatalf("%+v", out)
 	}
@@ -300,11 +282,32 @@ func TestDryRunPlansWithoutWrites(t *testing.T) {
 	}
 }
 
+// The plan reads the live agent records once, for the caller and for every
+// worker's and checkout's checks.
+func TestPlanReadsLiveRecordsOnce(t *testing.T) {
+	r := newRepo(t)
+	callerAgent := agent("w1:p1", "w1", "t_caller", "orchestrator", "working")
+	callerRec := r.register(t, callerAgent, nil, "adopt", nil)
+	w := agent("w2:p1", "w2", "t_worker", "worker", "idle")
+	wrec := r.register(t, w, &callerRec.ID, "spawn", created(t, r.topic, "dev"))
+	tasktest.Seed(t, r.root, task.Record{Title: "t", Owner: &wrec.ID, Status: task.Verified})
+	n, real := 0, liveByTerminal
+	liveByTerminal = func(s *state.Store) (map[string]identity.Record, error) { n++; return real(s) }
+	t.Cleanup(func() { liveByTerminal = real })
+	out := Run(context.Background(), client(t, r, herdrscript.Get(callerAgent.PaneID, callerAgent), herdrscript.List(callerAgent, w), call{Method: "worktree.list", Result: r.listing(map[string]string{r.topic: "w2"}, r.topic)}), Options{DryRun: true})
+	if res, ok := out.Result.(Result); out.Status != "success" || !ok || worker(res, wrec.ID).Outcome != "planned" || checkout(res, r.topic).Outcome != "planned" {
+		t.Fatalf("%+v", out)
+	}
+	if n != 1 {
+		t.Fatalf("live agent records read %d times; want 1", n)
+	}
+}
+
 func TestRequiresRegisteredCaller(t *testing.T) {
 	r := newRepo(t)
 	a := agent("w1:p1", "w1", "t_caller", "orchestrator", "idle")
 	for name, calls := range map[string][]call{
-		"unregistered agent": {get(a)},
+		"unregistered agent": {herdrscript.Get(a.PaneID, a)},
 		"not an agent":       {{Method: "agent.get", Err: &herdr.Error{Code: "agent_not_found", Message: "none"}}},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -328,10 +331,10 @@ func TestCleanupStopsWorkerAndRemovesItsCheckout(t *testing.T) {
 	tasktest.Seed(t, r.root, task.Record{Title: "t", Owner: &wrec.ID, Status: task.Verified})
 	open := map[string]string{r.topic: "w2"}
 	out := Run(context.Background(), client(t, r,
-		get(callerAgent), agentList(callerAgent, w), call{Method: "worktree.list", Result: r.listing(open, r.topic)},
-		get(w), call{Method: "pane.close", Params: map[string]any{"pane_id": "w2:p1"}, Result: herdrscript.OK()},
+		herdrscript.Get(callerAgent.PaneID, callerAgent), herdrscript.List(callerAgent, w), call{Method: "worktree.list", Result: r.listing(open, r.topic)},
+		herdrscript.Get(w.PaneID, w), call{Method: "pane.close", Params: map[string]any{"pane_id": "w2:p1"}, Result: herdrscript.OK()},
 		// Closing the workspace's last pane closed the workspace.
-		call{Method: "worktree.list", Result: r.listing(nil, r.topic)}, agentList(callerAgent), agentList(callerAgent),
+		call{Method: "worktree.list", Result: r.listing(nil, r.topic)}, herdrscript.List(callerAgent), herdrscript.List(callerAgent),
 	), Options{})
 	if out.Status != "success" || out.ExitCode() != 0 {
 		t.Fatalf("%+v", out)
@@ -343,13 +346,13 @@ func TestCleanupStopsWorkerAndRemovesItsCheckout(t *testing.T) {
 	if _, err := os.Stat(r.topic); !os.IsNotExist(err) {
 		t.Fatal("checkout kept")
 	}
-	if !strings.Contains(git(t, r.root, "branch", "--list", "topic"), "topic") {
+	if !strings.Contains(gittest.Git(t, r.root, "branch", "--list", "topic"), "topic") {
 		t.Fatal("branch deleted")
 	}
 	if rec := r.load(t, wrec.ID); rec.EndedAt == nil {
 		t.Fatalf("worker record not ended: %+v", rec)
 	}
-	want := []libagent.Effect{{Action: "closed", Kind: "pane", ID: "w2:p1"}, {Action: "updated", Kind: "agent_record", ID: wrec.ID}, {Action: "removed", Kind: "worktree", Path: r.topic}}
+	want := []cli.Effect{{Action: "closed", Kind: "pane", ID: "w2:p1"}, {Action: "updated", Kind: "agent_record", ID: wrec.ID}, {Action: "removed", Kind: "worktree", Path: r.topic}}
 	if !reflect.DeepEqual(out.Effects, want) {
 		t.Fatalf("%+v", out.Effects)
 	}
@@ -366,17 +369,17 @@ func TestCheckoutGuards(t *testing.T) {
 		{"clean and merged", "", func(*testing.T, repo, *string, **identity.Checkout, *[]herdr.AgentDetails) {}},
 		{"dirty", "dirty: yes", func(t *testing.T, r repo, _ *string, _ **identity.Checkout, _ *[]herdr.AgentDetails) {
 			os.WriteFile(filepath.Join(r.topic, "tracked"), []byte("x"), 0o644)
-			git(t, r.topic, "add", "tracked")
+			gittest.Git(t, r.topic, "add", "tracked")
 		}},
 		{"untracked", "dirty: yes", func(t *testing.T, r repo, _ *string, _ **identity.Checkout, _ *[]herdr.AgentDetails) {
 			os.WriteFile(filepath.Join(r.topic, "untracked"), []byte("x"), 0o644)
 		}},
 		{"unmerged", "merged into dev: no", func(t *testing.T, r repo, _ *string, _ **identity.Checkout, _ *[]herdr.AgentDetails) {
-			git(t, r.topic, "commit", "-qm", "work", "--allow-empty")
+			gittest.Git(t, r.topic, "commit", "-qm", "work", "--allow-empty")
 		}},
 		{"merged only into main", "merged into dev: no", func(t *testing.T, r repo, _ *string, _ **identity.Checkout, _ *[]herdr.AgentDetails) {
-			git(t, r.topic, "commit", "-qm", "work", "--allow-empty")
-			git(t, r.root, "merge", "-q", "--ff-only", "topic")
+			gittest.Git(t, r.topic, "commit", "-qm", "work", "--allow-empty")
+			gittest.Git(t, r.root, "merge", "-q", "--ff-only", "topic")
 		}},
 		{"unknown base", "merged into gone: unknown", func(t *testing.T, r repo, _ *string, c **identity.Checkout, _ *[]herdr.AgentDetails) {
 			*c = created(t, r.topic, "gone")
@@ -390,13 +393,13 @@ func TestCheckoutGuards(t *testing.T) {
 			*c = &identity.Checkout{Path: r.topic, Created: true, Base: &base, Branch: s("topic")}
 		}},
 		{"empty recorded marker on an unmarked checkout", "replaced since the worker's spawn", func(t *testing.T, r repo, _ *string, c **identity.Checkout, _ *[]herdr.AgentDetails) {
-			git(t, r.root, "worktree", "remove", r.topic)
-			git(t, r.root, "worktree", "add", "-q", r.topic, "topic")
+			gittest.Git(t, r.root, "worktree", "remove", r.topic)
+			gittest.Git(t, r.root, "worktree", "add", "-q", r.topic, "topic")
 			base := "dev"
 			*c = &identity.Checkout{Path: r.topic, Created: true, Base: &base, Branch: s("topic"), Marker: s("")}
 		}},
 		{"branch switched", "replaced since the worker's spawn", func(t *testing.T, r repo, _ *string, _ **identity.Checkout, _ *[]herdr.AgentDetails) {
-			git(t, r.topic, "switch", "-q", "-c", "other")
+			gittest.Git(t, r.topic, "switch", "-q", "-c", "other")
 		}},
 		{"borrowed", "not created by its worker's spawn", func(t *testing.T, r repo, _ *string, c **identity.Checkout, _ *[]herdr.AgentDetails) {
 			*c = &identity.Checkout{Path: r.topic}
@@ -404,7 +407,7 @@ func TestCheckoutGuards(t *testing.T) {
 		{"external", "not a managed checkout under .fledge/worktrees", func(t *testing.T, r repo, path *string, c **identity.Checkout, _ *[]herdr.AgentDetails) {
 			ext, _ := filepath.EvalSymlinks(t.TempDir())
 			ext = filepath.Join(ext, "ext")
-			git(t, r.root, "worktree", "add", "-q", "-b", "ext", ext, "dev")
+			gittest.Git(t, r.root, "worktree", "add", "-q", "-b", "ext", ext, "dev")
 			*path, *c = ext, created(t, ext, "dev")
 		}},
 		{"primary", "primary checkout", func(t *testing.T, r repo, path *string, c **identity.Checkout, _ *[]herdr.AgentDetails) {
@@ -439,7 +442,7 @@ func TestCheckoutGuards(t *testing.T) {
 				extra = append(extra, path)
 			}
 			agents := append([]herdr.AgentDetails{callerAgent, w}, others...)
-			out := Run(context.Background(), client(t, r, get(callerAgent), agentList(agents...), call{Method: "worktree.list", Result: r.listing(map[string]string{path: "w2"}, extra...)}), Options{DryRun: true})
+			out := Run(context.Background(), client(t, r, herdrscript.Get(callerAgent.PaneID, callerAgent), herdrscript.List(agents...), call{Method: "worktree.list", Result: r.listing(map[string]string{path: "w2"}, extra...)}), Options{DryRun: true})
 			got := checkout(out.Result.(Result), path)
 			if tc.reason == "" {
 				if got.Outcome != "planned" || got.Reason != nil {
@@ -465,7 +468,7 @@ func TestHeldWorkerKeepsCheckout(t *testing.T) {
 	w := agent("w2:p1", "w2", "t_worker", "worker", "idle")
 	wrec := r.register(t, w, &callerRec.ID, "spawn", created(t, r.topic, "dev"))
 	tasktest.Seed(t, r.root, task.Record{Title: "t", Owner: &wrec.ID, Status: task.Completed})
-	out := Run(context.Background(), client(t, r, get(callerAgent), agentList(callerAgent, w), call{Method: "worktree.list", Result: r.listing(map[string]string{r.topic: "w2"}, r.topic)}), Options{})
+	out := Run(context.Background(), client(t, r, herdrscript.Get(callerAgent.PaneID, callerAgent), herdrscript.List(callerAgent, w), call{Method: "worktree.list", Result: r.listing(map[string]string{r.topic: "w2"}, r.topic)}), Options{})
 	res := out.Result.(Result)
 	if out.Status != "success" || worker(res, wrec.ID).Outcome != "skipped" {
 		t.Fatalf("%+v", out)
@@ -490,12 +493,12 @@ func TestGuardsRecheckedBeforeStopping(t *testing.T) {
 			busy := w
 			busy.AgentStatus = "working"
 			plan := call{Method: "worktree.list", Result: r.listing(map[string]string{r.topic: "w2"}, r.topic)}
-			calls := []call{get(callerAgent), agentList(callerAgent, w), plan}
+			calls := []call{herdrscript.Get(callerAgent.PaneID, callerAgent), herdrscript.List(callerAgent, w), plan}
 			if change == "task" {
 				calls[2].Before = func() { tasktest.Seed(t, r.root, task.Record{Title: "more", Owner: &wrec.ID, Status: task.Assigned}) }
 			} else {
 				// Still working when stop's settle grace expires.
-				calls = append(calls, get(busy), call{Method: "agent.wait", Params: map[string]any{"target": "w2:p1", "until": []string{"idle", "done", "blocked"}, "timeout_ms": 5000}, Err: &herdr.Error{Code: "timeout", Message: "timed out"}})
+				calls = append(calls, herdrscript.Get(busy.PaneID, busy), call{Method: "agent.wait", Params: map[string]any{"target": "w2:p1", "until": []string{"idle", "done", "blocked"}, "timeout_ms": 5000}, Err: &herdr.Error{Code: "timeout", Message: "timed out"}})
 			}
 			out := Run(context.Background(), client(t, r, calls...), Options{})
 			res := out.Result.(Result)
@@ -523,10 +526,10 @@ func TestReplacementTerminalUntouched(t *testing.T) {
 	tasktest.Seed(t, r.root, task.Record{Title: "t", Owner: &wrec.ID, Status: task.Verified})
 	replacement := agent("w2:p1", "w2", "t_new", "worker", "idle")
 	out := Run(context.Background(), client(t, r,
-		get(callerAgent), agentList(callerAgent, w),
+		herdrscript.Get(callerAgent.PaneID, callerAgent), herdrscript.List(callerAgent, w),
 		// By the time it is stopped, the pane hosts another terminal and the
 		// worker's own terminal is gone.
-		get(replacement), agentList(callerAgent, replacement),
+		herdrscript.Get(replacement.PaneID, replacement), herdrscript.List(callerAgent, replacement),
 		call{Method: "pane.list", Result: map[string]any{"type": "pane_list", "panes": []herdr.AgentDetails{callerAgent, replacement}}},
 	), Options{})
 	if len(out.Effects) != 0 || worker(out.Result.(Result), wrec.ID).Outcome == "done" {
@@ -539,24 +542,24 @@ func TestReplacementTerminalUntouched(t *testing.T) {
 // removes it once it is safe.
 func TestRerunRemovesCheckoutOfStoppedWorker(t *testing.T) {
 	r := newRepo(t)
-	git(t, r.topic, "commit", "-qm", "work", "--allow-empty")
+	gittest.Git(t, r.topic, "commit", "-qm", "work", "--allow-empty")
 	callerAgent := agent("w1:p1", "w1", "t_caller", "orchestrator", "working")
 	callerRec := r.register(t, callerAgent, nil, "adopt", nil)
 	w := agent("w2:p1", "w2", "t_worker", "worker", "idle")
 	wrec := r.register(t, w, &callerRec.ID, "spawn", created(t, r.topic, "dev"))
 	tasktest.Seed(t, r.root, task.Record{Title: "t", Owner: &wrec.ID, Status: task.Verified})
 	out := Run(context.Background(), client(t, r,
-		get(callerAgent), agentList(callerAgent, w), call{Method: "worktree.list", Result: r.listing(map[string]string{r.topic: "w2"}, r.topic)},
-		get(w), call{Method: "pane.close", Result: herdrscript.OK()},
+		herdrscript.Get(callerAgent.PaneID, callerAgent), herdrscript.List(callerAgent, w), call{Method: "worktree.list", Result: r.listing(map[string]string{r.topic: "w2"}, r.topic)},
+		herdrscript.Get(w.PaneID, w), call{Method: "pane.close", Result: herdrscript.OK()},
 	), Options{})
 	res := out.Result.(Result)
 	if out.Status != "success" || worker(res, wrec.ID).Outcome != "done" || checkout(res, r.topic).Outcome != "skipped" {
 		t.Fatalf("%+v %+v", out, res)
 	}
-	git(t, r.root, "branch", "-f", "dev", "topic")
+	gittest.Git(t, r.root, "branch", "-f", "dev", "topic")
 	out = Run(context.Background(), client(t, r,
-		get(callerAgent), agentList(callerAgent), call{Method: "worktree.list", Result: r.listing(nil, r.topic)},
-		call{Method: "worktree.list", Result: r.listing(nil, r.topic)}, agentList(callerAgent), agentList(callerAgent),
+		herdrscript.Get(callerAgent.PaneID, callerAgent), herdrscript.List(callerAgent), call{Method: "worktree.list", Result: r.listing(nil, r.topic)},
+		call{Method: "worktree.list", Result: r.listing(nil, r.topic)}, herdrscript.List(callerAgent), herdrscript.List(callerAgent),
 	), Options{})
 	res = out.Result.(Result)
 	if out.Status != "success" || len(res.Workers) != 0 || checkout(res, r.topic).Outcome != "done" {
@@ -566,7 +569,7 @@ func TestRerunRemovesCheckoutOfStoppedWorker(t *testing.T) {
 		t.Fatal("checkout kept")
 	}
 	// Once removed, the checkout is no longer reported.
-	out = Run(context.Background(), client(t, r, get(callerAgent), agentList(callerAgent), call{Method: "worktree.list", Result: r.listing(nil)}), Options{})
+	out = Run(context.Background(), client(t, r, herdrscript.Get(callerAgent.PaneID, callerAgent), herdrscript.List(callerAgent), call{Method: "worktree.list", Result: r.listing(nil)}), Options{})
 	if res := out.Result.(Result); out.Status != "success" || len(res.Checkouts) != 0 {
 		t.Fatalf("%+v", res)
 	}
@@ -586,13 +589,18 @@ func TestStopFailureIsPartial(t *testing.T) {
 		tasktest.Seed(t, r.root, task.Record{Title: "t", Owner: &id, Status: task.Verified})
 	}
 	out := Run(context.Background(), client(t, r,
-		get(callerAgent), agentList(callerAgent, w, w2), call{Method: "worktree.list", Result: r.listing(map[string]string{r.topic: "w2"}, r.topic)},
-		get(w), call{Method: "pane.close", Err: &herdr.Error{Code: "timeout", Message: "no answer", Uncertain: true}},
-		get(w2), call{Method: "pane.close", Result: herdrscript.OK()},
+		herdrscript.Get(callerAgent.PaneID, callerAgent), herdrscript.List(callerAgent, w, w2), call{Method: "worktree.list", Result: r.listing(map[string]string{r.topic: "w2"}, r.topic)},
+		herdrscript.Get(w.PaneID, w), call{Method: "pane.close", Err: &herdr.Error{Code: "timeout", Message: "no answer", Uncertain: true}},
+		herdrscript.Get(w2.PaneID, w2), call{Method: "pane.close", Result: herdrscript.OK()},
 	), Options{})
 	res := out.Result.(Result)
 	if out.Status != "unknown" || out.ExitCode() != 1 || out.Error == nil || worker(res, wrec.ID).Outcome != "failed" || worker(res, w2rec.ID).Outcome != "done" {
 		t.Fatalf("%+v %+v", out, res)
+	}
+	// The reason and the aggregate message keep the failed stop's code, as
+	// neither the worker row nor the operation_failed summary has it elsewhere.
+	if reason := worker(res, wrec.ID).Reason; reason == nil || *reason != "timeout: no answer" || out.Error.Message != "1 cleanup action(s) failed; first: timeout: no answer" {
+		t.Fatalf("reason %v, message %q", reason, out.Error.Message)
 	}
 	if c := checkout(res, r.topic); c.Outcome != "skipped" {
 		t.Fatalf("%+v", c)
@@ -624,13 +632,13 @@ func TestRender(t *testing.T) {
 		{Result{Workers: []Worker{}, Checkouts: []Checkout{}}, "No spawned workers or created checkouts to clean up.\n"},
 	} {
 		var b bytes.Buffer
-		if err := (libagent.Outcome{Status: "success", Result: tc.result}).Write(&b, false, Render); err != nil {
+		if err := (cli.Outcome{Status: "success", Result: tc.result}).Write(&b, false, Render); err != nil {
 			t.Fatal(err)
 		}
 		if b.String() != tc.want {
 			t.Fatalf("got\n%s\nwant\n%s", b.String(), tc.want)
 		}
-		herdrscript.CheckOutputFailures(t, Render, libagent.Outcome{Result: tc.result})
+		herdrscript.CheckOutputFailures(t, Render, cli.Outcome{Result: tc.result})
 	}
 }
 
@@ -654,14 +662,14 @@ func TestNewDescendantHoldsWorker(t *testing.T) {
 				child := agent("w3:p1", "w3", "t_child", "child", "working")
 				r.register(t, child, &rec.ID, "spawn", nil)
 			}
-			listing := agentList(a, w)
+			listing := herdrscript.List(a, w)
 			if late {
 				listing.Before = addChild
 			} else {
 				addChild()
 			}
 			// No agent.get or pane.close of the worker is scripted: stopping it fails the test.
-			out := Run(context.Background(), client(t, r, get(a), listing), Options{})
+			out := Run(context.Background(), client(t, r, herdrscript.Get(a.PaneID, a), listing), Options{})
 			got := worker(out.Result.(Result), rec.ID)
 			if out.Status != "success" || len(out.Effects) != 0 || got.Outcome != "skipped" || got.Reason == nil || !strings.Contains(*got.Reason, "is live") {
 				t.Fatalf("new live descendant must hold its parent: %+v %+v", out, got)
@@ -700,15 +708,15 @@ func TestArchivedProvenanceDoesNotOwnReplacement(t *testing.T) {
 				w := agent("w2:p1", "w2", "t_old", "old", "done")
 				old := r.register(t, w, &caller.ID, "spawn", created(t, r.topic, "dev"))
 				r.endRecord(t, old.ID)
-				git(t, r.root, "worktree", "remove", r.topic)
+				gittest.Git(t, r.root, "worktree", "remove", r.topic)
 				if branch == "topic" {
-					git(t, r.root, "worktree", "add", "-q", r.topic, "topic")
+					gittest.Git(t, r.root, "worktree", "add", "-q", r.topic, "topic")
 				} else {
-					git(t, r.root, "worktree", "add", "-q", "-b", branch, r.topic, "dev")
+					gittest.Git(t, r.root, "worktree", "add", "-q", "-b", branch, r.topic, "dev")
 				}
 				listing := r.listing(nil, r.topic)
 				listing.Worktrees[1].Branch = s(branch)
-				out := Run(context.Background(), client(t, r, get(a), agentList(a), call{Method: "worktree.list", Result: listing}), Options{DryRun: dryRun})
+				out := Run(context.Background(), client(t, r, herdrscript.Get(a.PaneID, a), herdrscript.List(a), call{Method: "worktree.list", Result: listing}), Options{DryRun: dryRun})
 				c := checkout(out.Result.(Result), r.topic)
 				if out.Status != "success" || c.Outcome != "skipped" || c.Reason == nil || !strings.Contains(*c.Reason, "replaced since the worker's spawn") {
 					t.Fatalf("replacement checkout must not inherit archived provenance: %+v %+v", out, c)
@@ -745,7 +753,7 @@ func TestOnlyMatchingIncarnationOwnsSharedPath(t *testing.T) {
 			if !newerOwns {
 				owner = older.ID
 			}
-			out := Run(context.Background(), client(t, r, get(a), agentList(a), call{Method: "worktree.list", Result: r.listing(nil, r.topic)}), Options{DryRun: true})
+			out := Run(context.Background(), client(t, r, herdrscript.Get(a.PaneID, a), herdrscript.List(a), call{Method: "worktree.list", Result: r.listing(nil, r.topic)}), Options{DryRun: true})
 			res := out.Result.(Result)
 			if c := checkout(res, r.topic); len(res.Checkouts) != 1 || c.Outcome != "planned" || c.Worker != owner {
 				t.Fatalf("want planned under %s: %+v", owner, res.Checkouts)
@@ -765,14 +773,14 @@ func TestReplacementDuringStopIsKept(t *testing.T) {
 	rec := r.register(t, w, &caller.ID, "spawn", created(t, r.topic, "dev"))
 	tasktest.Seed(t, r.root, task.Record{Title: "accepted", Owner: &rec.ID, Status: task.Verified})
 	replace := func() {
-		git(t, r.root, "worktree", "remove", r.topic)
-		git(t, r.root, "worktree", "add", "-q", r.topic, "topic")
+		gittest.Git(t, r.root, "worktree", "remove", r.topic)
+		gittest.Git(t, r.root, "worktree", "add", "-q", r.topic, "topic")
 	}
 	listing := r.listing(nil, r.topic)
 	out := Run(context.Background(), client(t, r,
-		get(a), agentList(a, w), call{Method: "worktree.list", Result: listing},
-		get(w), call{Method: "pane.close", Before: replace, Result: herdrscript.OK()},
-		call{Method: "worktree.list", Result: listing}, agentList(a), agentList(a),
+		herdrscript.Get(a.PaneID, a), herdrscript.List(a, w), call{Method: "worktree.list", Result: listing},
+		herdrscript.Get(w.PaneID, w), call{Method: "pane.close", Before: replace, Result: herdrscript.OK()},
+		call{Method: "worktree.list", Result: listing}, herdrscript.List(a), herdrscript.List(a),
 	), Options{})
 	if _, err := os.Stat(r.topic); os.IsNotExist(err) {
 		t.Fatalf("replacement created during worker stop was DELETED: %+v", out.Result)
@@ -796,7 +804,7 @@ func TestMovedOutsideManagedTreeIsKept(t *testing.T) {
 	tasktest.Seed(t, r.root, task.Record{Title: "accepted", Owner: &rec.ID, Status: task.Verified})
 	outside := filepath.Join(t.TempDir(), "outside")
 	move := func() {
-		git(t, r.root, "worktree", "move", r.topic, outside)
+		gittest.Git(t, r.root, "worktree", "move", r.topic, outside)
 		if err := os.Symlink(outside, r.topic); err != nil {
 			t.Fatal(err)
 		}
@@ -804,9 +812,9 @@ func TestMovedOutsideManagedTreeIsKept(t *testing.T) {
 	movedListing := r.listing(nil, outside)
 	movedListing.Worktrees[1].Branch = s("topic")
 	out := Run(context.Background(), client(t, r,
-		get(a), agentList(a, w), call{Method: "worktree.list", Result: r.listing(nil, r.topic)},
-		get(w), call{Method: "pane.close", Before: move, Result: herdrscript.OK()},
-		call{Method: "worktree.list", Result: movedListing}, agentList(a), agentList(a),
+		herdrscript.Get(a.PaneID, a), herdrscript.List(a, w), call{Method: "worktree.list", Result: r.listing(nil, r.topic)},
+		herdrscript.Get(w.PaneID, w), call{Method: "pane.close", Before: move, Result: herdrscript.OK()},
+		call{Method: "worktree.list", Result: movedListing}, herdrscript.List(a), herdrscript.List(a),
 	), Options{})
 	if _, err := os.Stat(outside); os.IsNotExist(err) {
 		t.Fatalf("checkout moved outside managed tree was DELETED: %+v", out.Result)
@@ -814,5 +822,29 @@ func TestMovedOutsideManagedTreeIsKept(t *testing.T) {
 	c := checkout(out.Result.(Result), r.topic)
 	if out.Status != "success" || c.Outcome != "skipped" || c.Reason == nil || !strings.Contains(*c.Reason, "moved since cleanup planned it") {
 		t.Fatalf("%+v %+v", out, c)
+	}
+}
+
+// Stopping planned workers reuses the plan's store: the whole cleanup
+// resolves the repository root once.
+func TestCleanupStopsResolveRootOnce(t *testing.T) {
+	r := newRepo(t)
+	callerAgent := agent("w1:p1", "w1", "t_caller", "orchestrator", "working")
+	callerRec := r.register(t, callerAgent, nil, "adopt", nil)
+	a, b := agent("w2:p1", "w2", "t_a", "a", "idle"), agent("w3:p1", "w3", "t_b", "b", "idle")
+	ra, rb := r.register(t, a, &callerRec.ID, "spawn", nil), r.register(t, b, &callerRec.ID, "spawn", nil)
+	tasktest.Seed(t, r.root, task.Record{Title: "a", Owner: &ra.ID, Status: task.Verified})
+	tasktest.Seed(t, r.root, task.Record{Title: "b", Owner: &rb.ID, Status: task.Verified})
+	roots := identitytest.CountRoots(t)
+	out := Run(context.Background(), client(t, r,
+		herdrscript.Get(callerAgent.PaneID, callerAgent), herdrscript.List(callerAgent, a, b),
+		herdrscript.Get(a.PaneID, a), call{Method: "pane.close", Params: map[string]any{"pane_id": "w2:p1"}, Result: herdrscript.OK()},
+		herdrscript.Get(b.PaneID, b), call{Method: "pane.close", Params: map[string]any{"pane_id": "w3:p1"}, Result: herdrscript.OK()},
+	), Options{})
+	if res, ok := out.Result.(Result); out.Status != "success" || !ok || worker(res, ra.ID).Outcome != "done" || worker(res, rb.ID).Outcome != "done" {
+		t.Fatalf("%+v", out)
+	}
+	if got := roots(); got != 1 {
+		t.Fatalf("resolved the repository root %d times, want 1", got)
 	}
 }

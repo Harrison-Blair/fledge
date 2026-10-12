@@ -10,6 +10,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
@@ -54,7 +55,7 @@ func noGrace(o Options) Options {
 func filter(f selector.Filter) Options { return Options{Selection: selector.Selection{Filter: f}} }
 
 // rows summarizes a multi-target result as target=outcome/pane per row.
-func rows(t *testing.T, out libagent.Outcome, mode string) string {
+func rows(t *testing.T, out cli.Outcome, mode string) string {
 	t.Helper()
 	r, ok := out.Result.(FanOut)
 	if !ok || r.Mode != mode {
@@ -64,7 +65,7 @@ func rows(t *testing.T, out libagent.Outcome, mode string) string {
 	for _, row := range r.Targets {
 		pane := "-"
 		if row.Agent != nil {
-			pane = libagent.Display(row.Agent.PaneID)
+			pane = cli.Display(row.Agent.PaneID)
 		}
 		parts = append(parts, row.Target+"="+row.Outcome+"/"+pane)
 	}
@@ -112,7 +113,7 @@ func TestStopSeveralTargetsReportsEachRow(t *testing.T) {
 	if r.Targets[0].Error != nil || r.Targets[1].Error.Phase != "guard" || !strings.Contains(r.Targets[1].Error.Message, "--force") || r.Targets[2].Error.Code != "internal_error" {
 		t.Fatalf("%+v", r.Targets)
 	}
-	if len(out.Effects) != 1 || out.Effects[0] != (libagent.Effect{Action: "closed", Kind: "pane", ID: "w1:p1"}) {
+	if len(out.Effects) != 1 || out.Effects[0] != (cli.Effect{Action: "closed", Kind: "pane", ID: "w1:p1"}) {
 		t.Fatalf("effects %+v", out.Effects)
 	}
 }
@@ -329,6 +330,27 @@ func TestStopDryRunByIDReportsRealStopCodes(t *testing.T) {
 	}
 }
 
+// A dry run by several record ids lists Herdr agents once for all of them.
+func TestStopDryRunByIDsListsOnce(t *testing.T) {
+	a := withTerminal(agentIn("w1:p1", "a", "idle"), "term_a")
+	b := withTerminal(agentIn("w1:p2", "b", "idle"), "term_b")
+	c := withTerminal(agentIn("w1:p3", "c", "idle"), "term_c")
+	s, r := record(libagent.Client{API: byMethod{"agent.list": listCall(a, b, c)}, CallerPane: "old:p1", Cwd: identitytest.Repository(t)})
+	var ids, want []string
+	for _, d := range []herdr.AgentDetails{a, b, c} {
+		rec := identitytest.Register(t, s.Cwd, d)
+		ids = append(ids, rec.ID)
+		want = append(want, rec.ID+"=stop/"+d.PaneID)
+	}
+	out := Run(context.Background(), s, Options{Selection: selector.Selection{IDs: ids}, DryRun: true})
+	if got := rows(t, out, "dry-run"); got != strings.Join(want, " ") {
+		t.Fatalf("got %q, want %q", got, strings.Join(want, " "))
+	}
+	if !slices.Equal(r.methods, []string{"agent.list"}) {
+		t.Fatalf("want one agent.list, got %v", r.methods)
+	}
+}
+
 // closes serves agent.get from agents by target and notes each closed pane.
 type closes struct {
 	agents map[string]herdr.Pane
@@ -447,30 +469,37 @@ func TestStopFilterDryRunUsesListing(t *testing.T) {
 	}
 }
 
+// failed is the row failure that Fail records for err.
+func failed(err error, phase string) *cli.Failure {
+	o := cli.NewOutcome("")
+	o.Fail(err, phase, false)
+	return o.Error
+}
+
 func TestStopFanOutRendering(t *testing.T) {
 	agent := func(pane, name, status string) *libagent.AgentRow {
 		r := libagent.NewAgentRow(agentIn(pane, name, status))
 		return &r
 	}
-	refused := &libagent.Failure{Code: "invalid_input", Message: "agent b is working; pass --force to stop it anyway", Phase: "guard"}
-	missing := &libagent.Failure{Code: "agent_not_found", Message: "agent_not_found: no c", Phase: "agent.get"}
+	refused := failed(cli.Invalid("agent b is working; pass --force to stop it anyway"), "guard")
+	missing := failed(&herdr.Error{Code: "agent_not_found", Message: "no c"}, "agent.get")
 	for _, tc := range []struct {
 		name string
-		out  libagent.Outcome
+		out  cli.Outcome
 		want string
 	}{
-		{"fan-out", libagent.Outcome{Status: "partial", Result: FanOut{Mode: "fan-out", Targets: []Row{
+		{"fan-out", cli.Outcome{Status: "partial", Result: FanOut{Mode: "fan-out", Targets: []Row{
 			{Target: "a", Outcome: "stopped", Agent: agent("w1:p1", "a", "idle")},
 			{Target: "b", Outcome: "refused", Agent: agent("w1:p2", "b", "working"), Error: refused},
 			{Target: "c", Outcome: "failed", Error: missing},
-		}}, Error: &libagent.Failure{Code: "operation_failed", Message: "2 of 3 targets not stopped cleanly: b (invalid_input), c (agent_not_found)", Phase: "agent.stop"}},
+		}}, Error: &cli.Failure{Code: "operation_failed", Message: "2 of 3 targets not stopped cleanly: b (invalid_input), c (agent_not_found)", Phase: "agent.stop"}},
 			`partial: 2 of 3 targets not stopped cleanly: b (invalid_input), c (agent_not_found) (agent.stop)
 Stopped 1 of 3 agents.
   stopped  a (w1:p1)
   refused  b (w1:p2): agent b is working; pass --force to stop it anyway
   failed   c: agent_not_found: no c
 `},
-		{"dry-run", libagent.Outcome{Status: "success", Result: FanOut{Mode: "dry-run", Targets: []Row{
+		{"dry-run", cli.Outcome{Status: "success", Result: FanOut{Mode: "dry-run", Targets: []Row{
 			{Target: "a", Outcome: "stop", Agent: agent("w1:p1", "a", "idle")},
 			{Target: "b", Outcome: "refuse", Agent: agent("w1:p2", "b", "working"), Error: refused},
 		}}},
@@ -524,5 +553,29 @@ func TestStopFilterRegisteredMatchFollowsMovedTerminal(t *testing.T) {
 	out := Run(context.Background(), s, filter(selector.Filter{Registered: true}))
 	if r, ok := out.Result.(Result); out.Status != "success" || !ok || !r.Stopped || *r.PaneID != "w1:p5" || !ended(t, s.Cwd, rec.ID) {
 		t.Fatalf("%+v %+v", out, out.Error)
+	}
+}
+
+// A stop resolves the repository root once, however many id targets it ends.
+func TestStopByIDsResolvesRootOnce(t *testing.T) {
+	a, b := withTerminal(agentIn("w1:p1", "a", "idle"), "term_a"), withTerminal(agentIn("w1:p2", "b", "idle"), "term_b")
+	for name, n := range map[string]int{"one id": 1, "two ids": 2} {
+		t.Run(name, func(t *testing.T) {
+			calls := []call{
+				{Method: "agent.get", Params: map[string]any{"target": "w1:p1"}, Result: herdr.AgentResult{Type: "agent_info", Agent: a}}, closeCall("w1:p1", nil),
+				{Method: "agent.get", Params: map[string]any{"target": "w1:p2"}, Result: herdr.AgentResult{Type: "agent_info", Agent: b}}, closeCall("w1:p2", nil),
+			}
+			s := fake(t, calls[:2*n]...)
+			s.Cwd = identitytest.Repository(t)
+			ids := []string{identitytest.Register(t, s.Cwd, a).ID, identitytest.Register(t, s.Cwd, b).ID}[:n]
+			roots := identitytest.CountRoots(t)
+			out := Run(context.Background(), s, Options{Selection: selector.Selection{IDs: ids}})
+			if out.Status != "success" || len(out.Effects) != 2*n {
+				t.Fatalf("%+v", out)
+			}
+			if got := roots(); got != 1 {
+				t.Fatalf("resolved the repository root %d times, want 1", got)
+			}
+		})
 	}
 }

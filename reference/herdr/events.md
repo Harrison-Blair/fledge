@@ -1,6 +1,6 @@
 # herdr API: events methods
 
-> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
+> herdr 0.9.3 · protocol 22 · schema_version 1 · captured 2026-10-06
 > Part of the fledge herdr reference. Index: [README.md](README.md). Wire format: [protocol.md](protocol.md).
 
 The `events` namespace turns the request/response socket into a push channel. `events.subscribe` registers a set of subscriptions on a connection and then leaves that connection open, streaming `{"event":…,"data":…}` lines as matching state changes occur; `events.wait` blocks a single connection until one event matching a predicate arrives (or a timeout elapses) and returns it as an ordinary response. Two distinct envelope families flow over this channel: plain **events** (`EventKind` / `EventData`, snake_case names — the 26 lifecycle notifications in the [event catalog](#event-catalog-eventkind--eventdata)) and **subscription events** (`SubscriptionEventKind` / `SubscriptionEventData`, dotted names — the three parameterized, computed notifications in [subscription events](#subscription-events-subscriptioneventkind--subscriptioneventdata)). A subscription's `type` selects which one you receive.
@@ -74,12 +74,12 @@ Note: there is no `pane.output_changed` subscription — output is observed thro
 | pane_id | string | yes | — | Pane to watch. |
 | source | `ReadSource` enum | yes | — | Which text to search: `visible`, `recent`, `recent_unwrapped`, `detection`. |
 | match | `OutputMatch` | yes | — | Match predicate (see below). |
-| lines | integer (uint32) \| null | no | null (default window) | Number of lines of context to include in the pushed `read.text` window. **`lines: 0` and `lines: 1` silently suppress delivery** — the subscription acks normally but never pushes, even once a genuine match occurs; `lines: 2` and above push normally. |
+| lines | integer (uint32) \| null | no | null (default window) | Size of the read window, in rows from the bottom of the selected `source`. The match is searched only inside this window, and the window is the pushed `read.text`. **A match outside the window never pushes**: the subscription acks normally and stays silent. `lines: 0` never pushes. A small value can also miss a real match when the rows below it fill the window: with a shell prompt that wraps onto 2 rows, `lines: 2` held only the prompt and never pushed for the output line above it, while `lines: 3` pushed. |
 | strip_ansi | boolean | no | `true` | Strip ANSI escapes before matching and before returning `matched_line`/`read.text`. |
 
-**Delivery is once-only, not continuous** (undocumented in the schema): a `pane.output_matched` subscription pushes exactly one event on its connection — either the first match against output produced after the subscribe call, or, if the watched text already contains a match at subscribe time, that immediate level-triggered match against existing scrollback — and never pushes again even though later output keeps matching the same pattern. A caller that wants ongoing notifications must close the connection and re-subscribe after each push.
+**Delivery is once-only, not continuous** (undocumented in the schema; Validated 2026-10-06 against herdr 0.9.3): a `pane.output_matched` subscription pushes exactly one event on its connection — either the first match against output produced after the subscribe call, or, if the watched text already contains a match at subscribe time, that immediate level-triggered match against existing scrollback — and never pushes again even though later output keeps matching the same pattern. A caller that wants ongoing notifications must close the connection and re-subscribe after each push.
 
-Two more undocumented quirks: with `source: "recent"`, the pushed `read.source` comes back as `recent_unwrapped`, never `recent` (a plain `pane.read` call with `source: recent` correctly echoes `recent`; only `detection` and `recent_unwrapped` round-trip unchanged here). And `source: "visible"` is sensitive to the pane's current scroll offset — if the viewport is scrolled away from the bottom when new output arrives, a match against that new output will not fire, because it falls outside the visible window.
+Two more undocumented quirks: with `source: "recent"`, the pushed `read.source` comes back as `recent_unwrapped`, never `recent` (a plain `pane.read` call with `source: recent` correctly echoes `recent`; only `detection` and `recent_unwrapped` round-trip unchanged here). And `source: "visible"` is sensitive to the pane's current scroll offset — if the viewport is scrolled away from the bottom when new output arrives, a match against that new output will not fire, because it falls outside the visible window (with the pane scrolled up 50 rows, a `visible` subscription stayed silent while a `recent` one on the same output pushed). Validated 2026-10-06 against herdr 0.9.3.
 
 `OutputMatch` is a `oneOf`:
 
@@ -88,7 +88,7 @@ Two more undocumented quirks: with `source: "recent"`, the pushed `read.source` 
 | `substring` | `value`: string | Match when `value` occurs as a substring. |
 | `regex` | `value`: string | Match when the regex `value` matches. |
 
-Note: `strip_ansi`'s effect could not be conclusively exercised — a raw ANSI escape sent via `pane.send_text` came back byte-identical with `strip_ansi: true` and `strip_ansi: false` alike, because the shell's echoed command line contained the escape as literal backslash text rather than an interpreted control sequence in this pane's mode. (Constructed from schema; not live-validated (2026-09-19, herdr 0.9.1: no probe produced real ANSI bytes in scrollback to distinguish stripped from unstripped output).)
+Note: `strip_ansi: false` had no observable effect. A `printf` of a red `MARKE` put real escape bytes in scrollback (a `pane.read` with `format: "ansi"` returned them as `\x1b[38;5;1mMARKE\x1b[0m`), yet subscriptions with `strip_ansi: true` and `strip_ansi: false` both pushed `matched_line: "MARKE"` with `read.format: "text"`, and with `strip_ansi: false` a pattern containing the escape (`\x1b[38;5;1mMARKF`, `38;5;1mMARKF`, or `[31mMARKF`) never matched. Treat matching as always running on plain text. Validated 2026-10-06 against herdr 0.9.3.
 
 **`pane.agent_status_changed` fields** — push on a pane's agent-status transitions:
 
@@ -113,14 +113,14 @@ Note: `strip_ansi`'s effect could not be conclusively exercised — a raw ANSI e
 
 **Pushed lines** (after the ack, zero or more): not responses — they carry no `id` and no `result`. Shape is `{"event":<EventKind|SubscriptionEventKind>,"data":<EventData|SubscriptionEventData>}`. See the [event catalog](#event-catalog-eventkind--eventdata) and [subscription events](#subscription-events-subscriptioneventkind--subscriptioneventdata).
 
-**Errors**: none evidenced for a well-formed subscribe. Malformed `params` or an unknown `type` variant yields `invalid_request` (see [errors.md](errors.md)); an invalid regex inside an `OutputMatch` yields a distinct `invalid_regex` code carrying the underlying regex-crate parse error, not a generic `invalid_request`. Subscription variant objects tolerate unknown extra fields — `{"type":"tab.created","extra":"junk"}` acks normally rather than erroring. When validation fails on an item other than the first in a multi-item `subscriptions` array, the error response's `id` is **not** the request's own id but a mangled `<request id>:sub:<index>:probe` (0-based index of the failing item):
+**Errors**: none evidenced for a well-formed subscribe. Malformed `params` or an unknown `type` variant yields `invalid_request` (see [errors.md](errors.md)); an invalid regex inside an `OutputMatch` yields a distinct `invalid_regex` code carrying the underlying regex-crate parse error (`regex parse error: … error: unclosed group` for `"("`), not a generic `invalid_request`. Subscription variant objects tolerate unknown extra fields — `{"type":"tab.created","extra":"junk"}` acks normally rather than erroring. An empty `subscriptions` array acks normally. A `pane_id` that names no pane fails with `pane_not_found`, and the error echoes the request's own `id` whatever the failing item's index:
 
 ```json
 {"id":"e4","method":"events.subscribe","params":{"subscriptions":[{"type":"tab.created"},{"type":"pane.scroll_changed","pane_id":"w99:p99"}]}}
-{"id":"e4:sub:1:probe","error":{"code":"pane_not_found","message":"pane w99:p99 not found"}}
+{"id":"e4","error":{"code":"pane_not_found","message":"pane w99:p99 not found"}}
 ```
 
-A client that correlates responses strictly by echoed id will fail to match this error back to its request. Other codes possible.
+**Changed from 0.9.1**, where a failing item other than the first returned a mangled `<request id>:sub:<index>:probe` id (`e4:sub:1:probe` for this request). `events.wait` still mangles; see [events.wait](#eventswait). Other codes possible. Validated 2026-10-06 against herdr 0.9.3 (`pane_not_found` at item indexes 0, 1, and 2).
 
 **CLI**: API-only (no `herdr events` CLI group). Related one-shot waits are exposed as `herdr pane wait-output` and `herdr agent wait`.
 
@@ -135,13 +135,13 @@ A client that correlates responses strictly by echoed id will fail to match this
 
 The first line is the request, the second the ack; subsequent lines are pushed on the same open connection as tabs are created.
 
-Validated 2026-09-19 against herdr 0.9.1 (strip_ansi's effect on real ANSI bytes was not exercised; see the note above).
+Validated 2026-10-06 against herdr 0.9.3 (the example's two `tab_created` pushes came from `workspace.create` then `tab.create` on a fresh scratch server).
 
 ## events.wait
 
 Blocks the connection until a single event matching the `match_event` predicate is observed, then returns it as a normal response (`wait_matched`) and closes the connection like any other one-shot request. With `timeout_ms` set, the wait returns an error when the deadline passes before a match; with `timeout_ms` null/omitted the wait is indefinite. Unlike `events.subscribe`, exactly one event is returned and the connection does not stay open.
 
-**Implementation gap (validated on 0.9.1):** although the `EventMatch` schema admits 19 predicate variants (below), herdr 0.9.1 still rejects every match except pane agent-status matches with `unsupported_event_wait_match` — message `events.wait currently supports pane agent status matches`. This gap is unchanged from 0.8.2. Treat the schema as the forward-looking surface and, for now, only send a `pane_agent_status_changed` match. For the other kinds, subscribe with `events.subscribe` and read the first push instead.
+**Implementation gap (validated on 0.9.3):** although the `EventMatch` schema admits 19 predicate variants (below), herdr 0.9.3 still rejects every match except pane agent-status matches with `unsupported_event_wait_match` — message `events.wait currently supports pane agent status matches`. Re-checked 2026-10-06 with `tab_created`, `tab_closed`, `workspace_created`, `pane_created`, `pane_exited`, `pane_output_changed`, and `pane_agent_detected` matches. This gap is unchanged from 0.8.2 and 0.9.1. Treat the schema as the forward-looking surface and, for now, only send a `pane_agent_status_changed` match. For the other kinds, subscribe with `events.subscribe` and read the first push instead.
 
 **Params**: `EventsWaitParams`.
 
@@ -152,7 +152,7 @@ Blocks the connection until a single event matching the `match_event` predicate 
 
 ### EventMatch variants
 
-`EventMatch` is a `oneOf` discriminated by `event` (snake_case, matching `EventKind`). 19 variants. On 0.9.1 only `pane_agent_status_changed` is honored; the rest are schema-valid but return `unsupported_event_wait_match`. All variants have an optional `min_revision`/`workspace_id`/etc. only where listed; unlisted id fields are required filters.
+`EventMatch` is a `oneOf` discriminated by `event` (snake_case, matching `EventKind`). 19 variants. On 0.9.3 only `pane_agent_status_changed` is honored; the rest are schema-valid but return `unsupported_event_wait_match`. All variants have an optional `min_revision`/`workspace_id`/etc. only where listed; unlisted id fields are required filters.
 
 | `event` const | filter fields | required |
 | --- | --- | --- |
@@ -189,11 +189,11 @@ The `EventMatch` surface is narrower than the full `EventKind` list: it omits `w
 
 | code | when |
 | --- | --- |
-| `unsupported_event_wait_match` | The `match_event` variant is not `pane_agent_status_changed` on herdr 0.9.1. Message: `events.wait currently supports pane agent status matches`. |
+| `unsupported_event_wait_match` | The `match_event` variant is not `pane_agent_status_changed` on herdr 0.9.3. Message: `events.wait currently supports pane agent status matches`. |
 | `timeout` | `timeout_ms` elapsed before a matching event arrived. Message: `timed out waiting for event match`. |
 | `pane_not_found` | `match_event.pane_id` names a pane that does not exist. |
 
-`pane_not_found` (and other per-field validation failures on `match_event`) share `events.subscribe`'s id-mangling quirk: the response's `id` comes back as `<request id>:sub:0:probe` instead of the request's own id, e.g. a request `id: "e5"` gets back `"id":"e5:sub:0:probe"`. Other codes possible.
+`pane_not_found` mangles the response `id`: it comes back as `<request id>:sub:0:probe` instead of the request's own id, e.g. a request `id: "ZZZ"` gets back `"id":"ZZZ:sub:0:probe"`. On 0.9.1 `events.subscribe` had the same quirk; on 0.9.3 only `events.wait` keeps it. A request without `match_event` (only `timeout_ms`) fails with `invalid_request` (`missing field \`match_event\``) and echoes the request `id`. Other codes possible. Validated 2026-10-06 against herdr 0.9.3.
 
 **CLI**: API-only (no `herdr events` CLI group). `herdr agent wait <TARGET>` covers the supported agent-status wait, and `herdr pane wait-output` covers output waiting.
 
@@ -209,18 +209,18 @@ The `EventMatch` surface is narrower than the full `EventKind` list: it omits `w
 {"id":"e3","error":{"code":"timeout","message":"timed out waiting for event match"}}
 ```
 
-A match on the pane's already-current status returns `wait_matched` immediately instead of blocking (level-triggered, not edge-triggered) — confirmed live: after a pane was reported `idle`, a wait for `agent_status: "idle"` resolved in under a millisecond with no further state change in between:
+A match on the pane's already-current status returns `wait_matched` immediately instead of blocking (level-triggered, not edge-triggered) — confirmed live: after an agent in an unfocused tab was reported `working` then `idle` (so herdr shows it as `done`), a wait for `agent_status: "done"` resolved in under a millisecond with no further state change in between, while a wait for `idle` on the same pane timed out; after `agent.focus` collapsed it to `idle`, a wait for `idle` resolved at once. A pane with no agent is level-matched as `unknown` the same way:
 
 ```json
-{"id":"e4","method":"events.wait","params":{"match_event":{"event":"pane_agent_status_changed","pane_id":"w1:p1","agent_status":"idle"},"timeout_ms":3000}}
-{"id":"e4","result":{"type":"wait_matched","event":{"event":"pane_agent_status_changed","data":{"type":"pane_agent_status_changed","pane_id":"w1:p1","workspace_id":"w1","agent_status":"idle","agent":"rvbot"}}}}
+{"id":"e4","method":"events.wait","params":{"match_event":{"event":"pane_agent_status_changed","pane_id":"w1:p2","agent_status":"done"},"timeout_ms":2000}}
+{"id":"e4","result":{"type":"wait_matched","event":{"event":"pane_agent_status_changed","data":{"type":"pane_agent_status_changed","pane_id":"w1:p2","workspace_id":"w1","agent_status":"done","agent":"rvbot"}}}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3. To reproduce with `pane.report_agent`, run a real foreground process in the pane first (the probe used `exec -a rvbot sleep 3000`): an `idle` report for a pane whose foreground process is the plain shell released the agent at once (a `pane_agent_detected` push with `released: true` and `final_status: "unknown"`), so the pane read `unknown`, not `idle` or `done`.
 
 ## Event catalog (EventKind / EventData)
 
-The 26 `EventKind` values and their `EventData` payloads. Every pushed plain event and every `wait_matched.event` is an `EventEnvelope`: `{"event":<EventKind>,"data":<EventData>}`, where `data.type` repeats the kind. `EventData` is a `oneOf` discriminated by `data.type`; the tables below list each variant's fields. Domain entities (`WorkspaceInfo`, `TabInfo`, `PaneInfo`, `WorktreeInfo`, `PaneLayoutSnapshot`, `AgentStatus`) are defined in [data-model.md](data-model.md); only their field is named here.
+The 26 `EventKind` values and their `EventData` payloads. The `EventKind` enum and the `EventData` variants in `raw/schema.json` are unchanged from 0.9.1. Every pushed plain event and every `wait_matched.event` is an `EventEnvelope`: `{"event":<EventKind>,"data":<EventData>}`, where `data.type` repeats the kind. `EventData` is a `oneOf` discriminated by `data.type`; the tables below list each variant's fields. Domain entities (`WorkspaceInfo`, `TabInfo`, `PaneInfo`, `WorktreeInfo`, `PaneLayoutSnapshot`, `AgentStatus`) are defined in [data-model.md](data-model.md); only their field is named here.
 
 `EventEnvelope`:
 
@@ -242,7 +242,7 @@ The 26 `EventKind` values and their `EventData` payloads. Every pushed plain eve
 | `workspace_reordered` | `workspace_ids`: array of string (new order); `workspaces`: array of WorkspaceInfo; `before_workspace_id`: string \| null (optional) |
 | `workspace_focused` | `workspace_id`: string |
 
-`workspace_updated`'s live trigger could not be identified: roughly 15 distinct `WorkspaceInfo`-affecting operations (rename, move, reorder, metadata update, focus, tab/pane creation and mutation, worktree open/create) were tried across two dedicated hunts while subscribed, and every one instead produced a more specific named event (`workspace_renamed`, `workspace_moved`, `workspace_metadata_updated`, `workspace_focused`, etc.) or no event at all. (Constructed from schema; not live-validated (2026-09-19, herdr 0.9.1: no operation tried was observed to emit it).)
+`workspace_updated`'s live trigger could not be identified: roughly 15 distinct `WorkspaceInfo`-affecting operations (rename, move, reorder, metadata update, focus, tab/pane creation and mutation, worktree open/create) were tried across two dedicated hunts while subscribed, and every one instead produced a more specific named event (`workspace_renamed`, `workspace_moved`, `workspace_metadata_updated`, `workspace_focused`, etc.) or no event at all. (Constructed from schema; not live-validated (2026-10-06, herdr 0.9.3: the 2026-10-06 sweep below again did not emit it).)
 
 **Worktree kinds**
 
@@ -276,7 +276,7 @@ The 26 `EventKind` values and their `EventData` payloads. Every pushed plain eve
 | `pane_agent_detected` | `pane_id`: string; `workspace_id`: string. Optional: `agent`: string \| null; `final_status`: AgentStatus \| null; `released`: boolean |
 | `pane_agent_status_changed` | `pane_id`: string; `workspace_id`: string; `agent_status`: AgentStatus. Optional: `agent`: string \| null; `display_agent`: string \| null; `title`: string \| null; `state_labels`: map<string,string> |
 
-`pane_updated` fires for pane creation, foreground-cwd changes, and layout-adjacent pane changes, but **not** for `pane.rename` or `pane.report_metadata` — renaming a pane's label or updating its reported metadata does not push `pane_updated` on a connection subscribed to the full 24-kind plain set. (Validated 2026-09-19 against herdr 0.9.1.) `pane_output_changed`'s payload shape remains schema-derived only, since there is no plain subscription for it and `events.wait` rejects it with `unsupported_event_wait_match` on 0.9.1. (Constructed from schema; not live-validated (2026-09-19, herdr 0.9.1: no method exposed to a client can trigger or return this kind directly).)
+`pane_updated` fires for pane creation, foreground-cwd changes, and layout-adjacent pane changes, and for a `pane.report_metadata` call that changes the pane's `tokens` (the push carries the new `tokens`); a `pane.report_metadata` call that leaves `tokens` unchanged, and `pane.rename`, push nothing. **Changed from 0.9.1**, where `pane.report_metadata` did not push `pane_updated`. (Validated 2026-10-06 against herdr 0.9.3.) `pane_output_changed`'s payload shape remains schema-derived only, since there is no plain subscription for it and `events.wait` rejects it with `unsupported_event_wait_match` on 0.9.3. (Constructed from schema; not live-validated (2026-10-06, herdr 0.9.3: no method exposed to a client can trigger or return this kind directly).)
 
 **Layout kind**
 
@@ -287,6 +287,20 @@ The 26 `EventKind` values and their `EventData` payloads. Every pushed plain eve
 `AgentStatus` enum (used above): `idle`, `working`, `blocked`, `done`, `unknown`.
 
 Cross-check: the validated `tab.created` capture pushed `{"event":"tab_created","data":{"type":"tab_created","tab":{…TabInfo…}}}`, matching the `tab_created` row (single `tab: TabInfo` field, `data.type` echoing `event`).
+
+Live sweep, Validated 2026-10-06 against herdr 0.9.3: one connection subscribed to all 24 plain types while a scratch server ran workspace create/rename/metadata/move/`move_block`/focus/close, tab create/rename/move/focus/close, pane split/focus/move/close/exit, and `layout.set_split_ratio`. It received 19 kinds, and every payload's key set matched its row above (optional keys absent when they did not apply): `workspace_created`, `workspace_renamed`, `workspace_metadata_updated`, `workspace_moved`, `workspace_reordered` (from `workspace.move_block`, with `before_workspace_id`), `workspace_focused`, `workspace_closed` (with `workspace`), `tab_created`, `tab_renamed`, `tab_moved`, `tab_focused`, `tab_closed`, `pane_created`, `pane_updated`, `pane_focused`, `pane_moved`, `pane_closed`, `pane_exited`, `layout_updated`. Separate probes observed `pane_agent_detected` (both the detection form and the `released: true` form with `final_status`) and `pane_agent_status_changed` (in `events.wait` results). Not observed this pass: `workspace_updated`, `worktree_created`, `worktree_opened`, `worktree_removed` (no worktree was created), and `pane_output_changed`.
+
+Ordering and grouping seen in the same pass (Validated 2026-10-06 against herdr 0.9.3):
+
+- `workspace.create` pushed `workspace_created`, `tab_created`, `layout_updated`, then `pane_updated` when the root shell settled. `tab.create` pushed `tab_created`, `layout_updated`, `pane_updated`.
+- `tab.focus` to another workspace's tab pushed `workspace_focused`, `tab_focused`, and `pane_focused` together. A `workspace.move_block` that also moved focus pushed the same three before `workspace_reordered`.
+- `agent.focus` on the agent that already had focus, and `workspace.focus` on the focused workspace, pushed nothing.
+- Closing a workspace's last tab pushed `workspace_closed` before `tab_closed`; closing another tab pushed only `tab_closed`.
+- `workspace_reordered` omits `before_workspace_id` when the request sent `null`, and carries it when the request named a workspace.
+
+Taken from a sibling resync worker without a re-probe here: `pane.edit_scrollback`'s editor pane closes with `pane_exited` then `layout_updated` and no `pane_closed` (reported 2026-10-06 against herdr 0.9.3).
+
+Also from sibling pages, not re-probed here (Validated 2026-10-06 against herdr 0.9.3 in those pages' passes): `layout.set_split_ratio` pushes `layout_updated` plus one `pane_updated` per resized pane, and `layout.apply` with a `tab_id` emits no `pane_closed` for the replaced tab's panes (see [api/layout.md](api/layout.md)); closing a tab-placement plugin pane with `plugin.pane.close` removes its tab but emits only `pane_closed` (see [api/plugin.md](api/plugin.md)).
 
 ## Subscription events (SubscriptionEventKind / SubscriptionEventData)
 
@@ -334,7 +348,7 @@ The three parameterized subscription types stream a **different** envelope than 
 | title | string \| null | no | Pane/agent title, if known. |
 | state_labels | map<string,string> | no | Agent-provided state labels. |
 
-Note: this payload matches the plain `pane_agent_status_changed` `EventData` field-for-field, but arrives under the dotted `SubscriptionEventEnvelope` when reached via a `pane.agent_status_changed` subscription.
+Note: this payload matches the plain `pane_agent_status_changed` `EventData` field-for-field, but arrives under the dotted `SubscriptionEventEnvelope` when reached via a `pane.agent_status_changed` subscription. A subscription with no `agent_status` filter pushed every transition of a `pane.report_agent`-driven agent (`working`, then `done` for an unfocused tab), each as `{"data":{"agent":"rvbot","agent_status":"working","pane_id":"w1:p2","workspace_id":"w1"},"event":"pane.agent_status_changed"}` with the optional keys absent. Validated 2026-10-06 against herdr 0.9.3.
 
 **`pane.scroll_changed` → `PaneScrollChangedEvent`**
 
@@ -352,9 +366,11 @@ Note: this payload matches the plain `pane_agent_status_changed` `EventData` fie
 | max_offset_from_bottom | integer (uint64) | yes | Maximum possible offset. |
 | viewport_rows | integer (uint64) | yes | Visible viewport height in rows. |
 
+A `pane.scroll` to `offset_from_bottom: 50` pushed `{"data":{"pane_id":"w1:p1","scroll":{"max_offset_from_bottom":269,"offset_from_bottom":50,"viewport_rows":38},"workspace_id":"w1"},"event":"pane.scroll_changed"}`. New output also pushes: while scrolled up, 3 new rows moved the pane to `offset_from_bottom: 53`, `max_offset_from_bottom: 272` (the viewport stays on the same content), and output growth at the bottom pushed a change to `max_offset_from_bottom` alone. Validated 2026-10-06 against herdr 0.9.3.
+
 `ReadFormat` enum: `text`, `ansi`. `ReadSource` enum: `visible`, `recent`, `recent_unwrapped`, `detection`.
 
-Every `PaneReadResult` observed via `pane.output_matched` in this evidence had `format: "text"`; there is no parameter on this subscription to request `format: "ansi"` independently, so whether/when `ansi` can appear here is not confirmed. (Constructed from schema; not live-validated (2026-09-19, herdr 0.9.1: no parameter selects `ansi` format on this subscription).)
+Every `PaneReadResult` observed via `pane.output_matched` had `format: "text"`, including with `strip_ansi: false` on a line with real escape bytes; there is no parameter on this subscription to request `format: "ansi"` independently, so whether/when `ansi` can appear here is not confirmed. (Constructed from schema; not live-validated (2026-10-06, herdr 0.9.3: no parameter selects `ansi` format on this subscription).)
 
 ## Subscription vs EventKind: name and coverage diffs
 
@@ -375,4 +391,4 @@ Three surfaces name the same domain differently; a client must map between them 
 
 Everything else lines up one-to-one: the 24 plain subscription types each map to a distinct catalog `EventKind`, and the `pane.agent_status_changed` subscription maps to both the plain `pane_agent_status_changed` `EventKind` (via `events.wait`/other emitters) and the dotted `pane.agent_status_changed` `SubscriptionEventKind` (via this subscription).
 
-**`EventMatch` (events.wait) coverage:** narrower still — only 19 of the 26 `EventKind` values are expressible as a match. Not matchable in schema: `workspace_metadata_updated`, `workspace_reordered`, `worktree_created`, `worktree_opened`, `worktree_removed`, `pane_updated`, `layout_updated`. And on herdr 0.9.1 only `pane_agent_status_changed` matches are actually honored (all others → `unsupported_event_wait_match`).
+**`EventMatch` (events.wait) coverage:** narrower still — only 19 of the 26 `EventKind` values are expressible as a match. Not matchable in schema: `workspace_metadata_updated`, `workspace_reordered`, `worktree_created`, `worktree_opened`, `worktree_removed`, `pane_updated`, `layout_updated`. And on herdr 0.9.3 only `pane_agent_status_changed` matches are actually honored (all others → `unsupported_event_wait_match`).

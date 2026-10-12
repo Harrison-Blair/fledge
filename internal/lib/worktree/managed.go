@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/fledgedir"
 )
 
@@ -27,7 +27,7 @@ func CheckBranch(ctx context.Context, branch string) error {
 		}
 	}
 	if err != nil || strings.TrimSpace(string(checked)) != branch || strings.Contains(branch, "@{") {
-		return libagent.Invalid("invalid exact branch name %q", branch)
+		return cli.Invalid("invalid exact branch name %q", branch)
 	}
 	return nil
 }
@@ -35,7 +35,7 @@ func CheckBranch(ctx context.Context, branch string) error {
 // Prepare returns the managed checkout path root/.fledge/worktrees/<branch>.
 // It validates all known collisions before touching managed paths, then
 // ensures the ignored .fledge directory and the checkout's parent directories.
-func Prepare(ctx context.Context, root, branch string, out *libagent.Outcome) (string, error) {
+func Prepare(ctx context.Context, root, branch string, out *cli.Outcome) (string, error) {
 	root, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return "", err
@@ -54,10 +54,10 @@ func Prepare(ctx context.Context, root, branch string, out *libagent.Outcome) (s
 	requested := "refs/heads/" + branch
 	for _, ref := range strings.Fields(string(refs)) {
 		if ref == requested {
-			return "", libagent.Invalid("branch %q already exists", branch)
+			return "", cli.Invalid("branch %q already exists", branch)
 		}
 		if strings.HasPrefix(requested, ref+"/") || strings.HasPrefix(ref, requested+"/") {
-			return "", libagent.Invalid("branch %q conflicts with existing branch %q", branch, strings.TrimPrefix(ref, "refs/heads/"))
+			return "", cli.Invalid("branch %q conflicts with existing branch %q", branch, strings.TrimPrefix(ref, "refs/heads/"))
 		}
 	}
 
@@ -65,10 +65,10 @@ func Prepare(ctx context.Context, root, branch string, out *libagent.Outcome) (s
 	path := filepath.Join(managed, filepath.FromSlash(branch))
 	relative, err := filepath.Rel(managed, path)
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", libagent.Invalid("branch path escapes managed worktrees")
+		return "", cli.Invalid("branch path escapes managed worktrees")
 	}
 	if _, err = os.Lstat(path); err == nil {
-		return "", libagent.Invalid("worktree destination %s already exists", path)
+		return "", cli.Invalid("worktree destination %s already exists", path)
 	} else if !os.IsNotExist(err) {
 		return "", err
 	}

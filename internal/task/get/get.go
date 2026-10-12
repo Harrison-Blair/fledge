@@ -9,8 +9,9 @@ import (
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
-	"github.com/Harrison-Blair/fledge/internal/lib/usage"
+	"github.com/Harrison-Blair/fledge/internal/lib/termtext"
 )
 
 type Options struct{ ID string }
@@ -34,8 +35,8 @@ type Dependency struct {
 }
 
 // Run reads one task from the store without contacting Herdr.
-func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "task.get", Status: "success", Effects: []libagent.Effect{}}
+func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
+	out := cli.NewOutcome("task.get")
 	if err := task.ValidateID(o.ID); err != nil {
 		out.Fail(err, "validation", false)
 		return out
@@ -66,8 +67,8 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 }
 
 // Render writes the task as labelled lines, omitting steps not yet reached,
-// followed by its usage snapshots and indented texts.
-func Render(w io.Writer, o libagent.Outcome) error {
+// followed by its indented texts.
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil
@@ -81,7 +82,7 @@ func Render(w io.Writer, o libagent.Outcome) error {
 	if r.CreatedBy != nil {
 		creator = *r.CreatedBy
 	}
-	fmt.Fprintf(&b, "id: %s\ntitle: %s\nstatus: %s\nowner: %s\n", r.ID, r.Title, r.Status, owner)
+	fmt.Fprintf(&b, "id: %s\ntitle: %s\nstatus: %s\nowner: %s\n", r.ID, termtext.Clean(r.Title), r.Status, owner)
 	if r.Parent != nil {
 		fmt.Fprintf(&b, "parent: %s\n", *r.Parent)
 	}
@@ -94,13 +95,19 @@ func Render(w io.Writer, o libagent.Outcome) error {
 			state := d.Status
 			switch {
 			case d.Status == task.Cancelled && d.CancelReason != nil:
-				state += ": " + *d.CancelReason
+				state += ": " + termtext.Clean(*d.CancelReason)
 			case !d.Satisfied:
 				state += ", waiting"
 			}
 			deps = append(deps, fmt.Sprintf("%s (%s)", d.ID, state))
 		}
 		fmt.Fprintf(&b, "after: %s\n", strings.Join(deps, ", "))
+	}
+	if r.DeliveryMode != "" && r.DeliveryMode != task.ModeNone {
+		fmt.Fprintf(&b, "delivery mode: %s\n", r.DeliveryMode)
+	}
+	if r.BaseBranch != nil {
+		fmt.Fprintf(&b, "base branch: %s\n", termtext.Clean(*r.BaseBranch))
 	}
 	fmt.Fprintf(&b, "created: %s by %s\n", r.CreatedAt, creator)
 	if r.AssignedAt != nil {
@@ -133,17 +140,27 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		}
 		fmt.Fprintf(&b, "verified: %s by %s%s\n", *r.VerifiedAt, verifier, forced)
 	}
+	if r.VerifiedCommit != nil {
+		fmt.Fprintf(&b, "verified commit: %s\n", termtext.Clean(*r.VerifiedCommit))
+	}
+	if r.Branch != nil {
+		fmt.Fprintf(&b, "branch: %s\n", termtext.Clean(*r.Branch))
+	}
+	if r.PRURL != nil {
+		fmt.Fprintf(&b, "pull request: %s\n", termtext.Clean(*r.PRURL))
+	}
+	switch {
+	case r.LandedAt != nil:
+		fmt.Fprintf(&b, "landed: %s by %s into %s as %s\n", *r.LandedAt, cli.Display(r.LandedBy), termtext.Clean(cli.Display(r.TargetBranch)), cli.Display(r.MergeCommit))
+	case r.LandStep != nil:
+		fmt.Fprintf(&b, "land step: %s\n", *r.LandStep)
+	}
 	if r.CancelledAt != nil {
 		reason := ""
 		if r.CancelReason != nil {
-			reason = " (" + *r.CancelReason + ")"
+			reason = " (" + termtext.Clean(*r.CancelReason) + ")"
 		}
 		fmt.Fprintf(&b, "cancelled: %s%s\n", *r.CancelledAt, reason)
-	}
-	if u := r.Usage; u != nil {
-		b.WriteString("usage:\n")
-		snapshot(&b, "worker", u.Worker)
-		snapshot(&b, "verifier", u.Verifier)
 	}
 	text(&b, "brief", &r.Brief)
 	text(&b, "result", r.Result)
@@ -157,45 +174,7 @@ func text(b *strings.Builder, label string, s *string) {
 		return
 	}
 	fmt.Fprintf(b, "%s:\n", label)
-	for _, line := range strings.Split(strings.TrimRight(*s, "\n"), "\n") {
+	for _, line := range strings.Split(strings.TrimRight(termtext.Clean(*s), "\n"), "\n") {
 		fmt.Fprintf(b, "  %s\n", line)
 	}
-}
-
-// snapshot writes one usage line: elapsed time, then counts, cost, and basis,
-// or only the basis when usage is unavailable. The reason follows the basis.
-func snapshot(b *strings.Builder, label string, u *task.UsageSnapshot) {
-	if u == nil {
-		return
-	}
-	basis := u.Basis
-	if u.Reason != nil {
-		basis += " (" + *u.Reason + ")"
-	}
-	elapsed := duration(u.ElapsedSeconds)
-	if u.Basis == usage.Unavailable {
-		fmt.Fprintf(b, "  %s: %s, %s\n", label, elapsed, basis)
-		return
-	}
-	cost := "-"
-	if c := u.Cost; c != nil {
-		cost = fmt.Sprintf("%.2f %s (est)", c.Amount, c.Currency)
-		if c.Currency == "USD" || c.Currency == "" {
-			cost = fmt.Sprintf("$%.2f (est)", c.Amount)
-		}
-	}
-	t := u.Tokens
-	fmt.Fprintf(b, "  %s: %s, %d turns, in %s out %s cache-r %s cache-w %s, cost %s, %s\n",
-		label, elapsed, u.Turns, usage.Count(t.Input), usage.Count(t.Output), usage.Count(t.CacheRead), usage.Count(t.CacheWrite), cost, basis)
-}
-
-// duration renders seconds as 1h02m, 5m12s, or 40s.
-func duration(s int64) string {
-	switch {
-	case s >= 3600:
-		return fmt.Sprintf("%dh%02dm", s/3600, s%3600/60)
-	case s >= 60:
-		return fmt.Sprintf("%dm%02ds", s/60, s%60)
-	}
-	return fmt.Sprintf("%ds", s)
 }

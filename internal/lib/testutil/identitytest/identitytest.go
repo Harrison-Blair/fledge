@@ -4,6 +4,7 @@ package identitytest
 
 import (
 	"context"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -17,21 +18,16 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
 )
 
 // Repository returns a fresh Git repository with no .fledge directory.
 func Repository(t *testing.T) string {
 	t.Helper()
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if b, err := exec.Command("git", "-C", root, "init", "-q").CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v %s", err, b)
-	}
-	return root
+	return gittest.Repository(t)
 }
 
 // Register records a as a spawned agent in the repository at cwd, with no
@@ -49,7 +45,7 @@ func RegisterProfile(t *testing.T, cwd string, a herdr.AgentDetails, profile str
 
 func register(t *testing.T, cwd string, a herdr.AgentDetails, profile *string) identity.Record {
 	t.Helper()
-	s, err := identity.OpenStore(context.Background(), cwd, &libagent.Outcome{})
+	s, err := identity.OpenStore(context.Background(), cwd, &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,15 +56,15 @@ func register(t *testing.T, cwd string, a herdr.AgentDetails, profile *string) i
 	return rec
 }
 
-// RegisterChild records a like Register, then sets its parent to parent.
+// RegisterChild records a like Register, with parent as its parent.
 func RegisterChild(t *testing.T, cwd string, a herdr.AgentDetails, parent string) identity.Record {
 	t.Helper()
-	rec := Register(t, cwd, a)
-	s, err := identity.Existing(context.Background(), cwd)
+	s, err := identity.OpenStore(context.Background(), cwd, &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Update(identity.Kind, rec.ID, &rec, func() error { rec.Parent = &parent; return nil }); err != nil {
+	rec, err := identity.RegisterAs(context.Background(), s, libagent.Client{}, a, "spawn", nil, nil, &parent)
+	if err != nil {
 		t.Fatal(err)
 	}
 	return rec
@@ -158,5 +154,26 @@ func NoObserveSession(t *testing.T) {
 			}
 			return true
 		})
+	}
+}
+
+// CountRoots puts a git wrapper first on PATH that counts repository root
+// resolutions (the first Git command of each identity.Existing) and returns
+// a function that reads the count.
+func CountRoots(t *testing.T) func() int {
+	t.Helper()
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin, log := t.TempDir(), filepath.Join(t.TempDir(), "roots")
+	script := fmt.Sprintf("#!/bin/sh\ncase \"$*\" in *--is-bare-repository*) echo >>%q;; esac\nexec %q \"$@\"\n", log, git)
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return func() int {
+		b, _ := os.ReadFile(log)
+		return strings.Count(string(b), "\n")
 	}
 }

@@ -6,13 +6,13 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"text/tabwriter"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/gitstatus"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
@@ -54,8 +54,8 @@ type Result struct {
 	Worktrees          []Row   `json:"worktrees"`
 }
 
-func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "worktree.list", Status: "success", Effects: []libagent.Effect{}}
+func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
+	out := cli.NewOutcome("worktree.list")
 	r, err := inspectAll(ctx, c, o.Cwd)
 	if err != nil {
 		out.Fail(err, "worktree.list", false)
@@ -84,7 +84,6 @@ func inspectAll(ctx context.Context, c libagent.Client, cwd string) (Result, err
 		short := strings.TrimPrefix(strings.TrimPrefix(target, "refs/heads/"), "refs/remotes/")
 		r.DefaultBranch = &short
 	}
-	managed := filepath.Join(root, ".fledge", "worktrees")
 	// Rows are independent, so their git checks run concurrently, a few at a time.
 	rows := make([]Row, len(listing.Worktrees))
 	limit := make(chan struct{}, 8)
@@ -93,7 +92,7 @@ func inspectAll(ctx context.Context, c libagent.Client, cwd string) (Result, err
 		wg.Go(func() {
 			limit <- struct{}{}
 			defer func() { <-limit }()
-			rows[i] = inspect(ctx, root, managed, target, w)
+			rows[i] = inspect(ctx, root, target, w)
 		})
 	}
 	wg.Wait()
@@ -113,11 +112,10 @@ func inspectAll(ctx context.Context, c libagent.Client, cwd string) (Result, err
 }
 
 // inspect computes the row for checkout w of the repository at root.
-func inspect(ctx context.Context, root, managed, target string, w herdr.Worktree) Row {
+func inspect(ctx context.Context, root, target string, w herdr.Worktree) Row {
 	row := Row{Path: w.Path, Branch: w.Branch, WorkspaceID: w.OpenWorkspaceID, Primary: w.Path == root}
 	row.Dirty, row.Merged = worktree.State(ctx, root, target, w)
-	rel, err := filepath.Rel(managed, row.Path)
-	row.Managed = err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	row.Managed = worktree.Managed(root, row.Path)
 	return row
 }
 
@@ -158,7 +156,7 @@ func addOwners(ctx context.Context, c libagent.Client, r Result) {
 }
 
 // Render writes a successful list outcome as a table.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil

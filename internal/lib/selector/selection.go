@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
@@ -29,46 +30,55 @@ func (s Selection) Validate() error {
 	explicit := slices.Concat(s.Names, s.Panes, s.IDs)
 	switch {
 	case len(explicit) > 0 && !s.Filter.Empty():
-		return libagent.Invalid("explicit targets (--name, --pane, --id) and filter flags are mutually exclusive")
+		return cli.Invalid("explicit targets (--name, --pane, --id) and filter flags are mutually exclusive")
 	case len(explicit) == 0 && s.Filter.Empty():
-		return libagent.Invalid("at least one --name, --pane, --id, or filter flag is required")
+		return cli.Invalid("at least one --name, --pane, --id, or filter flag is required")
 	}
 	for i, t := range explicit {
 		if blank(t) {
-			return libagent.Invalid("targets must be nonempty")
+			return cli.Invalid("targets must be nonempty")
 		}
 		if slices.Contains(explicit[:i], t) {
-			return libagent.Invalid("duplicate target %q", t)
+			return cli.Invalid("duplicate target %q", t)
 		}
 	}
-	if slices.ContainsFunc(s.IDs, func(id string) bool { return !state.ValidID(id) }) {
-		return libagent.Invalid("--id must be 8 lowercase hexadecimal characters")
+	for _, id := range s.IDs {
+		if err := libagent.ValidateID("id", "agent", id); err != nil {
+			return err
+		}
 	}
 	return s.Filter.Validate()
+}
+
+// Explicit lists s's explicit targets, unresolved, in flag order: names, then
+// panes, then ids. It is nil for a filter.
+func (s Selection) Explicit() []identity.Target {
+	var targets []identity.Target
+	for _, v := range s.Names {
+		targets = append(targets, identity.Target{Name: v})
+	}
+	for _, v := range s.Panes {
+		targets = append(targets, identity.Target{Pane: v})
+	}
+	for _, v := range s.IDs {
+		targets = append(targets, identity.Target{ID: v})
+	}
+	return targets
 }
 
 // Targets resolves explicit targets in flag order, names then panes then ids,
 // with identity.Target semantics and errors, stopping at the first failure.
 // A filter's matches exclude the caller's own pane and fail with
-// no_agents_matched when none remain.
-func (s Selection) Targets(ctx context.Context, c libagent.Client) ([]Target, error) {
+// no_agents_matched when none remain. open supplies the store, as for
+// identity.Target.GetWith and Resolve; identity.OpenOnce opens it once.
+func (s Selection) Targets(ctx context.Context, c libagent.Client, open func() (*state.Store, error)) ([]Target, error) {
 	if err := s.Validate(); err != nil {
-		return nil, libagent.AtPhase("validation", err)
+		return nil, cli.AtPhase("validation", err)
 	}
 	if s.Filter.Empty() {
-		var explicit []identity.Target
-		for _, v := range s.Names {
-			explicit = append(explicit, identity.Target{Name: v})
-		}
-		for _, v := range s.Panes {
-			explicit = append(explicit, identity.Target{Pane: v})
-		}
-		for _, v := range s.IDs {
-			explicit = append(explicit, identity.Target{ID: v})
-		}
 		var targets []Target
-		for _, t := range explicit {
-			a, target, rec, err := t.Get(ctx, c)
+		for _, t := range s.Explicit() {
+			a, target, rec, err := t.GetWith(ctx, c, open)
 			if err != nil {
 				return nil, err
 			}
@@ -76,7 +86,7 @@ func (s Selection) Targets(ctx context.Context, c libagent.Client) ([]Target, er
 		}
 		return targets, nil
 	}
-	matches, err := Resolve(ctx, c, s.Filter)
+	matches, err := resolve(ctx, c, s.Filter, open)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +102,7 @@ func (s Selection) Targets(ctx context.Context, c libagent.Client) ([]Target, er
 		targets = append(targets, Target{Label: label, Pane: m.Agent.PaneID, Agent: m.Agent, Record: m.Record})
 	}
 	if len(targets) == 0 {
-		return nil, libagent.AtPhase("selection", &herdr.Error{Code: "no_agents_matched", Message: "no agents matched the selection"})
+		return nil, cli.AtPhase("selection", &cli.Error{Code: "no_agents_matched", Message: "no agents matched the selection"})
 	}
 	return targets, nil
 }

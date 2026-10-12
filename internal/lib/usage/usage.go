@@ -105,13 +105,7 @@ func (w Window) contains(ts *time.Time) bool {
 	return (w.From == nil || !ts.Before(*w.From)) && (w.To == nil || !ts.After(*w.To))
 }
 
-// Discovery reads session stores under Home and runs harness commands through Run.
-type Discovery harnessenv.Env
-
-// LocalDiscovery reads the real home directory and executes real harness commands.
-func LocalDiscovery() Discovery { return Discovery(harnessenv.Local()) }
-
-type reader func(ctx context.Context, d Discovery, ref Ref, w Window) (*tally, error)
+type reader func(ctx context.Context, d harnessenv.Env, ref Ref, w Window) (*tally, error)
 
 var readers = map[string]reader{
 	"claude":   readClaude,
@@ -122,7 +116,7 @@ var readers = map[string]reader{
 
 // Read summarizes kind's session ref inside w. Data problems never fail the
 // caller: they yield Basis unavailable with a Reason.
-func Read(ctx context.Context, d Discovery, kind string, ref Ref, w Window) Summary {
+func Read(ctx context.Context, d harnessenv.Env, kind string, ref Ref, w Window) Summary {
 	s := Summary{Harness: kind, SessionKind: ref.Kind, SessionValue: ref.Value}
 	p, ok := harness.Lookup(kind)
 	if !ok {
@@ -152,7 +146,7 @@ func (s Summary) unavailable(reason string) Summary {
 }
 
 // Locate returns the session file for a file-backed harness's ref.
-func Locate(d Discovery, kind string, ref Ref) (string, error) {
+func Locate(d harnessenv.Env, kind string, ref Ref) (string, error) {
 	if ref.Kind == "path" {
 		return ref.Value, nil
 	}

@@ -4,6 +4,7 @@ package read
 import (
 	"github.com/Harrison-Blair/fledge/internal/agent/read"
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/spf13/cobra"
 )
 
@@ -23,7 +24,7 @@ bytes exactly.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			options.LinesSet = cmd.Flags().Changed("lines")
-			return libagent.Finish(read.Run(cmd.Context(), libagent.FromEnvironment(0), options), cmd.OutOrStdout(), asJSON, read.Render)
+			return cli.Finish(read.Run(cmd.Context(), libagent.FromEnvironment(0), options), cmd.OutOrStdout(), asJSON, read.Render)
 		},
 	}
 	f := cmd.Flags()

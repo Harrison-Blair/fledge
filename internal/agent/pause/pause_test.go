@@ -5,17 +5,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"net"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
+	"github.com/Harrison-Blair/fledge/internal/lib/harness"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/sockettest"
 )
 
 type call = herdrscript.Call
@@ -26,7 +26,7 @@ func fake(t *testing.T, calls ...call) *pauser {
 }
 
 func TestPauseMappings(t *testing.T) {
-	for _, h := range libagent.Harnesses() {
+	for _, h := range harness.Kinds() {
 		t.Run(h, func(t *testing.T) {
 			keys := []string{"esc"}
 			switch h {
@@ -40,7 +40,7 @@ func TestPauseMappings(t *testing.T) {
 			s := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "worker"}, Result: herdrscript.Info(p)}, call{Method: "agent.send_keys", Params: map[string]any{"target": p.PaneID, "keys": keys}, Result: herdrscript.OK()})
 			out := s.run(context.Background(), Options{Target: identity.Target{Name: "worker"}, Timeout: 10 * time.Second, NoWait: true})
 			r := out.Result.(Result)
-			if out.Status != "success" || !r.Submitted || r.Settled || len(out.Effects) != 1 || out.Effects[0] != (libagent.Effect{Action: "submitted", Kind: "interrupt", ID: p.PaneID}) {
+			if out.Status != "success" || !r.Submitted || r.Settled || len(out.Effects) != 1 || out.Effects[0] != (cli.Effect{Action: "submitted", Kind: "interrupt", ID: p.PaneID}) {
 				t.Fatalf("%+v %+v", out, r)
 			}
 		})
@@ -54,12 +54,33 @@ func TestPauseValidation(t *testing.T) {
 		}
 	}
 }
+
+// TestPauseValidationMessages gives each rejected value its own message,
+// checking the target before the timeout when both are invalid.
+func TestPauseValidationMessages(t *testing.T) {
+	for _, tc := range []struct {
+		o    Options
+		want string
+	}{
+		{Options{Target: identity.Target{Name: " "}, Timeout: time.Second}, "target must be nonempty"},
+		{Options{Target: identity.Target{Pane: "\t"}, Timeout: time.Second}, "target must be nonempty"},
+		{Options{Target: identity.Target{Name: "w"}}, "--timeout must be positive"},
+		{Options{Target: identity.Target{Name: "w"}, Timeout: -time.Second}, "--timeout must be positive"},
+		{Options{Target: identity.Target{Name: " "}}, "target must be nonempty"},
+	} {
+		out := fake(t).run(context.Background(), tc.o)
+		if out.ExitCode() != 2 || out.Error.Phase != "validation" || out.Error.Message != tc.want {
+			t.Fatalf("%+v: %+v, want %q", tc.o, out.Error, tc.want)
+		}
+	}
+}
+
 func TestPauseGuards(t *testing.T) {
 	for _, status := range []string{"idle", "done", "blocked", "unknown", "working"} {
 		for _, harness := range []string{"claude", "", "future"} {
 			t.Run(status+"/"+harness, func(t *testing.T) {
 				p := herdrscript.LiveAgent(status)
-				p.Agent = libagent.Pointer(harness)
+				p.Agent = cli.Pointer(harness)
 				a := herdrscript.Info(p)
 				pending := true
 				if status == "working" {
@@ -184,13 +205,13 @@ func TestRender(t *testing.T) {
 	row := herdrscript.Row()
 	for _, tc := range []struct {
 		name string
-		out  libagent.Outcome
+		out  cli.Outcome
 		want string
 	}{
-		{"requested", libagent.Outcome{Status: "success", Result: Result{AgentRow: row, Submitted: true}}, "Pause requested: worker (claude) in w1:p1.\n"},
-		{"paused", libagent.Outcome{Status: "success", Result: Result{AgentRow: row, Submitted: true, Settled: true}}, "Paused: worker (claude) in w1:p1.\n"},
-		{"already settled", libagent.Outcome{Status: "success", Result: Result{AgentRow: row, Settled: true}}, "Already idle or done: worker (claude) in w1:p1.\n"},
-		{"failure", libagent.Outcome{Status: "partial", Result: Result{AgentRow: row, Submitted: true}, Error: &libagent.Failure{Message: "timed out", Phase: "agent.wait"}}, "partial: timed out (agent.wait)\n"},
+		{"requested", cli.Outcome{Status: "success", Result: Result{AgentRow: row, Submitted: true}}, "Pause requested: worker (claude) in w1:p1.\n"},
+		{"paused", cli.Outcome{Status: "success", Result: Result{AgentRow: row, Submitted: true, Settled: true}}, "Paused: worker (claude) in w1:p1.\n"},
+		{"already settled", cli.Outcome{Status: "success", Result: Result{AgentRow: row, Settled: true}}, "Already idle or done: worker (claude) in w1:p1.\n"},
+		{"failure", cli.Outcome{Status: "partial", Result: Result{AgentRow: row, Submitted: true}, Error: &cli.Failure{Message: "timed out", Phase: "agent.wait"}}, "partial: timed out (agent.wait)\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var b bytes.Buffer
@@ -232,16 +253,7 @@ func TestPauseByIDInterruptsVerifiedPane(t *testing.T) {
 // returns a result or a Herdr error object.
 func serve(t *testing.T, reply func(method string, params map[string]any) (result, err any)) {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "fp-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, "s")
-	l, err := net.Listen("unix", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { l.Close(); os.RemoveAll(dir) })
+	l, path := sockettest.Listen(t)
 	go func() {
 		for {
 			c, err := l.Accept()
@@ -283,7 +295,7 @@ func TestPauseReportsHerdrSettleTimeout(t *testing.T) {
 		return nil, map[string]any{"code": "timeout", "message": "wait timed out"}
 	})
 	for range 5 {
-		out := Run(context.Background(), libagent.FromEnvironment(200*time.Millisecond), Options{Target: identity.Target{Name: "worker"}, Timeout: 200 * time.Millisecond})
+		out := Run(context.Background(), libagent.FromEnvironment(20*time.Millisecond), Options{Target: identity.Target{Name: "worker"}, Timeout: 20 * time.Millisecond})
 		if out.Error == nil || out.Error.Code != "timeout" || out.Error.Phase != "agent.wait" || !out.Result.(Result).Submitted {
 			t.Fatalf("%+v %+v", out, out.Error)
 		}

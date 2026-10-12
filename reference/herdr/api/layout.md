@@ -1,6 +1,6 @@
 # herdr API: layout methods
 
-> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
+> herdr 0.9.3 · protocol 22 · schema_version 1 · captured 2026-10-06
 > Part of the fledge herdr reference. Index: [README.md](../README.md). Wire format: [protocol.md](../protocol.md).
 
 The `layout.*` methods read and reshape the pane tree of a tab. `layout.export` serializes
@@ -42,7 +42,7 @@ directions: `env` is accepted and takes effect on `layout.apply` but is never pr
 |---|---|---|---|---|
 | `type` | `"pane"` (const) | yes | — | Discriminator. |
 | `pane_id` | string \| null | no | null | Existing pane ID to reference. On `layout.apply` this is a hint, not a reservation — apply allocates fresh pane IDs (probe: requested `w1:p1` became `w1:p6`). On export it is the live pane ID. |
-| `command` | array of string \| null | no | null | Command line (argv) to run in the pane when applied; null/absent means a default shell. An empty array (`[]`) is rejected with `invalid_layout` ("pane command must not be empty"). |
+| `command` | array of string \| null | no | null | Command line (argv) to run in the pane when applied; null/absent means a default shell. An empty array (`[]`) is rejected with `invalid_layout` ("pane command must not be empty"). Unlike `env`, a pane's `command` is echoed back: both the `layout.apply` result and a later `layout.export` include it (absent for a default-shell pane). |
 | `cwd` | string \| null | no | null | Working directory for the pane. A `cwd` that does not exist is not an error — herdr silently substitutes `$HOME`, and the result reports the substituted path. |
 | `env` | object (string → string) | no | `{}` | Environment variables to set in the pane. Takes effect on `layout.apply` but is never echoed back — no result ever includes `env` (see above). |
 | `label` | string \| null | no | null | Human-readable label for the pane. |
@@ -75,7 +75,9 @@ Realize a `LayoutNode` tree into a target, creating the panes and splits it desc
 optionally running each pane's `command` (spawned non-blockingly: `layout.apply` does not
 wait for it to exit, and a pane whose command exits immediately closes that pane, closing
 the tab too if it was the last pane in it). The tree is limited to 16 levels of depth and 24
-panes; larger trees fail with `invalid_layout`. With neither `workspace_id` nor `tab_id`,
+panes; larger trees fail with `invalid_layout` (messages `layout depth is 17; maximum is 16` and
+`layout has more than 24 panes`). Depth counts nodes, leaves included: a chain of 15 nested
+splits (depth 16) is accepted and a chain of 16 is rejected. With neither `workspace_id` nor `tab_id`,
 apply creates a new tab in the currently focused workspace. When `workspace_id` is given
 without `tab_id`, apply creates a **new tab** in that workspace to hold the layout; giving
 both `workspace_id` and `tab_id` is rejected (`invalid_target`). `tab_id` does **not**
@@ -120,19 +122,26 @@ Other codes possible.
 **Events**: applying into a new tab emits `layout_updated`, `tab_created` (subscription type
 `tab.created`), and one `pane_created`/`pane_updated` pair per pane (subscription types
 `pane.created`/`pane.updated`); applying with an existing `tab_id` additionally emits
-`tab_closed` (subscription type `tab.closed`) for the destroyed tab. The `layout_updated`
+`tab_closed` (subscription type `tab.closed`) for the destroyed tab, but no `pane_closed` for
+the destroyed tab's panes. The `layout_updated`
 payload is a `PaneLayoutSnapshot` (area/panes/splits with rects), not the
 `LayoutDescription` this method returns.
 
 **CLI**: API-only (no CLI subcommand).
 
-**Example** — Validated 2026-09-19 against herdr 0.9.1. (Same request replayed verbatim; a
-pristine server yields `w1:t2`/`w1:p2` here, since the concrete IDs depend on prior session
-state.)
+Validated 2026-10-06 against herdr 0.9.3: every claim in this section (targeting, `tab_id`
+replacement order and label inheritance, `tab_label` override, pane-ID hints, the 16/24 limits,
+every error row, the `focus` default and both edge cases, `cwd` fallback to `$HOME`, `env`
+taking effect while never echoed, a command that exits closing its pane and tab, the ratio
+clamp and `f32` rounding, and the events above) was re-run on a scratch server.
+
+**Example** — Validated 2026-10-06 against herdr 0.9.3. (Captured as the first apply on a
+scratch server holding one workspace with one pane `w1:p1`, so it yields `w1:t2`/`w1:p2`; the
+concrete IDs depend on prior session state. `cwd` elided.)
 
 ```json
 {"id":"l3","method":"layout.apply","params":{"workspace_id":"w1","root":{"type":"pane","pane_id":"w1:p1","cwd":"…/scratch-repo"}}}
-{"id":"l3","result":{"type":"layout_apply","layout":{"workspace_id":"w1","tab_id":"w1:t6","zoomed":false,"focused_pane_id":"w1:p6","root":{"type":"pane","pane_id":"w1:p6","cwd":"…/scratch-repo"}}}}
+{"id":"l3","result":{"type":"layout_apply","layout":{"workspace_id":"w1","tab_id":"w1:t2","zoomed":false,"focused_pane_id":"w1:p2","root":{"type":"pane","pane_id":"w1:p2","cwd":"…/scratch-repo"}}}}
 ```
 
 ## layout.export
@@ -180,8 +189,12 @@ Other codes possible.
 
 **CLI**: API-only (no CLI subcommand).
 
-**Example** — Validated 2026-09-19 against herdr 0.9.1. (Replayed verbatim, byte-identical.
-Request uses the undocumented `workspace_id` field noted above; prefer `tab_id`.)
+Validated 2026-10-06 against herdr 0.9.3: the targeting rules, every error row (the
+no-workspaces case on a fresh scratch server), the ignored `workspace_id`, the zoomed
+snapshot, and the no-events claim were re-run.
+
+**Example** — Validated 2026-10-06 against herdr 0.9.3. (Same shape on a scratch server; `cwd`
+elided. Request uses the undocumented `workspace_id` field noted above; prefer `tab_id`.)
 
 ```json
 {"id":"r1","method":"layout.export","params":{"workspace_id":"w1"}}
@@ -227,13 +240,21 @@ unsplit pane), the method fails with `split_not_found`.
 
 Other codes possible.
 
-**Events**: emits exactly one `layout_updated` event to subscribers (subscription type
-`layout.updated`), with the same `PaneLayoutSnapshot` payload described under
-[layout.apply](#layoutapply).
+**Events**: emits one `layout_updated` event (subscription type `layout.updated`), with the
+same `PaneLayoutSnapshot` payload described under [layout.apply](#layoutapply), followed by
+one `pane_updated` (subscription type `pane.updated`) for each pane the new ratio resized —
+three for the three-pane example below. Validated 2026-10-06 against herdr 0.9.3; the 0.9.1
+page reported only the `layout_updated` event.
 
 **CLI**: API-only (no CLI subcommand).
 
-**Example** — Validated 2026-09-19 against herdr 0.9.1. (Byte-identical replay; this capture
+With neither `tab_id` nor `pane_id` the active tab is used: on a server whose active tab is a
+single pane, `{"path":[],"ratio":0.5}` fails `split_not_found`.
+
+Validated 2026-10-06 against herdr 0.9.3: the path walk, both integer ratios, every error row,
+the ignored unknown param, and the events above were re-run on a scratch server.
+
+**Example** — Validated 2026-10-06 against herdr 0.9.3. (Byte-identical replay; this capture
 targets a single-pane tab, so the split path does not resolve and the server returns an
 error — see below for a successful call.)
 

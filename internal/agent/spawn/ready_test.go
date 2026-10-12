@@ -104,20 +104,32 @@ func TestSpawnWithoutPromptRegistersAfterReadiness(t *testing.T) {
 }
 
 // Blocked during the gate exits partial like a blocked lifecycle wait: the
-// agent is registered and kept, and the requested prompt is never submitted.
+// agent is registered and kept, and the requested prompt, a task or a
+// profile brief, is never submitted.
 func TestSpawnBlockedDuringReadinessIsPartial(t *testing.T) {
-	p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
-	o := paneOptions()
-	o.Prompt, o.PromptSet = "secret brief", true
-	s, _ := gatedSpawn(t, launching(p, "idle", nil, flag(true)), getCall(launching(p, "blocked", nil, flag(true))), callerNotAgent())
-	s.Cwd = identitytest.Repository(t)
-	out := s.run(context.Background(), o, nil)
-	r := out.Result.(*Result)
-	if out.Status != "partial" || out.Error == nil || out.Error.Code != "agent_blocked" || out.Error.Phase != "agent.wait" {
-		t.Fatalf("%+v %+v", out, out.Error)
-	}
-	if r.Prompted || !r.PromptRequested || !r.Registered || r.MessageID != nil {
-		t.Fatalf("%+v", r)
+	for name, set := range map[string]func(*Options){
+		"prompt":  func(o *Options) { o.Prompt, o.PromptSet = "secret brief", true },
+		"profile": func(o *Options) { o.Profile = "reviewer" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
+			o := paneOptions()
+			set(&o)
+			s, _ := gatedSpawn(t, launching(p, "idle", nil, flag(true)), getCall(launching(p, "blocked", nil, flag(true))), callerNotAgent())
+			s.Cwd = identitytest.Repository(t)
+			out := s.run(context.Background(), o, nil)
+			r := out.Result.(*Result)
+			if out.Status != "partial" || out.Error == nil || out.Error.Code != "agent_blocked" || out.Error.Phase != "agent.wait" {
+				t.Fatalf("%+v %+v", out, out.Error)
+			}
+			if r.Prompted || !r.PromptRequested || !r.Registered || r.MessageID != nil {
+				t.Fatalf("%+v", r)
+			}
+			var b strings.Builder
+			if err := Render(&b, out); err != nil || !strings.Contains(b.String(), "The first prompt was not submitted; after resolving the dialog, resend it") {
+				t.Fatalf("%q %v", b.String(), err)
+			}
+		})
 	}
 }
 
@@ -247,25 +259,21 @@ func TestSpawnReadinessPollFailure(t *testing.T) {
 // Every first-prompt source is submitted exactly once, after the gate, with
 // one sender header.
 func TestSpawnFirstPromptSourcesSubmitOnceAfterReadiness(t *testing.T) {
-	reviewer := builtinProfile(t, "reviewer").Brief()
+	reviewer := builtinProfile(t, "reviewer").Brief() + noMemories
 	for _, tc := range []struct {
 		name, in, text string
 		set            func(*Options)
 	}{
 		{"inline", "", "task", func(o *Options) { o.Prompt, o.PromptSet = "task", true }},
 		{"file", "from file\n", "from file\n", func(o *Options) { o.File, o.FileSet = "-", true }},
-		{"role only", "", reviewer, func(o *Options) { o.Harness, o.Profile = "", "reviewer" }},
-		{"role and task", "", reviewer + "\n\ntask", func(o *Options) { o.Harness, o.Profile, o.Prompt, o.PromptSet = "", "reviewer", "task", true }},
+		{"role only", "", reviewer, func(o *Options) { o.Profile = "reviewer" }},
+		{"role and task", "", reviewer + "\n\ntask", func(o *Options) { o.Profile, o.Prompt, o.PromptSet = "reviewer", "task", true }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := herdrscript.Pane("w1:p1", "w1", "w1:t1")
 			o := paneOptions()
 			tc.set(&o)
 			wait, poll := launching(p, "idle", nil, flag(true)), launching(p, "idle", flag(true), nil)
-			if o.Profile != "" {
-				pi := "pi"
-				wait.Agent.Agent, poll.Agent.Agent = &pi, &pi
-			}
 			s, _ := gatedSpawn(t, wait, getCall(poll), senderCall(), call{Method: "agent.prompt", Params: map[string]any{"target": "worker", "text": header + tc.text}, Result: herdr.AgentResult{Type: "agent_prompted", Agent: herdr.AgentDetails{Pane: poll.Agent.Pane}}})
 			out := s.run(context.Background(), o, strings.NewReader(tc.in))
 			if r := out.Result.(*Result); out.Status != "success" || !r.Prompted || !r.PromptRequested {

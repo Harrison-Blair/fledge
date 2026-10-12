@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
@@ -32,7 +32,7 @@ func TestSendDeliversTextAndKeysVerbatimInOneCall(t *testing.T) {
 			s := fake(t, call{Method: "agent.get", Params: map[string]any{"target": "worker"}, Result: herdrscript.Info(p)}, call{Method: "pane.send_input", Params: tc.params, Result: herdrscript.OK()})
 			out := Run(context.Background(), s, tc.o)
 			r, ok := out.Result.(Result)
-			if out.Status != "success" || !ok || !r.Submitted || len(out.Effects) != 1 || out.Effects[0] != (libagent.Effect{Action: "submitted", Kind: "input", ID: "w1:p3"}) {
+			if out.Status != "success" || !ok || !r.Submitted || len(out.Effects) != 1 || out.Effects[0] != (cli.Effect{Action: "submitted", Kind: "input", ID: "w1:p3"}) {
 				t.Fatalf("%+v", out)
 			}
 		})
@@ -137,14 +137,14 @@ func TestHumanOperationResults(t *testing.T) {
 	row := herdrscript.Row()
 	blocked := "blocked"
 	row.AgentStatus = &blocked
-	if err := (libagent.Outcome{Status: "success", Result: Result{AgentRow: row, Submitted: true}}).Write(&b, false, Render); err != nil {
+	if err := (cli.Outcome{Status: "success", Result: Result{AgentRow: row, Submitted: true}}).Write(&b, false, Render); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := strings.TrimSpace(b.String()), "Sent input to worker (claude) in w1:p1; it was blocked before sending."; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 	b.Reset()
-	if err := (libagent.Outcome{Status: "success", Result: Result{AgentRow: row, Submitted: true}}).Write(&b, true, Render); err != nil {
+	if err := (cli.Outcome{Status: "success", Result: Result{AgentRow: row, Submitted: true}}).Write(&b, true, Render); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(b.String(), `"agent_status":"blocked"`) || !strings.Contains(b.String(), `"submitted":true`) {
@@ -153,5 +153,5 @@ func TestHumanOperationResults(t *testing.T) {
 }
 
 func TestOutputFailuresPropagate(t *testing.T) {
-	herdrscript.CheckOutputFailures(t, Render, libagent.Outcome{Result: Result{}})
+	herdrscript.CheckOutputFailures(t, Render, cli.Outcome{Result: Result{}})
 }

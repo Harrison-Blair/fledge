@@ -1,6 +1,6 @@
 # herdr API: agent methods
 
-> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
+> herdr 0.9.3 · protocol 22 · schema_version 1 · captured 2026-10-06
 > Part of the fledge herdr reference. Index: [README.md](../README.md). Wire format: [protocol.md](../protocol.md).
 
 The `agent` namespace inspects and controls the coding agent recognized inside a
@@ -65,6 +65,7 @@ Returned (as `agent`) by `agent.get`, `agent.focus`, `agent.rename`,
 | `launch_pending` | boolean | no | — | Whether an `agent.start` launch is still in progress (inferred). |
 | `screen_detection_skipped` | boolean | no | — | Whether screen-based detection was skipped (inferred). |
 | `state_change_seq` | uint64 | no | `0` | Monotonic counter bumped on a lifecycle state change; see note below. |
+| `completion_seq` | uint64 \| null | no | — | New in 0.9.3. "The current idle transition completed work, independently of who has viewed it." The `state_change_seq` of the transition that finished a turn; see note below. |
 | `state_labels` | object<string,string> | no | — | Detection-provided state labels (map of label key to value). |
 | `terminal_title` | string \| null | no | — | Raw terminal title (OSC). |
 | `terminal_title_stripped` | string \| null | no | — | Terminal title with control/markup stripped. |
@@ -73,34 +74,49 @@ Returned (as `agent`) by `agent.get`, `agent.focus`, `agent.rename`,
 Only some of the optional fields above are schema-typed nullable
 (`X \| null`, or `anyOf` a null variant for `agent_session`): `agent`,
 `display_agent`, `name`, `cwd`, `foreground_cwd`, `agent_session`,
-`terminal_title`, `terminal_title_stripped`, and `title`. The rest are
+`terminal_title`, `terminal_title_stripped`, `title`, and `completion_seq`
+(`uint64 \| null`). The rest are
 schema-typed as plain, non-nullable `boolean` (`interactive_ready`,
 `launch_pending`, `screen_detection_skipped`) or plain `object`
 (`state_labels`, `tokens`), and `state_change_seq` is a plain `integer`
 (`uint64`, default `0`). Constructed from schema; not live-validated
-(2026-09-19, herdr 0.9.1).
+(2026-10-06, herdr 0.9.3).
 
-Regardless of type, herdr 0.9.1 never emits `null` for any of these fields:
-an unset field is omitted from the JSON object entirely (e.g. `agent` and
-`interactive_ready` are absent, not `null`, while an `agent.start` launch is
-still pending). Read every optional field with a default rather than
-expecting a literal `null`. Validated 2026-09-19 against herdr 0.9.1.
+Regardless of type, herdr 0.9.1 and 0.9.3 never emit `null` for any of these
+fields: an unset field is omitted from the JSON object entirely (e.g. `agent`
+and `interactive_ready` are absent, not `null`, while an `agent.start` launch
+is still pending). Read every optional field with a default rather than
+expecting a literal `null`. Validated 2026-10-06 against herdr 0.9.3 (no `null` in any `agent.*` result or
+snapshot of this pass).
 
 `state_change_seq` is a **session-global** sequence, not a per-agent counter:
 it is shared by every agent in the session, so two agents never report the
 same value, but a single agent's value can jump by several between reads
-purely because *other* agents changed state in between.
+purely because *other* agents changed state in between. Validated 2026-10-06 against herdr 0.9.3 (two
+agents launched back to back reported `1` and `2`).
+
+`completion_seq` (new in 0.9.3) tells a caller that the agent's current
+settled state followed finished work. Measured on 0.9.3: it is absent on a
+freshly launched `idle` agent; a prompted turn that ends unseen gives
+`agent_status: "done"` with `completion_seq` equal to that transition's
+`state_change_seq` (e.g. both `4`); `agent.focus` then turns the agent `idle`
+and keeps `completion_seq: 4`; a turn that ends while the pane is focused
+goes straight to `idle` with `completion_seq` set; and the key disappears
+while the agent is `working` again. Unlike `done`, it does not depend on
+whether anyone viewed the pane. A synthetic agent created by
+`pane.report_agent` never showed it. Validated 2026-10-06 against herdr 0.9.3.
 
 `tokens` accumulates across sources up to the 32-key cap on `AgentInfo`
-(`metadata_token_limit`), but a single `pane.report_metadata` call may set at
-most 16 keys per call (`invalid_metadata_token: "a metadata report may update
-at most 16 tokens"`) — send more than 16 new tokens as separate calls.
+(`metadata_token_limit: "pane metadata may contain at most 32 tokens"`), but a
+single `pane.report_metadata` call may set at most 16 keys per call
+(`invalid_metadata_token: "a metadata report may update at most 16 tokens"`) —
+send more than 16 new tokens as separate calls.
 `state_labels` only accepts a closed, currently undiscoverable vocabulary:
 every key tried (`phase`, `lane`, `status`, `detail`) was rejected with
-`invalid_state_label`.
+`invalid_state_label` (`"unknown state label: <key>"`). Validated 2026-10-06 against herdr 0.9.3.
 
 `screen_detection_skipped` was never observed set on any captured
-`AgentInfo` on 0.9.1 — every probe that looked for a state populating it
+`AgentInfo` on 0.9.1 or 0.9.3 — every probe that looked for a state populating it
 came back without the field — even though the same key does appear,
 populated, as a top-level field of `agent.explain`'s `explain` object (see
 below). Its meaning and trigger condition on `AgentInfo` specifically remain
@@ -134,7 +150,7 @@ and the matched evidence. Read-only; does not mark the pane seen.
 | `type` | const `"agent_explain"` | yes | Result discriminator. |
 | `explain` | any | yes | Free-form detection explanation (agent kind, state, manifest, rule, evidence). Schema allows any JSON value. |
 
-On herdr 0.9.1, `explain` is consistently an 18-key object: `agent`, `state`,
+On herdr 0.9.1 and 0.9.3, `explain` is consistently an 18-key object: `agent`, `state`,
 `matched_rule`, `evaluated_rules` (each with its own `evidence`),
 `manifest_source`, `manifest_version`, `cached_remote_version`,
 `local_override_shadowing_remote`, `remote_update_status`,
@@ -146,21 +162,22 @@ On herdr 0.9.1, `explain` is consistently an 18-key object: `agent`, `state`,
 
 **CLI**: `herdr agent explain [TARGET] [--file <PATH>] [--agent <LABEL>] [--json] [--format text|json] [-v]`
 
-**Example** (the CLI renders `explain` as text):
+**Example** (the CLI renders `explain` as text; an idle scratch-server agent):
 
 ```text
 agent: claude
-state: working
-manifest: remote:/home/penguin/.local/state/herdr/agent-detection/remote/claude.toml 2026.08.13.1
-rule: osc_title_working (region=osc_title priority=1100)
-evidence: "◐ herdr-api-documentation"
+state: idle
+manifest: remote:/home/penguin/.local/state/herdr/agent-detection/remote/claude.toml 2026.09.11.1
+rule: live_prompt_box (region=prompt_box_body priority=950)
+evidence: "❯\n"
 ```
 
 `-v` appends `visible:`, `cached_remote_version:`, `local_override_shadowing_remote:`,
 `remote_update_status:`, and `evaluated_rules:` lines. The `--file`/`--agent`
-form (no live pane) prints `rule: none` plus `fallback_reason`.
+form (no live pane) prints `rule: none` plus `fallback_reason` (e.g.
+`fallback_reason: default_known_agent_idle_fallback`).
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ## agent.focus
 
@@ -185,10 +202,12 @@ plain CLI reads do not.
 
 **Errors**: `agent_not_found`; other codes possible.
 
-**Events**: focusing the pane emits `pane_focused`, `tab_focused`, and
-`workspace_focused` together on every call, even when the target pane's tab
-and workspace were already the active ones — `tab_focused`/`workspace_focused`
-are not conditional on a change.
+**Events**: a call that moves focus to the target pane emits `pane_focused`,
+`tab_focused`, and `workspace_focused` together, even when the target pane's
+tab and workspace were already the active ones — `tab_focused`/`workspace_focused`
+are not conditional on their own change. On 0.9.3 a call whose target pane is
+already the focused pane emits **no** events (on 0.9.1 every call emitted all
+three). Validated 2026-10-06 against herdr 0.9.3.
 
 **CLI**: `herdr agent focus <target>`
 
@@ -203,7 +222,8 @@ A real response also carries `name`, `agent_session`, `interactive_ready`,
 `terminal_title`, `cwd`, `foreground_cwd`, and `state_change_seq` when they
 apply, as in the [AgentInfo](#agentinfo) table above.
 
-Validated 2026-09-19 against herdr 0.9.1.
+Example captured 2026-09-19 against herdr 0.9.1. Validated 2026-10-06 against herdr 0.9.3 (the focused agent
+came back `focused: true`, and a `done` agent became `idle`).
 
 ## agent.get
 
@@ -229,12 +249,18 @@ pane seen.
 
 **Example**:
 
+Terminal IDs and bare agent-kind labels are rejected: on 0.9.3 both
+`"target":"term_65d2e587ec16350"` and `"target":"claude"` returned
+`agent_not_found` (`"agent target claude not found"`) on a server with no
+agent named `claude`. The capture below is from 0.9.1, where the live agent
+in `w2:p1` was itself named `claude`.
+
 ```json
 {"id":"cli:agent:get","method":"agent.get","params":{"target":"claude"}}
 {"id":"cli:agent:get","result":{"agent":{"agent":"claude","agent_session":{"agent":"claude","kind":"id","source":"herdr:claude","value":"ef3b9d04-…"},"agent_status":"working","cwd":"/home/penguin/source/fledge","focused":true,"foreground_cwd":"/home/penguin/source/fledge","pane_id":"w2:p1","revision":4,"state_change_seq":54,"tab_id":"w2:t1","terminal_id":"term_659708952f5514","terminal_title":"◐ herdr-api-documentation","terminal_title_stripped":"herdr-api-documentation","workspace_id":"w2"},"type":"agent_info"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
+Example captured 2026-09-19 against herdr 0.9.1. Validated 2026-10-06 against herdr 0.9.3.
 
 ## agent.list
 
@@ -263,8 +289,9 @@ type: null, expected struct EmptyParams").
 {"id":"r8","result":{"type":"agent_list","agents":[]}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1. (A populated live capture: two agents
-`codex` at `w1:p1` and `claude` at `w2:p1`.)
+Example captured 2026-09-19 against herdr 0.9.1. (A populated live capture: two agents
+`codex` at `w1:p1` and `claude` at `w2:p1`.) Validated 2026-10-06 against herdr 0.9.3 (empty and populated
+lists, and both `params` errors).
 
 ## agent.prompt
 
@@ -317,9 +344,17 @@ wait is indefinite.
 {"id":"1","result":{"type":"agent_prompted","agent":{"agent":"codex","agent_status":"idle","pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1","focused":false,"revision":588,"terminal_id":"term_6596fd32191491"}}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1 (the `timeout`-vs-`agent_prompt_stalled`
-race under a shorter `timeout_ms`, and an indefinite wait with `timeout_ms`
-omitted, were not exercised).
+Example captured 2026-09-19 against herdr 0.9.1. Validated 2026-10-06 against herdr 0.9.3: a prompt without
+`wait` returned in about 300 ms (the text, then Enter after a short delay);
+`empty_agent_prompt` (`"agent prompt must not be empty"`), `agent_blocked`
+(`"agent blk is blocked and requires interactive input"`, on a launch held at
+claude's trust dialog), and both `agent_not_ready` causes reproduced; a prompt
+typed into claude's Rewind menu (opened with `esc esc`, agent still reported
+`idle`) failed at 5307 ms with `agent_prompt_stalled` (`"agent prompt produced
+no observed working or blocked state within 5000 ms; current status is
+idle"`), and the same prompt with `timeout_ms: 2000` failed at 2003 ms with
+`timeout` instead. An indefinite wait with `timeout_ms` omitted was not
+exercised.
 
 ## agent.read
 
@@ -337,7 +372,7 @@ rows that have left an alternate screen cannot be recovered by a larger count.
 | `source` | enum | yes | — | Snapshot source: `visible` (rendered viewport), `recent` (recent output incl. soft wraps), `recent_unwrapped` (soft wraps joined; best for logs/transcripts), `detection` (plain-text bottom-buffer snapshot used for agent detection). CLI defaults this to `recent`. |
 | `format` | enum | no | `text` | `text` or `ansi`. Use `ansi` when colors/styling are evidence. |
 | `lines` | uint32 \| null | no | null | Number of rows to request; null uses the default extent. A value smaller than the default truncates *downward* to the bottom N rows (`truncated: true`); `lines: 0` returns an empty string with `truncated: true` rather than an error. |
-| `strip_ansi` | boolean | no | `true` | Documented to strip ANSI escapes from the returned text. On herdr 0.9.1 it has no observable effect in either direction: only `format` (`text` vs `ansi`) governs whether escapes appear. |
+| `strip_ansi` | boolean | no | `true` | Documented to strip ANSI escapes from the returned text. On herdr 0.9.1 and 0.9.3 it has no observable effect in either direction: only `format` (`text` vs `ansi`) governs whether escapes appear. |
 
 **Result** — `type: "pane_read"`, with `read` (`PaneReadResult`):
 
@@ -371,11 +406,16 @@ escape-laden output.
 ```
 
 `format: "text"` reads of `recent`/`recent_unwrapped` with no (or a large)
-`lines` consistently take roughly 374 ms to return; `format: "ansi"`,
-`source: "detection"`, `source: "visible"`, and small `lines` values return in
-under 1 ms. A caller polling `agent.read` in a loop pays that cost per call.
+`lines` are slow: on 0.9.3 `recent` took 395–410 ms and `recent_unwrapped`
+463–485 ms (0.9.1: roughly 374 ms); `format: "ansi"`, `source: "detection"`,
+`source: "visible"`, and small `lines` values returned in 1–7 ms (one
+`detection` read took 101 ms). A caller polling `agent.read` in a loop pays
+that cost per call.
 
-Validated 2026-09-19 against herdr 0.9.1.
+Example captured 2026-09-19 against herdr 0.9.1 (live session). Validated 2026-10-06 against herdr 0.9.3 on a
+scratch-server agent: all four sources, `lines` truncation and `lines: 0`, the
+`strip_ansi` no-op, the rejected wire spelling `recent-unwrapped`, a missing
+`source` (`invalid_request`), and `agent_not_found`.
 
 ## agent.rename
 
@@ -398,7 +438,9 @@ it. The name follows the pane occupant until the agent exits or is released.
 | `type` | const `"agent_info"` | yes | Result discriminator. |
 | `agent` | [AgentInfo](#agentinfo) | yes | The renamed agent. |
 
-**Errors**: `agent_not_found`; `agent_name_taken` when the requested name is
+**Errors**: `agent_not_found`; `invalid_agent_name` when `name` breaks the
+pattern (`"agent name must start with a lowercase letter and contain only
+lowercase letters, digits, '-' or '_' (1-32 characters)"`); `agent_name_taken` when the requested name is
 already used by another live agent (message includes candidate
 `terminal_id`/`pane_id`/`workspace_id`/`tab_id`/`cwd`/`status` for the
 holder) — renaming an agent to its own current name is not a conflict and
@@ -423,7 +465,9 @@ by the old name returns `agent_not_found`. Always send `name` explicitly —
 though an explicit name does not avoid `agent_launch_pending`; wait for the
 launch to settle first (`agent.wait`).
 
-Validated 2026-09-19 against herdr 0.9.1.
+Example captured 2026-09-19 against herdr 0.9.1. Validated 2026-10-06 against herdr 0.9.3 (set, clear by `null`
+and by omission, rename to its own name, `agent_name_taken`, `invalid_agent_name`,
+and `agent_launch_pending` with and without `name`).
 
 ## agent.send_keys
 
@@ -445,7 +489,7 @@ are supported.
 | --- | --- | --- | --- |
 | `type` | const `"ok"` | yes | Acknowledges the keys were written. |
 
-**Errors**: `invalid_key` (an unsupported key name rejects the whole request before any bytes are written, e.g. `"unsupported key bogus"`); `agent_not_ready` (target is not an active named agent; measured on a `pane.report_agent`-only synthetic agent, message `"agent X is not an active named agent"`); `agent_not_found`. Other codes possible.
+**Errors**: `invalid_key` (an unsupported key name rejects the whole request before any bytes are written, e.g. `"unsupported key bogus"`); `agent_not_ready` (target is not an active named agent, message `"agent X is not an active named agent"`; measured on a `pane.report_agent`-only synthetic agent and, on 0.9.3, on an agent whose `agent.start` launch is still pending); `agent_not_found`. Other codes possible. An empty `keys` array is accepted and returns `ok`.
 
 **CLI**: `herdr agent send-keys <TARGET> <KEY>...`
 
@@ -456,30 +500,34 @@ are supported.
 {"id":"1","result":{"type":"ok"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
+Example captured 2026-09-19 against herdr 0.9.1. Validated 2026-10-06 against herdr 0.9.3 (`esc`, `escape`,
+`ctrl+c`, `invalid_key`, both `agent_not_ready` causes, `agent_not_found`).
 
 ## agent.start
 
 Starts a supported interactive agent of `kind` in an existing pane identified by
 `pane_id`, assigning it `name`. The pane must already be at its interactive shell
 prompt with no foreground command; `agent.start` never creates, splits, or moves
-layout. On herdr 0.9.1 it returns almost immediately after the launch begins
-(three real launches measured at 0.2, 0.3, and 0.3 ms — an order of magnitude
-faster than earlier trials had suggested), not once the agent is ready for
-interactive input: the returned [AgentInfo](#agentinfo) reports
-`agent_status: "unknown"` and `launch_pending: true`, with no `agent` key and
-no `interactive_ready` key at all (detection fires roughly 300–450 ms later).
-The launch settles several seconds later (~3.6 s measured) — the target either
+layout. It returns almost immediately after the launch begins (0.2–0.3 ms
+measured on 0.9.1; 0.5–4.9 ms over four timed launches on 0.9.3), not once the agent
+is ready for interactive input: the returned [AgentInfo](#agentinfo) reports
+`agent_status: "unknown"`, `launch_pending: true`, and `state_change_seq: 0`,
+with no `agent` key and no `interactive_ready` key at all (detection fires
+roughly 300–540 ms later). The launch settles several seconds later (3.4–3.8 s
+measured on 0.9.3; ~3.6 s on 0.9.1) — the target either
 reaches `idle` with `interactive_ready: true` and `launch_pending` cleared, or,
 if it blocks on its own startup UI (e.g. a workspace-trust dialog), reaches
 `agent_status: "blocked"` with `launch_pending` still `true`; `agent.start`
-itself was never observed returning `agent_not_ready` in either case, and the
-name stays available for `agent.read`/`agent.send_keys` throughout. Callers
+itself was never observed returning `agent_not_ready` in either case. The name
+stays available for `agent.read` throughout; on 0.9.3 `agent.send_keys` and
+`agent.prompt` by name return `agent_not_ready` (`"agent X is not an active
+named agent"`) until the launch settles (on 0.9.1, `agent.send_keys` worked
+during the launch). Callers
 that need to wait for readiness before calling `agent.prompt` must settle the
 launch themselves: either call `agent.wait` (measured on 0.9.1: called
 immediately after `agent.start` it blocks and returns at ~3.6 s with
 `agent_status: "idle"`, after which `agent.prompt` is accepted on the first
-try) or poll `agent.get` until `agent_status` leaves `unknown`. `agent.wait`
+try; on 0.9.3 it returned at 3.4–3.6 s) or poll `agent.get` until `agent_status` leaves `unknown`. `agent.wait`
 matches `agent_status`, not `launch_pending`, so callers must check the
 returned status: `blocked` means the agent is at a startup dialog,
 `launch_pending` is still `true`, and `agent.prompt` will return
@@ -490,7 +538,8 @@ deadline can matter, and the only observable effect of too short a deadline is
 the silent name drop documented under Errors below).
 
 **Undocumented silent data loss**: a `timeout_ms` shorter than the real launch
-takes (measured: 3001 ms against a ~3.6 s `claude` startup) makes `agent.start`
+takes (measured: 3001 ms against a ~3.6 s `claude` startup; reproduced on 0.9.3,
+where the name was gone about 3.0 s after the call) makes `agent.start`
 return a normal `agent_started` result carrying the requested `name`, and then,
 when the deadline passes, herdr silently drops the name — no error is ever
 delivered. The harness process keeps running and stays reachable by pane ID
@@ -518,7 +567,7 @@ one.
 | `agent` | [AgentInfo](#agentinfo) | yes | The started agent. |
 | `argv` | array<string> | yes | The full argument vector Herdr launched. |
 
-**Errors**: `unsupported_agent_kind` (`kind` not in the supported list), `invalid_agent_name` (see [AgentInfo](#agentinfo)'s name pattern), `agent_pane_not_found` (target pane does not exist — validated below), `agent_pane_busy` (`"agent target pane X is not an available shell"` — covers both a foreground command already running and the pane already hosting an agent), `invalid_agent_timeout` (`timeout_ms` not in `(3000, 300000]`, e.g. `"agent start timeout must be greater than 3000ms and at most 300000ms"`). Validation runs in that order: name → kind → pane exists → pane available → timeout — when both `kind` and `name` are invalid the server returns `invalid_agent_name`, never `unsupported_agent_kind` (independently reproduced 3 times; kind-alone and name-alone each still trigger their own distinct error in isolation). `agent_not_ready` (agent blocked during startup) and `timeout` (startup timeout exceeded) were never observed on 0.9.1 in any trial — see the silent-drop bug above and the blocked-launch behavior in the prose. Other codes possible.
+**Errors**: `unsupported_agent_kind` (`kind` not in the supported list, `"unsupported interactive agent kind nope"`), `invalid_agent_name` (see [AgentInfo](#agentinfo)'s name pattern), `agent_name_taken` (`name` already used by a live agent; same message shape as [agent.rename](#agentrename)'s), `agent_pane_not_found` (target pane does not exist — validated below), `agent_pane_busy` (`"agent target pane X is not an available shell"` — covers both a foreground command already running and the pane already hosting an agent), `invalid_agent_timeout` (`timeout_ms` not in `(3000, 300000]`, e.g. `"agent start timeout must be greater than 3000ms and at most 300000ms"`). Validation runs in that order: name → kind → pane exists → pane available → timeout — when both `kind` and `name` are invalid the server returns `invalid_agent_name`, never `unsupported_agent_kind` (independently reproduced 3 times; kind-alone and name-alone each still trigger their own distinct error in isolation). `agent_not_ready` (agent blocked during startup) and `timeout` (startup timeout exceeded) were never observed on 0.9.1 or 0.9.3 in any trial — see the silent-drop bug above and the blocked-launch behavior in the prose. Other codes possible.
 
 **Events**: a successful start emits `pane_agent_detected` (underscored) and, on each subsequent lifecycle change, `pane.agent_status_changed` — **dotted**; subscribers must match the dotted spelling, not the underscored `pane_agent_status_changed` form.
 
@@ -542,14 +591,17 @@ one.
 returns `agent_not_found`, while `agent.get` for `"w1:p2"` still returns the
 running `claude` agent with no `name` field at all.
 
-Validated 2026-09-19 against herdr 0.9.1 (the 30-second default `timeout_ms`
-is not independently observable, and kinds other than `claude` were not
-launched — see the CLI-listed kinds and the `unsupported_agent_kind` error).
+Examples captured 2026-09-19 against herdr 0.9.1. Validated 2026-10-06 against herdr 0.9.3 (launch timing and
+shape, both events, the validation order — including a busy pane with an
+invalid `timeout_ms` returning `agent_pane_busy` — every listed error, the
+silent name drop, and a launch blocked at claude's trust dialog; the 30-second
+default `timeout_ms` is not independently observable, and kinds other than
+`claude` were not launched — the CLI-listed kinds are unchanged on 0.9.3).
 
 ## agent.view.clear
 
 Nominally deactivates the saved agent view registered for `source` (a
-client/view identifier). On herdr 0.9.1 this is **not what actually
+client/view identifier). On herdr 0.9.1 and 0.9.3 this is **not what actually
 happens**: there is a single live agent-view slot server-wide, not one
 slot per `source`. `agent.view.clear` only takes effect when the `source`
 it is given names that one currently-active view; called with any other
@@ -618,7 +670,10 @@ deactivating, or reporting on, `bugA`):
 {"id":"bug3","result":{"type":"agent_view","active":true,"source":"bugB","label":"B"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
+Examples captured 2026-09-19 against herdr 0.9.1. Validated 2026-10-06 against herdr 0.9.3 (the `bugA`/`bugB`
+and never-set-source sequences reproduced exactly, a `null` or omitted
+`source` returned `active: false`, and the 121-character source failed
+`invalid_agent_view`).
 
 ## agent.view.set
 
@@ -628,7 +683,7 @@ list, with an optional display `label`. This drives how a client presents and
 orders agents; it does not alter the agents themselves. A view set on one
 connection is visible to a `set`/`clear` from any other connection to the
 same server, so views are not keyed by the connection that sent them. On
-herdr 0.9.1, though, `source` does not key independent, coexisting per-source
+herdr 0.9.1 and 0.9.3, though, `source` does not key independent, coexisting per-source
 storage either: `agent.view.clear`'s behavior (see its bug callout) shows a
 single live view slot server-wide, and the last `set` call — for any
 `source` — is the one that wins, replacing whatever view previously occupied
@@ -698,7 +753,12 @@ resolves to the caller's current workspace/tab at evaluation time.
 {"id":"a1","result":{"type":"agent_view","active":true,"source":"docprobe","label":"probe-view"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1.
+Example captured 2026-09-19 against herdr 0.9.1. Validated 2026-10-06 against herdr 0.9.3 (this example, an empty
+and a 121-character `source` failing `invalid_agent_view`, a 120-character
+`source` accepted, a filter using every `op`, a context value and token fields,
+and `invalid_request` for an unknown `op` — `"unknown variant \`xor\`"` — an unknown
+field — `"data did not match any variant of untagged enum AgentViewField"` — and
+a bad `order`).
 
 ## agent.wait
 
@@ -708,11 +768,11 @@ Without `until`, it matches the first settled `idle`, `done`, or `blocked` state
 states (use `unknown` explicitly when needed). Without `timeout_ms`, it waits
 indefinitely. The wait is level-triggered: if the agent is already in a
 matching state when the call is made, it returns immediately (0.2 ms measured
-on an already-idle agent). On herdr 0.9.1 the result carries a full
+on 0.9.1, 1.5 ms on 0.9.3, on an already-idle agent). On herdr 0.9.1 and 0.9.3 the result carries a full
 [AgentInfo](#agentinfo) snapshot, the same shape as `agent.get`'s result, not
 an event envelope — the schema names the result type `wait_matched` with an
 `event` field, but the measured 0.9.1 response is `type: "agent_info"` with an
-`agent` field.
+`agent` field (the 0.9.3 schema still names `wait_matched`).
 
 **Params** (`AgentWaitParams`):
 
@@ -730,7 +790,7 @@ an event envelope — the schema names the result type `wait_matched` with an
 | `type` | const `"agent_info"` | yes | Result discriminator. |
 | `agent` | [AgentInfo](#agentinfo) | yes | The agent in its matched state. |
 
-**Errors**: `timeout` (no matching state within `timeout_ms`), `agent_not_found`, `agent_not_running` (`"agent is no longer running in the target pane"` — the agent process exits while the wait is blocked; measured 2502 ms into a 30 s wait). Other codes possible.
+**Errors**: `timeout` (no matching state within `timeout_ms`; `"timed out waiting for agent status"`), `agent_not_found`, `agent_not_running` (`"agent is no longer running in the target pane"` — the agent process exits while the wait is blocked; measured 2502 ms into a 30 s wait on 0.9.1, and about 0.4 s after the agent exited on 0.9.3). Other codes possible.
 
 **CLI**: `herdr agent wait <TARGET> [--until <STATUS>]... [--timeout <MS>]`
 
@@ -741,6 +801,8 @@ an event envelope — the schema names the result type `wait_matched` with an
 {"id":"1","result":{"agent":{"agent":"claude","agent_session":{"agent":"claude","kind":"id","source":"herdr:claude","value":"0187e81f-…"},"agent_status":"idle","cwd":"/home/penguin/source/fledge","focused":false,"foreground_cwd":"/home/penguin/source/fledge","interactive_ready":true,"name":"reviewer","pane_id":"w1:p1","revision":2,"state_change_seq":169,"tab_id":"w1:t1","terminal_id":"term_65bcdef99050e20","terminal_title":"✳ Claude Code","terminal_title_stripped":"Claude Code","workspace_id":"w1"},"type":"agent_info"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1 (the `timeout` and `blocked` paths are
-now exercised, in addition to the success path shown here; a wait with
-`timeout_ms` omitted was not exercised, since it would block indefinitely).
+Example captured 2026-09-19 against herdr 0.9.1. Validated 2026-10-06 against herdr 0.9.3 (success right after
+`agent.start`, the already-matching return, `timeout` at 509 ms for a 500 ms
+`timeout_ms`, `blocked` on a trust-dialog launch, `agent_not_running`, and
+`agent_not_found`; a wait with `timeout_ms` omitted was not exercised, since it
+would block indefinitely).

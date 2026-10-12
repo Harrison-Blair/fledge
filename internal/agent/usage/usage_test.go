@@ -4,16 +4,21 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
+	"github.com/Harrison-Blair/fledge/internal/lib/harnessenv"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/selector"
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 	libusage "github.com/Harrison-Blair/fledge/internal/lib/usage"
@@ -32,7 +37,7 @@ const piSession = `{"type":"session","version":3,"id":"pi-1","timestamp":"2026-0
 type fixture struct {
 	cwd     string
 	session string
-	d       libusage.Discovery
+	d       harnessenv.Env
 }
 
 func newFixture(t *testing.T) fixture {
@@ -50,7 +55,7 @@ func newFixture(t *testing.T) fixture {
 		t.Fatal("file readers must not run commands")
 		return nil, nil
 	}
-	return fixture{cwd: identitytest.Repository(t), session: session, d: libusage.Discovery{Home: home, Run: run}}
+	return fixture{cwd: identitytest.Repository(t), session: session, d: harnessenv.Env{Home: home, Run: run}}
 }
 
 // piAgent is a live pi agent named name in pane with terminal, reporting
@@ -66,17 +71,6 @@ func piAgent(pane, terminal, name, session string) herdr.AgentDetails {
 		a.AgentSession = &herdr.AgentSession{Source: &source, Agent: &harness, Kind: &kind, Value: &session}
 	}
 	return a
-}
-
-func listCall(agents ...herdr.AgentDetails) call {
-	if agents == nil {
-		agents = []herdr.AgentDetails{}
-	}
-	return call{Method: "agent.list", Result: map[string]any{"type": "agent_list", "agents": agents}}
-}
-
-func getCall(target string, a herdr.AgentDetails) call {
-	return call{Method: "agent.get", Params: map[string]any{"target": target}, Result: herdr.AgentResult{Type: "agent_info", Agent: a}}
 }
 
 func client(t *testing.T, cwd string, calls ...call) libagent.Client {
@@ -98,7 +92,7 @@ func record(t *testing.T, cwd, id string) identity.Record {
 	return rec
 }
 
-func rows(t *testing.T, out libagent.Outcome) []Row {
+func rows(t *testing.T, out cli.Outcome) []Row {
 	t.Helper()
 	r, ok := out.Result.(Result)
 	if out.Error != nil || !ok {
@@ -113,7 +107,7 @@ func TestUsageFilterMeasuresAndPersistsLiveRef(t *testing.T) {
 	f := newFixture(t)
 	a := piAgent("w1:p3", "term_a", "worker", f.session)
 	rec := identitytest.Register(t, f.cwd, a)
-	out := Run(context.Background(), client(t, f.cwd, listCall(a)), f.d, Options{Selection: selector.Selection{Filter: selector.Filter{Harnesses: []string{"pi"}}}})
+	out := Run(context.Background(), client(t, f.cwd, herdrscript.List(a)), f.d, Options{Selection: selector.Selection{Filter: selector.Filter{Harnesses: []string{"pi"}}}})
 	got := rows(t, out)
 	if len(got) != 1 {
 		t.Fatalf("%+v", got)
@@ -126,7 +120,7 @@ func TestUsageFilterMeasuresAndPersistsLiveRef(t *testing.T) {
 	if stored := record(t, f.cwd, rec.ID).NativeSession; stored == nil || stored.Value != f.session || stored.Kind != "path" {
 		t.Fatalf("ref not persisted: %+v", stored)
 	}
-	if len(out.Effects) != 1 || out.Effects[0] != (libagent.Effect{Action: "updated", Kind: "native_session", ID: rec.ID}) {
+	if len(out.Effects) != 1 || out.Effects[0] != (cli.Effect{Action: "updated", Kind: "native_session", ID: rec.ID}) {
 		t.Fatalf("%+v", out.Effects)
 	}
 }
@@ -170,7 +164,7 @@ func TestUsageGoneIDUsesPersistedRef(t *testing.T) {
 	}
 	c := client(t, f.cwd,
 		call{Method: "agent.get", Err: &herdr.Error{Code: "agent_not_found", Message: "gone"}},
-		listCall(),
+		herdrscript.List(),
 		call{Method: "pane.list", Result: map[string]any{"type": "pane_list", "panes": []any{}}})
 	got := rows(t, Run(context.Background(), c, f.d, Options{Selection: selector.Selection{IDs: []string{rec.ID}}}))
 	if len(got) != 1 || got[0].Basis != libusage.Measured || *got[0].AgentID != rec.ID {
@@ -195,7 +189,7 @@ func TestUsageStaleIDUnreadableRecordFails(t *testing.T) {
 	}
 	c := client(t, f.cwd,
 		call{Method: "agent.get", Err: &herdr.Error{Code: "agent_not_found", Message: "gone"}},
-		listCall(),
+		herdrscript.List(),
 		call{Method: "pane.list", Result: map[string]any{"type": "pane_list", "panes": []any{a}}, Before: corrupt})
 	out := Run(context.Background(), c, f.d, Options{Selection: selector.Selection{IDs: []string{rec.ID}}})
 	if out.Error == nil || out.Error.Phase != "identity" {
@@ -239,7 +233,7 @@ func TestUsageEndedClaudeIDWithoutWorktreeIsMeasured(t *testing.T) {
 	a.Agent, a.Cwd = &harness, &cwd
 	a = identitytest.WithSession(a, "cl-1")
 	rec := identitytest.Register(t, f.cwd, a)
-	live := rows(t, Run(context.Background(), client(t, f.cwd, listCall(a)), f.d, Options{Selection: selector.Selection{Filter: selector.Filter{Registered: true}}}))
+	live := rows(t, Run(context.Background(), client(t, f.cwd, herdrscript.List(a)), f.d, Options{Selection: selector.Selection{Filter: selector.Filter{Registered: true}}}))
 	if len(live) != 1 || live[0].Basis != libusage.Measured || live[0].Tokens.Output != 4 {
 		t.Fatalf("live: %+v", live)
 	}
@@ -268,7 +262,7 @@ func TestUsageUnknownIDFails(t *testing.T) {
 func TestUsageWithoutRefIsUnavailable(t *testing.T) {
 	f := newFixture(t)
 	a := piAgent("w1:p4", "term_b", "stray", "")
-	got := rows(t, Run(context.Background(), client(t, f.cwd, getCall("w1:p4", a)), f.d, Options{Selection: selector.Selection{Panes: []string{"w1:p4"}}}))
+	got := rows(t, Run(context.Background(), client(t, f.cwd, herdrscript.Get("w1:p4", a)), f.d, Options{Selection: selector.Selection{Panes: []string{"w1:p4"}}}))
 	if len(got) != 1 || got[0].Basis != libusage.Unavailable || got[0].Reason != "no native session ref observed" || got[0].Harness != "pi" || got[0].AgentID != nil || got[0].ElapsedSeconds != nil {
 		t.Fatalf("%+v", got)
 	}
@@ -279,9 +273,92 @@ func TestUsageNameAttributesRecord(t *testing.T) {
 	f := newFixture(t)
 	a := piAgent("w1:p3", "term_a", "worker", f.session)
 	rec := identitytest.Register(t, f.cwd, a)
-	got := rows(t, Run(context.Background(), client(t, f.cwd, getCall("worker", a)), f.d, Options{Selection: selector.Selection{Names: []string{"worker"}}}))
+	got := rows(t, Run(context.Background(), client(t, f.cwd, herdrscript.Get("worker", a)), f.d, Options{Selection: selector.Selection{Names: []string{"worker"}}}))
 	if len(got) != 1 || got[0].AgentID == nil || *got[0].AgentID != rec.ID || record(t, f.cwd, rec.ID).NativeSession == nil {
 		t.Fatalf("%+v", got)
+	}
+}
+
+// countScans counts calls of liveByTerminal, which then returns records and
+// err when either is set, else scans the store.
+func countScans(t *testing.T, records map[string]identity.Record, err error) *int {
+	t.Helper()
+	scans := 0
+	t.Cleanup(func() { liveByTerminal = identity.LiveByTerminal })
+	liveByTerminal = func(s *state.Store) (map[string]identity.Record, error) {
+		scans++
+		if records != nil || err != nil {
+			return records, err
+		}
+		return identity.LiveByTerminal(s)
+	}
+	return &scans
+}
+
+// Several --name targets share one scan of the live records, and each is
+// attributed to its own record.
+func TestUsageNamesScanLiveRecordsOnce(t *testing.T) {
+	f := newFixture(t)
+	names := []string{"one", "two", "three"}
+	var calls []call
+	ids := map[string]string{}
+	for i, name := range names {
+		a := piAgent("w1:p"+strconv.Itoa(i+3), "term_"+name, name, f.session)
+		ids[name] = identitytest.Register(t, f.cwd, a).ID
+		calls = append(calls, herdrscript.Get(name, a))
+	}
+	scans := countScans(t, nil, nil)
+	got := rows(t, Run(context.Background(), client(t, f.cwd, calls...), f.d, Options{Selection: selector.Selection{Names: names}}))
+	if *scans != 1 {
+		t.Fatalf("scans = %d, want 1", *scans)
+	}
+	if len(got) != len(names) {
+		t.Fatalf("%+v", got)
+	}
+	for i, r := range got {
+		if r.AgentID == nil || *r.AgentID != ids[names[i]] {
+			t.Fatalf("row %d: %+v", i, r)
+		}
+	}
+}
+
+// Targets that already carry records need no scan.
+func TestUsageRecordedTargetsSkipScan(t *testing.T) {
+	f := newFixture(t)
+	a := piAgent("w1:p3", "term_a", "worker", f.session)
+	identitytest.Register(t, f.cwd, a)
+	scans := countScans(t, nil, nil)
+	got := rows(t, Run(context.Background(), client(t, f.cwd, herdrscript.List(a)), f.d, Options{Selection: selector.Selection{Filter: selector.Filter{Registered: true}}}))
+	if *scans != 0 || len(got) != 1 || got[0].AgentID == nil {
+		t.Fatalf("scans = %d, rows %+v", *scans, got)
+	}
+}
+
+// A live record of a different harness in the target's terminal is not the
+// target's record.
+func TestUsageNameMismatchedHarnessIsUnattributed(t *testing.T) {
+	f := newFixture(t)
+	a := piAgent("w1:p3", "term_a", "worker", f.session)
+	identitytest.Register(t, f.cwd, a)
+	other := "claude"
+	a.Agent = &other
+	got := rows(t, Run(context.Background(), client(t, f.cwd, herdrscript.Get("worker", a)), f.d, Options{Selection: selector.Selection{Names: []string{"worker"}}}))
+	if len(got) != 1 || got[0].AgentID != nil || got[0].Harness != "claude" {
+		t.Fatalf("%+v", got)
+	}
+}
+
+// A failed scan is not fatal: no target is attributed, even to a record the
+// partial scan returned, and every row is still reported.
+func TestUsageScanErrorLeavesNamesUnattributed(t *testing.T) {
+	f := newFixture(t)
+	a := piAgent("w1:p3", "term_a", "worker", f.session)
+	rec := identitytest.Register(t, f.cwd, a)
+	scans := countScans(t, map[string]identity.Record{"term_a": rec}, errors.New("unreadable record"))
+	out := Run(context.Background(), client(t, f.cwd, herdrscript.Get("worker", a)), f.d, Options{Selection: selector.Selection{Names: []string{"worker"}}})
+	got := rows(t, out)
+	if *scans != 1 || len(got) != 1 || got[0].AgentID != nil || got[0].Basis != libusage.Measured || out.Status != "success" || len(out.Effects) != 0 {
+		t.Fatalf("scans = %d, %+v", *scans, out)
 	}
 }
 
@@ -291,11 +368,11 @@ func TestUsagePersistFailureWarns(t *testing.T) {
 	a := piAgent("w1:p3", "term_a", "worker", f.session)
 	rec := identitytest.Register(t, f.cwd, a)
 	unchanged := identitytest.ReadOnly(t, f.cwd, rec.ID)
-	out := Run(context.Background(), client(t, f.cwd, listCall(a)), f.d, Options{Selection: selector.Selection{Filter: selector.Filter{Registered: true}}})
+	out := Run(context.Background(), client(t, f.cwd, herdrscript.List(a)), f.d, Options{Selection: selector.Selection{Filter: selector.Filter{Registered: true}}})
 	if got := rows(t, out); len(got) != 1 || got[0].Basis != libusage.Measured || got[0].AgentID == nil || *got[0].AgentID != rec.ID || out.Status != "success" {
 		t.Fatalf("%+v", out)
 	}
-	if len(out.Effects) != 1 || out.Effects[0] != (libagent.Effect{Action: "warning", Kind: "native_session", ID: rec.ID}) {
+	if len(out.Effects) != 1 || out.Effects[0] != (cli.Effect{Action: "warning", Kind: "native_session", ID: rec.ID}) {
 		t.Fatalf("%+v", out.Effects)
 	}
 	unchanged()
@@ -304,7 +381,7 @@ func TestUsagePersistFailureWarns(t *testing.T) {
 // An empty filter selection is no_agents_matched, as for stop and message.
 func TestUsageEmptySelectionFails(t *testing.T) {
 	f := newFixture(t)
-	out := Run(context.Background(), client(t, f.cwd, listCall(piAgent("w1:p3", "term_a", "worker", ""))), f.d, Options{Selection: selector.Selection{Filter: selector.Filter{States: []string{"working"}}}})
+	out := Run(context.Background(), client(t, f.cwd, herdrscript.List(piAgent("w1:p3", "term_a", "worker", ""))), f.d, Options{Selection: selector.Selection{Filter: selector.Filter{States: []string{"working"}}}})
 	if out.Status != "rejected" || out.ExitCode() != 1 || out.Error.Code != "no_agents_matched" || out.Error.Phase != "selection" {
 		t.Fatalf("%+v", out)
 	}
@@ -334,7 +411,7 @@ func TestRenderTable(t *testing.T) {
 		{Pane: &pane, Summary: libusage.Summary{Harness: "cursor", Basis: libusage.Unavailable, Reason: "no native session ref observed"}},
 	}}
 	var b bytes.Buffer
-	if err := Render(&b, libagent.Outcome{Status: "success", Result: result}); err != nil {
+	if err := Render(&b, cli.Outcome{Status: "success", Result: result}); err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimRight(b.String(), "\n"), "\n")
@@ -355,7 +432,7 @@ func TestRenderTable(t *testing.T) {
 
 func TestRenderWarning(t *testing.T) {
 	var b bytes.Buffer
-	out := libagent.Outcome{Status: "success", Result: Result{Agents: []Row{}}, Effects: []libagent.Effect{{Action: "warning", Kind: "native_session", ID: "0000beef"}}}
+	out := cli.Outcome{Status: "success", Result: Result{Agents: []Row{}}, Effects: []cli.Effect{{Action: "warning", Kind: "native_session", ID: "0000beef"}}}
 	if err := Render(&b, out); err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +447,7 @@ func TestJSONFields(t *testing.T) {
 	f := newFixture(t)
 	a := piAgent("w1:p3", "term_a", "worker", f.session)
 	identitytest.Register(t, f.cwd, a)
-	out := Run(context.Background(), client(t, f.cwd, listCall(a)), f.d, Options{Selection: selector.Selection{Filter: selector.Filter{Registered: true}}})
+	out := Run(context.Background(), client(t, f.cwd, herdrscript.List(a)), f.d, Options{Selection: selector.Selection{Filter: selector.Filter{Registered: true}}})
 	var b bytes.Buffer
 	if err := out.Write(&b, true, Render); err != nil {
 		t.Fatal(err)
@@ -387,5 +464,121 @@ func TestJSONFields(t *testing.T) {
 		if _, ok := decoded.Result.Agents[0][key]; !ok {
 			t.Errorf("missing %s in %s", key, b.String())
 		}
+	}
+}
+
+// jsonPanes is the raw pane field of each --json row, as serialized.
+func jsonPanes(t *testing.T, out cli.Outcome) []string {
+	t.Helper()
+	var b bytes.Buffer
+	if err := out.Write(&b, true, Render); err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Result struct {
+			Agents []struct {
+				Pane json.RawMessage `json:"pane"`
+			} `json:"agents"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(b.Bytes(), &decoded); err != nil {
+		t.Fatalf("%v %s", err, b.String())
+	}
+	panes := make([]string, len(decoded.Result.Agents))
+	for i, a := range decoded.Result.Agents {
+		panes[i] = string(a.Pane)
+	}
+	return panes
+}
+
+// A live agent's --json pane is its resolved pane ID however it was selected,
+// never the selector text.
+func TestUsageLiveJSONPaneIsResolvedPaneID(t *testing.T) {
+	f := newFixture(t)
+	a := piAgent("w1:p3", "term_a", "worker", f.session)
+	rec := identitytest.Register(t, f.cwd, a)
+	for _, tc := range []struct {
+		name  string
+		calls []call
+		sel   selector.Selection
+	}{
+		{"name", []call{herdrscript.Get("worker", a)}, selector.Selection{Names: []string{"worker"}}},
+		{"pane", []call{herdrscript.Get("w1:p3", a)}, selector.Selection{Panes: []string{"w1:p3"}}},
+		{"id", []call{herdrscript.Get("w1:p3", a)}, selector.Selection{IDs: []string{rec.ID}}},
+		{"filter", []call{herdrscript.List(a)}, selector.Selection{Filter: selector.Filter{Harnesses: []string{"pi"}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := Run(context.Background(), client(t, f.cwd, tc.calls...), f.d, Options{Selection: tc.sel})
+			if got := rows(t, out); len(got) != 1 || got[0].Basis != libusage.Measured || got[0].AgentID == nil || *got[0].AgentID != rec.ID || *got[0].Name != "worker" {
+				t.Fatalf("%+v", got)
+			}
+			if panes := jsonPanes(t, out); len(panes) != 1 || panes[0] != `"w1:p3"` {
+				t.Fatalf("pane: %v", panes)
+			}
+		})
+	}
+}
+
+// An ended or stale --id reports its recorded pane.
+func TestUsageHistoricalJSONPaneIsRecordPane(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		calls func(a herdr.AgentDetails) []call
+	}{
+		{"ended", func(herdr.AgentDetails) []call { return nil }},
+		{"stale", func(a herdr.AgentDetails) []call {
+			return []call{
+				{Method: "agent.get", Err: &herdr.Error{Code: "agent_not_found", Message: "gone"}},
+				herdrscript.List(),
+				{Method: "pane.list", Result: map[string]any{"type": "pane_list", "panes": []any{a}}},
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			a := piAgent("w1:p3", "term_a", "worker", f.session)
+			rec := identitytest.Register(t, f.cwd, a)
+			s, _ := identity.Existing(context.Background(), f.cwd)
+			if _, _, err := identity.ObserveSession(s, rec.ID, *a.AgentSession, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			if tc.name == "ended" {
+				if err := identity.End(s, rec.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			out := Run(context.Background(), client(t, f.cwd, tc.calls(a)...), f.d, Options{Selection: selector.Selection{IDs: []string{rec.ID}}})
+			if got := rows(t, out); len(got) != 1 || got[0].Basis != libusage.Measured || got[0].AgentID == nil || *got[0].AgentID != rec.ID || got[0].ElapsedSeconds == nil {
+				t.Fatalf("%+v", got)
+			}
+			if panes := jsonPanes(t, out); len(panes) != 1 || panes[0] != `"w1:p3"` {
+				t.Fatalf("pane: %v", panes)
+			}
+		})
+	}
+}
+
+// Usage of a stale id and a live id resolves the repository root once for
+// the lookups, the stale record's reread, and the rows.
+func TestUsageIDsResolveRootOnce(t *testing.T) {
+	f := newFixture(t)
+	gone, live := piAgent("w1:p3", "term_a", "gone", ""), piAgent("w1:p4", "term_b", "live", "")
+	recGone, recLive := identitytest.Register(t, f.cwd, gone), identitytest.Register(t, f.cwd, live)
+	s, err := identity.Existing(context.Background(), f.cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ended := time.Now().UTC().Format(time.RFC3339)
+	if err := s.Update(identity.Kind, recGone.ID, &recGone, func() error { recGone.EndedAt = &ended; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	c := client(t, f.cwd, call{Method: "agent.get", Params: map[string]any{"target": "w1:p4"}, Result: herdr.AgentResult{Type: "agent_info", Agent: live}})
+	roots := identitytest.CountRoots(t)
+	got := rows(t, Run(context.Background(), c, f.d, Options{Selection: selector.Selection{IDs: []string{recGone.ID, recLive.ID}}}))
+	if len(got) != 2 || *got[0].AgentID != recGone.ID || *got[1].AgentID != recLive.ID {
+		t.Fatalf("%+v", got)
+	}
+	if n := roots(); n != 1 {
+		t.Fatalf("resolved the repository root %d times, want 1", n)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
@@ -254,7 +255,7 @@ func TestGetOutput(t *testing.T) {
 }
 
 func TestOutputFailuresPropagate(t *testing.T) {
-	herdrscript.CheckOutputFailures(t, Render, libagent.Outcome{Result: Result{}})
+	herdrscript.CheckOutputFailures(t, Render, cli.Outcome{Result: Result{}})
 }
 
 func TestGetByIDShowsRecord(t *testing.T) {
@@ -359,9 +360,8 @@ func TestGetShowsPersistedNativeSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source, harness, kind := "herdr:claude", "claude", "id"
 	for _, v := range []string{"s-old", "s-new"} {
-		if _, _, err := identity.ObserveSession(s, rec.ID, herdr.AgentSession{Source: &source, Agent: &harness, Kind: &kind, Value: &v}, time.Now()); err != nil {
+		if _, _, err := identity.ObserveSession(s, rec.ID, *identitytest.WithSession(herdr.AgentDetails{}, v).AgentSession, time.Now()); err != nil {
 			t.Fatal(err)
 		}
 	}

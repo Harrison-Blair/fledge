@@ -1,6 +1,10 @@
 package task
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
+)
 
 // Progress counts a parent's direct children. Cancelled children are shown
 // but not counted in Total.
@@ -11,7 +15,7 @@ type Progress struct {
 }
 
 // ChildProgress counts the direct children of task id among rs; it is nil
-// when id has none.
+// when id has none. A landed child counts as verified.
 func ChildProgress(id string, rs []Record) *Progress {
 	var p *Progress
 	for _, r := range rs {
@@ -24,7 +28,7 @@ func ChildProgress(id string, rs []Record) *Progress {
 		switch r.Status {
 		case Cancelled:
 			p.Cancelled++
-		case Verified:
+		case Verified, Landed:
 			p.Verified++
 			p.Total++
 		default:
@@ -45,8 +49,10 @@ func (p Progress) String() string {
 }
 
 // Satisfied reports whether a prerequisite in status no longer holds back its
-// dependents: it is verified, or cancelled.
-func Satisfied(status string) bool { return status == Verified || status == Cancelled }
+// dependents: it is verified, landed, or cancelled.
+func Satisfied(status string) bool {
+	return status == Verified || status == Landed || status == Cancelled
+}
 
 // Index maps rs by id.
 func Index(rs []Record) map[string]Record {
@@ -67,4 +73,24 @@ func Unmet(r Record, byID map[string]Record) []string {
 		}
 	}
 	return unmet
+}
+
+// CheckLinks requires parent, when set, to accept subtasks and every task in
+// after to exist. Call it inside the store lock that creates the linking task.
+func CheckLinks(s *state.Store, parent string, after []string) error {
+	if parent != "" {
+		r, err := Get(s, parent)
+		if err == nil {
+			err = Require(&r, "adding a subtask", Created, Assigned, Completed)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	for _, id := range after {
+		if _, err := Get(s, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }

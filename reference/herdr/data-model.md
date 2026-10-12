@@ -1,6 +1,6 @@
 # herdr data model
 
-> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
+> herdr 0.9.3 · protocol 22 · schema_version 1 · captured 2026-10-06
 > Part of the fledge herdr reference. Index: [README.md](README.md). Wire format: [protocol.md](protocol.md).
 
 This file catalogs the domain entities that herdr's socket API embeds inside method
@@ -8,12 +8,11 @@ results and pushed events. Every entity here comes from the `$defs` of the
 `success_response` schema in [raw/schema.json](raw/schema.json); the per-method result
 wrappers in `api/*.md` link back to these definitions instead of re-expanding them.
 Field tables use the schema's exact JSON names. `T | null` marks a schema
-`type: ["T","null"]` (optional/nullable); in practice herdr 0.9.1 omits such a field from
+`type: ["T","null"]` (optional/nullable); in practice herdr (0.9.1 and 0.9.3) omits such a field from
 the response entirely when its value is absent, rather than sending an explicit `null`, so
 callers should treat "key missing" and "value null" as equivalent. Unless a row says
 "(inferred)", the meaning is either stated by the schema or unambiguous from the field name
-and corroborating probe captures under `scratchpad/probes/`. All probe paths below are
-relative to `scratchpad/probes/`.
+and corroborating live probes. The probe captures are not stored in this repository.
 
 Two ID conventions appear throughout and are opaque stable handles: workspace `w1`, tab
 `w1:t1`, pane `w1:p1`. Closed tab/pane IDs are never reused; the counter that mints new
@@ -27,9 +26,10 @@ contiguous from 1, whether or not those workspaces were otherwise touched, and a
 subsequently created workspace is appended as (open workspace count + 1) rather than
 backfilled into the vacated ordinal. Callers should treat a held `number` as unstable across
 any workspace close elsewhere in the session, unlike `workspace_id`, which is never reused.
-Validated 2026-09-19 against herdr 0.9.1 (created three workspaces A/B/C numbered 1/2/3;
-closing A alone, with no other call in between, immediately renumbered B to 1 and C to 2;
-a workspace D created afterward got number 3, not the vacated 1).
+Validated 2026-10-06 against herdr 0.9.3 (created three workspaces numbered 13/14/15 after
+12 others; closing the first alone, with no other call in between, immediately renumbered
+the other two to 13 and 14; a workspace created afterward got number 15, not the vacated
+13). The 0.9.1 run used three workspaces numbered 1/2/3 with the same result.
 
 ## Contents
 
@@ -71,13 +71,13 @@ a workspace D created afterward got number 3, not the vacated 1).
 
 A workspace: the top-level container that holds tabs (each tab holds a pane tree). Emitted
 by `workspace.get`/`workspace.list`/`workspace.create`, embedded in `SessionSnapshot`, and
-carried by `workspace_*` events. Corroborated by `workspace-get.json`.
+carried by `workspace_*` events. Corroborated by a live probe (capture not stored).
 
 | field | type | required | meaning |
 | --- | --- | --- | --- |
 | `workspace_id` | string | yes | opaque workspace handle, e.g. `w2` |
 | `number` | integer (uint) | yes | 1-based display ordinal in the sidebar |
-| `label` | string | yes | display name (custom name, else derived) |
+| `label` | string | yes | display name (custom name, else derived; see below) |
 | `focused` | boolean | yes | this workspace holds the UI focus |
 | `pane_count` | integer (uint) | yes | total panes across all its tabs |
 | `tab_count` | integer (uint) | yes | number of tabs |
@@ -86,15 +86,21 @@ carried by `workspace_*` events. Corroborated by `workspace-get.json`.
 | `tokens` | object&lt;string,string&gt; | no | caller-set metadata key→value map; keys match `^[A-Za-z0-9_-]{1,32}$`, ≤32 entries |
 | `worktree` | [WorkspaceWorktreeInfo](#workspaceworktreeinfo) \| null | no | git worktree this workspace is checked out to, if any |
 
+Without a custom name, `label` is derived from the workspace's `cwd`: the basename of the
+Git work-tree root when the `cwd` is inside a Git work tree (a `cwd` two levels below the
+root of repo `wtrepo` gave `wtrepo`), else the `cwd` basename, or `~` for the home
+directory. Validated 2026-10-06 against herdr 0.9.3.
+
 `tokens` is absent until the caller sets metadata, then appears as an object. Validated
-2026-09-19 against herdr 0.9.1 (`worktree` was not opened from this section's own probing
-chunk, but is confirmed populated — with exactly the `WorkspaceWorktreeInfo` shape below —
-on a worktree-backed workspace in the companion worktree-probing chunk).
+2026-10-06 against herdr 0.9.3 (`workspace.report_metadata` added `tokens` to a workspace
+whose key set had none). `worktree` was not re-probed on 0.9.3 and keeps its earlier
+stamp: Validated 2026-09-19 against herdr 0.9.1 (populated with exactly the
+`WorkspaceWorktreeInfo` shape below on a worktree-backed workspace).
 
 ## TabInfo
 
 A tab inside a workspace; a tab owns one pane tree. Emitted by `tab.get`/`tab.list`/
-`tab.create` and carried by `tab_*` events. Corroborated by `tab-get.json`.
+`tab.create` and carried by `tab_*` events. Corroborated by a live probe (capture not stored).
 
 | field | type | required | meaning |
 | --- | --- | --- | --- |
@@ -106,14 +112,14 @@ A tab inside a workspace; a tab owns one pane tree. Emitted by `tab.get`/`tab.li
 | `pane_count` | integer (uint) | yes | panes in this tab |
 | `agent_status` | [AgentStatus](#agentstatus) | yes | rolled-up agent state across the tab's panes |
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ## PaneInfo
 
 A pane: one terminal cell in a tab's layout. A pane exists with or without an agent; when
 an agent is recognized, the agent fields are populated. Emitted by `pane.get`/`pane.list`/
 `pane.current` and by `pane_created`/`pane_updated` events. Corroborated by
-`pane-current.json`, `pane-get.json`.
+live probes (captures not stored).
 
 | field | type | required | meaning |
 | --- | --- | --- | --- |
@@ -137,19 +143,35 @@ an agent is recognized, the agent fields are populated. Emitted by `pane.get`/`p
 | `scroll` | [PaneScrollInfo](#panescrollinfo) \| null | no | scrollback viewport position |
 | `state_labels` | object&lt;string,string&gt; | no | detector-produced state annotations (label→value) |
 | `tokens` | object&lt;string,string&gt; | no | caller metadata map; keys `^[A-Za-z0-9_-]{1,32}$`, ≤32 entries |
+| `restore_error` | string \| null | no | new in 0.9.3: why this pane could not be restored after a server restart; the pane is then a placeholder (see below) |
 
 The 32-entry cap above is on the `tokens` map itself, not on a single write: setting a
 pane's tokens enforces a separate, lower per-call cap of 16 tokens — updating 17+ tokens in
 one `pane.report_metadata` call fails with `invalid_metadata_token: "a metadata report may
 update at most 16 tokens"` even though the resulting map is still under the 32-entry limit.
-Reach the 17-32 range with more than one call. Validated 2026-09-19 against herdr 0.9.1.
+Reach the 17-32 range with more than one call. A call that would take the map past 32
+fails with a different code, `metadata_token_limit: "pane metadata may contain at most 32
+tokens"`. Validated 2026-10-06 against herdr 0.9.3 (16 + 16 tokens from two sources
+succeeded; one more token failed).
+
+`restore_error` (schema: string \| null, no description) is omitted on a normal pane. After a
+restart of a scratch server whose saved pane `cwd` had been deleted, that pane came back as
+`{"pane_id":"w1:p3",…,"cwd":"…/gone","restore_error":"Saved directory is unavailable.
+Restore the directory and restart this session.","agent_status":"unknown","revision":0}`
+with no `scroll` or `foreground_cwd`. The pane is a placeholder without a terminal:
+`pane.get` and `pane.list` return it, but `pane.read`, `pane.process_info`, and
+`pane.send_text` fail with `pane_not_found`. Validated 2026-10-06 against herdr 0.9.3. A
+reported agent resume command that fails (an unknown command name) does not set
+`restore_error`, because herdr types the command into the restored shell; the shell prints
+the error. Validated 2026-10-06 against herdr 0.9.3. Other `restore_error` messages were not
+provoked.
 
 ## AgentInfo
 
 The recognized coding agent currently occupying a pane. Superset of the agent-relevant
 `PaneInfo` fields plus lifecycle bookkeeping. Emitted by `agent.get`/`agent.list`/
 `agent.start`/`agent.prompt` and embedded in `SessionSnapshot.agents`. Corroborated by
-`agent-get.json`, `agent-list.json`. Agent targets are a unique live agent `name` or the
+live probes (captures not stored). Agent targets are a unique live agent `name` or the
 hosting `pane_id`; names match `[a-z][a-z0-9_-]{0,31}` and follow the pane's occupant.
 
 | field | type | required | meaning |
@@ -171,19 +193,37 @@ hosting `pane_id`; names match `[a-z][a-z0-9_-]{0,31}` and follow the pane's occ
 | `launch_pending` | boolean | no | a launch is in progress and not yet detected |
 | `screen_detection_skipped` | boolean | no | screen-based detection bypassed (e.g. integration supplies state) |
 | `state_change_seq` | integer (uint64) | no (default 0) | monotonic counter bumped on each lifecycle change; use to detect state transitions |
+| `completion_seq` | integer (uint64) \| null | no | new in 0.9.3: schema "The current idle transition completed work, independently of who has viewed it." See below |
 | `state_labels` | object&lt;string,string&gt; | no | detector state annotations |
 | `title` | string \| null | no | resolved title |
 | `terminal_title` | string \| null | no | raw terminal title |
 | `terminal_title_stripped` | string \| null | no | title with decoration removed |
 | `tokens` | object&lt;string,string&gt; | no | caller metadata map (same constraints as PaneInfo) |
 
-Note: `PaneInfo` carries `scroll` and `label`; `AgentInfo` instead carries `name`,
-`interactive_ready`, `launch_pending`, `screen_detection_skipped`, and `state_change_seq`.
+Note: `PaneInfo` carries `scroll`, `label`, and `restore_error`; `AgentInfo` instead
+carries `name`, `interactive_ready`, `launch_pending`, `screen_detection_skipped`,
+`state_change_seq`, and `completion_seq`.
 
-Constructed from schema; not live-validated (2026-09-19, herdr 0.9.1: this reverification
-pass kept `agent.start` calls to a minimum, so no agent occupied a pane in this chunk and
-`AgentInfo`'s lifecycle fields went unexercised here; see the agent-lifecycle-focused
-reverification for live `agent.start`/`agent.prompt`/`agent.wait` behavior).
+`completion_seq`, observed with an agent driven by `pane.report_agent`: after `working` then
+`idle`, `completion_seq` equalled the `state_change_seq` of that idle transition (8 and 8).
+It stayed at 8 when `agent.focus` collapsed `done` to `idle` (that collapse did not bump
+`state_change_seq` either), so it records that work completed whether or not anyone has
+seen it. It was omitted while the agent was `working` or `blocked`, and a later
+`working` → `blocked` → `idle` sequence set it to the new idle transition's
+`state_change_seq` (11). `done` appears only while the agent's tab is not focused; a
+`tab.focus` to that tab collapsed `done` to `idle` and kept `completion_seq` and
+`state_change_seq` unchanged (6 and 6), as `agent.focus` did. Compare it with a stored value to detect "finished a new turn"
+without depending on the `idle`/`done` seen distinction. Validated 2026-10-06 against herdr
+0.9.3.
+
+The rest of the table: `terminal_id`, `agent_status`, `workspace_id`, `tab_id`, `pane_id`,
+`focused`, `revision`, `agent`, `name`, `cwd`, `foreground_cwd`, `terminal_title`,
+`terminal_title_stripped`, `state_change_seq`, and `agent_session` (for a `claude` source)
+were observed live; Validated 2026-10-06 against herdr 0.9.3. `display_agent`, `title`,
+`state_labels`, `tokens`, `interactive_ready`, `launch_pending`, and
+`screen_detection_skipped` did not appear for a `pane.report_agent`-driven agent and need a
+real `agent.start` launch: Constructed from schema; not live-validated (2026-10-06, herdr
+0.9.3: no real agent was launched on the scratch server).
 
 ## AgentStatus
 
@@ -207,21 +247,26 @@ Lifecycle semantics (from [raw/skill.md](raw/skill.md)):
   `agent read`) and ask the human before answering.
 - `unknown` is not a completion signal.
 - `agent.explain` reports which detection rule produced the current state and the evidence
-  string (probe `agent-explain.json`: `state: working`, `rule: osc_title_working`,
+  string (live probe, capture not stored: `state: working`, `rule: osc_title_working`,
   `evidence: "◐ herdr-api-documentation"`).
 - Roll-ups: `TabInfo.agent_status` and `WorkspaceInfo.agent_status` aggregate the most
   significant state across their panes.
 
-Validated 2026-09-19 against herdr 0.9.1 (only the `unknown` value, on panes with no
-recognized agent, was exercised live in this chunk — confirmed on every plain-shell pane
-probed; `idle`/`working`/`blocked`/`done` and the seen/unseen distinction are drawn from
-`raw/skill.md` and were not independently reproduced against a live agent here).
+Validated 2026-10-06 against herdr 0.9.3. All five values were observed with an agent
+driven by `pane.report_agent` (state `working`, `blocked`, `idle`) in a pane running a real
+foreground process. An `idle` report for an agent in a tab that was not the focused tab
+read back as `done`; `agent.focus` collapsed it to `idle`; `agent.read`, `pane.read`, and
+`agent.explain` left `done` unchanged; an `idle` report for an agent in the focused tab read
+back as `idle` directly. One caveat for probes: an `idle` report for a pane whose foreground
+process was the plain shell released the agent at once (`pane_agent_detected` with
+`released: true`), so the pane read `unknown`. The `blocked` meaning (an approval or
+question UI) is from `raw/skill.md`; the probe reported `blocked` directly.
 
 ## AgentSessionInfo
 
 The native session handle for a recognized agent — how herdr correlates a pane's agent to
 that agent's own on-disk/native session for restore and integration. Corroborated by
-`pane-current.json` (`{"agent":"claude","kind":"id","source":"herdr:claude","value":"ef3b9d04-…"}`).
+a live probe (capture not stored): `{"agent":"claude","kind":"id","source":"herdr:claude","value":"ef3b9d04-…"}`.
 
 | field | type | required | meaning |
 | --- | --- | --- | --- |
@@ -230,9 +275,24 @@ that agent's own on-disk/native session for restore and integration. Corroborate
 | `kind` | [AgentSessionRefKind](#agentsessionrefkind) | yes | whether `value` is a session id or a filesystem path |
 | `value` | string | yes | the session identifier or path itself |
 
-Constructed from schema; not live-validated (2026-09-19, herdr 0.9.1: no agent was attached
-to a pane in this reverification chunk, so `agent_session` was never populated; the shape
-above was captured 2026-09-17, see `pane-current.json`).
+Validated 2026-10-06 against herdr 0.9.3: `pane.report_agent_session` with source
+`herdr:claude`, agent `claude`, and `agent_session_id` `0000-test` made both `pane.get` and
+`agent.get` return `{"source":"herdr:claude","agent":"claude","kind":"id","value":"0000-test"}`.
+The same report for a made-up agent kind (`herdr:rvbot`) was accepted with `ok` but no
+`agent_session` appeared on the pane or agent, so herdr exposes the handle only for agents
+it recognizes.
+
+New in 0.9.3: `pane.report_agent` and `pane.report_agent_session` accept `resume_argv`
+(array of string \| null; schema: "Command that resumes this agent's session after a Herdr
+restart. The first element must be a plain command name."). It is a request parameter, not
+part of `AgentSessionInfo`; no response entity returns it. herdr validates it
+(`invalid_resume_argv`: "resume_argv must not be empty" for `[]`; "resume_argv must start
+with a plain command name, not a path" for `/bin/sh`, `./rvbot`, or a first element with a
+space), persists it as the pane's `agent_resume` in `session.json` (see the
+[appendix](#appendix-on-disk-persistence-sessionjson-version-3)), and on restart types it
+into the restored pane's shell: a pane with `resume_argv: ["sleep","3000"]` came back
+running `sleep 3000`. Validated 2026-10-06 against herdr 0.9.3. Its params are documented
+with the methods in [api/pane.md](api/pane.md).
 
 ## AgentSessionRefKind
 
@@ -243,18 +303,21 @@ Enum, used by `AgentSessionInfo.kind`.
 | `id` | `value` is a native session identifier |
 | `path` | `value` is a filesystem path to the session |
 
-Constructed from schema; not live-validated (2026-09-19, herdr 0.9.1: tied to
-`AgentSessionInfo`, above, which was not exercised in this chunk).
+`id` Validated 2026-10-06 against herdr 0.9.3 (see `AgentSessionInfo`, above). `path` is
+Constructed from schema; not live-validated (2026-10-06, herdr 0.9.3: a later report with
+`agent_session_path` did not replace the existing `id` handle, and no fresh pane was used
+for a path-only report).
 
 ## SessionSnapshot
 
 A full dump of the live session: every workspace, tab, pane, layout, and agent plus the
-current focus. Returned by the `session.snapshot` method (`result.type = session_snapshot`).
-Corroborated by `snapshot.json` (2 workspaces / 2 tabs / 2 panes / 2 layouts / 2 agents).
+current focus. Returned by the `session.snapshot` method (`result.type = session_snapshot`),
+nested as `result.snapshot`.
+Corroborated by a live probe (capture not stored): 2 workspaces, 2 tabs, 2 panes, 2 layouts, 2 agents.
 
 | field | type | required | meaning |
 | --- | --- | --- | --- |
-| `version` | string | yes | herdr version that produced the snapshot, e.g. `0.9.1` |
+| `version` | string | yes | herdr version that produced the snapshot, e.g. `0.9.3` |
 | `protocol` | integer (uint32) | yes | protocol number, e.g. `22` |
 | `workspaces` | array&lt;[WorkspaceInfo](#workspaceinfo)&gt; | yes | all workspaces |
 | `tabs` | array&lt;[TabInfo](#tabinfo)&gt; | yes | all tabs across all workspaces |
@@ -267,7 +330,9 @@ Corroborated by `snapshot.json` (2 workspaces / 2 tabs / 2 panes / 2 layouts / 2
 
 `workspaces`/`tabs`/`panes`/`layouts`/`agents` are present as `[]` (not omitted) when
 empty; the three `focused_*` fields are omitted entirely until something is focused, then
-all three appear together. Validated 2026-09-19 against herdr 0.9.1.
+all three appear together. Validated 2026-10-06 against herdr 0.9.3 (a fresh scratch server
+returned five empty arrays and no `focused_*` keys; after workspaces existed all three
+appeared, and `agents` entries carried `completion_seq`).
 
 ## LayoutDescription
 
@@ -275,7 +340,7 @@ A portable description of a tab's layout as a recursive split tree — the shape
 `layout.export`/`layout.apply`/`layout.set_split_ratio` (`result.type` of `layout_export`,
 `layout_apply`, `layout_split_ratio_set`). Unlike [PaneLayoutSnapshot](#panelayoutsnapshot)
 (pixel/cell geometry), this is the logical tree with ratios and pane specs and is meant to
-be re-applied. Corroborated by `raw/layout-export.json`, `raw/layout-apply.json`.
+be re-applied. Corroborated by live probes (captures not stored).
 
 | field | type | required | meaning |
 | --- | --- | --- | --- |
@@ -285,7 +350,7 @@ be re-applied. Corroborated by `raw/layout-export.json`, `raw/layout-apply.json`
 | `focused_pane_id` | string | yes | focused pane in the tree |
 | `root` | [LayoutNode](#layoutnode) | yes | root of the split tree |
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ## LayoutNode
 
@@ -314,7 +379,8 @@ Variant `split` (an interior division):
 | `second` | [LayoutNode](#layoutnode) | yes | second child subtree |
 
 Validated 2026-09-19 against herdr 0.9.1 (both variants round-tripped through
-`layout.export`/`layout.apply`, including a nested split).
+`layout.export`/`layout.apply`, including a nested split). Re-checked 2026-10-06 against
+herdr 0.9.3 with `layout.export` of a two-pane tab; `layout.apply` was not re-run.
 
 ## SplitDirection
 
@@ -326,7 +392,7 @@ splitting.
 | `right` | children placed side by side; `first` on the left |
 | `down` | children stacked; `first` on top |
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ## PaneDirection
 
@@ -339,13 +405,13 @@ Enum. A four-way spatial direction, used by neighbor/edge/focus queries.
 | `up` | toward the pane above |
 | `down` | toward the pane below |
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ## PaneLayoutSnapshot
 
 The rendered geometry of a tab: absolute cell rectangles for every pane and split. Returned
 by `pane.layout` and embedded in most pane-operation results and the `layout_updated` event.
-Corroborated by `pane-layout.json`, `pane-edges.json`.
+Corroborated by live probes (captures not stored).
 
 | field | type | required | meaning |
 | --- | --- | --- | --- |
@@ -357,7 +423,7 @@ Corroborated by `pane-layout.json`, `pane-edges.json`.
 | `panes` | array&lt;[PaneLayoutPane](#panelayoutpane)&gt; | yes | placed panes with rectangles |
 | `splits` | array&lt;[PaneLayoutSplit](#panelayoutsplit)&gt; | yes | split dividers with rectangles |
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ## PaneLayoutPane
 
@@ -369,7 +435,7 @@ A pane's placement within a [PaneLayoutSnapshot](#panelayoutsnapshot).
 | `focused` | boolean | yes | this pane is focused |
 | `rect` | [PaneLayoutRect](#panelayoutrect) | yes | its cell rectangle |
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ## PaneLayoutSplit
 
@@ -386,7 +452,7 @@ This `id` is a rendered-geometry identifier only. `layout.set_split_ratio` does 
 the request instead takes a `path` array of booleans descending the
 [LayoutNode](#layoutnode) tree to the target split, with `path: []` addressing the root
 split — passing `split_id` instead fails with `invalid_request: missing field 'path'`.
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3 (the root split's `id` was `split_0_root`).
 
 ## PaneLayoutRect
 
@@ -399,7 +465,7 @@ A rectangle in terminal cells. All fields are `uint16` (0..65535).
 | `width` | integer (uint16) | yes | width in cells |
 | `height` | integer (uint16) | yes | height in cells |
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ## PaneScrollInfo
 
@@ -411,12 +477,12 @@ The scrollback viewport position for a pane (`PaneInfo.scroll`). All fields `uin
 | `max_offset_from_bottom` | integer (uint64) | yes | maximum scrollable offset (history depth) |
 | `viewport_rows` | integer (uint64) | yes | visible rows in the viewport |
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ## PaneProcessInfo
 
 Process introspection for a pane, returned by `pane.process_info`
-(`result.type = pane_process_info`). Corroborated by `pane-process-info.json`.
+(`result.type = pane_process_info`). Corroborated by a live probe (capture not stored).
 
 | field | type | required | meaning |
 | --- | --- | --- | --- |
@@ -426,7 +492,9 @@ Process introspection for a pane, returned by `pane.process_info`
 | `foreground_process_group_id` | integer (uint32) \| null | no | foreground process group ID |
 | `foreground_processes` | array&lt;[PaneProcessInfoProcess](#paneprocessinfoprocess)&gt; | no | processes in the foreground group |
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3 for `pane_id`, `shell_pid`,
+`foreground_process_group_id`, and `foreground_processes`; `tty` was absent on Linux, as
+on 0.9.1.
 
 ## PaneProcessInfoProcess
 
@@ -445,15 +513,16 @@ One process in a pane's foreground group.
 and `tty` are unverifiable in this pass: the single foreground process captured never
 exercised a case that would distinguish a null value from an omitted one for either field
 (would need a process launched with a distinct `argv[0]`, or a platform with different tty
-resolution). Validated 2026-09-19 against herdr 0.9.1 (`argv0`/`tty` not exercised, see
-above).
+resolution). Validated 2026-10-06 against herdr 0.9.3 for a plain shell and for an
+`exec -a rvbot sleep 3000` process (`argv0` was still absent even though `argv[0]`
+differed from the executable name); when `argv0` and `tty` appear remains unexplained.
 
 ## PaneReadResult
 
 The output of reading a pane's screen/scrollback, returned by `pane.read` and embedded in
 `output_matched` (from `pane.wait_for_output`; there is no `pane.wait_output` method — the
 schema's per-method docs in `api/pane.md` name it correctly, but this cross-reference used
-the wrong name). Corroborated by `pane-read.json`.
+the wrong name). Corroborated by a live probe (capture not stored).
 
 | field | type | required | meaning |
 | --- | --- | --- | --- |
@@ -471,7 +540,7 @@ returned: it is computed against the pane's full rendered-height line buffer, bl
 included, so a small explicit `lines` cap (e.g. `0`, `1`, `5`) on a pane with only a few
 non-blank lines still comes back `truncated:true` with text identical to an untruncated,
 much larger `lines` request — don't treat `truncated:true` alone as proof that real content
-was cut. Validated 2026-09-19 against herdr 0.9.1.
+was cut. Validated 2026-10-06 against herdr 0.9.3.
 
 ## ReadSource
 
@@ -486,7 +555,8 @@ Enum. Selects which snapshot `pane.read`/`pane.wait_for_output` reads. Semantics
 | `detection` | the plain-text bottom-buffer snapshot used for agent detection |
 
 Note: the CLI spells this option `recent-unwrapped` (hyphen); the wire enum is
-`recent_unwrapped` (underscore). Validated 2026-09-19 against herdr 0.9.1.
+`recent_unwrapped` (underscore). Validated 2026-10-06 against herdr 0.9.3 (`herdr pane read
+--help` lists `recent-unwrapped`).
 
 ## ReadFormat
 
@@ -497,26 +567,26 @@ Enum. Output encoding for a read.
 | `text` | plain text, styling stripped |
 | `ansi` | includes ANSI color/style escapes (use when styling is evidence) |
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ## PaneTextPoint
 
 A single row/column coordinate into a pane's text content. Used by the `pane.copy_motion`
-and `pane.copy_search` results (see `api/pane.md`). Corroborated by `scratch/pane-copy-motion.json`
-(`{"row":0,"col":1}`).
+and `pane.copy_search` results (see `api/pane.md`). Corroborated by a live probe (capture not stored):
+`{"row":0,"col":1}`.
 
 | field | type | required | meaning |
 | --- | --- | --- | --- |
 | `row` | integer (uint32) | yes | row index |
 | `col` | integer (uint16) | yes | column index |
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ## PaneTextRange
 
 A span between two [PaneTextPoint](#panetextpoint)s. Used by the `pane.copy_search` result's
-`matches` (see `api/pane.md`). Corroborated by `scratch/pane-copy-search.json`
-(`{"start":{"row":0,"col":1},"end":{"row":0,"col":7}}`).
+`matches` (see `api/pane.md`). Corroborated by a live probe (capture not stored):
+`{"start":{"row":0,"col":1},"end":{"row":0,"col":7}}`.
 
 | field | type | required | meaning |
 | --- | --- | --- | --- |
@@ -526,16 +596,17 @@ A span between two [PaneTextPoint](#panetextpoint)s. Used by the `pane.copy_sear
 The `pane.copy_motion`/`pane.copy_search` result wrappers that carry these points also
 carry a `content_revision` counter, unrelated to and far finer-grained than
 [`PaneInfo.revision`](#paneinfo) (observed values in the thousands versus single digits for
-`revision` on the same pane). `pane.copy_search` requires the caller's `content_revision` to
+`revision` on the same pane on 0.9.1; 12 versus 3 on a quiet 0.9.3 pane). `pane.copy_search` requires the caller's `content_revision` to
 exactly match the pane's current one, or the call fails with `stale_content: "pane content
 changed"` — always fetch a fresh `content_revision` immediately before searching. Validated
-2026-09-19 against herdr 0.9.1.
+2026-10-06 against herdr 0.9.3 (the `pane.copy_search` result also carries `matches`,
+`total`, `current`, and `current_global`).
 
 ## PaneLinkRegion
 
 Inclusive display-cell columns on a pane's current viewport where a resolved link hit
 occurs. Returned by `pane.link.resolve` (see `api/pane.md`). Corroborated by
-`scratch/pane-link-resolve.json` (a pane with no links returned `regions: []`).
+a live probe (capture not stored): a pane with no links returned `regions: []`.
 
 | field | type | required | meaning |
 | --- | --- | --- | --- |
@@ -545,7 +616,7 @@ occurs. Returned by `pane.link.resolve` (see `api/pane.md`). Corroborated by
 
 The result's own `row` is named as above, but the request parameter for the same value is
 not `row` — `pane.link.resolve` takes `viewport_row`, and calling it with `row` fails with
-`invalid_request: missing field 'viewport_row'`. Validated 2026-09-19 against herdr 0.9.1.
+`invalid_request: missing field 'viewport_row'`. Validated 2026-10-06 against herdr 0.9.3.
 
 ## Pane operation result shapes
 
@@ -557,7 +628,7 @@ building blocks; see `api/pane.md` for which method returns which.
 ### PaneEdgesResult
 
 Whether each side of a pane touches the tab's outer boundary (`pane.edges`). Corroborated by
-`pane-edges.json`. Required: `pane_id`, `left`, `right`, `up`, `down`, `layout`.
+a live probe (capture not stored). Required: `pane_id`, `left`, `right`, `up`, `down`, `layout`.
 
 | field | type | meaning |
 | --- | --- | --- |
@@ -571,11 +642,13 @@ side) returns `left:true,right:true,up:true,down:true`, and a pane with a real n
 one side but sitting flush against the screen's other three edges reports `true` on exactly
 those three boundary sides and `false` on the side with the neighbor. Use
 [PaneNeighborResult](#paneneighborresult) below to ask whether a neighbor exists in a given
-direction. Validated 2026-09-19 against herdr 0.9.1.
+direction. Validated 2026-10-06 against herdr 0.9.3. The pane-operation results arrive
+nested under a key named after the operation (`edges`, `neighbor`, `focus`, `resize`,
+`swap`, `zoom`) beside `type`.
 
 ### PaneNeighborResult
 
-The neighbor in a given direction (`pane.neighbor`). Corroborated by `pane-neighbor.json`.
+The neighbor in a given direction (`pane.neighbor`). Corroborated by a live probe (capture not stored).
 Required: `pane_id`, `direction`, `layout`.
 
 | field | type | meaning |
@@ -586,7 +659,7 @@ Required: `pane_id`, `direction`, `layout`.
 | `layout` | [PaneLayoutSnapshot](#panelayoutsnapshot) | current geometry |
 
 When there is no neighbor, `neighbor_pane_id` is not sent as `null` — the key is absent
-from the object entirely. Validated 2026-09-19 against herdr 0.9.1.
+from the object entirely. Validated 2026-10-06 against herdr 0.9.3.
 
 ### PaneFocusDirectionResult
 
@@ -602,7 +675,7 @@ Result of a directional focus move (`pane.focus_direction`). Required: `changed`
 | `layout` | [PaneLayoutSnapshot](#panelayoutsnapshot) | current geometry |
 
 As with the other nullable `reason`/`*_id` fields on this page, `reason` is omitted (not
-sent as `null`) on a successful move. Validated 2026-09-19 against herdr 0.9.1.
+sent as `null`) on a successful move. Validated 2026-10-06 against herdr 0.9.3.
 
 ### PaneResizeResult
 
@@ -617,7 +690,7 @@ Result of resizing (`pane.resize`). Required: `changed`, `pane_id`, `focused_pan
 | `reason` | [PaneResizeReason](#reason--auxiliary-enums) \| null | why nothing changed (`unchanged`) |
 | `layout` | [PaneLayoutSnapshot](#panelayoutsnapshot) | current geometry |
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ### PaneSwapResult
 
@@ -633,7 +706,7 @@ Result of swapping two panes (`pane.swap`). Required: `changed`, `source_pane_id
 | `focused_pane_id` | string | focused pane |
 | `layout` | [PaneLayoutSnapshot](#panelayoutsnapshot) | current geometry |
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ### PaneZoomResult
 
@@ -651,20 +724,20 @@ Result of zoom toggling (`pane.zoom`). Required: `changed`, `zoom_changed`,
 | `reason` | [PaneZoomReason](#reason--auxiliary-enums) \| null | why no change (`single_pane`/`already_zoomed`/`already_unzoomed`) |
 | `layout` | [PaneLayoutSnapshot](#panelayoutsnapshot) | current geometry |
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3.
 
 ### PaneMoveResult
 
 Result of moving a pane to another tab/workspace (`pane.move`). Required: `changed`,
 `previous_pane_id`, `previous_workspace_id`, `previous_tab_id`, `pane`, `target_layout`,
 `focused_pane_id`. A move can create or close a tab/workspace. Corroborated by
-`raw/workspace-move.json`, `scratch/pane-move.json`.
+live probes (captures not stored).
 
 | field | type | meaning |
 | --- | --- | --- |
 | `changed` | boolean | the pane actually moved |
 | `pane` | [PaneInfo](#paneinfo) | the moved pane, with its **new** `pane_id` |
-| `previous_pane_id` | string | the pane's ID before the move (only the moved process's inherited context resolves it) |
+| `previous_pane_id` | string | the pane's ID before the move (it keeps resolving for any caller; see [addressing.md](addressing.md)) |
 | `previous_workspace_id` | string | source workspace |
 | `previous_tab_id` | string | source tab |
 | `focused_pane_id` | string | focused pane after the move |
@@ -680,13 +753,15 @@ Result of moving a pane to another tab/workspace (`pane.move`). Required: `chang
 workspace, since no source tab remains to describe. Validated 2026-09-19 against herdr 0.9.1
 (every `reason` value, a plain cross-tab move, a move that populates `created_tab`, one that
 populates `created_workspace`, and one that closes the source tab/workspace were all
-exercised live).
+exercised live). Re-checked 2026-10-06 against herdr 0.9.3 for both `reason` values, a
+cross-tab move, and `created_tab`; the `created_workspace` and closing cases were not
+re-run.
 
 ## WorktreeInfo
 
 A git worktree known to herdr, listed by `worktree.list` and returned by
 `worktree.create`/`worktree.open`/`worktree.remove` events. Corroborated by
-`worktree-list.json`, `scratch/worktree-create.json`.
+live probes (captures not stored).
 
 | field | type | required | meaning |
 | --- | --- | --- | --- |
@@ -699,8 +774,10 @@ A git worktree known to herdr, listed by `worktree.list` and returned by
 | `branch` | string \| null | no | checked-out branch, or null if detached/bare |
 | `open_workspace_id` | string \| null | no | workspace currently holding this worktree open, if any |
 
-Validated 2026-09-19 against herdr 0.9.1 (live-exercised across a normal worktree, a
-detached-HEAD worktree with `branch:null`, a bare source repo, and a worktree made
+Validated 2026-10-06 against herdr 0.9.3 for a primary checkout, a linked worktree, and a
+detached-HEAD worktree (`branch` omitted, not `null`), listed with `worktree.list` `cwd`.
+The rest keeps its earlier stamp: Validated 2026-09-19 against herdr 0.9.1 (live-exercised
+across a normal worktree, a detached-HEAD worktree with `branch:null`, a bare source repo, and a worktree made
 `is_prunable:true` by removing its directory out from under it; `open_workspace_id` was
 observed to populate and clear as the worktree's workspace opened and closed).
 
@@ -723,7 +800,7 @@ worktree-backed workspace, which returns exactly this shape as `worktree`).
 ## WorktreeSourceInfo
 
 Describes the repository/source that a `worktree.list` result was taken from
-(`worktree_list.source`). Corroborated by `worktree-list.json`.
+(`worktree_list.source`). Corroborated by a live probe (capture not stored).
 
 | field | type | required | meaning |
 | --- | --- | --- | --- |
@@ -733,16 +810,18 @@ Describes the repository/source that a `worktree.list` result was taken from
 | `source_checkout_path` | string | yes | checkout the listing was resolved from |
 | `source_workspace_id` | string \| null | no | workspace that provided the source context |
 
-Validated 2026-09-19 against herdr 0.9.1. `worktree.list` from a location outside any Git
+Validated 2026-10-06 against herdr 0.9.3 (`source_workspace_id` was absent for a `cwd`-based
+listing; the explicit-`cwd` `not_git_worktree` message below reproduced; the
+workspace-context message was not re-run). `worktree.list` from a location outside any Git
 work tree fails with `not_git_worktree`; the message text differs slightly depending on
 whether the problem is the caller's own workspace ("...require a workspace inside a Git
 work tree") or an explicit `path`/`cwd` param ("...require a path inside a Git work tree").
 
 ## ServerCapabilities
 
-Feature flags reported by the server in the `pong` result (`ping`). Corroborated by
-`scratch/ping.json` (server running, version 0.9.1, protocol 22:
-`{"live_handoff":true,"detached_server_daemon":false,"endpoint_protocol_generation":1,"surface_interest":true,"health_check":true}`).
+Feature flags reported by the server in the `pong` result (`ping`). A 0.9.3 scratch server
+(protocol 22) returned
+`{"live_handoff":true,"detached_server_daemon":false,"endpoint_protocol_generation":1,"surface_interest":true,"health_check":true,"ssh_agent_registration":true}`.
 
 | field | type | required | meaning |
 | --- | --- | --- | --- |
@@ -751,15 +830,17 @@ Feature flags reported by the server in the `pong` result (`ping`). Corroborated
 | `endpoint_protocol_generation` | integer (uint32) \| null | no | stable client-owned endpoint generation this server supports |
 | `health_check` | boolean | no (default false) | server supports endpoint health probes |
 | `surface_interest` | boolean | no (default false) | server supports explicit client-shell surface interest (`client_shell.surface.set`) |
+| `ssh_agent_registration` | boolean | no (default false) | new in 0.9.3: server supports `server.ssh_agent.register` (see [api/server.md](api/server.md)) |
 
-Validated 2026-09-19 against herdr 0.9.1.
+Validated 2026-10-06 against herdr 0.9.3 (`detached_server_daemon` was `true` on the
+default session's server and `false` on the scratch server).
 
 ## AgentManifestInfo
 
 An installed agent-detection manifest and its remote-update state, returned by
 `server.agent_manifests`/`server.reload_agent_manifests` (results
 `agent_manifest_status` / `agent_manifest_reload`). Corroborated by
-`raw/server-agent-manifests.json`.
+a live probe (capture not stored).
 
 | field | type | required | meaning |
 | --- | --- | --- | --- |
@@ -774,14 +855,14 @@ An installed agent-detection manifest and its remote-update state, returned by
 | `remote_last_checked_unix` | integer (uint64) \| null | no | unix time of the last remote check |
 | `warning` | string \| null | no | non-fatal load warning |
 
-Validated 2026-09-19 against herdr 0.9.1 (23 live manifests, each with the required fields
-populated; `remote_update_error`/`warning` were absent — not `null` — in this healthy
-state, not independently forced).
+Validated 2026-10-06 against herdr 0.9.3 (22 live manifests, one fewer than the 23 on
+0.9.1, each with the required fields populated; `remote_update_error`/`warning` were
+absent — not `null` — in this healthy state, not independently forced).
 
 ## IntegrationInfo
 
 One agent's editor/CLI integration status, as listed by `integration.list` (result
-`integration_list`, see `api/integration.md`). Corroborated by `scratch/integration-list.json`
+`integration_list`, see `api/integration.md`). Corroborated by a live probe (capture not stored)
 (e.g. `{"target":"claude","label":"claude","command":"claude","available":true,"state":"outdated"}`).
 
 | field | type | required | meaning |
@@ -794,7 +875,7 @@ One agent's editor/CLI integration status, as listed by `integration.list` (resu
 
 `command` is not always derived from `target`/`label`: e.g. `cursor`'s command is
 `cursor-agent`, and `antigravity_cli`'s label is `antigravity-cli` while its command is
-`agy`. Validated 2026-09-19 against herdr 0.9.1 (all 17 `IntegrationTarget` entries
+`agy`. Validated 2026-10-06 against herdr 0.9.3 (all 17 `IntegrationTarget` entries
 returned live with these 5 fields).
 
 ## IntegrationState
@@ -807,7 +888,7 @@ Enum. `IntegrationInfo.state`.
 | `current` | installed and up to date |
 | `outdated` | installed but older than what herdr would install now |
 
-Validated 2026-09-19 against herdr 0.9.1 (`not_installed`/`current` observed live across the
+Validated 2026-10-06 against herdr 0.9.3 (`not_installed`/`current` observed live across the
 17 targets; `outdated` requires an installed integration older than what herdr would
 install now, not present on the probed machine, and is schema-confirmed only).
 
@@ -819,13 +900,13 @@ targets. Full value set:
 `pi`, `omp`, `claude`, `codex`, `copilot`, `devin`, `droid`, `kimi`, `opencode`, `kilo`,
 `hermes`, `qodercli`, `qwen`, `cursor`, `mastracode`, `antigravity_cli`, `grok`.
 
-Validated 2026-09-19 against herdr 0.9.1 (`integration.list` returned exactly these 17
+Validated 2026-10-06 against herdr 0.9.3 (`integration.list` returned exactly these 17
 values in exactly this order).
 
 ## ConfigReloadStatus
 
 Enum. Outcome of `server.reload_config` (`config_reload` result). Corroborated by
-`scratch/server-reload-config.json` (`status: applied`, empty `diagnostics`).
+a live probe, capture not stored (`status: applied`, empty `diagnostics`).
 
 | value | meaning |
 | --- | --- |
@@ -833,7 +914,7 @@ Enum. Outcome of `server.reload_config` (`config_reload` result). Corroborated b
 | `partial` | applied with some settings rejected (see `diagnostics`) |
 | `failed` | reload failed; previous config retained |
 
-Validated 2026-09-19 against herdr 0.9.1 (`applied` observed live on a healthy config,
+Validated 2026-10-06 against herdr 0.9.3 (`applied` with `diagnostics: []` observed live on a healthy config,
 matching the worked example verbatim; `partial`/`failed` were not provoked, since
 `server.reload_config` reads the shared, non-session-scoped config file and crafting an
 invalid one risked affecting state outside the scratch session — both are schema-confirmed
@@ -856,13 +937,16 @@ it can write a managed install path outside the scratch session directory, so no
 ## Plugin entities
 
 Herdr plugins contribute actions, panes, event hooks, and link handlers. On the probed
-session no plugins were installed (`raw/plugin-list.json` → `plugins: []`,
-`raw/plugin-action-list.json` → `actions: []`), so shapes below are from the schema.
+session no plugins were installed (`plugin.list` → `plugins: []`,
+`plugin.action.list` → `actions: []`; captures not stored), so shapes below are from the schema.
 
 The empty-list state above (`plugin.list`, `plugin.action.list`, and `plugin.log.list` all
 returning `[]`) and the not-found error paths (`plugin.action.invoke`/`plugin.pane.open`
 with an unknown `plugin_id` both fail `plugin_not_found`) are Validated 2026-09-19 against
-herdr 0.9.1. No plugin was installed on the probed machine, and `plugin.link`/`enable`/
+herdr 0.9.1; the three empty lists and the `plugin.action.invoke` error were re-checked
+2026-10-06 against herdr 0.9.3 (`plugin.pane.open` was not re-run). The plugin `$defs` in
+`raw/schema.json` are unchanged from 0.9.1, so the per-entity stamps below were left as they
+were. No plugin was installed on the probed machine, and `plugin.link`/`enable`/
 `disable` were excluded from live probing because they can write a managed plugin path
 outside the scratch session directory, so each entity below (`InstalledPluginInfo` through
 the [Plugin enums](#plugin-enums)) carries its own not-live-validated stamp instead of one
@@ -1076,7 +1160,7 @@ InstalledPluginInfo, above).
 
 Pushed to a connection after `events.subscribe` as `{"event": …, "data": …}` lines (see
 [protocol.md](protocol.md)); `EventEnvelope` is also embedded in the `wait_matched`
-result from `events.wait`. Corroborated by `raw/events-subscribe-capture.json`.
+result from `events.wait`. Corroborated by a live probe (capture not stored).
 
 ### EventEnvelope
 
@@ -1085,13 +1169,13 @@ result from `events.wait`. Corroborated by `raw/events-subscribe-capture.json`.
 | `event` | [EventKind](#eventkind) | yes | the event name |
 | `data` | EventData | yes | the event payload (a tagged union whose `type` equals `event`) |
 
-The pushed-event half of this shape is Validated 2026-09-19 against herdr 0.9.1: every line
-on a held-open `events.subscribe` connection had exactly this `{event, data}` envelope. The
-`wait_matched`-from-`events.wait` half is Constructed from schema; not live-validated
-(2026-09-19, herdr 0.9.1: `events.wait` requires a `match_event` field, not documented on
-this page, even to wait for the next event of any kind with only a `timeout_ms` — a request
-supplying just `timeout_ms` fails `invalid_request: missing field 'match_event'`; see
-`api/events.md` for the params shape).
+Validated 2026-10-06 against herdr 0.9.3 for both halves: every plain-subscription line on a
+held-open `events.subscribe` connection had exactly this `{event, data}` envelope, and a
+`pane_agent_status_changed` match returned
+`{"type":"wait_matched","event":{"event":"pane_agent_status_changed","data":{"type":"pane_agent_status_changed",…}}}`.
+`events.wait` requires a `match_event` field even to wait for the next event of any kind: a
+request supplying just `timeout_ms` fails `invalid_request: missing field 'match_event'`,
+and on 0.9.3 only agent-status matches are supported (see [events.md](events.md#eventswait)).
 
 ### EventKind
 
@@ -1104,15 +1188,16 @@ Enum of all event names:
 `pane_focused`, `pane_moved`, `pane_output_changed`, `pane_exited`, `pane_agent_detected`,
 `pane_agent_status_changed`, `layout_updated`.
 
-Validated 2026-09-19 against herdr 0.9.1 (16 of the 26 kinds were live-triggered and
-observed on the wire in this pass — `workspace_created`, `workspace_renamed`,
-`workspace_closed`, `workspace_focused`, `worktree_created`, `worktree_removed`,
-`tab_created`, `tab_closed`, `tab_renamed`, `tab_focused`, `pane_created`, `pane_updated`,
-`pane_focused`, `pane_moved`, `pane_exited`, `layout_updated`; the remaining 10 —
-`workspace_updated`, `workspace_metadata_updated`, `workspace_moved`,
-`workspace_reordered`, `worktree_opened`, `tab_moved`, `pane_closed`,
-`pane_output_changed`, `pane_agent_detected`, `pane_agent_status_changed` — were not
-triggered by this probe sequence and remain schema-confirmed only).
+The enum is unchanged from 0.9.1. Validated 2026-10-06 against herdr 0.9.3 (21 of the 26
+kinds were observed on the wire — `workspace_created`, `workspace_renamed`,
+`workspace_metadata_updated`, `workspace_moved`, `workspace_reordered`,
+`workspace_focused`, `workspace_closed`, `tab_created`, `tab_renamed`, `tab_moved`,
+`tab_focused`, `tab_closed`, `pane_created`, `pane_updated`, `pane_focused`, `pane_moved`,
+`pane_closed`, `pane_exited`, `pane_agent_detected`, `pane_agent_status_changed`,
+`layout_updated`; `workspace_updated`, `worktree_created`, `worktree_opened`,
+`worktree_removed`, and `pane_output_changed` were not triggered this pass. The 0.9.1 pass
+observed `worktree_created` and `worktree_removed`; see [events.md](events.md) for the
+per-kind notes).
 
 ### EventData
 
@@ -1125,11 +1210,12 @@ carries `pane` ([PaneInfo](#paneinfo)); `pane_agent_status_changed` carries `pan
 ([PaneLayoutSnapshot](#panelayoutsnapshot)). See `api/events.md` for per-event payload
 tables.
 
-Validated 2026-09-19 against herdr 0.9.1 for `workspace_created`, `pane_created`, and
-`layout_updated` (each carries exactly the keys above, live). `pane_agent_status_changed`'s
-payload was not triggered in this pass (no agent-bearing pane was exercised here), so its
-optional-field list (`agent`/`display_agent`/`title`/`state_labels`) is Constructed from
-schema; not live-validated (2026-09-19, herdr 0.9.1: reason above).
+Validated 2026-10-06 against herdr 0.9.3 for `workspace_created`, `pane_created`,
+`layout_updated`, and `pane_agent_status_changed` (each carries exactly the keys above,
+live; the agent-status payload carried `agent` for a `pane.report_agent`-driven agent).
+`display_agent`, `title`, and `state_labels` did not appear and are Constructed from
+schema; not live-validated (2026-10-06, herdr 0.9.3: they need a real agent launch, which
+this pass did not do).
 
 ## Reason & auxiliary enums
 
@@ -1143,14 +1229,15 @@ Small enums that annotate *why* an operation produced its result. Each appears a
 | `PaneSwapReason` | `no_neighbor`, `same_pane`, `not_found`, `cross_tab` | `PaneSwapResult` |
 | `PaneZoomReason` | `single_pane`, `already_zoomed`, `already_unzoomed` | `PaneZoomResult` |
 | `PaneMoveReason` | `same_tab`, `zoomed_tab` | `PaneMoveResult` |
-| `NotificationShowReason` | `shown`, `disabled`, `rate_limited`, `no_foreground_client`, `busy` | `notification.show` result (`scratch/notification-show.json` → `disabled`) |
-| `ClientWindowTitleReason` | `set`, `cleared`, `no_foreground_client` | `client.window_title.set` result (`raw/client-window-title-set.json` → `no_foreground_client`) |
+| `NotificationShowReason` | `shown`, `disabled`, `rate_limited`, `no_foreground_client`, `busy` | `notification.show` result (live probe → `disabled`, capture not stored) |
+| `ClientWindowTitleReason` | `set`, `cleared`, `no_foreground_client` | `client.window_title.set` result (live probe → `no_foreground_client`, capture not stored) |
 
-Validated 2026-09-19 against herdr 0.9.1 for `no_neighbor`, `unchanged`,
-`same_pane`/`not_found`/`no_neighbor` (Swap), `single_pane`/`already_zoomed`/
-`already_unzoomed`, `same_tab`/`zoomed_tab`, and `no_foreground_client` (both
-`NotificationShowReason` and `ClientWindowTitleReason`), all observed live. `shown`,
-`disabled`, `rate_limited`, `busy` (`NotificationShowReason`) and `set`, `cleared`
+Validated 2026-10-06 against herdr 0.9.3 for `no_neighbor`, `unchanged`,
+`no_neighbor`/`same_pane`/`not_found`/`cross_tab` (Swap), `single_pane`/`already_zoomed`/
+`already_unzoomed`, `same_tab`/`zoomed_tab`, `disabled` (`NotificationShowReason`, on the
+scratch server), and `no_foreground_client` (`ClientWindowTitleReason`), all observed live.
+The 0.9.1 pass recorded `no_foreground_client` for `notification.show`; on the 0.9.3
+scratch server it returned `disabled`. `shown`, `rate_limited`, `busy` (`NotificationShowReason`) and `set`, `cleared`
 (`ClientWindowTitleReason`) require a real foreground client attached to the session, which
 this headless probing never had, and remain schema-confirmed only.
 
@@ -1174,12 +1261,13 @@ Top-level object (`version: 3`):
 | `workspaces` | array | persisted workspaces (see below) |
 | `active` | integer | index of the active workspace |
 | `selected` | integer | index of the selected workspace |
-| `sidebar_width` | integer | UI sidebar width |
-| `sidebar_section_split` | number | UI sidebar section split ratio |
+| `sidebar_width` | integer \| null | UI sidebar width |
+| `sidebar_section_split` | number \| null | UI sidebar section split ratio |
 | `collapsed_space_keys` | array | collapsed sidebar groups |
 
-Validated 2026-09-19 against herdr 0.9.1 (a scratch session's `session.json` has exactly
-these top-level keys, `version:3`).
+Validated 2026-10-06 against herdr 0.9.3 (a scratch session's `session.json` has exactly
+these top-level keys, `version:3`; `sidebar_width` and `sidebar_section_split` were `null`
+on a session no client had attached to).
 
 Each **workspace** entry: `id` (string), `custom_name` (string \| null), `identity_cwd`
 (string), `public_pane_numbers` (object mapping internal→public pane number),
@@ -1187,15 +1275,25 @@ Each **workspace** entry: `id` (string), `custom_name` (string \| null), `identi
 (int), `tabs` (array), `active_tab` (int).
 
 Each **tab** entry: `custom_name` (string \| null), `layout` (recursive tree, below),
-`panes` (object keyed by internal pane number → `{ cwd, agent_session? }`, where
-`agent_session` is `{ source, agent, kind, value }` when present), `zoomed` (bool),
-`focused` (int pane number), `root_pane` (int).
+`panes` (object keyed by internal pane number → `{ cwd, label?, agent_name?,
+agent_resume?, agent_session? }`), `zoomed` (bool), `focused` (int pane number),
+`root_pane` (int).
 
-`agent_session` is omitted from a pane's persisted entry entirely (not sent as `null`) when
-that pane has no attached agent — an ordinary shell pane persists as just `{"cwd": "…"}`.
-Validated 2026-09-19 against herdr 0.9.1 (workspace and tab key sets both confirmed exactly
-as listed above; the unconditional `{ cwd, agent_session }` shape previously shown here was
-corrected to reflect this).
+Each optional pane key is omitted entirely (not sent as `null`) when it does not apply — an
+ordinary shell pane persists as just `{"cwd": "…"}`. On 0.9.3 a pane entry can carry:
+
+- `label`: the pane's custom label.
+- `agent_name`: the agent's unique name.
+- `agent_resume`: `{ source, agent, argv }`, the `resume_argv` from the last
+  `pane.report_agent`/`pane.report_agent_session` that sent one, e.g.
+  `{"source":"herdr:rvbot2","agent":"rvbot2","argv":["no-such-cmd-xyz","--resume"]}`. On
+  restart herdr types `argv` into the restored pane's shell (see
+  [AgentSessionInfo](#agentsessioninfo)).
+- `agent_session`: `{ source, agent, kind, value }`, as in [AgentSessionInfo](#agentsessioninfo).
+
+Validated 2026-10-06 against herdr 0.9.3 (workspace and tab key sets confirmed exactly as
+listed above, unchanged from 0.9.1; one pane entry held all five pane keys). The 0.9.1
+pass saw only `cwd` and `agent_session`.
 
 The persisted **layout** tree is a recursive union with capitalized variant keys, and the
 direction value is likewise PascalCase:
@@ -1208,15 +1306,18 @@ direction value is likewise PascalCase:
 — a leaf is `{ "Pane": <internal-number> }`; an interior node is `{ "Split": { direction,
 ratio, first, second } }`. The embedded `agent_session` object mirrors
 [AgentSessionInfo](#agentsessioninfo) (`source`, `agent`, `kind`, `value`), which is how a
-restored pane re-attaches to its agent's native session. Validated 2026-09-19 against herdr
-0.9.1 (a live split persisted as `{"Split":{"direction":"Horizontal","ratio":0.5,
+restored pane re-attaches to its agent's native session. Validated 2026-10-06 against herdr
+0.9.3 for the layout shape (the capture here is from 0.9.1: a live split persisted as `{"Split":{"direction":"Horizontal","ratio":0.5,
 "first":{"Pane":6},"second":{"Pane":10}}}`; pane numbers above are illustrative, matching
 this page's convention, not that literal capture).
 
 Restarting a server against a pre-existing, non-empty session directory (named or default)
 respawns a real shell process for every persisted pane at its persisted `cwd` rather than
 starting clean — reusing a named session directory should be expected to bring back
-whatever it last held. Validated 2026-09-19 against herdr 0.9.1.
+whatever it last held. On 0.9.3 a pane whose persisted `cwd` no longer exists is instead
+restored as a placeholder with no shell, carrying `restore_error` (see
+[PaneInfo](#paneinfo)). Validated 2026-10-06 against herdr 0.9.3 (two restarts of the
+scratch session).
 
 (Structure read from `~/.config/herdr/session.json`; concrete `cwd`/`identity_cwd` values
 are omitted here as they are user paths.)

@@ -19,11 +19,18 @@ func TestParseVersion_Accepts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseVersion: %v", err)
 	}
-	if v.Major != 0 || v.Minor != 10 || v.Patch != 3 {
+	if v != (Version{Major: 0, Minor: 10, Patch: 3}) {
 		t.Fatalf("got %+v, want {0 10 3}", v)
 	}
-	if got := v.String(); got != "v0.10.3" {
-		t.Fatalf("String() = %q, want v0.10.3", got)
+}
+
+func TestParseVersion_RejectsIntOverflow(t *testing.T) {
+	// Plain digits pass the syntax check, so only strconv.Atoi catches a
+	// component that exceeds int.
+	for _, s := range []string{"v99999999999999999999.0.0", "v0.99999999999999999999.0", "v0.0.99999999999999999999"} {
+		if v, err := ParseVersion(s); err == nil {
+			t.Errorf("ParseVersion(%q) = %+v, nil; want an error", s, v)
+		}
 	}
 }
 

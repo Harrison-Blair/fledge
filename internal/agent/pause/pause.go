@@ -9,6 +9,7 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/harness"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
@@ -35,14 +36,17 @@ type pauser struct {
 
 // Run interrupts the foreground turn once using the harness's default binding.
 // Settlement observes readiness, not task completion or a persistent pause.
-func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
+func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 	return pauser{Client: c, Now: time.Now}.run(ctx, o)
 }
-func (s pauser) run(ctx context.Context, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.pause", Status: "success", Effects: []libagent.Effect{}}
+func (s pauser) run(ctx context.Context, o Options) cli.Outcome {
+	out := cli.NewOutcome("agent.pause")
 	err := o.Target.Validate()
-	if err == nil && (strings.TrimSpace(o.Name+o.Pane+o.ID) == "" || o.Timeout <= 0) {
-		err = libagent.Invalid("target must be nonempty and --timeout must be positive")
+	if err == nil && strings.TrimSpace(o.Name+o.Pane+o.ID) == "" {
+		err = cli.Invalid("target must be nonempty")
+	}
+	if err == nil && o.Timeout <= 0 {
+		err = cli.Invalid("--timeout must be positive")
 	}
 	if err != nil {
 		out.Fail(err, "validation", false)
@@ -59,12 +63,12 @@ func (s pauser) run(ctx context.Context, o Options) libagent.Outcome {
 	}
 	result := Result{AgentRow: libagent.NewAgentRow(a.Pane)}
 	out.Result = result
-	if a.Agent == nil || !libagent.IsHarness(*a.Agent) {
-		out.Fail(libagent.Invalid("pause requires a known harness"), "guard", false)
+	if a.Agent == nil || !harness.IsKind(*a.Agent) {
+		out.Fail(cli.Invalid("pause requires a known harness"), "guard", false)
 		return out
 	}
 	if (a.LaunchPending != nil && *a.LaunchPending) || (a.AgentStatus != "working" && a.AgentStatus != "idle" && a.AgentStatus != "done") {
-		out.Fail(libagent.Invalid("cannot pause an agent that is %s or has a pending launch", a.AgentStatus), "guard", false)
+		out.Fail(cli.Invalid("cannot pause an agent that is %s or has a pending launch", a.AgentStatus), "guard", false)
 		return out
 	}
 	if a.AgentStatus == "idle" || a.AgentStatus == "done" {
@@ -75,7 +79,7 @@ func (s pauser) run(ctx context.Context, o Options) libagent.Outcome {
 	profile, _ := harness.Lookup(*a.Agent)
 	keys := profile.InterruptKeys
 	if deadline.Sub(s.Now()) <= 0 {
-		out.Fail(&herdr.Error{Code: "timeout", Message: "pause timeout expired before interrupt"}, "agent.send_keys", false)
+		out.Fail(&cli.Error{Code: "timeout", Message: "pause timeout expired before interrupt"}, "agent.send_keys", false)
 		return out
 	}
 	var ack struct {
@@ -91,13 +95,13 @@ func (s pauser) run(ctx context.Context, o Options) libagent.Outcome {
 	}
 	result.Submitted = true
 	out.Result = result
-	out.Effects = append(out.Effects, libagent.Effect{Action: "submitted", Kind: "interrupt", ID: a.PaneID})
+	out.Effects = append(out.Effects, cli.Effect{Action: "submitted", Kind: "interrupt", ID: a.PaneID})
 	if o.NoWait {
 		return out
 	}
 	remaining := deadline.Sub(s.Now())
 	if remaining <= 0 {
-		out.Fail(&herdr.Error{Code: "timeout", Message: "pause timeout expired before settlement"}, "agent.wait", false)
+		out.Fail(&cli.Error{Code: "timeout", Message: "pause timeout expired before settlement"}, "agent.wait", false)
 		return out
 	}
 	// Herdr's default settled set includes blocked so approval dialogs fail promptly.
@@ -114,7 +118,7 @@ func (s pauser) run(ctx context.Context, o Options) libagent.Outcome {
 		out.Result = result
 		switch {
 		case settled.Agent.AgentStatus == "blocked":
-			err = &herdr.Error{Code: "agent_blocked", Message: "agent is blocked after interruption"}
+			err = &cli.Error{Code: "agent_blocked", Message: "agent is blocked after interruption"}
 		case settled.Agent.LaunchPending != nil && *settled.Agent.LaunchPending:
 			err = libagent.Protocol("agent launch is pending after interruption")
 		case settled.Agent.AgentStatus != "idle" && settled.Agent.AgentStatus != "done":
@@ -131,7 +135,7 @@ func (s pauser) run(ctx context.Context, o Options) libagent.Outcome {
 }
 
 // Render writes a successful pause outcome.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil
@@ -143,6 +147,6 @@ func Render(w io.Writer, o libagent.Outcome) error {
 			text = "Already idle or done"
 		}
 	}
-	_, err := fmt.Fprintf(w, "%s: %s (%s) in %s.\n", text, libagent.Display(r.Name), libagent.Display(r.Harness), libagent.Display(r.PaneID))
+	_, err := fmt.Fprintf(w, "%s: %s (%s) in %s.\n", text, cli.Display(r.Name), cli.Display(r.Harness), cli.Display(r.PaneID))
 	return err
 }

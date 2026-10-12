@@ -1,6 +1,6 @@
 # herdr API: ui methods
 
-> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
+> herdr 0.9.3 · protocol 22 · schema_version 1 · captured 2026-10-06
 > Part of the fledge herdr reference. Index: [README.md](../README.md). Wire format: [protocol.md](../protocol.md).
 
 The `ui` namespace drives client-facing surface and shell methods: the foreground client's window title, desktop/toast notifications, the client popup overlay, the client-shell surface interest lease, command invocation through the client-shell projection, and dismissal of product announcements and release notes. These operations act on whichever client is currently in the foreground, or on the connected client-shell endpoint; several return a boolean plus a `reason` enum reporting whether the action took effect, because the target surface may be absent (no foreground client), disabled, or otherwise unavailable rather than failing outright.
@@ -26,7 +26,7 @@ Clears any title override previously applied to the foreground client's window a
 
 | field | type | required | default | meaning |
 | --- | --- | --- | --- | --- |
-| _(none)_ | — | — | — | No parameters. `params` must be present; besides `{}`, herdr 0.9.1 also accepts an empty array `[]` and an object with unknown extra keys. Only a missing `params`, `null`, or a non-object/array scalar is rejected. |
+| _(none)_ | — | — | — | No parameters. `params` must be present; besides `{}`, herdr 0.9.3 (like 0.9.1) also accepts an empty array `[]` and an object with unknown extra keys. Only a missing `params`, `null`, or a non-object/array scalar is rejected. |
 
 **Result**: `type` const `client_window_title`.
 
@@ -47,17 +47,17 @@ Clears any title override previously applied to the foreground client's window a
 {"id":"1","result":{"type":"client_window_title","changed":true,"reason":"cleared"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1. (`changed:true` requires a foreground client; with none attached the result is `changed:false` / `reason:"no_foreground_client"`.)
+Validated 2026-10-06 against herdr 0.9.3, with a TUI client attached to a scratch server and with none. (`changed:true` requires a foreground client; with none attached the result is `changed:false` / `reason:"no_foreground_client"`. A second clear in a row also returned `changed:true` / `cleared`.)
 
 ## client.window_title.set
 
-Overrides the foreground client's window title with the supplied string. Acts on the foreground client only; if no client is in the foreground the request succeeds but reports that nothing changed. The change is applied by writing an OSC 0 escape sequence (`\x1b]0;<title>\x07`) to the client's terminal; the string is passed through unsanitized, including embedded control characters. There is also a startup race: for roughly the first seconds after a TUI client launches, and again the instant it exits, the server still reports `no_foreground_client` even though a session exists.
+Overrides the foreground client's window title with the supplied string. Acts on the foreground client only; if no client is in the foreground the request succeeds but reports that nothing changed. The change is applied by writing an OSC 0 escape sequence (`\x1b]0;<title>\x07`) to the client's terminal. Since 0.9.3 the client sanitizes the title before writing it: control characters are dropped (`"a\u0007b\u001bc\nd 🐧"` was written as `abcd 🐧`), and the title is truncated to 200 characters (an 8192-character title was written as its first 200). The response does not report either change. herdr 0.9.1 passed the string through unsanitized. There is also a startup race: briefly after a TUI client launches (about 0.2 s in the 0.9.3 probe; "roughly the first seconds" in 0.9.1), and again the instant it exits, the server still reports `no_foreground_client` even though a session exists.
 
 **Params**: `ClientWindowTitleSetParams`.
 
 | field | type | required | default | meaning |
 | --- | --- | --- | --- | --- |
-| title | string | yes | — | The window title to display for the foreground client. Must be non-empty (see Errors); otherwise unconstrained — an 8192-character title, Unicode/emoji, and embedded control characters (BEL, ESC, newline) are all accepted. |
+| title | string | yes | — | The window title to display for the foreground client. Must be non-empty (see Errors); otherwise unconstrained on the wire — an 8192-character title, Unicode/emoji, and embedded control characters (BEL, ESC, newline) are all accepted with `changed:true`, but what reaches the terminal is sanitized and truncated (see above). |
 
 **Result**: `type` const `client_window_title`.
 
@@ -84,7 +84,7 @@ Other codes possible.
 {"id":"r6","result":{"type":"client_window_title","changed":false,"reason":"no_foreground_client"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1. (Probe ran with no foreground client, so `changed` is `false` and `reason` is `no_foreground_client`. With a client attached, the same request returns `changed:true` / `reason:"set"`.)
+Validated 2026-10-06 against herdr 0.9.3. (Probe ran with no foreground client, so `changed` is `false` and `reason` is `no_foreground_client`. With a TUI client attached in a pty, the same request returns `changed:true` / `reason:"set"`, and the OSC 0 bytes were read from that pty.)
 
 ## client_shell.surface.set
 
@@ -121,11 +121,11 @@ Other codes possible. Envelope validation runs before the connection-kind check:
 {"id":"2","error":{"code":"connection_local_only","message":"client_shell.surface.set is only available through a client shell endpoint"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1 (the `connection_local_only` rejection path only, reproduced both over a plain API connection and with a real TUI client attached — the caller's connection kind is what matters, not session state). The client-shell endpoint's success response, with its `active`/`projection_revision` shape, remains constructed from schema and not live-validated: the per-session `herdr-client.sock` resets the connection for every framing tried (plain newline-JSON, a greeting-prefixed line, and a 4-byte length-prefixed frame), and no external handshake to it was found.
+Validated 2026-10-06 against herdr 0.9.3 (the `connection_local_only` rejection path and the two `invalid_request` envelope cases only, over a plain API connection with and without a TUI client attached — the caller's connection kind is what matters, not session state). The client-shell endpoint's success response, with its `active`/`projection_revision` shape, remains Constructed from schema; not live-validated (2026-10-06, herdr 0.9.3): the 0.9.1 pass found that the per-session `herdr-client.sock` resets the connection for every framing tried (plain newline-JSON, a greeting-prefixed line, and a 4-byte length-prefixed frame), and this pass did not retry it.
 
 ## command.invoke
 
-Invokes a command surfaced to the requesting client-shell connection through the client-shell projection. `command_id` is an opaque, endpoint-issued identifier obtained from that projection, not a fixed enum chosen by the caller; the `command_id` lookup happens before `pane_id`/`tab_id`/`workspace_id`/`selection` are resolved, so an unknown id masks any problem with those fields behind `command_not_found`. `pane_id`, `tab_id`, and `workspace_id` optionally scope the invocation to a specific target, and `selection` optionally carries client-owned selection coordinates (points are `{row, col}`, not `column`), which the schema says are validated against the pane's content revision (see [pane.md](pane.md)); no endpoint-issued `command_id` was reachable to observe that validation happen.
+Invokes a command surfaced to the requesting client-shell connection through the client-shell projection. `command_id` is an opaque, endpoint-issued identifier obtained from that projection, not a fixed enum chosen by the caller; the `command_id` lookup happens before `pane_id`/`tab_id`/`workspace_id`/`selection` are resolved, so an unknown id masks any problem with those fields behind `command_not_found`. Request deserialization still runs first: a malformed `selection` (e.g. `{"bogus":1}`, missing its required `pane_id`) fails `invalid_request` before the `command_id` lookup. `pane_id`, `tab_id`, and `workspace_id` optionally scope the invocation to a specific target, and `selection` optionally carries client-owned selection coordinates (points are `{row, col}`, not `column`), which the schema says are validated against the pane's content revision (see [pane.md](pane.md)); no endpoint-issued `command_id` was reachable to observe that validation happen.
 
 **Params**: `CommandInvokeParams`.
 
@@ -160,7 +160,7 @@ Other codes possible.
 {"id":"5","error":{"code":"command_not_found","message":"custom command manifest is stale; reload configuration"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1 (only the `command_not_found` rejection path — no endpoint-issued `command_id` is reachable from the public API socket, so the `{"type":"ok"}` success path and `selection`'s content-revision validation remain constructed from schema and not live-validated).
+Validated 2026-10-06 against herdr 0.9.3 (only the `command_not_found` rejection path and the malformed-`selection` case — no endpoint-issued `command_id` is reachable from the public API socket, so the `{"type":"ok"}` success path and `selection`'s content-revision validation remain Constructed from schema; not live-validated (2026-10-06, herdr 0.9.3)).
 
 ## notification.show
 
@@ -183,7 +183,7 @@ Shows a desktop/toast notification via the foreground client. Delivery is best-e
 | shown | boolean | yes | — | `true` if herdr accepted the notification for delivery, to a foreground client or via the no-client fallback path; `false` if no delivery path was available at all. Does not guarantee the notification was actually presented — see `disabled` and the note above. |
 | reason | string (enum) | yes | — | Outcome detail. One of: `shown` (accepted for delivery), `disabled` (no foreground client, and the no-client fallback delivery path is turned off in config), `rate_limited` (a notification was already delivered within roughly the last second), `no_foreground_client` (no foreground client, and the fallback path is not disabled), `busy` (client not accepting notifications right now; defined in the schema but never produced live — see below). |
 
-`disabled` only appears when there is no foreground client at all; a foreground client with its own delivery turned off still reports `shown` (see above). The rate limiter allows roughly one notification per second per server: a second call within about a second of the first is `rate_limited`, with delivery recovering after ~1.00 s, and a back-to-back burst has every call after the first dropped. `busy` was probed for with no client, an idle client, a client mid-startup, and a client with a popup overlay open, and was never produced.
+`disabled` only appears when there is no foreground client at all; a foreground client with its own delivery turned off still reports `shown` (see above). Because the default config has `[ui.toast] delivery = "off"`, a server on the default config with no client attached answers `disabled`, not `no_foreground_client`. The rate limiter allows roughly one notification per second per server: a second call within about a second of the first is `rate_limited` (still so at 0.98 s on 0.9.3), with delivery recovering after ~1.00 s (`shown` again at 1.02 s), and a back-to-back burst has every call after the first dropped. `busy` was probed for with no client, an idle client, a client mid-startup, and a client with a popup overlay open, and was never produced.
 
 **Errors**:
 
@@ -202,7 +202,7 @@ Other codes possible.
 {"id":"cli:notification:show","result":{"type":"notification_show","shown":false,"reason":"disabled"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1. (Probe target had `[ui.toast] delivery = "off"` and no foreground client, which is required to observe `disabled`; the same request with a client attached — including a normal CLI invocation — instead returns `shown:true` / `reason:"shown"`.)
+Validated 2026-10-06 against herdr 0.9.3 for the wire behavior: `disabled` with no client on the default config, `shown` with a TUI client attached (which itself had delivery `"off"`), the rate-limit timings, both `invalid_params`/`invalid_request` cases, and `shown` while a popup is open. The `busy` search and the CLI row (key order, local rejection) were not re-run and stay Validated 2026-09-19 against herdr 0.9.1. (`disabled` needs no foreground client and delivery `"off"`; the same request with a client attached — including a normal CLI invocation — instead returns `shown:true` / `reason:"shown"`.)
 
 ## popup.close
 
@@ -212,7 +212,7 @@ Closes the client popup overlay if one is currently open. If no popup is open, t
 
 | field | type | required | default | meaning |
 | --- | --- | --- | --- | --- |
-| _(none)_ | — | — | — | No parameters. `params` must be present; besides `{}`, herdr 0.9.1 also accepts an empty array `[]` and an object with unknown extra keys. Only a missing `params`, `null`, or a non-object/array scalar is rejected. |
+| _(none)_ | — | — | — | No parameters. `params` must be present; besides `{}`, herdr 0.9.3 (like 0.9.1) also accepts an empty array `[]` and an object with unknown extra keys. Only a missing `params`, `null`, or a non-object/array scalar is rejected. |
 
 **Result**: `type` const `ok`.
 
@@ -237,7 +237,7 @@ Other codes possible.
 {"id":"r7","error":{"code":"popup_not_open","message":"no popup is open"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1. (This example is the no-popup-open case. The success path is now live-validated too: opening a popup via `plugin.pane.open` with `placement: "popup"` and then calling `popup.close` returns `{"type":"ok"}`, and an immediately repeated call returns `popup_not_open` again.)
+Validated 2026-10-06 against herdr 0.9.3. (This example is the no-popup-open case, with and without a client and with `[]` and extra-key params. The success path is live-validated too: opening a popup via `plugin.pane.open` with `placement: "popup"` and then calling `popup.close` returns `{"type":"ok"}`, and an immediately repeated call returns `popup_not_open` again. On 0.9.3 a popup opened headless, with no client attached, also stays open until `popup.close` — see [plugin.pane.open](plugin.md#pluginpaneopen).)
 
 ## product_announcement.dismiss
 
@@ -269,11 +269,11 @@ Other codes possible.
 **Example**:
 
 ```json
-{"id":"3","method":"product_announcement.dismiss","params":{"id":"probe-announcement","version":"0.9.1"}}
+{"id":"3","method":"product_announcement.dismiss","params":{"id":"probe-announcement","version":"0.9.3"}}
 {"id":"3","error":{"code":"stale_announcement","message":"the product announcement is no longer current"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1 (the `stale_announcement` error path only — no scratch server had a current product announcement queued, and no API or config mechanism was found to inject one, so the `{"type":"ok"}` success path remains constructed from schema and not live-validated).
+Validated 2026-10-06 against herdr 0.9.3 (the `stale_announcement` error path only, including the empty-string case — no scratch server had a current product announcement queued, and no API or config mechanism was found to inject one, so the `{"type":"ok"}` success path remains Constructed from schema; not live-validated (2026-10-06, herdr 0.9.3)).
 
 ## release_notes.dismiss
 
@@ -308,4 +308,4 @@ Other codes possible.
 {"id":"4","result":{"type":"ok"}}
 ```
 
-Validated 2026-09-19 against herdr 0.9.1 (against a config dir whose `release-notes.json` already named `0.9.1` current; whether the dismissal is itself persisted to disk was not exercised — a successful call left `release-notes.json`'s mtime and contents unchanged in every probe, which does not distinguish an in-memory-only effect from a write to a store not inspected here).
+Validated 2026-10-06 against herdr 0.9.3 for the `stale_release_notes` path only: against the shared config dir, whose `release-notes.json` names `0.9.3`, the versions `0.9.1`, `0.9.2`, `""`, `" 0.9.3"` and `"v0.9.3"` each returned `stale_release_notes`, and the file's mtime was unchanged. The matching `"0.9.3"` dismissal was not sent, because a success might write to the shared config dir. So the success example above, the idempotency claim, and the claim that "current" comes from `release-notes.json` stay Validated 2026-09-19 against herdr 0.9.1 (against a config dir whose `release-notes.json` already named `0.9.1` current; whether the dismissal is itself persisted to disk was not exercised — a successful call left `release-notes.json`'s mtime and contents unchanged in every probe, which does not distinguish an in-memory-only effect from a write to a store not inspected here).

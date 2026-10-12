@@ -119,6 +119,16 @@ func TestWorst(t *testing.T) {
 	}
 }
 
+func TestHarnessDataAvailable(t *testing.T) {
+	if got := (report.HarnessData{Integrations: integrations()}).Available(); len(got) != 0 {
+		t.Fatalf("none available = %q", got)
+	}
+	want := []string{"codex", "opencode"}
+	if got := (report.HarnessData{Integrations: integrations("opencode", "codex")}).Available(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("available = %q, want %q", got, want)
+	}
+}
+
 func TestCapabilityNames(t *testing.T) {
 	if got := (report.CompatibilityData{}).CapabilityNames(); len(got) != 0 {
 		t.Fatalf("nil capabilities = %q", got)

@@ -3,15 +3,15 @@ package rename
 import (
 	"bytes"
 	"context"
-	"os/exec"
-	"path/filepath"
 	"reflect"
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 )
 
 type call = herdrscript.Call
@@ -47,7 +47,7 @@ func TestRenameCallerByDefaultRenamesAndLabels(t *testing.T) {
 	if out.Status != "success" || out.Error != nil {
 		t.Fatalf("%+v", out.Error)
 	}
-	want := []libagent.Effect{{Action: "updated", Kind: "agent_name", ID: "old:p1"}, {Action: "updated", Kind: "pane_label", ID: "old:p1"}, {Action: "updated", Kind: "tab", ID: "w1:t2"}}
+	want := []cli.Effect{{Action: "updated", Kind: "agent_name", ID: "old:p1"}, {Action: "updated", Kind: "pane_label", ID: "old:p1"}, {Action: "updated", Kind: "tab", ID: "w1:t2"}}
 	if !reflect.DeepEqual(out.Effects, want) {
 		t.Fatalf("%+v", out.Effects)
 	}
@@ -90,15 +90,9 @@ func TestRenameRegisteredAgentKeepsRecord(t *testing.T) {
 		{Method: "agent.rename", Result: agent("w1:p3", named("reviewer"))},
 	}, labels("w1:p3", 2)...)
 	c := herdrscript.Client(t, calls...)
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if b, err := exec.Command("git", "-C", root, "init", "-q").CombinedOutput(); err != nil {
-		t.Fatalf("%v %s", err, b)
-	}
+	root := identitytest.Repository(t)
 	c.Cwd = root
-	s, err := identity.OpenStore(context.Background(), root, &libagent.Outcome{})
+	s, err := identity.OpenStore(context.Background(), root, &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +101,7 @@ func TestRenameRegisteredAgentKeepsRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := Run(context.Background(), c, Options{Target: identity.Target{Name: "worker"}, To: "reviewer"})
-	if out.Error != nil || !reflect.DeepEqual(out.Effects[1], libagent.Effect{Action: "updated", Kind: "agent_record", ID: rec.ID}) {
+	if out.Error != nil || !reflect.DeepEqual(out.Effects[1], cli.Effect{Action: "updated", Kind: "agent_record", ID: rec.ID}) {
 		t.Fatalf("%+v %+v", out.Error, out.Effects)
 	}
 	var got identity.Record
@@ -138,5 +132,26 @@ func TestRenameRejections(t *testing.T) {
 				t.Fatalf("%+v %+v", out.Error, out.Effects)
 			}
 		})
+	}
+}
+
+// Renaming by id resolves the repository root once for the lookup and the
+// record update.
+func TestRenameByIDResolvesRootOnce(t *testing.T) {
+	t.Setenv("HERDR_SESSION", "dev")
+	calls := append([]call{
+		{Method: "agent.get", Params: map[string]any{"target": "w1:p3"}, Result: agent("w1:p3", named("worker"))},
+		{Method: "agent.rename", Result: agent("w1:p3", named("reviewer"))},
+	}, labels("w1:p3", 2)...)
+	c := herdrscript.Client(t, calls...)
+	c.Cwd = identitytest.Repository(t)
+	rec := identitytest.Register(t, c.Cwd, agent("w1:p3", named("worker")).Agent)
+	roots := identitytest.CountRoots(t)
+	out := Run(context.Background(), c, Options{Target: identity.Target{ID: rec.ID}, To: "reviewer"})
+	if out.Error != nil || *out.Result.(Result).ID != rec.ID {
+		t.Fatalf("%+v %+v", out.Error, out.Effects)
+	}
+	if got := roots(); got != 1 {
+		t.Fatalf("resolved the repository root %d times, want 1", got)
 	}
 }

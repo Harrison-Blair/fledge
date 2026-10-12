@@ -3,6 +3,7 @@ package list
 import (
 	"bytes"
 	"context"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"strings"
 	"testing"
 
@@ -66,9 +67,24 @@ func TestListEmptyAndInvalid(t *testing.T) {
 	if err := out.Write(&b, false, Render); out.Error != nil || err != nil || b.String() != "No tasks.\n" || out.Result.(Result).Tasks == nil {
 		t.Fatalf("%+v %q", out.Error, b.String())
 	}
+	if out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{Status: "done"}); out.Error == nil || out.Error.Message != "--status must be one of "+strings.Join(task.Statuses, ", ") {
+		t.Fatalf("%+v", out.Error)
+	}
 	for _, o := range []Options{{Status: "done"}, {Owner: "worker"}, {Parent: "goal"}} {
 		if out := Run(context.Background(), tasktest.Client(t, repo, ""), o); out.Error == nil || out.Error.Code != "invalid_input" {
 			t.Fatalf("%+v", out.Error)
+		}
+	}
+}
+
+func TestListRejectsMalformedIDs(t *testing.T) {
+	repo := identitytest.Repository(t)
+	for o, want := range map[Options]string{
+		{Owner: "worker"}: "--owner must be an 8 lowercase hexadecimal agent id",
+		{Parent: "goal"}:  "--parent must be an 8 lowercase hexadecimal task id",
+	} {
+		if out := Run(context.Background(), tasktest.Client(t, repo, ""), o); out.Error == nil || out.Error.Code != "invalid_input" || out.Error.Message != want || out.ExitCode() != 2 {
+			t.Fatalf("%+v: %+v", o, out.Error)
 		}
 	}
 }
@@ -134,5 +150,16 @@ func TestListReadyAndWaiting(t *testing.T) {
 	}
 	if !strings.Contains(b.String(), blocked+"  created  -      -       "+research+"  -         bbbbbb\n") {
 		t.Fatalf("%q", b.String())
+	}
+}
+
+func TestRenderRemovesControlSequences(t *testing.T) {
+	var buf bytes.Buffer
+	r := Result{Tasks: []Row{{Record: task.Record{ID: "11111111", Title: "X\x1b[2J\x1b]0;pwned\x07", Status: task.Created}}}}
+	if err := Render(&buf, cli.Outcome{Result: r}); err != nil {
+		t.Fatal(err)
+	}
+	if got := buf.String(); strings.ContainsAny(got, "\x1b\x07") || !strings.Contains(got, "X") {
+		t.Fatalf("unsafe human output: %q", got)
 	}
 }

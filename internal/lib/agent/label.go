@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 )
 
@@ -20,7 +21,7 @@ func (c Client) Rename(ctx context.Context, a herdr.AgentDetails, name string) (
 // label too; a tab shared with other panes keeps its label. It records an
 // updated effect for each label it sets and fails out at the first failed
 // request.
-func (c Client) Label(ctx context.Context, p herdr.Pane, name string, out *Outcome) error {
+func (c Client) Label(ctx context.Context, p herdr.Pane, name string, out *cli.Outcome) error {
 	var pane herdr.PaneResult
 	err := c.Call(ctx, "pane.rename", map[string]any{"pane_id": p.PaneID, "label": name}, &pane)
 	if err == nil && (pane.Type != "pane_info" || pane.Pane.PaneID != p.PaneID || pane.Pane.TabID != p.TabID) {
@@ -30,7 +31,7 @@ func (c Client) Label(ctx context.Context, p herdr.Pane, name string, out *Outco
 		out.Fail(err, "pane.rename", true)
 		return err
 	}
-	out.Effects = append(out.Effects, Effect{Action: "updated", Kind: "pane_label", ID: p.PaneID})
+	out.Effects = append(out.Effects, cli.Effect{Action: "updated", Kind: "pane_label", ID: p.PaneID})
 	var tab herdr.TabResult
 	err = c.Call(ctx, "tab.get", map[string]any{"tab_id": p.TabID}, &tab)
 	if err == nil && (tab.Type != "tab_info" || tab.Tab.ID != p.TabID || tab.Tab.PaneCount == nil) {
@@ -52,6 +53,6 @@ func (c Client) Label(ctx context.Context, p herdr.Pane, name string, out *Outco
 		out.Fail(err, "tab.rename", true)
 		return err
 	}
-	out.Effects = append(out.Effects, Effect{Action: "updated", Kind: "tab", ID: p.TabID})
+	out.Effects = append(out.Effects, cli.Effect{Action: "updated", Kind: "tab", ID: p.TabID})
 	return nil
 }

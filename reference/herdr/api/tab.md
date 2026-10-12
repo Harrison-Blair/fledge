@@ -1,6 +1,6 @@
 # herdr API: tab methods
 
-> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
+> herdr 0.9.3 · protocol 22 · schema_version 1 · captured 2026-10-06
 > Part of the fledge herdr reference. Index: [README.md](../README.md). Wire format: [protocol.md](../protocol.md).
 
 The `tab` namespace manages tabs within a workspace. A tab is a container of one or
@@ -15,12 +15,15 @@ tab also creates its `root_pane`; closing a tab closes the panes it contains. Mo
 methods operate on a single tab identified by its `tab_id`; `tab.list` enumerates tabs
 and `tab.move` reorders them within a workspace. All seven methods require an explicit
 `params` object, even where every field is optional (e.g. `tab.list`, `tab.create`); a
-wrong field type is a hard `invalid_request`, and on any deserialization failure the
-response `id` comes back as `""` rather than echoing the request id. Unknown extra
-fields in `params` are ignored. The `herdr tab` CLI prints compact JSON with
-alphabetically sorted keys (unlike the declaration order shown in this page's
-examples), exits `1` with the error envelope on an API error, and exits `2` with a
-usage message for an unknown subcommand.
+wrong field type is a hard `invalid_request`. On herdr 0.9.3 that error echoes the request
+`id` whenever the line is valid JSON with a string `id`; the response `id` is `""` only
+when the line is not valid JSON or its `id` is missing or not a string (on 0.9.1 every
+deserialization failure answered with `""`). Unknown extra fields in `params` are
+ignored. The `herdr tab` CLI prints compact JSON with alphabetically sorted keys (unlike
+the declaration order shown in this page's examples), exits `1` with the error envelope
+on an API error, and exits `2` with a usage message for an unknown subcommand. Tab IDs
+were walked from `t1` to `tS` (skipping `I`, `L`, and `O`; `U` was not reached), with
+`number` matching each suffix's base32 value. Validated 2026-10-06 against herdr 0.9.3.
 
 7 methods:
 
@@ -106,7 +109,8 @@ Close a tab, closing the panes it contains — no `pane_closed` event is emitted
 those panes, only `tab_closed` for the tab itself. The tab ID is not reused afterward.
 Closing the last tab in a workspace closes the workspace too (a `workspace_closed`
 event follows, and a later `tab.list`/`workspace.list` scoped to that workspace
-returns `workspace_not_found`). Closing the focused tab silently moves focus to an
+returns `workspace_not_found`); on 0.9.3 the same delivery tick carries
+`workspace_closed` *before* `tab_closed`. Closing the focused tab silently moves focus to an
 adjacent tab with no `tab_focused` event — a client tracking focus purely from events
 will go stale. Do not close tabs you did not create unless explicitly asked (skill.md
 safety guidance).
@@ -129,7 +133,7 @@ safety guidance).
 
 **CLI**: `herdr tab close <tab_id>`
 
-**Example** — `Validated 2026-09-19 against herdr 0.9.1.`
+**Example** — `Captured 2026-09-19 against herdr 0.9.1; Validated 2026-10-06 against herdr 0.9.3 (close, last-tab close, and focused-tab close re-run with the same results).`
 
 ```json
 {"id":"cli:tab:close","method":"tab.close","params":{"tab_id":"w1:t2"}}
@@ -168,11 +172,12 @@ in the session the message is "no active workspace" rather than naming the missi
 do not match on message text); other codes possible.
 
 **Events**: emits a `tab_created` event to subscribers (subscription type `tab.created`);
-the event `data` mirrors the `tab` field.
+the event `data` mirrors the `tab` field. On 0.9.3 the new root pane also produces
+`pane_created`, then `layout_updated` and a `pane_updated` once its shell settles.
 
 **CLI**: `herdr tab create [--workspace <workspace_id>] [--cwd PATH] [--label TEXT] [--env KEY=VALUE]... [--focus] [--no-focus]`
 
-**Example** — `Validated 2026-09-19 against herdr 0.9.1.` (root_pane's optional agent,
+**Example** — `Captured 2026-09-19 against herdr 0.9.1; Validated 2026-10-06 against herdr 0.9.3 (the nonexistent-cwd fallback, unvalidated labels with control characters, "no active workspace", and focus: true re-run with the same results).` (root_pane's optional agent,
 agent_session, display_agent, label, title, and state fields are schema-derived — not
 observed populated by any tab method)
 
@@ -206,12 +211,14 @@ updated tab metadata.
 **Errors**: `tab_not_found` (unknown `tab_id`); other codes possible.
 
 **Events**: emits a `tab_focused` event to subscribers (subscription type `tab.focused`)
-carrying `{tab_id, workspace_id}`. Re-focusing an already-focused tab is a no-op and
-emits no event.
+carrying `{tab_id, workspace_id}`. On 0.9.3 the same tick also carries
+`workspace_focused` (`{workspace_id}`) and `pane_focused` (`{pane_id, workspace_id}`), in
+the order `workspace_focused`, `tab_focused`, `pane_focused`. Re-focusing an
+already-focused tab is a no-op and emits no event. Validated 2026-10-06 against herdr 0.9.3.
 
 **CLI**: `herdr tab focus <tab_id>`
 
-**Example** — `Validated 2026-09-19 against herdr 0.9.1.` (a race between this call and a
+**Example** — `Captured 2026-09-19 against herdr 0.9.1; Validated 2026-10-06 against herdr 0.9.3.` (a race between this call and a
 human focusing another tab in a second UI client was not exercised)
 
 ```json
@@ -240,7 +247,7 @@ Retrieve one tab's metadata by ID. This is a read; it does not mark the tab seen
 
 **CLI**: `herdr tab get <tab_id>`
 
-**Example** — `Validated 2026-09-19 against herdr 0.9.1.`
+**Example** — `Captured 2026-09-19 against herdr 0.9.1 (live session); Validated 2026-10-06 against herdr 0.9.3 on a scratch server, including tab_not_found.`
 
 ```json
 {"id":"cli:tab:get","method":"tab.get","params":{"tab_id":"w2:t1"}}
@@ -269,7 +276,7 @@ scoped to that workspace. This is a read; it does not mark tabs seen.
 
 **CLI**: `herdr tab list [--workspace <workspace_id>]`
 
-**Example** — `Validated 2026-09-19 against herdr 0.9.1.`
+**Example** — `Captured 2026-09-19 against herdr 0.9.1 (live session); Validated 2026-10-06 against herdr 0.9.3 on a scratch server, including workspace_not_found.`
 
 ```json
 {"id":"cli:tab:list","method":"tab.list","params":{"workspace_id":"w2"}}
@@ -320,7 +327,7 @@ post-move list as the RPC result. No event on a no-op move.
 **CLI**: API-only (no CLI subcommand). The `herdr tab` command exposes only `list`,
 `create`, `get`, `focus`, `rename`, and `close`.
 
-**Example** — `Validated 2026-09-19 against herdr 0.9.1.`
+**Example** — `Captured 2026-09-19 against herdr 0.9.1; Validated 2026-10-06 against herdr 0.9.3 (index 0 → 1 no-op with no event, 0 → 3 landing at index 2, tab_count accepted, tab_count + 1 → tab_move_failed "insert_index 25 is out of bounds").`
 
 ```json
 {"id":"t1","method":"tab.move","params":{"tab_id":"w1:t1","insert_index":3}}
@@ -354,7 +361,7 @@ to its existing label still emits the event.
 **CLI**: `herdr tab rename <tab_id> <label>...` (the CLI joins multiple `LABEL` words into
 the label string).
 
-**Example** — `Validated 2026-09-19 against herdr 0.9.1.`
+**Example** — `Captured 2026-09-19 against herdr 0.9.1; Validated 2026-10-06 against herdr 0.9.3 (control characters and a 303-character label stored verbatim; a same-label rename still emitted tab_renamed).`
 
 ```json
 {"id":"cli:tab:rename","method":"tab.rename","params":{"tab_id":"w1:t2","label":"--label renamed-tab"}}

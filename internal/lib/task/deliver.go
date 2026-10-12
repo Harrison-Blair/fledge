@@ -5,7 +5,9 @@ import (
 	"errors"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/inbox"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 )
 
@@ -31,21 +33,32 @@ func (a Attempt) State() string {
 	return "outcome unknown"
 }
 
-// Deliver submits body to pane as message messageID with the caller's sender
-// header, then records the outcome on task id under the store lock. attempt
-// returns the task's attempt for this message, or an error when the task
-// changed so the outcome is no longer this call's to record. Deliver appends
-// the submitted-message and updated-task effects and fails out at phase
-// agent.prompt for a delivery error, otherwise at phase task for a recording
+// Deliver stores msg, which names its task, as an inbox record, rings its doorbell in pane (with
+// the task title for an assignment), then records the outcome on task id
+// under the store lock. The body is never typed; a doorbell that did not ring
+// may be rung again by the supervisor. attempt returns the task's attempt for
+// this message after storing messageID, the inbox id, on it, or an error when
+// the task changed so the outcome is no longer this call's to record. Deliver
+// appends the created-inbox, submitted-message, and updated-task effects and
+// fails out at phase inbox when the record cannot be stored, at phase
+// agent.prompt for a doorbell error, otherwise at phase task for a recording
 // error. It returns the updated task and whether the outcome was recorded.
-func Deliver(ctx context.Context, c libagent.Client, s *state.Store, out *libagent.Outcome, id, pane, messageID, body string, attempt func(*Record) (*Attempt, error)) (Record, bool) {
-	sender := libagent.ResolveSender(ctx, c)
-	_, deliveryErr := c.Prompt(ctx, pane, libagent.WithHeader(messageID, sender, body))
+func Deliver(ctx context.Context, c libagent.Client, s *state.Store, out *cli.Outcome, msg inbox.Record, pane, title string, attempt func(r *Record, messageID string) (*Attempt, error)) (Record, bool) {
+	m, deliveryErr := inbox.Create(s, msg)
+	phase := "inbox"
 	if deliveryErr == nil {
-		out.Effects = append(out.Effects, libagent.Effect{Action: "submitted", Kind: "message", ID: pane})
+		out.Effects = append(out.Effects, cli.Effect{Action: "created", Kind: "inbox", ID: m.ID})
+		phase = "agent.prompt"
+		_, deliveryErr = c.Prompt(ctx, pane, inbox.Doorbell(m, title))
+		if deliveryErr == nil {
+			out.Effects = append(out.Effects, cli.Effect{Action: "submitted", Kind: "message", ID: pane})
+		}
+		if _, err := inbox.AddRing(s, m.ID, pane, deliveryErr); err != nil {
+			out.Effects = append(out.Effects, cli.Effect{Action: "warning", Kind: "inbox", ID: m.ID})
+		}
 	}
-	r, err := Update(s, id, func(r *Record) error {
-		a, err := attempt(r)
+	r, err := Update(s, *msg.Task, func(r *Record) error {
+		a, err := attempt(r, m.ID)
 		if err != nil {
 			return err
 		}
@@ -59,11 +72,11 @@ func Deliver(ctx context.Context, c libagent.Client, s *state.Store, out *libage
 		return nil
 	})
 	if err == nil {
-		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "task", ID: r.ID})
+		out.Effects = append(out.Effects, cli.Effect{Action: "updated", Kind: "task", ID: r.ID})
 	}
 	switch {
 	case deliveryErr != nil:
-		out.Fail(deliveryErr, "agent.prompt", true)
+		out.Fail(deliveryErr, phase, phase == "agent.prompt")
 	case err != nil:
 		out.Fail(err, "task", false)
 	}

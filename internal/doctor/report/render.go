@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 )
 
 // nameGap is the space between the widest check name and the status column.
@@ -143,7 +145,7 @@ func wrapText(s string) []string {
 
 // compatLines shows the version and protocol; the capability list is verbose-only.
 func compatLines(d CompatibilityData, verbose bool) []string {
-	lines := []string{fmt.Sprintf("version %s · protocol %d (expected %d)", dash(d.Version), d.Protocol, d.Expected)}
+	lines := []string{fmt.Sprintf("version %s · protocol %d (expected %d)", cli.DisplayString(d.Version), d.Protocol, d.Expected)}
 	if verbose {
 		lines = append(lines, wrapList("capabilities", d.CapabilityNames())...)
 	}
@@ -153,12 +155,7 @@ func compatLines(d CompatibilityData, verbose bool) []string {
 // harnessLines shows the target and availability counts; the available names are
 // verbose-only.
 func harnessLines(d HarnessData, verbose bool) []string {
-	var available []string
-	for _, in := range d.Integrations {
-		if in.Available {
-			available = append(available, in.Target)
-		}
-	}
+	available := d.Available()
 	lines := []string{fmt.Sprintf("%d targets, %d available", len(d.Integrations), len(available))}
 	if verbose && len(available) > 0 {
 		lines = append(lines, wrapList("available", available)...)
@@ -235,15 +232,7 @@ func configLines(d ConfigData) []string {
 	}
 	lines := make([]string, len(rows))
 	for i, row := range rows {
-		lines[i] = fmt.Sprintf("%-*s%s", configKeyWidth, row.key, dash(row.val))
+		lines[i] = fmt.Sprintf("%-*s%s", configKeyWidth, row.key, cli.DisplayString(row.val))
 	}
 	return lines
-}
-
-// dash renders an empty value as "-" for human output.
-func dash(s string) string {
-	if s == "" {
-		return "-"
-	}
-	return s
 }

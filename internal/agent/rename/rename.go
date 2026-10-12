@@ -8,6 +8,7 @@ import (
 	"io"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 )
 
@@ -30,17 +31,17 @@ type Result struct {
 // record under the same id, then labels its pane and, when the pane is alone
 // in its tab, the tab. An agent already named To is only labeled. An
 // unavailable store means no record to update, as for agent get.
-func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
-	out := libagent.Outcome{Operation: "agent.rename", Status: "success", Effects: []libagent.Effect{}}
+func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
+	out := cli.NewOutcome("agent.rename")
 	if o.Name == "" && o.Pane == "" && o.ID == "" {
 		o.Pane = c.CallerPane
 	}
 	var err error
 	switch {
 	case o.To == "":
-		err = libagent.Invalid("--to is required")
+		err = cli.Invalid("--to is required")
 	case o.Name == "" && o.Pane == "" && o.ID == "":
-		err = libagent.Invalid("--name, --pane, or --id is required outside a Herdr pane")
+		err = cli.Invalid("--name, --pane, or --id is required outside a Herdr pane")
 	default:
 		if err = libagent.ValidateName(o.To); err == nil {
 			err = o.Target.Validate()
@@ -50,7 +51,8 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 		out.Fail(err, "validation", false)
 		return out
 	}
-	a, _, rec, err := o.Target.Get(ctx, c)
+	open := identity.OpenOnce(ctx, c.Cwd)
+	a, _, rec, err := o.Target.GetWith(ctx, c, open)
 	if err != nil {
 		out.Fail(err, "agent.get", false)
 		return out
@@ -61,13 +63,13 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 			out.Fail(err, "agent.rename", true)
 			return out
 		}
-		out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "agent_name", ID: a.PaneID})
+		out.Effects = append(out.Effects, cli.Effect{Action: "updated", Kind: "agent_name", ID: a.PaneID})
 	}
 	result := Result{AgentRow: libagent.NewAgentRow(a.Pane), Previous: previous}
 	out.Result = result
-	s, err := identity.Existing(ctx, c.Cwd)
+	s, err := open()
 	if err == nil && s != nil && rec == nil {
-		rec, err = identity.Match(s, a)
+		rec, err = identity.LiveEndingMismatched(s, a)
 		if err != nil {
 			out.Fail(err, "state", false)
 			return out
@@ -80,7 +82,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 				out.Fail(err, "state", false)
 				return out
 			}
-			out.Effects = append(out.Effects, libagent.Effect{Action: "updated", Kind: "agent_record", ID: renamed.ID})
+			out.Effects = append(out.Effects, cli.Effect{Action: "updated", Kind: "agent_record", ID: renamed.ID})
 		}
 		result.ID = &rec.ID
 		out.Result = result
@@ -91,11 +93,11 @@ func Run(ctx context.Context, c libagent.Client, o Options) libagent.Outcome {
 }
 
 // Render writes a successful rename.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil
 	}
-	_, err := fmt.Fprintf(w, "Renamed %s to %s (%s).\n", libagent.Display(r.Previous), libagent.Display(r.Name), libagent.Display(r.PaneID))
+	_, err := fmt.Fprintf(w, "Renamed %s to %s (%s).\n", cli.Display(r.Previous), cli.Display(r.Name), cli.Display(r.PaneID))
 	return err
 }

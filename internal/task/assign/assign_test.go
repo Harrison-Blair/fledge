@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -11,8 +13,10 @@ import (
 	"time"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/inbox"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
@@ -32,11 +36,29 @@ func prompted(a herdr.AgentResult) herdr.AgentResult {
 	return herdr.AgentResult{Type: "agent_prompted", Agent: a.Agent}
 }
 
-// brief is the exact text assign delivers for task id from boss.
+// brief is the exact body assign stores for task id.
 func brief(id string) string {
-	return "ᛉ fledge message from boss (w1:p1) · id m-0a1b2c · reply: fledge agent message --name boss\n" +
-		"task: " + id + " · title: Fix it · complete with: fledge task complete --id " + id + " --summary \"...\"\n" +
+	return "task: " + id + " · title: Fix it · complete with: fledge task complete --id " + id + " --summary \"...\"\n" +
 		"do the thing"
+}
+
+// recorder keeps the text of every prompt a client sends.
+type recorder struct {
+	inner   libagent.API
+	prompts []string
+}
+
+func (r *recorder) Call(ctx context.Context, method string, params, result any) error {
+	if method == "agent.prompt" {
+		r.prompts = append(r.prompts, params.(map[string]any)["text"].(string))
+	}
+	return r.inner.Call(ctx, method, params, result)
+}
+
+func recording(c libagent.Client) (libagent.Client, *recorder) {
+	r := &recorder{inner: c.API}
+	c.API = r
+	return c, r
 }
 
 func seed(t *testing.T, repo string) string {
@@ -50,9 +72,10 @@ func TestAssignRecordsOwnerThenDelivery(t *testing.T) {
 	c := tasktest.Client(t, repo, "w1:p1",
 		tasktest.Get("worker", worker),
 		tasktest.Get("w1:p1", boss),
-		call{Method: "agent.prompt", Params: map[string]any{"target": "w1:p3", "text": brief(id)}, Result: prompted(worker)},
+		call{Method: "agent.prompt", Result: prompted(worker)},
 	)
-	out := run(context.Background(), c, Options{Agent: identity.Target{Name: "worker"}, ID: id}, "m-0a1b2c")
+	c, rec := recording(c)
+	out := Run(context.Background(), c, Options{Agent: identity.Target{Name: "worker"}, ID: id})
 	if out.Error != nil || out.Status != "success" || out.Operation != "task.assign" {
 		t.Fatalf("%+v", out.Error)
 	}
@@ -61,15 +84,23 @@ func TestAssignRecordsOwnerThenDelivery(t *testing.T) {
 		t.Fatalf("%+v != %+v", out.Result, r)
 	}
 	if r.Status != task.Assigned || *r.Owner != owner.ID || r.AssignedAt == nil || r.Delivery == nil ||
-		r.Delivery.MessageID != "m-0a1b2c" || r.Delivery.Pane != "w1:p3" || r.Delivery.DeliveredAt == nil || r.Delivery.Error != nil {
+		!state.ValidID(r.Delivery.MessageID) || r.Delivery.Pane != "w1:p3" || r.Delivery.DeliveredAt == nil || r.Delivery.Error != nil {
 		t.Fatalf("%+v %+v", r, r.Delivery)
 	}
-	want := []libagent.Effect{{Action: "updated", Kind: "task", ID: id}, {Action: "submitted", Kind: "message", ID: "w1:p3"}, {Action: "updated", Kind: "task", ID: id}}
+	mid := r.Delivery.MessageID
+	m, err := inbox.Get(tasktest.Store(t, repo), mid)
+	if err != nil || m.Kind != inbox.Assignment || m.Body != brief(id) || m.To != owner.ID || *m.Task != id || *m.From.Name != "boss" || inbox.State(m) != "rung" {
+		t.Fatalf("%+v %v", m, err)
+	}
+	if want := "ᛉ fledge inbox · assignment from boss (w1:p1) · id " + mid + " · read: fledge inbox read --id " + mid + " · task: " + id + " · Fix it"; len(rec.prompts) != 1 || rec.prompts[0] != want {
+		t.Fatalf("%q", rec.prompts)
+	}
+	want := []cli.Effect{{Action: "updated", Kind: "task", ID: id}, {Action: "created", Kind: "inbox", ID: mid}, {Action: "submitted", Kind: "message", ID: "w1:p3"}, {Action: "updated", Kind: "task", ID: id}}
 	if !reflect.DeepEqual(out.Effects, want) {
 		t.Fatalf("%+v", out.Effects)
 	}
 	var b bytes.Buffer
-	if err := out.Write(&b, false, Render); err != nil || b.String() != "Assigned task "+id+" to worker ("+owner.ID+"); brief delivered to w1:p3 as message m-0a1b2c.\n" {
+	if err := out.Write(&b, false, Render); err != nil || b.String() != "Assigned task "+id+" to worker ("+owner.ID+"); brief stored as inbox message "+mid+" and doorbell rung in w1:p3.\n" {
 		t.Fatalf("%q %v", b.String(), err)
 	}
 }
@@ -123,7 +154,7 @@ func TestAssignRefusesUnregisteredAgent(t *testing.T) {
 	id := seed(t, repo)
 	before := tasktest.Load(t, repo, id)
 	out := Run(context.Background(), tasktest.Client(t, repo, "w1:p1", tasktest.Get("w1:p3", worker)), Options{Agent: identity.Target{Pane: "w1:p3"}, ID: id})
-	if out.Error == nil || out.Error.Code != "agent_unregistered" || out.Status != "rejected" || !strings.Contains(out.Error.Message, "fledge agent adopt --pane w1:p3") {
+	if out.Error == nil || out.Error.Code != "agent_unregistered" || out.Status != "rejected" || out.Error.Message != "the agent in w1:p3 has no Fledge record; the agent must register itself with fledge agent adopt in its own pane, or be started with fledge agent spawn" {
 		t.Fatalf("%+v", out.Error)
 	}
 	if r := tasktest.Load(t, repo, id); !reflect.DeepEqual(r, before) {
@@ -140,18 +171,21 @@ func TestAssignDeliveryFailureLeavesTaskAssigned(t *testing.T) {
 		tasktest.Get("w1:p1", boss),
 		call{Method: "agent.prompt", Err: &herdr.Error{Code: "agent_blocked", Message: "awaiting approval"}},
 	)
-	out := run(context.Background(), c, Options{Agent: identity.Target{Name: "worker"}, ID: id}, "m-0a1b2c")
+	out := Run(context.Background(), c, Options{Agent: identity.Target{Name: "worker"}, ID: id})
 	if out.Status != "partial" || out.Error == nil || out.Error.Code != "agent_blocked" || out.Error.Phase != "agent.prompt" {
 		t.Fatalf("%s %+v", out.Status, out.Error)
 	}
 	r := tasktest.Load(t, repo, id)
 	if r.Status != task.Assigned || *r.Owner != owner.ID || r.Delivery == nil || r.Delivery.DeliveredAt != nil ||
-		r.Delivery.Error == nil || !strings.Contains(*r.Delivery.Error, "awaiting approval") || r.Delivery.MessageID != "m-0a1b2c" {
+		r.Delivery.Error == nil || !strings.Contains(*r.Delivery.Error, "awaiting approval") || !state.ValidID(r.Delivery.MessageID) {
 		t.Fatalf("%+v %+v", r, r.Delivery)
+	}
+	if m, err := inbox.Get(tasktest.Store(t, repo), r.Delivery.MessageID); err != nil || inbox.State(m) != "queued" || m.Body != brief(id) {
+		t.Fatalf("%+v %v", m, err)
 	}
 	var b bytes.Buffer
 	out.Write(&b, false, Render)
-	if !strings.Contains(b.String(), "Task "+id+" remains assigned to worker ("+owner.ID+"); the brief was not delivered and will not be retried.") {
+	if !strings.Contains(b.String(), "Task "+id+" remains assigned to worker ("+owner.ID+"); the brief is stored as inbox message "+r.Delivery.MessageID+" but the doorbell did not ring; the doorbell may be rung again by the supervisor; the body is never typed.") {
 		t.Fatalf("%q", b.String())
 	}
 }
@@ -186,6 +220,22 @@ func TestAssignRejectsInvalidInput(t *testing.T) {
 	}
 }
 
+func TestAssignRejectsMalformedIDs(t *testing.T) {
+	repo := identitytest.Repository(t)
+	for label, tc := range map[string]struct {
+		o    Options
+		want string
+	}{
+		"task id":  {Options{Agent: identity.Target{Name: "worker"}, ID: "xyz"}, "--id must be an 8 lowercase hexadecimal task id"},
+		"agent id": {Options{Agent: identity.Target{ID: "nope"}, ID: "0123abcd"}, "--agent-id must be an 8 lowercase hexadecimal agent id"},
+	} {
+		out := Run(context.Background(), tasktest.Client(t, repo, ""), tc.o)
+		if out.Error == nil || out.Error.Code != "invalid_input" || out.Error.Message != tc.want || out.ExitCode() != 2 {
+			t.Fatalf("%s: %+v", label, out.Error)
+		}
+	}
+}
+
 // Two callers assign the same created task at once: the second reaches the
 // store lock after the first has assigned it, and must refuse.
 func TestConcurrentAssignExactlyOneSucceeds(t *testing.T) {
@@ -194,7 +244,7 @@ func TestConcurrentAssignExactlyOneSucceeds(t *testing.T) {
 	other := tasktest.Agent("w1:p4", "term_other", "other")
 	tasktest.Register(t, repo, other)
 	id := seed(t, repo)
-	var winner libagent.Outcome
+	var winner cli.Outcome
 	loser := tasktest.Client(t, repo, "",
 		call{Method: "agent.get", Params: map[string]any{"target": "other"}, Result: other, Before: func() {
 			c := tasktest.Client(t, repo, "", tasktest.Get("worker", worker), call{Method: "agent.prompt", Result: prompted(worker)})
@@ -221,22 +271,22 @@ func TestAssignUncertainDeliveryIsReportedUnknown(t *testing.T) {
 		tasktest.Get("w1:p1", boss),
 		call{Method: "agent.prompt", Err: &herdr.Error{Code: "transport_error", Message: "connection reset", Uncertain: true}},
 	)
-	out := run(context.Background(), c, Options{Agent: identity.Target{Name: "worker"}, ID: id}, "m-0a1b2c")
+	out := Run(context.Background(), c, Options{Agent: identity.Target{Name: "worker"}, ID: id})
 	if out.Status != "unknown" || out.Error == nil || out.Error.Code != "transport_error" {
 		t.Fatalf("%s %+v", out.Status, out.Error)
 	}
+	r := tasktest.Load(t, repo, id)
 	var b bytes.Buffer
 	out.Write(&b, false, Render)
-	if want := "Task " + id + " remains assigned to worker (" + owner.ID + "); the delivery outcome is unknown and will not be retried.\n"; !strings.HasSuffix(b.String(), want) || strings.Contains(b.String(), "not delivered") {
+	if want := "Task " + id + " remains assigned to worker (" + owner.ID + "); the brief is stored as inbox message " + r.Delivery.MessageID + " and the doorbell outcome is unknown; the doorbell may be rung again by the supervisor; the body is never typed.\n"; !strings.HasSuffix(b.String(), want) || strings.Contains(b.String(), "did not ring") {
 		t.Fatalf("%q", b.String())
 	}
-	r := tasktest.Load(t, repo, id)
 	if r.Status != task.Assigned || r.Delivery == nil || !r.Delivery.Uncertain || r.Delivery.Error == nil || r.Delivery.DeliveredAt != nil {
 		t.Fatalf("%+v %+v", r, r.Delivery)
 	}
 	b.Reset()
 	get.Render(&b, get.Run(context.Background(), tasktest.Client(t, repo, ""), get.Options{ID: id}))
-	if want := "delivery: message m-0a1b2c to w1:p3, outcome unknown: transport_error: connection reset\n"; !strings.Contains(b.String(), want) || strings.Contains(b.String(), "failed") {
+	if want := "delivery: message " + r.Delivery.MessageID + " to w1:p3, outcome unknown: transport_error: connection reset\n"; !strings.Contains(b.String(), want) || strings.Contains(b.String(), "failed") {
 		t.Fatalf("%q", b.String())
 	}
 }
@@ -291,6 +341,92 @@ func TestAssignWithSatisfiedPrerequisites(t *testing.T) {
 	}
 }
 
+// malform overwrites task id's record with text that does not decode.
+func malform(t *testing.T, repo, id string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(repo, ".fledge/state/tasks", id+".json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A malformed task record, even one the task does not wait on, fails the
+// assignment before the agent is resolved.
+func TestAssignRefusesMalformedUnrelatedRecord(t *testing.T) {
+	repo := identitytest.Repository(t)
+	tasktest.Register(t, repo, worker)
+	malform(t, repo, tasktest.Seed(t, repo, task.Record{Title: "other", Status: task.Created}))
+	id := seed(t, repo)
+	before := tasktest.Load(t, repo, id)
+	out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{Agent: identity.Target{Name: "worker"}, ID: id})
+	if out.Error == nil || out.Error.Phase != "task" || !strings.Contains(out.Error.Message, "decode") || !reflect.DeepEqual(tasktest.Load(t, repo, id), before) {
+		t.Fatalf("%+v", out.Error)
+	}
+}
+
+// The locked check reads only the prerequisites: a record the task does not
+// wait on that becomes malformed while the agent is resolved does not block
+// the assignment.
+func TestAssignLockedCheckIgnoresUnrelatedRecords(t *testing.T) {
+	repo := identitytest.Repository(t)
+	tasktest.Register(t, repo, worker)
+	other := tasktest.Seed(t, repo, task.Record{Title: "other", Status: task.Created})
+	done := tasktest.Seed(t, repo, task.Record{Title: "done", Status: task.Verified})
+	id := tasktest.Seed(t, repo, task.Record{Title: "Fix it", Brief: "do the thing", Status: task.Created, After: []string{done}})
+	get := tasktest.Get("worker", worker)
+	get.Before = func() { malform(t, repo, other) }
+	c := tasktest.Client(t, repo, "", get, call{Method: "agent.prompt", Result: prompted(worker)})
+	out := Run(context.Background(), c, Options{Agent: identity.Target{Name: "worker"}, ID: id})
+	if r := tasktest.Load(t, repo, id); out.Error != nil || r.Status != task.Assigned || r.UnmetAtAssign != nil {
+		t.Fatalf("%+v %+v", out.Error, r)
+	}
+}
+
+// The locked check sees prerequisite changes made while the agent is
+// resolved: a missing prerequisite is unmet, in declaration order.
+func TestAssignRechecksPrerequisitesUnderLock(t *testing.T) {
+	repo := identitytest.Repository(t)
+	tasktest.Register(t, repo, worker)
+	done := tasktest.Seed(t, repo, task.Record{Title: "done", Status: task.Verified})
+	gone := tasktest.Seed(t, repo, task.Record{Title: "gone", Status: task.Verified})
+	reopened := tasktest.Seed(t, repo, task.Record{Title: "reopened", Status: task.Verified})
+	id := tasktest.Seed(t, repo, task.Record{Title: "Fix it", Brief: "do the thing", Status: task.Created, After: []string{reopened, done, gone}})
+	change := func() {
+		if err := os.Remove(filepath.Join(repo, ".fledge/state/tasks", gone+".json")); err != nil {
+			t.Fatal(err)
+		}
+		s, err := task.Existing(context.Background(), repo)
+		if err == nil {
+			_, err = task.Update(s, reopened, func(r *task.Record) error { r.Status = task.Completed; return nil })
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	get := tasktest.Get("worker", worker)
+	get.Before = change
+	before := tasktest.Load(t, repo, id)
+	out := Run(context.Background(), tasktest.Client(t, repo, "", get), Options{Agent: identity.Target{Name: "worker"}, ID: id})
+	if out.Error == nil || out.Error.Code != "task_dependencies_unmet" || !strings.Contains(out.Error.Message, reopened+", "+gone) || !reflect.DeepEqual(tasktest.Load(t, repo, id), before) {
+		t.Fatalf("%+v", out.Error)
+	}
+}
+
+// A prerequisite that is present but unreadable under the lock fails the
+// assignment, even when forced, instead of counting as unmet.
+func TestAssignPropagatesPrerequisiteReadErrors(t *testing.T) {
+	repo := identitytest.Repository(t)
+	tasktest.Register(t, repo, worker)
+	dep := tasktest.Seed(t, repo, task.Record{Title: "dep", Status: task.Verified})
+	id := tasktest.Seed(t, repo, task.Record{Title: "Fix it", Brief: "do the thing", Status: task.Created, After: []string{dep}})
+	get := tasktest.Get("worker", worker)
+	get.Before = func() { malform(t, repo, dep) }
+	before := tasktest.Load(t, repo, id)
+	out := Run(context.Background(), tasktest.Client(t, repo, "", get), Options{Agent: identity.Target{Name: "worker"}, ID: id, Force: true})
+	if out.Error == nil || out.Error.Phase != "task" || !strings.Contains(out.Error.Message, "decode") || !reflect.DeepEqual(tasktest.Load(t, repo, id), before) {
+		t.Fatalf("%+v", out.Error)
+	}
+}
+
 // A task reassigned while its brief was in flight keeps the new assignment's
 // delivery untouched; the old outcome fails at phase task.
 func TestAssignDeliveryNotRecordedAfterReassignment(t *testing.T) {
@@ -310,7 +446,7 @@ func TestAssignDeliveryNotRecordedAfterReassignment(t *testing.T) {
 			}
 		}},
 	)
-	out := run(context.Background(), c, Options{Agent: identity.Target{Name: "worker"}, ID: id}, "m-0a1b2c")
+	out := Run(context.Background(), c, Options{Agent: identity.Target{Name: "worker"}, ID: id})
 	d := tasktest.Load(t, repo, id).Delivery
 	if out.Status != "partial" || out.Error == nil || out.Error.Code != "task_state_changed" || out.Error.Phase != "task" || d.MessageID != "m-ffffff" || d.DeliveredAt != nil || d.Error != nil {
 		t.Fatalf("%+v %+v %+v", out, out.Error, d)
@@ -322,7 +458,7 @@ func TestAssignCapturesOwnerSessionRef(t *testing.T) {
 	failing := func(*state.Store, string, herdr.AgentSession, time.Time) (identity.Record, bool, error) {
 		return identity.Record{}, false, errors.New("read-only store")
 	}
-	for label, observe := range map[string]task.Observer{"stored": identity.ObserveSession, "failing store": failing} {
+	for label, observe := range map[string]identity.Observer{"stored": identity.ObserveSession, "failing store": failing} {
 		t.Run(label, func(t *testing.T) {
 			old := observeSession
 			t.Cleanup(func() { observeSession = old })
@@ -335,9 +471,9 @@ func TestAssignCapturesOwnerSessionRef(t *testing.T) {
 			c := tasktest.Client(t, repo, "w1:p1",
 				tasktest.Get("worker", live),
 				tasktest.Get("w1:p1", boss),
-				call{Method: "agent.prompt", Params: map[string]any{"target": "w1:p3", "text": brief(id)}, Result: prompted(worker)},
+				call{Method: "agent.prompt", Result: prompted(worker)},
 			)
-			out := run(context.Background(), c, Options{Agent: identity.Target{Name: "worker"}, ID: id}, "m-0a1b2c")
+			out := Run(context.Background(), c, Options{Agent: identity.Target{Name: "worker"}, ID: id})
 			if r := tasktest.Load(t, repo, id); out.Error != nil || out.Status != "success" || r.Status != task.Assigned || r.Delivery.DeliveredAt == nil {
 				t.Fatalf("%+v %+v", out.Error, r)
 			}
@@ -353,9 +489,28 @@ func TestAssignCapturesOwnerSessionRef(t *testing.T) {
 			if label == "failing store" {
 				action, stored = "warning", rec.NativeSession == nil
 			}
-			if !stored || !slices.Contains(out.Effects, libagent.Effect{Action: action, Kind: "native_session", ID: owner.ID}) {
+			if !stored || !slices.Contains(out.Effects, cli.Effect{Action: action, Kind: "native_session", ID: owner.ID}) {
 				t.Fatalf("%+v %+v", rec.NativeSession, out.Effects)
 			}
 		})
+	}
+}
+
+// Assignment starts the supervision daemon.
+func TestAssignStartsSupervisor(t *testing.T) {
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_SOCKET_PATH", "/nonexistent")
+	t.Setenv("HERDR_SESSION", "")
+	starts := 0
+	old := startSupervisor
+	startSupervisor = func(string, string) error { starts++; return nil }
+	t.Cleanup(func() { startSupervisor = old })
+	repo := identitytest.Repository(t)
+	tasktest.Register(t, repo, worker)
+	id := seed(t, repo)
+	c := tasktest.Client(t, repo, "w1:p1", tasktest.Get("worker", worker), tasktest.Get("w1:p1", boss), call{Method: "agent.prompt", Result: prompted(worker)})
+	out := Run(context.Background(), c, Options{Agent: identity.Target{Name: "worker"}, ID: id})
+	if out.Error != nil || starts != 1 || !slices.Contains(out.Effects, cli.Effect{Action: "started", Kind: "supervisor"}) {
+		t.Fatalf("%d %+v", starts, out.Effects)
 	}
 }

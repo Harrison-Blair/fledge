@@ -10,21 +10,15 @@ import (
 	"strings"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/herdrscript"
 )
 
 type call = herdrscript.Call
 
-func git(t *testing.T, dir string, args ...string) {
-	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=Test", "-c", "user.email=t@example.com"}, args...)...)
-	if b, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git %v: %v %s", args, err, b)
-	}
-}
 func s(v string) *string { return &v }
 
 // fixture is a primary checkout on main with a managed merged checkout, an
@@ -34,19 +28,19 @@ type fixture struct{ root, merged, unmerged, detached string }
 func newFixture(t *testing.T) fixture {
 	t.Helper()
 	root, _ := filepath.EvalSymlinks(t.TempDir())
-	git(t, root, "init", "-q", "-b", "main")
-	git(t, root, "commit", "-qm", "initial", "--allow-empty")
+	gittest.Git(t, root, "init", "-q", "-b", "main")
+	gittest.Commit(t, root)
 	os.MkdirAll(filepath.Join(root, ".fledge"), 0o755)
 	os.WriteFile(filepath.Join(root, ".fledge", ".gitignore"), []byte("*\n"), 0o644)
 	outside, _ := filepath.EvalSymlinks(t.TempDir())
 	f := fixture{root: root, merged: filepath.Join(root, ".fledge", "worktrees", "merged"), unmerged: filepath.Join(outside, "unmerged"), detached: filepath.Join(outside, "detached")}
-	git(t, root, "worktree", "add", "-q", "-b", "merged", f.merged)
-	git(t, f.merged, "commit", "-qm", "merged work", "--allow-empty")
-	git(t, root, "merge", "-q", "--no-edit", "merged")
-	git(t, root, "worktree", "add", "-q", "-b", "unmerged", f.unmerged)
-	git(t, f.unmerged, "commit", "-qm", "unmerged work", "--allow-empty")
+	gittest.Git(t, root, "worktree", "add", "-q", "-b", "merged", f.merged)
+	gittest.Git(t, f.merged, "commit", "-qm", "merged work", "--allow-empty")
+	gittest.Git(t, root, "merge", "-q", "--no-edit", "merged")
+	gittest.Git(t, root, "worktree", "add", "-q", "-b", "unmerged", f.unmerged)
+	gittest.Git(t, f.unmerged, "commit", "-qm", "unmerged work", "--allow-empty")
 	os.WriteFile(filepath.Join(f.unmerged, "untracked"), []byte("x"), 0o644)
-	git(t, root, "worktree", "add", "-q", "--detach", f.detached, "main")
+	gittest.Git(t, root, "worktree", "add", "-q", "--detach", f.detached, "main")
 	return f
 }
 
@@ -138,7 +132,7 @@ func TestRender(t *testing.T) {
 		{Path: "/repo/.fledge/worktrees/y", Branch: s("y"), Dirty: "no", Merged: "no", Managed: true, Owner: &Owner{ID: "4e5f6a7b", Pane: "w1:p3"}, OwnerCount: 1},
 	}}
 	var b bytes.Buffer
-	if err := (libagent.Outcome{Status: "success", Result: r}).Write(&b, false, Render); err != nil {
+	if err := (cli.Outcome{Status: "success", Result: r}).Write(&b, false, Render); err != nil {
 		t.Fatal(err)
 	}
 	want := "PATH BRANCH WORKSPACE DIRTY MERGED MANAGED OWNER /repo (primary) main w1 no yes no - " +
@@ -146,13 +140,13 @@ func TestRender(t *testing.T) {
 	if got := strings.Join(strings.Fields(b.String()), " "); got != want {
 		t.Fatalf("got %q\nwant %q", got, want)
 	}
-	herdrscript.CheckOutputFailures(t, Render, libagent.Outcome{Result: r})
+	herdrscript.CheckOutputFailures(t, Render, cli.Outcome{Result: r})
 }
 
 // record stores an agent record naming terminal with worktree path at when.
 func record(t *testing.T, root, terminal, name, worktree, at string) string {
 	t.Helper()
-	s, err := identity.OpenStore(context.Background(), root, &libagent.Outcome{})
+	s, err := identity.OpenStore(context.Background(), root, &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,11 +272,11 @@ func TestListLeavesIncompleteStoreUnchanged(t *testing.T) {
 // unknown and says why, instead of falling back to another branch.
 func TestListMissingConfiguredBaseBranch(t *testing.T) {
 	f := newFixture(t)
-	git(t, f.root, "config", "fledge.baseBranch", "dev")
+	configure(t, f.root, "schema_version = 1\nbase_branch = \"dev\"\n")
 	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()})
 	out := Run(context.Background(), c, Options{Cwd: f.root})
 	r := out.Result.(Result)
-	if r.DefaultBranch != nil || r.DefaultBranchError == nil || !strings.Contains(*r.DefaultBranchError, "refs/heads/dev") {
+	if r.DefaultBranch != nil || r.DefaultBranchError == nil || !strings.Contains(*r.DefaultBranchError, ".fledge/config.toml base_branch names dev") {
 		t.Fatalf("%+v", r)
 	}
 	for _, row := range r.Worktrees {
@@ -297,13 +291,13 @@ func TestListMissingConfiguredBaseBranch(t *testing.T) {
 	if !strings.Contains(b.String(), "MERGED is unknown: "+*r.DefaultBranchError) {
 		t.Fatalf("%q", b.String())
 	}
-	herdrscript.CheckOutputFailures(t, Render, libagent.Outcome{Result: r})
+	herdrscript.CheckOutputFailures(t, Render, cli.Outcome{Result: r})
 }
 
 func TestListUsesConfiguredBaseBranch(t *testing.T) {
 	f := newFixture(t)
-	git(t, f.root, "branch", "dev", "main~1")
-	git(t, f.root, "config", "fledge.baseBranch", "dev")
+	gittest.Git(t, f.root, "branch", "dev", "main~1")
+	configure(t, f.root, "schema_version = 1\nbase_branch = \"dev\"\n")
 	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()})
 	r := Run(context.Background(), c, Options{Cwd: f.root}).Result.(Result)
 	if r.DefaultBranch == nil || *r.DefaultBranch != "dev" || r.DefaultBranchError != nil {
@@ -311,6 +305,45 @@ func TestListUsesConfiguredBaseBranch(t *testing.T) {
 	}
 	if row := r.Worktrees[1]; row.Merged != "no" {
 		t.Fatalf("merged into main but not dev: %+v", row)
+	}
+}
+
+// Without a local branch, the configured branch's remote-tracking ref is
+// the integration branch, as in a fresh clone.
+func TestListUsesConfiguredRemoteTrackingBranch(t *testing.T) {
+	f := newFixture(t)
+	gittest.Git(t, f.root, "update-ref", "refs/remotes/origin/dev", "main~1")
+	configure(t, f.root, "schema_version = 1\nbase_branch = \"dev\"\n")
+	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()})
+	r := Run(context.Background(), c, Options{Cwd: f.root}).Result.(Result)
+	if r.DefaultBranch == nil || *r.DefaultBranch != "origin/dev" || r.DefaultBranchError != nil {
+		t.Fatalf("%+v", r)
+	}
+	if row := r.Worktrees[1]; row.Merged != "no" {
+		t.Fatalf("merged into main but not origin/dev: %+v", row)
+	}
+}
+
+// An invalid configuration file makes merged checks unknown with its reason.
+func TestListInvalidConfigFile(t *testing.T) {
+	f := newFixture(t)
+	configure(t, f.root, "schema_version = 1\nbase_branch = \"..\"\n")
+	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()})
+	r := Run(context.Background(), c, Options{Cwd: f.root}).Result.(Result)
+	if r.DefaultBranch != nil || r.DefaultBranchError == nil || !strings.Contains(*r.DefaultBranchError, "not a valid branch name") {
+		t.Fatalf("%+v", r)
+	}
+	if row := r.Worktrees[1]; row.Merged != "unknown" {
+		t.Fatalf("%+v", row)
+	}
+}
+
+// configure writes content as root's .fledge/config.toml.
+func configure(t *testing.T, root, content string) {
+	t.Helper()
+	os.MkdirAll(filepath.Join(root, ".fledge"), 0o755)
+	if err := os.WriteFile(filepath.Join(root, ".fledge", "config.toml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -362,7 +395,7 @@ func TestListRespectsCancellation(t *testing.T) {
 func TestListSkipsOwnerOfDifferentHarness(t *testing.T) {
 	t.Setenv("HERDR_SESSION", "")
 	f := newFixture(t)
-	s, err := identity.OpenStore(context.Background(), f.root, &libagent.Outcome{})
+	s, err := identity.OpenStore(context.Background(), f.root, &cli.Outcome{})
 	if err != nil {
 		t.Fatal(err)
 	}

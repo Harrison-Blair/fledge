@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
@@ -28,16 +29,28 @@ var liveByTerminal = identity.LiveByTerminal
 // unattributed. Mine finds the caller in the listing, so a caller outside
 // Herdr or without a live record fails with caller_unregistered.
 func Resolve(ctx context.Context, c libagent.Client, f Filter) ([]Match, error) {
+	return resolve(ctx, c, f, func() (*state.Store, error) { return identity.Existing(ctx, c.Cwd) })
+}
+
+// ResolveIn is Resolve over s, a store the caller already opened with
+// identity.Existing, so the repository is not looked up again. A nil s is a
+// repository without state.
+func ResolveIn(ctx context.Context, s *state.Store, c libagent.Client, f Filter) ([]Match, error) {
+	return resolve(ctx, c, f, func() (*state.Store, error) { return s, nil })
+}
+
+// resolve is Resolve with open supplying the store after the listing.
+func resolve(ctx context.Context, c libagent.Client, f Filter, open func() (*state.Store, error)) ([]Match, error) {
 	if err := f.Validate(); err != nil {
-		return nil, libagent.AtPhase("validation", err)
+		return nil, cli.AtPhase("validation", err)
 	}
 	agents, err := c.List(ctx)
 	if err != nil {
 		return nil, err
 	}
-	s, records, err := load(ctx, c.Cwd)
+	s, records, err := load(open)
 	if err != nil && f.NeedsRecords() {
-		return nil, libagent.AtPhase("state", err)
+		return nil, cli.AtPhase("state", err)
 	}
 	match := func(a herdr.AgentDetails) *identity.Record {
 		if rec, ok := identity.Attributed(records, a); ok {
@@ -54,7 +67,7 @@ func Resolve(ctx context.Context, c libagent.Client, f Filter) ([]Match, error) 
 		if caller == nil {
 			// Without a store, RequireCaller fails with caller_unregistered.
 			_, err := identity.RequireCaller(ctx, nil, c)
-			return nil, libagent.AtPhase("identity", err)
+			return nil, cli.AtPhase("identity", err)
 		}
 		parent = caller.ID
 	}
@@ -62,7 +75,7 @@ func Resolve(ctx context.Context, c libagent.Client, f Filter) ([]Match, error) 
 	for _, id := range f.Tasks {
 		t, err := task.Get(s, id)
 		if err != nil {
-			return nil, libagent.AtPhase("selection", err)
+			return nil, cli.AtPhase("selection", err)
 		}
 		if t.Owner != nil {
 			owners = append(owners, *t.Owner)
@@ -71,7 +84,7 @@ func Resolve(ctx context.Context, c libagent.Client, f Filter) ([]Match, error) 
 	worktrees := make([]string, len(f.Worktrees))
 	for i, w := range f.Worktrees {
 		if worktrees[i], err = filepath.Abs(w); err != nil {
-			return nil, libagent.AtPhase("validation", libagent.Invalid("--worktree %q: %v", w, err))
+			return nil, cli.AtPhase("validation", cli.Invalid("--worktree %q: %v", w, err))
 		}
 	}
 	matches := []Match{}
@@ -85,10 +98,10 @@ func Resolve(ctx context.Context, c libagent.Client, f Filter) ([]Match, error) 
 	return matches, nil
 }
 
-// load opens the store without creating it and reads its live records. A
-// repository without state has neither.
-func load(ctx context.Context, cwd string) (*state.Store, map[string]identity.Record, error) {
-	s, err := identity.Existing(ctx, cwd)
+// load opens the store with open, which creates nothing, and reads its live
+// records. A repository without state has neither.
+func load(open func() (*state.Store, error)) (*state.Store, map[string]identity.Record, error) {
+	s, err := open()
 	if err != nil || s == nil {
 		return nil, nil, err
 	}

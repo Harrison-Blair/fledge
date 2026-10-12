@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"time"
+
+	"github.com/Harrison-Blair/fledge/internal/lib/harnessenv"
 )
 
 type piLine struct {
@@ -27,7 +29,7 @@ type piLine struct {
 }
 
 // readPi sums assistant message usage and pi's own cost estimate.
-func readPi(_ context.Context, d Discovery, ref Ref, w Window) (*tally, error) {
+func readPi(_ context.Context, d harnessenv.Env, ref Ref, w Window) (*tally, error) {
 	path, err := Locate(d, "pi", ref)
 	if err != nil {
 		return nil, err

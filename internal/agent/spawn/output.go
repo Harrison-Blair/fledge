@@ -5,6 +5,7 @@ import (
 	"io"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 )
 
 // Result reports the placement, launch, registration, and first-prompt state
@@ -22,7 +23,6 @@ type Result struct {
 	Cwd               *string          `json:"cwd"`
 	Argv              []string         `json:"argv"`
 	WorktreePath      *string          `json:"worktree_path"`
-	Split             bool             `json:"split"`
 	ID                *string          `json:"id"`
 	Registered        bool             `json:"registered"`
 	RegistrationError *string          `json:"registration_error"`
@@ -31,23 +31,19 @@ type Result struct {
 	MessageID         *string          `json:"message_id"`
 	Sender            *libagent.Sender `json:"sender"`
 	Profile           *ProfileRef      `json:"profile"`
-	// readDir is the directory a profile's reads were checked under.
-	readDir string
 }
 
 // ProfileRef names the profile a spawn used and where it came from: source
-// is "builtin" or "repo", path the repository file, and base the built-in it
-// inherits from.
+// is "builtin" or "repo", and path the repository file.
 type ProfileRef struct {
 	Name   string  `json:"name"`
 	Source string  `json:"source"`
 	Path   *string `json:"path"`
-	Base   *string `json:"base"`
 }
 
 // Render writes a successful spawn, or startup recovery hints by pane after
 // the generic failure lines that libagent writes first.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(*Result)
 	if !ok {
 		return nil
@@ -56,7 +52,7 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		if o.Status != "partial" && o.Status != "unknown" {
 			return nil
 		}
-		pane := libagent.Display(r.PaneID)
+		pane := cli.Display(r.PaneID)
 		switch o.Error.Phase {
 		case "agent.wait":
 			if o.Error.Code == "agent_blocked" {
@@ -90,11 +86,11 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		}
 		return nil
 	}
-	id := libagent.Display(r.ID)
+	id := cli.Display(r.ID)
 	if r.RegistrationError != nil {
 		id += " (not registered: " + *r.RegistrationError + ")"
 	}
-	if _, err := fmt.Fprintf(w, "Spawned %s (%s) in %s / %s / %s\n  cwd: %s\n  worktree: %s\n  id: %s\n", r.Name, r.Harness, libagent.Display(r.WorkspaceID), libagent.Display(r.TabID), libagent.Display(r.PaneID), libagent.Display(r.Cwd), libagent.Display(r.WorktreePath), id); err != nil {
+	if _, err := fmt.Fprintf(w, "Spawned %s (%s) in %s / %s / %s\n  cwd: %s\n  worktree: %s\n  id: %s\n", r.Name, r.Harness, cli.Display(r.WorkspaceID), cli.Display(r.TabID), cli.Display(r.PaneID), cli.Display(r.Cwd), cli.Display(r.WorktreePath), id); err != nil {
 		return err
 	}
 	if p := r.Profile; p != nil {
@@ -102,26 +98,16 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		if p.Path != nil {
 			source = *p.Path
 		}
-		if p.Base != nil {
-			source += ", extends " + *p.Base
-		}
 		if _, err := fmt.Fprintf(w, "  profile: %s (%s)\n", p.Name, source); err != nil {
 			return err
 		}
 	}
-	for _, e := range o.Effects {
-		if e.Action == "skipped" && e.Kind == "read" {
-			if _, err := fmt.Fprintf(w, "  skipped read: %s (not found in %s)\n", e.Path, r.readDir); err != nil {
-				return err
-			}
-		}
-	}
 	if r.Prompted {
-		_, err := fmt.Fprintf(w, "Message submitted to %s.\n", libagent.Display(r.PaneID))
+		_, err := fmt.Fprintf(w, "Message submitted to %s.\n", cli.Display(r.PaneID))
 		return err
 	}
 	return nil
 }
 
 // PositionalError explains the native-argument separator requirement.
-func PositionalError() error { return libagent.Invalid("native positional arguments must follow --") }
+func PositionalError() error { return cli.Invalid("native positional arguments must follow --") }

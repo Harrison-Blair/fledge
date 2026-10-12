@@ -3,6 +3,7 @@ package remove
 
 import (
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/worktree/remove"
 	"github.com/spf13/cobra"
 )
@@ -11,7 +12,7 @@ func New() *cobra.Command {
 	var o remove.Options
 	var asJSON bool
 	cmd := &cobra.Command{Use: "remove", Short: "Remove a linked checkout, keeping its branch", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		return libagent.Finish(remove.Run(cmd.Context(), libagent.FromEnvironment(0), o), cmd.OutOrStdout(), asJSON, remove.Render)
+		return cli.Finish(remove.Run(cmd.Context(), libagent.FromEnvironment(0), o), cmd.OutOrStdout(), asJSON, remove.Render)
 	}}
 	cmd.Flags().StringVar(&o.Path, "path", "", "Checkout path to remove")
 	cmd.Flags().StringVar(&o.Branch, "branch", "", "Branch whose checkout to remove")

@@ -104,6 +104,23 @@ func TestRejectsInvalidInput(t *testing.T) {
 	}
 }
 
+func TestRejectsMalformedIDs(t *testing.T) {
+	repo := identitytest.Repository(t)
+	for label, tc := range map[string]struct {
+		o    Options
+		want string
+	}{
+		"id":     {Options{ID: "BAD", After: []string{"01234567"}}, "--id must be an 8 lowercase hexadecimal task id"},
+		"after":  {Options{ID: "01234567", After: []string{"nope"}}, "--after must be an 8 lowercase hexadecimal task id"},
+		"remove": {Options{ID: "01234567", Remove: []string{"nope"}}, "--remove must be an 8 lowercase hexadecimal task id"},
+	} {
+		out := Run(context.Background(), tasktest.Client(t, repo, ""), tc.o)
+		if out.Error == nil || out.Error.Code != "invalid_input" || out.Error.Message != tc.want || out.ExitCode() != 2 {
+			t.Fatalf("%s: %+v", label, out.Error)
+		}
+	}
+}
+
 func TestConcurrentOppositeEdgesCannotBothLand(t *testing.T) {
 	repo := identitytest.Repository(t)
 	for range 20 {

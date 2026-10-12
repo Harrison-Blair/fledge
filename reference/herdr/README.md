@@ -1,6 +1,6 @@
 # herdr API Reference
 
-> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-19
+> herdr 0.9.3 · protocol 22 · schema_version 1 · captured 2026-10-06
 
 Exhaustive, agent-optimized documentation of the **herdr** socket API, written for
 implementing fledge's herdr client. herdr is a terminal workspace manager for AI coding
@@ -27,18 +27,18 @@ wins — and the docs have a bug.
 7. [cli-mapping.md](cli-mapping.md) — socket method ⇄ CLI command mapping, CLI-only
    commands, CLI conventions.
 
-## Method reference (103 methods)
+## Method reference (102 methods)
 
 | File | Namespace | Methods |
 |---|---|---|
 | [api/agent.md](api/agent.md) | `agent.*` | 12 |
-| [api/pane.md](api/pane.md) | `pane.*` | 37 |
+| [api/pane.md](api/pane.md) | `pane.*` | 35 |
 | [api/workspace.md](api/workspace.md) | `workspace.*` | 9 |
 | [api/tab.md](api/tab.md) | `tab.*` | 7 |
 | [api/worktree.md](api/worktree.md) | `worktree.*` | 4 |
 | [api/layout.md](api/layout.md) | `layout.*` (API-only, no CLI group) | 3 |
 | [api/plugin.md](api/plugin.md) | `plugin.*` (`herdr plugin` CLI group new in 0.9.1) | 11 |
-| [api/server.md](api/server.md) | `server.*` | 5 |
+| [api/server.md](api/server.md) | `server.*` | 6 |
 | [api/session.md](api/session.md) | `session.snapshot`, `ping` | 2 |
 | [api/integration.md](api/integration.md) | `integration.*` | 3 |
 | [api/ui.md](api/ui.md) | `notification.show`, `popup.close`, `client.window_title.*`, `client_shell.surface.set`, `command.invoke`, `product_announcement.dismiss`, `release_notes.dismiss` | 8 |
@@ -56,7 +56,7 @@ wins — and the docs have a bug.
 
 ## Provenance and validation
 
-- Params, results, and types come from `raw/schema.json` (herdr 0.9.1).
+- Params, results, and types come from `raw/schema.json` (herdr 0.9.3).
 - Two evidence stamps appear on individual claims and examples throughout these pages.
   **Validated YYYY-MM-DD against herdr X.Y.Z** means the claim was actually exercised:
   a real captured exchange, read-only methods against a live session and mutating
@@ -68,5 +68,5 @@ wins — and the docs have a bug.
   reason. A section carries the Validated stamp only for the parts of it actually
   exercised in that pass, so dates can differ section-to-section within a page as it is
   re-verified over time; see [RESYNC.md](RESYNC.md) for how a resync pass decides which.
-- herdr self-updates (`herdr update`); these docs describe **0.9.1 / protocol 22** and
+- herdr self-updates (`herdr update`); these docs describe **0.9.3 / protocol 22** and
   will drift. See [RESYNC.md](RESYNC.md) for the refresh procedure.

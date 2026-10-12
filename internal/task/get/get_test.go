@@ -3,14 +3,16 @@ package get
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/identitytest"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/tasktest"
-	"github.com/Harrison-Blair/fledge/internal/lib/usage"
 )
 
 func TestGetShowsFullRecord(t *testing.T) {
@@ -123,35 +125,39 @@ func TestGetShowsPrerequisiteStates(t *testing.T) {
 	}
 }
 
-func TestGetShowsUsage(t *testing.T) {
+// A record stored with a usage snapshot by a development build shows no
+// usage in either output.
+func TestGetOmitsLegacyUsage(t *testing.T) {
 	repo := identitytest.Repository(t)
-	p := tasktest.Ptr[string]
-	worker := &task.UsageSnapshot{AgentID: p("aaaaaaaa"), ElapsedSeconds: 3725, Turns: 14, Basis: usage.Measured,
-		Tokens: usage.Tokens{Input: 1234, Output: 18420, CacheRead: 410_300, CacheWrite: 96_000}}
-	verifier := &task.UsageSnapshot{ElapsedSeconds: 312, Turns: 3, Basis: usage.Measured, Reason: p("fallback to totals"),
-		Tokens: usage.Tokens{Input: 12, Output: 2_345_678, CacheRead: 999_999}, Cost: &usage.Cost{Amount: 0.614, Currency: "USD", Basis: "estimate"}}
-	id := tasktest.Seed(t, repo, task.Record{Title: "T", Status: task.Verified, CreatedAt: "2026-01-01T00:00:00Z", Usage: &task.Usage{Worker: worker, Verifier: verifier}})
-	out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{ID: id})
-	var b bytes.Buffer
-	if err := out.Write(&b, false, Render); err != nil {
+	s, err := identity.OpenStore(context.Background(), repo, &cli.Outcome{})
+	if err != nil {
 		t.Fatal(err)
 	}
-	want := "usage:\n" +
-		"  worker: 1h02m, 14 turns, in 1.2k out 18.4k cache-r 410k cache-w 96k, cost -, measured\n" +
-		"  verifier: 5m12s, 3 turns, in 12 out 2.3M cache-r 1M cache-w 0, cost $0.61 (est), measured (fallback to totals)\n"
-	if !strings.HasSuffix(b.String(), want) {
-		t.Fatalf("%q\nwant suffix %q", b.String(), want)
+	usage := `{"worker":{"elapsed_seconds":40,"turns":9,"basis":"measured","tokens":{"input":1,"output":2,"cache_read":3,"cache_write":4}},"verifier":null}`
+	id, err := s.Create(task.Kind, func(id string) any {
+		return map[string]any{"id": id, "title": "T", "status": task.Completed, "created_at": "2026-01-01T00:00:00Z", "usage": json.RawMessage(usage)}
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	b.Reset()
-	if err := out.Write(&b, true, Render); err != nil || !strings.Contains(b.String(), `"usage":{"worker":{"agent_id":"aaaaaaaa",`) {
-		t.Fatalf("%s %v", b.String(), err)
+	out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{ID: id})
+	for _, asJSON := range []bool{false, true} {
+		var b bytes.Buffer
+		if err := out.Write(&b, asJSON, Render); err != nil || strings.Contains(b.String(), "usage") {
+			t.Fatalf("json=%v: %s %v", asJSON, b.String(), err)
+		}
 	}
+}
 
-	unavailable := &task.UsageSnapshot{ElapsedSeconds: 40, Basis: usage.Unavailable, Reason: p("no native session ref observed")}
-	id = tasktest.Seed(t, repo, task.Record{Title: "T", Status: task.Completed, CreatedAt: "2026-01-01T00:00:00Z", Usage: &task.Usage{Worker: unavailable}})
-	b.Reset()
-	Run(context.Background(), tasktest.Client(t, repo, ""), Options{ID: id}).Write(&b, false, Render)
-	if want := "usage:\n  worker: 40s, unavailable (no native session ref observed)\n"; !strings.HasSuffix(b.String(), want) {
-		t.Fatalf("%q\nwant suffix %q", b.String(), want)
+func TestRenderRemovesControlSequences(t *testing.T) {
+	evil := "X\x1b[2J\x1b]0;pwned\x07"
+	dep := Dependency{ID: "22222222", Title: evil, Status: task.Cancelled, CancelReason: &evil}
+	r := Result{Record: task.Record{ID: "11111111", Title: evil, Status: task.Cancelled, Brief: evil + "\n" + evil, Result: &evil, VerificationNote: &evil, CreatedAt: "now", CancelledAt: tasktest.Ptr("later"), CancelReason: &evil}, Dependencies: []Dependency{dep}}
+	var buf bytes.Buffer
+	if err := Render(&buf, cli.Outcome{Result: r}); err != nil {
+		t.Fatal(err)
+	}
+	if got := buf.String(); strings.ContainsAny(got, "\x1b\x07") || !strings.Contains(got, "X") {
+		t.Fatalf("unsafe human output: %q", got)
 	}
 }

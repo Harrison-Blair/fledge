@@ -3,26 +3,19 @@ package gitstatus
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-)
 
-func git(t *testing.T, dir string, args ...string) {
-	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=Test", "-c", "user.email=t@example.com"}, args...)...)
-	if b, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git %v: %v %s", args, err, b)
-	}
-}
+	"github.com/Harrison-Blair/fledge/internal/lib/testutil/gittest"
+)
 
 // repository returns a repo on main with one commit.
 func repository(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	git(t, root, "init", "-q", "-b", "main")
-	git(t, root, "commit", "-qm", "initial", "--allow-empty")
+	gittest.Git(t, root, "init", "-q", "-b", "main")
+	gittest.Commit(t, root)
 	return root
 }
 
@@ -31,8 +24,17 @@ func commit(t *testing.T, dir, file string) {
 	if err := os.WriteFile(filepath.Join(dir, file), []byte(file), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	git(t, dir, "add", file)
-	git(t, dir, "commit", "-qm", file)
+	gittest.Git(t, dir, "add", file)
+	gittest.Git(t, dir, "commit", "-qm", file)
+}
+
+// configure writes content as root's .fledge/config.toml.
+func configure(t *testing.T, root, content string) {
+	t.Helper()
+	os.MkdirAll(filepath.Join(root, ".fledge"), 0o755)
+	if err := os.WriteFile(filepath.Join(root, ".fledge", "config.toml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestDirty(t *testing.T) {
@@ -61,7 +63,7 @@ func TestDirtyLinkedCheckout(t *testing.T) {
 	ctx := context.Background()
 	root := repository(t)
 	linked := filepath.Join(t.TempDir(), "linked")
-	git(t, root, "worktree", "add", "-q", "-b", "topic", linked)
+	gittest.Git(t, root, "worktree", "add", "-q", "-b", "topic", linked)
 	if got := Dirty(ctx, linked); got != "no" {
 		t.Fatalf("clean linked: %s", got)
 	}
@@ -77,8 +79,8 @@ func TestDirtyLinkedCheckout(t *testing.T) {
 func TestDefaultBranch(t *testing.T) {
 	ctx := context.Background()
 	originHEAD := func(t *testing.T, root string) {
-		git(t, root, "update-ref", "refs/remotes/origin/trunk", "HEAD")
-		git(t, root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
+		gittest.Git(t, root, "update-ref", "refs/remotes/origin/trunk", "HEAD")
+		gittest.Git(t, root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
 	}
 	check := func(t *testing.T, root, want string) {
 		t.Helper()
@@ -88,14 +90,43 @@ func TestDefaultBranch(t *testing.T) {
 	}
 	t.Run("configured before origin HEAD", func(t *testing.T) {
 		root := repository(t)
-		git(t, root, "branch", "integration")
+		gittest.Git(t, root, "branch", "integration")
 		originHEAD(t, root)
-		git(t, root, "config", "fledge.baseBranch", "integration")
+		configure(t, root, "schema_version = 1\nbase_branch = \"integration\"\n")
 		check(t, root, "refs/heads/integration")
+	})
+	// Git configuration is never read, in any scope.
+	t.Run("git config ignored", func(t *testing.T) {
+		root := repository(t)
+		gittest.Git(t, root, "branch", "wrong")
+		originHEAD(t, root)
+		gittest.Git(t, root, "config", "fledge.baseBranch", "wrong")
+		check(t, root, "refs/remotes/origin/trunk")
+	})
+	t.Run("file without base branch", func(t *testing.T) {
+		root := repository(t)
+		originHEAD(t, root)
+		configure(t, root, "schema_version = 1\n")
+		check(t, root, "refs/remotes/origin/trunk")
+	})
+	// A fresh clone has origin/<name> but no local branch yet.
+	t.Run("configured remote tracking only", func(t *testing.T) {
+		root := repository(t)
+		gittest.Git(t, root, "update-ref", "refs/remotes/origin/dev", "HEAD")
+		originHEAD(t, root)
+		configure(t, root, "schema_version = 1\nbase_branch = \"dev\"\n")
+		check(t, root, "refs/remotes/origin/dev")
+	})
+	t.Run("configured local before remote tracking", func(t *testing.T) {
+		root := repository(t)
+		gittest.Git(t, root, "branch", "dev")
+		gittest.Git(t, root, "update-ref", "refs/remotes/origin/dev", "HEAD")
+		configure(t, root, "schema_version = 1\nbase_branch = \"dev\"\n")
+		check(t, root, "refs/heads/dev")
 	})
 	t.Run("dev is not preferred unconfigured", func(t *testing.T) {
 		root := repository(t)
-		git(t, root, "branch", "dev")
+		gittest.Git(t, root, "branch", "dev")
 		originHEAD(t, root)
 		check(t, root, "refs/remotes/origin/trunk")
 	})
@@ -106,39 +137,43 @@ func TestDefaultBranch(t *testing.T) {
 	})
 	t.Run("main", func(t *testing.T) {
 		root := repository(t)
-		git(t, root, "branch", "dev")
+		gittest.Git(t, root, "branch", "dev")
 		check(t, root, "refs/heads/main")
 	})
 	t.Run("none", func(t *testing.T) {
 		root := t.TempDir()
-		git(t, root, "init", "-q", "-b", "trunk")
-		git(t, root, "commit", "-qm", "initial", "--allow-empty")
+		gittest.Git(t, root, "init", "-q", "-b", "trunk")
+		gittest.Commit(t, root)
 		check(t, root, "")
 	})
-	// A configured branch that does not exist is an error, not a fallback.
+	// A configured branch that does not exist locally or on origin is an
+	// error, not a fallback.
 	t.Run("configured missing", func(t *testing.T) {
 		root := repository(t)
 		originHEAD(t, root)
-		git(t, root, "config", "fledge.baseBranch", "missing")
+		configure(t, root, "schema_version = 1\nbase_branch = \"missing\"\n")
 		got, err := DefaultBranch(ctx, root)
-		if got != "" || err == nil || !strings.Contains(err.Error(), "fledge.baseBranch") || !strings.Contains(err.Error(), "missing") {
+		if got != "" || err == nil || !strings.Contains(err.Error(), ".fledge/config.toml") || !strings.Contains(err.Error(), "missing") {
 			t.Fatalf("got %q, %v", got, err)
 		}
 	})
-	// Unreadable config is an error that carries git's explanation.
-	t.Run("config unreadable", func(t *testing.T) {
-		// Git's message is asserted below, so keep it untranslated.
-		t.Setenv("LC_ALL", "C")
-		t.Setenv("LANGUAGE", "")
+	// An invalid file is an error carrying the reader's explanation.
+	t.Run("config invalid", func(t *testing.T) {
 		root := repository(t)
-		f, err := os.OpenFile(filepath.Join(root, ".git", "config"), os.O_APPEND|os.O_WRONLY, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		f.WriteString("[broken\n")
-		f.Close()
+		originHEAD(t, root)
+		configure(t, root, "schema_version = 1\nbase_branch = \"-x\"\n")
 		got, err := DefaultBranch(ctx, root)
-		if got != "" || err == nil || !strings.Contains(err.Error(), "fledge.baseBranch") || !strings.Contains(err.Error(), "bad config line") {
+		if got != "" || err == nil || !strings.Contains(err.Error(), ".fledge/config.toml") || !strings.Contains(err.Error(), "starts with -") {
+			t.Fatalf("got %q, %v", got, err)
+		}
+	})
+	// An unreadable file is an error, not a fallback.
+	t.Run("config unreadable", func(t *testing.T) {
+		root := repository(t)
+		originHEAD(t, root)
+		os.MkdirAll(filepath.Join(root, ".fledge", "config.toml"), 0o755)
+		got, err := DefaultBranch(ctx, root)
+		if got != "" || err == nil || !strings.Contains(err.Error(), ".fledge/config.toml") || !strings.Contains(err.Error(), "not a regular file") {
 			t.Fatalf("got %q, %v", got, err)
 		}
 	})
@@ -148,18 +183,18 @@ func TestMerged(t *testing.T) {
 	ctx := context.Background()
 	root := repository(t)
 	for _, b := range []string{"merged", "unmerged", "squashed"} {
-		git(t, root, "branch", b)
+		gittest.Git(t, root, "branch", b)
 	}
-	git(t, root, "switch", "-q", "merged")
+	gittest.Git(t, root, "switch", "-q", "merged")
 	commit(t, root, "merged")
-	git(t, root, "switch", "-q", "unmerged")
+	gittest.Git(t, root, "switch", "-q", "unmerged")
 	commit(t, root, "unmerged")
-	git(t, root, "switch", "-q", "squashed")
+	gittest.Git(t, root, "switch", "-q", "squashed")
 	commit(t, root, "squashed")
-	git(t, root, "switch", "-q", "main")
-	git(t, root, "merge", "-q", "--no-edit", "merged")
-	git(t, root, "merge", "-q", "--squash", "squashed")
-	git(t, root, "commit", "-qm", "squash")
+	gittest.Git(t, root, "switch", "-q", "main")
+	gittest.Git(t, root, "merge", "-q", "--no-edit", "merged")
+	gittest.Git(t, root, "merge", "-q", "--squash", "squashed")
+	gittest.Git(t, root, "commit", "-qm", "squash")
 	target := "refs/heads/main"
 	for _, tc := range []struct{ rev, want string }{
 		{"refs/heads/merged", "yes"},

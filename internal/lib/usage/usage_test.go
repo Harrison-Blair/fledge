@@ -3,6 +3,7 @@ package usage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -39,13 +40,13 @@ func noRun(t *testing.T) harnessenv.Runner {
 	}
 }
 
-func fixture(t *testing.T) Discovery {
+func fixture(t *testing.T) harnessenv.Env {
 	t.Helper()
 	home, err := filepath.Abs(filepath.Join("testdata", "home"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Discovery{Home: home, Run: noRun(t)}
+	return harnessenv.Env{Home: home, Run: noRun(t)}
 }
 
 func write(t *testing.T, path, content string) {
@@ -133,7 +134,7 @@ func TestReadMalformedLinesAreCountedAndValidLinesSummed(t *testing.T) {
 
 {"type":"message","timestamp":"2026-01-03T10:00:07.000Z","message":{"role":"assistant","model":"m","provider":"p","usage":{"input":10,"output":20,"cacheRead":0,"cacheWrite":0,"reasoning":0,"cost":{"total":0.25}}}}
 `)
-	s := Read(context.Background(), Discovery{Run: noRun(t)}, "pi", Ref{Kind: "path", Value: path}, Window{})
+	s := Read(context.Background(), harnessenv.Env{Run: noRun(t)}, "pi", Ref{Kind: "path", Value: path}, Window{})
 	assertBasis(t, s, Measured)
 	assertTokens(t, s.Tokens, Tokens{Input: 11, Output: 22, CacheRead: 3, CacheWrite: 4})
 	if !strings.Contains(s.Reason, "2 malformed entries") {
@@ -144,7 +145,7 @@ func TestReadMalformedLinesAreCountedAndValidLinesSummed(t *testing.T) {
 func TestReadOnlyMalformedLinesIsUnavailable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	write(t, path, "{broken\nalso broken\n")
-	s := Read(context.Background(), Discovery{Run: noRun(t)}, "pi", Ref{Kind: "path", Value: path}, Window{})
+	s := Read(context.Background(), harnessenv.Env{Run: noRun(t)}, "pi", Ref{Kind: "path", Value: path}, Window{})
 	assertBasis(t, s, Unavailable)
 	if !strings.Contains(s.Reason, "2 malformed entries") {
 		t.Fatalf("reason %q", s.Reason)
@@ -243,7 +244,7 @@ func TestClaudeIDWithoutCwdMissingIsUnavailable(t *testing.T) {
 
 // Two projects holding the same session id cannot be told apart without a cwd.
 func TestClaudeIDWithoutCwdAmbiguousIsUnavailable(t *testing.T) {
-	d := Discovery{Home: t.TempDir(), Run: noRun(t)}
+	d := harnessenv.Env{Home: t.TempDir(), Run: noRun(t)}
 	line := `{"type":"assistant","sessionId":"dup","requestId":"r","timestamp":"2026-01-02T10:00:00.000Z","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":1}}}` + "\n"
 	for _, slug := range []string{"-a", "-b"} {
 		write(t, filepath.Join(d.Home, ".claude", "projects", slug, "dup.jsonl"), line)
@@ -319,6 +320,331 @@ func TestCodexFallbackWindowSubtractsEarlierTotal(t *testing.T) {
 	assertTokens(t, s.Tokens, Tokens{Input: 100, Output: 25, CacheRead: 80, Reasoning: 3})
 }
 
+// codexTotal is a legacy cumulative token_count line.
+func codexTotal(ts string, in, cached, write, out, reasoning int) string {
+	return fmt.Sprintf(`{"type":"event_msg","timestamp":%q,"payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":%d,"cached_input_tokens":%d,"cache_write_input_tokens":%d,"output_tokens":%d,"reasoning_output_tokens":%d}}}}`, ts, in, cached, write, out, reasoning) + "\n"
+}
+
+// codexRecordLine is a newer per-response token_usage_record line.
+func codexRecordLine(ts, id string, in, cached, write, out, reasoning int) string {
+	return fmt.Sprintf(`{"type":"token_usage_record","timestamp":%q,"payload":{"response_id":%q,"usage":{"input_tokens":%d,"cached_input_tokens":%d,"cache_write_input_tokens":%d,"output_tokens":%d,"reasoning_output_tokens":%d}}}`, ts, id, in, cached, write, out, reasoning) + "\n"
+}
+
+func codexModel(ts, model string) string {
+	return fmt.Sprintf(`{"type":"turn_context","timestamp":%q,"payload":{"model":%q}}`, ts, model) + "\n"
+}
+
+// A rollout that switches from legacy token_count totals to token_usage_record
+// keeps the legacy prefix and ignores the cumulative totals after the switch.
+func TestCodexMixedRolloutAddsLegacyPrefix(t *testing.T) {
+	s := readFile(t, "codex", codexMeta+
+		codexTotal("2026-01-02T10:00:05Z", 100, 0, 0, 0, 0)+
+		codexRecordLine("2026-01-02T11:00:05Z", "r1", 50, 0, 0, 0, 0)+
+		codexTotal("2026-01-02T11:00:06Z", 150, 0, 0, 0, 0))
+	assertBasis(t, s, Measured)
+	assertTokens(t, s.Tokens, Tokens{Input: 150})
+	if s.Turns != 1 || !strings.Contains(s.Reason, "token_count total_token_usage from before the first token_usage_record") {
+		t.Fatalf("turns %d reason %q", s.Turns, s.Reason)
+	}
+}
+
+func TestCodexMixedRolloutWindows(t *testing.T) {
+	content := codexMeta +
+		codexModel("2026-01-02T10:00:01Z", "legacy-m") +
+		codexTotal("2026-01-02T10:00:05Z", 60, 10, 5, 12, 2) +
+		codexTotal("2026-01-02T10:10:05Z", 130, 20, 10, 30, 6) +
+		codexModel("2026-01-02T11:00:00Z", "new-m") +
+		codexRecordLine("2026-01-02T11:00:05Z", "r1", 70, 15, 5, 9, 3) +
+		codexRecordLine("2026-01-02T11:00:05Z", "r1", 70, 15, 5, 9, 3) +
+		codexTotal("2026-01-02T11:00:06Z", 200, 35, 15, 39, 9) +
+		// A model after the transition without a record of its own is not attributed.
+		codexModel("2026-01-02T11:20:00Z", "idle-m") +
+		codexModel("2026-01-02T12:00:00Z", "new-m2") +
+		codexRecordLine("2026-01-02T12:00:05Z", "r2", 30, 0, 0, 4, 1) +
+		codexTotal("2026-01-02T12:00:06Z", 230, 35, 15, 43, 10)
+	// The same rollout forked from a parent: it starts with the parent's
+	// inherited total, and every later cumulative total includes it.
+	fork := codexForkMeta +
+		codexTotal("2026-01-02T09:00:00Z", 1000, 400, 50, 100, 20) +
+		codexModel("2026-01-02T10:00:01Z", "legacy-m") +
+		codexTotal("2026-01-02T10:00:05Z", 1060, 410, 55, 112, 22) +
+		codexTotal("2026-01-02T10:10:05Z", 1130, 420, 60, 130, 26) +
+		codexModel("2026-01-02T11:00:00Z", "new-m") +
+		codexRecordLine("2026-01-02T11:00:05Z", "r1", 70, 15, 5, 9, 3) +
+		codexRecordLine("2026-01-02T11:00:05Z", "r1", 70, 15, 5, 9, 3) +
+		codexTotal("2026-01-02T11:00:06Z", 1200, 435, 65, 139, 29) +
+		codexModel("2026-01-02T11:20:00Z", "idle-m") +
+		codexModel("2026-01-02T12:00:00Z", "new-m2") +
+		codexRecordLine("2026-01-02T12:00:05Z", "r2", 30, 0, 0, 4, 1) +
+		codexTotal("2026-01-02T12:00:06Z", 1230, 435, 65, 143, 30)
+	cases := []struct {
+		name         string
+		w            Window
+		tokens       Tokens
+		turns        int
+		models       []string
+		first, last  *time.Time
+		legacyReason bool
+	}{
+		{"unbounded", Window{}, Tokens{Input: 180, Output: 43, CacheRead: 35, CacheWrite: 15, Reasoning: 10}, 2,
+			[]string{"legacy-m", "new-m", "new-m2"}, at("2026-01-02T11:00:05Z"), at("2026-01-02T12:00:05Z"), true},
+		// 130/20/10/30/6 minus 60/10/5/12/2 before the window; no turns.
+		{"before transition", window("2026-01-02T10:05:00Z", "2026-01-02T10:30:00Z"), Tokens{Input: 55, Output: 18, CacheRead: 10, CacheWrite: 5, Reasoning: 4}, 0,
+			nil, nil, nil, true},
+		{"across transition", window("2026-01-02T10:05:00Z", "2026-01-02T11:30:00Z"), Tokens{Input: 105, Output: 27, CacheRead: 25, CacheWrite: 10, Reasoning: 7}, 1,
+			[]string{"new-m"}, at("2026-01-02T11:00:05Z"), at("2026-01-02T11:00:05Z"), true},
+		{"after transition", window("2026-01-02T11:30:00Z", "2026-01-02T13:00:00Z"), Tokens{Input: 30, Output: 4, Reasoning: 1}, 1,
+			[]string{"new-m2"}, at("2026-01-02T12:00:05Z"), at("2026-01-02T12:00:05Z"), false},
+	}
+	for kind, content := range map[string]string{"unmarked": content, "fork": fork} {
+		path := filepath.Join(t.TempDir(), "s.jsonl")
+		write(t, path, content)
+		for _, c := range cases {
+			s := Read(context.Background(), harnessenv.Env{Run: noRun(t)}, "codex", Ref{Kind: "path", Value: path}, c.w)
+			if s.Basis != Measured || s.Tokens != c.tokens || s.Turns != c.turns || !reflect.DeepEqual(s.Models, c.models) || s.Cost != nil {
+				t.Errorf("%s %s: %+v", kind, c.name, s)
+			}
+			if !reflect.DeepEqual(s.First, c.first) || !reflect.DeepEqual(s.Last, c.last) {
+				t.Errorf("%s %s: first %v last %v", kind, c.name, s.First, s.Last)
+			}
+			if got := strings.Contains(s.Reason, "token_count total_token_usage from before the first token_usage_record"); got != c.legacyReason {
+				t.Errorf("%s %s: reason %q", kind, c.name, s.Reason)
+			}
+		}
+	}
+}
+
+// Only a valid token_usage_record ends the legacy prefix.
+func TestCodexMalformedRecordDoesNotEndLegacyPrefix(t *testing.T) {
+	for _, bad := range []string{
+		`{"type":"token_usage_record","timestamp":"2026-01-02T10:00:01Z","payload":{"response_id":"x","usage":null}}`,
+		`{"type":"token_usage_record","timestamp":"2026-01-02T10:00:01Z","payload":{"response_id":"x"}}`,
+		`{"type":"token_usage_record","timestamp":"2026-01-02T10:00:01Z","payload":"bad"}`,
+	} {
+		s := readFile(t, "codex", codexMeta+bad+"\n"+
+			codexTotal("2026-01-02T10:00:05Z", 100, 0, 0, 0, 0)+
+			codexRecordLine("2026-01-02T11:00:05Z", "r1", 50, 0, 0, 0, 0))
+		if s.Basis != Measured || s.Tokens != (Tokens{Input: 150}) || s.Turns != 1 ||
+			!strings.Contains(s.Reason, "token_count total_token_usage from before the first token_usage_record") || !strings.Contains(s.Reason, "1 malformed entries") {
+			t.Errorf("%s: %+v", bad, s)
+		}
+	}
+}
+
+const codexForkMeta = `{"type":"session_meta","payload":{"id":"c","parent_thread_id":"p"}}` + "\n"
+
+const legacyReason = "token_count total_token_usage from before the first token_usage_record"
+
+// A fork's leading token_count is its parent's cumulative total, so it counts
+// toward neither the unbounded nor a bounded usage.
+func TestCodexForkExcludesInheritedTotal(t *testing.T) {
+	cases := []struct {
+		name        string
+		w           Window
+		tokens      Tokens
+		turns       int
+		models      []string
+		first, last *time.Time
+	}{
+		{"unbounded", Window{}, Tokens{Input: 420, Output: 55, CacheRead: 250, CacheWrite: 30, Reasoning: 13}, 2,
+			[]string{"gpt-5.6-sol"}, at("2026-01-03T09:00:05Z"), at("2026-01-03T10:00:05Z")},
+		{"inherited only", window("2026-01-03T08:00:00Z", "2026-01-03T09:00:03Z"), Tokens{}, 0, nil, nil, nil},
+		{"inherited and first record", window("2026-01-03T08:00:00Z", "2026-01-03T09:30:00Z"),
+			Tokens{Input: 240, Output: 30, CacheRead: 150, CacheWrite: 10, Reasoning: 8}, 1,
+			[]string{"gpt-5.6-sol"}, at("2026-01-03T09:00:05Z"), at("2026-01-03T09:00:05Z")},
+		{"second record", window("2026-01-03T09:30:00Z", "2026-01-03T11:00:00Z"),
+			Tokens{Input: 180, Output: 25, CacheRead: 100, CacheWrite: 20, Reasoning: 5}, 1,
+			[]string{"gpt-5.6-sol"}, at("2026-01-03T10:00:05Z"), at("2026-01-03T10:00:05Z")},
+	}
+	for _, c := range cases {
+		s := Read(context.Background(), fixture(t), "codex", Ref{Kind: "id", Value: "cdx-fork"}, c.w)
+		if s.Basis != Measured || s.Tokens != c.tokens || s.Turns != c.turns || !reflect.DeepEqual(s.Models, c.models) || s.Cost != nil || s.Reason != "" {
+			t.Errorf("%s: %+v", c.name, s)
+		}
+		if !reflect.DeepEqual(s.First, c.first) || !reflect.DeepEqual(s.Last, c.last) {
+			t.Errorf("%s: first %v last %v", c.name, s.First, s.Last)
+		}
+	}
+}
+
+// The subtraction baseline is the later of the inherited total and the last
+// local total before the window in rollout order, whatever the inherited
+// total's timestamp.
+func TestCodexForkBaselineFollowsRolloutOrder(t *testing.T) {
+	body := codexModel("2026-01-02T10:00:01Z", "m") +
+		codexTotal("2026-01-02T10:00:05Z", 1060, 0, 0, 0, 0) +
+		codexTotal("2026-01-02T10:10:05Z", 1130, 0, 0, 0, 0) +
+		codexRecordLine("2026-01-02T11:00:05Z", "r1", 50, 0, 0, 0, 0)
+	cases := []struct {
+		name, inherited string
+		w               Window
+		input           int64
+	}{
+		{"inherited inside window", codexTotal("2026-01-02T10:20:00Z", 1000, 0, 0, 0, 0), window("2026-01-02T10:05:00Z", "2026-01-02T10:30:00Z"), 70},
+		{"inherited inside window, unbounded", codexTotal("2026-01-02T10:20:00Z", 1000, 0, 0, 0, 0), Window{}, 180},
+		{"inherited without timestamp", `{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000}}}}` + "\n", window("2026-01-02T10:00:03Z", "2026-01-02T11:30:00Z"), 180},
+		{"inherited without timestamp, unbounded", `{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000}}}}` + "\n", Window{}, 180},
+	}
+	for _, c := range cases {
+		path := filepath.Join(t.TempDir(), "s.jsonl")
+		write(t, path, codexForkMeta+c.inherited+body)
+		s := Read(context.Background(), harnessenv.Env{Run: noRun(t)}, "codex", Ref{Kind: "path", Value: path}, c.w)
+		if s.Basis != Measured || s.Tokens != (Tokens{Input: c.input}) || !strings.Contains(s.Reason, legacyReason) {
+			t.Errorf("%s: %+v", c.name, s)
+		}
+	}
+}
+
+// A local total with zero delta still counts as legacy usage; inherited
+// totals alone never add a reason or a model.
+func TestCodexForkLocalZeroDeltaAndInheritedOnly(t *testing.T) {
+	cases := []struct {
+		name, content string
+		tokens        Tokens
+		turns         int
+		models        []string
+		legacy        bool
+	}{
+		{"zero local delta", codexForkMeta + codexTotal("2026-01-02T10:00:00Z", 100, 0, 0, 0, 0) +
+			codexModel("2026-01-02T10:00:01Z", "local-m") + codexTotal("2026-01-02T10:00:05Z", 100, 0, 0, 0, 0) +
+			codexModel("2026-01-02T11:00:00Z", "new-m") + codexRecordLine("2026-01-02T11:00:05Z", "r1", 50, 0, 0, 0, 0) +
+			codexTotal("2026-01-02T11:00:06Z", 150, 0, 0, 0, 0),
+			Tokens{Input: 50}, 1, []string{"local-m", "new-m"}, true},
+		{"inherited then records", codexForkMeta + codexTotal("2026-01-02T10:00:00Z", 100, 0, 0, 0, 0) +
+			codexModel("2026-01-02T11:00:00Z", "new-m") + codexRecordLine("2026-01-02T11:00:05Z", "r1", 50, 0, 0, 0, 0) +
+			codexTotal("2026-01-02T11:00:06Z", 150, 0, 0, 0, 0),
+			Tokens{Input: 50}, 1, []string{"new-m"}, false},
+		{"inherited only with context", codexForkMeta + codexTotal("2026-01-02T10:00:00Z", 100, 0, 0, 0, 0) +
+			codexModel("2026-01-02T10:00:01Z", "m"),
+			Tokens{}, 0, nil, false},
+		{"inherited only", codexForkMeta + codexTotal("2026-01-02T10:00:00Z", 100, 0, 0, 0, 0) +
+			codexTotal("2026-01-02T10:00:05Z", 130, 0, 0, 0, 0),
+			Tokens{}, 0, nil, false},
+	}
+	for _, c := range cases {
+		s := readFile(t, "codex", c.content)
+		if s.Basis != Measured || s.Tokens != c.tokens || s.Turns != c.turns || !reflect.DeepEqual(s.Models, c.models) ||
+			strings.Contains(s.Reason, legacyReason) != c.legacy || strings.Contains(s.Reason, "token_count total_token_usage") != c.legacy {
+			t.Errorf("%s: %+v", c.name, s)
+		}
+	}
+}
+
+// Only a nonempty string parent_thread_id on the first session_meta marks a
+// fork; anything else leaves the leading total as local legacy usage.
+func TestCodexForkMarkerIsRequired(t *testing.T) {
+	shape := codexTotal("2026-01-02T10:00:05Z", 100, 0, 0, 0, 0) +
+		codexModel("2026-01-02T10:00:06Z", "m") +
+		codexRecordLine("2026-01-02T11:00:05Z", "r1", 50, 0, 0, 0, 0) +
+		codexTotal("2026-01-02T11:00:06Z", 150, 0, 0, 0, 0)
+	for _, meta := range []string{
+		`{"type":"session_meta","payload":{"id":"c"}}`,
+		`{"type":"session_meta","payload":{"id":"c","parent_thread_id":null}}`,
+		`{"type":"session_meta","payload":{"id":"c","parent_thread_id":""}}`,
+		`{"type":"session_meta","payload":{"id":"c","parent_thread_id":7}}`,
+		`{"type":"session_meta","payload":{"id":"c","parent_thread_id":{"id":"p"}}}`,
+		`{"type":"session_meta","payload":{"id":"c","parent_thread_id":["p"]}}`,
+		`{"type":"session_meta","payload":"bad"}`,
+		`{"type":"session_meta","payload":null}`,
+		`{"type":"session_meta"}`,
+	} {
+		s := readFile(t, "codex", meta+"\n"+shape)
+		if s.Basis != Measured || s.Tokens != (Tokens{Input: 150}) || s.Turns != 1 || !strings.Contains(s.Reason, legacyReason) || strings.Contains(s.Reason, "malformed") {
+			t.Errorf("%s: %+v", meta, s)
+		}
+	}
+	for name, c := range map[string]struct {
+		content string
+		input   int64
+	}{
+		"marked":              {codexForkMeta + shape, 50},
+		"total before meta":   {shape[:strings.Index(shape, "\n")+1] + codexForkMeta + shape[strings.Index(shape, "\n")+1:], 150},
+		"later marked meta":   {codexMeta + codexForkMeta + shape, 150},
+		"later unmarked meta": {codexForkMeta + codexMeta + shape, 50},
+	} {
+		s := readFile(t, "codex", c.content)
+		if s.Basis != Measured || s.Tokens != (Tokens{Input: c.input}) || strings.Contains(s.Reason, legacyReason) != (c.input == 150) {
+			t.Errorf("%s: %+v", name, s)
+		}
+	}
+}
+
+// Only a turn_context whose payload parses, even without a model, ends the
+// inherited phase.
+func TestCodexForkInheritedPhaseEndsAtValidContext(t *testing.T) {
+	tail := codexTotal("2026-01-02T10:00:05Z", 130, 0, 0, 0, 0) +
+		codexRecordLine("2026-01-02T11:00:05Z", "r1", 50, 0, 0, 0, 0)
+	inherited := codexForkMeta + codexTotal("2026-01-02T10:00:00Z", 100, 0, 0, 0, 0)
+	s := readFile(t, "codex", inherited+`{"type":"turn_context","timestamp":"2026-01-02T10:00:01Z","payload":"bad"}`+"\n"+tail)
+	if s.Tokens != (Tokens{Input: 50}) || strings.Contains(s.Reason, legacyReason) || !strings.Contains(s.Reason, "1 malformed entries") {
+		t.Errorf("malformed context: %+v", s)
+	}
+	s = readFile(t, "codex", inherited+`{"type":"turn_context","timestamp":"2026-01-02T10:00:01Z","payload":{}}`+"\n"+tail)
+	if s.Tokens != (Tokens{Input: 80}) || !strings.Contains(s.Reason, legacyReason) || strings.Contains(s.Reason, "malformed") || len(s.Models) != 0 {
+		t.Errorf("empty-model context: %+v", s)
+	}
+}
+
+// A valid turn_context ends the inherited phase for good, even before the
+// first session_meta; later metadata never reopens it.
+func TestCodexForkContextBeforeMetaKeepsPhaseClosed(t *testing.T) {
+	tail := codexForkMeta + codexTotal("2026-01-02T10:00:05Z", 100, 0, 0, 0, 0) +
+		codexRecordLine("2026-01-02T11:00:05Z", "r1", 50, 0, 0, 0, 0)
+	for name, ctx := range map[string]string{
+		"model":       codexModel("2026-01-02T10:00:01Z", "m"),
+		"empty model": `{"type":"turn_context","timestamp":"2026-01-02T10:00:01Z","payload":{}}` + "\n",
+	} {
+		s := readFile(t, "codex", ctx+tail)
+		if s.Basis != Measured || s.Tokens != (Tokens{Input: 150}) || s.Turns != 1 || !strings.Contains(s.Reason, legacyReason) {
+			t.Errorf("%s: %+v", name, s)
+		}
+	}
+}
+
+// A local total followed by a fork's inherited total mixes histories that
+// cannot be reconciled, so the whole summary is unavailable.
+func TestCodexLocalTotalBeforeInheritedTotalIsUnavailable(t *testing.T) {
+	head := codexTotal("2026-01-02T10:00:00Z", 100, 0, 0, 0, 0) + codexForkMeta +
+		codexTotal("2026-01-02T10:00:01Z", 3000, 0, 0, 0, 0)
+	for name, content := range map[string]string{
+		"with record":    head + codexModel("2026-01-02T10:00:02Z", "m") + codexRecordLine("2026-01-02T11:00:05Z", "r1", 50, 0, 0, 0, 0),
+		"without record": head + codexModel("2026-01-02T10:00:02Z", "m") + codexTotal("2026-01-02T10:00:05Z", 3100, 0, 0, 0, 0),
+		"no context":     head,
+	} {
+		s := readFile(t, "codex", content)
+		if s.Basis != Unavailable || s.Tokens != (Tokens{}) || !strings.Contains(s.Reason, "ambiguous") || strings.Contains(s.Reason, "s.jsonl") {
+			t.Errorf("%s: %+v", name, s)
+		}
+	}
+	// Totals after the first response record are ignored and never ambiguous.
+	s := readFile(t, "codex", codexTotal("2026-01-02T10:00:00Z", 100, 0, 0, 0, 0)+
+		codexRecordLine("2026-01-02T10:00:01Z", "r1", 50, 0, 0, 0, 0)+codexForkMeta+
+		codexTotal("2026-01-02T10:00:02Z", 3000, 0, 0, 0, 0))
+	if s.Basis != Measured || s.Tokens != (Tokens{Input: 150}) {
+		t.Errorf("after record: %+v", s)
+	}
+}
+
+// The inherited total is the window's baseline by rollout order even when its
+// timestamp falls inside the window and no local total precedes the window.
+func TestCodexForkInheritedBaselineIgnoresItsTimestamp(t *testing.T) {
+	content := codexForkMeta + codexTotal("2026-01-02T10:20:00Z", 1000, 0, 0, 0, 0) +
+		codexModel("2026-01-02T10:00:01Z", "m") +
+		codexTotal("2026-01-02T10:00:05Z", 1060, 0, 0, 0, 0) +
+		codexTotal("2026-01-02T10:10:05Z", 1130, 0, 0, 0, 0)
+	for name, content := range map[string]string{
+		"without record": content,
+		"with record":    content + codexRecordLine("2026-01-02T11:00:05Z", "r1", 50, 0, 0, 0, 0),
+	} {
+		path := filepath.Join(t.TempDir(), "s.jsonl")
+		write(t, path, content)
+		s := Read(context.Background(), harnessenv.Env{Run: noRun(t)}, "codex", Ref{Kind: "path", Value: path}, window("2026-01-02T09:00:00Z", "2026-01-02T10:30:00Z"))
+		if s.Basis != Measured || s.Tokens != (Tokens{Input: 130}) || !strings.Contains(s.Reason, "token_count total_token_usage") {
+			t.Errorf("%s: %+v", name, s)
+		}
+	}
+}
+
 func TestPiSumsUsageAndCost(t *testing.T) {
 	s := Read(context.Background(), fixture(t), "pi", Ref{Kind: "id", Value: "pi-1"}, Window{})
 	assertBasis(t, s, Measured)
@@ -378,7 +704,7 @@ func lockedHome(t *testing.T) string {
 
 func TestOpencodeReadsExportAndNeverTheDatabase(t *testing.T) {
 	r := opencodeRunner(t)
-	s := Read(context.Background(), Discovery{Home: lockedHome(t), Run: r.run}, "opencode", Ref{Kind: "id", Value: "oc-1"}, Window{})
+	s := Read(context.Background(), harnessenv.Env{Home: lockedHome(t), Run: r.run}, "opencode", Ref{Kind: "id", Value: "oc-1"}, Window{})
 	assertBasis(t, s, Measured)
 	if want := []string{"opencode export oc-1"}; !reflect.DeepEqual(r.calls, want) {
 		t.Fatalf("calls %q", r.calls)
@@ -407,7 +733,7 @@ func TestOpencodeReadsExportAndNeverTheDatabase(t *testing.T) {
 
 func TestOpencodeWindow(t *testing.T) {
 	r := opencodeRunner(t)
-	s := Read(context.Background(), Discovery{Run: r.run}, "opencode", Ref{Kind: "id", Value: "oc-1"},
+	s := Read(context.Background(), harnessenv.Env{Run: r.run}, "opencode", Ref{Kind: "id", Value: "oc-1"},
 		window("2026-01-03T10:05:00Z", "2026-01-03T11:00:00Z"))
 	assertTokens(t, s.Tokens, Tokens{Input: 10, Output: 2})
 	if s.Cost == nil || math.Abs(s.Cost.Amount-0.01) > 1e-9 {
@@ -416,7 +742,7 @@ func TestOpencodeWindow(t *testing.T) {
 }
 
 func TestOpencodeExportFailureIsUnavailable(t *testing.T) {
-	s := Read(context.Background(), Discovery{Run: (&fakeRunner{}).run}, "opencode", Ref{Kind: "id", Value: "oc-1"}, Window{})
+	s := Read(context.Background(), harnessenv.Env{Run: (&fakeRunner{}).run}, "opencode", Ref{Kind: "id", Value: "oc-1"}, Window{})
 	assertBasis(t, s, Unavailable)
 	if !strings.Contains(s.Reason, "opencode export") {
 		t.Fatalf("reason %q", s.Reason)
@@ -429,7 +755,7 @@ func TestClaudeSkipsSyntheticMessages(t *testing.T) {
 	write(t, path, `{"type":"assistant","requestId":"req-a","timestamp":"2026-01-02T10:00:00.000Z","message":{"model":"claude-opus-5","usage":{"input_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":2}}}
 {"type":"assistant","timestamp":"2026-01-02T10:01:00.000Z","message":{"model":"<synthetic>","usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0}}}
 `)
-	s := Read(context.Background(), Discovery{Run: noRun(t)}, "claude", Ref{Kind: "path", Value: path}, Window{})
+	s := Read(context.Background(), harnessenv.Env{Run: noRun(t)}, "claude", Ref{Kind: "path", Value: path}, Window{})
 	if s.Turns != 1 || !reflect.DeepEqual(s.Models, []string{"claude-opus-5"}) {
 		t.Fatalf("turns %d models %q", s.Turns, s.Models)
 	}
@@ -444,7 +770,7 @@ func TestUnrecognizedOrUnreadableSessionIsUnavailable(t *testing.T) {
 		for _, kind := range []string{"claude", "codex", "pi"} {
 			path := filepath.Join(t.TempDir(), "s.jsonl")
 			write(t, path, content)
-			s := Read(context.Background(), Discovery{Run: noRun(t)}, kind, Ref{Kind: "path", Value: path}, Window{})
+			s := Read(context.Background(), harnessenv.Env{Run: noRun(t)}, kind, Ref{Kind: "path", Value: path}, Window{})
 			if s.Basis != Unavailable || s.Reason == "" {
 				t.Errorf("%s %s: basis %q reason %q", name, kind, s.Basis, s.Reason)
 			}
@@ -461,7 +787,7 @@ func TestClaudeUnrecognizedSubagentFileIsUnavailable(t *testing.T) {
 	write(t, path, `{"type":"assistant","requestId":"r","timestamp":"2026-01-02T10:00:00.000Z","message":{"model":"m","usage":{"input_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":2}}}
 `)
 	write(t, filepath.Join(dir, "s", "subagents", "agent-x.jsonl"), "{}\n")
-	s := Read(context.Background(), Discovery{Run: noRun(t)}, "claude", Ref{Kind: "path", Value: path}, Window{})
+	s := Read(context.Background(), harnessenv.Env{Run: noRun(t)}, "claude", Ref{Kind: "path", Value: path}, Window{})
 	assertBasis(t, s, Unavailable)
 }
 
@@ -488,7 +814,7 @@ func TestValidSessionWithoutResponsesIsMeasuredZero(t *testing.T) {
 	} {
 		path := filepath.Join(t.TempDir(), "s.jsonl")
 		write(t, path, content)
-		s := Read(context.Background(), Discovery{Run: noRun(t)}, strings.TrimSuffix(kind, "-stub"), Ref{Kind: "path", Value: path}, Window{})
+		s := Read(context.Background(), harnessenv.Env{Run: noRun(t)}, strings.TrimSuffix(kind, "-stub"), Ref{Kind: "path", Value: path}, Window{})
 		if s.Basis != Measured || s.Tokens != (Tokens{}) || s.Reason != "" {
 			t.Errorf("%s header only: %+v", kind, s)
 		}
@@ -498,7 +824,7 @@ func TestValidSessionWithoutResponsesIsMeasuredZero(t *testing.T) {
 func TestOpencodeRejectsUnrecognizedExport(t *testing.T) {
 	for _, out := range []string{`{"error":"session missing"}`, `{}`, `{"info":{"id":"oc-1"}}`, `{"messages":[]}`, `[]`} {
 		r := &fakeRunner{outputs: map[string]string{"opencode export oc-1": out}}
-		s := Read(context.Background(), Discovery{Run: r.run}, "opencode", Ref{Kind: "id", Value: "oc-1"}, Window{})
+		s := Read(context.Background(), harnessenv.Env{Run: r.run}, "opencode", Ref{Kind: "id", Value: "oc-1"}, Window{})
 		if s.Basis != Unavailable || s.Cost != nil {
 			t.Errorf("%s: %+v", out, s)
 		}
@@ -507,7 +833,7 @@ func TestOpencodeRejectsUnrecognizedExport(t *testing.T) {
 
 func TestOpencodeEmptySessionIsMeasuredZero(t *testing.T) {
 	r := &fakeRunner{outputs: map[string]string{"opencode export oc-1": `{"info":{"id":"oc-1"},"messages":[]}`}}
-	s := Read(context.Background(), Discovery{Run: r.run}, "opencode", Ref{Kind: "id", Value: "oc-1"}, Window{})
+	s := Read(context.Background(), harnessenv.Env{Run: r.run}, "opencode", Ref{Kind: "id", Value: "oc-1"}, Window{})
 	assertBasis(t, s, Measured)
 	if s.Tokens != (Tokens{}) || s.Cost == nil || s.Cost.Amount != 0 {
 		t.Fatalf("%+v", s)
@@ -519,7 +845,7 @@ func readFile(t *testing.T, kind, content string) Summary {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	write(t, path, content)
-	return Read(context.Background(), Discovery{Run: noRun(t)}, kind, Ref{Kind: "path", Value: path}, Window{})
+	return Read(context.Background(), harnessenv.Env{Run: noRun(t)}, kind, Ref{Kind: "path", Value: path}, Window{})
 }
 
 const (
@@ -586,6 +912,11 @@ func TestExplicitZeroUsageAndNullCodexInfoAreMeasured(t *testing.T) {
 	if s.Basis != Measured || s.Reason != "" || s.Tokens != (Tokens{}) {
 		t.Errorf("null info: %+v", s)
 	}
+	// A model without any usage is not attributed.
+	s = readFile(t, "codex", codexMeta+codexModel("2026-01-02T10:00:01Z", "m")+`{"type":"event_msg","timestamp":"2026-01-02T10:00:05Z","payload":{"type":"token_count","info":null}}`+"\n")
+	if s.Basis != Measured || len(s.Models) != 0 {
+		t.Errorf("null info with model: %+v", s)
+	}
 }
 
 func TestOpencodeMissingOrNullTokensIsMalformed(t *testing.T) {
@@ -595,12 +926,12 @@ func TestOpencodeMissingOrNullTokensIsMalformed(t *testing.T) {
 		`{"info":{"role":"assistant","modelID":"m","cost":0.5,"tokens":null,"time":{"created":1767434405000}}}`,
 	} {
 		r := &fakeRunner{outputs: map[string]string{"opencode export s": `{"info":{"id":"s"},"messages":[` + bad + `]}`}}
-		s := Read(context.Background(), Discovery{Run: r.run}, "opencode", Ref{Kind: "id", Value: "s"}, Window{})
+		s := Read(context.Background(), harnessenv.Env{Run: r.run}, "opencode", Ref{Kind: "id", Value: "s"}, Window{})
 		if s.Basis != Unavailable || s.Cost != nil {
 			t.Errorf("alone %s: %+v", bad, s)
 		}
 		r = &fakeRunner{outputs: map[string]string{"opencode export s": `{"info":{"id":"s"},"messages":[` + valid + `,` + bad + `]}`}}
-		s = Read(context.Background(), Discovery{Run: r.run}, "opencode", Ref{Kind: "id", Value: "s"}, Window{})
+		s = Read(context.Background(), harnessenv.Env{Run: r.run}, "opencode", Ref{Kind: "id", Value: "s"}, Window{})
 		if s.Basis != Measured || s.Turns != 1 || s.Tokens.Input != 10 || s.Cost == nil || s.Cost.Amount != 0.25 || !strings.Contains(s.Reason, "1 malformed entries") {
 			t.Errorf("mixed %s: %+v", bad, s)
 		}

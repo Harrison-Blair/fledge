@@ -1,18 +1,21 @@
 # herdr API: workspace methods
 
-> herdr 0.9.1 · protocol 22 · schema_version 1 · captured 2026-09-17
+> herdr 0.9.3 · protocol 22 · schema_version 1 · captured 2026-10-06
 > Part of the fledge herdr reference. Index: [README.md](../README.md). Wire format: [protocol.md](../protocol.md).
 
 The `workspace` namespace manages herdr's top-level containers. A workspace holds one or
 more tabs, each tab holds one or more panes, and every pane runs a terminal that herdr may
 recognize as a coding agent. These methods create, inspect, focus, rename, reorder, close,
 and attach display-only metadata to workspaces. Workspace IDs are short opaque strings
-assigned as a Crockford-style base32 counter — `w1`, `w2`, … `w9`, `wA`, `wB`, … skipping
-the letter `I` — and are never reused after a workspace is closed; treat them as opaque
-rather than assuming the `w1`, `w2` shape holds past the ninth workspace. Reads (`get`,
+assigned as a Crockford-style base32 counter — `w1`, `w2`, … `w9`, `wA`, `wB`, … `wZ`,
+skipping the letters `I`, `L`, `O`, and `U` — and are never reused after a workspace is
+closed. The counter does not continue as plain base32 past `wZ`: on 0.9.3 the next
+workspace was `w0`, then `w11`, `w12`, … (`w10` was never issued). Treat IDs as opaque
+rather than assuming any digit shape. Validated 2026-10-06 against herdr 0.9.3. Reads (`get`,
 `list`) do not mark an agent's tab as seen; only focusing does. Most mutations emit a
 push event to connections subscribed via `events.subscribe`, delivered on a fixed ~100 ms
-tick after the response it corresponds to (see [events.md](../events.md)); each Events row
+tick after the response it corresponds to (see [events.md](../events.md); a subscription
+frame arrived about 100 ms after the call on 0.9.3); each Events row
 below gives both the `events.subscribe` subscription type (dotted, e.g. `workspace.closed`)
 and the event actually delivered on the wire (underscored, e.g. `workspace_closed`, in both
 its `event` and `data.type` fields).
@@ -73,13 +76,14 @@ and behaves as a plain close.
 Other codes possible.
 
 **Events**: emits a `workspace_closed` event to subscribers (subscription type
-`workspace.closed`) carrying the full final `WorkspaceInfo` and `workspace_id`.
+`workspace.closed`) carrying the full final `WorkspaceInfo` and `workspace_id`. A group
+close emits one `workspace_closed` per closed workspace, root first.
 
 **CLI**: `herdr workspace close <workspace_id> [--group]` (`--group` maps to `close_group`;
 it is missing from `herdr workspace close --help`'s own usage line but appears in the usage
 printed for a bad invocation and in the full `herdr workspace` command listing).
 
-**Example** — Validated 2026-09-19 against herdr 0.9.1.
+**Example** — Captured 2026-09-19 against herdr 0.9.1; Validated 2026-10-06 against herdr 0.9.3 (plain close, unknown ID, `close_group: true` on an ungrouped workspace, root close refused without `close_group`, child-only and whole-group closes, and the `--group` help omission).
 
 ```json
 {"id":"c1","method":"workspace.close","params":{"workspace_id":"w2"}}
@@ -107,7 +111,8 @@ working directory is resolved with this precedence: `cwd` if given, else the pan
 `source_workspace_id` if given, else herdr's default (the user's home directory); any
 supplied `env` is overlaid on top. A `cwd` that does not exist is not an error — the pane
 silently falls back to herdr's default, and the only way to detect this is to compare the
-requested `cwd` against the returned `root_pane.cwd`. The very first workspace created on a
+requested `cwd` against the returned `root_pane.cwd`. The returned path is normalized
+(a `cwd` of `…/plain/../plain` came back as `…/plain`). The very first workspace created on a
 server comes back `focused: true` even when `focus` is omitted or `false` (focus has to
 live somewhere); on a server that already has a workspace, `focus` defaults to `false` as
 documented below.
@@ -119,7 +124,7 @@ documented below.
 | `cwd` | string \| null | no | null | Working directory for the root pane's process; see the precedence and fallback above. |
 | `env` | object (string→string) | no | `{}` | Environment variables set for the launched process. |
 | `focus` | boolean | no | `false` | If true, focus the new workspace in the UI; false creates it in the background. |
-| `label` | string \| null | no | null | Display label; null lets herdr auto-assign one (the basename of the effective cwd, or `~` for the home directory). |
+| `label` | string \| null | no | null | Display label; null lets herdr auto-assign one: the basename of the Git work tree root when the effective cwd is inside a Git work tree (a cwd of `…/lbl/deep/er` in repo `lbl` gives `lbl`), else the basename of the effective cwd, or `~` for the home directory. Validated 2026-10-06 against herdr 0.9.3. |
 | `source_workspace_id` | string \| null | no | null | Workspace whose focused pane supplies the fallback cwd (see precedence above). |
 
 **Result** — `type: "workspace_created"`:
@@ -133,23 +138,27 @@ documented below.
 
 **Errors**: `invalid_request` (malformed input, e.g. a wrong JSON type for a field —
 schema-level rejections come back as `invalid_request` with a serde message, never as
-`invalid_params`, and the response echoes `"id":""` instead of the request's own id),
+`invalid_params`; on 0.9.3 the response echoes the request's own `id` when the line is
+valid JSON with a string `id`, where 0.9.1 answered `"id":""`),
 `workspace_not_found` (unknown `source_workspace_id`); other codes possible.
 
 **Events**: emits three events in order to subscribers: `workspace_created` (subscription
 type `workspace.created`), `tab_created` (subscription type `tab.created`), and
-`pane_created` (subscription type `pane.created`).
+`pane_created` (subscription type `pane.created`). On 0.9.3 these are followed by
+`layout_updated` and, once the root shell settles, `pane_updated`. When the new workspace
+becomes focused (the first workspace on a server), `workspace_focused`, `tab_focused`, and
+`pane_focused` are interleaved after their matching `*_created` event. Validated 2026-10-06 against herdr 0.9.3.
 
 **CLI**: `herdr workspace create [--cwd PATH] [--label TEXT] [--env KEY=VALUE] [--focus] [--no-focus]`
 
-**Example** — Validated 2026-09-19 against herdr 0.9.1.
+**Example** — Captured 2026-09-19 against herdr 0.9.1; Validated 2026-10-06 against herdr 0.9.3 (first-workspace focus, nonexistent-cwd fallback, label rules, `source_workspace_id` cwd precedence, and unknown `source_workspace_id`).
 
 ```json
 {"id":"cli:workspace:create","method":"workspace.create","params":{"label":"docs-ws","focus":true}}
 {"id":"cli:workspace:create","result":{"type":"workspace_created","workspace":{"active_tab_id":"w1:t1","agent_status":"unknown","focused":true,"label":"docs-ws","number":1,"pane_count":1,"tab_count":1,"workspace_id":"w1"},"tab":{"agent_status":"unknown","focused":true,"label":"1","number":1,"pane_count":1,"tab_id":"w1:t1","workspace_id":"w1"},"root_pane":{"agent_status":"unknown","cwd":"/…/scratch-repo","focused":true,"foreground_cwd":"/…/scratch-repo","pane_id":"w1:p1","revision":0,"scroll":{"max_offset_from_bottom":0,"offset_from_bottom":0,"viewport_rows":40},"tab_id":"w1:t1","terminal_id":"term_65970bc8958f71","workspace_id":"w1"}}}
 ```
 
-`source_workspace_id` also validated 2026-09-19 against herdr 0.9.1:
+`source_workspace_id` also validated 2026-09-19 against herdr 0.9.1 (this capture) and re-validated 2026-10-06 against herdr 0.9.3:
 
 ```json
 {"id":"w2","method":"workspace.create","params":{"label":"child-ws","focus":false,"source_workspace_id":"w1"}}
@@ -185,15 +194,16 @@ to switch context.
 Other codes possible.
 
 **Events**: emits a `workspace_focused` event to subscribers (subscription type
-`workspace.focused`) carrying `{workspace_id}` only, not a full `WorkspaceInfo`. Focusing a
-workspace that is already focused produces no additional, distinguishable event — a caller
+`workspace.focused`) carrying `{workspace_id}` only, not a full `WorkspaceInfo`. On 0.9.3
+the same tick also carries `tab_focused` and `pane_focused` for the workspace's active
+tab and pane. Focusing a workspace that is already focused produces no event at all — a caller
 that focuses then waits for `workspace_focused` can hang when the target was already
 focused.
 
 **CLI**: `herdr workspace focus <workspace_id>`
 
-**Example** — Validated 2026-09-19 against herdr 0.9.1. (`agent_status: "working"` is
-illustrative; this pass exercised the result shape with plain shell panes, not a live
+**Example** — Captured 2026-09-19 against herdr 0.9.1; Validated 2026-10-06 against herdr 0.9.3. (`agent_status: "working"` is
+illustrative; both passes exercised the result shape with plain shell panes, not a live
 agent.)
 
 ```json
@@ -229,14 +239,14 @@ Other codes possible.
 
 **CLI**: `herdr workspace get <workspace_id>`
 
-**Example** — Validated 2026-09-19 against herdr 0.9.1.
+**Example** — Captured 2026-09-19 against herdr 0.9.1 (live session); Validated 2026-10-06 against herdr 0.9.3 on a scratch server.
 
 ```json
 {"id":"cli:workspace:get","method":"workspace.get","params":{"workspace_id":"w2"}}
 {"id":"cli:workspace:get","result":{"type":"workspace_info","workspace":{"active_tab_id":"w2:t1","agent_status":"working","focused":false,"label":"fledge","number":2,"pane_count":1,"tab_count":1,"workspace_id":"w2"}}}
 ```
 
-The `workspace_not_found` error is confirmed by probe:
+The `workspace_not_found` error is confirmed by probe (same message on 0.9.3):
 
 ```json
 {"id":"cli:workspace:get","method":"workspace.get","params":{"workspace_id":"w99"}}
@@ -252,6 +262,7 @@ repo's primary checkout — no workspace already open there, and no `workspace_i
 silently opens a second, hidden workspace for that primary checkout in addition to the
 linked-worktree workspace the call actually returns; the response never mentions the hidden
 workspace, and it only surfaces via a later `workspace.list` or `workspace.get`.
+Validated 2026-10-06 against herdr 0.9.3.
 
 **Params** (`EmptyParams`): none. Send `params: {}`.
 
@@ -266,7 +277,7 @@ workspace, and it only surfaces via a later `workspace.list` or `workspace.get`.
 
 **CLI**: `herdr workspace list`
 
-**Example** — Validated 2026-09-19 against herdr 0.9.1.
+**Example** — Captured 2026-09-19 against herdr 0.9.1 (live session); Validated 2026-10-06 against herdr 0.9.3 on a scratch server.
 
 ```json
 {"id":"cli:workspace:list","method":"workspace.list","params":{}}
@@ -275,19 +286,23 @@ workspace, and it only surfaces via a later `workspace.list` or `workspace.get`.
 
 ## workspace.move
 
-Move one workspace to an absolute position in the display order. `insert_index` is a
-zero-based slot in the reordered list, but the accepted range is `0..=N` inclusive, where
-`N` is the workspace count including the one being moved — `insert_index=N` places it
-last (`N-1` places it second-to-last); one past that (`N+1`) is refused (see
-`workspace_move_failed` below). The response returns the full reordered list, whose
-`number` fields reflect the new positions.
+Move one workspace to a position in the display order. `insert_index` is resolved against
+the **pre-move** order, as in [`tab.move`](tab.md#tabmove): the workspace is inserted before
+whatever currently occupies that index, and only then is its old slot removed. Moving a
+workspace forward therefore lands it one slot earlier than the index names — moving the
+first of ten workspaces to `insert_index: 2` put it at index 1, and moving a workspace to
+its own index or the index just after it is a no-op. The accepted range is `0..=N`
+inclusive, where `N` is the workspace count including the one being moved:
+`insert_index=N` places it last, `N-1` places it second-to-last when it starts earlier in
+the list, and `N+1` is refused (see `workspace_move_failed` below). The response returns
+the full reordered list, whose `number` fields reflect the new positions. Validated 2026-10-06 against herdr 0.9.3.
 
 **Params** (`WorkspaceMoveParams`):
 
 | field | type | required | default | meaning |
 | --- | --- | --- | --- | --- |
 | `workspace_id` | string | yes | — | ID of the workspace to move. |
-| `insert_index` | integer (uint, ≥ 0) | yes | — | Zero-based target index in the display order. |
+| `insert_index` | integer (uint, ≥ 0) | yes | — | Zero-based target index, evaluated against the display order **before** the move. Valid range: `0..=N`. |
 
 **Result** — `type: "workspace_list"`:
 
@@ -306,12 +321,14 @@ possible. A negative `insert_index` fails at the schema layer instead, as `inval
 `workspace_reordered` — that name belongs to `move_block`, below. A move to the workspace's
 current index is a no-op and emits nothing. herdr also pushes a redundant
 `workspace_focused` for whichever workspace currently holds focus in the same delivery
-tick, even when focus did not change and the focused workspace was not the one moved.
+tick, even when focus did not change and the focused workspace was not the one moved; on
+0.9.3 that redundant `workspace_focused` comes with matching `tab_focused` and
+`pane_focused` events.
 
 **CLI**: API-only (no CLI subcommand). The `herdr workspace` command group lists only
 list/create/get/focus/rename/report-metadata/close.
 
-**Example** — Validated 2026-09-19 against herdr 0.9.1.
+**Example** — Captured 2026-09-19 against herdr 0.9.1; Validated 2026-10-06 against herdr 0.9.3 (`N`, `N-1`, `N+1` → `"insert_index 6 is out of bounds"`, `-1` → `invalid_request` "expected usize", no-op moves with no event).
 
 ```json
 {"id":"wm1","method":"workspace.move","params":{"workspace_id":"w2","insert_index":0}}
@@ -349,14 +366,16 @@ does not match a live workspace), `workspace_move_block_failed` (`workspace_ids`
 possible.
 
 **Events**: emits exactly one `workspace_reordered` event to subscribers (subscription type
-`workspace.reordered`) carrying `{workspace_ids, before_workspace_id, workspaces}`;
+`workspace.reordered`) carrying `{workspace_ids, before_workspace_id, workspaces}`
+(`before_workspace_id` is omitted when the request sent `null`);
 `move_block` never emits `workspace_moved` — that name belongs to `move`, above. As with
-`move`, herdr also pushes a redundant `workspace_focused` for the currently focused
-workspace in the same delivery tick, even when focus did not change.
+`move`, herdr also pushes a redundant `workspace_focused` (with `tab_focused` and
+`pane_focused` on 0.9.3) for the currently focused workspace in the same delivery tick,
+even when focus did not change.
 
 **CLI**: API-only (no CLI subcommand).
 
-**Example** — Validated 2026-09-19 against herdr 0.9.1.
+**Example** — Captured 2026-09-19 against herdr 0.9.1; Validated 2026-10-06 against herdr 0.9.3 (null and non-null `before_workspace_id`, non-adjacent IDs, and all five error cases).
 
 ```json
 {"id":"wm2","method":"workspace.move_block","params":{"workspace_ids":["w2"],"before_workspace_id":null}}
@@ -391,7 +410,7 @@ the event.
 **CLI**: `herdr workspace rename <workspace_id> <label>` (the CLI accepts the label as one
 or more trailing arguments: `rename <WORKSPACE_ID> <LABEL>...`).
 
-**Example** — Validated 2026-09-19 against herdr 0.9.1.
+**Example** — Captured 2026-09-19 against herdr 0.9.1; Validated 2026-10-06 against herdr 0.9.3 (empty and 500-character labels, same-label rename still emitting `workspace_renamed`, unknown ID, multi-word CLI label).
 
 ```json
 {"id":"cli:workspace:rename","method":"workspace.rename","params":{"workspace_id":"w1","label":"--label docs-ws-renamed"}}
@@ -419,8 +438,8 @@ it expires — expiry is server-initiated: the server clears the token and pushe
 | --- | --- | --- | --- | --- |
 | `workspace_id` | string | yes | — | ID of the workspace to annotate. |
 | `source` | string | yes | — | Namespace/identity of the reporter. Must be non-empty (`""` fails `invalid_metadata_source`). Scopes only the `seq` counter below — not the token values (see above). |
-| `tokens` | object (string→(string \| null)) | yes | — | Token map. Keys match `^[A-Za-z0-9_-]{1,32}$`; at most 16 entries per report (a workspace accumulates tokens across separate reports up to a separate, undocumented cap of 32 total — see Errors); a null value clears that token. |
-| `seq` | integer (uint64, ≥ 0) \| null | no | null | Monotonic sequence number for this source; lets the server drop out-of-order reports. Strictly greater than the previous seq for this source — an equal seq is also discarded, not only a lesser one, and the rejection is silent (still `{"type":"ok"}`, no error). |
+| `tokens` | object (string→(string \| null)) | yes | — | Token map. Must not be empty (`{}` fails `invalid_metadata_token`, `"missing token to set or clear"`). Keys match `^[A-Za-z0-9_-]{1,32}$`; at most 16 entries per report (a workspace accumulates tokens across separate reports up to a separate, undocumented cap of 32 total — see Errors); a null value clears that token. |
+| `seq` | integer (uint64, ≥ 0) \| null | no | null | Monotonic sequence number for this source; lets the server drop out-of-order reports. Strictly greater than the previous seq for this source — an equal seq is also discarded, not only a lesser one, and the rejection is silent (still `{"type":"ok"}`, no error, and no `workspace_metadata_updated` event). |
 | `ttl_ms` | integer (uint64) \| null | no | null | Token lifetime in milliseconds, 1 … 86400000 (24 h); null means no explicit expiry. |
 
 **Result** — `type: "ok"`:
@@ -431,11 +450,14 @@ it expires — expiry is server-initiated: the server clears the token and pushe
 
 **Errors**: `workspace_not_found` (unknown `workspace_id`), `invalid_metadata_source`
 (`source` is empty — `"metadata source must not be empty"`), `invalid_metadata_token` (a
-token key does not match `^[A-Za-z0-9_-]{1,32}$`, or a single report updates more than 16
-tokens — `"a metadata report may update at most 16 tokens"`), `metadata_token_limit` (the
-workspace already holds 32 tokens total —
-`"workspace metadata may contain at most 32 tokens"`), `invalid_metadata_ttl` (`ttl_ms`
-outside `1..=86400000`); other codes possible. None of these is `invalid_params`; that code
+token key does not match `^[A-Za-z0-9_-]{1,32}$` — `"invalid metadata token key: <key>"`;
+a single report updates more than 16 tokens — `"a metadata report may update at most 16
+tokens"`; or `tokens` is empty — `"missing token to set or clear"`),
+`metadata_token_limit` (adding a new token while the workspace already holds 32 —
+`"workspace metadata may contain at most 32 tokens"`; overwriting an existing token at
+the cap still succeeds), `invalid_metadata_ttl` (`ttl_ms` outside `1..=86400000` —
+`"metadata ttl_ms must be at least 1"` / `"metadata ttl_ms must be 86400000 or less"`);
+other codes possible. None of these is `invalid_params`; that code
 does not appear anywhere in this namespace.
 
 **Events**: emits a `workspace_metadata_updated` event to subscribers (subscription type
@@ -445,7 +467,7 @@ does not appear anywhere in this namespace.
 **CLI**: `herdr workspace report-metadata <workspace_id> --source ID [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]`
 (`--token` sets a token; `--clear-token` sends a null value for that token).
 
-**Example** — Validated 2026-09-19 against herdr 0.9.1.
+**Example** — Captured 2026-09-19 against herdr 0.9.1; Validated 2026-10-06 against herdr 0.9.3 (shared token bag across sources, null clears, silent clear of an unset token, `tokens` key removed when empty, per-source `seq` with silent equal/lesser discard, every error above, and a 300 ms `ttl_ms` whose server-initiated expiry event arrived about 390 ms after the report).
 
 ```json
 {"id":"1","method":"workspace.report_metadata","params":{"workspace_id":"w1","source":"my-tool","tokens":{"branch":"main"},"ttl_ms":60000}}

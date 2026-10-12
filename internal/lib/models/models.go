@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/harness"
 	"github.com/Harrison-Blair/fledge/internal/lib/harnessenv"
 )
@@ -106,7 +106,7 @@ func piModels(_ context.Context, d Discovery) ([]Row, error) {
 	for provider, entry := range store {
 		for _, m := range entry.Models {
 			if m.ID != "" {
-				rows = append(rows, Row{Model: provider + "/" + m.ID, Name: libagent.Pointer(m.Name)})
+				rows = append(rows, Row{Model: provider + "/" + m.ID, Name: cli.Pointer(m.Name)})
 			}
 		}
 	}
@@ -126,7 +126,7 @@ func codexModels(_ context.Context, d Discovery) ([]Row, error) {
 	var rows []Row
 	for _, m := range cache.Models {
 		if m.Slug != "" && m.Visibility == "list" {
-			rows = append(rows, Row{Model: m.Slug, Name: libagent.Pointer(m.DisplayName)})
+			rows = append(rows, Row{Model: m.Slug, Name: cli.Pointer(m.DisplayName)})
 		}
 	}
 	return rows, nil
@@ -164,7 +164,7 @@ func claudeModels(_ context.Context, d Discovery) ([]Row, error) {
 	var rows []Row
 	for _, m := range catalog.Catalog.Config.Models {
 		if m.ID != "" {
-			rows = append(rows, Row{Model: m.ID, Name: libagent.Pointer(m.Name)})
+			rows = append(rows, Row{Model: m.ID, Name: cli.Pointer(m.Name)})
 		}
 	}
 	return rows, nil
@@ -203,7 +203,7 @@ func cursorModels(ctx context.Context, d Discovery) ([]Row, error) {
 	for _, line := range output {
 		id, label, ok := strings.Cut(line, " - ")
 		if id = strings.TrimSpace(id); ok && id != "" {
-			rows = append(rows, Row{Model: id, Name: libagent.Pointer(strings.TrimSpace(label))})
+			rows = append(rows, Row{Model: id, Name: cli.Pointer(strings.TrimSpace(label))})
 		}
 	}
 	return rows, nil

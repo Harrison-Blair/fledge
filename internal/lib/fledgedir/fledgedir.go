@@ -13,8 +13,11 @@ import (
 	"slices"
 	"strings"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 )
+
+// ErrNotRepository marks Root's error for a cwd outside every Git repository.
+var ErrNotRepository = errors.New("not inside a git repository")
 
 // Root resolves the primary (non-linked) checkout of the repository containing
 // cwd. In the primary checkout the git dir is the common dir, so the answer is
@@ -27,7 +30,7 @@ func Root(ctx context.Context, cwd string) (string, error) {
 	if err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
-			return "", fmt.Errorf("%s is not inside a git repository: %s", cwd, strings.TrimSpace(string(exit.Stderr)))
+			return "", fmt.Errorf("%s is %w: %s", cwd, ErrNotRepository, strings.TrimSpace(string(exit.Stderr)))
 		}
 		return "", fmt.Errorf("resolve repository: %w", err)
 	}
@@ -66,10 +69,10 @@ func Root(ctx context.Context, cwd string) (string, error) {
 }
 
 // Ensure creates root/.fledge with a .gitignore whose final rules are the
-// managed block, which ignores everything except profile TOML files, then
+// managed block, which ignores everything except profile Markdown files, then
 // verifies git ignores its contents. It validates everything before writing,
 // only appends to an existing ignore file, and records each mutation on out.
-func Ensure(root string, out *libagent.Outcome) (string, error) {
+func Ensure(root string, out *cli.Outcome) (string, error) {
 	dir := filepath.Join(root, ".fledge")
 	if err := CheckParents(root, dir); err != nil {
 		return "", err
@@ -79,7 +82,7 @@ func Ensure(root string, out *libagent.Outcome) (string, error) {
 	info, err := os.Lstat(ignore)
 	if err == nil {
 		if !info.Mode().IsRegular() {
-			return "", libagent.Invalid("managed ignore file must be a regular file: %s", ignore)
+			return "", cli.Invalid("managed ignore file must be a regular file: %s", ignore)
 		}
 		content, err = os.ReadFile(ignore)
 	}
@@ -118,7 +121,7 @@ func CheckParents(root, parent string) error {
 			return err
 		}
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return libagent.Invalid("managed parent must be a real directory: %s", path)
+			return cli.Invalid("managed parent must be a real directory: %s", path)
 		}
 	}
 	return nil
@@ -130,7 +133,7 @@ var mkdir = os.Mkdir
 // MakeParents creates each missing directory between root and parent,
 // recording every creation on out. A directory another caller creates first
 // is accepted without an effect.
-func MakeParents(root, parent string, out *libagent.Outcome) error {
+func MakeParents(root, parent string, out *cli.Outcome) error {
 	rel, err := filepath.Rel(root, parent)
 	if err != nil {
 		return err
@@ -152,16 +155,18 @@ func MakeParents(root, parent string, out *libagent.Outcome) error {
 		} else if err != nil {
 			return err
 		}
-		out.Effects = append(out.Effects, libagent.Effect{Action: "created", Kind: "directory", Path: path})
+		out.Effects = append(out.Effects, cli.Effect{Action: "created", Kind: "directory", Path: path})
 	}
 	return nil
 }
 
-// managedRules ignore everything in .fledge except versioned profile files.
-var managedRules = []string{"*", "!/profiles/", "!/profiles/*.toml"}
+// managedRules ignore everything in .fledge except versioned profile files
+// and the repository configuration file.
+var managedRules = []string{"*", "!/profiles/", "!/profiles/*.md", "!/config.toml"}
 
 // missingRules returns the managed rules to append so that content ends with
-// the managed block. A legacy file ending in "*" needs only the exceptions.
+// the managed block. A legacy file ending in "*", or in the managed block
+// before "!/config.toml", needs only the rules after it.
 func missingRules(content []byte) []string {
 	var rules []string
 	for _, line := range strings.Split(string(content), "\n") {
@@ -172,13 +177,16 @@ func missingRules(content []byte) []string {
 	if slices.Equal(rules[max(len(rules)-len(managedRules), 0):], managedRules) {
 		return nil
 	}
+	if previous := managedRules[:3]; slices.Equal(rules[max(len(rules)-len(previous), 0):], previous) {
+		return managedRules[3:]
+	}
 	if len(rules) > 0 && rules[len(rules)-1] == "*" {
 		return managedRules[1:]
 	}
 	return managedRules
 }
 
-func appendIgnoreRule(path string, observed []byte, created bool, out *libagent.Outcome) error {
+func appendIgnoreRule(path string, observed []byte, created bool, out *cli.Outcome) error {
 	suffix := []byte(strings.Join(missingRules(observed), "\n") + "\n")
 	if len(observed) > 0 && observed[len(observed)-1] != '\n' {
 		suffix = append([]byte{'\n'}, suffix...)
@@ -191,10 +199,10 @@ func appendIgnoreRule(path string, observed []byte, created bool, out *libagent.
 	if created {
 		action = "created"
 	}
-	return writeIgnoreRule(f, suffix, libagent.Effect{Action: action, Kind: "file", Path: path}, out)
+	return writeIgnoreRule(f, suffix, cli.Effect{Action: action, Kind: "file", Path: path}, out)
 }
 
-func writeIgnoreRule(f io.WriteCloser, suffix []byte, effect libagent.Effect, out *libagent.Outcome) error {
+func writeIgnoreRule(f io.WriteCloser, suffix []byte, effect cli.Effect, out *cli.Outcome) error {
 	if effect.Action == "created" {
 		out.Effects = append(out.Effects, effect)
 	}

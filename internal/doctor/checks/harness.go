@@ -13,13 +13,8 @@ func Harness(list herdr.IntegrationListResult, listErr error) report.Check {
 	if listErr != nil {
 		return report.Check{Name: "harness_installations", Status: report.Fail, Detail: "integration.list failed: " + listErr.Error()}
 	}
-	var available []string
-	for _, in := range list.Integrations {
-		if in.Available {
-			available = append(available, in.Target)
-		}
-	}
 	data := report.HarnessData{Integrations: list.Integrations}
+	available := data.Available()
 	if len(available) == 0 {
 		return report.Check{Name: "harness_installations", Status: report.Warn, Detail: fmt.Sprintf("%d targets, none available", len(list.Integrations)), Data: data}
 	}

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
@@ -144,8 +144,8 @@ func TestCurrentRequiresRegisteredCaller(t *testing.T) {
 func TestOutputFailuresPropagate(t *testing.T) {
 	name, parent := "worker", "0000cafe"
 	herdrscript.CheckOutputFailures(t, Render,
-		libagent.Outcome{Result: Result{Tasks: []Task{}}},
-		libagent.Outcome{Result: Result{Record: identityRecord(&name, &parent), ParentName: &name, Tasks: []Task{{ID: "0000beef", Title: "t"}}}},
+		cli.Outcome{Result: Result{Tasks: []Task{}}},
+		cli.Outcome{Result: Result{Record: identityRecord(&name, &parent), ParentName: &name, Tasks: []Task{{ID: "0000beef", Title: "t"}}}},
 	)
 }
 

@@ -6,8 +6,8 @@ import (
 	"reflect"
 	"testing"
 
-	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/brief"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/proposal"
 )
 
@@ -40,8 +40,8 @@ func TestTemplatePrintsSkeletons(t *testing.T) {
 			Operation string            `json:"operation"`
 			Status    string            `json:"status"`
 			Result    map[string]string `json:"result"`
-			Effects   []libagent.Effect `json:"effects"`
-			Error     *libagent.Failure `json:"error"`
+			Effects   []cli.Effect      `json:"effects"`
+			Error     *cli.Failure      `json:"error"`
 		}
 		if err := json.Unmarshal(b.Bytes(), &got); err != nil {
 			t.Fatal(err)

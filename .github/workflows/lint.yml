@@ -36,20 +36,6 @@ jobs:
           cache: true
       - name: Check formatting
         shell: bash
-        run: |
-          set -euo pipefail
-          git ls-files --cached --others --exclude-standard --deduplicate -z -- '*.go' |
-            (
-              status=0
-              while IFS= read -r -d '' file; do
-                [[ -f "$file" ]] || continue
-                unformatted="$(gofmt -l -- "$file")" || exit "$?"
-                if [[ -n "$unformatted" ]]; then
-                  printf '%s\n' "$unformatted" >&2
-                  status=1
-                fi
-              done
-              exit "$status"
-            )
+        run: bash .github/scripts/gofmt-check.sh
       - name: Vet
         run: go vet ./...

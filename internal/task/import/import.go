@@ -4,18 +4,19 @@ package taskimport
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"slices"
 	"strings"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
-	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/landing"
 	"github.com/Harrison-Blair/fledge/internal/lib/proposal"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
+	"github.com/Harrison-Blair/fledge/internal/lib/termtext"
 )
 
 type Options struct {
@@ -48,10 +49,11 @@ type Result struct {
 // nor cancelled and every existing prerequisite id must exist; a dry run
 // checks the same without creating anything. The creator is the caller's
 // live agent record, or null when the caller is unregistered. Repeated
-// prerequisites are stored once.
-func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libagent.Outcome {
-	out := libagent.Outcome{Operation: "task.import", Status: "success", Effects: []libagent.Effect{}}
-	p, order, err := validate(o, in)
+// prerequisites are stored once. A task without delivery_mode, and the
+// file's parent, take the repository's configured delivery_mode, else none.
+func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Outcome {
+	out := cli.NewOutcome("task.import")
+	p, order, err := validate(ctx, o, in)
 	if err != nil {
 		out.Fail(err, "validation", false)
 		return out
@@ -85,12 +87,17 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 				out.Fail(err, "state", false)
 				return out
 			}
-			if err := check(s, o.Parent, existing); err != nil {
+			if err := task.CheckLinks(s, o.Parent, existing); err != nil {
 				out.Fail(err, "task", false)
 				return out
 			}
 		}
 		out.Result = r
+		return out
+	}
+	mode, err := landing.DefaultMode(ctx, c.Cwd)
+	if err != nil {
+		out.Fail(err, "config", false)
 		return out
 	}
 	s, err := identity.OpenStore(ctx, c.Cwd, &out)
@@ -105,18 +112,21 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 	}
 	phase := "state"
 	err = s.Exclusive(func(tx *state.Tx) error {
-		if err := check(s, o.Parent, existing); err != nil {
+		if err := task.CheckLinks(s, o.Parent, existing); err != nil {
 			phase = "task"
 			return err
 		}
 		create := func(rec task.Record) (string, error) {
 			rec.Status, rec.CreatedAt = task.Created, *task.Now()
+			if rec.DeliveryMode == "" {
+				rec.DeliveryMode = mode
+			}
 			if caller != nil {
 				rec.CreatedBy = &caller.ID
 			}
 			id, err := tx.Create(task.Kind, func(id string) any { rec.ID = id; return rec })
 			if err == nil {
-				out.Effects = append(out.Effects, libagent.Effect{Action: "created", Kind: "task", ID: id})
+				out.Effects = append(out.Effects, cli.Effect{Action: "created", Kind: "task", ID: id})
 			}
 			return id, err
 		}
@@ -138,7 +148,11 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 					after = append(after, dep)
 				}
 			}
-			id, err := create(task.Record{Title: t.Title, Brief: t.Brief, Parent: r.Parent, After: after})
+			rec := task.Record{Title: t.Title, Brief: t.Brief, Parent: r.Parent, After: after, BaseBranch: t.BaseBranch}
+			if t.DeliveryMode != nil {
+				rec.DeliveryMode = *t.DeliveryMode
+			}
+			id, err := create(rec)
 			if err != nil {
 				return err
 			}
@@ -158,58 +172,42 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) libage
 	return out
 }
 
-// validate reads and decodes the proposal and checks the flags against it.
-// File and schema problems are input errors; a brief off the template keeps
-// its task_brief_incomplete code.
-func validate(o Options, in io.Reader) (proposal.Proposal, []proposal.Task, error) {
+// validate reads and decodes the proposal, checks each base_branch, and
+// checks the flags against it. Every problem is an input error.
+func validate(ctx context.Context, o Options, in io.Reader) (proposal.Proposal, []proposal.Task, error) {
 	switch {
 	case !o.FileSet:
-		return proposal.Proposal{}, nil, libagent.Invalid("--file is required")
-	case o.Parent != "" && task.ValidateID(o.Parent) != nil:
-		return proposal.Proposal{}, nil, libagent.Invalid("--parent must be 8 lowercase hexadecimal characters")
-	}
-	text, err := libagent.ReadText(in, libagent.TextInput{File: o.File, FileFlag: "file", FileSet: true, Noun: "proposal"})
-	if err != nil {
-		return proposal.Proposal{}, nil, err
-	}
-	p, err := proposal.Decode([]byte(text))
-	if err != nil {
-		var coded *herdr.Error
-		if !errors.As(err, &coded) {
-			err = libagent.Invalid("%v", err)
+		return proposal.Proposal{}, nil, cli.Invalid("--file is required")
+	case o.Parent != "":
+		if err := libagent.ValidateID("parent", "task", o.Parent); err != nil {
+			return proposal.Proposal{}, nil, err
 		}
+	}
+	text, err := cli.ReadText(in, cli.TextInput{File: o.File, FileFlag: "file", FileSet: true, Noun: "proposal"})
+	if err != nil {
 		return proposal.Proposal{}, nil, err
+	}
+	p, order, err := proposal.DecodeOrdered([]byte(text))
+	if err != nil {
+		return proposal.Proposal{}, nil, cli.Invalid("%v", err)
+	}
+	for _, t := range order {
+		if t.BaseBranch == nil {
+			continue
+		}
+		if err := landing.ValidTarget(ctx, fmt.Sprintf("task %q: base_branch", t.Key), *t.BaseBranch); err != nil {
+			return proposal.Proposal{}, nil, err
+		}
 	}
 	if p.Parent != nil && o.Parent != "" {
-		return proposal.Proposal{}, nil, libagent.Invalid("--parent conflicts with the file's [parent]; use one")
+		return proposal.Proposal{}, nil, cli.Invalid("--parent conflicts with the file's [parent]; use one")
 	}
-	order, err := p.Order()
-	return p, order, err
-}
-
-// check requires parent, when set, to accept subtasks and every existing
-// prerequisite to exist.
-func check(s *state.Store, parent string, existing []string) error {
-	if parent != "" {
-		r, err := task.Get(s, parent)
-		if err == nil {
-			err = task.Require(&r, "adding a subtask", task.Created, task.Assigned, task.Completed)
-		}
-		if err != nil {
-			return err
-		}
-	}
-	for _, id := range existing {
-		if _, err := task.Get(s, id); err != nil {
-			return err
-		}
-	}
-	return nil
+	return p, order, nil
 }
 
 // Render writes the tasks in creation order: a plan on a dry run, one line
 // per created record otherwise.
-func Render(w io.Writer, o libagent.Outcome) error {
+func Render(w io.Writer, o cli.Outcome) error {
 	r, ok := o.Result.(Result)
 	if o.Error != nil || !ok {
 		return nil
@@ -222,7 +220,7 @@ func Render(w io.Writer, o libagent.Outcome) error {
 	if r.DryRun {
 		switch {
 		case r.newParent != "":
-			fmt.Fprintf(&b, "Would create parent task: %s\nWould create %s under it:\n", r.newParent, n)
+			fmt.Fprintf(&b, "Would create parent task: %s\nWould create %s under it:\n", termtext.Clean(r.newParent), n)
 		case r.Parent != nil:
 			fmt.Fprintf(&b, "Would create %s under %s:\n", n, *r.Parent)
 		default:
@@ -230,21 +228,21 @@ func Render(w io.Writer, o libagent.Outcome) error {
 		}
 		width := 0
 		for _, t := range r.Tasks {
-			width = max(width, len(t.Key))
+			width = max(width, len(termtext.Clean(t.Key)))
 		}
 		for _, t := range r.Tasks {
-			fmt.Fprintf(&b, "  %-*s  %s", width, t.Key, t.Title)
+			fmt.Fprintf(&b, "  %-*s  %s", width, termtext.Clean(t.Key), termtext.Clean(t.Title))
 			if len(t.After) > 0 {
-				fmt.Fprintf(&b, "  (after: %s)", strings.Join(t.After, ", "))
+				fmt.Fprintf(&b, "  (after: %s)", termtext.Clean(strings.Join(t.After, ", ")))
 			}
 			b.WriteString("\n")
 		}
 	} else {
 		if r.newParent != "" {
-			fmt.Fprintf(&b, "Created task %s: %s\n", *r.Parent, r.newParent)
+			fmt.Fprintf(&b, "Created task %s: %s\n", *r.Parent, termtext.Clean(r.newParent))
 		}
 		for _, t := range r.Tasks {
-			fmt.Fprintf(&b, "Created task %s (%s): %s\n", *t.ID, t.Key, t.Title)
+			fmt.Fprintf(&b, "Created task %s (%s): %s\n", *t.ID, termtext.Clean(t.Key), termtext.Clean(t.Title))
 		}
 		if r.newParent != "" {
 			fmt.Fprintf(&b, "Created %s under parent %s\n", n, *r.Parent)
