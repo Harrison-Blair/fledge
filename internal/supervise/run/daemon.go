@@ -275,14 +275,16 @@ func (d *daemon) tick(ctx context.Context, now time.Time) {
 		if d.ep.Quiet[w.rec.ID] {
 			continue
 		}
-		d.quiet(ctx, w)
+		d.quiet(ctx, w, now)
 	}
 }
 
 // quiet wakes w's parent when, 30 seconds into an idle episode, w still owns
-// an assigned task and has sent its parent no inbox record since the last
-// doorbell rung for it.
-func (d *daemon) quiet(ctx context.Context, w *worker) {
+// an assigned task, has sent its parent no inbox record since the last
+// doorbell rung for it, and Herdr still reports it idle or done. A live
+// status other than that is applied as a missed transition, which ends the
+// episode; a failed lookup is retried at the next tick.
+func (d *daemon) quiet(ctx context.Context, w *worker, now time.Time) {
 	tasks, err := owned(d.store, w.rec.ID)
 	if err != nil {
 		d.log.Printf("quiet check of %s: %v", w.rec.ID, err)
@@ -314,6 +316,19 @@ func (d *daemon) quiet(ctx context.Context, w *worker) {
 		if m.From.ID != nil && *m.From.ID == w.rec.ID && w.rec.Parent != nil && m.To == *w.rec.Parent && !parse(m.CreatedAt).Before(lastBell) {
 			return
 		}
+	}
+	a, err := d.c.Get(ctx, w.pane)
+	if err != nil {
+		w.quietChecked = false
+		d.log.Printf("quiet check of %s: %v", w.rec.ID, err)
+		return
+	}
+	if a.TerminalID != w.rec.TerminalID {
+		return
+	}
+	d.status(ctx, w.pane, a.AgentStatus, now)
+	if w.status != "idle" && w.status != "done" {
+		return
 	}
 	d.ep.Quiet[w.rec.ID] = true
 	d.save()

@@ -226,7 +226,7 @@ func TestExitWakesUnlessFledgeEndedTheRecord(t *testing.T) {
 func TestQuietWakesAfterThirtySecondsWithAssignedTask(t *testing.T) {
 	w := newWorld(t)
 	tasktest.Seed(t, w.repo, task.Record{Title: "Fix it", Status: task.Assigned, Owner: &w.work.ID})
-	d := w.daemon(t, herdrscript.List(w.bossA, w.wrkA), prompt("w1:p1"))
+	d := w.daemon(t, herdrscript.List(w.bossA, w.wrkA), herdrscript.Get("w1:p3", with(w.wrkA, "done")), prompt("w1:p1"))
 	ctx := context.Background()
 	d.reconcile(ctx, t0)
 	d.status(ctx, "w1:p3", "idle", t0)
@@ -249,6 +249,46 @@ func TestQuietWakesAfterThirtySecondsWithAssignedTask(t *testing.T) {
 	d.status(ctx, "w1:p3", "working", t0.Add(61*time.Second))
 	if d.ep.Quiet[w.work.ID] {
 		t.Fatal("quiet episode not cleared")
+	}
+}
+
+// At the end of the grace period the worker's live status decides: a worker
+// working again, its transition missed, gets no quiet wake and its episode
+// resets.
+func TestQuietRechecksLiveStatus(t *testing.T) {
+	w := newWorld(t)
+	tasktest.Seed(t, w.repo, task.Record{Title: "Fix it", Status: task.Assigned, Owner: &w.work.ID})
+	d := w.daemon(t, herdrscript.List(w.bossA, with(w.wrkA, "idle")), herdrscript.Get("w1:p3", with(w.wrkA, "working")))
+	ctx := context.Background()
+	d.reconcile(ctx, t0)
+	d.tick(ctx, t0.Add(31*time.Second))
+	d.tick(ctx, t0.Add(62*time.Second))
+	if ws := wakes(t, w.store, w.boss.ID); len(ws) != 0 {
+		t.Fatalf("quiet wake for a working worker: %+v", ws)
+	}
+	if wk := d.watched["w1:p3"]; wk.status != "working" || !wk.quietSince.IsZero() {
+		t.Fatalf("episode not reset: %+v", wk)
+	}
+}
+
+// Returning to working cancels the idle episode: a later idle spell starts
+// its own 30 seconds.
+func TestReturnToWorkingRestartsQuietGrace(t *testing.T) {
+	w := newWorld(t)
+	tasktest.Seed(t, w.repo, task.Record{Title: "Fix it", Status: task.Assigned, Owner: &w.work.ID})
+	d := w.daemon(t, herdrscript.List(w.bossA, w.wrkA), herdrscript.Get("w1:p3", with(w.wrkA, "idle")), prompt("w1:p1"))
+	ctx := context.Background()
+	d.reconcile(ctx, t0)
+	d.status(ctx, "w1:p3", "idle", t0)
+	d.status(ctx, "w1:p3", "working", t0.Add(10*time.Second))
+	d.status(ctx, "w1:p3", "idle", t0.Add(20*time.Second))
+	d.tick(ctx, t0.Add(31*time.Second))
+	if ws := wakes(t, w.store, w.boss.ID); len(ws) != 0 {
+		t.Fatalf("quiet wake before the new episode's grace ended: %+v", ws)
+	}
+	d.tick(ctx, t0.Add(51*time.Second))
+	if ws := wakes(t, w.store, w.boss.ID); len(ws) != 1 {
+		t.Fatalf("%+v", ws)
 	}
 }
 
