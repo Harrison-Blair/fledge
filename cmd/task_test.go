@@ -20,10 +20,10 @@ func TestTaskHelp(t *testing.T) {
 	if err := ExecuteWithArgs([]string{"task", "--help"}, &out); err != nil {
 		t.Fatal(err)
 	}
+	if strings.Contains(out.String(), "board") {
+		t.Fatalf("task help still advertises the removed board: %s", out.String())
+	}
 	for _, name := range childNames(t, "task") {
-		if name == "board" {
-			continue // an interactive browser with no --json flag
-		}
 		var sub bytes.Buffer
 		if err := ExecuteWithArgs([]string{"task", name, "--help"}, &sub); err != nil || !strings.Contains(sub.String(), "Usage:") || !strings.Contains(sub.String(), "--json") {
 			t.Fatalf("%s: %v %s", name, err, sub.String())
@@ -41,6 +41,23 @@ func TestTaskHelp(t *testing.T) {
 	if !strings.Contains(help, "A brief is any nonblank UTF-8 text without NUL") || !strings.Contains(help, "task template prints an optional six-heading skeleton") || strings.Contains(help, "Briefs follow") {
 		t.Fatal(out.String())
 	}
+}
+
+func TestTaskBoardRemoved(t *testing.T) {
+	t.Run("command discovery", func(t *testing.T) {
+		for _, name := range childNames(t, "task") {
+			if name == "board" {
+				t.Fatal("task board is still registered")
+			}
+		}
+	})
+	t.Run("invocation", func(t *testing.T) {
+		var out bytes.Buffer
+		err := ExecuteWithArgs([]string{"task", "board"}, &out)
+		if err == nil || !strings.Contains(err.Error(), `unknown command "board"`) {
+			t.Fatalf("task board error = %v; want unknown command", err)
+		}
+	})
 }
 
 func TestTaskTemplateOutsideRepository(t *testing.T) {

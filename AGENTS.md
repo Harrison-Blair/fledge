@@ -153,8 +153,7 @@ Every Fledge `agent` command except `models`, `profiles`, and `capabilities` wit
 `--live`, plus `task create`/`assign`/`complete`/`verify`/`import`, the `worktree`
 commands, and `doctor`, connect to Herdr's local Unix socket. `task create`/`verify`
 connect only when run inside a Herdr pane. `task import` connects only when run inside
-a Herdr pane without `--dry-run`. `task board` shows tasks outside Herdr, but it
-connects to show workers and to go to a worker's pane. In Codex's restricted sandbox, request
+a Herdr pane without `--dry-run`. In Codex's restricted sandbox, request
 `sandbox_permissions: "require_escalated"` on the first invocation of these commands and
 of Herdr session-control commands, with a task-specific justification and a narrow
 command prefix. Do not first run a socket command in the sandbox to rediscover the known

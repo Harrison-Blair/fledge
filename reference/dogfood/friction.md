@@ -1556,3 +1556,29 @@ Update 2026-10-06: reproduced in all 66 Codex verifiers of the audit-fix run (ve
 1. Assign several workers to disjoint pages under one parent.
 2. Let each worker write its findings about other pages into its own report.
 3. Observe that the parent must relay each report path by message, and the recipient must search each file by hand.
+
+---
+
+**Issue:** The tool environment can identify a different Herdr agent as the caller
+
+**Status:** Open
+
+**Summary:** On 2026-10-12, during task-board removal, the tool environment pointed to pane `w2Q:p1`. `fledge agent current` returned `caller_unregistered`. The agent incorrectly assumed that pane belonged to this conversation, then adopted it as `task-board-removal` and assigned task `a763cbff` to record `6cb91c8f`. The user identified it as a separate skills agent and stopped it. The mistaken task was cancelled. The cause of the mismatched tool environment is not established. Workaround: do not adopt a pane until its session identity has been checked against the current conversation. This work continued without live agent registration.
+
+**Reproduction steps:**
+1. Use a tool environment whose Herdr caller pane belongs to a separate agent.
+2. Run `fledge agent current` and observe `caller_unregistered`.
+3. Run `fledge agent adopt --name <name>` without checking session identity. Observe that adoption names and registers the separate agent.
+
+---
+
+**Issue:** Unknown task subcommands printed help and returned success
+
+**Status:** Resolved for the task command group
+
+**Summary:** On 2026-10-12, after removing the task board, `fledge task board` printed task help and returned exit 0. Cobra did not run the task group's `cobra.NoArgs` check because the group had no handler. A help handler, matching the root command's handler, now makes the task group check arguments. The removed command returns an unknown-command error and exit 1. `fledge task` still prints help and succeeds.
+
+**Reproduction steps:**
+1. Remove the board registration while leaving the task group without a handler.
+2. Build the CLI and run `fledge task board`.
+3. Observe task help and exit 0. With the help handler, observe an unknown-command error and exit 1.
