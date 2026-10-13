@@ -22,7 +22,7 @@ section at the end records what the owner settled.
 | Pull request target | 200 source lines | Same sitting arithmetic as the task ceiling |
 | Pull request ceiling | 300 source lines | 90-minute exception x 500 lines/hour = 750 reviewed lines; / 2.2 = 341; rounded down to 300 so that pull requests up to a 2.5 ratio still fit |
 | Files changed (excluding raw captures and `testdata/`) | Task and pull request target 20, pull request ceiling 30 | Policy choice: Google's 10-file mark for 90% of changes, doubled for this repository's source-plus-test file pairs; Google's style guide calls a 50-file spread "usually too large" |
-| Domains touched | Task and pull request target 3, pull request ceiling 5 code domains | This repository: 75th percentile of 2 code domains per task; Microsoft: more files lower the share of useful review comments |
+| Domains touched | Task and pull request target 3, pull request ceiling 5 code domains | This repository: 75th percentile of 2 code domains per task; Microsoft: fewer files, a higher share of useful review comments (a direction; the paper gives no number) |
 | Sitting | 30 to 60 minutes; up to 90 when the change warrants it | Owner decision; SmartBear's 60 to 90 minute guidance |
 
 Lines are additions plus deletions. Every limit is a planning limit, applied before implementation
@@ -122,10 +122,25 @@ traditional inspection.
 
 **Bosu, Greiler, Bird, "Characteristics of Useful Code Reviews: An Empirical Study at Microsoft",
 MSR 2015.** Listing: <https://www.microsoft.com/en-us/research/?p=168510>, accessed 2026-10-13.
-From 1.5 million review comments in five Microsoft projects: "the more files that are in a change,
-the lower the proportion of comments in the code review that will be of value to the author of
-the change." Only the abstract was read; the paper's thresholds are under "Not verified". This is
-the Microsoft review-size evidence for the files and domains guards.
+Full text: <https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/bosu2015useful.pdf>
+(HTTP 200, an 11-page PDF of the paper); publication page:
+<https://www.microsoft.com/en-us/research/publication/characteristics-of-useful-code-reviews-an-empirical-study-at-microsoft/>
+(HTTP 200); both accessed 2026-10-13. From 1.5 million review comments in five Microsoft projects,
+the abstract says: "the more files that are in a change, the lower the proportion of comments in
+the code review that will be of value to the author of the change." Section VI-B1, "Do larger code
+reviews (i.e., with higher number of files) get less useful comments?", says: "The trendline shows
+that as number of files in the change increases, the proportion of comments that are useful
+drops." Figure 8 (PDF page 9), "Usefulness density vs. Number of files", plots one series for each
+of the five projects (Azure, Bing, Exchange, Office, Visual Studio) over 1 to 40 files. In
+paraphrase: the series are noisy, most points lie between about 60 and 70 percent useful, the
+decline is gradual with no sharp cutoff at any file count, Bing's series starts near 63 percent and
+rises over the first files, and the figure draws no trendline. The paper's explanation, in section
+VI-B1: with more files "a thorough review takes more time and effort", so "reviewers may opt for
+cursory review of large changesets and may miss some changes", which may lead "to false positives
+or more questions to the author in an effort to understand the change". The paper gives no
+file-count threshold. This note takes a direction from it: fewer files, a higher share of useful
+comments. That supports a files guard in principle; the guard's numbers come from this
+repository's data and Google's remarks.
 
 **Forsgren, Humble, Kim, *Accelerate* (2018), on batch size.** Publisher excerpt:
 <https://itrevolution.com/wp-content/uploads/2022/06/ACC_excerpt.pdf>, Chapter 2, accessed
@@ -194,7 +209,6 @@ the state it changes and the output it prints, so that a user could name it.
 | *The Pragmatic Programmer*, 20th anniversary edition, Topic 12 "Tracer Bullets" | The O'Reilly preview, <https://www.oreilly.com/library/view/the-pragmatic-programmer/9780135956977/>, returned HTTP 403; the pragprog.com title page, <https://pragprog.com/titles/tpp20/the-pragmatic-programmer-20th-anniversary-edition/>, returned HTTP 200 but lists "Tracer Bullets" without an extract (its extracts are the preface, DRY, Don't Outrun Your Headlights, Inheritance Tax, and Shared State) | The book's definition and tip text |
 | *Accelerate*, Chapter 4 (trunk-based development) | Not in the publisher excerpt, <https://itrevolution.com/wp-content/uploads/2022/06/ACC_excerpt.pdf> (HTTP 200) | Branch-lifetime and branch-count findings that would bound how long a feature branch should live |
 | Phabricator Differential documentation | <https://secure.phabricator.com/book/phabricator/article/differential/> returned HTTP 503 | First-party description of dependent revisions |
-| Bosu et al. 2015 full text | <https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/bosu2015useful.pdf> and the publication page <https://www.microsoft.com/en-us/research/publication/characteristics-of-useful-code-reviews-an-empirical-study-at-microsoft/> returned HTTP 403; only the abstract on the listing above was read | Usefulness by file count, to set a files threshold from data |
 | GitHub automatic retargeting when a base branch is deleted | <https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/changing-the-base-branch-of-a-pull-request> returned HTTP 200 but does not state it | Whether a stack's child pull request follows its merged parent to `dev` without `gh pr edit --base` |
 
 ## Derivations
@@ -228,8 +242,10 @@ in the 26 verified tasks with at least 50 source lines, guard-eligible files per
 median of 1.75 (quartiles 1.33 / 1.75 / 2.0). Doubling 10 to **20** covers that pairing up to the
 upper quartile, and 20 is the task limit and the pull request target. Google's style guide calls a
 200-line change spread across 50 files "usually too large"; that remark is the upper bound, and the
-pull request ceiling of **30** stays well under it. Microsoft's finding that more files mean a
-smaller share of useful comments supports keeping both. In the dataset, guard-eligible files have
+pull request ceiling of **30** stays well under it. Microsoft's finding that the share of useful
+comments falls as files grow supports a files guard in principle but gives no number; 20 and 30
+remain policy choices from this repository's data and Google's remarks.
+In the dataset, guard-eligible files have
 quartiles 2 / 3 / 9, and 8 of 81 tasks exceed 20 and 5 exceed 30. Counting all files instead
 (quartiles 2 / 4 / 9) gives 9 over 20 and 5 over 30; the difference is `fix/docs-07`, which is 20
 guard-eligible files plus 4 raw captures.
@@ -238,7 +254,8 @@ guard-eligible files plus 4 raw captures.
 task are 1 / 1 / 2, and 14 of 81 tasks exceed 3. A task or pull request target of **3** code domains
 admits every task at or under the upper quartile with room for one more; the pull request ceiling
 of **5** excludes the 6 widest tasks. Google's advice to split by files that need different
-reviewers, and Microsoft's file-count finding, are the reasons a second, structural guard helps:
+reviewers, and Microsoft's finding that fewer files bring a higher share of useful comments (a
+direction, not a number), are the reasons a second, structural guard helps:
 `fix/code-05` (`55a7ea2`) is 94 source lines but 39 files and 5 domains.
 
 ## Domains
