@@ -204,8 +204,9 @@ pull requests". "Stacked pull requests CLI commands",
 a stack.
 
 **`gh` on this machine.** `gh version 2.101.0 (2026-09-15)`. `gh help` lists no built-in stack
-command, and `gh extension list` shows that `gh-stack` is not installed. The stack operations
-come from that extension or from the GitHub website, not from built-in `gh`.
+command. `gh extension list` (2026-10-13) shows `gh stack  github/gh-stack  v0.2.1`, so the
+`gh-stack` extension `v0.2.1` is installed. The stack operations come from that extension or from
+the GitHub website, not from built-in `gh`.
 
 **Tracer bullets, Hunt and Thomas.** Bill Venners, "Tracer Bullets and Prototypes: A Conversation
 with Andy Hunt and Dave Thomas, Part VIII", Artima, 2003-04-21, <https://www.artima.com/intv/tracer.html>,
