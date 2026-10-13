@@ -35,6 +35,10 @@ func New() *cobra.Command {
 			"one merged at another head or closed. auto does the same\n" +
 			"steps and merges in one command, with no review stop. Every step is stored\n" +
 			"as land_step and can be run again after a refusal.\n\n" +
+			"Every attempt that passes the head check prints the advisory review-size\n" +
+			"report of the verified commit against the target, as task size does, also in\n" +
+			"the JSON size field and the body of a pull request it opens; the size never\n" +
+			"refuses a landing. A successful landing warns about each measure over a limit.\n\n" +
 			"Every refusal names a code and the step reached. One land runs at a time per\n" +
 			"repository. Land never removes a checkout, stops an agent, or deletes a\n" +
 			"branch; use fledge agent cleanup for that."}
