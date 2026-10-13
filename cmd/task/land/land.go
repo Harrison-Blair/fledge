@@ -30,7 +30,9 @@ func New() *cobra.Command {
 			"review: land_step is review and the task stays verified. Later, task land\n" +
 			"--merge runs every guard and check again and merges the pull request only\n" +
 			"while its head is the verified commit. --merge applies only to pr mode and\n" +
-			"needs a pull request that task land opened or found. auto does the same\n" +
+			"needs a pull request that task land opened or found. A review-stage pull\n" +
+			"request merged in GitHub is recorded by the next task land, which refuses\n" +
+			"one merged at another head or closed. auto does the same\n" +
 			"steps and merges in one command, with no review stop. Every step is stored\n" +
 			"as land_step and can be run again after a refusal.\n\n" +
 			"Every refusal names a code and the step reached. One land runs at a time per\n" +

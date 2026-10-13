@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/Harrison-Blair/fledge/internal/lib/cli"
+	"github.com/Harrison-Blair/fledge/internal/lib/gitstatus"
 	"github.com/Harrison-Blair/fledge/internal/lib/landing"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 )
@@ -16,11 +18,17 @@ import (
 // pr pushes the verified commit to the branch on origin, finds or opens one
 // pull request into the target, checks it, merges it only while its head is
 // the verified commit, and records the landing once GitHub reports it
-// merged. In pr mode without --merge it stops at review after the checks.
+// merged. In pr mode without --merge it stops at review after the checks,
+// and a later run records a pull request merged in GitHub.
 // Each step is idempotent, so a refused landing can be run again; the step
 // reached is stored as land_step before the step runs.
 func (l *lander) pr(ctx context.Context) error {
 	gh := landing.GH{Dir: l.root}
+	if l.mode == task.ModePR && l.r.PRURL != nil {
+		if done, err := l.mergedInGitHub(ctx, gh, *l.r.PRURL); done || err != nil {
+			return err
+		}
+	}
 	if err := l.reach(stepPush, nil); err != nil {
 		return err
 	}
@@ -59,21 +67,54 @@ func (l *lander) pr(ctx context.Context) error {
 	if err := l.reach(stepConfirm, nil); err != nil {
 		return err
 	}
-	m, err := gh.Merged(ctx, pr.Number)
+	m, err := gh.Merged(ctx, strconv.Itoa(pr.Number))
 	if err != nil {
 		return err
 	}
 	if m.State != "MERGED" || !landing.FullHash(m.MergeCommit) {
 		return refuse("land_unconfirmed", "%s is %s after the merge request, not merged with a merge commit; check it, for example for a merge queue, and run task land again", pr.URL, m.State)
 	}
-	if err := l.record(m.MergeCommit, &pr.URL); err != nil {
-		return err
+	_, err = l.confirm(ctx, m.MergeCommit, pr.URL)
+	return err
+}
+
+// mergedInGitHub checks the stored pull request of a pr task. It records a
+// pull request merged at the verified head and returns true, refuses one
+// merged at another head or closed, and returns false for an open one.
+func (l *lander) mergedInGitHub(ctx context.Context, gh landing.GH, url string) (bool, error) {
+	m, err := gh.Merged(ctx, url)
+	switch {
+	case err != nil:
+		return false, err
+	case m.State == "CLOSED":
+		return false, refuse("land_pr_closed", "%s was closed without a merge; reopen it, then run task land again", url)
+	case m.State != "MERGED":
+		return false, nil
+	case m.HeadRefOid != l.commit:
+		return false, refuse("land_pr_merged_other_head", "%s was merged at head %s, not the verified commit %s", url, m.HeadRefOid, l.commit)
+	case !landing.FullHash(m.MergeCommit):
+		return false, refuse("land_unconfirmed", "%s is merged but gh reports no merge commit; run task land again", url)
 	}
-	// Update the local view of the target so merged checks see the landing.
+	l.step = stepConfirm
+	fetched, err := l.confirm(ctx, m.MergeCommit, url)
+	// A squash or rebase merge does not contain the verified commit.
+	if err == nil && fetched && gitstatus.Merged(ctx, l.root, l.commit, m.MergeCommit) == "no" {
+		l.warnings = append(l.warnings, "verified commit is not in the target history; agent cleanup will hold this checkout")
+	}
+	return true, err
+}
+
+// confirm records the landing as merge, then fetches the target so merged
+// checks see it, and returns whether the fetch succeeded.
+func (l *lander) confirm(ctx context.Context, merge, url string) (bool, error) {
+	if err := l.record(merge, &url); err != nil {
+		return false, err
+	}
 	if output, err := l.git(ctx, "fetch", "origin", l.target).CombinedOutput(); err != nil {
 		l.warnings = append(l.warnings, fmt.Sprintf("git fetch origin %s failed: %s", l.target, strings.TrimSpace(string(output))))
+		return false, nil
 	}
-	return nil
+	return true, nil
 }
 
 // reach stores step as the land step reached, and prURL when set.

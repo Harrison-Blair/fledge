@@ -199,7 +199,8 @@ func (l *lander) resolveBranch(ctx context.Context) (string, error) {
 }
 
 // guard runs the checks common to both modes and the mode's target check,
-// then refuses a commit the target already contains.
+// then refuses a commit the target already contains, except for a pr task
+// with a pull request.
 func (l *lander) guard(ctx context.Context) error {
 	if err := landing.ValidBranch(ctx, "branch", l.branch); err != nil {
 		return refuse("land_branch_invalid", "%v", err)
@@ -244,7 +245,9 @@ func (l *lander) guard(ctx context.Context) error {
 	if landing.RefCommit(ctx, l.root, targetRef) == "" {
 		return refuse("land_target_missing", "target branch %s does not exist as %s", l.target, targetRef)
 	}
-	if gitstatus.Merged(ctx, l.root, l.commit, targetRef) == "yes" {
+	// A pr task with a pull request may have been merged in GitHub; pr
+	// checks that pull request instead.
+	if gitstatus.Merged(ctx, l.root, l.commit, targetRef) == "yes" && (l.mode != task.ModePR || l.r.PRURL == nil) {
 		return refuse("land_already_merged", "verified commit %s is already in %s; nothing to land", l.commit, l.target)
 	}
 	return nil

@@ -15,7 +15,8 @@ func TestHelpNamesAutoMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"auto does the same\nsteps and merges in one command, with no review stop", "local, pr, or auto", "pr lands in two steps",
-		"stops with the pull request open for the owner's\nreview", "task land\n--merge runs every guard", "--merge applies only to pr mode", "--merge "} {
+		"stops with the pull request open for the owner's\nreview", "task land\n--merge runs every guard", "--merge applies only to pr mode", "--merge ",
+		"A review-stage pull\nrequest merged in GitHub is recorded by the next task land"} {
 		if !strings.Contains(b.String(), want) {
 			t.Errorf("help lacks %q: %s", want, b.String())
 		}
