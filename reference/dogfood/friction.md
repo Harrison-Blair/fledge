@@ -1827,3 +1827,68 @@ per-session keying that wave 2A designed.
 1. Spawn a worker, then stop its pane outside cleanup.
 2. Run `fledge agent cleanup --results-collected --dry-run`.
 3. Observe the record held with "no live Herdr agent hosts its terminal".
+
+---
+
+**Issue:** `gh stack link` retargets the bottom pull request to the repository default branch
+
+**Status:** Open
+
+**Summary:** On 2026-10-13, during stacked delivery, `gh stack link` set the stack base to the repository default branch (`main`) and silently retargeted the bottom pull request: PR #19 moved from `dev` to `main`. Passing `--base dev` avoids it.
+
+**Reproduction steps:**
+1. Open a pull request into `dev` in a repository whose default branch is `main`.
+2. Run `gh stack link` for a stack over it without `--base`.
+3. Observe the bottom pull request now targets `main`.
+
+---
+
+**Issue:** `agent cleanup` holds stacked layers merged through a GitHub stack merge
+
+**Status:** Open
+
+**Summary:** On 2026-10-13, `fledge agent cleanup` judged each stacked layer merged against its recorded parent branch, not the stack base. Upper layers merged into `dev` by one GitHub stack merge were held as unmerged, and their checkouts needed `fledge worktree remove --force`.
+
+**Reproduction steps:**
+1. Create a stack of task branches, each based on the one below, with pull requests stacked on `dev`.
+2. Merge the stack into `dev` in GitHub.
+3. Run `fledge agent cleanup --dry-run`. Observe the upper layers held.
+
+---
+
+**Issue:** `task land` cannot record a GitHub stack merge
+
+**Status:** Open
+
+**Summary:** On 2026-10-13, the four stack A tasks were merged into `dev` by a GitHub stack merge, but `fledge task land` could not record it: `gh pr merge` is refused for stacked pull requests, and one merge commit covers several pull requests. The four tasks stay `verified`, not `landed`.
+
+**Reproduction steps:**
+1. Verify the tasks of a stack and merge the stack in GitHub.
+2. Run `fledge task land --id <task>` for a layer.
+3. Observe that no landing is recorded for the stack merge.
+
+---
+
+**Issue:** A stacked task has no record of its parent layer, so size counts lower layers
+
+**Status:** Open
+
+**Summary:** On 2026-10-13, a stacked task records no parent layer branch. `fledge task size` and the `task land` size report measure against the integration branch, so a layer's report includes every lower layer's changes.
+
+**Reproduction steps:**
+1. Create a task whose branch is based on another task's unmerged branch.
+2. Run `fledge task size --id <upper task>`.
+3. Observe that the counts include the lower layer's files and lines.
+
+---
+
+**Issue:** Claude's folder-trust dialog again blocked a spawn in a fresh scratch directory
+
+**Status:** Open
+
+**Summary:** On 2026-10-13, a Claude spawn into a fresh scratch directory stopped on the folder-trust dialog, and spawn reported `partial`. `fledge agent send --key Down` then `Enter` answered it. A recurrence of the Claude folder-trust entry of 2026-10-12 above; the Codex trust entry covers only Codex.
+
+**Reproduction steps:**
+1. Create a new directory under `.fledge/tmp/`.
+2. Spawn a Claude worker there with an absolute `--cwd` and a `--prompt`.
+3. Observe the trust dialog and the `partial` spawn outcome.

@@ -113,6 +113,8 @@ A task normally moves through `created` → `assigned` → `completed` → `veri
 Completion and verification require separate commands. Cancellation ends a task early.
 `fledge task verify --commit REV` binds a verification to a commit.
 `fledge task land --id TASK_ID` then merges that commit locally or through a pull request, as the task's delivery mode says.
+In `pr` mode it stops with the pull request open for the owner's read, and `fledge task land --id TASK_ID --merge` merges it.
+`fledge task size --id TASK_ID` reports the branch's advisory review size.
 
 ```sh
 fledge task template

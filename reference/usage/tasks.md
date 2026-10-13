@@ -160,11 +160,11 @@ JSON results add these derived fields:
 - List rows: `progress` (`verified`, `total`, `cancelled`, or null) and `waiting`.
 - Get: `progress` and `dependencies` (`id`, `title`, `status`, `cancel_reason`, `satisfied`).
 - Verify: `open_subtasks` and `warnings`.
-- Land: `mode` and `warnings`, beside the record's `land_step`.
+- Land: `mode`, `warnings`, `review_pending`, and `size`, beside the record's `land_step`.
 - Cancel: `unblocked`.
 - Template: `kind` and `text`.
 
-`task list`, `task get`, `task depend`, and `task template` never contact Herdr.
+`task list`, `task get`, `task depend`, `task template`, and `task size` never contact Herdr.
 
 ## Verified commit
 
@@ -180,13 +180,21 @@ When the caller's checkout has staged, unstaged, or untracked changes, verify pr
 
 A task's `delivery_mode` decides how `task land` delivers its branch:
 
-- `local` merges the branch into the target branch in the primary checkout.
-- `pr` pushes the branch, then opens and merges a GitHub pull request with `gh`.
+- `local` merges the branch into the target branch in the primary checkout. Fledge verification is the only review.
+- `pr` pushes the branch, opens a GitHub pull request with `gh`, and waits for its checks.
+  Then `task land` stops with the pull request open for the owner's read (the `review` step).
+  `task land --merge` merges it later, on the owner's word.
+  This mode gives each pull request an agent review (the verifier) and a human review.
+- `auto` pushes, opens, checks, and merges a pull request in one command, with no review stop.
+  The verifier is the only review.
 - `none` refuses to land the task (`task_no_delivery_mode`).
+
+Every mode lands only a `verified` task with a non-null `verified_commit` (see [Landing](#landing)).
 
 `create --delivery-mode MODE` sets the mode.
 Without it, the mode is `delivery_mode` in `.fledge/config.toml`, else `none`.
-`task land --mode local|pr` overrides the mode for a landing and stores it on the task.
+This repository's `.fledge/config.toml` sets `delivery_mode = "pr"`.
+`task land --mode local|pr|auto` overrides the mode for a landing and stores it on the task.
 `create --base-branch BRANCH` names the branch the task lands into instead of the repository integration branch.
 The branch must be nonblank and a single line, must not start with `-`, and must pass `git check-ref-format refs/heads/BRANCH`.
 Otherwise it is invalid input.
@@ -194,13 +202,14 @@ A proposal entry takes the same `delivery_mode` and `base_branch` keys, and `imp
 
 ## Landing
 
-`task land --id TASK [--branch BRANCH] [--mode local|pr] [--json]` merges a verified task's branch into its target branch.
+`task land --id TASK [--branch BRANCH] [--mode local|pr|auto] [--merge] [--json]` merges a verified task's branch into its target branch.
 Then the task moves to `landed`.
 The caller must be a registered agent other than the owner (`caller_unregistered`, `task_self_landing`, no `--force`).
 The task must be `verified` (`task_invalid_state`) with a non-null `verified_commit` (`land_unverified_commit`).
 
 The branch is `--branch`, else the branch that an earlier `task land` stored, else the branch checked out in the owner's recorded checkout, else the branch its spawn created (`land_branch_unknown`).
 The target is the task's `base_branch`, else the repository integration branch, reduced to a short name.
+No integration branch, or a failed lookup of it, is `land_target_missing`.
 `land` refuses a target whose short name is not a valid branch name with `land_target_invalid`, before any git or gh command runs.
 `land` stores `--branch` and `--mode` even when it refuses the landing.
 
@@ -210,8 +219,9 @@ Before it merges or pushes, it requires all of these:
 - The branch is valid (`land_branch_invalid`) and differs from the target (`land_same_branch`).
 - `refs/heads/<branch>` is the verified commit (`land_head_mismatch`).
 - No checkout of the branch has staged or unstaged changes (`land_dirty`).
-- The target exists: `refs/heads/<target>` in local mode, `refs/remotes/origin/<target>` in pr mode (`land_target_missing`).
+- The target exists: `refs/heads/<target>` in local mode, `refs/remotes/origin/<target>` in pr and auto mode (`land_target_missing`).
 - The target does not already contain the verified commit (`land_already_merged`, with nothing recorded).
+  A pr task with a stored `pr_url` skips this check, because `land` checks that pull request instead (see below).
 
 In **local** mode, the primary checkout must have the target checked out with no staged or unstaged changes (`land_primary_not_ready`).
 Untracked files are allowed.
@@ -222,23 +232,44 @@ A conflict is `land_merge_conflict`.
 Git's refusal to overwrite untracked files, or a failed hook, is `land_merge_refused` with git's message.
 A merge overwrites ignored files that the branch starts to track, but git refuses to overwrite untracked files.
 
-In **pr** mode, `land` requires `gh` on `PATH` (`land_gh_missing`) and an `origin` remote.
-It passes every value to `gh` as `--flag=value`, and runs these steps, each recorded in `land_step`:
+In **pr** and **auto** mode, `land` requires `gh` on `PATH` (`land_gh_missing`) and an `origin` remote (`land_target_missing`).
+It passes every value to `gh` as `--flag=value`; a failed `gh` command is `land_gh_failed` with gh's message.
+It runs these steps, each recorded in `land_step`:
 
 1. `push`: if `origin/<branch>` is not the verified commit, push the verified commit to the branch on origin (`land_push_rejected`).
-2. `pr`: find the open pull request from the branch into the target, or open one with the task title and a body that names the task, commit, verifier, note, and owner.
+2. `pr`: find the open pull request from the branch into the target, or open one with the task title and a body that names the task, commit, verifier, note, and owner, and the size report.
    More than one open pull request is `land_pr_ambiguous`.
    `land` records `pr_url` as soon as the pull request exists, so a failed lookup after `gh pr create` keeps it.
 3. `checks`: refuse a draft (`land_pr_draft`), a `CONFLICTING` pull request (`land_pr_not_mergeable`), an `UNKNOWN` one (`land_mergeable_unknown`, retry later), or another head (`land_head_mismatch`).
    Refuse checks that are still running or a status context that is `PENDING` or `EXPECTED` (`land_checks_pending`).
    Refuse a check run that concluded other than `SUCCESS`, `NEUTRAL`, or `SKIPPED`, or a status context other than `SUCCESS` (`land_checks_failed`).
    Zero checks pass.
-4. `merge`: `gh pr merge --merge --match-head-commit=<verified_commit>` (`land_merge_failed` with gh's message).
-5. `confirm`: only a `MERGED` pull request with a merge commit is recorded as landed (`land_unconfirmed` otherwise, for example under a merge queue).
+4. `review` (pr mode only): stop with the pull request open for the owner's read.
+   The task stays `verified`, with `land_step` `review` and `pr_url` set.
+   The command succeeds, and the JSON result has `review_pending` true.
+   The text output names the pull request and the next command, `fledge task land --id TASK --merge`.
+   auto mode skips this step.
+5. `merge`: `gh pr merge --merge --match-head-commit=<verified_commit>` (`land_merge_failed` with gh's message).
+6. `confirm`: only a `MERGED` pull request with a merge commit is recorded as landed (`land_unconfirmed` otherwise, for example under a merge queue).
    Then `land` runs `git fetch origin <target>` so that `agent cleanup` sees the merge.
 
+`task land --id TASK --merge` continues a pr task after the review stop.
+It runs every guard and step 1 to 3 again, then merges and confirms only while the pull request head is the verified commit.
+`--merge` applies only to pr mode: with `--mode local` or `--mode auto`, or a task in another mode, it is invalid input.
+A pr task with no `pr_url` is `land_review_not_open`: run `task land` without `--merge` first.
+
+The owner can also merge a review-stage pull request with the GitHub button.
+Each `task land` of a pr task with a stored `pr_url`, with or without `--merge`, first reads that pull request:
+
+- `MERGED` at the verified commit: `land` records the landing with GitHub's merge commit (`land_step` `confirm`) and fetches the target.
+  After a squash or rebase merge, the verified commit is not in the target history, and `land` warns that `agent cleanup` will hold the checkout.
+- `MERGED` at another head: `land_pr_merged_other_head`.
+- `CLOSED` without a merge: `land_pr_closed`; reopen it, then run `task land` again.
+- `MERGED` with no merge commit reported: `land_unconfirmed`.
+- Open: `land` continues with the steps above.
+
 Every step can run again, so run `task land` again after a refusal.
-A refusal in pr mode after step 1 leaves the pushed branch, the pull request, `pr_url`, and `land_step`.
+A refusal in pr or auto mode after step 1 leaves the pushed branch, the pull request, `pr_url`, and `land_step`.
 `land` decodes `gh` JSON strictly, and a missing field is `land_gh_output_invalid`.
 
 Before it records the landing, `land` checks under the store lock that the task is still `verified` with the same `verified_commit` (`task_state_changed`).
@@ -246,6 +277,54 @@ It records `merge_commit`, `target_branch`, `landed_at`, `landed_by`, and status
 Every refusal is `rejected` with its code, and the JSON result shows the `land_step` reached.
 `land` never removes a checkout, stops an agent, or deletes a branch.
 `agent cleanup` does that and counts a `landed` task as finished.
+
+### Size report
+
+Every `task land` that passes the head check measures the verified commit against the target, as [`task size`](#size) does, with the same base ref and the limits of the mode.
+The report prints after the outcome, also on a refusal and at the review stop, and is the JSON `size` field (null when the head check was not reached or the measure failed).
+A pull request that `land` opens carries the report in its body.
+After a landing, each measure over a limit is a `review size:` warning.
+The review stop and refusals print the report without warnings.
+The size is advisory: it never refuses a landing.
+
+## Size
+
+`task size --id TASK [--json]` reports how large a task's branch is for review, as `task land` measures it.
+It is read-only: it writes nothing and does not contact Herdr.
+
+The diff is `<base>...<head>`, from the merge base of the two:
+
+- `head` is the task's `verified_commit`, else the head of its branch.
+  The branch is found as in [Landing](#landing) (`size_branch_unknown`).
+  A task without a `verified_commit` whose branch does not exist is `size_branch_missing`.
+- The target is the task's `base_branch`, else the integration branch (`size_target_missing`, `size_target_invalid`).
+- `base` is `refs/heads/<target>` for modes `local` and `none`, and `refs/remotes/origin/<target>` for `pr` and `auto`.
+  When that ref is missing, the other one is used and the output says so (`base_missing` in JSON).
+  When both are missing, the refusal is `size_target_missing`.
+
+The measures follow [Review units](../plan/review-units.md):
+
+- **source lines**: added plus deleted lines of hand-written source: non-test Go, built-in profiles (`internal/lib/profiles/builtin/*.md`), `.github/scripts/*.py` except `*_test.py`, and `.github/workflows/*.yml`.
+- **files**: changed files, except files under a `testdata/` directory and Herdr raw captures (`reference/herdr/raw/`).
+- **code domains**: domains of changed source and test files.
+  A domain is a command (`cmd/<name>/` with `internal/<name>/`), each `internal/lib/<name>/`, the command root (`cmd/`), the module root, or `.github/`.
+  Documentation areas (`reference/<area>/`) are listed in JSON as `doc_areas` but not counted.
+- **total read**: added plus deleted lines of every changed file.
+
+Modes `local` and `none` compare with the task limits, and `pr` and `auto` with the pull request target and ceiling:
+
+| Measure | Task limit | Pull request target | Pull request ceiling |
+| --- | --- | --- | --- |
+| Source lines | 200 | 200 | 300 |
+| Files | 20 | 20 | 30 |
+| Code domains | 3 | 3 | 5 |
+| Total read | 750 | 750 | 750 |
+
+Each measure has a status: `within`, `over target` (over the target, within the ceiling), or `over ceiling`.
+A measure with one limit is `within` or `over ceiling`.
+The text output names the branch, target, mode and limits, base, and head, then one line per measure and the code domains.
+The JSON result holds `branch`, `target`, `base`, `base_missing`, `head`, `mode`, and `size` (`kind`, one `value`/`target`/`ceiling`/`status` object per measure, `domains`, and `doc_areas`).
+An over-limit size never makes the command fail.
 
 ## Proposals
 
@@ -270,7 +349,7 @@ brief = '''
 ...
 '''
 after = []                   # local keys or existing 8-hex task ids
-delivery_mode = "local"      # optional: local, pr, or none
+delivery_mode = "local"      # optional: local, pr, auto, or none
 base_branch = "dev"          # optional: the branch it lands into
 
 [[tasks]]

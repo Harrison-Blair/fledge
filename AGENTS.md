@@ -111,6 +111,7 @@ it with another tool.
 | See what needs your attention | `fledge attention` | separate `agent list`, `task list`, and inbox checks by hand |
 | Watch workers without polling | `fledge supervise` starts automatically, with `status`/`stop` | `fledge agent wait` loops, harness idle notifications, timed polls |
 | Land a verified branch, only after the user names that branch explicitly | `fledge task land` | manual `git merge`, `gh pr create`/`gh pr merge` |
+| Measure a task's review size | `fledge task size` | `git diff --stat` by hand |
 | Type raw input or keys into an agent (slash commands, dialog answers) | `fledge agent send` | raw `herdr pane send-text`/`send-keys` |
 | Register your own running agent, from your own pane | `fledge agent adopt` | — |
 | Rename an agent, relabeling its pane and its own tab | `fledge agent rename` | raw `herdr agent`/`pane`/`tab rename` |
@@ -168,7 +169,7 @@ command prefix. Do not first run a socket command in the sandbox to rediscover t
 `connect: operation not permitted` failure. Use the normal approval mechanism; these
 instructions do not override an approval denial or authorize unrelated session changes.
 Help, version, `agent models`/`profiles`, `agent capabilities` without `--live`,
-`task get`/`list`/`cancel`/`depend`/`template`, `task import --dry-run`,
+`task get`/`list`/`cancel`/`depend`/`template`/`size`, `task import --dry-run`,
 `supervise status`/`stop`, the `memory` commands, and `update` do not require Herdr
 socket access.
 
