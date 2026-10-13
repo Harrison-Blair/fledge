@@ -121,6 +121,11 @@ func TestLandRefusesBeforeGuards(t *testing.T) {
 			t.Fatalf("%+v: %+v", o, out.Error)
 		}
 	}
+	for _, mode := range []string{"none", "bogus"} {
+		if out := f.landAs(t, tasktest.Client(t, f.repo, "w1:p1"), Options{Mode: mode, ModeSet: true}); out.Error == nil || out.Error.Message != "--mode must be local, pr, or auto" {
+			t.Fatalf("%s: %+v", mode, out.Error)
+		}
+	}
 	if out := f.landAs(t, tasktest.Client(t, f.repo, ""), Options{Branch: "feat", BranchSet: true}); out.Error == nil || out.Error.Code != "caller_unregistered" {
 		t.Fatalf("%+v", out.Error)
 	}
@@ -148,10 +153,18 @@ func TestLandRequiresVerifiedTaskAndCommit(t *testing.T) {
 
 func TestLandModeAndBranchResolution(t *testing.T) {
 	f := setup(t, task.ModeNone)
-	f.refused(t, f.land(t, Options{}), "task_no_delivery_mode")
+	out := f.land(t, Options{})
+	f.refused(t, out, "task_no_delivery_mode")
+	if !strings.Contains(out.Error.Message, "--mode local, --mode pr, or --mode auto") {
+		t.Fatalf("%+v", out.Error)
+	}
 	// The worker has no checkout recorded, so the branch is unknown; --mode
 	// given on a refused run is still stored.
-	r := f.refused(t, f.land(t, Options{Mode: "local", ModeSet: true}), "land_branch_unknown")
+	r := f.refused(t, f.land(t, Options{Mode: "auto", ModeSet: true}), "land_branch_unknown")
+	if r.DeliveryMode != task.ModeAuto {
+		t.Fatalf("%+v", r)
+	}
+	r = f.refused(t, f.land(t, Options{Mode: "local", ModeSet: true}), "land_branch_unknown")
 	if r.DeliveryMode != task.ModeLocal || r.Branch != nil {
 		t.Fatalf("%+v", r)
 	}

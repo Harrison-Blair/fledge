@@ -75,8 +75,8 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 	if err == nil && o.BranchSet {
 		err = landing.ValidBranch(ctx, "--branch", o.Branch)
 	}
-	if err == nil && o.ModeSet && o.Mode != task.ModeLocal && o.Mode != task.ModePR {
-		err = cli.Invalid("--mode must be local or pr")
+	if err == nil && o.ModeSet && o.Mode != task.ModeLocal && o.Mode != task.ModePR && o.Mode != task.ModeAuto {
+		err = cli.Invalid("--mode must be local, pr, or auto")
 	}
 	if err != nil {
 		return fail(err, "validation")
@@ -143,8 +143,8 @@ func (l *lander) land(ctx context.Context, o Options) error {
 			return err
 		}
 	}
-	if l.mode != task.ModeLocal && l.mode != task.ModePR {
-		return refuse("task_no_delivery_mode", "task %s has delivery mode %s; pass --mode local or --mode pr", r.ID, l.mode)
+	if l.mode != task.ModeLocal && l.mode != task.ModePR && l.mode != task.ModeAuto {
+		return refuse("task_no_delivery_mode", "task %s has delivery mode %s; pass --mode local, --mode pr, or --mode auto", r.ID, l.mode)
 	}
 	if l.branch, err = l.resolveBranch(ctx); err != nil {
 		return err
@@ -214,7 +214,7 @@ func (l *lander) guard(ctx context.Context) error {
 		}
 	}
 	targetRef := "refs/heads/" + l.target
-	if l.mode == task.ModePR {
+	if l.mode != task.ModeLocal {
 		if _, err := exec.LookPath("gh"); err != nil {
 			return refuse("land_gh_missing", "pr mode needs the GitHub CLI gh on PATH")
 		}

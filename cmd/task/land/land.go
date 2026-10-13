@@ -26,14 +26,15 @@ func New() *cobra.Command {
 			"pr pushes the verified commit to the branch on origin, opens or reuses one pull\n" +
 			"request with gh, and merges it only when it is not a draft, is mergeable, has\n" +
 			"the verified head, and every check passed (zero checks pass). Every step is\n" +
-			"stored as land_step and can be run again after a refusal.\n\n" +
+			"stored as land_step and can be run again after a refusal. auto delivers\n" +
+			"exactly as pr does, in one command.\n\n" +
 			"Every refusal names a code and the step reached. One land runs at a time per\n" +
 			"repository. Land never removes a checkout, stops an agent, or deletes a\n" +
 			"branch; use fledge agent cleanup for that."}
 	f := cmd.Flags()
 	f.StringVar(&options.ID, "id", "", "Task ID")
 	f.StringVar(&options.Branch, "branch", "", "Branch to land")
-	f.StringVar(&options.Mode, "mode", "", "Delivery mode for this landing: local or pr")
+	f.StringVar(&options.Mode, "mode", "", "Delivery mode for this landing: local, pr, or auto")
 	f.BoolVar(&asJSON, "json", false, "Emit a structured outcome")
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 		options.BranchSet = f.Changed("branch")

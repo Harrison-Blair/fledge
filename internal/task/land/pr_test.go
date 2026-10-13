@@ -80,7 +80,13 @@ func context_(state string) string {
 // setupPR is setup in pr mode with a bare origin holding main, and a fake gh.
 func setupPR(t *testing.T) (fixture, fakeGH) {
 	t.Helper()
-	f := setup(t, task.ModePR)
+	return setupPRMode(t, task.ModePR)
+}
+
+// setupPRMode is setupPR for a task in delivery mode mode.
+func setupPRMode(t *testing.T, mode string) (fixture, fakeGH) {
+	t.Helper()
+	f := setup(t, mode)
 	origin := filepath.Join(t.TempDir(), "origin.git")
 	git(t, f.repo, "init", "-q", "--bare", origin)
 	git(t, f.repo, "remote", "add", "origin", origin)
@@ -92,37 +98,43 @@ func setupPR(t *testing.T) (fixture, fakeGH) {
 	return f, g
 }
 
+// TestLandPRPushesOpensAndMerges lands a pr task and an auto task the same
+// way: push, pull request, checks, merge, confirm.
 func TestLandPRPushesOpensAndMerges(t *testing.T) {
-	f, g := setupPR(t)
-	out := f.land(t, Options{Branch: "feat", BranchSet: true})
-	if out.Error != nil {
-		t.Fatalf("%+v", out.Error)
-	}
-	origin := git(t, f.repo, "remote", "get-url", "origin")
-	if pushed := git(t, origin, "rev-parse", "refs/heads/feat"); pushed != f.head {
-		t.Fatalf("pushed %s", pushed)
-	}
-	log := g.log(t)
-	wantCreate := "pr create --base=main --head=feat --title=Feature --body-file="
-	wantMerge := "pr merge 7 --merge --match-head-commit=" + f.head + " --subject=Merge branch 'feat' (verified task " + f.id + ")"
-	if !slices.ContainsFunc(log, func(l string) bool { return strings.HasPrefix(l, wantCreate) }) || !slices.Contains(log, wantMerge) ||
-		!slices.Contains(log, "pr list --head=feat --base=main --state=open --json=number,url,headRefOid,isDraft,mergeable") ||
-		!slices.Contains(log, "pr view 7 --json=isDraft,mergeable,headRefOid,statusCheckRollup") || !slices.Contains(log, "pr view 7 --json=state,mergeCommit") {
-		t.Fatalf("%q", log)
-	}
-	r := f.load(t)
-	if r.Status != task.Landed || *r.MergeCommit != mergeHash || *r.PRURL != "https://example.com/pr/7" || *r.TargetBranch != "main" || *r.LandStep != "confirm" || *r.LandedBy != f.boss.ID {
-		t.Fatalf("%+v", r)
-	}
-	body, _ := os.ReadFile(filepath.Join(g.dir, "body"))
-	for _, part := range []string{f.id, f.head, f.boss.ID, f.worker.ID} {
-		if !strings.Contains(string(body), part) {
-			t.Fatalf("body lacks %s: %s", part, body)
-		}
-	}
-	want := "Landed task " + f.id + ": merged feat into main (pr) as " + mergeHash + ".\nPull request: https://example.com/pr/7\n"
-	if got := render(t, out); got != want {
-		t.Fatalf("%q", got)
+	for _, mode := range []string{task.ModePR, task.ModeAuto} {
+		t.Run(mode, func(t *testing.T) {
+			f, g := setupPRMode(t, mode)
+			out := f.land(t, Options{Branch: "feat", BranchSet: true})
+			if out.Error != nil {
+				t.Fatalf("%+v", out.Error)
+			}
+			origin := git(t, f.repo, "remote", "get-url", "origin")
+			if pushed := git(t, origin, "rev-parse", "refs/heads/feat"); pushed != f.head {
+				t.Fatalf("pushed %s", pushed)
+			}
+			log := g.log(t)
+			wantCreate := "pr create --base=main --head=feat --title=Feature --body-file="
+			wantMerge := "pr merge 7 --merge --match-head-commit=" + f.head + " --subject=Merge branch 'feat' (verified task " + f.id + ")"
+			if !slices.ContainsFunc(log, func(l string) bool { return strings.HasPrefix(l, wantCreate) }) || !slices.Contains(log, wantMerge) ||
+				!slices.Contains(log, "pr list --head=feat --base=main --state=open --json=number,url,headRefOid,isDraft,mergeable") ||
+				!slices.Contains(log, "pr view 7 --json=isDraft,mergeable,headRefOid,statusCheckRollup") || !slices.Contains(log, "pr view 7 --json=state,mergeCommit") {
+				t.Fatalf("%q", log)
+			}
+			r := f.load(t)
+			if r.Status != task.Landed || *r.MergeCommit != mergeHash || *r.PRURL != "https://example.com/pr/7" || *r.TargetBranch != "main" || *r.LandStep != "confirm" || *r.LandedBy != f.boss.ID {
+				t.Fatalf("%+v", r)
+			}
+			body, _ := os.ReadFile(filepath.Join(g.dir, "body"))
+			for _, part := range []string{f.id, f.head, f.boss.ID, f.worker.ID} {
+				if !strings.Contains(string(body), part) {
+					t.Fatalf("body lacks %s: %s", part, body)
+				}
+			}
+			want := "Landed task " + f.id + ": merged feat into main (" + mode + ") as " + mergeHash + ".\nPull request: https://example.com/pr/7\n"
+			if got := render(t, out); got != want {
+				t.Fatalf("%q", got)
+			}
+		})
 	}
 }
 
@@ -241,6 +253,19 @@ func TestLandPRGuards(t *testing.T) {
 	if out := f.land(t, Options{ID: id, Branch: "feat", BranchSet: true}); out.Error == nil || out.Error.Code != "land_target_missing" {
 		t.Fatalf("%+v", out.Error)
 	}
+}
+
+// TestLandAutoUsesPRGuards checks that an auto task, like a pr task, needs gh.
+func TestLandAutoUsesPRGuards(t *testing.T) {
+	f, _ := setupPRMode(t, task.ModeAuto)
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	os.Symlink(gitPath, filepath.Join(bin, "git"))
+	t.Setenv("PATH", bin)
+	f.refused(t, f.land(t, Options{Branch: "feat", BranchSet: true}), "land_gh_missing")
 }
 
 func TestLandPRRefusesInvalidTargetBeforeGH(t *testing.T) {
