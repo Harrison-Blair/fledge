@@ -18,10 +18,10 @@ section at the end records what the owner settled.
 
 | Limit | Value | Basis (derived below) |
 | --- | --- | --- |
-| Task ceiling | 200 hand-written source lines | A task must fit one normal sitting alone: 400 reviewed lines per review (SmartBear) / 2.2 reviewed lines per source line (this repository) = 182, rounded to 200; at 500 lines/hour that is 53 minutes |
+| Task ceiling | 200 hand-written source lines | A task must fit one normal sitting alone: 400 reviewed lines per review (SmartBear) / 2.2 reviewed lines per source line (this repository) = 182, relaxed by policy to 200 (440 reviewed lines, 53 minutes at 500 lines/hour) |
 | Pull request target | 200 source lines | Same sitting arithmetic as the task ceiling |
 | Pull request ceiling | 300 source lines | 90-minute exception x 500 lines/hour = 750 reviewed lines; / 2.2 = 341; rounded down to 300 so that pull requests up to a 2.5 ratio still fit |
-| Files changed | Task and pull request target 20, pull request ceiling 30 | Google: about 90% of changes touch fewer than 10 files, doubled for this repository's source-plus-test pairs; Google's style guide calls a 50-file spread "usually too large" |
+| Files changed (excluding raw captures and `testdata/`) | Task and pull request target 20, pull request ceiling 30 | Policy choice: Google's 10-file mark for 90% of changes, doubled for this repository's source-plus-test file pairs; Google's style guide calls a 50-file spread "usually too large" |
 | Domains touched | Task and pull request target 3, pull request ceiling 5 code domains | This repository: 75th percentile of 2 code domains per task; Microsoft: more files lower the share of useful review comments |
 | Sitting | 30 to 60 minutes; up to 90 when the change warrants it | Owner decision; SmartBear's 60 to 90 minute guidance |
 
@@ -70,7 +70,8 @@ method='inclusive')`.
 | Hand-written source (this definition) | 0 / 20 / 67 | 2,892 |
 | Tests (Go and Python tests, `testdata/`) | 3 / 32 / 89 | 2,793 |
 | Markdown not counted as source | 0 / 0 / 4 | 2,097 |
-| Files changed | 2 / 4 / 9 | 183 |
+| Files changed, all files | 2 / 4 / 9 | 183 |
+| Files changed, guard-eligible (no `reference/herdr/raw/`, no `testdata/`) | 2 / 3 / 9 | 183 |
 | Code domains, `cmd`/`internal` pair as one | 1 / 1 / 2 | 18 |
 | Code domains, pair counted as two | 1 / 1 / 3 | 22 |
 | All areas, including `reference/` areas | 1 / 2 / 3 | 18 |
@@ -189,12 +190,12 @@ the state it changes and the output it prints, so that a user could name it.
 
 | Source | Why | What was expected from it |
 | --- | --- | --- |
-| Jason Cohen, *Best Kept Secrets of Peer Code Review* (2006) | SmartBear serves it behind a sign-up form (<https://smartbear.com/lp/collaborator/best-kept-code-review-secrets>); the StickyMinds case-study article returned HTTP 403 | Cisco study size and method; the rate and duration curves behind the 200-400 LOC and 60-90 minute guidance |
-| *The Pragmatic Programmer*, 20th anniversary edition, Topic 12 "Tracer Bullets" | O'Reilly preview returned HTTP 403; pragprog.com offers no extract for this topic | The book's definition and tip text |
-| *Accelerate*, Chapter 4 (trunk-based development) | Not in the publisher excerpt | Branch-lifetime and branch-count findings that would bound how long a feature branch should live |
-| Phabricator Differential documentation | `secure.phabricator.com` returned HTTP 503 | First-party description of dependent revisions |
-| Bosu et al. 2015 full text | Only the abstract was read | Usefulness by file count, to set a files threshold from data |
-| GitHub automatic retargeting when a base branch is deleted | Not stated on the fetched "Changing the base branch" page | Whether a stack's child pull request follows its merged parent to `dev` without `gh pr edit --base` |
+| Jason Cohen, *Best Kept Secrets of Peer Code Review* (2006) | <https://smartbear.com/lp/collaborator/best-kept-code-review-secrets> served the book behind a sign-up form and returned HTTP 404 when retried on 2026-10-13; the StickyMinds case-study article, <https://www.stickyminds.com/article/best-kept-secrets-peer-code-review>, returned HTTP 403 | Cisco study size and method; the rate and duration curves behind the 200-400 LOC and 60-90 minute guidance |
+| *The Pragmatic Programmer*, 20th anniversary edition, Topic 12 "Tracer Bullets" | The O'Reilly preview, <https://www.oreilly.com/library/view/the-pragmatic-programmer/9780135956977/>, returned HTTP 403; the pragprog.com title page, <https://pragprog.com/titles/tpp20/the-pragmatic-programmer-20th-anniversary-edition/>, returned HTTP 200 but lists "Tracer Bullets" without an extract (its extracts are the preface, DRY, Don't Outrun Your Headlights, Inheritance Tax, and Shared State) | The book's definition and tip text |
+| *Accelerate*, Chapter 4 (trunk-based development) | Not in the publisher excerpt, <https://itrevolution.com/wp-content/uploads/2022/06/ACC_excerpt.pdf> (HTTP 200) | Branch-lifetime and branch-count findings that would bound how long a feature branch should live |
+| Phabricator Differential documentation | <https://secure.phabricator.com/book/phabricator/article/differential/> returned HTTP 503 | First-party description of dependent revisions |
+| Bosu et al. 2015 full text | <https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/bosu2015useful.pdf> and the publication page <https://www.microsoft.com/en-us/research/publication/characteristics-of-useful-code-reviews-an-empirical-study-at-microsoft/> returned HTTP 403; only the abstract on the listing above was read | Usefulness by file count, to set a files threshold from data |
+| GitHub automatic retargeting when a base branch is deleted | <https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/changing-the-base-branch-of-a-pull-request> returned HTTP 200 but does not state it | Whether a stack's child pull request follows its merged parent to `dev` without `gh pr edit --base` |
 
 ## Derivations
 
@@ -203,8 +204,10 @@ the state it changes and the output it prints, so that a user could name it.
 that is 48 minutes, inside 60. A 90-minute exception sitting holds 90/60 x 500 = 750 lines. This
 repository's median ratio of reviewed lines to source lines is 2.2 (quartiles 1.7 / 2.2 / 2.8).
 
-- Pull request target: 400 / 2.2 = 182 source lines, rounded to **200**. Check: 200 x 2.2 = 440
-  reviewed lines, 53 minutes at 500 lines/hour.
+- Pull request target: 400 / 2.2 = 182 source lines, relaxed by policy to **200**. This is a
+  relaxation of SmartBear's 400-reviewed-line maximum, not compliance with it: 200 x 2.2 = 440
+  reviewed lines, 53 minutes at 500 lines/hour. The 40 extra lines buy a round number and still
+  fit the 60-minute sitting.
 - Pull request ceiling: 750 / 2.2 = 341 source lines, rounded down to **300**. Check: 300 x 2.2 =
   660 lines, 79 minutes; a pull request at the 2.5 ratio still fits 90 minutes (750 lines), and one
   at the upper-quartile ratio of 2.8 (840 lines, 101 minutes) does not, so a reviewer may ask for a
@@ -216,13 +219,20 @@ repository's median ratio of reviewed lines to source lines is 2.2 (quartiles 1.
   industrial medians in Rigby and Bird are 44 to 78. In this repository 75 of 81 tasks are at or
   under 200.
 
-**Files guard.** Google: about 90% of changes touch fewer than 10 files. In this repository a
-source file usually comes with its test file (source-plus-test lines are 2.13 times source
-lines), so 10 source files are about **20 changed files**: the task limit and the pull request
-target. Google's style guide calls a 200-line change spread across 50 files "usually too large";
-the pull request ceiling of **30** stays well under that. Microsoft's finding that more files mean
-a smaller share of useful comments supports keeping both. In the dataset, 9 of 81 tasks exceed 20
-files and 5 exceed 30. Raw captures and `testdata/` fixtures do not count toward files.
+**Files guard.** The guard counts guard-eligible files: every changed file except Herdr raw
+captures (`reference/herdr/raw/`) and `testdata/` fixtures, which are data, as in the line rule.
+The number 20 is a policy choice, not a conversion of a measured figure. Google reports that about
+90% of changes touch fewer than 10 files, counting every changed file; this note takes that 10 as
+the scale of a normal change. In this repository a source file usually travels with its test file:
+in the 26 verified tasks with at least 50 source lines, guard-eligible files per source file have a
+median of 1.75 (quartiles 1.33 / 1.75 / 2.0). Doubling 10 to **20** covers that pairing up to the
+upper quartile, and 20 is the task limit and the pull request target. Google's style guide calls a
+200-line change spread across 50 files "usually too large"; that remark is the upper bound, and the
+pull request ceiling of **30** stays well under it. Microsoft's finding that more files mean a
+smaller share of useful comments supports keeping both. In the dataset, guard-eligible files have
+quartiles 2 / 3 / 9, and 8 of 81 tasks exceed 20 and 5 exceed 30. Counting all files instead
+(quartiles 2 / 4 / 9) gives 9 over 20 and 5 over 30; the difference is `fix/docs-07`, which is 20
+guard-eligible files plus 4 raw captures.
 
 **Domains guard.** Repository data, not literature, sets this number: the code-domain quartiles per
 task are 1 / 1 / 2, and 14 of 81 tasks exceed 3. A task or pull request target of **3** code domains
@@ -238,12 +248,22 @@ A **domain** is a unit of review context, one of:
 - a command: `cmd/<name>/` together with `internal/<name>/` (and their nested subcommands);
 - a shared library: each `internal/lib/<name>/`;
 - the command root: files directly in `cmd/` (the root command and the cross-command tests);
-- the module root: files at the repository root (`main.go`, `ste_test.go`, `AGENTS.md`);
+- the module root: files at the repository root (`main.go`, `ste_test.go`, `AGENTS.md`), but not
+  root `testdata/` fixtures (see below);
 - `.github/`;
 - a documentation area: each `reference/<area>/`.
 
 The guard counts **code domains**: domains of changed source and test files. Documentation areas
 are listed for the reader but not counted, in line with the line rule.
+
+**Root fixtures are excluded from code domains.** A file under the repository-root `testdata/`
+directory, for example `testdata/ste-baseline.json`, adds no domain. Fixtures are data, not
+authored logic: the line rule does not count them as source, and the files guard does not count
+them either, so the domain guard follows the same population. A change that edits
+`testdata/ste-baseline.json` together with `ste_test.go` still touches the module root through the
+test file. Under this choice wave 1 counts 7 code domains and wave 2A 12 (each would count one
+more if root fixtures belonged to the module root), wave 3 counts 0, and the dataset figures do not
+change: quartiles 1 / 1 / 2, maximum 18, and 14 of 81 tasks over 3.
 
 **Recommendation: count a `cmd/<x>` and `internal/<x>` pair as one domain.** `AGENTS.md` Layout
 makes `cmd/<x>` thin Cobra wiring that calls into `internal/<x>`, so a command change touches both
@@ -254,16 +274,16 @@ commands.
 
 Domain counts for past tasks (code domains, pair as one):
 
-| Task (merge) | Source lines | Files | Code domains | Domains |
+| Task (merge) | Source lines | Files, all / guard-eligible | Code domains | Domains |
 | --- | --- | --- | --- | --- |
-| `feat/wave15-repoconfig-schema` (`8f6e97a`) | 61 | 3 | 1 | `lib/repoconfig` |
-| `fix/docs-07` (`0819e6c`) | 0 | 24 | 0 | (docs only: `reference/herdr`) |
-| `fix/code-03` (`44b4713`) | 93 | 6 | 2 | `agent`, `lib/agent` |
-| `feat/wave4-codex-no-daemon` (`621a7af`) | 34 | 14 | 2 | `cmd` root, `agent` |
-| `fix/runtime-07` (`6750875`) | 102 | 14 | 5 | `agent`, `task`, `lib/agent`, `lib/identity`, `lib/task` |
-| `fix/code-04` (`c7287fb`) | 92 | 21 | 5 | `task`, `lib/agent`, `lib/identity`, `lib/selector`, `lib/task` |
-| `feat/wave1-dispatcher-config` (`d869229`) | 207 | 23 | 8 | `agent`, `worktree`, `lib/fledgedir`, `lib/gitstatus`, `lib/profiles`, `lib/repoconfig`, `lib/worktree`, module root |
-| `feat/wave2a-supervise-inbox` (`4ef38f8`) | 2,892 | 61 | 13 | `cmd` root, `agent`, `attention`, `inbox`, `supervise`, `task`, `lib/fledgedir`, `lib/inbox`, `lib/profiles`, `lib/state`, `lib/supervise`, `lib/task`, module root |
+| `feat/wave15-repoconfig-schema` (`8f6e97a`) | 61 | 3 / 3 | 1 | `lib/repoconfig` |
+| `fix/docs-07` (`0819e6c`) | 0 | 24 / 20 | 0 | (docs only: `reference/herdr`) |
+| `fix/code-03` (`44b4713`) | 93 | 6 / 6 | 2 | `agent`, `lib/agent` |
+| `feat/wave4-codex-no-daemon` (`621a7af`) | 34 | 14 / 14 | 2 | `cmd` root, `agent` |
+| `fix/runtime-07` (`6750875`) | 102 | 14 / 14 | 5 | `agent`, `task`, `lib/agent`, `lib/identity`, `lib/task` |
+| `fix/code-04` (`c7287fb`) | 92 | 21 / 21 | 5 | `task`, `lib/agent`, `lib/identity`, `lib/selector`, `lib/task` |
+| `feat/wave1-dispatcher-config` (`d869229`) | 207 | 23 / 22 | 7 | `agent`, `worktree`, `lib/fledgedir`, `lib/gitstatus`, `lib/profiles`, `lib/repoconfig`, `lib/worktree` |
+| `feat/wave2a-supervise-inbox` (`4ef38f8`) | 2,892 | 61 / 60 | 12 | `cmd` root, `agent`, `attention`, `inbox`, `supervise`, `task`, `lib/fledgedir`, `lib/inbox`, `lib/profiles`, `lib/state`, `lib/supervise`, `lib/task` |
 
 ## Schemes compared
 
@@ -314,22 +334,24 @@ the 98 first-parent commits the churn is 38,388 lines and 12,690 source lines; t
 net diff because the task board was added (894 source lines in `3fe3783`) and later removed (934
 in `86e1206`).
 
-At 200 source lines per sitting, the program's 10,018 net source lines need at least 51 sittings
-under any scheme. The scheme decides only where those sittings fall and what story each one tells.
+At the 200-line normal target, the program's 10,018 net source lines need at least 51 sittings
+under any scheme; at the 300-line ceiling with 90-minute sittings, at least 34. The mechanical
+exception changes both bounds further, because a mechanical pull request may exceed the line
+limits. The scheme decides only where those sittings fall and what story each one tells.
 
 ### Feature pull requests to `dev`, program level
 
 | Work (commits) | Source lines | Re-planned |
 | --- | --- | --- |
-| Repository memory (`33c6301`) | 686 | Stack of 4: `memory add`/`list` end to end, then `get`/`remove`, then profile brief injection, then docs |
+| Repository memory (`33c6301`) | 686 | Stack of 4, each slice at most 200 source lines and carrying its own docs: `memory add` end to end with the store's write path, then `list`, then `get`/`remove`, then profile brief injection |
 | Simplified task briefs (`0b71a5a`) | 361 | Stack of 2 |
-| Simplified spawn placement and Markdown profiles (`f8fae2c`) | 1,216 | Two features, not one: placement and Markdown profiles, each a stack of 3 |
+| Simplified spawn placement and Markdown profiles (`f8fae2c`) | 1,216 | Two features, not one, 7 slices in all: placement (about 443 source lines in `internal/agent/spawn` and `cmd/agent/spawn`) as a stack of 3, and Markdown profiles (about 773) as a stack of 4 |
 | Task board (`3fe3783`, `8d54ba0`) | 894 | Stack of 5 |
 | Task board removal (`86e1206`) | 934 | One pull request under the deletion exception |
 | Review fan-out fixes (`28acda6`, `2197cac`, `8b0a289`) | 106 | One pull request if one sentence names the fix, else three |
 | Permission bypass default (`010b799`) | 75 | One pull request |
 | STE ratchet (`869a9c2`) | 0 (573 test) | One pull request |
-| Fix sweep: 71 tasks `fix/code-*`, `fix/runtime-*`, `fix/tests-*`, `fix/docs-*` | 3,732 | At least 13 pull requests of at most 300 lines, grouped by the user-visible defect and its domain; `fix/code-30` as a mechanical stack of 4 along its own commits; docs-only fixes as one pull request per `reference/` area within 30 files |
+| Fix sweep: 71 tasks `fix/code-*`, `fix/runtime-*`, `fix/tests-*`, `fix/docs-*` | 3,732 | `fix/code-30` (1,142) as its own mechanical pull request under step 4, with the owner's word for its 18 domains; its two largest commits (514 and 436) rule out a stack of slices at most 200. The other 2,590 source lines as at least 13 separate pull requests of at most 200 lines, grouped by the user-visible defect and its domain, with `fix/runtime-12` (257) and `fix/runtime-08` (240) each split per step 3; docs-only fixes as one pull request per `reference/` area within 30 guard-eligible files |
 | README and usage guides (`0b6fc49`) | 0 (3,912 Markdown) | One docs pull request, 15 files |
 | Adopt registers only the caller's agent (`7f7a975`, `c7b2cc0`) | 248 | One pull request at the 90-minute tier |
 | Waves 1 to 4 | 4,438 | Below |
@@ -341,14 +363,14 @@ lines.
 
 | Wave (merge) | Source / tests / Markdown | Files, code domains | Re-planned pull requests |
 | --- | --- | --- | --- |
-| 1 (`d869229`) and 1.5 (`8f6e97a`) | 207 / 357 / 226 and 61 / 49 / 15 | 23 files, 8 domains; 3 files, 1 domain | 3 or 4: **(a)** "Fledge reads the integration branch from `.fledge/config.toml`" (`f5243eb`, plus wave 1.5's schema check, planned together): about 224 source lines, 3 domains (`worktree`, `lib/gitstatus`, `lib/repoconfig`), 90-minute tier. **(b)** "The managed ignore keeps `.fledge/config.toml` trackable" (`be00942`, `db03f8c`, `1d48f81`): 11 source lines, 4 domains (three of them only for updated test expectations, so a task split per step 3 or an owner exception). **(c)** "The orchestrator profile is a strict dispatcher" (`668c4c9`, `657eebf`): 33 source lines, 2 domains. **(d)** The firstmate comparison note: docs only, or with (c). The real merge was one task over the task ceiling (207) and over the domain guard (8) |
-| 2A (`4ef38f8`) | 2,892 / 2,793 / 169 | 61 files, 13 domains, one task | Three features. **Inbox** (`dd1b0b9`, `119d876`, `17ce592`, `2b0ecf8`: 1,137 source lines): a stack of 6; slice 1 is "a message to a registered agent is stored, rings a doorbell, and `fledge inbox read` prints it", and later slices add task notices, acknowledgment, and archiving. **Supervision daemon** (`b4dbb22`, `11fbfe4`, `6fd017d` and three fixes: about 1,630 source lines; `11fbfe4` alone is 1,106): a stack of 8 on top of the inbox stack; slice 1 is "`fledge supervise run` wakes the orchestrator when a worker blocks". **Attention** (`9850a2f`, 222): one pull request at the 90-minute tier, after both stacks. About 15 pull requests |
-| 2B (`420dde3`) | 1,244 / 1,380 / 121 | 51 files, 7 domains | A stack of 6: **(a)** "`task verify --commit` binds a verification to a commit" (`8711e48`, `90394e3`, `8a7bd18`: about 199); **(b)** "`task create` and `import` take a delivery mode and base branch" (`0ba7903`, `744837f`: 123); **(c)** and **(d)** "`task land` merges locally" as 2 slices of `3288afc`; **(e)** and **(f)** "`task land` delivers through a pull request" as 2 slices of `3288afc` with `6912d08` and the profile edits. `3288afc` is 895 source lines, so the split between local and pull request delivery is an estimate |
-| 3 (`8ca37c1`) | 0 / 2 / 109 | 4 files, 0 domains | One docs pull request, as merged |
-| 4 (`621a7af`) | 34 / 89 / 84 | 14 files, 2 domains | One pull request, as merged |
+| 1 (`d869229`) and 1.5 (`8f6e97a`) | 207 / 357 / 226 and 61 / 49 / 15 | 23 files (22 guard-eligible), 7 domains; 3 files, 1 domain | 3 or 4: **(a)** "Fledge reads the integration branch from `.fledge/config.toml`" (`f5243eb`, plus wave 1.5's schema check, planned together): about 224 source lines, 3 domains (`worktree`, `lib/gitstatus`, `lib/repoconfig`), 90-minute tier. **(b)** "The managed ignore keeps `.fledge/config.toml` trackable" (`be00942`, `db03f8c`, `1d48f81`): 11 source lines, 4 domains (three of them only for updated test expectations, so a task split per step 3 or an owner exception). **(c)** "The orchestrator profile is a strict dispatcher" (`668c4c9`, `657eebf`): 33 source lines, 2 domains. **(d)** The firstmate comparison note: docs only, or with (c). The real merge was one task over the task ceiling (207) and over the domain guard (7) |
+| 2A (`4ef38f8`) | 2,892 / 2,793 / 169 | 61 files (60 guard-eligible), 12 domains, one task | Three features. **Inbox** (`dd1b0b9`, `119d876`, `17ce592`, `2b0ecf8`: 1,137 source lines): a stack of 6; slice 1 is "a message to a registered agent is stored, rings a doorbell, and `fledge inbox read` prints it", and later slices add task notices, acknowledgment, and archiving. **Supervision daemon** (`b4dbb22`, `11fbfe4`, `6fd017d` and three fixes: about 1,630 source lines; `11fbfe4` alone is 1,106): a stack of 9 on top of the inbox stack; slice 1 is "`fledge supervise run` wakes the orchestrator when a worker blocks". **Attention** (`9850a2f`, 222): one pull request at the 90-minute tier, after both stacks. About 16 pull requests |
+| 2B (`420dde3`) | 1,244 / 1,380 / 121 | 51 files (51 guard-eligible), 7 domains | A stack of 7: **(a)** "`task verify --commit` binds a verification to a commit" (`8711e48`, `90394e3`, `8a7bd18`: about 199); **(b)** "`task create` and `import` take a delivery mode and base branch" (`0ba7903`, `744837f`: 123); **(c)** to **(e)** "`task land` merges locally" as 3 slices of `3288afc`; **(f)** and **(g)** "`task land` delivers through a pull request" as 2 slices of `3288afc` with `6912d08` and the profile edits. Slices (c) to (g) share about 922 source lines, at most 200 each; `3288afc` is 895 source lines, so the split between local and pull request delivery is an estimate |
+| 3 (`8ca37c1`) | 0 / 2 / 109 | 4 files (3 guard-eligible), 0 domains | One docs pull request, as merged |
+| 4 (`621a7af`) | 34 / 89 / 84 | 14 files (14 guard-eligible), 2 domains | One pull request, as merged |
 
-The six wave merges become about 26 to 27 feature pull requests to `dev`, 20 of them in three
-stacks. The same 4,420 source lines need at least 23 normal sittings in either plan; the
+The six wave merges become about 28 to 29 feature pull requests to `dev`, 22 of them in three
+stacks (6 inbox, 9 supervision, 7 `task land`). The same 4,420 source lines need at least 23 normal sittings in either plan; the
 difference is that each re-planned pull request is one nameable change that fits one sitting.
 
 ### Tasks over the task ceiling
@@ -361,8 +383,9 @@ split `feat/memory` (686), `simplify/profiles` (1,216), `simplify/tasks` (361), 
 commit `3fe3783` (894), and the direct commit `7f7a975` (228); the board removal `86e1206` (934)
 falls under the deletion exception.
 
-Over the files guard of 20 files: 9 tasks, among them `fix/code-30` (183), `fix/code-05` (39),
-`fix/code-29` (33), and the docs-only `fix/docs-07` (24 files). Over the domain guard of 3: 14
+Over the files guard of 20 guard-eligible files: 8 tasks, among them `fix/code-30` (183),
+`fix/code-05` (39), and `fix/code-29` (33); 5 of them exceed 30. Counted over all files, 9 tasks
+exceed 20: the ninth is the docs-only `fix/docs-07`, 20 guard-eligible files plus 4 raw captures. Over the domain guard of 3: 14
 tasks; `fix/tests-09` (`e3b41b5`) is the widest small one, 61 source lines over 11 domains.
 
 ## Open decisions
