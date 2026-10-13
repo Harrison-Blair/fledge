@@ -17,7 +17,7 @@ var wantCommandTree = map[string][]string{
 	"fledge inbox":     {"read"},
 	"fledge memory":    {"add", "get", "list", "remove"},
 	"fledge supervise": {"run", "status", "stop"},
-	"fledge task":      {"assign", "cancel", "complete", "create", "depend", "get", "import", "land", "list", "template", "verify"},
+	"fledge task":      {"assign", "cancel", "complete", "create", "depend", "get", "import", "land", "list", "size", "template", "verify"},
 	"fledge worktree":  {"create", "list", "remove"},
 }
 
