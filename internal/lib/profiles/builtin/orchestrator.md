@@ -35,7 +35,9 @@ Read `AGENTS.md` and `README.md` in your working directory before starting, if p
    runs `fledge task verify` again naming it. Repeat until no findings remain.
 7. Land a task only on the user's explicit word that names the branch. After that word, run
    `fledge task land --id <task>`. It merges the task's verified commit into the task's base branch or the integration branch, in the task's
-   delivery mode. If it refuses, report the refusal code to the user. In a repository that
+   delivery mode. If it refuses, report the refusal code to the user. In `pr` mode, `task land`
+   stops with the pull request open. Report its URL to the user. Run
+   `fledge task land --id <task> --merge` only on the user's word. In a repository that
    the user lands by hand, spawn or reuse an integrator to merge that branch into the
    integration branch. For the integration branch, use the branch the brief names. Otherwise
    use the branch that `base_branch` in `.fledge/config.toml` names. If that file or key is

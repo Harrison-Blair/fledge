@@ -18,27 +18,35 @@ import (
 )
 
 // Options selects the task, and optionally the branch to land and the
-// delivery mode, both stored on the task.
+// delivery mode, both stored on the task. Merge merges a pr task that
+// stopped for review.
 type Options struct {
 	ID, Branch, Mode   string
 	BranchSet, ModeSet bool
+	Merge              bool
 }
 
 // Result is the task with the delivery mode used. On a refusal its land_step
 // is the step reached, and Warnings is set only after a landing.
 type Result struct {
 	task.Record
-	Mode     string   `json:"mode"`
-	Warnings []string `json:"warnings"`
+	Mode          string   `json:"mode"`
+	Warnings      []string `json:"warnings"`
+	ReviewPending bool     `json:"review_pending"`
+	target        string
 }
 
+// errMergeMode refuses --merge outside pr mode.
+var errMergeMode = cli.Invalid("--merge applies only to pr mode")
+
 // The land steps recorded in land_step. Check covers every guard before a
-// merge or a push.
+// merge or a push. Review is a pr landing stopped with its pull request open.
 const (
 	stepCheck   = "check"
 	stepPush    = "push"
 	stepPR      = "pr"
 	stepChecks  = "checks"
+	stepReview  = "review"
 	stepMerge   = "merge"
 	stepConfirm = "confirm"
 )
@@ -50,6 +58,7 @@ type lander struct {
 	r                            task.Record
 	mode, branch, target, commit string
 	step                         string
+	merge, review                bool
 	warnings                     []string
 }
 
@@ -62,7 +71,7 @@ type lander struct {
 // deletes a branch.
 func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 	out := cli.NewOutcome("task.land")
-	l := &lander{step: stepCheck}
+	l := &lander{step: stepCheck, merge: o.Merge}
 	// fail refuses with the record as last read and the step reached.
 	fail := func(err error, phase string) cli.Outcome {
 		out.Fail(err, phase, false)
@@ -77,6 +86,9 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 	}
 	if err == nil && o.ModeSet && o.Mode != task.ModeLocal && o.Mode != task.ModePR && o.Mode != task.ModeAuto {
 		err = cli.Invalid("--mode must be local, pr, or auto")
+	}
+	if err == nil && o.Merge && o.ModeSet && o.Mode != task.ModePR {
+		err = errMergeMode
 	}
 	if err != nil {
 		return fail(err, "validation")
@@ -106,7 +118,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 		return fail(err, "land")
 	}
 	out.Effects = append(out.Effects, cli.Effect{Action: "updated", Kind: "task", ID: l.r.ID})
-	out.Result = Result{Record: l.r, Mode: l.mode, Warnings: l.warnings}
+	out.Result = Result{Record: l.r, Mode: l.mode, Warnings: l.warnings, ReviewPending: l.review, target: l.target}
 	return out
 }
 
@@ -130,6 +142,12 @@ func (l *lander) land(ctx context.Context, o Options) error {
 	l.commit, l.mode = *r.VerifiedCommit, r.DeliveryMode
 	if o.ModeSet {
 		l.mode = o.Mode
+	}
+	if o.Merge && l.mode != task.ModePR {
+		return errMergeMode
+	}
+	if o.Merge && r.PRURL == nil {
+		return refuse("land_review_not_open", "task %s has no open pull request to merge; run fledge task land --id %s first", r.ID, r.ID)
 	}
 	if o.BranchSet || o.ModeSet {
 		if err := l.update(func(r *task.Record) {
@@ -302,6 +320,12 @@ func Render(w io.Writer, o cli.Outcome) error {
 		return err
 	}
 	var b strings.Builder
+	if r.ReviewPending {
+		fmt.Fprintf(&b, "Task %s is ready for review: pull request %s merges %s into %s (%s), and its checks passed.\n", r.ID, *r.PRURL, *r.Branch, r.target, r.Mode)
+		fmt.Fprintf(&b, "Merge it only on the owner's word: fledge task land --id %s --merge\n", r.ID)
+		_, err := io.WriteString(w, b.String())
+		return err
+	}
 	fmt.Fprintf(&b, "Landed task %s: merged %s into %s (%s) as %s.\n", r.ID, *r.Branch, *r.TargetBranch, r.Mode, *r.MergeCommit)
 	if r.PRURL != nil {
 		fmt.Fprintf(&b, "Pull request: %s\n", *r.PRURL)

@@ -16,8 +16,9 @@ import (
 // pr pushes the verified commit to the branch on origin, finds or opens one
 // pull request into the target, checks it, merges it only while its head is
 // the verified commit, and records the landing once GitHub reports it
-// merged. Each step is idempotent, so a refused landing can be run again;
-// the step reached is stored as land_step before the step runs.
+// merged. In pr mode without --merge it stops at review after the checks.
+// Each step is idempotent, so a refused landing can be run again; the step
+// reached is stored as land_step before the step runs.
 func (l *lander) pr(ctx context.Context) error {
 	gh := landing.GH{Dir: l.root}
 	if err := l.reach(stepPush, nil); err != nil {
@@ -44,6 +45,10 @@ func (l *lander) pr(ctx context.Context) error {
 	}
 	if err := l.mergeable(pr, c); err != nil {
 		return err
+	}
+	if l.mode == task.ModePR && !l.merge {
+		l.review = true
+		return l.reach(stepReview, nil)
 	}
 	if err := l.reach(stepMerge, nil); err != nil {
 		return err

@@ -1,6 +1,7 @@
 package land
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -77,14 +78,9 @@ func context_(state string) string {
 	return `{"__typename":"StatusContext","context":"ci","state":"` + state + `"}`
 }
 
-// setupPR is setup in pr mode with a bare origin holding main, and a fake gh.
-func setupPR(t *testing.T) (fixture, fakeGH) {
-	t.Helper()
-	return setupPRMode(t, task.ModePR)
-}
-
-// setupPRMode is setupPR for a task in delivery mode mode.
-func setupPRMode(t *testing.T, mode string) (fixture, fakeGH) {
+// setupPR is setup in delivery mode mode with a bare origin holding main,
+// and a fake gh.
+func setupPR(t *testing.T, mode string) (fixture, fakeGH) {
 	t.Helper()
 	f := setup(t, mode)
 	origin := filepath.Join(t.TempDir(), "origin.git")
@@ -98,12 +94,12 @@ func setupPRMode(t *testing.T, mode string) (fixture, fakeGH) {
 	return f, g
 }
 
-// TestLandPRPushesOpensAndMerges lands a pr task and an auto task the same
-// way: push, pull request, checks, merge, confirm.
+// TestLandPRPushesOpensAndMerges lands an auto task in one command: push,
+// pull request, checks, merge, confirm.
 func TestLandPRPushesOpensAndMerges(t *testing.T) {
-	for _, mode := range []string{task.ModePR, task.ModeAuto} {
+	for _, mode := range []string{task.ModeAuto} {
 		t.Run(mode, func(t *testing.T) {
-			f, g := setupPRMode(t, mode)
+			f, g := setupPR(t, mode)
 			out := f.land(t, Options{Branch: "feat", BranchSet: true})
 			if out.Error != nil {
 				t.Fatalf("%+v", out.Error)
@@ -153,7 +149,7 @@ func TestLandPRRefusesUnreadyPullRequests(t *testing.T) {
 		{"run missing conclusion", checks("HEAD", "MERGEABLE", `{"__typename":"CheckRun","status":"COMPLETED"}`), "land_gh_output_invalid"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f, g := setupPR(t)
+			f, g := setupPR(t, task.ModePR)
 			g.set(t, "checks", strings.ReplaceAll(tc.checks, `"HEAD"`, `"`+f.head+`"`))
 			out := f.land(t, Options{Branch: "feat", BranchSet: true})
 			r := f.refused(t, out, tc.code)
@@ -169,7 +165,7 @@ func TestLandPRRefusesUnreadyPullRequests(t *testing.T) {
 }
 
 func TestLandPRAcceptsSkippedNeutralAndRerunsIdempotently(t *testing.T) {
-	f, g := setupPR(t)
+	f, g := setupPR(t, task.ModeAuto)
 	g.set(t, "checks", checks(f.head, "UNKNOWN", ""))
 	f.refused(t, f.land(t, Options{Branch: "feat", BranchSet: true}), "land_mergeable_unknown")
 	// The rerun finds the pushed branch and the open pull request.
@@ -188,21 +184,21 @@ func TestLandPRAcceptsSkippedNeutralAndRerunsIdempotently(t *testing.T) {
 }
 
 func TestLandPRRefusesAmbiguousMergeFailureAndUnconfirmed(t *testing.T) {
-	f, g := setupPR(t)
+	f, g := setupPR(t, task.ModeAuto)
 	pr := strings.Replace(prJSON, "%s", f.head, 1)
 	g.set(t, "list", "["+pr+","+strings.Replace(pr, `"number":7`, `"number":8`, 1)+"]")
 	if r := f.refused(t, f.land(t, Options{Branch: "feat", BranchSet: true}), "land_pr_ambiguous"); *r.LandStep != "pr" {
 		t.Fatalf("%+v", r)
 	}
 
-	f, g = setupPR(t)
+	f, g = setupPR(t, task.ModeAuto)
 	g.set(t, "merge-fails", "")
 	out := f.land(t, Options{Branch: "feat", BranchSet: true})
 	if r := f.refused(t, out, "land_merge_failed"); *r.LandStep != "merge" || !strings.Contains(out.Error.Message, "merge blocked") {
 		t.Fatalf("%+v %s", r, out.Error.Message)
 	}
 
-	f, g = setupPR(t)
+	f, g = setupPR(t, task.ModeAuto)
 	g.set(t, "merged", `{"state":"OPEN","mergeCommit":null}`)
 	if r := f.refused(t, f.land(t, Options{Branch: "feat", BranchSet: true}), "land_unconfirmed"); *r.LandStep != "confirm" {
 		t.Fatalf("%+v", r)
@@ -210,7 +206,7 @@ func TestLandPRRefusesAmbiguousMergeFailureAndUnconfirmed(t *testing.T) {
 }
 
 func TestLandPRPushRejected(t *testing.T) {
-	f, _ := setupPR(t)
+	f, _ := setupPR(t, task.ModePR)
 	origin := git(t, f.repo, "remote", "get-url", "origin")
 	hook := filepath.Join(origin, "hooks", "pre-receive")
 	if err := os.WriteFile(hook, []byte("#!/bin/sh\necho denied >&2\nexit 1\n"), 0o755); err != nil {
@@ -222,7 +218,7 @@ func TestLandPRPushRejected(t *testing.T) {
 }
 
 func TestLandPRGuards(t *testing.T) {
-	f, _ := setupPR(t)
+	f, _ := setupPR(t, task.ModePR)
 	// gh missing: PATH holds only git.
 	gitPath, err := exec.LookPath("git")
 	if err != nil {
@@ -244,7 +240,7 @@ func TestLandPRGuards(t *testing.T) {
 	// on origin is refused.
 	git(t, f.repo, "push", "-q", "origin", "main:dev")
 	git(t, f.repo, "fetch", "-q", "origin")
-	id := tasktest.Seed(t, f.repo, task.Record{Title: "t", Status: task.Verified, Owner: &f.worker.ID, VerifiedCommit: &f.head, DeliveryMode: task.ModePR, BaseBranch: tasktest.Ptr("refs/remotes/origin/dev")})
+	id := tasktest.Seed(t, f.repo, task.Record{Title: "t", Status: task.Verified, Owner: &f.worker.ID, VerifiedCommit: &f.head, DeliveryMode: task.ModeAuto, BaseBranch: tasktest.Ptr("refs/remotes/origin/dev")})
 	out := f.land(t, Options{ID: id, Branch: "feat", BranchSet: true})
 	if r := tasktest.Load(t, f.repo, id); out.Error != nil || *r.TargetBranch != "dev" {
 		t.Fatalf("%+v %+v", out.Error, r)
@@ -257,7 +253,7 @@ func TestLandPRGuards(t *testing.T) {
 
 // TestLandAutoUsesPRGuards checks that an auto task, like a pr task, needs gh.
 func TestLandAutoUsesPRGuards(t *testing.T) {
-	f, _ := setupPRMode(t, task.ModeAuto)
+	f, _ := setupPR(t, task.ModeAuto)
 	gitPath, err := exec.LookPath("git")
 	if err != nil {
 		t.Fatal(err)
@@ -269,7 +265,7 @@ func TestLandAutoUsesPRGuards(t *testing.T) {
 }
 
 func TestLandPRRefusesInvalidTargetBeforeGH(t *testing.T) {
-	f, g := setupPR(t)
+	f, g := setupPR(t, task.ModePR)
 	git(t, f.repo, "update-ref", "refs/remotes/origin/-foo", "main")
 	check := func(id string) {
 		t.Helper()
@@ -291,7 +287,7 @@ func TestLandPRRefusesInvalidTargetBeforeGH(t *testing.T) {
 }
 
 func TestLandPRRecordsCreatedURLWhenLookupFails(t *testing.T) {
-	f, g := setupPR(t)
+	f, g := setupPR(t, task.ModeAuto)
 	g.set(t, "list-after-create-fails", "")
 	out := f.land(t, Options{Branch: "feat", BranchSet: true})
 	if r := f.refused(t, out, "land_gh_failed"); *r.LandStep != "pr" || r.PRURL == nil || *r.PRURL != "https://example.com/pr/7" {
@@ -314,7 +310,7 @@ func TestLandPRRecordsCreatedURLWhenLookupFails(t *testing.T) {
 }
 
 func TestLandEarlyRefusalsNameCheckStep(t *testing.T) {
-	f, g := setupPR(t)
+	f, g := setupPR(t, task.ModePR)
 	for _, tc := range []struct {
 		name string
 		pane string
@@ -338,5 +334,150 @@ func TestLandEarlyRefusalsNameCheckStep(t *testing.T) {
 				t.Fatalf("gh ran: %q", g.log(t))
 			}
 		})
+	}
+}
+
+// merged reports whether the fake gh ran gh pr merge.
+func (g fakeGH) merged() bool {
+	_, err := os.Stat(filepath.Join(g.dir, "did-merge"))
+	return err == nil
+}
+
+// reviewStop lands a pr task up to the review stop and checks the result.
+func reviewStop(t *testing.T, f fixture, g fakeGH, o Options) {
+	t.Helper()
+	out := f.land(t, o)
+	if out.Error != nil {
+		t.Fatalf("%+v", out.Error)
+	}
+	r := f.load(t)
+	if r.Status != task.Verified || *r.LandStep != "review" || r.PRURL == nil || *r.PRURL != "https://example.com/pr/7" || r.MergeCommit != nil || r.LandedAt != nil {
+		t.Fatalf("%+v", r)
+	}
+	if res := out.Result.(Result); !res.ReviewPending {
+		t.Fatalf("%+v", res)
+	}
+	if g.merged() || slices.ContainsFunc(g.log(t), func(l string) bool { return strings.HasPrefix(l, "pr merge") }) {
+		t.Fatalf("merged: %q", g.log(t))
+	}
+	var b bytes.Buffer
+	if err := out.Write(&b, true, Render); err != nil || !strings.Contains(b.String(), `"review_pending":true`) {
+		t.Fatalf("%v %s", err, b.String())
+	}
+	want := "Task " + f.id + " is ready for review: pull request https://example.com/pr/7 merges feat into main (pr), and its checks passed.\n" +
+		"Merge it only on the owner's word: fledge task land --id " + f.id + " --merge\n"
+	if got := render(t, out); got != want {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestLandPRStopsForReviewIdempotently(t *testing.T) {
+	f, g := setupPR(t, task.ModePR)
+	reviewStop(t, f, g, Options{Branch: "feat", BranchSet: true})
+	g.set(t, "list", "["+strings.Replace(prJSON, "%s", f.head, 1)+"]")
+	reviewStop(t, f, g, Options{})
+}
+
+func TestLandPRMergeAfterReview(t *testing.T) {
+	f, g := setupPR(t, task.ModePR)
+	reviewStop(t, f, g, Options{Branch: "feat", BranchSet: true})
+	g.set(t, "list", "["+strings.Replace(prJSON, "%s", f.head, 1)+"]")
+	out := f.land(t, Options{Merge: true})
+	if out.Error != nil {
+		t.Fatalf("%+v", out.Error)
+	}
+	log := g.log(t)
+	wantMerge := "pr merge 7 --merge --match-head-commit=" + f.head + " --subject=Merge branch 'feat' (verified task " + f.id + ")"
+	if !slices.Contains(log, wantMerge) || !slices.Contains(log, "pr view 7 --json=state,mergeCommit") {
+		t.Fatalf("%q", log)
+	}
+	r := f.load(t)
+	if r.Status != task.Landed || *r.MergeCommit != mergeHash || *r.LandStep != "confirm" || *r.TargetBranch != "main" || out.Result.(Result).ReviewPending {
+		t.Fatalf("%+v", r)
+	}
+	want := "Landed task " + f.id + ": merged feat into main (pr) as " + mergeHash + ".\nPull request: https://example.com/pr/7\n"
+	if got := render(t, out); got != want {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestLandPRMergeRefusesMovedLocalHead(t *testing.T) {
+	f, g := setupPR(t, task.ModePR)
+	reviewStop(t, f, g, Options{Branch: "feat", BranchSet: true})
+	git(t, f.repo, "checkout", "-q", "feat")
+	commitFile(t, f.repo, "later", "later\n")
+	git(t, f.repo, "checkout", "-q", "main")
+	f.refused(t, f.land(t, Options{Merge: true}), "land_head_mismatch")
+	if g.merged() {
+		t.Fatal("merged")
+	}
+}
+
+func TestLandPRMergeRefusesMovedPRHead(t *testing.T) {
+	f, g := setupPR(t, task.ModePR)
+	reviewStop(t, f, g, Options{Branch: "feat", BranchSet: true})
+	g.set(t, "list", "["+strings.Replace(prJSON, "%s", f.head, 1)+"]")
+	g.set(t, "checks", checks("2222222222222222222222222222222222222222", "MERGEABLE", ""))
+	out := f.land(t, Options{Merge: true})
+	if r := f.refused(t, out, "land_head_mismatch"); *r.LandStep != "checks" || !strings.Contains(out.Error.Message, "has head 2222") {
+		t.Fatalf("%+v %s", r, out.Error.Message)
+	}
+	if g.merged() {
+		t.Fatal("merged")
+	}
+}
+
+// TestLandPRMergeNeedsOpenPullRequest gates --merge on pr_url, not on
+// land_step: a merge refused at checks after the review stop can run again.
+func TestLandPRMergeNeedsOpenPullRequest(t *testing.T) {
+	f, g := setupPR(t, task.ModePR)
+	if r := f.refused(t, f.land(t, Options{Branch: "feat", BranchSet: true, Merge: true}), "land_review_not_open"); r.PRURL != nil {
+		t.Fatalf("%+v", r)
+	}
+	if _, err := os.Stat(filepath.Join(g.dir, "log")); err == nil {
+		t.Fatalf("gh ran: %q", g.log(t))
+	}
+	reviewStop(t, f, g, Options{Branch: "feat", BranchSet: true})
+	g.set(t, "list", "["+strings.Replace(prJSON, "%s", f.head, 1)+"]")
+	g.set(t, "checks", checks(f.head, "MERGEABLE", run("IN_PROGRESS", "")))
+	if r := f.refused(t, f.land(t, Options{Merge: true}), "land_checks_pending"); *r.LandStep != "checks" || g.merged() {
+		t.Fatalf("%+v", r)
+	}
+	g.set(t, "checks", checks(f.head, "MERGEABLE", run("COMPLETED", "SUCCESS")))
+	if out := f.land(t, Options{Merge: true}); out.Error != nil || f.load(t).Status != task.Landed || !g.merged() {
+		t.Fatalf("%+v", out.Error)
+	}
+}
+
+func TestLandMergeAppliesOnlyToPRMode(t *testing.T) {
+	f, g := setupPR(t, task.ModePR)
+	record := filepath.Join(f.repo, ".fledge", "state", "tasks", f.id+".json")
+	before, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{task.ModeLocal, task.ModeAuto} {
+		// Refused at validation, before the caller is looked up.
+		out := f.landAs(t, tasktest.Client(t, f.repo, "w1:p1"), Options{Mode: mode, ModeSet: true, Merge: true, Branch: "feat", BranchSet: true})
+		if out.Error == nil || out.Error.Code != "invalid_input" || out.Error.Message != "--merge applies only to pr mode" {
+			t.Fatalf("%s: %+v", mode, out.Error)
+		}
+	}
+	if after, _ := os.ReadFile(record); !bytes.Equal(after, before) {
+		t.Fatalf("record changed: %s", after)
+	}
+	// Without --mode, the stored mode decides.
+	for _, mode := range []string{task.ModeLocal, task.ModeAuto} {
+		id := tasktest.Seed(t, f.repo, task.Record{Title: "t", Status: task.Verified, Owner: &f.worker.ID, VerifiedCommit: &f.head, DeliveryMode: mode, PRURL: tasktest.Ptr("https://example.com/pr/7")})
+		out := f.land(t, Options{ID: id, Branch: "feat", BranchSet: true, Merge: true})
+		if out.Error == nil || out.Error.Code != "invalid_input" || out.Error.Message != "--merge applies only to pr mode" {
+			t.Fatalf("%s: %+v", mode, out.Error)
+		}
+		if r := tasktest.Load(t, f.repo, id); r.Status != task.Verified || r.LandStep != nil {
+			t.Fatalf("%+v", r)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(g.dir, "log")); err == nil {
+		t.Fatalf("gh ran: %q", g.log(t))
 	}
 }
