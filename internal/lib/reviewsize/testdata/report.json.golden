@@ -1,0 +1,34 @@
+{
+  "kind": "pr",
+  "source_lines": {
+    "value": 250,
+    "target": 200,
+    "ceiling": 300,
+    "status": "over target"
+  },
+  "files": {
+    "value": 12,
+    "target": 20,
+    "ceiling": 30,
+    "status": "within"
+  },
+  "code_domains": {
+    "value": 2,
+    "target": 3,
+    "ceiling": 5,
+    "status": "within"
+  },
+  "total_lines": {
+    "value": 800,
+    "target": 750,
+    "ceiling": 750,
+    "status": "over ceiling"
+  },
+  "domains": [
+    "lib/reviewsize",
+    "task"
+  ],
+  "doc_areas": [
+    "reference/plan"
+  ]
+}

@@ -8,4 +8,5 @@
 //
 //	classify.go  per-path source, test, guard, and domain classification
 //	measure.go   git diff --numstat parsing and the summed Diff
+//	report.go    limits, Compare, the JSON Report, and Render
 package reviewsize
