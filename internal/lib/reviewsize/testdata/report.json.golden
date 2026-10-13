@@ -1,0 +1,34 @@
+{
+  "kind": "task",
+  "source_lines": {
+    "value": 234,
+    "target": 200,
+    "ceiling": 200,
+    "status": "over ceiling"
+  },
+  "files": {
+    "value": 14,
+    "target": 20,
+    "ceiling": 20,
+    "status": "within"
+  },
+  "code_domains": {
+    "value": 2,
+    "target": 3,
+    "ceiling": 3,
+    "status": "within"
+  },
+  "total_lines": {
+    "value": 810,
+    "target": 750,
+    "ceiling": 750,
+    "status": "over ceiling"
+  },
+  "domains": [
+    "agent",
+    "cmd root"
+  ],
+  "documentation_areas": [
+    "reference/usage"
+  ]
+}
