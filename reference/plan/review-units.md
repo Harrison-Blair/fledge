@@ -186,10 +186,26 @@ one pull request per branch; `gt modify` edits a branch and will "automatically 
 branches above it"; `gt sync` rebases open pull requests onto the latest `main`; the stack merges
 from the Graphite UI. These are the operations a stack needs that `gh` lacks.
 
-**`gh` on this machine.** `gh version 2.101.0 (2026-09-15)`. `gh help` lists no stack command, and
-`gh pr --help` lists create, merge, edit, and the rest, but nothing that restacks or merges a
-chain. `gh pr edit --help` has `-B, --base branch  Change the base branch for this pull request`,
-so retargeting is a manual per-pull-request step.
+**GitHub stacked pull requests.** "About stacked pull requests",
+<https://docs.github.com/en/pull-requests/get-started/about-stacked-prs>, HTTP 200, accessed
+2026-10-13. GitHub supports stacks natively; the fetched pages state no release status (no
+preview or beta label). A stack is "two or more pull requests in the same repository", where the
+bottom one targets the trunk and "Each subsequent pull request targets the branch of the pull
+request below it"; each one "shows only the diff for its layer". "When you merge a pull request
+at the bottom of the stack, the remaining branches are automatically rebased so the next pull
+request targets the default base branch." "Merging stacked pull requests",
+<https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/merging-stacked-pull-requests>,
+HTTP 200, accessed 2026-10-13: stacks merge "from the bottom (closest to the trunk) up", a
+mid-stack merge takes every pull request below it, and "Auto-merge is not supported for stacked
+pull requests". "Stacked pull requests CLI commands",
+<https://docs.github.com/en/pull-requests/reference/stacked-prs-cli-commands>, HTTP 200, accessed
+2026-10-13: the `gh stack` extension (`gh extension install github/gh-stack`) has `init`, `add`,
+`link`, `submit`, `rebase`, `sync`, `merge`, and others, so it can link, submit, rebase, and merge
+a stack.
+
+**`gh` on this machine.** `gh version 2.101.0 (2026-09-15)`. `gh help` lists no built-in stack
+command, and `gh extension list` shows that `gh-stack` is not installed. The stack operations
+come from that extension or from the GitHub website, not from built-in `gh`.
 
 **Tracer bullets, Hunt and Thomas.** Bill Venners, "Tracer Bullets and Prototypes: A Conversation
 with Andy Hunt and Dave Thomas, Part VIII", Artima, 2003-04-21, <https://www.artima.com/intv/tracer.html>,
@@ -209,7 +225,6 @@ the state it changes and the output it prints, so that a user could name it.
 | *The Pragmatic Programmer*, 20th anniversary edition, Topic 12 "Tracer Bullets" | The O'Reilly preview, <https://www.oreilly.com/library/view/the-pragmatic-programmer/9780135956977/>, returned HTTP 403; the pragprog.com title page, <https://pragprog.com/titles/tpp20/the-pragmatic-programmer-20th-anniversary-edition/>, returned HTTP 200 but lists "Tracer Bullets" without an extract (its extracts are the preface, DRY, Don't Outrun Your Headlights, Inheritance Tax, and Shared State) | The book's definition and tip text |
 | *Accelerate*, Chapter 4 (trunk-based development) | Not in the publisher excerpt, <https://itrevolution.com/wp-content/uploads/2022/06/ACC_excerpt.pdf> (HTTP 200) | Branch-lifetime and branch-count findings that would bound how long a feature branch should live |
 | Phabricator Differential documentation | <https://secure.phabricator.com/book/phabricator/article/differential/> returned HTTP 503 | First-party description of dependent revisions |
-| GitHub automatic retargeting when a base branch is deleted | <https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/changing-the-base-branch-of-a-pull-request> returned HTTP 200 but does not state it | Whether a stack's child pull request follows its merged parent to `dev` without `gh pr edit --base` |
 
 ## Derivations
 
@@ -308,10 +323,11 @@ Domain counts for past tasks (code domains, pair as one):
 | --- | --- | --- | --- | --- |
 | **Per task**: each verified task opens its own pull request into `dev` | The task: median 20 source lines, 75% at or under 67 here; very small | Fragmented: a reviewer sees a lib change without its caller, or a test-only change without its reason; 81 pull requests for PR #16's tasks | Poor: most tasks are layers or fixes, not a change a user could name | Works today: `task create --delivery-mode pr`, then `task land` pushes, opens, checks, and merges one `gh` pull request. Missing: a way to open the pull request for the human read without merging it in the same command, and a size report |
 | **Per feature**: tasks land locally into a feature branch; the feature branch opens one pull request into `dev` | The sum of the feature's tasks; must be held to 200 / 300 by planning | Best: one story, one description, one decision to merge | Best when the feature is one nameable change | Partly today: tasks take `--base-branch feat/<x>` and land `local` into it; a parent task (`--parent`) can stand for the feature, be verified once its subtasks are, and be landed with `--branch feat/<x> --mode pr`. Missing: creating and refreshing the feature branch from `dev` (`worktree create --base` makes a checkout, not an integration branch), a feature-level size report, and the open-without-merge step |
-| **Stacked**: one feature becomes a chain of pull requests, each building on the one below | Each pull request within 200 / 300; the feature may be larger | Good when each layer is a working slice; Meta and Google do this at scale | Good when each pull request is itself a thin end-to-end slice; poor when the stack is horizontal layers (lib, then command, then docs) | Hardest. Two shapes exist on today's primitives: (a) each task's `--base-branch` names the task below it, so `task land` merges each pull request into its parent's branch, not `dev`, and the stack then needs bottom-up retargeting (`gh pr edit --base`), which Fledge cannot do because a task's base is fixed at creation; (b) each task targets `dev`, branches from the task below (`worktree create --base`), and runs `--after` it, so it lands only after its parent; its pull request shows the parent's commits until the parent merges. Both need restacking when a lower pull request changes, and a restack moves the head, so `land` refuses (`land_head_mismatch`) until `task verify --commit` runs again. `gh` has no stack, restack, or chained-merge command |
+| **Stacked**: one feature becomes a chain of pull requests, each building on the one below | Each pull request within 200 / 300; the feature may be larger | Good when each layer is a working slice; Meta and Google do this at scale | Good when each pull request is itself a thin end-to-end slice; poor when the stack is horizontal layers (lib, then command, then docs) | Hardest. Two shapes exist on today's primitives: (a) each task's `--base-branch` names the task below it, so `task land` merges each pull request into its parent's branch, not `dev`, and the stack then needs bottom-up retargeting (`gh pr edit --base`), which Fledge cannot do because a task's base is fixed at creation; (b) each task targets `dev`, branches from the task below (`worktree create --base`), and runs `--after` it, so it lands only after its parent; its pull request shows the parent's commits until the parent merges. Both need restacking when a lower pull request changes, and a restack moves the head, so `land` refuses (`land_head_mismatch`) until `task verify --commit` runs again. Built-in `gh` has no stack, restack, or chained-merge command; GitHub's native stacks and the `gh stack` extension provide them, and GitHub retargets the next pull request after the bottom one merges |
 
 Shape (b) needs no retargeting and fits Fledge's dependency model; shape (a) matches Graphite's
-model but needs a base-edit command and retargeting.
+model but needs a base-edit command and retargeting. GitHub's native stacks are shape (a); the
+choice between the shapes waits for the probe in a throwaway repository.
 
 ## Decision rule
 
@@ -447,5 +463,15 @@ Recorded 2026-10-13 by the owner:
 - Sitting length is 30 to 60 minutes, with exceptions up to 90.
 - The guards beyond lines are files changed and domains touched. The governing principle is the
   tracer bullet: a thin end-to-end slice a user recognizes as one change.
+
+Recorded 2026-10-13, round two, by the owner:
+
+- The delivery modes are `local`, `pr`, `auto`, and `none`, in one field. `pr` now means an agent
+  review, CI checks, and the owner's read; `auto` is the earlier one-command pull request. There
+  is no `pr-human` mode.
+- The human gap is two steps: `task land` stops at `review`, and `task land --merge` merges on the
+  owner's word. Fledge also records a merge that the owner makes with the GitHub button.
+- The size limits are constants. An advisory size report shows them and never refuses.
+- Stacks are probed in a throwaway repository before any stack tooling is built.
 
 Further decisions are appended as planning rounds settle them.
