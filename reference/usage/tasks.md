@@ -304,9 +304,9 @@ The diff is `<base>...<head>`, from the merge base of the two:
 
 The measures follow [Review units](../plan/review-units.md):
 
-- **source lines**: added plus deleted lines of hand-written source: non-test Go, built-in profiles (`internal/lib/profiles/builtin/*.md`), `.github/scripts/*.py` except `*_test.py`, and `.github/workflows/*.yml`.
+- **source lines**: added plus deleted lines of hand-written source: non-test Go, built-in profiles (`internal/lib/profiles/builtin/*.md`), `.github/scripts/*.py` except `*_test.py`, and `.github/workflows/*.yml`; files under any `testdata/` directory are excluded.
 - **files**: changed files, except files under a `testdata/` directory and Herdr raw captures (`reference/herdr/raw/`).
-- **code domains**: domains of changed source and test files.
+- **code domains**: domains of changed source and test files; fixtures under a `testdata/` directory add no domain.
   A domain is a command (`cmd/<name>/` with `internal/<name>/`), each `internal/lib/<name>/`, the command root (`cmd/`), the module root, or `.github/`.
   Documentation areas (`reference/<area>/`) are listed in JSON as `doc_areas` but not counted.
 - **total read**: added plus deleted lines of every changed file.
