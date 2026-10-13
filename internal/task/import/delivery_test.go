@@ -54,3 +54,29 @@ func TestImportRejectsInvalidBaseBranch(t *testing.T) {
 		t.Fatal("created tasks")
 	}
 }
+
+func TestImportStoresAutoAndRejectsUnknownMode(t *testing.T) {
+	repo := identitytest.Repository(t)
+	path := write(t, "schema_version = 1\n"+withKeys(taskTOML("a", "A"), "a", "delivery_mode = \"auto\"\n"))
+	if out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{File: path, FileSet: true, DryRun: true}, strings.NewReader("")); out.Error != nil {
+		t.Fatalf("dry run: %+v", out.Error)
+	}
+	out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{File: path, FileSet: true}, strings.NewReader(""))
+	if out.Error != nil {
+		t.Fatalf("%+v", out.Error)
+	}
+	if a := tasktest.Load(t, repo, *out.Result.(Result).Tasks[0].ID); a.DeliveryMode != task.ModeAuto {
+		t.Fatalf("a: %+v", a)
+	}
+	repo = identitytest.Repository(t)
+	path = write(t, "schema_version = 1\n"+withKeys(taskTOML("a", "A"), "a", "delivery_mode = \"pr-human\"\n"))
+	for _, dry := range []bool{true, false} {
+		out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{File: path, FileSet: true, DryRun: dry}, strings.NewReader(""))
+		if out.Error == nil || out.Error.Code != "invalid_input" || !strings.Contains(out.Error.Message, `task "a": delivery_mode must be one of local, pr, auto, none`) {
+			t.Fatalf("dry=%v: %+v", dry, out.Error)
+		}
+	}
+	if count(t, repo) != 0 {
+		t.Fatal("created tasks")
+	}
+}

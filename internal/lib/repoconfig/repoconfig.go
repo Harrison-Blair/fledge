@@ -12,10 +12,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/Harrison-Blair/fledge/internal/lib/task"
 )
 
 // Path is the configuration file relative to the primary checkout.
@@ -125,14 +127,15 @@ func read(ctx context.Context, root string) (Config, error) {
 	return c, nil
 }
 
-// checkDeliveryMode accepts the string local, pr, or none.
+// checkDeliveryMode accepts a string naming one of task.DeliveryModes.
 func checkDeliveryMode(v any) (string, error) {
+	modes := strings.Join(task.DeliveryModes[:len(task.DeliveryModes)-1], ", ") + ", or " + task.DeliveryModes[len(task.DeliveryModes)-1]
 	s, ok := v.(string)
 	if !ok {
-		return "", errors.New("delivery_mode must be a string: local, pr, or none")
+		return "", errors.New("delivery_mode must be a string: " + modes)
 	}
-	if s != "local" && s != "pr" && s != "none" {
-		return "", fmt.Errorf("delivery_mode %q is not local, pr, or none", s)
+	if !slices.Contains(task.DeliveryModes, s) {
+		return "", fmt.Errorf("delivery_mode %q is not %s", s, modes)
 	}
 	return s, nil
 }

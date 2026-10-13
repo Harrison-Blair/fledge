@@ -12,6 +12,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/Harrison-Blair/fledge/internal/lib/brief"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
+	libtask "github.com/Harrison-Blair/fledge/internal/lib/task"
 )
 
 // schemaVersion is the only proposal file version this binary reads.
@@ -52,7 +53,6 @@ var (
 	topKeys   = []string{"schema_version", "parent", "tasks"}
 	tableKeys = []string{"title", "brief"}
 	taskKeys  = []string{"key", "title", "brief", "after", "delivery_mode", "base_branch"}
-	modes     = []string{"local", "pr", "none"}
 )
 
 // Decode strictly parses and validates a proposal file, including that its
@@ -108,8 +108,8 @@ func DecodeOrdered(data []byte) (Proposal, []Task, error) {
 		if err := checkText(t.Title, t.Brief); err != nil {
 			return Proposal{}, nil, fmt.Errorf("task %q: %w", t.Key, err)
 		}
-		if t.DeliveryMode != nil && !slices.Contains(modes, *t.DeliveryMode) {
-			return Proposal{}, nil, fmt.Errorf("task %q: delivery_mode must be one of %s", t.Key, strings.Join(modes, ", "))
+		if t.DeliveryMode != nil && !slices.Contains(libtask.DeliveryModes, *t.DeliveryMode) {
+			return Proposal{}, nil, fmt.Errorf("task %q: delivery_mode must be one of %s", t.Key, strings.Join(libtask.DeliveryModes, ", "))
 		}
 	}
 	for _, t := range f.Tasks {

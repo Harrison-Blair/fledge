@@ -22,3 +22,18 @@ func TestDecodeDeliveryKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestDecodeDeliveryModeAuto(t *testing.T) {
+	entry := strings.Replace(task("a", ""), "key = \"a\"\n", "key = \"a\"\ndelivery_mode = \"auto\"\n", 1)
+	p, err := Decode([]byte(header + entry))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *p.Tasks[0].DeliveryMode != "auto" {
+		t.Fatalf("%+v", p.Tasks[0])
+	}
+	bad := strings.Replace(task("a", ""), "key = \"a\"\n", "key = \"a\"\ndelivery_mode = \"pr-human\"\n", 1)
+	if _, err := Decode([]byte(header + bad)); err == nil || err.Error() != `task "a": delivery_mode must be one of local, pr, auto, none` {
+		t.Fatalf("%v", err)
+	}
+}

@@ -40,6 +40,9 @@ func TestCreateDeliveryModeDefaults(t *testing.T) {
 	if r, code := created(t, repo, Options{}); code != "" || r.DeliveryMode != task.ModePR {
 		t.Fatalf("config: %s %+v", code, r)
 	}
+	if r, code := created(t, repo, Options{DeliveryMode: "auto", DeliveryModeSet: true}); code != "" || r.DeliveryMode != task.ModeAuto {
+		t.Fatalf("auto: %s %+v", code, r)
+	}
 	r, code := created(t, repo, Options{DeliveryMode: "local", DeliveryModeSet: true, BaseBranch: "release/1", BaseBranchSet: true})
 	if code != "" || r.DeliveryMode != task.ModeLocal || r.BaseBranch == nil || *r.BaseBranch != "release/1" {
 		t.Fatalf("flags: %s %+v", code, r)
@@ -61,6 +64,10 @@ func TestCreateRejectsInvalidDeliveryOptions(t *testing.T) {
 		if _, code := created(t, repo, o); code != "invalid_input" {
 			t.Fatalf("%+v: %s", o, code)
 		}
+	}
+	o := Options{Title: "t", Body: "b", BodySet: true, DeliveryMode: "bogus", DeliveryModeSet: true}
+	if out := Run(context.Background(), tasktest.Client(t, repo, ""), o, strings.NewReader("")); out.Error == nil || !strings.Contains(out.Error.Message, "local, pr, auto, none") {
+		t.Fatalf("%+v", out.Error)
 	}
 	// An invalid configuration file fails the create unless --delivery-mode
 	// makes it irrelevant.

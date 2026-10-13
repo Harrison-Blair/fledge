@@ -192,3 +192,9 @@ func TestValidateIDNamesATaskID(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+func TestDeliveryModesListsEveryMode(t *testing.T) {
+	if want := []string{"local", "pr", "auto", "none"}; !reflect.DeepEqual(DeliveryModes, want) {
+		t.Fatalf("%q", DeliveryModes)
+	}
+}

@@ -46,7 +46,7 @@ func TestRead(t *testing.T) {
 			t.Fatalf("got %+v, %v want %+v", got, err, want)
 		}
 	})
-	for _, mode := range []string{"local", "pr", "none"} {
+	for _, mode := range []string{"local", "pr", "auto", "none"} {
 		t.Run("delivery mode "+mode, func(t *testing.T) {
 			got, err := Read(ctx, write(t, "schema_version = 1\ndelivery_mode = \""+mode+"\"\n"))
 			if err != nil || got.DeliveryMode != mode {
@@ -95,10 +95,11 @@ func TestReadRejectsInvalidFiles(t *testing.T) {
 		{"dot dot", "schema_version = 1\nbase_branch = \"a..b\"\n", "base_branch"},
 		{"previous branch", "schema_version = 1\nbase_branch = \"@{-1}\"\n", "base_branch"},
 		{"trailing newline", "schema_version = 1\nbase_branch = \"dev\\n\"\n", "base_branch"},
-		{"unknown delivery mode", "schema_version = 1\ndelivery_mode = \"push\"\n", "delivery_mode \"push\" is not local, pr, or none"},
-		{"empty delivery mode", "schema_version = 1\ndelivery_mode = \"\"\n", "delivery_mode \"\" is not local, pr, or none"},
-		{"upper delivery mode", "schema_version = 1\ndelivery_mode = \"PR\"\n", "delivery_mode \"PR\" is not local, pr, or none"},
-		{"integer delivery mode", "schema_version = 1\ndelivery_mode = 1\n", "delivery_mode must be a string: local, pr, or none"},
+		{"unknown delivery mode", "schema_version = 1\ndelivery_mode = \"push\"\n", "delivery_mode \"push\" is not local, pr, auto, or none"},
+		{"pr-human delivery mode", "schema_version = 1\ndelivery_mode = \"pr-human\"\n", "delivery_mode \"pr-human\" is not local, pr, auto, or none"},
+		{"empty delivery mode", "schema_version = 1\ndelivery_mode = \"\"\n", "delivery_mode \"\" is not local, pr, auto, or none"},
+		{"upper delivery mode", "schema_version = 1\ndelivery_mode = \"PR\"\n", "delivery_mode \"PR\" is not local, pr, auto, or none"},
+		{"integer delivery mode", "schema_version = 1\ndelivery_mode = 1\n", "delivery_mode must be a string: local, pr, auto, or none"},
 		{"case delivery mode", "schema_version = 1\nDelivery_Mode = \"pr\"\n", `unknown key "Delivery_Mode"`},
 		{"case inbox", "schema_version = 1\n[Inbox]\nack_timeout = \"5m\"\n", `unknown key "Inbox"`},
 		{"case ack timeout", "schema_version = 1\n[inbox]\nAck_Timeout = \"5m\"\n", `unknown key "inbox.Ack_Timeout"`},

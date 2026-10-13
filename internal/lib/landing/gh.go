@@ -38,9 +38,9 @@ type Check struct {
 	Typename, Status, Conclusion, State string
 }
 
-// Merged is the state and merge commit of a pull request.
+// Merged is the state, merge commit, and head of a pull request.
 type Merged struct {
-	State, MergeCommit string
+	State, MergeCommit, HeadRefOid string
 }
 
 // run runs gh with args and returns its stdout, or a gh_failed error with
@@ -138,10 +138,10 @@ func (g GH) Merge(ctx context.Context, n int, head, subject string) error {
 	return err
 }
 
-// Merged reads the state and merge commit of pull request n. MergeCommit is
-// "" while there is none.
-func (g GH) Merged(ctx context.Context, n int) (Merged, error) {
-	b, err := g.run(ctx, "pr", "view", strconv.Itoa(n), "--json=state,mergeCommit")
+// Merged reads the state, merge commit, and head of the pull request that
+// selector names by number or URL. MergeCommit is "" while there is none.
+func (g GH) Merged(ctx context.Context, selector string) (Merged, error) {
+	b, err := g.run(ctx, "pr", "view", selector, "--json=state,mergeCommit,headRefOid")
 	if err != nil {
 		return Merged{}, err
 	}
@@ -150,11 +150,12 @@ func (g GH) Merged(ctx context.Context, n int) (Merged, error) {
 		MergeCommit *struct {
 			Oid *string `json:"oid"`
 		} `json:"mergeCommit"`
+		HeadRefOid *string `json:"headRefOid"`
 	}
-	if err := json.Unmarshal(b, &raw); err != nil || raw.State == nil {
+	if err := json.Unmarshal(b, &raw); err != nil || raw.State == nil || raw.HeadRefOid == nil {
 		return Merged{}, invalidOutput("pr view", err)
 	}
-	m := Merged{State: *raw.State}
+	m := Merged{State: *raw.State, HeadRefOid: *raw.HeadRefOid}
 	if raw.MergeCommit != nil && raw.MergeCommit.Oid != nil {
 		m.MergeCommit = *raw.MergeCommit.Oid
 	}

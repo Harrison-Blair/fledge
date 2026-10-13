@@ -23,17 +23,26 @@ func New() *cobra.Command {
 			"local merges the verified commit with a merge commit in the primary checkout,\n" +
 			"which must have the target checked out with no staged or unstaged changes. A\n" +
 			"failed merge is aborted and the checkout is checked to be exactly as before.\n\n" +
-			"pr pushes the verified commit to the branch on origin, opens or reuses one pull\n" +
-			"request with gh, and merges it only when it is not a draft, is mergeable, has\n" +
-			"the verified head, and every check passed (zero checks pass). Every step is\n" +
-			"stored as land_step and can be run again after a refusal.\n\n" +
+			"pr lands in two steps. First, task land pushes the verified commit to the\n" +
+			"branch on origin, opens or reuses one pull request with gh, and waits until it\n" +
+			"is not a draft, is mergeable, has the verified head, and every check passed\n" +
+			"(zero checks pass). Then it stops with the pull request open for the owner's\n" +
+			"review: land_step is review and the task stays verified. Later, task land\n" +
+			"--merge runs every guard and check again and merges the pull request only\n" +
+			"while its head is the verified commit. --merge applies only to pr mode and\n" +
+			"needs a pull request that task land opened or found. A review-stage pull\n" +
+			"request merged in GitHub is recorded by the next task land, which refuses\n" +
+			"one merged at another head or closed. auto does the same\n" +
+			"steps and merges in one command, with no review stop. Every step is stored\n" +
+			"as land_step and can be run again after a refusal.\n\n" +
 			"Every refusal names a code and the step reached. One land runs at a time per\n" +
 			"repository. Land never removes a checkout, stops an agent, or deletes a\n" +
 			"branch; use fledge agent cleanup for that."}
 	f := cmd.Flags()
 	f.StringVar(&options.ID, "id", "", "Task ID")
 	f.StringVar(&options.Branch, "branch", "", "Branch to land")
-	f.StringVar(&options.Mode, "mode", "", "Delivery mode for this landing: local or pr")
+	f.StringVar(&options.Mode, "mode", "", "Delivery mode for this landing: local, pr, or auto")
+	f.BoolVar(&options.Merge, "merge", false, "Merge a pr task's pull request after the review stop")
 	f.BoolVar(&asJSON, "json", false, "Emit a structured outcome")
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 		options.BranchSet = f.Changed("branch")

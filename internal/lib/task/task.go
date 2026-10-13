@@ -37,11 +37,12 @@ var Statuses = []string{Created, Assigned, Completed, Verified, Cancelled, Lande
 const (
 	ModeLocal = "local"
 	ModePR    = "pr"
+	ModeAuto  = "auto"
 	ModeNone  = "none"
 )
 
 // DeliveryModes lists every delivery mode.
-var DeliveryModes = []string{ModeLocal, ModePR, ModeNone}
+var DeliveryModes = []string{ModeLocal, ModePR, ModeAuto, ModeNone}
 
 // Record is one task. Agent references are Fledge agent record ids. Parent
 // is the task this one was created under; it never changes. After lists the
