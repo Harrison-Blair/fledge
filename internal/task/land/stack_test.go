@@ -1496,3 +1496,35 @@ func TestReconcileRefusesAChangedUUID(t *testing.T) {
 	refusedNaming(t, s.land(t, Options{}), "task_state_changed", s.layers[2])
 	s.unchanged(t, before)
 }
+
+// TestLandStackReadsEachPullOneTime: a run on three open layers at the review
+// step reads each layer pull request one time.
+func TestLandStackReadsEachPullOneTime(t *testing.T) {
+	s := setupStack(t)
+	for i := range 3 {
+		s.inStack(t, i, stackJSON(11, 3, i+1))
+	}
+	s.review(t)
+	ok(t, s.land(t, Options{}), "")
+	reads := slices.DeleteFunc(s.apiCalls(t), func(l string) bool { return !slices.Contains(threeReads, l) })
+	if !slices.Equal(reads, threeReads) {
+		t.Fatalf("%d reads: %q", len(reads), reads)
+	}
+}
+
+// TestLandStackWithALandedHighLayerPushesNothing: l2 is merged and l1 is
+// open. A run without --merge records l2, prints the layer lines, and pushes
+// nothing.
+func TestLandStackWithALandedHighLayerPushesNothing(t *testing.T) {
+	s := setupStack(t)
+	s.review(t)
+	s.pushes(t)
+	s.merge(t, 1, mergeSHA, "")
+	out := s.land(t, Options{})
+	ok(t, out, "Layer "+s.layers[0]+": land step review.\nLayer "+s.layers[1]+": landed at "+mergeSHA+".\nLayer "+s.layers[2]+": land step review.\n")
+	if pushes := s.pushes(t); len(pushes) != 0 {
+		t.Fatalf("%q", pushes)
+	}
+	s.landedAt(t, 1, mergeSHA)
+	s.atReview(t, s.layers[0])
+}

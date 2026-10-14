@@ -100,7 +100,7 @@ func (l *lander) stack(ctx context.Context, o Options, p task.Record) error {
 		}
 		return l.requestMerge(ctx, gh, records, k)
 	}
-	if low != 0 {
+	if slices.ContainsFunc(records, func(r task.Record) bool { return r.Status == task.Landed }) {
 		l.summarize(records, false)
 		return nil
 	}
@@ -478,7 +478,7 @@ func (l *lander) openLayers(ctx context.Context, layers []*lander) error {
 			return err
 		}
 	}
-	if err := l.formStack(ctx, gh, prs); err != nil {
+	if err := l.formStack(ctx, gh, layers, prs); err != nil {
 		return err
 	}
 	for i, layer := range layers {
@@ -491,20 +491,24 @@ func (l *lander) openLayers(ctx context.Context, layers []*lander) error {
 	return l.reachParent(stepReview)
 }
 
-// formStack reads every layer pull request. One pull request shows only its
-// own stack, so the check needs all of them. When no pull request is in a
+// formStack uses the reconcile read of each layer pull request, and reads
+// each pull request that has no reconcile read. One pull request shows only
+// its own stack, so the check needs all of them. When no pull request is in a
 // stack, formStack posts one stack of all of them, bottom first. When all are
 // in one stack of the layer count, each at its layer number, it posts
 // nothing. Any other state is land_stack_mismatch.
-func (l *lander) formStack(ctx context.Context, gh landing.GH, prs []landing.PR) error {
+func (l *lander) formStack(ctx context.Context, gh landing.GH, layers []*lander, prs []landing.PR) error {
 	numbers := make([]int, len(prs))
 	var states []string
 	var first *landing.Stack
 	none, same := true, true
 	for i, pr := range prs {
-		p, err := gh.Pull(ctx, pr.Number)
-		if err != nil {
-			return err
+		p, ok := l.pulls[layers[i].r.ID]
+		if !ok {
+			var err error
+			if p, err = gh.Pull(ctx, pr.Number); err != nil {
+				return err
+			}
 		}
 		numbers[i] = pr.Number
 		if p.Stack == nil {
