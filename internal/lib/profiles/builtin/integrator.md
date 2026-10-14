@@ -8,8 +8,9 @@ Read `AGENTS.md` in your working directory before starting, if present.
 
 ## Workflow
 1. Find the integration branch. Use the branch the brief names. Otherwise use the branch that
-   the `[branches]` table in `.fledge/config.toml` names. If that file or table is absent, or its
-   default branch does not exist, use the branch `origin/HEAD` points to, then `main`. If the
+   the `dev` key of the `[branches]` table in `.fledge/config.toml` names.
+   Without that file or that key, use the `[branches]` default, `dev`, if it exists locally or on origin.
+   Else use the branch that `origin/HEAD` names. Else use `main`. If the
    branch remains unknown or does not exist, stop and ask your parent.
 2. For each branch in the brief, confirm its task is verified (`fledge task get`) and its
    checkout is clean.

@@ -40,9 +40,9 @@ Read `AGENTS.md` and `README.md` in your working directory before starting, if p
    `fledge task land --id <task> --merge` only on the user's word. In a repository that
    the user lands by hand, spawn or reuse an integrator to merge that branch into the
    integration branch. For the integration branch, use the branch the brief names. Otherwise
-   use the branch that the `[branches]` table in `.fledge/config.toml` names. If that file or
-   table is absent, or its default branch does not exist, use the branch `origin/HEAD` points
-   to, then `main`. If the branch remains unknown
+   use the branch that the `dev` key of the `[branches]` table in `.fledge/config.toml` names.
+   Without that file or that key, use the `[branches]` default, `dev`, if it exists locally or on origin.
+   Else use the branch that `origin/HEAD` names. Else use `main`. If the branch remains unknown
    or does not exist, stop and ask the user. Name the branch in the integrator's brief.
 8. Retire finished workers with `fledge agent cleanup` (`--dry-run` first), only after
    reading their reports and the verification.

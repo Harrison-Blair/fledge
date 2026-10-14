@@ -106,14 +106,43 @@ func TestBuiltinRolesReadRepositoryInstructionsIfPresent(t *testing.T) {
 	}
 }
 
-// Built-ins ship to every repository, so they name no repository's branch or
-// backlog: the integration branch comes from the brief, else the documented
-// .fledge/config.toml, origin/HEAD, main fallback. Git config is not read.
-func TestBuiltinRolesNameNoRepositoryBranch(t *testing.T) {
+// namesBareDev reports a dev that is not the `dev` key of the [branches]
+// table: inline code `dev` passes only on a line that also names [branches].
+func namesBareDev(text string) bool {
 	dev := regexp.MustCompile(`\bdev\b`)
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, "[branches]") {
+			line = strings.ReplaceAll(line, "`dev`", "")
+		}
+		if dev.MatchString(line) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestNamesBareDev(t *testing.T) {
+	for _, c := range []struct {
+		text string
+		want bool
+	}{
+		{"Merge the branch into dev.", true},
+		{"Use the branch that the `dev` key of the `[branches]` table names.", false},
+	} {
+		if got := namesBareDev(c.text); got != c.want {
+			t.Errorf("namesBareDev(%q) = %v, want %v", c.text, got, c.want)
+		}
+	}
+}
+
+// Built-ins ship to every repository, so they name no repository's branch or
+// backlog: the integration branch comes from the brief, else the [branches]
+// dev key of .fledge/config.toml, else a dev, origin/HEAD, main fallback.
+// Git config is not read.
+func TestBuiltinRolesNameNoRepositoryBranch(t *testing.T) {
 	for _, name := range roles {
 		role := builtin(t, name).Role
-		if dev.MatchString(role) || strings.Contains(role, "Touch main") || strings.Contains(role, "backlog check-off") {
+		if namesBareDev(role) || strings.Contains(role, "Touch main") || strings.Contains(role, "backlog check-off") {
 			t.Errorf("%s names a repository-specific branch or backlog:\n%s", name, role)
 		}
 	}

@@ -19,7 +19,7 @@ section at the end records what the owner settled.
 | Limit | Value | Basis (derived below) |
 | --- | --- | --- |
 | Task ceiling | 300 hand-written source lines | A task must fit one normal sitting alone. 400 reviewed lines per review (SmartBear) / 2.2 reviewed lines per source line (this repository) = 182. Policy relaxed it to 200 (440 reviewed lines, 53 minutes at 500 lines/hour). The owner decision of 2026-10-14 raised it to 300: 300 x 2.2 = 660 reviewed lines, 79 minutes at 500 lines an hour |
-| Pull request target | 200 source lines | Same sitting arithmetic as the task ceiling |
+| Pull request target | 200 source lines | One normal sitting: the 200-line derivation in the task ceiling row (440 reviewed lines, 53 minutes at 500 lines an hour) |
 | Pull request ceiling | 300 source lines | 90-minute exception x 500 lines/hour = 750 reviewed lines; / 2.2 = 341; rounded down to 300 so that pull requests up to a 2.5 ratio still fit |
 | Files changed (excluding raw captures and `testdata/`) | Task and pull request target 20, pull request ceiling 30 | Policy choice: Google's 10-file mark for 90% of changes, doubled for this repository's source-plus-test file pairs; Google's style guide calls a 50-file spread "usually too large" |
 | Domains touched | Task and pull request target 3, pull request ceiling 5 code domains | This repository: 75th percentile of 2 code domains per task; Microsoft: fewer files, a higher share of useful review comments (a direction; the paper gives no number) |
