@@ -98,7 +98,7 @@ delivery_mode = "local"
 ack_timeout = "5m"
 ```
 
-`delivery_mode` must be the string `local`, `pr`, or `none`.
+`delivery_mode` must be the string `local`, `pr`, `auto`, or `none`.
 `[inbox]` is the only table, and `ack_timeout` is its only key.
 `ack_timeout` must be a Go duration string, such as `90s` or `5m`, from `10s` to `1h` inclusive.
 

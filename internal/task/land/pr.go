@@ -12,6 +12,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/gitstatus"
 	"github.com/Harrison-Blair/fledge/internal/lib/landing"
+	"github.com/Harrison-Blair/fledge/internal/lib/reviewsize"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 )
 
@@ -168,6 +169,11 @@ func (l *lander) open(ctx context.Context, gh landing.GH) (string, error) {
 	body := fmt.Sprintf("Fledge task %s, verified at commit %s.\n\n- Verifier: %s\n- Owner: %s\n", l.r.ID, l.commit, cli.Display(l.r.Verifier), cli.Display(l.r.Owner))
 	if l.r.VerificationNote != nil {
 		body += "\nVerification note:\n\n" + *l.r.VerificationNote + "\n"
+	}
+	if l.size != nil {
+		var b strings.Builder
+		reviewsize.Render(&b, *l.size)
+		body += "\nReview size against " + l.base + ":\n\n```\n" + b.String() + "```\n"
 	}
 	_, err = f.WriteString(body)
 	if closeErr := f.Close(); err == nil {

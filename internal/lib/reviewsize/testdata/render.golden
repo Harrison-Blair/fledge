@@ -1,0 +1,12 @@
+pr size
+  source lines   250  target 200, ceiling 300  over target
+  files           12  target 20, ceiling 30    within
+  code domains     2  target 3, ceiling 5      within
+  total read     800  limit 750                over ceiling
+  domains: lib/reviewsize, task
+task size
+  source lines   250  limit 200                over ceiling
+  files           12  limit 20                 within
+  code domains     2  limit 3                  within
+  total read     800  limit 750                over ceiling
+  domains: lib/reviewsize, task

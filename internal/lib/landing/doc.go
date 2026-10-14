@@ -5,5 +5,6 @@
 //	git.go   commit resolution, branch validation, refs, checkouts, and changes
 //	mode.go  delivery mode validation and the configured default
 //	lock.go  the repository's land lock
+//	resolve.go  a task's branch, target, and base ref
 //	gh.go    gh pull request commands and their decoded output
 package landing

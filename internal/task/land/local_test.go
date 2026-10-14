@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
+	"github.com/Harrison-Blair/fledge/internal/lib/reviewsize"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/tasktest"
 )
@@ -36,7 +37,7 @@ func TestLandLocalMergesVerifiedCommit(t *testing.T) {
 	if res := out.Result.(Result); res.Mode != task.ModeLocal || !reflect.DeepEqual(res.Record, r) {
 		t.Fatalf("%+v", res)
 	}
-	want := "Landed task " + f.id + ": merged feat into main (local) as " + merge + ".\n"
+	want := "Landed task " + f.id + ": merged feat into main (local) as " + merge + ".\n" + sizeBlock(reviewsize.KindTask, "refs/heads/main", "", small)
 	if got := render(t, out); got != want {
 		t.Fatalf("%q\nwant %q", got, want)
 	}

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Harrison-Blair/fledge/internal/lib/reviewsize"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/tasktest"
 )
@@ -139,7 +140,7 @@ func TestLandPRPushesOpensAndMerges(t *testing.T) {
 					t.Fatalf("body lacks %s: %s", part, body)
 				}
 			}
-			want := "Landed task " + f.id + ": merged feat into main (" + mode + ") as " + mergeHash + ".\nPull request: https://example.com/pr/7\n"
+			want := "Landed task " + f.id + ": merged feat into main (" + mode + ") as " + mergeHash + ".\nPull request: https://example.com/pr/7\n" + sizeBlock(reviewsize.KindPR, "refs/remotes/origin/main", "", small)
 			if got := render(t, out); got != want {
 				t.Fatalf("%q", got)
 			}
@@ -378,7 +379,7 @@ func reviewStop(t *testing.T, f fixture, g fakeGH, o Options) {
 		t.Fatalf("%v %s", err, b.String())
 	}
 	want := "Task " + f.id + " is ready for review: pull request https://example.com/pr/7 merges feat into main (pr), and its checks passed.\n" +
-		"Merge it only on the owner's word: fledge task land --id " + f.id + " --merge\n"
+		"Merge it only on the owner's word: fledge task land --id " + f.id + " --merge\n" + sizeBlock(reviewsize.KindPR, "refs/remotes/origin/main", "", small)
 	if got := render(t, out); got != want {
 		t.Fatalf("%q", got)
 	}
@@ -408,7 +409,7 @@ func TestLandPRMergeAfterReview(t *testing.T) {
 	if r.Status != task.Landed || *r.MergeCommit != mergeHash || *r.LandStep != "confirm" || *r.TargetBranch != "main" || out.Result.(Result).ReviewPending {
 		t.Fatalf("%+v", r)
 	}
-	want := "Landed task " + f.id + ": merged feat into main (pr) as " + mergeHash + ".\nPull request: https://example.com/pr/7\n"
+	want := "Landed task " + f.id + ": merged feat into main (pr) as " + mergeHash + ".\nPull request: https://example.com/pr/7\n" + sizeBlock(reviewsize.KindPR, "refs/remotes/origin/main", "", small)
 	if got := render(t, out); got != want {
 		t.Fatalf("%q", got)
 	}
@@ -558,7 +559,12 @@ func TestLandPRRecordsGitHubMerge(t *testing.T) {
 				t.Fatalf("%q", g.log(t))
 			}
 			noPushOrPR(t, f, g)
-			want := "Landed task " + f.id + ": merged feat into main (pr) as " + merge + ".\nPull request: https://example.com/pr/7\n"
+			// Fetched, origin/main already contains the verified commit.
+			d := small
+			if fetched {
+				d = reviewsize.Diff{}
+			}
+			want := "Landed task " + f.id + ": merged feat into main (pr) as " + merge + ".\nPull request: https://example.com/pr/7\n" + sizeBlock(reviewsize.KindPR, "refs/remotes/origin/main", "", d)
 			if got := render(t, out); got != want || len(out.Result.(Result).Warnings) != 0 {
 				t.Fatalf("%q", got)
 			}
@@ -620,5 +626,23 @@ func TestLandPRWithoutPRKeepsAlreadyMerged(t *testing.T) {
 	f.refused(t, f.land(t, Options{Branch: "feat", BranchSet: true}), "land_already_merged")
 	if _, err := os.Stat(filepath.Join(g.dir, "log")); err == nil {
 		t.Fatalf("gh ran: %q", g.log(t))
+	}
+}
+
+// TestLandPRBodyHasSize: the pull request body has the size report after
+// the verification note.
+func TestLandPRBodyHasSize(t *testing.T) {
+	f, g := setupPR(t, task.ModeAuto)
+	f.id = tasktest.Seed(t, f.repo, task.Record{Title: "Feature", Brief: "b", Status: task.Verified, Owner: &f.worker.ID, Verifier: &f.boss.ID,
+		VerifiedAt: task.Now(), VerifiedCommit: &f.head, VerificationNote: tasktest.Ptr("looks good"), DeliveryMode: task.ModeAuto, CreatedAt: *task.Now()})
+	if out := f.land(t, Options{Branch: "feat", BranchSet: true}); out.Error != nil {
+		t.Fatalf("%+v", out.Error)
+	}
+	body, _ := os.ReadFile(filepath.Join(g.dir, "body"))
+	var b strings.Builder
+	reviewsize.Render(&b, reviewsize.Compare(small, reviewsize.KindPR))
+	want := "Verification note:\n\nlooks good\n\nReview size against refs/remotes/origin/main:\n\n```\n" + b.String() + "```\n"
+	if !strings.HasSuffix(string(body), want) {
+		t.Fatalf("%q\nwant suffix %q", body, want)
 	}
 }

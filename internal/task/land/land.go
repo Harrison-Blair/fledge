@@ -2,6 +2,7 @@ package land
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -13,6 +14,7 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/gitstatus"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/landing"
+	"github.com/Harrison-Blair/fledge/internal/lib/reviewsize"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 )
@@ -27,13 +29,16 @@ type Options struct {
 }
 
 // Result is the task with the delivery mode used. On a refusal its land_step
-// is the step reached, and Warnings is set only after a landing.
+// is the step reached, and Warnings is set only after a landing. Size is the
+// advisory review size, set once the head check passed.
 type Result struct {
 	task.Record
-	Mode          string   `json:"mode"`
-	Warnings      []string `json:"warnings"`
-	ReviewPending bool     `json:"review_pending"`
+	Mode          string             `json:"mode"`
+	Warnings      []string           `json:"warnings"`
+	ReviewPending bool               `json:"review_pending"`
+	Size          *reviewsize.Report `json:"size"`
 	target        string
+	base          string
 }
 
 // errMergeMode refuses --merge outside pr mode.
@@ -60,6 +65,8 @@ type lander struct {
 	step                         string
 	merge, review                bool
 	warnings                     []string
+	size                         *reviewsize.Report
+	base                         string // the size base ref, and the missing ref of the mode
 }
 
 // Run lands task o.ID. The caller must be a registered agent other than the
@@ -75,7 +82,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 	// fail refuses with the record as last read and the step reached.
 	fail := func(err error, phase string) cli.Outcome {
 		out.Fail(err, phase, false)
-		result := Result{Record: l.r, Mode: l.mode}
+		result := Result{Record: l.r, Mode: l.mode, Size: l.size, base: l.base}
 		result.LandStep = &l.step
 		out.Result = result
 		return out
@@ -118,7 +125,10 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 		return fail(err, "land")
 	}
 	out.Effects = append(out.Effects, cli.Effect{Action: "updated", Kind: "task", ID: l.r.ID})
-	out.Result = Result{Record: l.r, Mode: l.mode, Warnings: l.warnings, ReviewPending: l.review, target: l.target}
+	if l.size != nil && !l.review {
+		l.warnings = append(l.warnings, sizeWarnings(*l.size)...)
+	}
+	out.Result = Result{Record: l.r, Mode: l.mode, Warnings: l.warnings, ReviewPending: l.review, Size: l.size, target: l.target, base: l.base}
 	return out
 }
 
@@ -164,7 +174,11 @@ func (l *lander) land(ctx context.Context, o Options) error {
 	if l.mode != task.ModeLocal && l.mode != task.ModePR && l.mode != task.ModeAuto {
 		return refuse("task_no_delivery_mode", "task %s has delivery mode %s; pass --mode local, --mode pr, or --mode auto", r.ID, l.mode)
 	}
-	if l.branch, err = l.resolveBranch(ctx); err != nil {
+	if l.branch, err = landing.TaskBranch(ctx, l.s, l.r, "land"); err != nil {
+		var coded *cli.Error
+		if errors.As(err, &coded) {
+			coded.Message += "; pass --branch"
+		}
 		return err
 	}
 	if err := l.guard(ctx); err != nil {
@@ -174,28 +188,6 @@ func (l *lander) land(ctx context.Context, o Options) error {
 		return l.local(ctx)
 	}
 	return l.pr(ctx)
-}
-
-// resolveBranch returns the stored branch, else the branch checked out in
-// the owner's recorded checkout, else the branch its spawn created.
-func (l *lander) resolveBranch(ctx context.Context) (string, error) {
-	if l.r.Branch != nil {
-		return *l.r.Branch, nil
-	}
-	if l.r.Owner != nil {
-		var owner identity.Record
-		if err := l.s.Get(identity.Kind, *l.r.Owner, &owner); err == nil {
-			if owner.WorktreePath != nil {
-				if b := gitstatus.Branch(ctx, *owner.WorktreePath); b != nil {
-					return *b, nil
-				}
-			}
-			if owner.WorktreeBranch != nil {
-				return *owner.WorktreeBranch, nil
-			}
-		}
-	}
-	return "", refuse("land_branch_unknown", "cannot tell which branch task %s is on: its owner has no recorded checkout branch; pass --branch", l.r.ID)
 }
 
 // guard runs the checks common to both modes and the mode's target check,
@@ -208,7 +200,7 @@ func (l *lander) guard(ctx context.Context) error {
 	if !landing.FullHash(l.commit) {
 		return refuse("land_unverified_commit", "task %s has a malformed verified commit %q", l.r.ID, l.commit)
 	}
-	target, err := l.resolveTarget(ctx)
+	target, err := landing.TaskTarget(ctx, l.root, l.r, "land")
 	if err != nil {
 		return err
 	}
@@ -219,6 +211,7 @@ func (l *lander) guard(ctx context.Context) error {
 	if head := landing.RefCommit(ctx, l.root, "refs/heads/"+l.branch); head != l.commit {
 		return refuse("land_head_mismatch", "branch %s is at %s, not the verified commit %s; verify the new head again", l.branch, display(head), l.commit)
 	}
+	l.measure(ctx)
 	paths, err := landing.Checkouts(ctx, l.root, l.branch)
 	if err != nil {
 		return err
@@ -253,25 +246,55 @@ func (l *lander) guard(ctx context.Context) error {
 	return nil
 }
 
-// resolveTarget returns the short name of the task's base branch, else of
-// the repository integration branch, once it is a valid branch name.
-func (l *lander) resolveTarget(ctx context.Context) (string, error) {
-	ref := ""
-	if l.r.BaseBranch != nil {
-		ref = *l.r.BaseBranch
-	} else {
-		var err error
-		if ref, err = gitstatus.DefaultBranch(ctx, l.root); err != nil {
-			return "", refuse("land_target_missing", "%v", err)
-		}
-		if ref == "" {
-			return "", refuse("land_target_missing", "no integration branch: set base_branch in .fledge/config.toml or create the task with --base-branch")
+// measure sets the advisory review size of the verified commit against the
+// base ref of the mode, the same one task size uses. It never refuses: with
+// no base ref or a failed diff the size stays unset.
+func (l *lander) measure(ctx context.Context) {
+	base, missing, err := landing.BaseRef(ctx, l.root, l.mode, l.target, "land")
+	if err != nil {
+		return
+	}
+	d, err := reviewsize.Measure(ctx, l.root, base, l.commit)
+	if err != nil {
+		return
+	}
+	kind := reviewsize.KindTask
+	if l.mode != task.ModeLocal {
+		kind = reviewsize.KindPR
+	}
+	r := reviewsize.Compare(d, kind)
+	l.size, l.base = &r, base
+	if missing != "" {
+		l.base += " (" + missing + " is missing)"
+	}
+}
+
+// sizeWarnings names each measure of r over a limit.
+func sizeWarnings(r reviewsize.Report) []string {
+	var warnings []string
+	for _, m := range []struct {
+		name string
+		c    reviewsize.Check
+	}{{"source lines", r.SourceLines}, {"files", r.Files}, {"code domains", r.CodeDomains}, {"total read", r.TotalLines}} {
+		switch {
+		case m.c.Status == reviewsize.Within:
+		case m.c.Target == m.c.Ceiling:
+			warnings = append(warnings, fmt.Sprintf("review size: %s %d is over limit %d", m.name, m.c.Value, m.c.Ceiling))
+		case m.c.Status == reviewsize.OverCeiling:
+			warnings = append(warnings, fmt.Sprintf("review size: %s %d is over ceiling %d", m.name, m.c.Value, m.c.Ceiling))
+		default:
+			warnings = append(warnings, fmt.Sprintf("review size: %s %d is over target %d", m.name, m.c.Value, m.c.Target))
 		}
 	}
-	if err := landing.ValidTarget(ctx, "target", ref); err != nil {
-		return "", refuse("land_target_invalid", "%v", err)
-	}
-	return landing.ShortBranch(ref), nil
+	return warnings
+}
+
+// sizeText is the review size report against base.
+func sizeText(r reviewsize.Report, base string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Review size against %s:\n", base)
+	reviewsize.Render(&b, r)
+	return b.String()
 }
 
 // update stores mutate's changes once the task is still verified at the
@@ -318,23 +341,24 @@ func Render(w io.Writer, o cli.Outcome) error {
 	if !ok {
 		return nil
 	}
-	if o.Error != nil {
-		_, err := fmt.Fprintf(w, "Land step reached: %s.\n", *r.LandStep)
-		return err
-	}
 	var b strings.Builder
-	if r.ReviewPending {
+	switch {
+	case o.Error != nil:
+		fmt.Fprintf(&b, "Land step reached: %s.\n", *r.LandStep)
+	case r.ReviewPending:
 		fmt.Fprintf(&b, "Task %s is ready for review: pull request %s merges %s into %s (%s), and its checks passed.\n", r.ID, *r.PRURL, *r.Branch, r.target, r.Mode)
 		fmt.Fprintf(&b, "Merge it only on the owner's word: fledge task land --id %s --merge\n", r.ID)
-		_, err := io.WriteString(w, b.String())
-		return err
+	default:
+		fmt.Fprintf(&b, "Landed task %s: merged %s into %s (%s) as %s.\n", r.ID, *r.Branch, *r.TargetBranch, r.Mode, *r.MergeCommit)
+		if r.PRURL != nil {
+			fmt.Fprintf(&b, "Pull request: %s\n", *r.PRURL)
+		}
+		for _, warning := range r.Warnings {
+			fmt.Fprintf(&b, "Warning: %s.\n", warning)
+		}
 	}
-	fmt.Fprintf(&b, "Landed task %s: merged %s into %s (%s) as %s.\n", r.ID, *r.Branch, *r.TargetBranch, r.Mode, *r.MergeCommit)
-	if r.PRURL != nil {
-		fmt.Fprintf(&b, "Pull request: %s\n", *r.PRURL)
-	}
-	for _, warning := range r.Warnings {
-		fmt.Fprintf(&b, "Warning: %s.\n", warning)
+	if r.Size != nil {
+		b.WriteString(sizeText(*r.Size, r.base))
 	}
 	_, err := io.WriteString(w, b.String())
 	return err
