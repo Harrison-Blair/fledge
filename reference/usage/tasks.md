@@ -388,7 +388,7 @@ The run reads `git ls-remote --heads origin`, then runs `git fetch` only for the
 It runs the local guards for every layer before the first push.
 The target check of a layer runs after the push of the layer below, because that branch is its target.
 Each push is `git push origin <commit>:refs/heads/<branch>`, without force.
-Every layer and the parent store `branch` and `land_step` `push`.
+Each layer stores its `branch`. Each layer and the parent store `land_step` `push`.
 
 **Open and link.** The run finds or opens the pull request of each layer and stores its `pr_url`.
 A layer with a stored `pr_url` uses that pull request and never opens another.
