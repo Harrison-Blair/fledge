@@ -7,10 +7,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/Harrison-Blair/fledge/internal/lib/cli"
+	"github.com/Harrison-Blair/fledge/internal/lib/landing"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/tasktest"
 )
@@ -101,7 +104,8 @@ func TestLayerWithoutStackBaseRefusesNothing(t *testing.T) {
 // stack is a fixture with a bare origin holding main, a fake gh, a git that
 // logs its arguments, and a verified stack parent in pr mode with three
 // layers l1, l2, and l3. Each layer is verified at its local head, and no
-// layer branch exists on origin. f.id is the parent.
+// layer branch exists on origin. f.id is the parent. The fake gh answers for
+// pull request i+1 of layer i at its head, with passing checks.
 type stack struct {
 	fixture
 	gh             fakeGH
@@ -116,9 +120,10 @@ func setupStack(t *testing.T) stack {
 	s.id = tasktest.Seed(t, f.repo, task.Record{Title: "p", Brief: "b", Status: task.Verified, Shape: task.ShapeStack, DeliveryMode: task.ModePR,
 		Owner: &f.worker.ID, Verifier: &f.boss.ID, VerifiedAt: task.Now(), CreatedAt: *task.Now()})
 	below := "main"
-	for _, name := range []string{"l1", "l2", "l3"} {
+	for i, name := range []string{"l1", "l2", "l3"} {
 		git(t, f.repo, "checkout", "-qb", name, below)
-		head := commitFile(t, f.repo, name, name+"\n")
+		s.answer(t, i, commitFile(t, f.repo, name, name+"\n"), git(t, f.repo, "rev-parse", below))
+		head := git(t, f.repo, "rev-parse", "HEAD")
 		r := task.Record{Title: name, Brief: "b", Status: task.Verified, Owner: &f.worker.ID, Verifier: &f.boss.ID, VerifiedAt: task.Now(),
 			VerifiedCommit: &head, DeliveryMode: task.ModeLocal, Parent: &s.id, Branch: tasktest.Ptr(name), CreatedAt: *task.Now()}
 		if len(s.layers) > 0 {
@@ -139,6 +144,33 @@ func setupStack(t *testing.T) stack {
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return s
+}
+
+// pullURL is the url of the pull request of layer i.
+func pullURL(i int) string { return "https://example.com/pr/" + strconv.Itoa(i+1) }
+
+// apiPull is the fake gh file that answers the REST read of the pull request
+// of layer i.
+func apiPull(i int) string { return "api-GET-repos_{owner}_{repo}_pulls_" + strconv.Itoa(i+1) }
+
+// restPull is the REST pull request of layer i at head on base.
+func restPull(i int, head, base string) string {
+	below := "main"
+	if i > 0 {
+		below = "l" + strconv.Itoa(i)
+	}
+	return `{"number":` + strconv.Itoa(i+1) + `,"state":"open","merged":false,"merge_commit_sha":null,"draft":false,` +
+		`"head":{"sha":"` + head + `","ref":"l` + strconv.Itoa(i+1) + `"},"base":{"sha":"` + base + `","ref":"` + below + `"},"stack":null}`
+}
+
+// answer makes the fake gh answer for the pull request of layer i at head on
+// base: gh pr list, passing checks, and the REST read.
+func (s stack) answer(t *testing.T, i int, head, base string) {
+	t.Helper()
+	n := strconv.Itoa(i + 1)
+	s.gh.set(t, "list-l"+n, `[{"number":`+n+`,"url":"`+pullURL(i)+`","headRefOid":"`+head+`","isDraft":false,"mergeable":"MERGEABLE"}]`)
+	s.gh.set(t, "checks-"+n, checks(head, "MERGEABLE", ""))
+	s.gh.set(t, apiPull(i), restPull(i, head, base))
 }
 
 // edit stores mutate's changes to task id.
@@ -187,15 +219,21 @@ func (s stack) stackRefused(t *testing.T, out cli.Outcome, code string) {
 	}
 }
 
-func TestLandStackPushesLayersBottomFirst(t *testing.T) {
+func TestLandStackOpensPullRequestsAndStopsForReview(t *testing.T) {
 	s := setupStack(t)
 	out := s.land(t, Options{})
-	if out.Error != nil {
+	if out.Error != nil || out.ExitCode() != 0 {
 		t.Fatalf("%+v", out.Error)
 	}
 	pushes := s.pushes(t)
 	if len(pushes) != 3 {
 		t.Fatalf("%q", pushes)
+	}
+	var creates []string
+	for _, line := range s.gh.log(t) {
+		if strings.HasPrefix(line, "pr create ") {
+			creates = append(creates, line)
+		}
 	}
 	res := out.Result.(Result)
 	text := render(t, out)
@@ -206,25 +244,31 @@ func TestLandStackPushesLayersBottomFirst(t *testing.T) {
 		if got := s.remote(t, name); got != s.heads[i] {
 			t.Fatalf("origin %s at %q", name, got)
 		}
+		base := []string{"main", "l1", "l2"}[i]
+		if len(creates) != 3 || !strings.HasPrefix(creates[i], "pr create --base="+base+" --head="+name+" ") {
+			t.Fatalf("%q", creates)
+		}
 		r := tasktest.Load(t, s.repo, s.layers[i])
-		if r.Status != task.Verified || r.LandStep == nil || *r.LandStep != stepPush || r.Branch == nil || *r.Branch != name {
+		if r.Status != task.Verified || r.LandStep == nil || *r.LandStep != stepReview || r.Branch == nil || *r.Branch != name || r.PRURL == nil || *r.PRURL != pullURL(i) {
 			t.Fatalf("%+v", r)
 		}
-		if l := res.Layers[i]; l != (Layer{ID: s.layers[i], Branch: name, Head: s.heads[i], LandStep: stepPush}) {
+		if l := res.Layers[i]; l != (Layer{ID: s.layers[i], Branch: name, Head: s.heads[i], PRURL: pullURL(i), LandStep: stepReview}) {
 			t.Fatalf("%+v", l)
 		}
-		if !strings.Contains(text, "Layer "+s.layers[i]+": branch "+name+" at "+s.heads[i]+", land step push.\n") {
+		if !strings.Contains(text, "Layer "+s.layers[i]+": branch "+name+" at "+s.heads[i]+", pull request "+pullURL(i)+", land step review.\n") {
 			t.Fatalf("%q", text)
 		}
 	}
-	if p := s.load(t); p.Status != task.Verified || p.LandStep == nil || *p.LandStep != stepPush || p.Branch != nil {
+	if p := s.load(t); p.Status != task.Verified || p.LandStep == nil || *p.LandStep != stepReview || p.Branch != nil || p.PRURL != nil {
 		t.Fatalf("%+v", p)
 	}
-	if len(res.Layers) != 3 || strings.Count(text, "\n") != 3 {
+	if !res.ReviewPending || len(res.Layers) != 3 || strings.Count(text, "\n") != 4 ||
+		!strings.HasSuffix(text, "Merge the stack only on the owner's word: fledge task land --id "+s.id+" --merge\n") {
 		t.Fatalf("%q", text)
 	}
 	b, err := json.Marshal(res)
-	if err != nil || !strings.Contains(string(b), `"layers":[{"id":"`+s.layers[0]+`","branch":"l1","head":"`+s.heads[0]+`","land_step":"push"}`) {
+	if err != nil || !strings.Contains(string(b), `"review_pending":true`) ||
+		!strings.Contains(string(b), `"layers":[{"id":"`+s.layers[0]+`","branch":"l1","head":"`+s.heads[0]+`","pr_url":"`+pullURL(0)+`","land_step":"review"}`) {
 		t.Fatalf("%s %v", b, err)
 	}
 }
@@ -241,6 +285,110 @@ func TestLandStackRunAgainPushesNothing(t *testing.T) {
 	if pushes := s.pushes(t); len(pushes) != 0 {
 		t.Fatalf("%q", pushes)
 	}
+	log := s.gh.log(t)
+	if creates := slices.DeleteFunc(slices.Clone(log), func(l string) bool { return !strings.HasPrefix(l, "pr create") }); len(creates) != 3 {
+		t.Fatalf("%q", log)
+	}
+	for i := range 3 {
+		if !slices.Contains(log, "api --method=GET repos/{owner}/{repo}/pulls/"+strconv.Itoa(i+1)) {
+			t.Fatalf("%q", log)
+		}
+		if r := tasktest.Load(t, s.repo, s.layers[i]); r.PRURL == nil || *r.PRURL != pullURL(i) || *r.LandStep != stepReview {
+			t.Fatalf("%+v", r)
+		}
+	}
+}
+
+// rebase lands the stack to review. Then GitHub rebases l2 onto a new commit
+// on l1 with content as its l2 file, and the fake gh answers with that head.
+// The local l2 does not change. The l2 verification stores its patch id
+// against l1.
+func (s stack) rebase(t *testing.T, content string) (rebased string) {
+	t.Helper()
+	if out := s.land(t, Options{}); out.Error != nil {
+		t.Fatalf("%+v", out.Error)
+	}
+	id, err := landing.PatchID(context.Background(), s.repo, s.heads[0], s.heads[1])
+	if err != nil || id == "" {
+		t.Fatal(err)
+	}
+	s.edit(t, s.layers[1], func(r *task.Record) { r.VerifiedPatchID = &id })
+	git(t, s.repo, "checkout", "-qb", "rebased", s.heads[0])
+	base := commitFile(t, s.repo, "x", "x\n")
+	rebased = commitFile(t, s.repo, "l2", content)
+	git(t, s.repo, "checkout", "-q", "main")
+	git(t, s.repo, "push", "-qf", "origin", "rebased:refs/heads/l2")
+	s.answer(t, 1, rebased, base)
+	s.pushes(t)
+	return rebased
+}
+
+func TestLandStackAcceptsRebasedPullHead(t *testing.T) {
+	s := setupStack(t)
+	rebased := s.rebase(t, "l2\n")
+	out := s.land(t, Options{})
+	if out.Error != nil {
+		t.Fatalf("%+v", out.Error)
+	}
+	if pushes := s.pushes(t); len(pushes) != 0 {
+		t.Fatalf("%q", pushes)
+	}
+	if got := git(t, s.repo, "rev-parse", "l2"); got != s.heads[1] || s.remote(t, "l2") != rebased {
+		t.Fatalf("local l2 %s, origin l2 %s", got, s.remote(t, "l2"))
+	}
+	r := tasktest.Load(t, s.repo, s.layers[1])
+	if *r.VerifiedCommit != rebased || r.CarriedFrom == nil || *r.CarriedFrom != s.heads[1] || *r.LandStep != stepReview {
+		t.Fatalf("%+v", r)
+	}
+	if l := out.Result.(Result).Layers[1]; l.Head != rebased || !out.Result.(Result).ReviewPending {
+		t.Fatalf("%+v", l)
+	}
+}
+
+// stackRefusedAt requires out to be a rejected refusal with code at step,
+// with the two human lines, and a parent with a null branch and pr_url.
+func (s stack) stackRefusedAt(t *testing.T, out cli.Outcome, code, step, name string) {
+	t.Helper()
+	if out.Error == nil || out.Error.Code != code || out.ExitCode() != 1 {
+		t.Fatalf("want %s, got %+v", code, out.Error)
+	}
+	text := render(t, out)
+	first, _, _ := strings.Cut(text, "\n")
+	if !strings.HasPrefix(first, "rejected: "+code+": ") || !strings.HasSuffix(first, " (land)") || !strings.Contains(first, name) ||
+		!strings.HasSuffix(text, " (land)\nLand step reached: "+step+".\n") {
+		t.Fatalf("%q", text)
+	}
+	if p := s.load(t); p.LandStep == nil || *p.LandStep != step || p.Branch != nil || p.PRURL != nil {
+		t.Fatalf("%+v", p)
+	}
+}
+
+func TestLandStackRefusesChangedPullHead(t *testing.T) {
+	s := setupStack(t)
+	s.rebase(t, "changed\n")
+	s.stackRefusedAt(t, s.land(t, Options{}), "land_head_mismatch", stepPR, "l2")
+	if r := tasktest.Load(t, s.repo, s.layers[1]); *r.VerifiedCommit != s.heads[1] || r.CarriedFrom != nil {
+		t.Fatalf("%+v", r)
+	}
+	if pushes := s.pushes(t); len(pushes) != 0 {
+		t.Fatalf("%q", pushes)
+	}
+}
+
+func TestLandStackRefusesPullWithoutHead(t *testing.T) {
+	s := setupStack(t)
+	if out := s.land(t, Options{}); out.Error != nil {
+		t.Fatalf("%+v", out.Error)
+	}
+	body := restPull(1, s.heads[1], s.heads[0])
+	s.gh.set(t, apiPull(1), strings.Replace(body, `"head":{"sha":"`+s.heads[1]+`","ref":"l2"},`, "", 1))
+	s.stackRefusedAt(t, s.land(t, Options{}), "land_gh_output_invalid", stepPR, "")
+}
+
+func TestLandStackRefusesFailedLayerChecks(t *testing.T) {
+	s := setupStack(t)
+	s.gh.set(t, "checks-3", checks(s.heads[2], "MERGEABLE", run("COMPLETED", "FAILURE")))
+	s.stackRefusedAt(t, s.land(t, Options{}), "land_checks_failed", stepChecks, "l3")
 }
 
 // TestLandStackPushesBranchThatOriginLacks: origin lacks a layer branch and

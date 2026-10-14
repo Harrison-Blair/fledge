@@ -18,22 +18,29 @@ import (
 // fakeGH is a gh on PATH that logs its arguments and answers from files in
 // dir: list (before a create) and listed (after), checks, view (before a
 // merge) and merged (after), and the optional merge-fails and
-// list-after-create-fails.
+// list-after-create-fails. When list-<head> exists, pr list for that head
+// answers [] before a create and list-<head> after it, and pr create prints
+// its url. checks-<n> answers for pull request n when it exists. gh api
+// answers from api-<method>-<path with _ for />.
 type fakeGH struct{ dir string }
 
 const ghScript = `#!/bin/sh
 d=%q
 printf '%s\n' "$*" >> "$d/log"
+h=; for a in "$@"; do case "$a" in --head=*) h=${a#--head=} ;; esac; done
 case "$1 $2" in
-"pr list") if [ -f "$d/created" ]; then
+"pr list") if [ -f "$d/list-$h" ]; then
+    if [ -f "$d/created-$h" ]; then cat "$d/list-$h"; else echo '[]'; fi
+  elif [ -f "$d/created" ]; then
     if [ -f "$d/list-after-create-fails" ]; then echo "lookup failed" >&2; exit 1; fi
     cat "$d/listed"; else cat "$d/list"; fi ;;
-"pr create") touch "$d/created"
+"pr create") touch "$d/created" "$d/created-$h"
   for a in "$@"; do case "$a" in --body-file=*) cp "${a#--body-file=}" "$d/body" ;; esac; done
-  echo https://example.com/pr/7 ;;
-"pr view") case "$4" in *statusCheckRollup*) cat "$d/checks" ;;
+  if [ -f "$d/list-$h" ]; then sed 's/.*"url":"\([^"]*\)".*/\1/' "$d/list-$h"; else echo https://example.com/pr/7; fi ;;
+"pr view") case "$4" in *statusCheckRollup*) if [ -f "$d/checks-$3" ]; then cat "$d/checks-$3"; else cat "$d/checks"; fi ;;
   *) if [ -f "$d/did-merge" ]; then cat "$d/merged"; else cat "$d/view"; fi ;; esac ;;
 "pr merge") if [ -f "$d/merge-fails" ]; then echo "merge blocked" >&2; exit 1; fi; touch "$d/did-merge" ;;
+"api "*) f="$d/api-${2#--method=}-$(printf '%s' "$3" | tr / _)"; cat "$f"; if [ -f "$f.exit" ]; then exit "$(cat "$f.exit")"; fi ;;
 *) echo "unexpected gh $*" >&2; exit 2 ;;
 esac
 `

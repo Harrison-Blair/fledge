@@ -39,7 +39,7 @@ func (l *lander) pr(ctx context.Context) error {
 	if err := l.reach(stepPR, nil); err != nil {
 		return err
 	}
-	pr, err := l.pullRequest(ctx, gh)
+	pr, err := l.pullRequest(ctx, gh, l.branch, l.target)
 	if err != nil {
 		return err
 	}
@@ -139,38 +139,39 @@ func (l *lander) reach(step string, prURL *string) error {
 	})
 }
 
-// pullRequest returns the one open pull request from the branch into the
-// target, opening it when there is none. The URL of an opened pull request is
+// pullRequest returns the one open pull request from branch into base,
+// opening it when there is none. The URL of an opened pull request is
 // stored before it is listed again, so a failed lookup keeps it.
-func (l *lander) pullRequest(ctx context.Context, gh landing.GH) (landing.PR, error) {
-	prs, err := gh.List(ctx, l.branch, l.target)
+func (l *lander) pullRequest(ctx context.Context, gh landing.GH, branch, base string) (landing.PR, error) {
+	prs, err := gh.List(ctx, branch, base)
 	if err == nil && len(prs) == 0 {
 		var url string
-		if url, err = l.open(ctx, gh); err == nil && url != "" {
+		if url, err = l.open(ctx, gh, branch, base); err == nil && url != "" {
 			err = l.reach(stepPR, &url)
 		}
 		if err == nil {
-			prs, err = gh.List(ctx, l.branch, l.target)
+			prs, err = gh.List(ctx, branch, base)
 		}
 	}
 	switch {
 	case err != nil:
 		return landing.PR{}, err
 	case len(prs) == 0:
-		return landing.PR{}, refuse("land_gh_output_invalid", "gh pr create succeeded but gh pr list shows no open pull request from %s into %s", l.branch, l.target)
+		return landing.PR{}, refuse("land_gh_output_invalid", "gh pr create succeeded but gh pr list shows no open pull request from %s into %s", branch, base)
 	case len(prs) > 1:
 		var urls []string
 		for _, p := range prs {
 			urls = append(urls, p.URL)
 		}
-		return landing.PR{}, refuse("land_pr_ambiguous", "more than one open pull request from %s into %s: %s; close the extras", l.branch, l.target, strings.Join(urls, ", "))
+		return landing.PR{}, refuse("land_pr_ambiguous", "more than one open pull request from %s into %s: %s; close the extras", branch, base, strings.Join(urls, ", "))
 	}
 	return prs[0], nil
 }
 
-// open creates the pull request with a body naming the task, the verified
-// commit, its verifier and note, and its owner, and returns its URL.
-func (l *lander) open(ctx context.Context, gh landing.GH) (string, error) {
+// open creates the pull request from branch into base with a body naming the
+// task, the verified commit, its verifier and note, and its owner, and
+// returns its URL.
+func (l *lander) open(ctx context.Context, gh landing.GH, branch, base string) (string, error) {
 	f, err := os.CreateTemp("", "fledge-land-*.md")
 	if err != nil {
 		return "", err
@@ -192,7 +193,7 @@ func (l *lander) open(ctx context.Context, gh landing.GH) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return gh.Create(ctx, l.branch, l.target, l.r.Title, f.Name())
+	return gh.Create(ctx, branch, base, l.r.Title, f.Name())
 }
 
 // mergeable refuses a pull request that is a draft, not cleanly mergeable,
@@ -215,7 +216,7 @@ func (l *lander) mergeable(pr landing.PR, c landing.Checks) error {
 	}
 	for _, check := range c.Rollup {
 		if check.Typename == "CheckRun" && !slices.Contains([]string{"SUCCESS", "NEUTRAL", "SKIPPED"}, check.Conclusion) || check.Typename == "StatusContext" && check.State != "SUCCESS" {
-			return refuse("land_checks_failed", "checks on %s failed", pr.URL)
+			return refuse("land_checks_failed", "checks on %s of branch %s failed", pr.URL, l.branch)
 		}
 	}
 	return nil

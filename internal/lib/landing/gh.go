@@ -43,8 +43,23 @@ type Merged struct {
 	State, MergeCommit, HeadRefOid string
 }
 
-// run runs gh with args and returns its stdout, or a gh_failed error with
-// its stderr.
+// Pull is a pull request as the REST API reports it. MergeCommit is "" while
+// merge_commit_sha is null. Stack is nil while the pull request is in no stack.
+type Pull struct {
+	Number                             int
+	State                              string
+	Merged, Draft                      bool
+	MergeCommit                        string
+	HeadSHA, HeadRef, BaseSHA, BaseRef string
+	Stack                              *Stack
+}
+
+// Stack is the stack of a pull request: its number, its count of pull
+// requests, and the position of the pull request, counted from 1 at the bottom.
+type Stack struct{ Number, Size, Position int }
+
+// run runs gh with args and returns its stdout. On an error it also returns
+// a gh_failed error with its stderr.
 func (g GH) run(ctx context.Context, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	cmd.Dir = g.Dir
@@ -52,7 +67,7 @@ func (g GH) run(ctx context.Context, args ...string) ([]byte, error) {
 	cmd.Stderr = &stderr
 	b, err := cmd.Output()
 	if err != nil {
-		return nil, &cli.Error{Code: "land_gh_failed", Message: fmt.Sprintf("gh %s failed: %v: %s", strings.Join(args[:2], " "), err, strings.TrimSpace(stderr.String()))}
+		return b, &cli.Error{Code: "land_gh_failed", Message: fmt.Sprintf("gh %s failed: %v: %s", strings.Join(args[:2], " "), err, strings.TrimSpace(stderr.String()))}
 	}
 	return b, nil
 }
@@ -131,6 +146,53 @@ func (g GH) Checks(ctx context.Context, n int) (Checks, error) {
 	return c, nil
 }
 
+// Pull reads pull request n through the REST API.
+func (g GH) Pull(ctx context.Context, n int) (Pull, error) {
+	b, err := g.run(ctx, "api", "--method=GET", "repos/{owner}/{repo}/pulls/"+strconv.Itoa(n))
+	if err != nil {
+		return Pull{}, apiError(err, b)
+	}
+	type ref struct {
+		SHA *string `json:"sha"`
+		Ref *string `json:"ref"`
+	}
+	var raw struct {
+		Number         *int            `json:"number"`
+		State          *string         `json:"state"`
+		Merged         *bool           `json:"merged"`
+		MergeCommitSHA json.RawMessage `json:"merge_commit_sha"`
+		Head           *ref            `json:"head"`
+		Base           *ref            `json:"base"`
+		Draft          *bool           `json:"draft"`
+		Stack          json.RawMessage `json:"stack"`
+	}
+	var merge *string
+	var stack *struct {
+		Number   *int `json:"number"`
+		Size     *int `json:"size"`
+		Position *int `json:"position"`
+	}
+	// A missing nullable field leaves its RawMessage nil, and null decodes to nil.
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return Pull{}, invalidOutput("api pulls", err)
+	}
+	if raw.Number == nil || raw.State == nil || raw.Merged == nil || raw.MergeCommitSHA == nil || raw.Draft == nil || raw.Stack == nil ||
+		raw.Head == nil || raw.Head.SHA == nil || raw.Head.Ref == nil || raw.Base == nil || raw.Base.SHA == nil || raw.Base.Ref == nil ||
+		json.Unmarshal(raw.MergeCommitSHA, &merge) != nil || json.Unmarshal(raw.Stack, &stack) != nil ||
+		stack != nil && (stack.Number == nil || stack.Size == nil || stack.Position == nil) {
+		return Pull{}, invalidOutput("api pulls", errors.New("a field is missing"))
+	}
+	p := Pull{Number: *raw.Number, State: *raw.State, Merged: *raw.Merged, Draft: *raw.Draft,
+		HeadSHA: *raw.Head.SHA, HeadRef: *raw.Head.Ref, BaseSHA: *raw.Base.SHA, BaseRef: *raw.Base.Ref}
+	if merge != nil {
+		p.MergeCommit = *merge
+	}
+	if stack != nil {
+		p.Stack = &Stack{Number: *stack.Number, Size: *stack.Size, Position: *stack.Position}
+	}
+	return p, nil
+}
+
 // Merge merges pull request n with a merge commit titled subject, only while
 // its head is still head.
 func (g GH) Merge(ctx context.Context, n int, head, subject string) error {
@@ -160,6 +222,19 @@ func (g GH) Merged(ctx context.Context, selector string) (Merged, error) {
 		m.MergeCommit = *raw.MergeCommit.Oid
 	}
 	return m, nil
+}
+
+// apiError adds the message of the JSON body that gh api writes to stdout on
+// an HTTP error to err.
+func apiError(err error, body []byte) error {
+	var raw struct {
+		Message string `json:"message"`
+	}
+	var coded *cli.Error
+	if json.Unmarshal(body, &raw) == nil && raw.Message != "" && errors.As(err, &coded) {
+		coded.Message += ": GitHub answered: " + raw.Message
+	}
+	return err
 }
 
 func invalidOutput(command string, err error) error {

@@ -47,6 +47,7 @@ type Layer struct {
 	ID       string `json:"id"`
 	Branch   string `json:"branch"`
 	Head     string `json:"head"`
+	PRURL    string `json:"pr_url"`
 	LandStep string `json:"land_step"`
 }
 
@@ -287,6 +288,12 @@ func (l *lander) carry(ctx context.Context, head string) error {
 	if err := landing.CheckCarry(ctx, l.s, l.root, l.r, l.mode, head, "land"); err != nil {
 		return err
 	}
+	return l.carryTo(head)
+}
+
+// carryTo stores head as the verified commit and the old commit as
+// carried_from.
+func (l *lander) carryTo(head string) error {
 	old := l.commit
 	if err := l.update(func(r *task.Record) { r.VerifiedCommit, r.CarriedFrom = &head, &old }); err != nil {
 		return err
@@ -415,8 +422,9 @@ func Render(w io.Writer, o cli.Outcome) error {
 		fmt.Fprintf(&b, "Land step reached: %s.\n", *r.LandStep)
 	case len(r.Layers) > 0:
 		for _, layer := range r.Layers {
-			fmt.Fprintf(&b, "Layer %s: branch %s at %s, land step %s.\n", layer.ID, layer.Branch, layer.Head, layer.LandStep)
+			fmt.Fprintf(&b, "Layer %s: branch %s at %s, pull request %s, land step %s.\n", layer.ID, layer.Branch, layer.Head, layer.PRURL, layer.LandStep)
 		}
+		fmt.Fprintf(&b, "Merge the stack only on the owner's word: fledge task land --id %s --merge\n", r.ID)
 	case r.ReviewPending:
 		fmt.Fprintf(&b, "Task %s is ready for review: pull request %s merges %s into %s (%s), and its checks passed.\n", r.ID, *r.PRURL, *r.Branch, r.target, r.Mode)
 		fmt.Fprintf(&b, "Merge it only on the owner's word: fledge task land --id %s --merge\n", r.ID)

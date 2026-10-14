@@ -1,0 +1,88 @@
+package landing
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/Harrison-Blair/fledge/internal/lib/cli"
+)
+
+// fakeAPI puts a gh on PATH that logs its arguments to dir/log, writes
+// dir/body to stdout, and exits with the status in dir/status.
+func fakeAPI(t *testing.T, body string, status int) string {
+	t.Helper()
+	dir := t.TempDir()
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + dir + "/log'\ncat '" + dir + "/body'\nexit " + string(rune('0'+status)) + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "body"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return dir
+}
+
+const pullJSON = `{"number":11,"state":"open","merged":false,"merge_commit_sha":null,"draft":false,` +
+	`"head":{"sha":"aaaa","ref":"l2"},"base":{"sha":"bbbb","ref":"l1"},` +
+	`"stack":{"id":2120687,"number":5,"base":{"ref":"dev","sha":"cccc"},"size":3,"position":2}}`
+
+func TestPullDecodesTheRESTPullRequest(t *testing.T) {
+	dir := fakeAPI(t, pullJSON, 0)
+	p, err := GH{Dir: dir}.Pull(context.Background(), 11)
+	want := Pull{Number: 11, State: "open", HeadSHA: "aaaa", HeadRef: "l2", BaseSHA: "bbbb", BaseRef: "l1", Stack: &Stack{Number: 5, Size: 3, Position: 2}}
+	if err != nil || p.Stack == nil || *p.Stack != *want.Stack {
+		t.Fatalf("%v %+v", err, p)
+	}
+	p.Stack, want.Stack = nil, nil
+	if p != want {
+		t.Fatalf("%+v", p)
+	}
+	if log, _ := os.ReadFile(filepath.Join(dir, "log")); string(log) != "api --method=GET repos/{owner}/{repo}/pulls/11\n" {
+		t.Fatalf("%q", log)
+	}
+	merged := strings.NewReplacer(`"merged":false`, `"merged":true`, `"merge_commit_sha":null`, `"merge_commit_sha":"dddd"`, `"draft":false`, `"draft":true`).Replace(pullJSON)
+	merged = merged[:strings.Index(merged, `"stack"`)] + `"stack":null}`
+	dir = fakeAPI(t, merged, 0)
+	if p, err := (GH{Dir: dir}).Pull(context.Background(), 11); err != nil || !p.Merged || p.MergeCommit != "dddd" || !p.Draft || p.Stack != nil {
+		t.Fatalf("%v %+v", err, p)
+	}
+}
+
+func TestPullRefusesAMissingField(t *testing.T) {
+	for _, field := range []string{`"number":11,`, `"state":"open",`, `"merged":false,`, `"merge_commit_sha":null,`, `"draft":false,`,
+		`"sha":"aaaa",`, `"ref":"l2"`, `"head":{"sha":"aaaa","ref":"l2"},`, `"base":{"sha":"bbbb","ref":"l1"},`, `"sha":"bbbb",`, `"ref":"l1"`,
+		`"number":5,`, `"size":3,`, `,"position":2`} {
+		body := strings.Replace(pullJSON, field, "", 1)
+		if field == `"ref":"l2"` || field == `"ref":"l1"` {
+			body = strings.Replace(strings.Replace(pullJSON, `,`+field, "", 1), field, "", 1)
+		}
+		if body == pullJSON {
+			t.Fatalf("%s: not removed", field)
+		}
+		dir := fakeAPI(t, body, 0)
+		var coded *cli.Error
+		if _, err := (GH{Dir: dir}).Pull(context.Background(), 11); !errors.As(err, &coded) || coded.Code != "land_gh_output_invalid" {
+			t.Fatalf("%s: %v", field, err)
+		}
+	}
+	dir := fakeAPI(t, pullJSON[:strings.Index(pullJSON, `,"stack"`)]+"}", 0)
+	var coded *cli.Error
+	if _, err := (GH{Dir: dir}).Pull(context.Background(), 11); !errors.As(err, &coded) || coded.Code != "land_gh_output_invalid" {
+		t.Fatalf("no stack: %v", err)
+	}
+}
+
+// TestPullReadsTheBodyOfAnHTTPError: gh api exits nonzero on an HTTP error
+// and writes the JSON body to stdout. The error has the GitHub message.
+func TestPullReadsTheBodyOfAnHTTPError(t *testing.T) {
+	dir := fakeAPI(t, `{"message":"Not Found","status":"404"}`, 1)
+	var coded *cli.Error
+	if _, err := (GH{Dir: dir}).Pull(context.Background(), 11); !errors.As(err, &coded) || coded.Code != "land_gh_failed" || !strings.Contains(coded.Message, "Not Found") {
+		t.Fatalf("%v", err)
+	}
+}
