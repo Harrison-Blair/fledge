@@ -117,7 +117,8 @@ func (l *lander) pushLayers(ctx context.Context) ([]*lander, error) {
 }
 
 // openLayers finds or opens the pull request of each layer into its layer
-// base, bottom first, and stores its pr_url. Then it checks each pull
+// base, bottom first, and stores its pr_url. A layer with a stored pr_url
+// uses that pull request and never opens another. Then it checks each pull
 // request. Then every layer and the parent store the review step.
 func (l *lander) openLayers(ctx context.Context, layers []*lander) error {
 	gh := landing.GH{Dir: l.root}
@@ -129,12 +130,13 @@ func (l *lander) openLayers(ctx context.Context, layers []*lander) error {
 		if err := layer.reach(stepPR, nil); err != nil {
 			return err
 		}
+		var pr landing.PR
+		var err error
 		if layer.r.PRURL != nil {
-			if err := layer.pullHead(ctx, gh); err != nil {
-				return err
-			}
+			pr, err = layer.pullHead(ctx, gh)
+		} else {
+			pr, err = layer.pullRequest(ctx, gh, layer.branch, layer.target)
 		}
-		pr, err := layer.pullRequest(ctx, gh, layer.branch, layer.target)
 		if err != nil {
 			return err
 		}
@@ -165,24 +167,33 @@ func (l *lander) openLayers(ctx context.Context, layers []*lander) error {
 	return l.reachParent(stepReview)
 }
 
-// pullHead reads the pull request of the layer through the REST API. Its
-// head is the current head of the layer, and its base is the patch id base.
-// A head with the verified patch id gets the verification. Any other head is
-// land_head_mismatch.
-func (l *lander) pullHead(ctx context.Context, gh landing.GH) error {
-	n, err := strconv.Atoi(path.Base(*l.r.PRURL))
+// pullHead reads the stored pull request of the layer through the REST API
+// and returns it. A pull request closed without a merge is land_pr_closed.
+// Its head is the current head of the layer, and its base is the patch id
+// base. A head with the verified patch id gets the verification. Any other
+// head is land_head_mismatch.
+func (l *lander) pullHead(ctx context.Context, gh landing.GH) (landing.PR, error) {
+	url := *l.r.PRURL
+	n, err := strconv.Atoi(path.Base(url))
 	if err != nil {
-		return refuse("land_gh_output_invalid", "pull request URL %s of branch %s has no number", *l.r.PRURL, l.branch)
+		return landing.PR{}, refuse("land_gh_output_invalid", "pull request URL %s of branch %s has no number", url, l.branch)
 	}
 	p, err := gh.Pull(ctx, n)
-	if err != nil || p.HeadSHA == l.commit {
-		return err
+	if err != nil {
+		return landing.PR{}, err
+	}
+	if p.State == "closed" && !p.Merged {
+		return landing.PR{}, refuse("land_pr_closed", "%s of branch %s was closed without a merge; reopen it, then run task land again", url, l.branch)
+	}
+	pr := landing.PR{Number: p.Number, URL: url, HeadRefOid: p.HeadSHA}
+	if p.HeadSHA == l.commit {
+		return pr, nil
 	}
 	id, err := landing.PatchID(ctx, l.root, p.BaseSHA, p.HeadSHA)
 	if err != nil || id == "" || l.r.VerifiedPatchID == nil || id != *l.r.VerifiedPatchID {
-		return refuse("land_head_mismatch", "pull request %s of branch %s has head %s, not the verified commit %s, and its patch id against base %s is not the verified patch id; verify the new head again", *l.r.PRURL, l.branch, p.HeadSHA, l.commit, p.BaseSHA)
+		return landing.PR{}, refuse("land_head_mismatch", "pull request %s of branch %s has head %s, not the verified commit %s, and its patch id against base %s is not the verified patch id; verify the new head again", url, l.branch, p.HeadSHA, l.commit, p.BaseSHA)
 	}
-	return l.carryTo(p.HeadSHA)
+	return pr, l.carryTo(p.HeadSHA)
 }
 
 // reachParent stores step as the land step that the stack parent reached.

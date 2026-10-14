@@ -385,6 +385,27 @@ func TestLandStackRefusesPullWithoutHead(t *testing.T) {
 	s.stackRefusedAt(t, s.land(t, Options{}), "land_gh_output_invalid", stepPR, "")
 }
 
+// TestLandStackRefusesClosedStoredPull: the l2 layer has a stored pull
+// request at the verified head. GitHub closed it without a merge, so the open
+// list is empty. The landing refuses it and creates no pull request.
+func TestLandStackRefusesClosedStoredPull(t *testing.T) {
+	s := setupStack(t)
+	if out := s.land(t, Options{}); out.Error != nil {
+		t.Fatalf("%+v", out.Error)
+	}
+	s.gh.set(t, apiPull(1), strings.Replace(restPull(1, s.heads[1], s.heads[0]), `"state":"open"`, `"state":"closed"`, 1))
+	s.gh.set(t, "list-l2", "[]")
+	out := s.land(t, Options{})
+	log := s.gh.log(t)
+	if creates := slices.DeleteFunc(slices.Clone(log), func(l string) bool { return !strings.HasPrefix(l, "pr create") }); len(creates) != 3 {
+		t.Fatalf("create count %d: %q", len(creates), creates)
+	}
+	s.stackRefusedAt(t, out, "land_pr_closed", stepPR, "l2")
+	if r := tasktest.Load(t, s.repo, s.layers[1]); r.PRURL == nil || *r.PRURL != pullURL(1) {
+		t.Fatalf("%+v", r)
+	}
+}
+
 func TestLandStackRefusesFailedLayerChecks(t *testing.T) {
 	s := setupStack(t)
 	s.gh.set(t, "checks-3", checks(s.heads[2], "MERGEABLE", run("COMPLETED", "FAILURE")))
