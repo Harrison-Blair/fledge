@@ -66,3 +66,20 @@ func TestLandLayerWithoutSizeStillLands(t *testing.T) {
 		}
 	}
 }
+
+// TestLandLayerWithoutStackBaseStillLands: when the parent has no stack base,
+// the size stays unset and the landing does not refuse.
+func TestLandLayerWithoutStackBaseStillLands(t *testing.T) {
+	f, _, _ := setupLayer(t, func(r *task.Record) { r.Status = task.Landed })
+	git(t, f.repo, "branch", "-m", "main", "trunk")
+	if _, err := task.Update(tasktest.Store(t, f.repo), f.id, func(r *task.Record) error {
+		r.BaseBranch = tasktest.Ptr("trunk")
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out := f.land(t, Options{})
+	if res, _ := out.Result.(Result); out.Error != nil || res.Size != nil || f.load(t).Status != task.Landed {
+		t.Fatalf("%+v %+v", out.Error, res.Size)
+	}
+}

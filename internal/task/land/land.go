@@ -250,12 +250,17 @@ func (l *lander) guard(ctx context.Context) error {
 
 // measure sets the advisory review size of the verified commit against the
 // base ref of the mode for the layer base. Task size uses the same base. It
-// returns only a refusal of the layer base. With no base ref or a failed diff
-// the size stays unset.
+// returns only the land_branch_unknown and land_stack_fork refusals of the
+// layer base. With any other error, no base ref, or a failed diff the size
+// stays unset.
 func (l *lander) measure(ctx context.Context) error {
 	target, err := landing.LayerBase(ctx, l.s, l.root, l.r, "land")
 	if err != nil {
-		return err
+		var coded *cli.Error
+		if errors.As(err, &coded) && (coded.Code == "land_branch_unknown" || coded.Code == "land_stack_fork") {
+			return err
+		}
+		return nil
 	}
 	base, missing, err := landing.BaseRef(ctx, l.root, l.mode, target, "land")
 	if err != nil {
