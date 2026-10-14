@@ -103,6 +103,9 @@ func Render(w io.Writer, o cli.Outcome) error {
 		}
 		fmt.Fprintf(&b, "after: %s\n", strings.Join(deps, ", "))
 	}
+	if r.Shape != "" {
+		fmt.Fprintf(&b, "shape: %s\n", termtext.Clean(r.Shape))
+	}
 	if r.DeliveryMode != "" && r.DeliveryMode != task.ModeNone {
 		fmt.Fprintf(&b, "delivery mode: %s\n", r.DeliveryMode)
 	}

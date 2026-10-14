@@ -44,12 +44,22 @@ const (
 // DeliveryModes lists every delivery mode.
 var DeliveryModes = []string{ModeLocal, ModePR, ModeAuto, ModeNone}
 
+// The parent shapes: how the subtasks of a parent task are delivered.
+const (
+	ShapeStack   = "stack"
+	ShapeFeature = "feature"
+)
+
+// Shapes lists every parent shape.
+var Shapes = []string{ShapeStack, ShapeFeature}
+
 // Record is one task. Agent references are Fledge agent record ids. Parent
 // is the task this one was created under; it never changes. After lists the
 // prerequisite task ids in declaration order. UnmetAtAssign is set only when
 // a forced assign bypassed prerequisites, naming the ones still unmet then.
 // DeliveryMode is how task land delivers the task; a record written before it
-// existed loads as none. Branch is resolved and stored by task land;
+// existed loads as none. Shape is one of Shapes, or empty when the task has
+// no shape. Branch is set at creation or resolved and stored by task land;
 // VerifiedCommit is the commit the latest verification bound. The landing
 // fields stay null until task land records them; LandStep is the last land
 // step reached, for refusals.
@@ -76,6 +86,7 @@ type Record struct {
 	CancelledAt            *string                 `json:"cancelled_at"`
 	Delivery               *Delivery               `json:"delivery"`
 	DeliveryMode           string                  `json:"delivery_mode"`
+	Shape                  string                  `json:"shape"`
 	Branch                 *string                 `json:"branch"`
 	BaseBranch             *string                 `json:"base_branch"`
 	VerifiedCommit         *string                 `json:"verified_commit"`

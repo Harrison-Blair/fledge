@@ -21,9 +21,9 @@ import (
 )
 
 type Options struct {
-	Title, Body, File, Parent, DeliveryMode, BaseBranch string
-	After                                               []string
-	BodySet, FileSet, DeliveryModeSet, BaseBranchSet    bool
+	Title, Body, File, Parent, DeliveryMode, BaseBranch, Shape, Branch    string
+	After                                                                 []string
+	BodySet, FileSet, DeliveryModeSet, BaseBranchSet, ShapeSet, BranchSet bool
 }
 
 // Run stores a new task. The brief is any nonblank, NUL-free UTF-8 text,
@@ -33,7 +33,8 @@ type Options struct {
 // checked and the task stored under one store lock. Repeated prerequisites
 // are stored once. The delivery mode is DeliveryMode when set, else the
 // repository's configured delivery_mode, else none; BaseBranch, when set, is
-// stored as the task's landing target.
+// stored as the task's landing target. Shape, when set, is one of
+// task.Shapes. Branch, when set, is stored as the task's branch.
 func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Outcome {
 	out := cli.NewOutcome("task.create")
 	var text string
@@ -66,6 +67,12 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 	if err == nil && o.BaseBranchSet {
 		err = landing.ValidTarget(ctx, "--base-branch", o.BaseBranch)
 	}
+	if err == nil && o.ShapeSet && !slices.Contains(task.Shapes, o.Shape) {
+		err = cli.Invalid("--shape must be one of %s", strings.Join(task.Shapes, ", "))
+	}
+	if err == nil && o.BranchSet {
+		err = landing.ValidBranch(ctx, "--branch", o.Branch)
+	}
 	if err != nil {
 		out.Fail(err, "validation", false)
 		return out
@@ -95,7 +102,10 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 			return err
 		}
 		_, err := tx.Create(task.Kind, func(id string) any {
-			r = task.Record{ID: id, Title: o.Title, Brief: text, After: after, Status: task.Created, CreatedAt: *task.Now(), DeliveryMode: mode}
+			r = task.Record{ID: id, Title: o.Title, Brief: text, After: after, Status: task.Created, CreatedAt: *task.Now(), DeliveryMode: mode, Shape: o.Shape}
+			if o.BranchSet {
+				r.Branch = &o.Branch
+			}
 			if o.BaseBranchSet {
 				r.BaseBranch = &o.BaseBranch
 			}

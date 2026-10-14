@@ -18,15 +18,21 @@ import (
 // schemaVersion is the only proposal file version this binary reads.
 const schemaVersion = 1
 
-// Parent is the optional parent task the proposed tasks belong under.
+// Parent is the optional parent task the proposed tasks belong under. Each
+// pointer is nil when the file omits its key. The importer validates Branch
+// and BaseBranch.
 type Parent struct {
-	Title string `toml:"title"`
-	Brief string `toml:"brief"`
+	Title        string  `toml:"title"`
+	Brief        string  `toml:"brief"`
+	Shape        *string `toml:"shape"`
+	Branch       *string `toml:"branch"`
+	BaseBranch   *string `toml:"base_branch"`
+	DeliveryMode *string `toml:"delivery_mode"`
 }
 
 // Task is one proposed task. After holds local keys or existing task ids.
-// DeliveryMode and BaseBranch are nil when the file omits them; the importer
-// validates BaseBranch.
+// DeliveryMode, BaseBranch, and Branch are nil when the file omits them. The
+// importer validates BaseBranch and Branch.
 type Task struct {
 	Key          string   `toml:"key"`
 	Title        string   `toml:"title"`
@@ -34,6 +40,7 @@ type Task struct {
 	After        []string `toml:"after"`
 	DeliveryMode *string  `toml:"delivery_mode"`
 	BaseBranch   *string  `toml:"base_branch"`
+	Branch       *string  `toml:"branch"`
 }
 
 // Proposal is a decoded, validated proposal file.
@@ -51,8 +58,8 @@ type file struct {
 
 var (
 	topKeys   = []string{"schema_version", "parent", "tasks"}
-	tableKeys = []string{"title", "brief"}
-	taskKeys  = []string{"key", "title", "brief", "after", "delivery_mode", "base_branch"}
+	tableKeys = []string{"title", "brief", "shape", "branch", "base_branch", "delivery_mode"}
+	taskKeys  = []string{"key", "title", "brief", "after", "delivery_mode", "base_branch", "branch"}
 )
 
 // Decode strictly parses and validates a proposal file, including that its
@@ -87,6 +94,12 @@ func DecodeOrdered(data []byte) (Proposal, []Task, error) {
 	if f.Parent != nil {
 		if err := checkText(f.Parent.Title, f.Parent.Brief); err != nil {
 			return Proposal{}, nil, fmt.Errorf("parent: %w", err)
+		}
+		if f.Parent.Shape != nil && !slices.Contains(libtask.Shapes, *f.Parent.Shape) {
+			return Proposal{}, nil, fmt.Errorf("[parent]: shape must be one of %s", strings.Join(libtask.Shapes, ", "))
+		}
+		if f.Parent.DeliveryMode != nil && !slices.Contains(libtask.DeliveryModes, *f.Parent.DeliveryMode) {
+			return Proposal{}, nil, fmt.Errorf("[parent]: delivery_mode must be one of %s", strings.Join(libtask.DeliveryModes, ", "))
 		}
 	}
 	if len(f.Tasks) == 0 {
