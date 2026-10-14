@@ -92,7 +92,7 @@ func TestDefaultBranch(t *testing.T) {
 		root := repository(t)
 		gittest.Git(t, root, "branch", "integration")
 		originHEAD(t, root)
-		configure(t, root, "schema_version = 1\nbase_branch = \"integration\"\n")
+		configure(t, root, "schema_version = 1\n[branches]\ndev = \"integration\"\n")
 		check(t, root, "refs/heads/integration")
 	})
 	// Git configuration is never read, in any scope.
@@ -103,7 +103,8 @@ func TestDefaultBranch(t *testing.T) {
 		gittest.Git(t, root, "config", "fledge.baseBranch", "wrong")
 		check(t, root, "refs/remotes/origin/trunk")
 	})
-	t.Run("file without base branch", func(t *testing.T) {
+	// A default dev that does not exist falls back to origin/HEAD.
+	t.Run("default dev missing", func(t *testing.T) {
 		root := repository(t)
 		originHEAD(t, root)
 		configure(t, root, "schema_version = 1\n")
@@ -114,30 +115,38 @@ func TestDefaultBranch(t *testing.T) {
 		root := repository(t)
 		gittest.Git(t, root, "update-ref", "refs/remotes/origin/dev", "HEAD")
 		originHEAD(t, root)
-		configure(t, root, "schema_version = 1\nbase_branch = \"dev\"\n")
+		configure(t, root, "schema_version = 1\n[branches]\ndev = \"dev\"\n")
 		check(t, root, "refs/remotes/origin/dev")
 	})
 	t.Run("configured local before remote tracking", func(t *testing.T) {
 		root := repository(t)
 		gittest.Git(t, root, "branch", "dev")
 		gittest.Git(t, root, "update-ref", "refs/remotes/origin/dev", "HEAD")
-		configure(t, root, "schema_version = 1\nbase_branch = \"dev\"\n")
+		configure(t, root, "schema_version = 1\n[branches]\ndev = \"dev\"\n")
 		check(t, root, "refs/heads/dev")
 	})
-	t.Run("dev is not preferred unconfigured", func(t *testing.T) {
+	// Without a file, dev is the default dev branch.
+	t.Run("default dev before origin HEAD", func(t *testing.T) {
 		root := repository(t)
 		gittest.Git(t, root, "branch", "dev")
 		originHEAD(t, root)
-		check(t, root, "refs/remotes/origin/trunk")
+		check(t, root, "refs/heads/dev")
+	})
+	t.Run("default dev remote tracking only", func(t *testing.T) {
+		root := repository(t)
+		gittest.Git(t, root, "update-ref", "refs/remotes/origin/dev", "HEAD")
+		originHEAD(t, root)
+		check(t, root, "refs/remotes/origin/dev")
 	})
 	t.Run("origin HEAD before main", func(t *testing.T) {
 		root := repository(t)
 		originHEAD(t, root)
 		check(t, root, "refs/remotes/origin/trunk")
 	})
+	// A default dev that does not exist, without origin/HEAD, falls back to main.
 	t.Run("main", func(t *testing.T) {
 		root := repository(t)
-		gittest.Git(t, root, "branch", "dev")
+		gittest.Git(t, root, "branch", "other")
 		check(t, root, "refs/heads/main")
 	})
 	t.Run("none", func(t *testing.T) {
@@ -151,9 +160,19 @@ func TestDefaultBranch(t *testing.T) {
 	t.Run("configured missing", func(t *testing.T) {
 		root := repository(t)
 		originHEAD(t, root)
-		configure(t, root, "schema_version = 1\nbase_branch = \"missing\"\n")
+		configure(t, root, "schema_version = 1\n[branches]\ndev = \"missing\"\n")
 		got, err := DefaultBranch(ctx, root)
-		if got != "" || err == nil || !strings.Contains(err.Error(), ".fledge/config.toml") || !strings.Contains(err.Error(), "missing") {
+		if got != "" || err == nil || !strings.Contains(err.Error(), ".fledge/config.toml [branches] dev names missing") {
+			t.Fatalf("got %q, %v", got, err)
+		}
+	})
+	// A dev that the file names is set even when it is the default name.
+	t.Run("configured default name missing", func(t *testing.T) {
+		root := repository(t)
+		originHEAD(t, root)
+		configure(t, root, "schema_version = 1\n[branches]\ndev = \"dev\"\n")
+		got, err := DefaultBranch(ctx, root)
+		if got != "" || err == nil || !strings.Contains(err.Error(), ".fledge/config.toml [branches] dev names dev") {
 			t.Fatalf("got %q, %v", got, err)
 		}
 	})
@@ -161,7 +180,7 @@ func TestDefaultBranch(t *testing.T) {
 	t.Run("config invalid", func(t *testing.T) {
 		root := repository(t)
 		originHEAD(t, root)
-		configure(t, root, "schema_version = 1\nbase_branch = \"-x\"\n")
+		configure(t, root, "schema_version = 1\n[branches]\ndev = \"-x\"\n")
 		got, err := DefaultBranch(ctx, root)
 		if got != "" || err == nil || !strings.Contains(err.Error(), ".fledge/config.toml") || !strings.Contains(err.Error(), "starts with -") {
 			t.Fatalf("got %q, %v", got, err)

@@ -365,9 +365,9 @@ func TestIncompleteAgentInfoRefusesRemoval(t *testing.T) {
 // A configured base branch that does not exist refuses removal with its reason.
 func TestMissingConfiguredBaseBranchExplainsRefusal(t *testing.T) {
 	r := newRepo(t)
-	configure(t, r.root, "schema_version = 1\nbase_branch = \"dev\"\n")
+	configure(t, r.root, "schema_version = 1\n[branches]\ndev = \"dev\"\n")
 	out := Run(context.Background(), herdrscript.Client(t, call{Method: "worktree.list", Result: r.listing(false)}, agentList()), Options{Branch: "topic", Cwd: r.root})
-	if out.ExitCode() != 2 || out.Error.Phase != "guard" || !strings.Contains(out.Error.Message, "merged: unknown (.fledge/config.toml base_branch names dev, which does not exist") {
+	if out.ExitCode() != 2 || out.Error.Phase != "guard" || !strings.Contains(out.Error.Message, "merged: unknown (.fledge/config.toml [branches] dev names dev, which does not exist") {
 		t.Fatalf("%+v", out)
 	}
 }
