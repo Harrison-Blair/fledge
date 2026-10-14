@@ -221,6 +221,33 @@ func TestMergeAnswerRefusesAnUnknownShape(t *testing.T) {
 	}
 }
 
+// TestMergeAnswerRefusesAnUnknownShapeOnHTTP400: gh exits 1 for HTTP 400.
+// A body with details is a merge answer. If it is not a failed answer with a
+// message, it is land_gh_output_invalid. A body with no details is an HTTP
+// error and stays land_gh_failed.
+func TestMergeAnswerRefusesAnUnknownShapeOnHTTP400(t *testing.T) {
+	for _, body := range []string{
+		`{"status":"done","details":{}}`,
+		`{"details":{"message":"x"}}`,
+		`{"status":"pending","details":{}}`,
+	} {
+		dir := fakeAPI(t, body, 1)
+		g := GH{Dir: dir}
+		var coded *cli.Error
+		if _, err := g.MergeAsync(context.Background(), 2, mergeHeadSHA); !errors.As(err, &coded) || coded.Code != "land_gh_output_invalid" {
+			t.Fatalf("PUT %s: %v", body, err)
+		}
+		if _, err := g.MergeStatus(context.Background(), 2, mergeUUID); !errors.As(err, &coded) || coded.Code != "land_gh_output_invalid" {
+			t.Fatalf("GET %s: %v", body, err)
+		}
+	}
+	dir := fakeAPI(t, `{"message":"Not Found","status":"404"}`, 1)
+	var coded *cli.Error
+	if _, err := (GH{Dir: dir}).MergeAsync(context.Background(), 2, mergeHeadSHA); !errors.As(err, &coded) || coded.Code != "land_gh_failed" || !strings.Contains(coded.Message, "Not Found") {
+		t.Fatalf("%v", err)
+	}
+}
+
 // TestMergeAsyncReadsTheBodyOfAnHTTPError: an HTTP error that is not a
 // failed answer is land_gh_failed with the GitHub message.
 func TestMergeAsyncReadsTheBodyOfAnHTTPError(t *testing.T) {

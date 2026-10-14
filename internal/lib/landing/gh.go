@@ -240,7 +240,9 @@ func (g GH) MergeStatus(ctx context.Context, n int, uuid string) (MergeAnswer, e
 
 // mergeAnswer runs a merge-async call and decodes its answer, also from the
 // body of HTTP 400. A pending answer to the PUT needs a uuid, a merged answer
-// needs a full sha, and a failed answer needs a message.
+// needs a full sha, and a failed answer needs a message. On an HTTP error, a
+// body with details is a merge answer and must be failed. A body with no
+// details is an ordinary HTTP error.
 func (g GH) mergeAnswer(ctx context.Context, put bool, args ...string) (MergeAnswer, error) {
 	b, err := g.run(ctx, args...)
 	var raw struct {
@@ -252,8 +254,10 @@ func (g GH) mergeAnswer(ctx context.Context, put bool, args ...string) (MergeAns
 		switch {
 		case !put && decoded == nil && raw.Status != nil && *raw.Status == "404":
 			return MergeAnswer{}, ErrMergeRequestGone
-		case decoded != nil || raw.Status == nil || *raw.Status != "failed":
+		case decoded != nil || raw.Details == nil:
 			return MergeAnswer{}, apiError(err, b)
+		case raw.Status == nil || *raw.Status != "failed":
+			return MergeAnswer{}, invalidOutput("api merge-async", errors.New("an HTTP error answer is not failed"))
 		}
 	}
 	if decoded != nil || raw.Status == nil {

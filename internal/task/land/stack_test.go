@@ -886,14 +886,21 @@ func TestLandStackMergeFailed(t *testing.T) {
 }
 
 // TestLandStackMergeRefusesPendingWithoutUUID: a pending PUT answer with no
-// uuid is land_gh_output_invalid, and the run stores nothing.
+// uuid is land_gh_output_invalid. The run sends no poll and stores no
+// merge_request on a layer.
 func TestLandStackMergeRefusesPendingWithoutUUID(t *testing.T) {
 	s := setupStack(t)
 	s.review(t)
 	s.gh.set(t, apiMerge(2), putNoUUID)
-	s.mergeRefused(t, s.land(t, Options{ID: s.layers[1], Merge: true}), "land_gh_output_invalid", stepMerge, "")
-	if got := s.mergeRequest(t, 1); got != "" {
-		t.Fatalf("%q", got)
+	out := s.land(t, Options{ID: s.layers[1], Merge: true})
+	if calls := s.mergeCalls(t); !slices.Equal(calls, []string{putLine(2, s.heads[1])}) {
+		t.Fatalf("%q", calls)
+	}
+	s.mergeRefused(t, out, "land_gh_output_invalid", stepMerge, "")
+	for i, id := range s.layers {
+		if r := tasktest.Load(t, s.repo, id); r.MergeRequest != nil {
+			t.Fatalf("layer %d: %q", i, *r.MergeRequest)
+		}
 	}
 }
 
