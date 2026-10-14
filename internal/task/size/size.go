@@ -1,5 +1,7 @@
 // Package size implements task size: the review size of a task's branch
-// against its target branch, judged by the limits of its delivery mode.
+// against its target branch, judged by the limits of its delivery mode. It
+// compares a stack layer with the layer below it, and a stack parent from
+// the stack base to the head of its top layer.
 package size
 
 import (
@@ -69,11 +71,22 @@ func measure(ctx context.Context, s *state.Store, root string, r task.Record) (R
 	if res.Mode == "" {
 		res.Mode = task.ModeNone
 	}
+	// Measure a stack parent at the head of its top layer.
+	top := r
+	if r.Shape == task.ShapeStack {
+		layers, err := landing.StackLayers(s, r, "size")
+		if err != nil {
+			return res, err
+		}
+		if len(layers) > 0 {
+			top = layers[len(layers)-1]
+		}
+	}
 	var err error
-	if res.Branch, err = landing.TaskBranch(ctx, s, r, "size"); err != nil {
+	if res.Branch, err = landing.TaskBranch(ctx, s, top, "size"); err != nil {
 		return res, err
 	}
-	if res.Target, err = landing.TaskTarget(ctx, root, r, "size"); err != nil {
+	if res.Target, err = landing.LayerBase(ctx, s, root, r, "size"); err != nil {
 		return res, err
 	}
 	var missing string
@@ -83,10 +96,10 @@ func measure(ctx context.Context, s *state.Store, root string, r task.Record) (R
 	if missing != "" {
 		res.BaseMissing = &missing
 	}
-	if r.VerifiedCommit != nil {
-		res.Head = *r.VerifiedCommit
+	if top.VerifiedCommit != nil {
+		res.Head = *top.VerifiedCommit
 	} else if res.Head = landing.RefCommit(ctx, root, "refs/heads/"+res.Branch); res.Head == "" {
-		return res, &cli.Error{Code: "size_branch_missing", Message: fmt.Sprintf("branch %s of task %s does not exist", res.Branch, r.ID)}
+		return res, &cli.Error{Code: "size_branch_missing", Message: fmt.Sprintf("branch %s of task %s does not exist", res.Branch, top.ID)}
 	}
 	d, err := reviewsize.Measure(ctx, root, res.Base, res.Head)
 	if err != nil {

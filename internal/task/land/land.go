@@ -211,7 +211,9 @@ func (l *lander) guard(ctx context.Context) error {
 	if head := landing.RefCommit(ctx, l.root, "refs/heads/"+l.branch); head != l.commit {
 		return refuse("land_head_mismatch", "branch %s is at %s, not the verified commit %s; verify the new head again", l.branch, display(head), l.commit)
 	}
-	l.measure(ctx)
+	if err := l.measure(ctx); err != nil {
+		return err
+	}
 	paths, err := landing.Checkouts(ctx, l.root, l.branch)
 	if err != nil {
 		return err
@@ -247,16 +249,21 @@ func (l *lander) guard(ctx context.Context) error {
 }
 
 // measure sets the advisory review size of the verified commit against the
-// base ref of the mode, the same one task size uses. It never refuses: with
-// no base ref or a failed diff the size stays unset.
-func (l *lander) measure(ctx context.Context) {
-	base, missing, err := landing.BaseRef(ctx, l.root, l.mode, l.target, "land")
+// base ref of the mode for the layer base. Task size uses the same base. It
+// returns only a refusal of the layer base. With no base ref or a failed diff
+// the size stays unset.
+func (l *lander) measure(ctx context.Context) error {
+	target, err := landing.LayerBase(ctx, l.s, l.root, l.r, "land")
 	if err != nil {
-		return
+		return err
+	}
+	base, missing, err := landing.BaseRef(ctx, l.root, l.mode, target, "land")
+	if err != nil {
+		return nil
 	}
 	d, err := reviewsize.Measure(ctx, l.root, base, l.commit)
 	if err != nil {
-		return
+		return nil
 	}
 	kind := reviewsize.KindTask
 	if l.mode != task.ModeLocal {
@@ -267,6 +274,7 @@ func (l *lander) measure(ctx context.Context) {
 	if missing != "" {
 		l.base += " (" + missing + " is missing)"
 	}
+	return nil
 }
 
 // sizeWarnings names each measure of r over a limit.

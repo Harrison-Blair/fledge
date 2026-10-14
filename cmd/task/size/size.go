@@ -15,6 +15,9 @@ func New() *cobra.Command {
 		Long: "Show how large a task's branch is for review, as task land measures it.\n\n" +
 			"The diff is <target>...<head>: head is the task's verified commit, else the\n" +
 			"head of its branch; target is its base branch, else the integration branch.\n" +
+			"For a layer of a stack parent, target is the branch of the layer below. For\n" +
+			"the bottom layer and for a layer above a landed layer, target is the stack\n" +
+			"base. For a stack parent, the diff is <stack base>...<head of the top layer>.\n" +
 			"The measures are hand-written source lines, guard-eligible files, code\n" +
 			"domains, and total changed lines.\n\n" +
 			"Delivery modes local and none compare with the task limits and\n" +
