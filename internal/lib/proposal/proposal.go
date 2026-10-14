@@ -71,7 +71,8 @@ func Decode(data []byte) (Proposal, error) {
 
 // DecodeOrdered is Decode that also returns the creation order it checked,
 // as Order would. When the file's [parent] has shape stack, the tasks must
-// form one after chain.
+// form one after chain. When it has shape feature, it must have a branch,
+// and FeatureMembers applies to the tasks.
 func DecodeOrdered(data []byte) (Proposal, []Task, error) {
 	// The typed decoder matches keys case-insensitively, so check exact
 	// names on a raw decode first.
@@ -98,6 +99,9 @@ func DecodeOrdered(data []byte) (Proposal, []Task, error) {
 		}
 		if f.Parent.Shape != nil && !slices.Contains(libtask.Shapes, *f.Parent.Shape) {
 			return Proposal{}, nil, fmt.Errorf("[parent]: shape must be one of %s", strings.Join(libtask.Shapes, ", "))
+		}
+		if f.Parent.Shape != nil && *f.Parent.Shape == libtask.ShapeFeature && f.Parent.Branch == nil {
+			return Proposal{}, nil, fmt.Errorf("[parent]: shape feature needs a branch")
 		}
 		if f.Parent.DeliveryMode != nil && !slices.Contains(libtask.DeliveryModes, *f.Parent.DeliveryMode) {
 			return Proposal{}, nil, fmt.Errorf("[parent]: delivery_mode must be one of %s", strings.Join(libtask.DeliveryModes, ", "))
@@ -133,6 +137,11 @@ func DecodeOrdered(data []byte) (Proposal, []Task, error) {
 			}
 		}
 	}
+	if f.Parent != nil && f.Parent.Shape != nil && *f.Parent.Shape == libtask.ShapeFeature {
+		if err := FeatureMembers(f.Tasks, f.Parent.Branch); err != nil {
+			return Proposal{}, nil, err
+		}
+	}
 	p := Proposal{Parent: f.Parent, Tasks: f.Tasks}
 	order, err := p.Order()
 	if err != nil {
@@ -156,6 +165,30 @@ func (p Proposal) CheckStack(parent string, rs []libtask.Record) error {
 	}
 	_, err := libtask.Layers(parent, rs)
 	return err
+}
+
+// FeatureMembers gives each task without delivery_mode the mode local. When
+// branch is not nil, it gives each task without base_branch the base branch.
+// A task with another mode or base is an error that names its key.
+func FeatureMembers(ts []Task, branch *string) error {
+	name := ""
+	if branch != nil {
+		name = *branch
+	}
+	for i, t := range ts {
+		if t.DeliveryMode != nil && *t.DeliveryMode != libtask.ModeLocal {
+			return fmt.Errorf("task %q: a member of feature branch %q needs delivery_mode local, not %q", t.Key, name, *t.DeliveryMode)
+		}
+		if branch != nil && t.BaseBranch != nil && *t.BaseBranch != *branch {
+			return fmt.Errorf("task %q: a member of feature branch %q needs base_branch %q, not %q", t.Key, name, name, *t.BaseBranch)
+		}
+		mode := libtask.ModeLocal
+		ts[i].DeliveryMode = &mode
+		if branch != nil {
+			ts[i].BaseBranch = branch
+		}
+	}
+	return nil
 }
 
 // checkKeys rejects any key outside the documented shape.

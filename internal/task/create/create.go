@@ -34,8 +34,9 @@ type Options struct {
 // are stored once. The delivery mode is DeliveryMode when set, else the
 // repository's configured delivery_mode, else none; BaseBranch, when set, is
 // stored as the task's landing target. Shape, when set, is one of
-// task.Shapes. Branch, when set, is stored as the task's branch. Under a
-// stack Parent, the new task must be after the top layer and no other layer.
+// task.Shapes. Branch, when set, is stored as the task's branch, and shape
+// feature requires it. Under a stack Parent, the new task must be after the
+// top layer and no other layer. Under a feature Parent, see featureMember.
 func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Outcome {
 	out := cli.NewOutcome("task.create")
 	var text string
@@ -74,6 +75,9 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 	if err == nil && o.BranchSet {
 		err = landing.ValidBranch(ctx, "--branch", o.Branch)
 	}
+	if err == nil && o.Shape == task.ShapeFeature && !o.BranchSet {
+		err = cli.Invalid("--shape feature needs --branch")
+	}
 	if err != nil {
 		out.Fail(err, "validation", false)
 		return out
@@ -103,6 +107,10 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 			return err
 		}
 		if err := checkLayer(s, o.Parent, after); err != nil {
+			phase = "task"
+			return err
+		}
+		if err := featureMember(s, &o, &mode); err != nil {
 			phase = "task"
 			return err
 		}
@@ -165,6 +173,32 @@ func checkLayer(s *state.Store, parent string, after []string) error {
 	if !slices.Equal(below, want) {
 		return &cli.Error{Code: "task_stack_fork", Message: fmt.Sprintf("a new layer of stack %s must be after its top layer %s and no other layer", parent, want[0])}
 	}
+	return nil
+}
+
+// featureMember applies only when o.Parent has shape feature. The member gets
+// the delivery mode local and, when the parent has a branch, that branch as
+// its base branch. Another explicit mode fails with task_feature_member_mode,
+// and another explicit base branch with task_feature_member_base.
+func featureMember(s *state.Store, o *Options, mode *string) error {
+	if o.Parent == "" {
+		return nil
+	}
+	p, err := task.Get(s, o.Parent)
+	if err != nil || p.Shape != task.ShapeFeature {
+		return err
+	}
+	if o.DeliveryModeSet && o.DeliveryMode != task.ModeLocal {
+		return &cli.Error{Code: "task_feature_member_mode", Message: fmt.Sprintf("a member of feature parent %s needs delivery mode local, not %q", o.Parent, o.DeliveryMode)}
+	}
+	*mode = task.ModeLocal
+	if p.Branch == nil {
+		return nil
+	}
+	if o.BaseBranchSet && o.BaseBranch != *p.Branch {
+		return &cli.Error{Code: "task_feature_member_base", Message: fmt.Sprintf("a member of feature parent %s needs base branch %q, not %q", o.Parent, *p.Branch, o.BaseBranch)}
+	}
+	o.BaseBranch, o.BaseBranchSet = *p.Branch, true
 	return nil
 }
 

@@ -26,7 +26,7 @@ func TestDecodeRefusesAStackFork(t *testing.T) {
 			t.Fatalf("want %q, got %v", want, err)
 		}
 	}
-	if _, err := Decode(stack("feature", task("a", ""), task("b", `"a"`), task("c", `"a"`))); err != nil {
+	if _, err := Decode(feature(task("a", ""), task("b", `"a"`), task("c", `"a"`))); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Decode([]byte(header + task("a", "") + task("b", `"a"`) + task("c", `"a"`))); err != nil {

@@ -88,7 +88,7 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 				out.Fail(err, "state", false)
 				return out
 			}
-			if err := checkLinks(s, o.Parent, existing, p); err != nil {
+			if err := checkLinks(s, o.Parent, existing, p, order); err != nil {
 				out.Fail(err, "task", false)
 				return out
 			}
@@ -113,7 +113,7 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 	}
 	phase := "state"
 	err = s.Exclusive(func(tx *state.Tx) error {
-		if err := checkLinks(s, o.Parent, existing, p); err != nil {
+		if err := checkLinks(s, o.Parent, existing, p, order); err != nil {
 			phase = "task"
 			return err
 		}
@@ -182,12 +182,18 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 
 // checkLinks runs task.CheckLinks. When parent has shape stack, its layers
 // and the proposal's tasks must also form one after chain. A fork is invalid
-// input.
-func checkLinks(s *state.Store, parent string, existing []string, p proposal.Proposal) error {
+// input. When parent has shape feature, proposal.FeatureMembers applies to
+// order with the branch of parent. A conflict is invalid input.
+func checkLinks(s *state.Store, parent string, existing []string, p proposal.Proposal, order []proposal.Task) error {
 	if err := task.CheckLinks(s, parent, existing); err != nil || parent == "" {
 		return err
 	}
 	r, err := task.Get(s, parent)
+	if err == nil && r.Shape == task.ShapeFeature {
+		if err := proposal.FeatureMembers(order, r.Branch); err != nil {
+			return cli.Invalid("%v", err)
+		}
+	}
 	if err != nil || r.Shape != task.ShapeStack {
 		return err
 	}

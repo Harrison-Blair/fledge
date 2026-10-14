@@ -16,7 +16,7 @@ func TestCreateStoresShapeAndBranch(t *testing.T) {
 	if code != "" || r.Shape != task.ShapeStack || r.Branch == nil || *r.Branch != "stack/01-a" {
 		t.Fatalf("%s %+v", code, r)
 	}
-	if r, code := created(t, repo, Options{Shape: task.ShapeFeature, ShapeSet: true}); code != "" || r.Shape != task.ShapeFeature {
+	if r, code := created(t, repo, Options{Shape: task.ShapeFeature, ShapeSet: true, Branch: "feat/x", BranchSet: true}); code != "" || r.Shape != task.ShapeFeature {
 		t.Fatalf("%s %+v", code, r)
 	}
 }

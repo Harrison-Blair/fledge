@@ -33,7 +33,7 @@ func TestImportRefusesAStackFork(t *testing.T) {
 	}
 	for _, body := range []string{
 		shaped("stack", taskTOML("c", "C", "b"), taskTOML("a", "A"), taskTOML("b", "B", "a")),
-		shaped("feature", taskTOML("a", "A"), taskTOML("b", "B", "a"), taskTOML("c", "C", "a")),
+		featured("branch = \"feat/x\"\n", taskTOML("a", "A"), taskTOML("b", "B", "a"), taskTOML("c", "C", "a")),
 	} {
 		out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{File: write(t, body), FileSet: true}, strings.NewReader(""))
 		if out.Error != nil {
