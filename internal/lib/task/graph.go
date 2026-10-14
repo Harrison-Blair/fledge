@@ -2,6 +2,8 @@ package task
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 )
@@ -93,4 +95,76 @@ func CheckLinks(s *state.Store, parent string, after []string) error {
 		}
 	}
 	return nil
+}
+
+// Layers returns the direct subtasks of parent among rs, bottom first. Only
+// after edges between these layers count, and cancelled layers stay in the
+// chain. It fails, naming the fork or the gap, unless the edges form one
+// chain. One chain has these properties:
+//   - One layer, the bottom, has no prerequisite layer.
+//   - Each other layer has one prerequisite layer.
+//   - Each layer has at most one dependent layer.
+//   - Every layer is in the chain.
+func Layers(parent string, rs []Record) ([]Record, error) {
+	byID := map[string]Record{}
+	var ids []string
+	for _, r := range rs {
+		if r.Parent != nil && *r.Parent == parent {
+			byID[r.ID] = r
+			ids = append(ids, r.ID)
+		}
+	}
+	var bottoms []string
+	dependents := map[string][]string{}
+	for _, id := range ids {
+		var below []string
+		for _, dep := range byID[id].After {
+			if _, ok := byID[dep]; ok && !slices.Contains(below, dep) {
+				below = append(below, dep)
+			}
+		}
+		switch len(below) {
+		case 0:
+			bottoms = append(bottoms, id)
+		case 1:
+			dependents[below[0]] = append(dependents[below[0]], id)
+		default:
+			return nil, chainError("layer %s is after more than one layer: %s", id, strings.Join(below, ", "))
+		}
+	}
+	for _, id := range ids {
+		if len(dependents[id]) > 1 {
+			return nil, chainError("layer %s has more than one dependent layer: %s", id, strings.Join(dependents[id], ", "))
+		}
+	}
+	layers := []Record{}
+	switch {
+	case len(ids) == 0:
+		return layers, nil
+	case len(bottoms) == 0:
+		return nil, chainError("no layer is without a prerequisite layer")
+	case len(bottoms) > 1:
+		return nil, chainError("more than one layer has no prerequisite layer: %s", strings.Join(bottoms, ", "))
+	}
+	for id := bottoms[0]; ; id = dependents[id][0] {
+		layers = append(layers, byID[id])
+		if len(dependents[id]) == 0 {
+			break
+		}
+	}
+	if len(layers) < len(ids) {
+		var gap []string
+		for _, id := range ids {
+			if !slices.ContainsFunc(layers, func(r Record) bool { return r.ID == id }) {
+				gap = append(gap, id)
+			}
+		}
+		return nil, chainError("the chain from %s does not include %s", bottoms[0], strings.Join(gap, ", "))
+	}
+	return layers, nil
+}
+
+// chainError is a Layers failure.
+func chainError(format string, args ...any) error {
+	return fmt.Errorf("stack layers must form one after chain: "+format, args...)
 }

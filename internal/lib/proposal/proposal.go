@@ -70,7 +70,8 @@ func Decode(data []byte) (Proposal, error) {
 }
 
 // DecodeOrdered is Decode that also returns the creation order it checked,
-// as Order would.
+// as Order would. When the file's [parent] has shape stack, the tasks must
+// form one after chain.
 func DecodeOrdered(data []byte) (Proposal, []Task, error) {
 	// The typed decoder matches keys case-insensitively, so check exact
 	// names on a raw decode first.
@@ -137,7 +138,24 @@ func DecodeOrdered(data []byte) (Proposal, []Task, error) {
 	if err != nil {
 		return Proposal{}, nil, err
 	}
+	if p.Parent != nil && p.Parent.Shape != nil && *p.Parent.Shape == libtask.ShapeStack {
+		if err := p.CheckStack("[parent]", nil); err != nil {
+			return Proposal{}, nil, err
+		}
+	}
 	return p, order, nil
+}
+
+// CheckStack requires the layers of parent among rs and the tasks, as new
+// layers of parent, to form one after chain, as task.Layers checks it. A key
+// never looks like an id, so each task takes its key as its id.
+func (p Proposal) CheckStack(parent string, rs []libtask.Record) error {
+	rs = slices.Clone(rs)
+	for _, t := range p.Tasks {
+		rs = append(rs, libtask.Record{ID: t.Key, Parent: &parent, After: t.After})
+	}
+	_, err := libtask.Layers(parent, rs)
+	return err
 }
 
 // checkKeys rejects any key outside the documented shape.

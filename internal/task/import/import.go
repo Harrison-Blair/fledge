@@ -46,10 +46,11 @@ type Result struct {
 // Run validates the proposal before opening the store, then, unless DryRun,
 // creates the parent (if the file has one) and the tasks in topological
 // order under one store lock. An existing Parent must be neither verified
-// nor cancelled and every existing prerequisite id must exist; a dry run
-// checks the same without creating anything. The creator is the caller's
-// live agent record, or null when the caller is unregistered. Repeated
-// prerequisites are stored once. A task or the file's parent without
+// nor cancelled and every existing prerequisite id must exist. When the
+// Parent has shape stack, its layers and the new tasks must form one after
+// chain. A dry run checks the same without creating anything. The creator is
+// the caller's live agent record, or null when the caller is unregistered.
+// Repeated prerequisites are stored once. A task or the file's parent without
 // delivery_mode takes the repository's configured delivery_mode, else none.
 func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Outcome {
 	out := cli.NewOutcome("task.import")
@@ -87,7 +88,7 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 				out.Fail(err, "state", false)
 				return out
 			}
-			if err := task.CheckLinks(s, o.Parent, existing); err != nil {
+			if err := checkLinks(s, o.Parent, existing, p); err != nil {
 				out.Fail(err, "task", false)
 				return out
 			}
@@ -112,7 +113,7 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 	}
 	phase := "state"
 	err = s.Exclusive(func(tx *state.Tx) error {
-		if err := task.CheckLinks(s, o.Parent, existing); err != nil {
+		if err := checkLinks(s, o.Parent, existing, p); err != nil {
 			phase = "task"
 			return err
 		}
@@ -177,6 +178,27 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 	}
 	out.Result = r
 	return out
+}
+
+// checkLinks runs task.CheckLinks. When parent has shape stack, its layers
+// and the proposal's tasks must also form one after chain. A fork is invalid
+// input.
+func checkLinks(s *state.Store, parent string, existing []string, p proposal.Proposal) error {
+	if err := task.CheckLinks(s, parent, existing); err != nil || parent == "" {
+		return err
+	}
+	r, err := task.Get(s, parent)
+	if err != nil || r.Shape != task.ShapeStack {
+		return err
+	}
+	rs, err := task.List(s)
+	if err != nil {
+		return err
+	}
+	if err := p.CheckStack(parent, rs); err != nil {
+		return cli.Invalid("%v", err)
+	}
+	return nil
 }
 
 // validate reads and decodes the proposal, checks each branch and

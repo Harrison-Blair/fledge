@@ -19,7 +19,7 @@ func TestImportStoresParentKeysAndTaskBranch(t *testing.T) {
 		t.Fatal(err)
 	}
 	parent := strings.Replace(parentTOML, "title = \"Templates\"\n", "title = \"Templates\"\nshape = \"stack\"\nbranch = \"stack/00\"\nbase_branch = \"dev\"\ndelivery_mode = \"pr\"\n", 1)
-	path := write(t, "schema_version = 1\n"+parent+tasktest.Brief()+"'''\n"+withKeys(taskTOML("a", "A"), "a", "branch = \"stack/01-a\"\n")+taskTOML("b", "B"))
+	path := write(t, "schema_version = 1\n"+parent+tasktest.Brief()+"'''\n"+withKeys(taskTOML("a", "A"), "a", "branch = \"stack/01-a\"\n")+taskTOML("b", "B", "a"))
 	out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{File: path, FileSet: true}, strings.NewReader(""))
 	if out.Error != nil {
 		t.Fatalf("%+v", out.Error)

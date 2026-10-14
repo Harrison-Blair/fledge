@@ -34,7 +34,8 @@ type Options struct {
 // are stored once. The delivery mode is DeliveryMode when set, else the
 // repository's configured delivery_mode, else none; BaseBranch, when set, is
 // stored as the task's landing target. Shape, when set, is one of
-// task.Shapes. Branch, when set, is stored as the task's branch.
+// task.Shapes. Branch, when set, is stored as the task's branch. Under a
+// stack Parent, the new task must be after the top layer and no other layer.
 func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Outcome {
 	out := cli.NewOutcome("task.create")
 	var text string
@@ -101,6 +102,10 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 			phase = "task"
 			return err
 		}
+		if err := checkLayer(s, o.Parent, after); err != nil {
+			phase = "task"
+			return err
+		}
 		_, err := tx.Create(task.Kind, func(id string) any {
 			r = task.Record{ID: id, Title: o.Title, Brief: text, After: after, Status: task.Created, CreatedAt: *task.Now(), DeliveryMode: mode, Shape: o.Shape}
 			if o.BranchSet {
@@ -126,6 +131,41 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 	out.Effects = append(out.Effects, cli.Effect{Action: "created", Kind: "task", ID: r.ID})
 	out.Result = r
 	return out
+}
+
+// checkLayer applies only when parent has shape stack. It fails with
+// task_stack_fork when the layers do not form one after chain. It also fails
+// when the new task is not after the top layer and no other layer. The first
+// layer is after no layer.
+func checkLayer(s *state.Store, parent string, after []string) error {
+	if parent == "" {
+		return nil
+	}
+	p, err := task.Get(s, parent)
+	if err != nil || p.Shape != task.ShapeStack {
+		return err
+	}
+	rs, err := task.List(s)
+	if err != nil {
+		return err
+	}
+	layers, err := task.Layers(parent, rs)
+	if err != nil {
+		return &cli.Error{Code: "task_stack_fork", Message: err.Error()}
+	}
+	var below, want []string
+	for _, l := range layers {
+		if slices.Contains(after, l.ID) {
+			below = append(below, l.ID)
+		}
+	}
+	if len(layers) > 0 {
+		want = []string{layers[len(layers)-1].ID}
+	}
+	if !slices.Equal(below, want) {
+		return &cli.Error{Code: "task_stack_fork", Message: fmt.Sprintf("a new layer of stack %s must be after its top layer %s and no other layer", parent, want[0])}
+	}
+	return nil
 }
 
 // Render writes a successful creation.

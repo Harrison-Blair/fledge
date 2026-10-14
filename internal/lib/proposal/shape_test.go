@@ -13,7 +13,7 @@ func parentWith(lines string) string {
 
 func TestDecodeParentKeysAndTaskBranch(t *testing.T) {
 	entry := strings.Replace(task("a", ""), "key = \"a\"\n", "key = \"a\"\nbranch = \"stack/01-a\"\n", 1)
-	src := header + parentTable + "shape = \"stack\"\nbranch = \"stack/00\"\nbase_branch = \"dev\"\ndelivery_mode = \"pr\"\nbrief = '''\n" + valid() + "'''\n\n" + entry + task("b", "")
+	src := header + parentTable + "shape = \"stack\"\nbranch = \"stack/00\"\nbase_branch = \"dev\"\ndelivery_mode = \"pr\"\nbrief = '''\n" + valid() + "'''\n\n" + entry + task("b", `"a"`)
 	p, err := Decode([]byte(src))
 	if err != nil {
 		t.Fatal(err)
