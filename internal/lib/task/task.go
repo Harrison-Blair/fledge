@@ -60,7 +60,10 @@ var Shapes = []string{ShapeStack, ShapeFeature}
 // DeliveryMode is how task land delivers the task; a record written before it
 // existed loads as none. Shape is one of Shapes, or empty when the task has
 // no shape. Branch is set at creation or resolved and stored by task land;
-// VerifiedCommit is the commit the latest verification bound. The landing
+// VerifiedCommit is the commit the latest verification bound, and
+// VerifiedPatchID is its patch id against the task's base. CarriedFrom is
+// the verified commit before a carry-forward to a head with an equal patch
+// id. A new verification clears it. The landing
 // fields stay null until task land records them; LandStep is the last land
 // step reached, for refusals.
 type Record struct {
@@ -90,6 +93,8 @@ type Record struct {
 	Branch                 *string                 `json:"branch"`
 	BaseBranch             *string                 `json:"base_branch"`
 	VerifiedCommit         *string                 `json:"verified_commit"`
+	VerifiedPatchID        *string                 `json:"verified_patch_id"`
+	CarriedFrom            *string                 `json:"carried_from"`
 	LandedAt               *string                 `json:"landed_at"`
 	LandedBy               *string                 `json:"landed_by"`
 	MergeCommit            *string                 `json:"merge_commit"`

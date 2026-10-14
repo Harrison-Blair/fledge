@@ -34,10 +34,8 @@ func verifyWith(t *testing.T, c libagent.Client, repo, id, rev string) (task.Rec
 }
 
 func TestCommitBindsTheResolvedHead(t *testing.T) {
-	repo, id := setup(t, task.Completed)
-	tasktest.Register(t, repo, boss)
-	gittest.Commit(t, repo)
-	head := strings.TrimSpace(gittest.Git(t, repo, "rev-parse", "HEAD"))
+	// A branch ahead of main, so the patch id diff is not empty.
+	repo, id, head := branched(t, nil)
 	r, text, code := verifyCommit(t, repo, id, "HEAD")
 	if code != nil || r.VerifiedCommit == nil || *r.VerifiedCommit != head || strings.Contains(text, "Warning") {
 		t.Fatalf("%v %+v %q", code, r, text)

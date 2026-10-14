@@ -5,6 +5,7 @@ package verify
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -13,10 +14,12 @@ import (
 
 	libagent "github.com/Harrison-Blair/fledge/internal/lib/agent"
 	"github.com/Harrison-Blair/fledge/internal/lib/cli"
+	"github.com/Harrison-Blair/fledge/internal/lib/fledgedir"
 	"github.com/Harrison-Blair/fledge/internal/lib/gitstatus"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
 	"github.com/Harrison-Blair/fledge/internal/lib/landing"
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 )
 
@@ -43,10 +46,13 @@ type Result struct {
 // direct subtask must be verified or cancelled, unless Force is set; the
 // verifier and whether Force was used are recorded. A repeat verification
 // replaces the previous verifier, note, time, Force flag, and bound commit,
-// keeping only the latest. CommitSet resolves Commit in the caller's checkout
+// keeping only the latest. Each verification also clears CarriedFrom and
+// VerifiedPatchID. CommitSet resolves Commit in the caller's checkout
 // and binds the commit as VerifiedCommit; a dirty checkout adds a warning,
-// since the bound commit is then not exactly what was tested. A registered verifier's live session ref is then stored. This is
-// a workflow guard, not a security boundary.
+// since the bound commit is then not exactly what was tested. The patch id
+// of the bound commit is then stored. When it is unknown or the diff is
+// empty, a warning replaces it. A registered verifier's live session ref is
+// then stored. This is a workflow guard, not a security boundary.
 func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Outcome {
 	out := cli.NewOutcome("task.verify")
 	err := task.ValidateID(o.ID)
@@ -102,6 +108,15 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 			return &cli.Error{Code: "task_open_subtasks", Message: fmt.Sprintf("task %s has subtasks that are not verified or cancelled: %s; finish them first, or pass --force", r.ID, strings.Join(open, ", "))}
 		}
 		r.Status, r.VerifiedAt, r.Forced, r.Verifier, r.VerificationNote, r.VerifiedCommit = task.Verified, task.Now(), o.Force, nil, nil, commit
+		r.VerifiedPatchID, r.CarriedFrom = nil, nil
+		if commit != nil {
+			id, err := patchID(ctx, s, c.Cwd, *r, *commit)
+			if err != nil {
+				warnings = append(warnings, fmt.Sprintf("no patch id is stored, so task land cannot carry this verification to a rebased head: %v", err))
+			} else {
+				r.VerifiedPatchID = &id
+			}
+		}
 		if caller != nil {
 			r.Verifier = &caller.ID
 		}
@@ -120,6 +135,20 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 	}
 	out.Result = Result{Record: r, OpenSubtasks: open, Warnings: warnings}
 	return out
+}
+
+// patchID returns the patch id of commit against the base of r. The base is
+// the layer base for a stack layer, else the base ref of the task target.
+func patchID(ctx context.Context, s *state.Store, cwd string, r task.Record, commit string) (string, error) {
+	root, err := fledgedir.Root(ctx, cwd)
+	if err != nil {
+		return "", err
+	}
+	id, err := landing.TaskPatchID(ctx, s, root, r, r.DeliveryMode, commit, "verify")
+	if err == nil && id == "" {
+		err = errors.New("the diff against the base is empty")
+	}
+	return id, err
 }
 
 // dirty reports whether the checkout containing dir has staged, unstaged, or

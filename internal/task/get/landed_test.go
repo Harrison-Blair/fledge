@@ -16,6 +16,7 @@ func TestGetShowsVerifiedCommitAndLanding(t *testing.T) {
 	hash, merge := "0123456789abcdef0123456789abcdef01234567", "89abcdef0123456789abcdef0123456789abcdef"
 	id := tasktest.Seed(t, repo, task.Record{Title: "T", Brief: "b", Status: task.Landed, CreatedAt: "2026-01-01T00:00:00Z",
 		DeliveryMode: task.ModePR, BaseBranch: p("dev"), Branch: p("feat/x"), Verifier: p("bbbbbbbb"), VerifiedAt: p("2026-01-01T00:03:00Z"), VerifiedCommit: &hash,
+		VerifiedPatchID: p("fedcba9876543210fedcba9876543210fedcba98"), CarriedFrom: p("00112233445566778899aabbccddeeff00112233"),
 		LandedAt: p("2026-01-01T00:04:00Z"), LandedBy: p("cccccccc"), MergeCommit: &merge, TargetBranch: p("dev"), PRURL: p("https://example.com/pr/1"), LandStep: p("confirm")})
 	out := Run(context.Background(), tasktest.Client(t, repo, ""), Options{ID: id})
 	var b bytes.Buffer
@@ -27,6 +28,8 @@ func TestGetShowsVerifiedCommitAndLanding(t *testing.T) {
 		"created: 2026-01-01T00:00:00Z by an unregistered caller\n" +
 		"verified: 2026-01-01T00:03:00Z by bbbbbbbb\n" +
 		"verified commit: " + hash + "\n" +
+		"verified patch id: fedcba9876543210fedcba9876543210fedcba98\n" +
+		"carried from: 00112233445566778899aabbccddeeff00112233\n" +
 		"branch: feat/x\npull request: https://example.com/pr/1\n" +
 		"landed: 2026-01-01T00:04:00Z by cccccccc into dev as " + merge + "\n" +
 		"brief:\n  b\n"

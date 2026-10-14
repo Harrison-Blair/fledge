@@ -74,7 +74,8 @@ type lander struct {
 // the land lock; the store lock is held only while a record is written, and
 // each write first checks that the task is still verified at the same
 // commit. A refusal before a pull request push changes nothing but storing
-// --branch and --mode. Land never removes a checkout, stops an agent, or
+// --branch and --mode, and a carry-forward to a head with an equal patch id.
+// Land never removes a checkout, stops an agent, or
 // deletes a branch.
 func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 	out := cli.NewOutcome("task.land")
@@ -209,7 +210,9 @@ func (l *lander) guard(ctx context.Context) error {
 		return refuse("land_same_branch", "task %s would land branch %s into itself", l.r.ID, l.branch)
 	}
 	if head := landing.RefCommit(ctx, l.root, "refs/heads/"+l.branch); head != l.commit {
-		return refuse("land_head_mismatch", "branch %s is at %s, not the verified commit %s; verify the new head again", l.branch, display(head), l.commit)
+		if err := l.carry(ctx, head); err != nil {
+			return err
+		}
 	}
 	if err := l.measure(ctx); err != nil {
 		return err
@@ -245,6 +248,24 @@ func (l *lander) guard(ctx context.Context) error {
 	if gitstatus.Merged(ctx, l.root, l.commit, targetRef) == "yes" && (l.mode != task.ModePR || l.r.PRURL == nil) {
 		return refuse("land_already_merged", "verified commit %s is already in %s; nothing to land", l.commit, l.target)
 	}
+	return nil
+}
+
+// carry moves the verification to head when head has the verified patch id.
+// It stores head as the verified commit and the old commit as carried_from.
+// Any other head is land_head_mismatch.
+func (l *lander) carry(ctx context.Context, head string) error {
+	if head == "" {
+		return refuse("land_head_mismatch", "branch %s is at %s, not the verified commit %s; verify the new head again", l.branch, display(head), l.commit)
+	}
+	if err := landing.CheckCarry(ctx, l.s, l.root, l.r, l.mode, head, "land"); err != nil {
+		return err
+	}
+	old := l.commit
+	if err := l.update(func(r *task.Record) { r.VerifiedCommit, r.CarriedFrom = &head, &old }); err != nil {
+		return err
+	}
+	l.commit = head
 	return nil
 }
 
