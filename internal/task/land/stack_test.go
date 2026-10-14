@@ -1528,3 +1528,199 @@ func TestLandStackWithALandedHighLayerPushesNothing(t *testing.T) {
 	s.landedAt(t, 1, mergeSHA)
 	s.atReview(t, s.layers[0])
 }
+
+// originMerge makes a merge commit of head on main in origin outside
+// Fledge, as the GitHub button does, and returns it. The local tracking ref
+// does not change.
+func (s stack) originMerge(t *testing.T, head string) string {
+	t.Helper()
+	m := git(t, s.origin, "commit-tree", head+"^{tree}", "-p", "main", "-p", head, "-m", "merge "+head)
+	git(t, s.origin, "update-ref", "refs/heads/main", m)
+	return m
+}
+
+// tracked is the commit of refs/remotes/origin/main in the repository.
+func (s stack) tracked(t *testing.T) string {
+	t.Helper()
+	return git(t, s.repo, "rev-parse", "refs/remotes/origin/main")
+}
+
+// rebaseOnOrigin makes the GitHub rebase of layer i on origin: a commit on
+// onto that writes content to the file of layer i, pushed to the layer
+// branch from another clone. The repository does not get the commit. It
+// returns the new head.
+func (s stack) rebaseOnOrigin(t *testing.T, i int, onto, content string) string {
+	t.Helper()
+	clone := filepath.Join(t.TempDir(), "clone")
+	git(t, s.repo, "clone", "-q", s.origin, clone)
+	git(t, clone, "checkout", "-q", "--detach", onto)
+	name := "l" + strconv.Itoa(i+1)
+	head := commitFile(t, clone, name, content)
+	git(t, clone, "push", "-qf", "origin", "HEAD:refs/heads/"+name)
+	return head
+}
+
+// buttonMerge makes merge commit M1 of l2 on origin main outside Fledge and
+// makes the pull requests of l1 and l2 answer merged at their verified heads
+// as M1. l3 stays open. The stack is at the review step. It returns M1.
+func (s stack) buttonMerge(t *testing.T) string {
+	t.Helper()
+	s.review(t)
+	m1 := s.originMerge(t, s.heads[1])
+	s.merge(t, 0, m1, "")
+	s.merge(t, 1, m1, "")
+	return m1
+}
+
+// TestLandStackRecordsButtonMergesAndFetches: GitHub merged l1 and l2 as M1
+// with the button. The run records them, prints the record line, and gets
+// M1 into the tracking ref. Then GitHub rebased l3 onto M1 and merged it as
+// M2. The next run records l3 and the parent, and gets M2.
+func TestLandStackRecordsButtonMergesAndFetches(t *testing.T) {
+	s := setupStack(t)
+	m1 := s.buttonMerge(t)
+	out := s.land(t, Options{})
+	want := "Recorded a GitHub merge of layers 1 to 2.\nLayer " + s.layers[0] + ": landed at " + m1 + ".\nLayer " + s.layers[1] + ": landed at " + m1 +
+		".\nLayer " + s.layers[2] + ": land step review.\nLayers 1 to 2 landed.\n"
+	ok(t, out, want)
+	if got := render(t, out); got != want {
+		t.Fatalf("%q", got)
+	}
+	s.landedAt(t, 0, m1)
+	s.landedAt(t, 1, m1)
+	if got := s.tracked(t); got != m1 {
+		t.Fatalf("origin/main is %s, not M1 %s", got, m1)
+	}
+	s.patchID(t, 2)
+	rebased := s.rebaseOnOrigin(t, 2, m1, "l3\n")
+	m2 := s.originMerge(t, rebased)
+	s.gh.set(t, apiPull(2), mergedPull(2, rebased, m1, m2))
+	refs := s.refs(t)
+	ok(t, s.land(t, Options{}), "Recorded a GitHub merge of layer 3.\n")
+	if got := s.refs(t); !slices.Equal(got, refs) {
+		t.Fatalf("refs changed:\n%q\n%q", refs, got)
+	}
+	if r := s.landedAt(t, 2, m2); cli.Display(r.VerifiedCommit) != rebased || cli.Display(r.CarriedFrom) != s.heads[2] {
+		t.Fatalf("%+v", r)
+	}
+	if p := s.load(t); p.Status != task.Landed || cli.Display(p.MergeCommit) != m2 {
+		t.Fatalf("%+v", p)
+	}
+	if got := s.tracked(t); got != m2 {
+		t.Fatalf("origin/main is %s, not M2 %s", got, m2)
+	}
+}
+
+// TestLandStackRefusesAChangedButtonMerge: GitHub merged l3 as M2 at a
+// rebased head with a changed line. No record changes, and the tracking ref
+// stays at M1.
+func TestLandStackRefusesAChangedButtonMerge(t *testing.T) {
+	s := setupStack(t)
+	m1 := s.buttonMerge(t)
+	ok(t, s.land(t, Options{}), "")
+	s.patchID(t, 2)
+	rebased := s.rebaseOnOrigin(t, 2, m1, "changed\n")
+	m2 := s.originMerge(t, rebased)
+	s.gh.set(t, apiPull(2), mergedPull(2, rebased, m1, m2))
+	before := s.snapshot(t)
+	refusedNaming(t, s.land(t, Options{}), "land_pr_merged_other_head", s.layers[2])
+	s.unchanged(t, before)
+	if got := s.tracked(t); got != m1 {
+		t.Fatalf("origin/main is %s, not M1 %s", got, m1)
+	}
+}
+
+// TestLandStackRefusesAClosedButtonLayer: l2 is closed without a merge. No
+// record changes, and the tracking ref does not change.
+func TestLandStackRefusesAClosedButtonLayer(t *testing.T) {
+	s := setupStack(t)
+	s.buttonMerge(t)
+	s.gh.set(t, apiPull(1), strings.Replace(restPull(1, s.heads[1], s.heads[0]), `"state":"open"`, `"state":"closed"`, 1))
+	before, tracked := s.snapshot(t), s.tracked(t)
+	refusedNaming(t, s.land(t, Options{}), "land_pr_closed", s.layers[1])
+	s.unchanged(t, before)
+	if got := s.tracked(t); got != tracked {
+		t.Fatalf("origin/main moved from %s to %s", tracked, got)
+	}
+}
+
+// TestLandStackWithNoGitHubChangeFetchesNothing: after the record of M1,
+// origin main moves to a new commit. A run with no change on GitHub writes
+// nothing and runs no git fetch, so the tracking ref stays at M1.
+func TestLandStackWithNoGitHubChangeFetchesNothing(t *testing.T) {
+	s := setupStack(t)
+	m1 := s.buttonMerge(t)
+	ok(t, s.land(t, Options{}), "")
+	moved := git(t, s.origin, "commit-tree", m1+"^{tree}", "-p", m1, "-m", "moved")
+	git(t, s.origin, "update-ref", "refs/heads/main", moved)
+	before := s.snapshot(t)
+	out := s.land(t, Options{})
+	ok(t, out, "Layers 1 to 2 landed.")
+	if strings.Contains(render(t, out), "Recorded") {
+		t.Fatalf("%q", render(t, out))
+	}
+	s.unchanged(t, before)
+	if got := s.tracked(t); got != m1 {
+		t.Fatalf("origin/main is %s, not M1 %s", got, m1)
+	}
+}
+
+// TestLandStackWarnsOnAFailedFetch: origin does not exist. The run records
+// l1 and l2, exits 0, and warns about the failed git fetch.
+func TestLandStackWarnsOnAFailedFetch(t *testing.T) {
+	s := setupStack(t)
+	m1 := s.buttonMerge(t)
+	git(t, s.repo, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing.git"))
+	out := s.land(t, Options{})
+	ok(t, out, "Recorded a GitHub merge of layers 1 to 2.")
+	s.landedAt(t, 0, m1)
+	s.landedAt(t, 1, m1)
+	if w := out.Result.(Result).Warnings; len(w) != 1 || !strings.HasPrefix(w[0], "git fetch origin main failed: ") {
+		t.Fatalf("%q", w)
+	}
+}
+
+// TestLandStackNamesNonPrefixLayers: the landed layers do not form a prefix,
+// so the stack line names each landed layer.
+func TestLandStackNamesNonPrefixLayers(t *testing.T) {
+	for _, c := range []struct {
+		merged []int
+		want   string
+	}{{[]int{1}, "\nLayer 2 landed.\n"}, {[]int{1, 2}, "\nLayers 2 and 3 landed.\n"}} {
+		s := setupStack(t)
+		s.review(t)
+		for _, i := range c.merged {
+			s.merge(t, i, mergeSHA, "")
+		}
+		ok(t, s.land(t, Options{}), c.want)
+	}
+}
+
+// refs are the refs of the repository other than refs/remotes/origin/main,
+// each with its commit.
+func (s stack) refs(t *testing.T) []string {
+	t.Helper()
+	return slices.DeleteFunc(strings.Split(git(t, s.repo, "for-each-ref", "--format=%(refname) %(objectname)"), "\n"),
+		func(l string) bool { return strings.HasPrefix(l, "refs/remotes/origin/main ") })
+}
+
+// TestLandStackNamesAFailedPatchFetch: GitHub rebased l3 onto M1 and merged
+// it, but origin is missing, so the git fetch of the rebased head fails. The
+// run refuses land_pr_merged_other_head with the fetch error, and no record
+// changes.
+func TestLandStackNamesAFailedPatchFetch(t *testing.T) {
+	s := setupStack(t)
+	m1 := s.buttonMerge(t)
+	ok(t, s.land(t, Options{}), "")
+	s.patchID(t, 2)
+	rebased := s.rebaseOnOrigin(t, 2, m1, "l3\n")
+	s.gh.set(t, apiPull(2), mergedPull(2, rebased, m1, s.originMerge(t, rebased)))
+	git(t, s.repo, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing.git"))
+	before := s.snapshot(t)
+	out := s.land(t, Options{})
+	refusedNaming(t, out, "land_pr_merged_other_head", s.layers[2])
+	if want := "git fetch origin " + m1 + " " + rebased + " failed: "; !strings.Contains(out.Error.Message, want) {
+		t.Fatalf("message lacks %q: %s", want, out.Error.Message)
+	}
+	s.unchanged(t, before)
+}

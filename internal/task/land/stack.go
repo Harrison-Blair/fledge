@@ -50,7 +50,8 @@ func stackParent(s *state.Store, r task.Record) (p task.Record, ok bool, err err
 
 // stack lands stack parent p. The parent and the layers store the branches
 // and the delivery mode, so --branch and --mode are invalid input. Each run
-// first makes the records follow GitHub. A landed stack then ends the run.
+// first makes the records follow GitHub, and names the layers that it
+// recorded. A landed stack then ends the run.
 // A layer lands only after the parent reached review. The parent guards run
 // on each other run. Then a run continues the merge request that a layer
 // holds. Else --merge requests the merge of the selected layer, or of the top
@@ -67,9 +68,12 @@ func (l *lander) stack(ctx context.Context, o Options, p task.Record) error {
 		return err
 	}
 	gh := landing.GH{Dir: l.root}
-	records, wrote, err := l.reconcile(ctx, gh, records, -1, "")
+	records, wrote, recorded, err := l.follow(ctx, gh, records, -1, "")
 	if err != nil {
 		return err
+	}
+	if len(recorded) > 0 {
+		l.summary = append(l.summary, "Recorded a GitHub merge of "+layerNames("layer", recorded)+".")
 	}
 	p = l.r
 	low := slices.IndexFunc(records, func(r task.Record) bool { return r.Status != task.Landed })
@@ -220,7 +224,7 @@ func (l *lander) recordMerge(ctx context.Context, gh landing.GH, j int, uuid str
 	if err != nil {
 		return err
 	}
-	records, wrote, err := l.reconcile(ctx, gh, records, j, uuid)
+	records, wrote, _, err := l.follow(ctx, gh, records, j, uuid)
 	if err != nil {
 		return err
 	}
@@ -229,6 +233,29 @@ func (l *lander) recordMerge(ctx context.Context, gh landing.GH, j int, uuid str
 	}
 	l.summarize(records, wrote)
 	return nil
+}
+
+// follow runs the reconcile. It also returns the positions of the layers
+// that the reconcile moved to landed. When there are such layers, follow runs
+// git fetch origin <base> one time. A failed git fetch adds a warning.
+func (l *lander) follow(ctx context.Context, gh landing.GH, records []task.Record, j int, uuid string) ([]task.Record, bool, []int, error) {
+	stored, wrote, err := l.reconcile(ctx, gh, records, j, uuid)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	var recorded []int
+	for i, r := range stored {
+		if r.Status == task.Landed && records[i].Status != task.Landed {
+			recorded = append(recorded, i+1)
+		}
+	}
+	if len(recorded) > 0 {
+		base := cli.Display(stored[recorded[0]-1].TargetBranch)
+		if output, err := l.git(ctx, "fetch", "origin", base).CombinedOutput(); err != nil {
+			l.warnings = append(l.warnings, fmt.Sprintf("git fetch origin %s failed: %s", base, strings.TrimSpace(string(output))))
+		}
+	}
+	return stored, wrote, recorded, nil
 }
 
 // reconcile makes the stack records follow GitHub. It reads the pull request
@@ -262,8 +289,10 @@ func (l *lander) reconcile(ctx context.Context, gh landing.GH, records []task.Re
 			return nil, false, err
 		case pull.State == "closed" && !pull.Merged:
 			return nil, false, refuse("land_pr_closed", "pull request %s of layer %s was closed without a merge; reopen it, then run task land again", *r.PRURL, r.ID)
-		case pull.Merged && r.Status != task.Landed && pull.HeadSHA != commit(&r) && !l.samePatch(ctx, r, pull):
-			return nil, false, refuse("land_pr_merged_other_head", "pull request %s of layer %s was merged at head %s, not the verified commit %s, and its patch id against base %s is not the verified patch id", *r.PRURL, r.ID, pull.HeadSHA, commit(&r), pull.BaseSHA)
+		case pull.Merged && r.Status != task.Landed && pull.HeadSHA != commit(&r):
+			if same, note := l.samePatch(ctx, r, pull); !same {
+				return nil, false, refuse("land_pr_merged_other_head", "pull request %s of layer %s was merged at head %s, not the verified commit %s, and its patch id against base %s is not the verified patch id%s", *r.PRURL, r.ID, pull.HeadSHA, commit(&r), pull.BaseSHA, note)
+			}
 		}
 		l.pulls[r.ID] = pull
 		if i == j && uuid != "" {
@@ -334,20 +363,30 @@ func (l *lander) reconcile(ctx context.Context, gh landing.GH, records []task.Re
 }
 
 // samePatch reports whether the head of pull request p has the verified
-// patch id of r against the base of p.
-func (l *lander) samePatch(ctx context.Context, r task.Record, p landing.Pull) bool {
+// patch id of r against the base of p. GitHub can make a head that the
+// repository does not have. When the patch id read fails and the base or the
+// head is missing, samePatch runs git fetch origin <base> <head> one time by
+// SHA, which moves no ref, and reads the patch id again. note names a failed
+// git fetch, else it is "".
+func (l *lander) samePatch(ctx context.Context, r task.Record, p landing.Pull) (same bool, note string) {
 	id, err := landing.PatchID(ctx, l.root, p.BaseSHA, p.HeadSHA)
-	return err == nil && id != "" && r.VerifiedPatchID != nil && id == *r.VerifiedPatchID
+	if err != nil && (l.git(ctx, "cat-file", "-e", p.BaseSHA+"^{commit}").Run() != nil || l.git(ctx, "cat-file", "-e", p.HeadSHA+"^{commit}").Run() != nil) {
+		if output, err := l.git(ctx, "fetch", "--no-write-fetch-head", "origin", p.BaseSHA, p.HeadSHA).CombinedOutput(); err != nil {
+			return false, fmt.Sprintf(". git fetch origin %s %s failed: %s", p.BaseSHA, p.HeadSHA, strings.TrimSpace(string(output)))
+		}
+		id, err = landing.PatchID(ctx, l.root, p.BaseSHA, p.HeadSHA)
+	}
+	return err == nil && id != "" && r.VerifiedPatchID != nil && id == *r.VerifiedPatchID, ""
 }
 
 // summarize sets the human lines of a stack run that ends after a record:
 // one line for each layer, then the stack line. wrote is true when this run
 // landed the parent.
 func (l *lander) summarize(records []task.Record, wrote bool) {
-	landed := 0
-	for _, r := range records {
+	var landed []int
+	for i, r := range records {
 		if r.Status == task.Landed {
-			landed++
+			landed = append(landed, i+1)
 			l.summary = append(l.summary, fmt.Sprintf("Layer %s: landed at %s.", r.ID, cli.Display(r.MergeCommit)))
 		} else {
 			l.summary = append(l.summary, fmt.Sprintf("Layer %s: land step %s.", r.ID, cli.Display(r.LandStep)))
@@ -359,8 +398,27 @@ func (l *lander) summarize(records []task.Record, wrote bool) {
 	case l.r.Status == task.Landed:
 		l.summary = append(l.summary, fmt.Sprintf("Stack %s is already landed at %s.", l.r.ID, cli.Display(l.r.MergeCommit)))
 	default:
-		l.summary = append(l.summary, fmt.Sprintf("Layers 1 to %d landed.", landed))
+		l.summary = append(l.summary, layerNames("Layer", landed)+" landed.")
 	}
+}
+
+// layerNames names the layers at positions ns, in ascending order, after
+// word: "Layer 2", "Layers 1 to 3" for a prefix, "Layers 2 and 3", or
+// "Layers 1, 3, and 4".
+func layerNames(word string, ns []int) string {
+	names := make([]string, len(ns))
+	for i, n := range ns {
+		names[i] = strconv.Itoa(n)
+	}
+	switch {
+	case len(ns) == 1:
+		return word + " " + names[0]
+	case ns[0] == 1 && ns[len(ns)-1] == len(ns):
+		return fmt.Sprintf("%ss 1 to %d", word, len(ns))
+	case len(ns) == 2:
+		return word + "s " + names[0] + " and " + names[1]
+	}
+	return word + "s " + strings.Join(names[:len(names)-1], ", ") + ", and " + names[len(names)-1]
 }
 
 // mergeFailed refuses the failed merge request of pull request n with the
@@ -549,8 +607,8 @@ func (l *lander) pullHead(ctx context.Context, p landing.Pull) (landing.PR, erro
 	if p.HeadSHA == l.commit {
 		return pr, nil
 	}
-	if !l.samePatch(ctx, l.r, p) {
-		return landing.PR{}, refuse("land_head_mismatch", "pull request %s of branch %s has head %s, not the verified commit %s, and its patch id against base %s is not the verified patch id; verify the new head again", url, l.branch, p.HeadSHA, l.commit, p.BaseSHA)
+	if same, note := l.samePatch(ctx, l.r, p); !same {
+		return landing.PR{}, refuse("land_head_mismatch", "pull request %s of branch %s has head %s, not the verified commit %s, and its patch id against base %s is not the verified patch id%s; verify the new head again", url, l.branch, p.HeadSHA, l.commit, p.BaseSHA, note)
 	}
 	return pr, l.carryTo(p.HeadSHA)
 }

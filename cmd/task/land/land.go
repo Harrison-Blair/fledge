@@ -50,6 +50,10 @@ func New() *cobra.Command {
 			"request. A layer stores the uuid of a pending request as merge_request.\n" +
 			"The next task land on the parent or on a layer continues a pending\n" +
 			"request and sends no new request.\n\n" +
+			"A run on a stack first records every layer that GitHub reports merged, also\n" +
+			"a merge made with the GitHub button. After such a record, the run gets the\n" +
+			"target branch from origin with git fetch. A run with no change on GitHub\n" +
+			"writes nothing.\n\n" +
 			"Every attempt that passes the head check prints the advisory review-size\n" +
 			"report of the verified commit against the target, as task size does, also in\n" +
 			"the JSON size field and the body of a pull request it opens; the size never\n" +
