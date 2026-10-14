@@ -16,6 +16,7 @@ import (
 
 	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/landing"
+	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/testutil/tasktest"
 )
@@ -410,27 +411,41 @@ func TestLandStackRefusesPullWithoutHead(t *testing.T) {
 	}
 	body := restPull(1, s.heads[1], s.heads[0])
 	s.gh.set(t, apiPull(1), strings.Replace(body, `"head":{"sha":"`+s.heads[1]+`","ref":"l2"},`, "", 1))
-	s.stackRefusedAt(t, s.land(t, Options{}), "land_gh_output_invalid", stepPR, "")
+	s.refusedAtCheck(t, s.land(t, Options{}), "land_gh_output_invalid", "")
 }
 
 // TestLandStackRefusesClosedStoredPull: the l2 layer has a stored pull
-// request at the verified head. GitHub closed it without a merge, so the open
-// list is empty. The landing refuses it and creates no pull request.
+// request. GitHub closed it without a merge. The reconcile refuses it at the
+// check step and creates no pull request.
 func TestLandStackRefusesClosedStoredPull(t *testing.T) {
 	s := setupStack(t)
 	if out := s.land(t, Options{}); out.Error != nil {
 		t.Fatalf("%+v", out.Error)
 	}
+	os.Remove(filepath.Join(s.gh.dir, "log"))
 	s.gh.set(t, apiPull(1), strings.Replace(restPull(1, s.heads[1], s.heads[0]), `"state":"open"`, `"state":"closed"`, 1))
-	s.gh.set(t, "list-l2", "[]")
 	out := s.land(t, Options{})
-	log := s.gh.log(t)
-	if creates := slices.DeleteFunc(slices.Clone(log), func(l string) bool { return !strings.HasPrefix(l, "pr create") }); len(creates) != 3 {
-		t.Fatalf("create count %d: %q", len(creates), creates)
+	if slices.ContainsFunc(s.gh.log(t), func(l string) bool { return strings.HasPrefix(l, "pr create") }) {
+		t.Fatalf("%q", s.gh.log(t))
 	}
-	s.stackRefusedAt(t, out, "land_pr_closed", stepPR, "l2")
+	s.refusedAtCheck(t, out, "land_pr_closed", s.layers[1])
 	if r := tasktest.Load(t, s.repo, s.layers[1]); r.PRURL == nil || *r.PRURL != pullURL(1) {
 		t.Fatalf("%+v", r)
+	}
+}
+
+// refusedAtCheck requires out to be a refusal with code that names name at
+// the check step of the reconcile. The parent stays at review.
+func (s stack) refusedAtCheck(t *testing.T, out cli.Outcome, code, name string) {
+	t.Helper()
+	if out.Error == nil || out.Error.Code != code || out.ExitCode() != 1 || !strings.Contains(out.Error.Message, name) {
+		t.Fatalf("want %s, got %+v", code, out.Error)
+	}
+	if text := render(t, out); !strings.HasSuffix(text, " (land)\nLand step reached: check.\n") {
+		t.Fatalf("%q", text)
+	}
+	if p := s.load(t); cli.Display(p.LandStep) != stepReview {
+		t.Fatalf("%+v", p)
 	}
 }
 
@@ -718,15 +733,16 @@ func putLine(n int, head string) string {
 }
 
 // review lands the stack to review. The poll runs every millisecond for at
-// most 20 milliseconds. The fake gh log starts empty.
+// most 20 milliseconds, and the reads after a merge are one millisecond
+// apart. The fake gh log starts empty.
 func (s stack) review(t *testing.T) {
 	t.Helper()
 	if out := s.land(t, Options{}); out.Error != nil {
 		t.Fatalf("%+v", out.Error)
 	}
-	interval, timeout := pollInterval, pollTimeout
-	pollInterval, pollTimeout = time.Millisecond, 20*time.Millisecond
-	t.Cleanup(func() { pollInterval, pollTimeout = interval, timeout })
+	interval, timeout, confirm := pollInterval, pollTimeout, confirmInterval
+	pollInterval, pollTimeout, confirmInterval = time.Millisecond, 20*time.Millisecond, time.Millisecond
+	t.Cleanup(func() { pollInterval, pollTimeout, confirmInterval = interval, timeout, confirm })
 	os.Remove(filepath.Join(s.gh.dir, "log"))
 }
 
@@ -768,8 +784,9 @@ func (s stack) mergeRequest(t *testing.T, i int) string {
 }
 
 // TestLandStackMergeRequestsAndPolls: --merge on l2 sends one PUT on pull
-// request 2 at its head, then polls the uuid. Before the record step exists,
-// merged is land_unconfirmed, and the uuid stays stored.
+// request 2 at its head, then polls the uuid. Pull request 2 still reads
+// open after merged, so the run clears the uuid and refuses
+// land_unconfirmed.
 func TestLandStackMergeRequestsAndPolls(t *testing.T) {
 	s := setupStack(t)
 	s.review(t)
@@ -780,10 +797,7 @@ func TestLandStackMergeRequestsAndPolls(t *testing.T) {
 		t.Fatalf("%q", calls)
 	}
 	s.mergeRefused(t, out, "land_unconfirmed", stepMerge, "fledge task land --id "+s.id)
-	if got := s.mergeRequest(t, 1); got != mergeUUID {
-		t.Fatalf("%q", got)
-	}
-	for _, i := range []int{0, 2} {
+	for _, i := range []int{0, 1, 2} {
 		if got := s.mergeRequest(t, i); got != "" {
 			t.Fatalf("layer %d: %q", i, got)
 		}
@@ -978,4 +992,507 @@ func TestLandStackMergeRequestGone(t *testing.T) {
 	if got := s.mergeRequest(t, 1); got != mergeUUID {
 		t.Fatalf("%q", got)
 	}
+}
+
+// The merge commits of the reconcile cases.
+const (
+	mergeSHA  = "7a4be7028342660f46d0c0869c8c74c436df9cb1"
+	buttonSHA = "ea8b531b9f3403aa20afc22c7ef4549b3b3e7b6c"
+)
+
+// mergedPull is the REST pull request of layer i, merged at head on base as
+// merge commit sha.
+func mergedPull(i int, head, base, sha string) string {
+	return strings.Replace(restPull(i, head, base), `"state":"open","merged":false,"merge_commit_sha":null`, `"state":"closed","merged":true,"merge_commit_sha":"`+sha+`"`, 1)
+}
+
+// base is the base commit of layer i.
+func (s stack) base(t *testing.T, i int) string {
+	t.Helper()
+	if i == 0 {
+		return git(t, s.repo, "rev-parse", "main")
+	}
+	return s.heads[i-1]
+}
+
+// merge makes the REST read of the pull request of layer i answer merged at
+// its verified head as merge commit sha. With suffix .after-put, only the
+// reads after a PUT answer so.
+func (s stack) merge(t *testing.T, i int, sha, suffix string) {
+	t.Helper()
+	s.gh.set(t, apiPull(i)+suffix, mergedPull(i, s.heads[i], s.base(t, i), sha))
+}
+
+// changed commits a change of the file of layer i on its base and returns
+// the new head. The verification of layer i stores its patch id against its
+// base, so only the changed line stops a carry.
+func (s stack) changed(t *testing.T, i int) string {
+	t.Helper()
+	s.patchID(t, i)
+	git(t, s.repo, "checkout", "-qb", "changed", s.base(t, i))
+	head := commitFile(t, s.repo, "l"+strconv.Itoa(i+1), "changed\n")
+	git(t, s.repo, "checkout", "-q", "main")
+	return head
+}
+
+// patchID stores the patch id of layer i against its base on its record.
+func (s stack) patchID(t *testing.T, i int) {
+	t.Helper()
+	id, err := landing.PatchID(context.Background(), s.repo, s.base(t, i), s.heads[i])
+	if err != nil || id == "" {
+		t.Fatal(err)
+	}
+	s.edit(t, s.layers[i], func(r *task.Record) { r.VerifiedPatchID = &id })
+}
+
+// rebaseLow rebases l1 onto a new commit on main with the same change and
+// makes its REST read answer merged at that head as mergeSHA. It returns the
+// new head.
+func (s stack) rebaseLow(t *testing.T) string {
+	t.Helper()
+	s.patchID(t, 0)
+	git(t, s.repo, "checkout", "-qb", "rebased-l1", "main")
+	base := commitFile(t, s.repo, "x", "x\n")
+	head := commitFile(t, s.repo, "l1", "l1\n")
+	git(t, s.repo, "checkout", "-q", "main")
+	s.gh.set(t, apiPull(0), mergedPull(0, head, base, mergeSHA))
+	return head
+}
+
+// snapshot is the JSON of the parent and of each layer record.
+func (s stack) snapshot(t *testing.T) []string {
+	t.Helper()
+	var out []string
+	for _, id := range append([]string{s.id}, s.layers...) {
+		b, err := json.Marshal(tasktest.Load(t, s.repo, id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, string(b))
+	}
+	return out
+}
+
+// unchanged requires the records to equal before.
+func (s stack) unchanged(t *testing.T, before []string) {
+	t.Helper()
+	if after := s.snapshot(t); !slices.Equal(after, before) {
+		t.Fatalf("records changed:\n%q\n%q", before, after)
+	}
+}
+
+// apiCalls returns the gh api commands of the fake gh log and empties the
+// log.
+func (s stack) apiCalls(t *testing.T) []string {
+	t.Helper()
+	calls := slices.DeleteFunc(s.gh.log(t), func(l string) bool { return !strings.HasPrefix(l, "api ") })
+	os.Remove(filepath.Join(s.gh.dir, "log"))
+	return calls
+}
+
+// pullLine is the fake gh log line of the REST read of pull request n.
+func pullLine(n int) string { return "api --method=GET repos/{owner}/{repo}/pulls/" + strconv.Itoa(n) }
+
+// threeReads are the reads of the three layer pull requests.
+var threeReads = []string{pullLine(1), pullLine(2), pullLine(3)}
+
+// landedAt requires layer i to be landed by the reconcile at sha.
+func (s stack) landedAt(t *testing.T, i int, sha string) task.Record {
+	t.Helper()
+	r := tasktest.Load(t, s.repo, s.layers[i])
+	if r.Status != task.Landed || cli.Display(r.MergeCommit) != sha || cli.Display(r.TargetBranch) != "main" || cli.Display(r.LandStep) != stepConfirm ||
+		r.LandedAt == nil || cli.Display(r.LandedBy) != s.boss.ID || r.MergeRequest != nil {
+		t.Fatalf("layer %d: %+v", i, r)
+	}
+	return r
+}
+
+// atReview requires task id to be verified at the review step.
+func (s stack) atReview(t *testing.T, id string) {
+	t.Helper()
+	if r := tasktest.Load(t, s.repo, id); r.Status != task.Verified || cli.Display(r.LandStep) != stepReview || r.MergeRequest != nil {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// ok requires out to exit 0 with human output that contains text.
+func ok(t *testing.T, out cli.Outcome, text string) {
+	t.Helper()
+	if out.Error != nil || out.ExitCode() != 0 {
+		t.Fatalf("%+v", out.Error)
+	}
+	if got := render(t, out); !strings.Contains(got, text) {
+		t.Fatalf("%q", got)
+	}
+}
+
+// refusedNaming requires out to exit 1 with code and a message that names
+// id.
+func refusedNaming(t *testing.T, out cli.Outcome, code, id string) {
+	t.Helper()
+	if out.Error == nil || out.Error.Code != code || out.ExitCode() != 1 || !strings.Contains(out.Error.Message, id) {
+		t.Fatalf("want %s naming %s, got %+v", code, id, out.Error)
+	}
+}
+
+// TestReconcileReadsNoLayerWithoutPull: a stack at the push step has no
+// pr_url, so the reconcile reads no pull request before the pull request
+// steps.
+func TestReconcileReadsNoLayerWithoutPull(t *testing.T) {
+	s := setupStack(t)
+	for _, id := range append([]string{s.id}, s.layers...) {
+		s.edit(t, id, func(r *task.Record) { r.LandStep = tasktest.Ptr(stepPush) })
+	}
+	ok(t, s.land(t, Options{}), "")
+	log := s.gh.log(t)
+	first := slices.IndexFunc(log, func(l string) bool { return strings.HasPrefix(l, "pr ") })
+	if first < 0 || slices.ContainsFunc(log[:first], func(l string) bool { return strings.Contains(l, "/pulls/") }) {
+		t.Fatalf("%q", log)
+	}
+}
+
+// TestReconcileRecordsAMergeOfLayersOneToTwo: the merge of l2 records l1 and
+// l2 with the one merge commit and clears the uuid. Then a merge of the
+// parent records l3 and the parent.
+func TestReconcileRecordsAMergeOfLayersOneToTwo(t *testing.T) {
+	s := setupStack(t)
+	s.review(t)
+	s.gh.set(t, apiMerge(2), putPending)
+	s.gh.set(t, apiPoll(2, mergeUUID), getMerged)
+	s.merge(t, 0, mergeSHA, ".after-put")
+	s.merge(t, 1, mergeSHA, ".after-put")
+	out := s.land(t, Options{ID: s.layers[1], Merge: true})
+	ok(t, out, "Layers 1 to 2 landed")
+	want := "Layer " + s.layers[0] + ": landed at " + mergeSHA + ".\nLayer " + s.layers[1] + ": landed at " + mergeSHA + ".\nLayer " + s.layers[2] +
+		": land step review.\nLayers 1 to 2 landed.\n"
+	if got := render(t, out); got != want {
+		t.Fatalf("%q", got)
+	}
+	l1, l2 := s.landedAt(t, 0, mergeSHA), s.landedAt(t, 1, mergeSHA)
+	s.atReview(t, s.layers[2])
+	s.atReview(t, s.id)
+	s.gh.set(t, apiPull(2), mergedPull(2, s.heads[2], s.heads[1], mergeSHA))
+	ok(t, s.land(t, Options{Merge: true}), "Stack landed")
+	s.landedAt(t, 2, mergeSHA)
+	if p := s.load(t); p.Status != task.Landed || cli.Display(p.MergeCommit) != mergeSHA || cli.Display(p.LandStep) != stepConfirm {
+		t.Fatalf("%+v", p)
+	}
+	for i, r := range []task.Record{l1, l2} {
+		if got := tasktest.Load(t, s.repo, s.layers[i]); !slices.Equal(s.snapshotOf(t, got), s.snapshotOf(t, r)) {
+			t.Fatalf("layer %d changed: %+v", i, got)
+		}
+	}
+}
+
+// snapshotOf is the JSON of r.
+func (s stack) snapshotOf(t *testing.T, r task.Record) []string {
+	t.Helper()
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []string{string(b)}
+}
+
+// TestReconcileRecordsAnAlreadyMergedPut: the PUT answers that pull request
+// 2 is already merged. The run reads every pull request again, records l1
+// and l2, and polls nothing.
+func TestReconcileRecordsAnAlreadyMergedPut(t *testing.T) {
+	s := setupStack(t)
+	s.review(t)
+	s.gh.set(t, apiMerge(2), putAlready)
+	s.merge(t, 0, mergeSHA, ".after-put")
+	s.merge(t, 1, mergeSHA, ".after-put")
+	ok(t, s.land(t, Options{ID: s.layers[1], Merge: true}), "Layers 1 to 2 landed")
+	want := append(append(slices.Clone(threeReads), putLine(2, s.heads[1])), threeReads...)
+	if calls := s.apiCalls(t); !slices.Equal(calls, want) {
+		t.Fatalf("%q", calls)
+	}
+	s.landedAt(t, 0, mergeSHA)
+	s.landedAt(t, 1, mergeSHA)
+	s.atReview(t, s.layers[2])
+	s.atReview(t, s.id)
+}
+
+// TestReconcileRefusesALaggingRead: the poll answers merged, but pull
+// request 2 still reads open after 3 more reads. The run clears the uuid and
+// refuses land_unconfirmed. The next run records the merge with no PUT and
+// no poll.
+func TestReconcileRefusesALaggingRead(t *testing.T) {
+	s := setupStack(t)
+	s.review(t)
+	before := s.snapshot(t)
+	s.gh.set(t, apiMerge(2), putPending)
+	s.gh.set(t, apiPoll(2, mergeUUID), getMerged)
+	s.mergeRefused(t, s.land(t, Options{ID: s.layers[1], Merge: true}), "land_unconfirmed", stepMerge, "fledge task land --id "+s.id)
+	calls := s.apiCalls(t)
+	poll := slices.Index(calls, "api --method=GET repos/{owner}/{repo}/"+mergeUUIDPath)
+	if poll < 0 || !slices.Equal(calls[poll+1:], []string{pullLine(1), pullLine(2), pullLine(2), pullLine(2), pullLine(2), pullLine(3)}) {
+		t.Fatalf("%q", calls)
+	}
+	s.unchanged(t, before)
+	s.merge(t, 0, mergeSHA, "")
+	s.merge(t, 1, mergeSHA, "")
+	ok(t, s.land(t, Options{}), "Layers 1 to 2 landed")
+	if calls := s.apiCalls(t); !slices.Equal(calls, threeReads) {
+		t.Fatalf("%q", calls)
+	}
+	s.landedAt(t, 0, mergeSHA)
+	s.landedAt(t, 1, mergeSHA)
+}
+
+// TestReconcileRefusesAMergeAtAnotherHead: l2 was merged at a head with a
+// changed line. No record changes.
+func TestReconcileRefusesAMergeAtAnotherHead(t *testing.T) {
+	s := setupStack(t)
+	s.review(t)
+	head := s.changed(t, 1)
+	s.gh.set(t, apiPull(1), mergedPull(1, head, s.heads[0], mergeSHA))
+	before := s.snapshot(t)
+	refusedNaming(t, s.land(t, Options{}), "land_pr_merged_other_head", s.layers[1])
+	s.unchanged(t, before)
+}
+
+// TestReconcileCarriesARebasedLayer: GitHub rebased l1 to a head with an
+// equal patch id before the merge. The landed write of l1 also stores the
+// carry.
+func TestReconcileCarriesARebasedLayer(t *testing.T) {
+	s := setupStack(t)
+	s.review(t)
+	rebased := s.rebaseLow(t)
+	s.merge(t, 1, mergeSHA, "")
+	ok(t, s.land(t, Options{}), "Layers 1 to 2 landed")
+	if r := s.landedAt(t, 0, mergeSHA); cli.Display(r.VerifiedCommit) != rebased || cli.Display(r.CarriedFrom) != s.heads[0] {
+		t.Fatalf("%+v", r)
+	}
+	if r := s.landedAt(t, 1, mergeSHA); cli.Display(r.VerifiedCommit) != s.heads[1] || r.CarriedFrom != nil {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// TestReconcileRefusesACarryBesideAChangedLayer: l1 has a carry, and l2 was
+// merged at a head with a changed line. Neither layer changes, also not the
+// carry of l1.
+func TestReconcileRefusesACarryBesideAChangedLayer(t *testing.T) {
+	s := setupStack(t)
+	s.review(t)
+	s.rebaseLow(t)
+	head := s.changed(t, 1)
+	s.gh.set(t, apiPull(1), mergedPull(1, head, s.heads[0], mergeSHA))
+	before := s.snapshot(t)
+	refusedNaming(t, s.land(t, Options{}), "land_pr_merged_other_head", s.layers[1])
+	s.unchanged(t, before)
+	if r := tasktest.Load(t, s.repo, s.layers[0]); cli.Display(r.VerifiedCommit) != s.heads[0] || r.CarriedFrom != nil {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// TestReconcileRefusesAClosedLayer: GitHub closed the pull request of l2
+// without a merge. No record changes.
+func TestReconcileRefusesAClosedLayer(t *testing.T) {
+	s := setupStack(t)
+	s.review(t)
+	s.gh.set(t, apiPull(1), strings.Replace(restPull(1, s.heads[1], s.heads[0]), `"state":"open"`, `"state":"closed"`, 1))
+	before := s.snapshot(t)
+	refusedNaming(t, s.land(t, Options{}), "land_pr_closed", s.layers[1])
+	s.unchanged(t, before)
+}
+
+// hook makes beforeRecord run fn for this test.
+func hook(t *testing.T, fn func()) {
+	t.Helper()
+	old := beforeRecord
+	beforeRecord = fn
+	t.Cleanup(func() { beforeRecord = old })
+}
+
+// failPut makes the record write of task id fail for this test, until the
+// returned function restores it.
+func failPut(t *testing.T, id string) (restore func()) {
+	t.Helper()
+	old := putRecord
+	putRecord = func(tx *state.Tx, r task.Record) error {
+		if r.ID == id {
+			return errors.New("disk full")
+		}
+		return old(tx, r)
+	}
+	restore = func() { putRecord = old }
+	t.Cleanup(restore)
+	return restore
+}
+
+// TestReconcileRefusesAChangedLayer: l1 is cancelled after the GitHub read.
+// The reconcile refuses task_state_changed and writes nothing.
+func TestReconcileRefusesAChangedLayer(t *testing.T) {
+	s := setupStack(t)
+	s.review(t)
+	s.merge(t, 0, mergeSHA, "")
+	s.merge(t, 1, mergeSHA, "")
+	var before []string
+	hook(t, func() {
+		s.edit(t, s.layers[0], func(r *task.Record) { r.Status = task.Cancelled })
+		before = s.snapshot(t)
+	})
+	refusedNaming(t, s.land(t, Options{}), "task_state_changed", s.layers[0])
+	s.unchanged(t, before)
+}
+
+// TestReconcileKeepsACancelledParent: the parent is cancelled after the
+// GitHub read. The layers are recorded, the parent stays cancelled, and the
+// parent guard refuses.
+func TestReconcileKeepsACancelledParent(t *testing.T) {
+	s := setupStack(t)
+	s.review(t)
+	for i := range s.layers {
+		s.merge(t, i, mergeSHA, "")
+	}
+	hook(t, func() { s.edit(t, s.id, func(r *task.Record) { r.Status = task.Cancelled }) })
+	refusedNaming(t, s.land(t, Options{}), "task_invalid_state", s.id)
+	for i := range s.layers {
+		s.landedAt(t, i, mergeSHA)
+	}
+	if p := s.load(t); p.Status != task.Cancelled {
+		t.Fatalf("%+v", p)
+	}
+}
+
+// TestReconcileFinishesAFailedLayerWrite: the write of l2 fails after the
+// write of l1. The next run writes l2.
+func TestReconcileFinishesAFailedLayerWrite(t *testing.T) {
+	s := setupStack(t)
+	s.review(t)
+	s.merge(t, 0, mergeSHA, "")
+	s.merge(t, 1, mergeSHA, "")
+	restore := failPut(t, s.layers[1])
+	out := s.land(t, Options{ID: s.layers[1]})
+	refusedNaming(t, out, "land_record_incomplete", s.layers[0])
+	if !strings.Contains(out.Error.Message, "fledge task land --id "+s.id) {
+		t.Fatalf("%+v", out.Error)
+	}
+	l1 := s.landedAt(t, 0, mergeSHA)
+	s.atReview(t, s.layers[1])
+	restore()
+	ok(t, s.land(t, Options{ID: s.layers[1]}), "Layers 1 to 2 landed")
+	s.landedAt(t, 1, mergeSHA)
+	if got := tasktest.Load(t, s.repo, s.layers[0]); !slices.Equal(s.snapshotOf(t, got), s.snapshotOf(t, l1)) {
+		t.Fatalf("%+v", got)
+	}
+}
+
+// TestReconcileFinishesAFailedParentWrite: the parent write fails after the
+// three layer writes. The next run lands the parent with no PUT and no poll.
+func TestReconcileFinishesAFailedParentWrite(t *testing.T) {
+	s := setupStack(t)
+	s.review(t)
+	for i := range s.layers {
+		s.merge(t, i, mergeSHA, "")
+	}
+	s.edit(t, s.layers[2], func(r *task.Record) { r.MergeRequest = tasktest.Ptr(mergeUUID) })
+	restore := failPut(t, s.id)
+	refusedNaming(t, s.land(t, Options{Merge: true}), "land_record_incomplete", s.layers[2])
+	for i := range s.layers {
+		s.landedAt(t, i, mergeSHA)
+	}
+	s.atReview(t, s.id)
+	restore()
+	s.apiCalls(t)
+	ok(t, s.land(t, Options{}), "Stack landed")
+	if calls := s.apiCalls(t); !slices.Equal(calls, threeReads) {
+		t.Fatalf("%q", calls)
+	}
+	if p := s.load(t); p.Status != task.Landed || cli.Display(p.MergeCommit) != mergeSHA || cli.Display(p.TargetBranch) != "main" {
+		t.Fatalf("%+v", p)
+	}
+}
+
+// TestReconcileClearsTheUUIDOfALandedStack: the stack is landed, and l3
+// still holds a uuid. The run clears it and changes nothing else.
+func TestReconcileClearsTheUUIDOfALandedStack(t *testing.T) {
+	s := setupStack(t)
+	s.review(t)
+	for i, id := range append(slices.Clone(s.layers), s.id) {
+		s.edit(t, id, func(r *task.Record) { r.Status, r.MergeCommit = task.Landed, tasktest.Ptr(mergeSHA) })
+		if i < len(s.layers) {
+			s.merge(t, i, mergeSHA, "")
+		}
+	}
+	before := s.snapshot(t)
+	s.edit(t, s.layers[2], func(r *task.Record) { r.MergeRequest = tasktest.Ptr(mergeUUID) })
+	ok(t, s.land(t, Options{}), "Stack "+s.id+" is already landed at "+mergeSHA+".")
+	if calls := s.apiCalls(t); !slices.Equal(calls, threeReads) {
+		t.Fatalf("%q", calls)
+	}
+	s.unchanged(t, before)
+}
+
+// TestReconcileRecordsAButtonMerge: l1 and l2 were merged with the GitHub
+// button, so no layer holds a uuid. The run records both, and two more runs
+// change nothing.
+func TestReconcileRecordsAButtonMerge(t *testing.T) {
+	s := setupStack(t)
+	s.review(t)
+	s.pushes(t)
+	s.merge(t, 0, buttonSHA, "")
+	s.merge(t, 1, buttonSHA, "")
+	ok(t, s.land(t, Options{}), "Layers 1 to 2 landed")
+	if log := s.gh.log(t); !slices.Equal(log, threeReads) {
+		t.Fatalf("%q", log)
+	}
+	if pushes := s.pushes(t); len(pushes) != 0 {
+		t.Fatalf("%q", pushes)
+	}
+	s.landedAt(t, 0, buttonSHA)
+	s.landedAt(t, 1, buttonSHA)
+	s.atReview(t, s.layers[2])
+	s.atReview(t, s.id)
+	for range 2 {
+		before := s.snapshot(t)
+		os.Remove(filepath.Join(s.gh.dir, "log"))
+		ok(t, s.land(t, Options{}), "Layers 1 to 2 landed")
+		if log := s.gh.log(t); !slices.Equal(log, threeReads) {
+			t.Fatalf("%q", log)
+		}
+		s.unchanged(t, before)
+	}
+}
+
+// TestReconcileRefusesALandedParentWithAnOpenLayer: the parent is landed, but
+// l1 is not.
+func TestReconcileRefusesALandedParentWithAnOpenLayer(t *testing.T) {
+	s := setupStack(t)
+	s.review(t)
+	s.edit(t, s.id, func(r *task.Record) { r.Status = task.Landed })
+	refusedNaming(t, s.land(t, Options{}), "task_invalid_state", s.layers[0])
+}
+
+// TestReconcileMergesNoLandedSuffix: l1 and l2 are landed, so --merge of l2
+// sends no PUT and prints the layer lines.
+func TestReconcileMergesNoLandedSuffix(t *testing.T) {
+	s := setupStack(t)
+	s.review(t)
+	s.merge(t, 0, mergeSHA, "")
+	s.merge(t, 1, mergeSHA, "")
+	ok(t, s.land(t, Options{ID: s.layers[1], Merge: true}), "Layers 1 to 2 landed")
+	if calls := s.apiCalls(t); !slices.Equal(calls, threeReads) {
+		t.Fatalf("%q", calls)
+	}
+}
+
+// TestReconcileRefusesAChangedUUID: l3 holds another uuid after the GitHub
+// read. The reconcile refuses task_state_changed and writes nothing.
+func TestReconcileRefusesAChangedUUID(t *testing.T) {
+	s := setupStack(t)
+	s.review(t)
+	for i := range s.layers {
+		s.merge(t, i, mergeSHA, "")
+	}
+	s.edit(t, s.layers[2], func(r *task.Record) { r.MergeRequest = tasktest.Ptr(mergeUUID) })
+	var before []string
+	hook(t, func() {
+		s.edit(t, s.layers[2], func(r *task.Record) { r.MergeRequest = tasktest.Ptr("00000000-0000-0000-0000-000000000000") })
+		before = s.snapshot(t)
+	})
+	refusedNaming(t, s.land(t, Options{}), "task_state_changed", s.layers[2])
+	s.unchanged(t, before)
 }

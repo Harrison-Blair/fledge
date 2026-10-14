@@ -21,6 +21,17 @@ import (
 // at most pollTimeout. Tests change them.
 var pollInterval, pollTimeout = 2 * time.Second, 120 * time.Second
 
+// After a merge, the reconcile reads a lagging pull request confirmReads more
+// times, confirmInterval apart. Tests change them.
+var confirmReads, confirmInterval = 3, 2 * time.Second
+
+// Test hooks: beforeRecord runs between the GitHub read and the record
+// writes of the reconcile, and putRecord writes one record.
+var (
+	beforeRecord = func() {}
+	putRecord    = func(tx *state.Tx, r task.Record) error { return tx.Put(task.Kind, r.ID, r) }
+)
+
 // stackParent returns the stack parent of r: r when r is a stack parent, or
 // the parent of r when that parent is a stack parent. ok is false for any
 // other task.
@@ -38,31 +49,45 @@ func stackParent(s *state.Store, r task.Record) (p task.Record, ok bool, err err
 }
 
 // stack lands stack parent p. The parent and the layers store the branches
-// and the delivery mode, so --branch and --mode are invalid input. A layer
-// lands only after the parent reached review. The parent guards run on each
-// stack run. Then a run continues the merge request that a layer holds. Else
-// --merge requests the merge of the selected layer, or of the top layer for
-// the parent. Else the push step and the pull request steps run.
+// and the delivery mode, so --branch and --mode are invalid input. Each run
+// first makes the records follow GitHub. A landed stack then ends the run.
+// A layer lands only after the parent reached review. The parent guards run
+// on each other run. Then a run continues the merge request that a layer
+// holds. Else --merge requests the merge of the selected layer, or of the top
+// layer for the parent. Else a run with a landed layer ends. Else the push
+// step and the pull request steps run.
 func (l *lander) stack(ctx context.Context, o Options, p task.Record) error {
 	if o.BranchSet || o.ModeSet {
 		return cli.Invalid("--branch and --mode do not apply to a stack task: the stack records store the branches and the delivery mode")
 	}
 	selected := l.r.ID
-	if l.r.ID != p.ID && (p.LandStep == nil || *p.LandStep != stepReview) {
+	l.r, l.mode, l.commit = p, p.DeliveryMode, commit(&p)
+	records, err := landing.StackLayers(l.s, p, "land")
+	if err != nil {
+		return err
+	}
+	gh := landing.GH{Dir: l.root}
+	records, wrote, err := l.reconcile(ctx, gh, records, -1, "")
+	if err != nil {
+		return err
+	}
+	p = l.r
+	low := slices.IndexFunc(records, func(r task.Record) bool { return r.Status != task.Landed })
+	switch {
+	case p.Status == task.Landed && low < 0:
+		l.summarize(records, wrote)
+		return nil
+	case p.Status == task.Landed:
+		return refuse("task_invalid_state", "stack %s is landed, but its layer %s is %s; inspect it with fledge task get --id %s", p.ID, records[low].ID, records[low].Status, records[low].ID)
+	case selected != p.ID && (p.LandStep == nil || *p.LandStep != stepReview):
 		return refuse("land_stack_not_open", "stack %s has no open pull requests. Land the stack with fledge task land --id %s", p.ID, p.ID)
 	}
-	l.r, l.mode, l.commit = p, p.DeliveryMode, commit(&p)
 	if err := task.Require(&p, "land", task.Verified); err != nil {
 		return err
 	}
 	if p.DeliveryMode != task.ModePR {
 		return refuse("land_stack_mode", "stack %s has delivery mode %s. A stack lands only in pr mode", p.ID, p.DeliveryMode)
 	}
-	records, err := landing.StackLayers(l.s, p, "land")
-	if err != nil {
-		return err
-	}
-	gh := landing.GH{Dir: l.root}
 	for j, r := range records {
 		if r.MergeRequest != nil {
 			return l.poll(ctx, gh, records, j, *r.MergeRequest)
@@ -75,6 +100,10 @@ func (l *lander) stack(ctx context.Context, o Options, p task.Record) error {
 		}
 		return l.requestMerge(ctx, gh, records, k)
 	}
+	if low != 0 {
+		l.summarize(records, false)
+		return nil
+	}
 	layers, err := l.pushLayers(ctx, records)
 	if err != nil {
 		return err
@@ -83,14 +112,16 @@ func (l *lander) stack(ctx context.Context, o Options, p task.Record) error {
 }
 
 // requestMerge requests the merge of the unlanded layers up to layer k: from
-// the lowest layer that is not landed. Each of these layers needs the review
-// step, a pull request, and green checks at its current head. The PUT sends
-// the current head of layer k. Layer k stores the uuid of a pending answer
-// before the poll starts.
+// the lowest layer that is not landed. When there is no such layer, it sends
+// nothing. Each of these layers needs the review step, a pull request, and
+// green checks at the head that the reconcile read. The PUT sends the current
+// head of layer k. Layer k stores the uuid of a pending answer before the
+// poll starts.
 func (l *lander) requestMerge(ctx context.Context, gh landing.GH, records []task.Record, k int) error {
 	low := slices.IndexFunc(records, func(r task.Record) bool { return r.Status != task.Landed })
 	if low < 0 || low > k {
-		return refuse("land_already_merged", "stack %s has no unlanded layer up to the selected layer; nothing to merge", l.r.ID)
+		l.summarize(records, false)
+		return nil
 	}
 	var layer *lander
 	var pr landing.PR
@@ -102,7 +133,7 @@ func (l *lander) requestMerge(ctx context.Context, gh landing.GH, records []task
 		if layer, err = l.layer(ctx, r); err != nil {
 			return err
 		}
-		if pr, err = layer.pullHead(ctx, gh); err != nil {
+		if pr, err = layer.pullHead(ctx, l.pulls[r.ID]); err != nil {
 			return err
 		}
 		c, err := gh.Checks(ctx, pr.Number)
@@ -121,7 +152,7 @@ func (l *lander) requestMerge(ctx context.Context, gh landing.GH, records []task
 	case a.Status == "failed":
 		return mergeFailed(pr.Number, a)
 	case a.Status == "merged":
-		return l.recordMerge(pr.Number)
+		return l.recordMerge(ctx, gh, k, "")
 	}
 	if err := layer.update(func(r *task.Record) { r.MergeRequest = &a.UUID }); err != nil {
 		return err
@@ -157,9 +188,9 @@ func (l *lander) poll(ctx context.Context, gh landing.GH, records []task.Record,
 				return err
 			}
 			if p.Merged {
-				return l.recordMerge(n)
+				return l.recordMerge(ctx, gh, j, "")
 			}
-			l.step, records[j] = stepCheck, layer.r
+			l.pulls[layer.r.ID], l.step, records[j] = p, stepCheck, layer.r
 			return l.requestMerge(ctx, gh, records, j)
 		case err != nil:
 			return err
@@ -169,7 +200,7 @@ func (l *lander) poll(ctx context.Context, gh landing.GH, records []task.Record,
 			}
 			return mergeFailed(n, a)
 		case a.Status == "merged":
-			return l.recordMerge(n)
+			return l.recordMerge(ctx, gh, j, uuid)
 		case !time.Now().Before(deadline):
 			return refuse("land_merge_pending", "GitHub did not finish merge request %s of pull request %d in %s. Continue it with fledge task land --id %s", uuid, n, pollTimeout, l.r.ID)
 		}
@@ -181,10 +212,155 @@ func (l *lander) poll(ctx context.Context, gh landing.GH, records []task.Record,
 	}
 }
 
-// recordMerge is the record step after GitHub merged pull request n. Fledge
-// does not record a stack merge yet, so it refuses land_unconfirmed.
-func (l *lander) recordMerge(n int) error {
-	return refuse("land_unconfirmed", "GitHub merged pull request %d of stack %s, but this Fledge cannot record a stack merge. Record it later with fledge task land --id %s", n, l.r.ID, l.r.ID)
+// recordMerge is the record step after GitHub merged the pull request of
+// layer j. uuid is the merge request that layer j holds, or "". It runs the
+// reconcile again, and layer j must then be landed.
+func (l *lander) recordMerge(ctx context.Context, gh landing.GH, j int, uuid string) error {
+	records, err := landing.StackLayers(l.s, l.r, "land")
+	if err != nil {
+		return err
+	}
+	records, wrote, err := l.reconcile(ctx, gh, records, j, uuid)
+	if err != nil {
+		return err
+	}
+	if records[j].Status != task.Landed {
+		return refuse("land_unconfirmed", "GitHub merged the pull request of layer %s of stack %s, but the pull request still reads open. Record the merge later with fledge task land --id %s", records[j].ID, l.r.ID, l.r.ID)
+	}
+	l.summarize(records, wrote)
+	return nil
+}
+
+// reconcile makes the stack records follow GitHub. It reads the pull request
+// of each layer with a pr_url one time. A lagging read of layer j gets
+// confirmReads more reads. Each merged layer that is not landed must have
+// its verified commit as head, or a head with the verified patch id. Then one
+// Exclusive call reads the records again and makes the writes, bottom first.
+// Each merged layer moves to landed with its carry. The call clears a stored
+// uuid when GitHub merged its pull request, or when it is uuid of layer j.
+// When every layer is landed, the parent moves to landed. reconcile writes
+// nothing before every check passes. It returns the stored layers, and
+// whether it landed the parent.
+func (l *lander) reconcile(ctx context.Context, gh landing.GH, records []task.Record, j int, uuid string) ([]task.Record, bool, error) {
+	l.pulls = map[string]landing.Pull{}
+	clears := map[string]string{}
+	for i, r := range records {
+		if r.PRURL == nil {
+			continue
+		}
+		n, err := strconv.Atoi(path.Base(*r.PRURL))
+		if err != nil {
+			return nil, false, refuse("land_gh_output_invalid", "pull request URL %s of layer %s has no number", *r.PRURL, r.ID)
+		}
+		pull, err := gh.Pull(ctx, n)
+		for k := 0; err == nil && i == j && !pull.Merged && k < confirmReads; k++ {
+			time.Sleep(confirmInterval)
+			pull, err = gh.Pull(ctx, n)
+		}
+		switch {
+		case err != nil:
+			return nil, false, err
+		case pull.State == "closed" && !pull.Merged:
+			return nil, false, refuse("land_pr_closed", "pull request %s of layer %s was closed without a merge; reopen it, then run task land again", *r.PRURL, r.ID)
+		case pull.Merged && r.Status != task.Landed && pull.HeadSHA != commit(&r) && !l.samePatch(ctx, r, pull):
+			return nil, false, refuse("land_pr_merged_other_head", "pull request %s of layer %s was merged at head %s, not the verified commit %s, and its patch id against base %s is not the verified patch id", *r.PRURL, r.ID, pull.HeadSHA, commit(&r), pull.BaseSHA)
+		}
+		l.pulls[r.ID] = pull
+		if i == j && uuid != "" {
+			clears[r.ID] = uuid
+		} else if pull.Merged && r.MergeRequest != nil {
+			clears[r.ID] = *r.MergeRequest
+		}
+	}
+	if len(l.pulls) == 0 {
+		return records, false, nil
+	}
+	base, err := landing.TaskTarget(ctx, l.root, l.r, "land")
+	if err != nil {
+		return nil, false, err
+	}
+	beforeRecord()
+	var stored []task.Record
+	wrote := false
+	err = l.s.Exclusive(func(tx *state.Tx) error {
+		var p task.Record
+		if err := tx.Get(task.Kind, l.r.ID, &p); err != nil {
+			return err
+		}
+		var writes []task.Record
+		step := stepConfirm
+		for _, old := range records {
+			var r task.Record
+			if err := tx.Get(task.Kind, old.ID, &r); err != nil {
+				return err
+			}
+			w, changed := r, false
+			if pull, ok := l.pulls[r.ID]; ok && pull.Merged && old.Status != task.Landed {
+				if r.Status != task.Verified || commit(&r) != commit(&old) {
+					return refuse("task_state_changed", "layer %s changed while it was being recorded; inspect it with fledge task get --id %s", r.ID, r.ID)
+				}
+				w.Status, w.MergeCommit, w.TargetBranch, w.LandStep, w.LandedAt, w.LandedBy = task.Landed, &pull.MergeCommit, &base, &step, task.Now(), &l.caller
+				if from := commit(&old); pull.HeadSHA != from {
+					w.VerifiedCommit, w.CarriedFrom = &pull.HeadSHA, &from
+				}
+				changed = true
+			}
+			if u, ok := clears[r.ID]; ok {
+				if r.MergeRequest == nil || *r.MergeRequest != u {
+					return refuse("task_state_changed", "layer %s no longer holds merge request %s; inspect it with fledge task get --id %s", r.ID, u, r.ID)
+				}
+				w.MergeRequest, changed = nil, true
+			}
+			if changed {
+				writes = append(writes, w)
+			}
+			stored = append(stored, w)
+		}
+		if p.Status == task.Verified && !slices.ContainsFunc(stored, func(r task.Record) bool { return r.Status != task.Landed }) {
+			p.Status, p.MergeCommit, p.TargetBranch, p.LandStep, p.LandedAt, p.LandedBy = task.Landed, stored[len(stored)-1].MergeCommit, &base, &step, task.Now(), &l.caller
+			writes, wrote = append(writes, p), true
+		}
+		var written []string
+		for _, w := range writes {
+			if err := putRecord(tx, w); err != nil {
+				return refuse("land_record_incomplete", "the reconcile wrote the records %v but could not write task %s: %v. Finish the record with fledge task land --id %s", written, w.ID, err, l.r.ID)
+			}
+			written = append(written, w.ID)
+		}
+		l.r, l.commit = p, commit(&p)
+		return nil
+	})
+	return stored, wrote, err
+}
+
+// samePatch reports whether the head of pull request p has the verified
+// patch id of r against the base of p.
+func (l *lander) samePatch(ctx context.Context, r task.Record, p landing.Pull) bool {
+	id, err := landing.PatchID(ctx, l.root, p.BaseSHA, p.HeadSHA)
+	return err == nil && id != "" && r.VerifiedPatchID != nil && id == *r.VerifiedPatchID
+}
+
+// summarize sets the human lines of a stack run that ends after a record:
+// one line for each layer, then the stack line. wrote is true when this run
+// landed the parent.
+func (l *lander) summarize(records []task.Record, wrote bool) {
+	landed := 0
+	for _, r := range records {
+		if r.Status == task.Landed {
+			landed++
+			l.summary = append(l.summary, fmt.Sprintf("Layer %s: landed at %s.", r.ID, cli.Display(r.MergeCommit)))
+		} else {
+			l.summary = append(l.summary, fmt.Sprintf("Layer %s: land step %s.", r.ID, cli.Display(r.LandStep)))
+		}
+	}
+	switch {
+	case l.r.Status == task.Landed && wrote:
+		l.summary = append(l.summary, fmt.Sprintf("Stack landed at %s.", cli.Display(l.r.MergeCommit)))
+	case l.r.Status == task.Landed:
+		l.summary = append(l.summary, fmt.Sprintf("Stack %s is already landed at %s.", l.r.ID, cli.Display(l.r.MergeCommit)))
+	default:
+		l.summary = append(l.summary, fmt.Sprintf("Layers 1 to %d landed.", landed))
+	}
 }
 
 // mergeFailed refuses the failed merge request of pull request n with the
@@ -278,7 +454,7 @@ func (l *lander) openLayers(ctx context.Context, layers []*lander) error {
 		var pr landing.PR
 		var err error
 		if layer.r.PRURL != nil {
-			pr, err = layer.pullHead(ctx, gh)
+			pr, err = layer.pullHead(ctx, l.pulls[layer.r.ID])
 		} else {
 			pr, err = layer.pullRequest(ctx, gh, layer.branch, layer.target)
 		}
@@ -355,21 +531,13 @@ func (l *lander) formStack(ctx context.Context, gh landing.GH, prs []landing.PR)
 	return refuse("land_stack_mismatch", "the layer pull requests of stack %s are not one GitHub stack in layer order: %s", l.r.ID, strings.Join(states, ", "))
 }
 
-// pullHead reads the stored pull request of the layer through the REST API
+// pullHead checks p, the REST read of the stored pull request of the layer,
 // and returns it. A pull request closed without a merge is land_pr_closed.
 // Its head is the current head of the layer, and its base is the patch id
 // base. A head with the verified patch id gets the verification. Any other
 // head is land_head_mismatch.
-func (l *lander) pullHead(ctx context.Context, gh landing.GH) (landing.PR, error) {
+func (l *lander) pullHead(ctx context.Context, p landing.Pull) (landing.PR, error) {
 	url := *l.r.PRURL
-	n, err := strconv.Atoi(path.Base(url))
-	if err != nil {
-		return landing.PR{}, refuse("land_gh_output_invalid", "pull request URL %s of branch %s has no number", url, l.branch)
-	}
-	p, err := gh.Pull(ctx, n)
-	if err != nil {
-		return landing.PR{}, err
-	}
 	if p.State == "closed" && !p.Merged {
 		return landing.PR{}, refuse("land_pr_closed", "%s of branch %s was closed without a merge; reopen it, then run task land again", url, l.branch)
 	}
@@ -377,8 +545,7 @@ func (l *lander) pullHead(ctx context.Context, gh landing.GH) (landing.PR, error
 	if p.HeadSHA == l.commit {
 		return pr, nil
 	}
-	id, err := landing.PatchID(ctx, l.root, p.BaseSHA, p.HeadSHA)
-	if err != nil || id == "" || l.r.VerifiedPatchID == nil || id != *l.r.VerifiedPatchID {
+	if !l.samePatch(ctx, l.r, p) {
 		return landing.PR{}, refuse("land_head_mismatch", "pull request %s of branch %s has head %s, not the verified commit %s, and its patch id against base %s is not the verified patch id; verify the new head again", url, l.branch, p.HeadSHA, l.commit, p.BaseSHA)
 	}
 	return pr, l.carryTo(p.HeadSHA)

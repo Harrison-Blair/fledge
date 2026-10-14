@@ -21,7 +21,8 @@ import (
 // list-after-create-fails. When list-<head> exists, pr list for that head
 // answers [] before a create and list-<head> after it, and pr create prints
 // its url. checks-<n> answers for pull request n when it exists. gh api
-// answers from api-<method>-<path with _ for />.
+// answers from api-<method>-<path with _ for />, or after a PUT from that
+// file with the suffix .after-put when it exists.
 type fakeGH struct{ dir string }
 
 const ghScript = `#!/bin/sh
@@ -40,7 +41,10 @@ case "$1 $2" in
 "pr view") case "$4" in *statusCheckRollup*) if [ -f "$d/checks-$3" ]; then cat "$d/checks-$3"; else cat "$d/checks"; fi ;;
   *) if [ -f "$d/did-merge" ]; then cat "$d/merged"; else cat "$d/view"; fi ;; esac ;;
 "pr merge") if [ -f "$d/merge-fails" ]; then echo "merge blocked" >&2; exit 1; fi; touch "$d/did-merge" ;;
-"api "*) f="$d/api-${2#--method=}-$(printf '%s' "$3" | tr / _)"; cat "$f"; if [ -f "$f.exit" ]; then exit "$(cat "$f.exit")"; fi ;;
+"api "*) f="$d/api-${2#--method=}-$(printf '%s' "$3" | tr / _)"; e="$f.exit"
+  if [ "$2" = --method=PUT ]; then touch "$d/did-put"; fi
+  if [ -f "$d/did-put" ] && [ -f "$f.after-put" ]; then f="$f.after-put"; fi
+  cat "$f"; if [ -f "$e" ]; then exit "$(cat "$e")"; fi ;;
 *) echo "unexpected gh $*" >&2; exit 2 ;;
 esac
 `

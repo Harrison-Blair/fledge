@@ -39,6 +39,7 @@ type Result struct {
 	Size          *reviewsize.Report `json:"size"`
 	Layers        []Layer            `json:"layers"`
 	Stack         int                `json:"stack"`
+	summary       []string
 	target        string
 	base          string
 }
@@ -79,7 +80,9 @@ type lander struct {
 	size                         *reviewsize.Report
 	base                         string // the size base ref, and the missing ref of the mode
 	layers                       []Layer
-	stackNumber                  int // the GitHub stack number of the layer pull requests
+	stackNumber                  int                     // the GitHub stack number of the layer pull requests
+	pulls                        map[string]landing.Pull // the layer pull requests that the reconcile read, by layer id
+	summary                      []string                // the human lines of a stack run that ends after a record
 }
 
 // Run lands task o.ID. The caller must be a registered agent other than the
@@ -142,7 +145,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 	if l.size != nil && !l.review {
 		l.warnings = append(l.warnings, sizeWarnings(*l.size)...)
 	}
-	out.Result = Result{Record: l.r, Mode: l.mode, Warnings: l.warnings, ReviewPending: l.review, Size: l.size, Layers: l.layers, Stack: l.stackNumber, target: l.target, base: l.base}
+	out.Result = Result{Record: l.r, Mode: l.mode, Warnings: l.warnings, ReviewPending: l.review, Size: l.size, Layers: l.layers, Stack: l.stackNumber, summary: l.summary, target: l.target, base: l.base}
 	return out
 }
 
@@ -422,6 +425,8 @@ func Render(w io.Writer, o cli.Outcome) error {
 	switch {
 	case o.Error != nil:
 		fmt.Fprintf(&b, "Land step reached: %s.\n", *r.LandStep)
+	case len(r.summary) > 0:
+		b.WriteString(strings.Join(r.summary, "\n") + "\n")
 	case len(r.Layers) > 0:
 		for _, layer := range r.Layers {
 			fmt.Fprintf(&b, "Layer %s: branch %s at %s, pull request %s, land step %s.\n", layer.ID, layer.Branch, layer.Head, layer.PRURL, layer.LandStep)
