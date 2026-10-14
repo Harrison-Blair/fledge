@@ -21,8 +21,8 @@ leading `*`.
 
 Develop on `dev` or feature branches off `dev`. Changes reach `main` only through a
 pull request, which the owner approves. Never commit directly to `main`.
-The committed `.fledge/config.toml` names `dev` as the integration branch. Fledge uses
-this value to find merged branches.
+The committed `.fledge/config.toml` names `dev` as the integration branch in its
+`[branches]` table. Fledge uses this value to find merged branches.
 
 ## Releases
 
@@ -110,7 +110,7 @@ it with another tool.
 | Read and acknowledge messages sent to you | `fledge inbox`, `fledge inbox read` | message text typed into your pane, harness message notifications |
 | See what needs your attention | `fledge attention` | separate `agent list`, `task list`, and inbox checks by hand |
 | Watch workers without polling | `fledge supervise` starts automatically, with `status`/`stop` | `fledge agent wait` loops, harness idle notifications, timed polls |
-| Land a verified branch, only after the user names that branch explicitly | `fledge task land` | manual `git merge`, `gh pr create`/`gh pr merge` |
+| Land a verified branch, only after the user names that branch explicitly | `fledge task land`. For a stack: `fledge task land --id <parent>`, then `fledge task land --id <parent> --merge` | manual `git merge`, `gh pr create`/`gh pr merge`, `gh stack` |
 | Measure a task's review size | `fledge task size` | `git diff --stat` by hand |
 | Type raw input or keys into an agent (slash commands, dialog answers) | `fledge agent send` | raw `herdr pane send-text`/`send-keys` |
 | Register your own running agent, from your own pane | `fledge agent adopt` | — |

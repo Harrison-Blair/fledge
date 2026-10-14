@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -154,7 +155,7 @@ func TestDiagnoseFixedCheckOrder(t *testing.T) {
 			for _, c := range r.Checks {
 				names = append(names, c.Name)
 			}
-			want := []string{"herdr_connectivity", "herdr_compatibility", "harness_installations", "model_discovery", "configuration"}
+			want := []string{"herdr_connectivity", "herdr_compatibility", "harness_installations", "model_discovery", "configuration", "branches"}
 			if !reflect.DeepEqual(names, want) {
 				t.Fatalf("checks = %q, want %q", names, want)
 			}
@@ -164,11 +165,11 @@ func TestDiagnoseFixedCheckOrder(t *testing.T) {
 
 func TestDiagnoseHealthy(t *testing.T) {
 	r := doctor.Diagnose(context.Background(), healthy())
-	want := map[string]report.Status{"herdr_connectivity": report.OK, "herdr_compatibility": report.OK, "harness_installations": report.OK, "model_discovery": report.Warn, "configuration": report.OK}
+	want := map[string]report.Status{"herdr_connectivity": report.OK, "herdr_compatibility": report.OK, "harness_installations": report.OK, "model_discovery": report.Warn, "configuration": report.OK, "branches": report.OK}
 	if got := statuses(r); !reflect.DeepEqual(got, want) {
 		t.Fatalf("statuses = %v, want %v", got, want)
 	}
-	if r.Summary != (report.Summary{OK: 4, Warn: 1}) {
+	if r.Summary != (report.Summary{OK: 5, Warn: 1}) {
 		t.Fatalf("summary = %+v", r.Summary)
 	}
 }
@@ -177,11 +178,11 @@ func TestDiagnoseFeedsHerdrResultsToDependentChecks(t *testing.T) {
 	// A failed ping fails connectivity and leaves compatibility unknown; a failed
 	// list fails harnesses and leaves model availability unknown (never a failure).
 	r := doctor.Diagnose(context.Background(), outsideHerdr())
-	want := map[string]report.Status{"herdr_connectivity": report.Fail, "herdr_compatibility": report.Warn, "harness_installations": report.Fail, "model_discovery": report.Warn, "configuration": report.Fail}
+	want := map[string]report.Status{"herdr_connectivity": report.Fail, "herdr_compatibility": report.Warn, "harness_installations": report.Fail, "model_discovery": report.Warn, "configuration": report.Fail, "branches": report.OK}
 	if got := statuses(r); !reflect.DeepEqual(got, want) {
 		t.Fatalf("statuses = %v, want %v", got, want)
 	}
-	if r.Summary != (report.Summary{Warn: 2, Fail: 3}) {
+	if r.Summary != (report.Summary{OK: 1, Warn: 2, Fail: 3}) {
 		t.Fatalf("summary = %+v", r.Summary)
 	}
 	if !strings.Contains(r.Checks[0].Detail, "missing.sock") || !strings.Contains(r.Checks[2].Detail, "down") {
@@ -268,6 +269,29 @@ func TestRunWarnDoesNotFail(t *testing.T) {
 	o.Out = &b
 	if err := doctor.Run(context.Background(), o); err != nil {
 		t.Fatalf("warn-only run must not fail: %v", err)
+	}
+}
+
+func TestRunMissingDevBranchWarnsInTextAndJSON(t *testing.T) {
+	dir := t.TempDir()
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "init"}} {
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	o := healthy()
+	o.Env.Getwd = func() (string, error) { return dir, nil }
+	for _, asJSON := range []bool{false, true} {
+		var b strings.Builder
+		o.Out, o.JSON = &b, asJSON
+		if err := doctor.Run(context.Background(), o); err != nil {
+			t.Fatalf("json=%v: a warning must not fail: %v", asJSON, err)
+		}
+		for _, want := range []string{"branches", "warn", "git branch dev main", "git push -u origin dev"} {
+			if !strings.Contains(b.String(), want) {
+				t.Fatalf("json=%v: output does not contain %q:\n%s", asJSON, want, b.String())
+			}
+		}
 	}
 }
 

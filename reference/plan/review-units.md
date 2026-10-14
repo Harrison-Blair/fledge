@@ -18,8 +18,8 @@ section at the end records what the owner settled.
 
 | Limit | Value | Basis (derived below) |
 | --- | --- | --- |
-| Task ceiling | 200 hand-written source lines | A task must fit one normal sitting alone: 400 reviewed lines per review (SmartBear) / 2.2 reviewed lines per source line (this repository) = 182, relaxed by policy to 200 (440 reviewed lines, 53 minutes at 500 lines/hour) |
-| Pull request target | 200 source lines | Same sitting arithmetic as the task ceiling |
+| Task ceiling | 300 hand-written source lines | A task must fit one normal sitting alone. 400 reviewed lines per review (SmartBear) / 2.2 reviewed lines per source line (this repository) = 182. Policy relaxed it to 200 (440 reviewed lines, 53 minutes at 500 lines/hour). The owner decision of 2026-10-14 raised it to 300: 300 x 2.2 = 660 reviewed lines, 79 minutes at 500 lines an hour |
+| Pull request target | 200 source lines | One normal sitting: the 200-line derivation in the task ceiling row (440 reviewed lines, 53 minutes at 500 lines an hour) |
 | Pull request ceiling | 300 source lines | 90-minute exception x 500 lines/hour = 750 reviewed lines; / 2.2 = 341; rounded down to 300 so that pull requests up to a 2.5 ratio still fit |
 | Files changed (excluding raw captures and `testdata/`) | Task and pull request target 20, pull request ceiling 30 | Policy choice: Google's 10-file mark for 90% of changes, doubled for this repository's source-plus-test file pairs; Google's style guide calls a 50-file spread "usually too large" |
 | Domains touched | Task and pull request target 3, pull request ceiling 5 code domains | This repository: 75th percentile of 2 code domains per task; Microsoft: fewer files, a higher share of useful review comments (a direction; the paper gives no number) |
@@ -340,7 +340,7 @@ user-visible change it serves, estimated source lines, files, code domains, and 
 2. Attach every task to the sentence it serves. A task that serves none (refactor, test-only,
    docs-only) rides with the feature that needs it; if no feature needs it in this wave, it is
    its own sentence ("…, with no behavior change").
-3. Split any task over 200 source lines, 20 files, or 3 code domains. Split vertically first (a
+3. Split any task over 300 source lines, 20 files, or 3 code domains. Split vertically first (a
    thinner end-to-end slice); split horizontally (stubs, a library first) only when no vertical
    cut exists.
 4. Mechanical exception: a change that applies one rule uniformly (rename, import move, envelope
@@ -426,6 +426,8 @@ tasks; `fix/tests-09` (`e3b41b5`) is the widest small one, 61 source lines over 
 
 1. **Verifier ceiling.** Whether an agent verifier may hold more than the human sitting.
    Recommendation: no; keep the task ceiling at 200 until verifier misses are measured.
+   The owner settled it in the Decisions entry "Recorded 2026-10-14 by the owner": the task
+   ceiling is 300.
 2. **Where the limits are checked.** Plan time only, a size field on the task, or a check at
    landing. Recommendation: plan time now, then an advisory size report from `task land` (and any
    future diff command); no refusal until the numbers are tested on a few waves.
@@ -474,5 +476,10 @@ Recorded 2026-10-13, round two, by the owner:
   owner's word. Fledge also records a merge that the owner makes with the GitHub button.
 - The size limits are constants. An advisory size report shows them and never refuses.
 - Stacks are probed in a throwaway repository before any stack tooling is built.
+
+Recorded 2026-10-14 by the owner:
+
+- The task ceiling is 300 hand-written source lines. Files stay at 20, and code domains stay at 3.
+  The pull request target of 200 and the pull request ceiling of 300 do not change.
 
 Further decisions are appended as planning rounds settle them.

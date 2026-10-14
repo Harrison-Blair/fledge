@@ -46,11 +46,12 @@ type Result struct {
 // Run validates the proposal before opening the store, then, unless DryRun,
 // creates the parent (if the file has one) and the tasks in topological
 // order under one store lock. An existing Parent must be neither verified
-// nor cancelled and every existing prerequisite id must exist; a dry run
-// checks the same without creating anything. The creator is the caller's
-// live agent record, or null when the caller is unregistered. Repeated
-// prerequisites are stored once. A task without delivery_mode, and the
-// file's parent, take the repository's configured delivery_mode, else none.
+// nor cancelled and every existing prerequisite id must exist. When the
+// Parent has shape stack, its layers and the new tasks must form one after
+// chain. A dry run checks the same without creating anything. The creator is
+// the caller's live agent record, or null when the caller is unregistered.
+// Repeated prerequisites are stored once. A task or the file's parent without
+// delivery_mode takes the repository's configured delivery_mode, else none.
 func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Outcome {
 	out := cli.NewOutcome("task.import")
 	p, order, err := validate(ctx, o, in)
@@ -87,7 +88,7 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 				out.Fail(err, "state", false)
 				return out
 			}
-			if err := task.CheckLinks(s, o.Parent, existing); err != nil {
+			if err := checkLinks(s, o.Parent, existing, p, order); err != nil {
 				out.Fail(err, "task", false)
 				return out
 			}
@@ -112,7 +113,7 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 	}
 	phase := "state"
 	err = s.Exclusive(func(tx *state.Tx) error {
-		if err := task.CheckLinks(s, o.Parent, existing); err != nil {
+		if err := checkLinks(s, o.Parent, existing, p, order); err != nil {
 			phase = "task"
 			return err
 		}
@@ -131,7 +132,14 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 			return id, err
 		}
 		if p.Parent != nil {
-			id, err := create(task.Record{Title: p.Parent.Title, Brief: p.Parent.Brief})
+			rec := task.Record{Title: p.Parent.Title, Brief: p.Parent.Brief, Branch: p.Parent.Branch, BaseBranch: p.Parent.BaseBranch}
+			if p.Parent.Shape != nil {
+				rec.Shape = *p.Parent.Shape
+			}
+			if p.Parent.DeliveryMode != nil {
+				rec.DeliveryMode = *p.Parent.DeliveryMode
+			}
+			id, err := create(rec)
 			if err != nil {
 				return err
 			}
@@ -148,7 +156,7 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 					after = append(after, dep)
 				}
 			}
-			rec := task.Record{Title: t.Title, Brief: t.Brief, Parent: r.Parent, After: after, BaseBranch: t.BaseBranch}
+			rec := task.Record{Title: t.Title, Brief: t.Brief, Parent: r.Parent, After: after, BaseBranch: t.BaseBranch, Branch: t.Branch}
 			if t.DeliveryMode != nil {
 				rec.DeliveryMode = *t.DeliveryMode
 			}
@@ -172,8 +180,35 @@ func Run(ctx context.Context, c libagent.Client, o Options, in io.Reader) cli.Ou
 	return out
 }
 
-// validate reads and decodes the proposal, checks each base_branch, and
-// checks the flags against it. Every problem is an input error.
+// checkLinks runs task.CheckLinks. When parent has shape stack, its layers
+// and the proposal's tasks must also form one after chain. A fork is invalid
+// input. When parent has shape feature, proposal.FeatureMembers applies to
+// order with the branch of parent. A conflict is invalid input.
+func checkLinks(s *state.Store, parent string, existing []string, p proposal.Proposal, order []proposal.Task) error {
+	if err := task.CheckLinks(s, parent, existing); err != nil || parent == "" {
+		return err
+	}
+	r, err := task.Get(s, parent)
+	if err == nil && r.Shape == task.ShapeFeature {
+		if err := proposal.FeatureMembers(order, r.Branch); err != nil {
+			return cli.Invalid("%v", err)
+		}
+	}
+	if err != nil || r.Shape != task.ShapeStack {
+		return err
+	}
+	rs, err := task.List(s)
+	if err != nil {
+		return err
+	}
+	if err := p.CheckStack(parent, rs); err != nil {
+		return cli.Invalid("%v", err)
+	}
+	return nil
+}
+
+// validate reads and decodes the proposal, checks each branch and
+// base_branch, and checks the flags against it. Every problem is an input error.
 func validate(ctx context.Context, o Options, in io.Reader) (proposal.Proposal, []proposal.Task, error) {
 	switch {
 	case !o.FileSet:
@@ -191,11 +226,13 @@ func validate(ctx context.Context, o Options, in io.Reader) (proposal.Proposal, 
 	if err != nil {
 		return proposal.Proposal{}, nil, cli.Invalid("%v", err)
 	}
-	for _, t := range order {
-		if t.BaseBranch == nil {
-			continue
+	if p.Parent != nil {
+		if err := validBranches(ctx, "[parent]:", p.Parent.Branch, p.Parent.BaseBranch); err != nil {
+			return proposal.Proposal{}, nil, err
 		}
-		if err := landing.ValidTarget(ctx, fmt.Sprintf("task %q: base_branch", t.Key), *t.BaseBranch); err != nil {
+	}
+	for _, t := range order {
+		if err := validBranches(ctx, fmt.Sprintf("task %q:", t.Key), t.Branch, t.BaseBranch); err != nil {
 			return proposal.Proposal{}, nil, err
 		}
 	}
@@ -203,6 +240,20 @@ func validate(ctx context.Context, o Options, in io.Reader) (proposal.Proposal, 
 		return proposal.Proposal{}, nil, cli.Invalid("--parent conflicts with the file's [parent]; use one")
 	}
 	return p, order, nil
+}
+
+// validBranches checks branch as task create checks --branch, and base as it
+// checks --base-branch. A nil value is not checked.
+func validBranches(ctx context.Context, owner string, branch, base *string) error {
+	if branch != nil {
+		if err := landing.ValidBranch(ctx, owner+" branch", *branch); err != nil {
+			return err
+		}
+	}
+	if base != nil {
+		return landing.ValidTarget(ctx, owner+" base_branch", *base)
+	}
+	return nil
 }
 
 // Render writes the tasks in creation order: a plan on a dry run, one line

@@ -40,24 +40,26 @@ func samePath(a, b string) bool {
 }
 
 // DefaultBranch returns the full ref of the repository integration branch:
-// the branch that base_branch in .fledge/config.toml of the primary checkout
-// repo names, as refs/heads/<name> or else refs/remotes/origin/<name>; else
-// the target of refs/remotes/origin/HEAD, else refs/heads/main, or "" when
-// none of them exists. Git configuration is not read. A configured branch
-// that does not exist, or an unreadable or invalid file, is an error rather
-// than a fallback, so merged checks become "unknown".
+// the [branches] dev branch of .fledge/config.toml in the primary checkout
+// repo, as refs/heads/<dev> or else refs/remotes/origin/<dev>; else the
+// target of refs/remotes/origin/HEAD, else refs/heads/main, or "" when none
+// of them exists. Git configuration is not read. A dev branch that the file
+// names and that does not exist, or an unreadable or invalid file, is an
+// error rather than a fallback, so merged checks become "unknown". A default
+// dev branch that does not exist falls back.
 func DefaultBranch(ctx context.Context, repo string) (string, error) {
 	c, err := repoconfig.Read(ctx, repo)
 	if err != nil {
 		return "", err
 	}
-	if c.BaseBranch != "" {
-		for _, ref := range []string{"refs/heads/" + c.BaseBranch, "refs/remotes/origin/" + c.BaseBranch} {
-			if exists(ctx, repo, ref) {
-				return ref, nil
-			}
+	dev := c.Branches.Dev
+	for _, ref := range []string{"refs/heads/" + dev, "refs/remotes/origin/" + dev} {
+		if exists(ctx, repo, ref) {
+			return ref, nil
 		}
-		return "", fmt.Errorf("%s base_branch names %s, which does not exist locally or on origin", repoconfig.Path, c.BaseBranch)
+	}
+	if c.Branches.DevSet {
+		return "", fmt.Errorf("%s [branches] dev names %s, which does not exist locally or on origin", repoconfig.Path, dev)
 	}
 	if b, err := exec.CommandContext(ctx, "git", "-C", repo, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD").Output(); err == nil {
 		return strings.TrimSpace(string(b)), nil

@@ -158,4 +158,42 @@ Recorded 2026-10-12, wave-two decisions and the wave-one sign-off:
   - When the local base branch is absent, Fledge falls back to `origin/<name>`.
   - The orchestrator delegates all investigation.
 
+Recorded 2026-10-14, the stack wave (GitHub stacks, the branches table, and the feature flow):
+
+- Decision 1, scope: the wave covers stacks, the `[branches]` table, and the feature-branch flow.
+  A `pr_ready` supervisor wake, a promotion command from dev to main, and a command that refreshes
+  a feature branch are out of scope.
+- Decision 2, carry-forward: a verification carries forward to a new head with an equal patch id.
+  `task verify --commit` stores the patch id. `task land` and `task size` compare it.
+- Decision 3, the parent is the group: a parent task gets a shape, `stack` or `feature`. There is
+  no separate stack record. The proposal `[parent]` gets a `delivery_mode` key.
+- Decision 4, one chain: the layers of a stack form one `after` chain. `task create` and
+  `task import` refuse a fork.
+- Decision 5, branches: a task gets a `branch` at creation. `task size` and `task land` measure
+  each stack layer against the branch of the layer below, the layer base.
+- Decision 6, landing a stack: a stack lands only in `pr` mode, with a verified parent.
+  `task land` pushes the layers, opens one pull request for each layer, and forms a native GitHub
+  stack. `task land --merge` merges the stack with the merge-async API. Each run makes the records
+  follow GitHub, also after a merge made with the GitHub button. No command deletes a branch.
+- Decision 7, the branches table: a `[branches]` table with `main` and `dev` keys replaces the
+  `base_branch` config key. `fledge doctor` warns about a missing dev branch. No command makes it.
+- Decision 8, the feature flow: a local landing merges in the checkout that has the target checked
+  out. The members of a feature parent default to `local` delivery into the feature branch.
+- Decision 9, size: `task size` measures a layer against the layer below. For a stack parent, it
+  reports the total of the stack. The report stays advisory.
+- Decision 10, cleanup: `agent cleanup` judges a stacked layer by the merge commit of its task
+  against the stack base.
+- Decision 11, limits: each layer is at most 300 source lines, 20 files, and 3 code domains.
+- The task ceiling is 300 hand-written source lines (owner decision of 2026-10-14). Files stay at
+  20 and code domains at 3. The pull request target of 200 and the pull request ceiling of 300 do
+  not change.
+- Owner answers to the six questions of the first pass:
+  - Q1, patch id mode: `git patch-id --verbatim`, not `--stable`.
+  - Q2, a stack landing needs the parent verified. The parent moves to `landed` from `verified`.
+  - Q3, mode of a stack: the parent's mode must be `pr`. The layer modes have no effect.
+  - Q4, refusal codes for the local landing: the new codes `land_target_checkout_missing` and
+    `land_target_checkout_dirty`.
+  - Q5, friction status word: `Resolved 2026-10-14`.
+  - Q6, a missing default dev branch: fall back to `origin/HEAD`, then `main`, as before.
+
 Further decisions are appended as planning rounds settle them.

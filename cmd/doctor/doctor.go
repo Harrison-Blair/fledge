@@ -18,7 +18,7 @@ func New() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Diagnose the local Fledge and Herdr environment",
-		Long:  "Diagnose the local Fledge and Herdr environment with read-only checks against\nthe Herdr socket, harness installations, local model discovery, and the Herdr\nenvironment, printing a per-check report.\nExits nonzero if any check fails; warnings never fail.",
+		Long:  "Diagnose the local Fledge and Herdr environment with read-only checks.\nThe checks examine the Herdr socket, harness installations, local model\ndiscovery, the Herdr environment, and the configured dev branch.\nThe command prints a report for each check.\nExits nonzero if any check fails; warnings never fail.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return doctor.Run(cmd.Context(), doctor.Options{

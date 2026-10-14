@@ -22,4 +22,7 @@ fledge doctor
     session        -
     cwd            /work/dir
 
-  0 ok · 2 warn · 3 fail
+  branches                ok
+    not in a repository
+
+  1 ok · 2 warn · 3 fail

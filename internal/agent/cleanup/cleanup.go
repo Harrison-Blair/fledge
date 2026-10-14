@@ -45,7 +45,8 @@ type Worker struct {
 }
 
 // Checkout is one checkout a worker recorded; removing it is the action.
-// Base is the ref its spawn created it from.
+// Base is the ref its spawn created it from, or the stack base for the
+// checkout of a stacked layer.
 type Checkout struct {
 	Path    string  `json:"path"`
 	Branch  *string `json:"branch"`
@@ -54,7 +55,8 @@ type Checkout struct {
 	Outcome string  `json:"outcome"`
 	Reason  *string `json:"reason"`
 	// marker and markedBranch identify the owned checkout planned for removal.
-	marker, markedBranch string
+	// mergeCommit, for a stacked layer, is the commit that merged it.
+	marker, markedBranch, mergeCommit string
 }
 
 // Run plans the cleanup of the caller's finished workers and their checkouts
@@ -118,7 +120,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 			ch.Outcome, ch.Reason = "skipped", cli.Pointer("its worker "+ch.Worker+" was not stopped")
 			continue
 		}
-		ch.Outcome, ch.Reason = record(remove.Run(ctx, c, remove.Options{Path: ch.Path, Cwd: p.root, Base: *ch.Base, Marker: ch.marker, MarkedBranch: ch.markedBranch, PlannedPath: ch.Path}))
+		ch.Outcome, ch.Reason = record(remove.Run(ctx, c, remove.Options{Path: ch.Path, Cwd: p.root, Base: *ch.Base, MergeCommit: ch.mergeCommit, Marker: ch.marker, MarkedBranch: ch.markedBranch, PlannedPath: ch.Path}))
 	}
 	out.Result = p.Result
 	var retired []string

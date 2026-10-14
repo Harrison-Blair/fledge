@@ -16,8 +16,8 @@ func TestCompareBoundaries(t *testing.T) {
 		pick func(Report) Check
 		want Status
 	}{
-		{"task lines 200", KindTask, Diff{SourceLines: 200}, srcLines, Within},
-		{"task lines 201", KindTask, Diff{SourceLines: 201}, srcLines, OverCeiling},
+		{"task lines 300", KindTask, Diff{SourceLines: 300}, srcLines, Within},
+		{"task lines 301", KindTask, Diff{SourceLines: 301}, srcLines, OverCeiling},
 		{"task files 20", KindTask, Diff{Files: 20}, files, Within},
 		{"task files 21", KindTask, Diff{Files: 21}, files, OverCeiling},
 		{"task domains 3", KindTask, Diff{CodeDomains: domains(3)}, codeDomains, Within},

@@ -272,11 +272,11 @@ func TestListLeavesIncompleteStoreUnchanged(t *testing.T) {
 // unknown and says why, instead of falling back to another branch.
 func TestListMissingConfiguredBaseBranch(t *testing.T) {
 	f := newFixture(t)
-	configure(t, f.root, "schema_version = 1\nbase_branch = \"dev\"\n")
+	configure(t, f.root, "schema_version = 1\n[branches]\ndev = \"dev\"\n")
 	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()})
 	out := Run(context.Background(), c, Options{Cwd: f.root})
 	r := out.Result.(Result)
-	if r.DefaultBranch != nil || r.DefaultBranchError == nil || !strings.Contains(*r.DefaultBranchError, ".fledge/config.toml base_branch names dev") {
+	if r.DefaultBranch != nil || r.DefaultBranchError == nil || !strings.Contains(*r.DefaultBranchError, ".fledge/config.toml [branches] dev names dev") {
 		t.Fatalf("%+v", r)
 	}
 	for _, row := range r.Worktrees {
@@ -297,7 +297,7 @@ func TestListMissingConfiguredBaseBranch(t *testing.T) {
 func TestListUsesConfiguredBaseBranch(t *testing.T) {
 	f := newFixture(t)
 	gittest.Git(t, f.root, "branch", "dev", "main~1")
-	configure(t, f.root, "schema_version = 1\nbase_branch = \"dev\"\n")
+	configure(t, f.root, "schema_version = 1\n[branches]\ndev = \"dev\"\n")
 	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()})
 	r := Run(context.Background(), c, Options{Cwd: f.root}).Result.(Result)
 	if r.DefaultBranch == nil || *r.DefaultBranch != "dev" || r.DefaultBranchError != nil {
@@ -313,7 +313,7 @@ func TestListUsesConfiguredBaseBranch(t *testing.T) {
 func TestListUsesConfiguredRemoteTrackingBranch(t *testing.T) {
 	f := newFixture(t)
 	gittest.Git(t, f.root, "update-ref", "refs/remotes/origin/dev", "main~1")
-	configure(t, f.root, "schema_version = 1\nbase_branch = \"dev\"\n")
+	configure(t, f.root, "schema_version = 1\n[branches]\ndev = \"dev\"\n")
 	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()})
 	r := Run(context.Background(), c, Options{Cwd: f.root}).Result.(Result)
 	if r.DefaultBranch == nil || *r.DefaultBranch != "origin/dev" || r.DefaultBranchError != nil {
@@ -327,7 +327,7 @@ func TestListUsesConfiguredRemoteTrackingBranch(t *testing.T) {
 // An invalid configuration file makes merged checks unknown with its reason.
 func TestListInvalidConfigFile(t *testing.T) {
 	f := newFixture(t)
-	configure(t, f.root, "schema_version = 1\nbase_branch = \"..\"\n")
+	configure(t, f.root, "schema_version = 1\n[branches]\ndev = \"..\"\n")
 	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()})
 	r := Run(context.Background(), c, Options{Cwd: f.root}).Result.(Result)
 	if r.DefaultBranch != nil || r.DefaultBranchError == nil || !strings.Contains(*r.DefaultBranchError, "not a valid branch name") {
@@ -335,6 +335,51 @@ func TestListInvalidConfigFile(t *testing.T) {
 	}
 	if row := r.Worktrees[1]; row.Merged != "unknown" {
 		t.Fatalf("%+v", row)
+	}
+}
+
+// Each refused file exits 0, shows every merged check as unknown, and prints
+// its reason in the MERGED line.
+func TestListBranchesConfigRefusals(t *testing.T) {
+	for _, tc := range []struct{ name, content, want string }{
+		{"base branch", "schema_version = 1\nbase_branch = \"dev\"\n", `unknown key "base_branch"`},
+		{"unknown key", "schema_version = 1\n[branches]\nstage = \"x\"\n", `unknown key "branches.stage"`},
+		{"integer dev", "schema_version = 1\n[branches]\ndev = 5\n", "[branches] dev must be a string"},
+		{"missing dev", "schema_version = 1\n[branches]\ndev = \"trunk\"\n", "[branches] dev names trunk, which does not exist"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			configure(t, f.root, tc.content)
+			c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()})
+			out := Run(context.Background(), c, Options{Cwd: f.root})
+			r := out.Result.(Result)
+			if out.ExitCode() != 0 || r.DefaultBranch != nil || r.Worktrees[1].Merged != "unknown" {
+				t.Fatalf("exit %d %+v", out.ExitCode(), r)
+			}
+			var b bytes.Buffer
+			if err := out.Write(&b, false, Render); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(b.String(), "MERGED is unknown: ") || !strings.Contains(b.String(), tc.want) {
+				t.Fatalf("%q", b.String())
+			}
+		})
+	}
+}
+
+// Without a [branches] table and without a dev branch, merges are judged
+// against main.
+func TestListDefaultDevMissingUsesMain(t *testing.T) {
+	f := newFixture(t)
+	configure(t, f.root, "schema_version = 1\n")
+	c := herdrscript.Client(t, call{Method: "worktree.list", Result: f.listing()})
+	out := Run(context.Background(), c, Options{Cwd: f.root})
+	r := out.Result.(Result)
+	if out.ExitCode() != 0 || r.DefaultBranch == nil || *r.DefaultBranch != "main" || r.DefaultBranchError != nil {
+		t.Fatalf("exit %d %+v", out.ExitCode(), r)
+	}
+	if row := r.Worktrees[1]; row.Merged != "yes" {
+		t.Fatalf("merged into main: %+v", row)
 	}
 }
 

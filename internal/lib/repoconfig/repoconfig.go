@@ -38,11 +38,15 @@ var (
 )
 
 // Config is a decoded, validated configuration file. A zero field is not
-// configured.
+// configured. Branches.Main is "main" and Branches.Dev is "dev" when the file
+// does not name them; DevSet is true when the file names dev.
 type Config struct {
-	BaseBranch   string
 	DeliveryMode string
-	Inbox        struct {
+	Branches     struct {
+		Main, Dev string
+		DevSet    bool
+	}
+	Inbox struct {
 		AckTimeout time.Duration
 	}
 }
@@ -50,7 +54,6 @@ type Config struct {
 // file is the TOML shape; a pointer distinguishes an omitted version.
 type file struct {
 	SchemaVersion *int64 `toml:"schema_version"`
-	BaseBranch    string `toml:"base_branch"`
 }
 
 // Read returns the configuration of the repository whose primary checkout is
@@ -65,11 +68,13 @@ func Read(ctx context.Context, root string) (Config, error) {
 }
 
 func read(ctx context.Context, root string) (Config, error) {
+	var c Config
+	c.Branches.Main, c.Branches.Dev = "main", "dev"
 	path := filepath.Join(root, Path)
 	info, err := os.Lstat(path)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		return Config{}, nil
+		return c, nil
 	case err != nil:
 		return Config{}, err
 	case !info.Mode().IsRegular():
@@ -94,7 +99,7 @@ func read(ctx context.Context, root string) (Config, error) {
 		return Config{}, err
 	}
 	for k := range raw {
-		if k != "schema_version" && k != "base_branch" && k != "delivery_mode" && k != "inbox" {
+		if k != "schema_version" && k != "branches" && k != "delivery_mode" && k != "inbox" {
 			return Config{}, fmt.Errorf("unknown key %q", k)
 		}
 	}
@@ -108,12 +113,11 @@ func read(ctx context.Context, root string) (Config, error) {
 	if *fl.SchemaVersion != schemaVersion {
 		return Config{}, fmt.Errorf("unsupported schema_version %d; this Fledge reads %d", *fl.SchemaVersion, schemaVersion)
 	}
-	if _, ok := raw["base_branch"]; ok {
-		if err := checkBranch(ctx, root, fl.BaseBranch); err != nil {
+	if v, ok := raw["branches"]; ok {
+		if err := checkBranches(ctx, root, v, &c); err != nil {
 			return Config{}, err
 		}
 	}
-	c := Config{BaseBranch: fl.BaseBranch}
 	if v, ok := raw["delivery_mode"]; ok {
 		if c.DeliveryMode, err = checkDeliveryMode(v); err != nil {
 			return Config{}, err
@@ -167,19 +171,50 @@ func checkInbox(v any) (time.Duration, error) {
 	return d, nil
 }
 
+// checkBranches accepts a [branches] table whose only keys are main and dev,
+// each a branch name that checkBranch accepts, and sets them in c.
+func checkBranches(ctx context.Context, root string, v any, c *Config) error {
+	t, ok := v.(map[string]any)
+	if !ok {
+		return errors.New("branches must be a table")
+	}
+	for k, v := range t {
+		var dst *string
+		switch k {
+		case "main":
+			dst = &c.Branches.Main
+		case "dev":
+			dst, c.Branches.DevSet = &c.Branches.Dev, true
+		default:
+			return fmt.Errorf("unknown key %q", "branches."+k)
+		}
+		label := "[branches] " + k
+		s, ok := v.(string)
+		if !ok {
+			return errors.New(label + " must be a string")
+		}
+		if err := checkBranch(ctx, root, label, s); err != nil {
+			return err
+		}
+		*dst = s
+	}
+	return nil
+}
+
 // checkBranch accepts a branch name git would accept as refs/heads/<name>.
 // The full-ref form, unlike --branch, does not expand @{-N} from the reflog.
-func checkBranch(ctx context.Context, root, name string) error {
+// The label names the key in each error.
+func checkBranch(ctx context.Context, root, label, name string) error {
 	switch {
 	case strings.TrimSpace(name) == "":
-		return errors.New("base_branch is blank")
+		return errors.New(label + " is blank")
 	case strings.ContainsAny(name, "\r\n"):
-		return fmt.Errorf("base_branch %q spans lines", name)
+		return fmt.Errorf("%s %q spans lines", label, name)
 	case strings.HasPrefix(name, "-"):
-		return fmt.Errorf("base_branch %q starts with -", name)
+		return fmt.Errorf("%s %q starts with -", label, name)
 	}
 	if exec.CommandContext(ctx, "git", "-C", root, "check-ref-format", "refs/heads/"+name).Run() != nil {
-		return fmt.Errorf("base_branch %q is not a valid branch name", name)
+		return fmt.Errorf("%s %q is not a valid branch name", label, name)
 	}
 	return nil
 }

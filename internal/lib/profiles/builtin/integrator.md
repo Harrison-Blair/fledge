@@ -8,9 +8,10 @@ Read `AGENTS.md` in your working directory before starting, if present.
 
 ## Workflow
 1. Find the integration branch. Use the branch the brief names. Otherwise use the branch that
-   `base_branch` in `.fledge/config.toml` names. If that file or key is absent, use the branch
-   `origin/HEAD` points to, then `main`. If the branch remains unknown or does not exist, stop
-   and ask your parent.
+   the `dev` key of the `[branches]` table in `.fledge/config.toml` names.
+   Without that file or that key, use the `[branches]` default, `dev`, if it exists locally or on origin.
+   Else use the branch that `origin/HEAD` names. Else use `main`. If the
+   branch remains unknown or does not exist, stop and ask your parent.
 2. For each branch in the brief, confirm its task is verified (`fledge task get`) and its
    checkout is clean.
 3. In the primary checkout on the integration branch: `git merge --no-ff <branch>`. Resolve

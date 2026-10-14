@@ -103,6 +103,9 @@ func Render(w io.Writer, o cli.Outcome) error {
 		}
 		fmt.Fprintf(&b, "after: %s\n", strings.Join(deps, ", "))
 	}
+	if r.Shape != "" {
+		fmt.Fprintf(&b, "shape: %s\n", termtext.Clean(r.Shape))
+	}
 	if r.DeliveryMode != "" && r.DeliveryMode != task.ModeNone {
 		fmt.Fprintf(&b, "delivery mode: %s\n", r.DeliveryMode)
 	}
@@ -142,6 +145,12 @@ func Render(w io.Writer, o cli.Outcome) error {
 	}
 	if r.VerifiedCommit != nil {
 		fmt.Fprintf(&b, "verified commit: %s\n", termtext.Clean(*r.VerifiedCommit))
+	}
+	if r.VerifiedPatchID != nil {
+		fmt.Fprintf(&b, "verified patch id: %s\n", termtext.Clean(*r.VerifiedPatchID))
+	}
+	if r.CarriedFrom != nil {
+		fmt.Fprintf(&b, "carried from: %s\n", termtext.Clean(*r.CarriedFrom))
 	}
 	if r.Branch != nil {
 		fmt.Fprintf(&b, "branch: %s\n", termtext.Clean(*r.Branch))

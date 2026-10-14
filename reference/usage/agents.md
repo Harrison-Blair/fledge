@@ -931,7 +931,15 @@ Cleanup removes a checkout only when all these conditions hold:
 - Its worker ended or cleanup is stopping it now.
 - It is clean.
 - It is merged into its recorded base, such as `dev`, rather than the [integration branch](worktrees.md#integration-branch).
+  A stacked layer is the exception (see below).
 - No other live agent uses it, except workers cleanup is stopping, under the same rules as `worktree remove`.
+
+A **stacked layer** is a checkout whose worker owns a task under a parent with `shape = stack` (see [Stacks and features](tasks.md#stacks-and-features)).
+GitHub rebases the upper layers of a stack merge, so their branch heads are not in the stack base.
+Thus cleanup judges a stacked layer against the stack base, not the recorded base.
+The layer counts as merged when the `merge_commit` of its task is in `refs/heads/<stack base>` or in `refs/remotes/origin/<stack base>`.
+Cleanup holds a layer whose task has no merge commit.
+Cleanup does not run `git fetch`. `task land` gets the stack base from origin after it records a stack merge.
 
 Cleanup always keeps branches.
 It reports and keeps borrowed checkouts and checkouts recorded before creation or identity tracking.

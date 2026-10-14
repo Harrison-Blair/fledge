@@ -17,7 +17,14 @@ func TestHelpNamesAutoMode(t *testing.T) {
 	for _, want := range []string{"auto does the same\nsteps and merges in one command, with no review stop", "local, pr, or auto", "pr lands in two steps",
 		"stops with the pull request open for the owner's\nreview", "task land\n--merge runs every guard", "--merge applies only to pr mode", "--merge ",
 		"A review-stage pull\nrequest merged in GitHub is recorded by the next task land",
-		"Every attempt that passes the head check prints the advisory review-size\nreport", "the size never\nrefuses a landing"} {
+		"Every attempt that passes the head check prints the advisory review-size\nreport", "the size never\nrefuses a landing",
+		"A stack parent lands in pr mode only", "pushes each layer branch to origin, bottom first, without force",
+		"--branch and --mode are\ninvalid input for a stack", "fledge task land --id <parent>",
+		"task land --id <parent> --merge requests the GitHub merge of the top layer", "--merge requests the merge of the unlanded layers up\nto that layer",
+		"The next task land on the parent or on a layer continues a pending\nrequest and sends no new request",
+		"A run on a stack first records every layer that GitHub reports merged",
+		"A run with no change on GitHub\nwrites nothing",
+		"local merges the verified commit with a merge commit in the checkout that has\nthe target checked out: the primary checkout or a managed worktree"} {
 		if !strings.Contains(b.String(), want) {
 			t.Errorf("help lacks %q: %s", want, b.String())
 		}

@@ -80,7 +80,7 @@ func TestDoctorJSONSuccess(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
 		t.Fatalf("invalid json: %v\n%s", err, out.String())
 	}
-	if len(doc.Checks) != 5 || doc.Summary.Fail != 0 {
+	if len(doc.Checks) != 6 || doc.Summary.Fail != 0 {
 		t.Fatalf("unexpected report: %+v", doc)
 	}
 }

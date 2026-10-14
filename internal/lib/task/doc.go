@@ -4,6 +4,6 @@
 // Herdr idle or done.
 //
 //	task.go     records, statuses, delivery modes, and locked store access
-//	graph.go    subtask progress, dependency satisfaction, and link checks
+//	graph.go    subtask progress, dependency satisfaction, link checks, and stack layers
 //	deliver.go  message attempts: submitting, recording, and describing their outcome
 package task

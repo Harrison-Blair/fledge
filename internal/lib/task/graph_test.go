@@ -115,3 +115,51 @@ func TestCheckLinks(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+func TestLayersReturnsTheChainBottomFirst(t *testing.T) {
+	p, other := "0000000a", "0000000b"
+	layer := func(id, status string, after ...string) Record {
+		return Record{ID: id, Parent: &p, Status: status, After: after}
+	}
+	rs := []Record{
+		{ID: p, Shape: ShapeStack},
+		layer("00000003", Created, "00000002", "0000000f"),
+		layer("00000001", Verified, "0000000f"),
+		layer("00000002", Cancelled, "00000001"),
+		{ID: "0000000f", Status: Created},
+		{ID: "00000004", Parent: &other, After: []string{"00000003"}},
+	}
+	got, err := Layers(p, rs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := []string{}
+	for _, r := range got {
+		ids = append(ids, r.ID)
+	}
+	if !reflect.DeepEqual(ids, []string{"00000001", "00000002", "00000003"}) {
+		t.Fatalf("%v", ids)
+	}
+	if got, err := Layers(other, rs[:5]); err != nil || len(got) != 0 {
+		t.Fatalf("%v %v", got, err)
+	}
+}
+
+func TestLayersRefusesABrokenChain(t *testing.T) {
+	p := "0000000a"
+	layer := func(id string, after ...string) Record {
+		return Record{ID: id, Parent: &p, After: after}
+	}
+	const prefix = "stack layers must form one after chain: "
+	for want, rs := range map[string][]Record{
+		"layer 00000001 has more than one dependent layer: 00000002, 00000003": {layer("00000001"), layer("00000002", "00000001"), layer("00000003", "00000001")},
+		"more than one layer has no prerequisite layer: 00000001, 00000002":    {layer("00000001"), layer("00000002"), layer("00000003", "00000002")},
+		"layer 00000003 is after more than one layer: 00000001, 00000002":      {layer("00000001"), layer("00000002", "00000001"), layer("00000003", "00000001", "00000002")},
+		"no layer is without a prerequisite layer":                             {layer("00000001", "00000002"), layer("00000002", "00000001")},
+		"the chain from 00000001 does not include 00000003, 00000004":          {layer("00000001"), layer("00000002", "00000001"), layer("00000003", "00000004"), layer("00000004", "00000003")},
+	} {
+		if _, err := Layers(p, rs); err == nil || err.Error() != prefix+want {
+			t.Fatalf("want %q, got %v", want, err)
+		}
+	}
+}

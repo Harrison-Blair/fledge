@@ -20,9 +20,11 @@ func New() *cobra.Command {
 			"created. The target is the task's base branch, else the repository\n" +
 			"integration branch. --mode overrides the task's delivery mode; --branch and\n" +
 			"--mode are stored on the task even when the landing is refused.\n\n" +
-			"local merges the verified commit with a merge commit in the primary checkout,\n" +
-			"which must have the target checked out with no staged or unstaged changes. A\n" +
-			"failed merge is aborted and the checkout is checked to be exactly as before.\n\n" +
+			"local merges the verified commit with a merge commit in the checkout that has\n" +
+			"the target checked out: the primary checkout or a managed worktree. That\n" +
+			"checkout must have no staged or unstaged changes; untracked files are\n" +
+			"permitted. A failed merge is aborted and the checkout is checked to be exactly\n" +
+			"as before.\n\n" +
 			"pr lands in two steps. First, task land pushes the verified commit to the\n" +
 			"branch on origin, opens or reuses one pull request with gh, and waits until it\n" +
 			"is not a draft, is mergeable, has the verified head, and every check passed\n" +
@@ -35,6 +37,23 @@ func New() *cobra.Command {
 			"one merged at another head or closed. auto does the same\n" +
 			"steps and merges in one command, with no review stop. Every step is stored\n" +
 			"as land_step and can be run again after a refusal.\n\n" +
+			"A stack parent lands in pr mode only. The parent must be verified, and each\n" +
+			"layer must be verified with --commit. task land --id <parent> checks every\n" +
+			"layer. Then it pushes each layer branch to origin, bottom first, without force.\n" +
+			"The records store the branch and the mode. Thus --branch and --mode are\n" +
+			"invalid input for a stack task. Without --merge, a layer does not land\n" +
+			"alone. Use fledge task land --id <parent>.\n\n" +
+			"task land --id <parent> --merge requests the GitHub merge of the top layer.\n" +
+			"task land --id <layer> --merge requests the merge of the unlanded layers up\n" +
+			"to that layer. Each of these layers must be at the review step, with green\n" +
+			"checks at its current head. The request sends the current head of the pull\n" +
+			"request. A layer stores the uuid of a pending request as merge_request.\n" +
+			"The next task land on the parent or on a layer continues a pending\n" +
+			"request and sends no new request.\n\n" +
+			"A run on a stack first records every layer that GitHub reports merged, also\n" +
+			"a merge made with the GitHub button. After such a record, the run gets the\n" +
+			"target branch from origin with git fetch. A run with no change on GitHub\n" +
+			"writes nothing.\n\n" +
 			"Every attempt that passes the head check prints the advisory review-size\n" +
 			"report of the verified commit against the target, as task size does, also in\n" +
 			"the JSON size field and the body of a pull request it opens; the size never\n" +

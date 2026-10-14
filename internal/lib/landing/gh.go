@@ -43,8 +43,23 @@ type Merged struct {
 	State, MergeCommit, HeadRefOid string
 }
 
-// run runs gh with args and returns its stdout, or a gh_failed error with
-// its stderr.
+// Pull is a pull request as the REST API reports it. MergeCommit is "" while
+// merge_commit_sha is null. Stack is nil while the pull request is in no stack.
+type Pull struct {
+	Number                             int
+	State                              string
+	Merged, Draft                      bool
+	MergeCommit                        string
+	HeadSHA, HeadRef, BaseSHA, BaseRef string
+	Stack                              *Stack
+}
+
+// Stack is the stack of a pull request: its number, its count of pull
+// requests, and the position of the pull request, counted from 1 at the bottom.
+type Stack struct{ Number, Size, Position int }
+
+// run runs gh with args and returns its stdout. On an error it also returns
+// a gh_failed error with its stderr.
 func (g GH) run(ctx context.Context, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	cmd.Dir = g.Dir
@@ -52,7 +67,7 @@ func (g GH) run(ctx context.Context, args ...string) ([]byte, error) {
 	cmd.Stderr = &stderr
 	b, err := cmd.Output()
 	if err != nil {
-		return nil, &cli.Error{Code: "land_gh_failed", Message: fmt.Sprintf("gh %s failed: %v: %s", strings.Join(args[:2], " "), err, strings.TrimSpace(stderr.String()))}
+		return b, &cli.Error{Code: "land_gh_failed", Message: fmt.Sprintf("gh %s failed: %v: %s", strings.Join(args[:2], " "), err, strings.TrimSpace(stderr.String()))}
 	}
 	return b, nil
 }
@@ -131,6 +146,146 @@ func (g GH) Checks(ctx context.Context, n int) (Checks, error) {
 	return c, nil
 }
 
+// Pull reads pull request n through the REST API.
+func (g GH) Pull(ctx context.Context, n int) (Pull, error) {
+	b, err := g.run(ctx, "api", "--method=GET", "repos/{owner}/{repo}/pulls/"+strconv.Itoa(n))
+	if err != nil {
+		return Pull{}, apiError(err, b)
+	}
+	type ref struct {
+		SHA *string `json:"sha"`
+		Ref *string `json:"ref"`
+	}
+	var raw struct {
+		Number         *int            `json:"number"`
+		State          *string         `json:"state"`
+		Merged         *bool           `json:"merged"`
+		MergeCommitSHA json.RawMessage `json:"merge_commit_sha"`
+		Head           *ref            `json:"head"`
+		Base           *ref            `json:"base"`
+		Draft          *bool           `json:"draft"`
+		Stack          json.RawMessage `json:"stack"`
+	}
+	var merge *string
+	var stack *struct {
+		Number   *int `json:"number"`
+		Size     *int `json:"size"`
+		Position *int `json:"position"`
+	}
+	// A missing nullable field leaves its RawMessage nil, and null decodes to nil.
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return Pull{}, invalidOutput("api pulls", err)
+	}
+	if raw.Number == nil || raw.State == nil || raw.Merged == nil || raw.MergeCommitSHA == nil || raw.Draft == nil || raw.Stack == nil ||
+		raw.Head == nil || raw.Head.SHA == nil || raw.Head.Ref == nil || raw.Base == nil || raw.Base.SHA == nil || raw.Base.Ref == nil ||
+		json.Unmarshal(raw.MergeCommitSHA, &merge) != nil || json.Unmarshal(raw.Stack, &stack) != nil ||
+		stack != nil && (stack.Number == nil || stack.Size == nil || stack.Position == nil) {
+		return Pull{}, invalidOutput("api pulls", errors.New("a field is missing"))
+	}
+	p := Pull{Number: *raw.Number, State: *raw.State, Merged: *raw.Merged, Draft: *raw.Draft,
+		HeadSHA: *raw.Head.SHA, HeadRef: *raw.Head.Ref, BaseSHA: *raw.Base.SHA, BaseRef: *raw.Base.Ref}
+	if merge != nil {
+		p.MergeCommit = *merge
+	}
+	if stack != nil {
+		p.Stack = &Stack{Number: *stack.Number, Size: *stack.Size, Position: *stack.Position}
+	}
+	return p, nil
+}
+
+// CreateStack forms a GitHub stack of the pull requests numbers, bottom
+// first, and returns the stack number. It sends no base: GitHub takes the base
+// of the bottom pull request. An HTTP 422 answer is land_stack_mismatch.
+func (g GH) CreateStack(ctx context.Context, numbers []int) (int, error) {
+	args := []string{"api", "--method=POST", "repos/{owner}/{repo}/stacks"}
+	for _, n := range numbers {
+		args = append(args, "--field=pull_requests[]="+strconv.Itoa(n))
+	}
+	b, err := g.run(ctx, args...)
+	if err != nil {
+		var answer struct{ Message, Status string }
+		if json.Unmarshal(b, &answer) == nil && answer.Status == "422" {
+			return 0, &cli.Error{Code: "land_stack_mismatch", Message: "GitHub refused the stack: " + answer.Message}
+		}
+		return 0, apiError(err, b)
+	}
+	var raw struct {
+		Number *int `json:"number"`
+	}
+	if err := json.Unmarshal(b, &raw); err != nil || raw.Number == nil {
+		return 0, invalidOutput("api stacks", err)
+	}
+	return *raw.Number, nil
+}
+
+// MergeAnswer is a merge-async answer. Status is pending, enqueued, merged,
+// or failed. UUID names a pending request. SHA is the merge commit of a
+// merged pull request. Message is the text of GitHub.
+type MergeAnswer struct{ Status, UUID, SHA, Message string }
+
+// ErrMergeRequestGone is an HTTP 404 answer to a poll. Fledge assumes that
+// GitHub gives it for an expired uuid. The probes did not observe it.
+var ErrMergeRequestGone = errors.New("GitHub has no merge request with this uuid")
+
+// MergeAsync requests a merge commit of pull request n at head sha.
+func (g GH) MergeAsync(ctx context.Context, n int, sha string) (MergeAnswer, error) {
+	return g.mergeAnswer(ctx, true, "api", "--method=PUT", "repos/{owner}/{repo}/pulls/"+strconv.Itoa(n)+"/merge-async",
+		"--raw-field=merge_method=merge", "--raw-field=sha="+sha)
+}
+
+// MergeStatus reads the status of merge request uuid of pull request n.
+func (g GH) MergeStatus(ctx context.Context, n int, uuid string) (MergeAnswer, error) {
+	return g.mergeAnswer(ctx, false, "api", "--method=GET", "repos/{owner}/{repo}/pulls/"+strconv.Itoa(n)+"/merge-async/"+uuid)
+}
+
+// mergeAnswer runs a merge-async call and decodes its answer, also from the
+// body of HTTP 400. A pending answer to the PUT needs a uuid, a merged answer
+// needs a full sha, and a failed answer needs a message. On an HTTP error, a
+// body with details is a merge answer and must be failed. A body with no
+// details is an ordinary HTTP error.
+func (g GH) mergeAnswer(ctx context.Context, put bool, args ...string) (MergeAnswer, error) {
+	b, err := g.run(ctx, args...)
+	var raw struct {
+		Status  *string                              `json:"status"`
+		Details *struct{ Message, UUID, SHA string } `json:"details"`
+	}
+	decoded := json.Unmarshal(b, &raw)
+	if err != nil {
+		switch {
+		case !put && decoded == nil && raw.Status != nil && *raw.Status == "404":
+			return MergeAnswer{}, ErrMergeRequestGone
+		case decoded != nil || raw.Details == nil:
+			return MergeAnswer{}, apiError(err, b)
+		case raw.Status == nil || *raw.Status != "failed":
+			return MergeAnswer{}, invalidOutput("api merge-async", errors.New("an HTTP error answer is not failed"))
+		}
+	}
+	if decoded != nil || raw.Status == nil {
+		return MergeAnswer{}, invalidOutput("api merge-async", decoded)
+	}
+	a := MergeAnswer{Status: *raw.Status}
+	if d := raw.Details; d != nil {
+		a.Message, a.UUID, a.SHA = d.Message, d.UUID, d.SHA
+	}
+	switch {
+	case a.Status == "pending" && put:
+		if a.UUID != "" {
+			return a, nil
+		}
+	case a.Status == "pending" || a.Status == "enqueued" && !put:
+		return a, nil
+	case a.Status == "merged":
+		if FullHash(a.SHA) {
+			return a, nil
+		}
+	case a.Status == "failed":
+		if a.Message != "" {
+			return a, nil
+		}
+	}
+	return MergeAnswer{}, invalidOutput("api merge-async", fmt.Errorf("a %q answer is missing a field or has an unknown status", a.Status))
+}
+
 // Merge merges pull request n with a merge commit titled subject, only while
 // its head is still head.
 func (g GH) Merge(ctx context.Context, n int, head, subject string) error {
@@ -160,6 +315,19 @@ func (g GH) Merged(ctx context.Context, selector string) (Merged, error) {
 		m.MergeCommit = *raw.MergeCommit.Oid
 	}
 	return m, nil
+}
+
+// apiError adds the message of the JSON body that gh api writes to stdout on
+// an HTTP error to err.
+func apiError(err error, body []byte) error {
+	var raw struct {
+		Message string `json:"message"`
+	}
+	var coded *cli.Error
+	if json.Unmarshal(body, &raw) == nil && raw.Message != "" && errors.As(err, &coded) {
+		coded.Message += ": GitHub answered: " + raw.Message
+	}
+	return err
 }
 
 func invalidOutput(command string, err error) error {
