@@ -83,3 +83,11 @@ type ConfigData struct {
 	// and is never serialized, so the JSON document is unaffected.
 	SocketField string `json:"-"`
 }
+
+// BranchesData records the configured branch names and the ref that holds the
+// dev branch. Ref is empty when the dev branch does not exist.
+type BranchesData struct {
+	Main string `json:"main"`
+	Dev  string `json:"dev"`
+	Ref  string `json:"ref"`
+}

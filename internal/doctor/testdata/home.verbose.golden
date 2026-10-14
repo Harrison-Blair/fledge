@@ -23,4 +23,7 @@ fledge doctor
     session        -
     cwd            ~
 
-  2 ok · 3 warn · 0 fail
+  branches                ok
+    not in a repository
+
+  3 ok · 3 warn · 0 fail

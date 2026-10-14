@@ -39,6 +39,7 @@ func Diagnose(ctx context.Context, o Options) report.Report {
 		checks.Harness(list, listErr),
 		checks.Models(ctx, o.Discovery, list, listErr),
 		checks.Configuration(o.Env),
+		checks.Branches(ctx, o.Env),
 	})
 }
 
