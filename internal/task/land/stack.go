@@ -2,6 +2,7 @@ package land
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -99,7 +100,8 @@ func (l *lander) pushLayers(ctx context.Context) error {
 }
 
 // fetch runs git fetch for the stack base and the layer branches that exist
-// on origin. A git fetch of a branch that is not on origin fails.
+// on origin. A git fetch of a branch that is not on origin fails. fetch removes
+// the local tracking ref of each layer branch that origin lacks.
 func (l *lander) fetch(ctx context.Context, layers []*lander) error {
 	base, err := landing.TaskTarget(ctx, l.root, l.r, "land")
 	if err != nil {
@@ -117,6 +119,14 @@ func (l *lander) fetch(ctx context.Context, layers []*lander) error {
 	for _, line := range strings.Split(string(output), "\n") {
 		if fields := strings.Fields(line); len(fields) == 2 {
 			remote = append(remote, strings.TrimPrefix(fields[1], "refs/heads/"))
+		}
+	}
+	// A stale tracking ref of a missing layer branch would stop its push.
+	for _, layer := range layers {
+		if !slices.Contains(remote, layer.branch) {
+			if output, err := l.git(ctx, "update-ref", "-d", "refs/remotes/origin/"+layer.branch).CombinedOutput(); err != nil {
+				return fmt.Errorf("git update-ref -d refs/remotes/origin/%s failed: %s", layer.branch, strings.TrimSpace(string(output)))
+			}
 		}
 	}
 	names = slices.DeleteFunc(names, func(name string) bool { return !slices.Contains(remote, name) })

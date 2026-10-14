@@ -243,6 +243,23 @@ func TestLandStackRunAgainPushesNothing(t *testing.T) {
 	}
 }
 
+// TestLandStackPushesBranchThatOriginLacks: origin lacks a layer branch and
+// a stale tracking ref has the verified commit. The landing pushes the branch
+// again.
+func TestLandStackPushesBranchThatOriginLacks(t *testing.T) {
+	s := setupStack(t)
+	if out := s.land(t, Options{}); out.Error != nil {
+		t.Fatalf("%+v", out.Error)
+	}
+	git(t, s.origin, "update-ref", "-d", "refs/heads/l3")
+	if out := s.land(t, Options{}); out.Error != nil {
+		t.Fatalf("%+v", out.Error)
+	}
+	if got := strings.TrimSpace(git(t, s.origin, "for-each-ref", "--format=%(objectname)", "refs/heads/l3")); got != s.heads[2] {
+		t.Fatalf("origin lacks l3: got %q, want %s", got, s.heads[2])
+	}
+}
+
 // TestLandStackFetchesBranchesOnOrigin: a layer branch on origin is fetched,
 // so the stale tracking ref does not cause a push. A missing branch is not
 // fetched.
