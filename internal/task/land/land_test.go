@@ -285,7 +285,7 @@ func TestLandSizeWarnsOnlyOnLanding(t *testing.T) {
 	if out.Error != nil {
 		t.Fatalf("%+v", out.Error)
 	}
-	const warning = "review size: source lines 350 is over limit 200"
+	const warning = "review size: source lines 350 is over limit 300"
 	if w := out.Result.(Result).Warnings; !slices.Equal(w, []string{warning}) {
 		t.Fatalf("%q", w)
 	}

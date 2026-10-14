@@ -83,7 +83,7 @@ func TestSizeLocalModesUseLocalBaseAndTaskLimits(t *testing.T) {
 		}
 		want := "branch: feat\ntarget: main\nmode: " + mode + " (task limits)\nbase: refs/heads/main\nhead: " + f.head + "\n" +
 			"task size\n" +
-			"  source lines     2  limit 200                within\n" +
+			"  source lines     2  limit 300                within\n" +
 			"  files            1  limit 20                 within\n" +
 			"  code domains     1  limit 3                  within\n" +
 			"  total read       2  limit 750                within\n" +

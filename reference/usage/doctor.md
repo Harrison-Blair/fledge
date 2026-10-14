@@ -11,7 +11,7 @@ fledge doctor --verbose
 fledge doctor --json
 ```
 
-It runs five checks, each independently:
+It runs six checks, each independently:
 
 - `herdr_connectivity` — `ping` reaches the Herdr socket (`fail` if not).
 - `herdr_compatibility` — the pong `protocol` matches the pinned protocol (`22`).
@@ -25,6 +25,12 @@ It runs five checks, each independently:
   An installed harness whose cache is unreadable is `fail`.
   An installed harness with no models, including one that has not created its cache yet, is `warn`.
 - `configuration` — `HERDR_ENV`, `HERDR_SOCKET_PATH` and its file mode, `HERDR_PANE_ID`, `HERDR_SESSION`, and the working directory.
+- `branches` — the dev branch of the [`[branches]`](worktrees.md#integration-branch) table exists, in the repository that contains the working directory.
+  The dev branch is present as a local branch or on origin: `ok`.
+  The dev branch is missing: `warn`. The detail prints the two commands that make it: `git branch <dev> <main>` and `git push -u origin <dev>`.
+  Not in a Git repository: `ok` with the detail `not in a repository`.
+  An invalid `.fledge/config.toml`: `warn` with the read error.
+  Doctor never makes the branch. The JSON `data` holds `main`, `dev`, and `ref`, the ref that holds the dev branch.
 
 Each check reports exactly one status: `ok`, `warn`, or `fail`.
 Human output groups checks into blocks.

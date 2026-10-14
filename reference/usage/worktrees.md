@@ -67,8 +67,11 @@ It judges the merge against the [integration branch](#integration-branch).
 `agent cleanup` instead uses each checkout's recorded creation base (see [Cleanup](agents.md#cleanup)).
 The integration branch uses this order:
 
-1. The branch that `base_branch` in `.fledge/config.toml` names, read from the primary checkout's working tree.
+1. The dev branch that the `[branches]` table in `.fledge/config.toml` names, read from the primary checkout's working tree.
    Fledge uses the local branch `refs/heads/<name>` when it exists, else `refs/remotes/origin/<name>`, as in a fresh clone.
+   Without a `dev` key, the dev branch is `dev`.
+   A dev branch that the file names and that does not exist is an error, and every checkout reports merged `unknown`.
+   A default dev branch that does not exist goes to the next step.
 2. Otherwise, the branch `origin/HEAD` points to, usually the remote default such as `origin/main`.
 3. Otherwise, the local `main` branch.
 4. Otherwise, none: every checkout reports merged `unknown`.
@@ -79,16 +82,25 @@ Fledge develops on `dev` and reaches `main` only through pull requests, so this 
 
 ```toml
 schema_version = 1
-base_branch = "dev"
+delivery_mode = "pr"
+
+[branches]
+main = "main"
+dev = "dev"
 ```
 
 `schema_version = 1` is required.
-`base_branch` is optional: without it, or without the file, Fledge continues with `origin/HEAD`.
+The `[branches]` table is optional. It accepts only the keys `main` and `dev`.
+`main` names the main branch, and its default is `main`.
+`dev` names the dev branch, the integration branch, and its default is `dev`.
+Without the file, Fledge uses these defaults.
 Keys are case-sensitive, and an unknown key or a wrong type makes the file invalid.
+The old top-level key for the integration branch is now an unknown key, so a file that holds it is invalid. Use `[branches] dev`.
 Give a branch name: `dev`, rather than `origin/dev` or `refs/heads/dev`.
 The name must be a valid branch name on one line and must not start with `-`.
+[`fledge doctor`](doctor.md) warns when the dev branch does not exist and prints the commands that make it.
 
-The file accepts two more optional settings.
+The file accepts two more optional settings, `delivery_mode` and `[inbox]`.
 `task land` and the supervision daemon read them once those ship:
 
 ```toml
@@ -99,7 +111,7 @@ ack_timeout = "5m"
 ```
 
 `delivery_mode` must be the string `local`, `pr`, `auto`, or `none`.
-`[inbox]` is the only table, and `ack_timeout` is its only key.
+`[branches]` and `[inbox]` are the only tables, and `ack_timeout` is the only key of `[inbox]`.
 `ack_timeout` must be a Go duration string, such as `90s` or `5m`, from `10s` to `1h` inclusive.
 
 There is no command to edit the file. Edit it by hand and commit it.

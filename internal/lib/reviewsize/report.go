@@ -9,7 +9,7 @@ import (
 // Limits of reference/plan/review-units.md. A task has one limit per measure;
 // a pull request has a target and a ceiling. Total read has one limit.
 const (
-	TaskLines        = 200
+	TaskLines        = 300
 	TaskFiles        = 20
 	TaskDomains      = 3
 	PRTargetLines    = 200

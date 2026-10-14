@@ -14,6 +14,7 @@ fledge task template > brief.md                               # optional skeleto
 fledge task create --title "Fix the parser" --file brief.md   # prints the task ID
 fledge task create --title "Add tests" --file tests.md --parent 1a2b3c4d --after 5e6f7a8b
 fledge task create --title "Try a probe" --body "one line"
+fledge task create --title "Parser stack" --file stack.md --shape stack --delivery-mode pr   # see Stacks
 fledge task import --file .fledge/tmp/plans/5d6ab497.toml --dry-run   # see Proposals
 fledge task depend --id 9c0d1e2f --after 1a2b3c4d --remove 5e6f7a8b
 fledge task list --ready                                        # created and unblocked
@@ -93,6 +94,7 @@ A subtask is not a prerequisite of its parent.
 
 - `create` requires a single-line `--title` and a brief (`--body`, or `--file` with `-` for stdin), and takes optional `--parent` and repeatable `--after`.
   `--delivery-mode` and `--base-branch` set how and where the task lands (see [Delivery modes](#delivery-modes)).
+  `--shape` and `--branch` set the shape of a parent and the branch of a task (see [Stacks and features](#stacks-and-features)).
   `created_by` is the caller's agent record, or null when the caller is unregistered.
 - `assign --id TASK` takes exactly one of `--name`, `--pane`, or `--agent-id`.
   The agent must be registered.
@@ -150,6 +152,8 @@ This lets `agent usage` find the session later.
 
 Each record holds `id`, `title`, `brief`, `parent`, `after`, `owner`, `status`, `result`, `verifier`, `verification_note`, `forced`, `cancel_reason`, `created_at`, `created_by`, `assigned_at`, `unmet_at_assign`, `completed_at`, `completion_notification`, `verified_at`, `cancelled_at`, and `delivery`.
 It also holds `delivery_mode`, `branch`, `base_branch`, `verified_commit`, `landed_at`, `landed_by`, `merge_commit`, `target_branch`, `pr_url`, and `land_step`.
+It also holds `shape`, `verified_patch_id`, `carried_from`, and `merge_request`.
+A record without `shape` loads with an empty shape.
 Records written before subtasks and dependencies load with a null `parent`, `after`, and `unmet_at_assign`.
 Records written before landing load with `delivery_mode` `none` and null landing fields.
 A completion notification records its `recipient`, `message_id`, optional `pane`, `delivered_at`, `error`, and `uncertain` state.
@@ -176,11 +180,33 @@ When the caller's checkout has staged, unstaged, or untracked changes, verify pr
 `task get` prints `verified commit: <hash>`.
 `task land` lands only the verified commit.
 
+### Patch id carry-forward
+
+`verify --commit` also stores `verified_patch_id`.
+This value is the output of `git patch-id --verbatim` for the diff `<base>...<commit>`.
+The base is the base ref of the task, as [Size](#size) finds it. For a stack layer, the base is the layer base.
+When the base does not resolve, or the diff is empty, verify stores a null patch id and prints a warning.
+Verify never refuses because of a patch id.
+Each verification clears `carried_from`.
+A verification without `--commit` stores a null patch id.
+
+A rebase changes the commit but can keep the patch.
+When the branch head is not `verified_commit`, `task land` and `task size` compute the patch id of the head against the current base:
+
+- An equal patch id carries the verification forward.
+  The command stores the head as `verified_commit` and the old commit as `carried_from`.
+- Another patch id is `land_head_mismatch`, and the record does not change.
+
+`--verbatim` keeps whitespace, so a change only in whitespace gives another patch id.
+`task get` prints `verified patch id:` and `carried from:` when the record holds them.
+A carry-forward does not push.
+In `pr` mode, push the rebased head yourself first, else the push of `task land` is `land_push_rejected`.
+
 ## Delivery modes
 
 A task's `delivery_mode` decides how `task land` delivers its branch:
 
-- `local` merges the branch into the target branch in the primary checkout. Fledge verification is the only review.
+- `local` merges the branch into the target branch in the checkout that has the target checked out. Fledge verification is the only review.
 - `pr` pushes the branch, opens a GitHub pull request with `gh`, and waits for its checks.
   Then `task land` stops with the pull request open for the owner's read (the `review` step).
   `task land --merge` merges it later, on the owner's word.
@@ -199,6 +225,7 @@ This repository's `.fledge/config.toml` sets `delivery_mode = "pr"`.
 The branch must be nonblank and a single line, must not start with `-`, and must pass `git check-ref-format refs/heads/BRANCH`.
 Otherwise it is invalid input.
 A proposal entry takes the same `delivery_mode` and `base_branch` keys, and `import` checks them in the same way.
+A proposal entry also takes a `branch` key, as `create --branch` does.
 
 ## Landing
 
@@ -217,13 +244,18 @@ One `task land` runs at a time per repository: it holds an exclusive lock on `.f
 Before it merges or pushes, it requires all of these:
 
 - The branch is valid (`land_branch_invalid`) and differs from the target (`land_same_branch`).
-- `refs/heads/<branch>` is the verified commit (`land_head_mismatch`).
+- `refs/heads/<branch>` is the verified commit, or has the verified patch id (`land_head_mismatch`, see [Patch id carry-forward](#patch-id-carry-forward)).
 - No checkout of the branch has staged or unstaged changes (`land_dirty`).
 - The target exists: `refs/heads/<target>` in local mode, `refs/remotes/origin/<target>` in pr and auto mode (`land_target_missing`).
 - The target does not already contain the verified commit (`land_already_merged`, with nothing recorded).
   A pr task with a stored `pr_url` skips this check, because `land` checks that pull request instead (see below).
 
-In **local** mode, the primary checkout must have the target checked out with no staged or unstaged changes (`land_primary_not_ready`).
+In **local** mode, `land` merges in the checkout that has the target checked out.
+That checkout is the primary checkout or a managed worktree under `.fledge/worktrees`.
+For example, a member of a feature parent lands in the feature checkout that has the feature branch checked out.
+When no such checkout has the target checked out, the refusal is `land_target_checkout_missing`.
+An unmanaged checkout of the target does not count.
+When that checkout has staged or unstaged changes, the refusal is `land_target_checkout_dirty`.
 Untracked files are allowed.
 `land` runs `git merge --no-ff -m "Merge branch '<branch>' (verified task <id>)" <verified_commit>` there.
 It never stashes, resets, or checks out.
@@ -287,20 +319,169 @@ After a landing, each measure over a limit is a `review size:` warning.
 The review stop and refusals print the report without warnings.
 The size is advisory: it never refuses a landing.
 
+## Stacks and features
+
+A parent task can have a **shape**: `stack` or `feature`.
+The direct subtasks of a `stack` parent are its **layers**.
+The direct subtasks of a `feature` parent are its **members**.
+There is no separate stack record. The parent is the group.
+
+- `create --shape stack|feature` stores the shape in the `shape` field. Any other value is invalid input.
+- `task get` prints `shape: <value>` when the shape is not empty.
+- `create --branch BRANCH` stores the branch of a task in the `branch` field.
+  The branch must pass the same check as `--base-branch`.
+- The proposal `[parent]` table takes the keys `shape`, `branch`, `base_branch`, and `delivery_mode` (see [Proposals](#proposals)).
+  `import` checks the parent `delivery_mode` as it checks the `delivery_mode` of a task.
+  Without the key, the parent gets the repository default, as a task does.
+
+### The chain rule
+
+The layers of a stack form one `after` chain.
+Only the `after` edges between the layers of one stack count:
+
+- Exactly one layer, the bottom, has no prerequisite among the layers.
+- Each other layer has exactly one prerequisite among the layers.
+- No layer is the prerequisite of more than one layer.
+- Every layer is in the chain.
+
+Cancelled layers stay in the chain. A prerequisite outside the stack does not count.
+`task import` refuses a stack whose tasks fork as invalid input: `stack layers must form one after chain: ...`.
+`task import --parent <stack parent>` checks the existing layers and the new tasks together.
+`task create --parent <stack parent>` refuses with `task_stack_fork` when the new task is not `after` the top layer and no other layer.
+The first layer names no layer.
+`task depend` can still make a fork later.
+Then `task size` refuses with `size_stack_fork`, and `task land` refuses with `land_stack_fork`.
+A `feature` parent puts no rule on the order of its members.
+
+### The layer base
+
+The **layer base** is the branch that `task size` and `task land` compare a layer with:
+
+- For the bottom layer, the **stack base**: the parent's `base_branch`, else the [`[branches] dev`](worktrees.md#integration-branch) branch.
+- For any other layer, the stored `branch` of the layer below.
+- For a layer above a `landed` layer, the stack base. GitHub moves the base of that pull request to the stack base.
+
+A layer below with no stored `branch` is `size_branch_unknown` or `land_branch_unknown`, and the message names that layer.
+`verify --commit` uses the layer base for the patch id of a layer (see [Patch id carry-forward](#patch-id-carry-forward)).
+
+### Landing a stack
+
+A stack lands only when the parent's delivery mode is `pr`. Any other parent mode is `land_stack_mode`.
+The delivery modes of the layers have no effect.
+`--branch` and `--mode` are invalid input for a stack parent or a layer, because the records store both.
+The parent must be `verified`. It moves to `landed` from `verified`, as each task does.
+
+Each `task land` on a stack parent or a layer does these steps:
+
+1. **Reconcile.** The run reads the pull request of each layer that has a `pr_url`, one time for each layer.
+   It records each layer that GitHub reports merged and that is not `landed`.
+   This includes a merge made with the GitHub button.
+   The reconcile always runs first, with or without `--merge`, also for a `landed` parent.
+2. **Push.** `task land --id <parent>` checks every layer and pushes the layer branches to origin, bottom first.
+3. **Open.** The same run opens one pull request for each layer, from the layer branch into the layer base.
+4. **Link.** The same run forms one native GitHub stack from the layer pull requests, then stops at `review`.
+5. **Merge.** `task land --id <parent> --merge` requests the GitHub merge of the top layer, on the owner's word.
+   `task land --id <layer> --merge` requests the merge of the unlanded layers up to that layer.
+
+**Push.** Each layer must be `verified` with a `verified_commit` (`land_stack_layer_unverified`, which names the layer).
+The run reads `git ls-remote --heads origin`, then runs `git fetch` only for the layer branches that exist on origin.
+It runs the local guards for every layer before the first push.
+The target check of a layer runs after the push of the layer below, because that branch is its target.
+Each push is `git push origin <commit>:refs/heads/<branch>`, without force.
+Every layer and the parent store `branch` and `land_step` `push`.
+
+**Open and link.** The run finds or opens the pull request of each layer and stores its `pr_url`.
+A layer with a stored `pr_url` uses that pull request and never opens another.
+The current head of a layer with a pull request is the head of that pull request on GitHub.
+Its patch id base is the base of that pull request.
+GitHub rebases the upper layers after a lower merge, and an equal patch id lets such a head pass with no push.
+The run checks each pull request with the rules of the `checks` step in [Landing](#landing).
+Then it reads each layer pull request with `GET repos/{owner}/{repo}/pulls/{n}`:
+
+- No layer pull request is in a stack: the run sends `POST repos/{owner}/{repo}/stacks` with the pull request numbers, bottom first.
+  GitHub takes the stack base from the bottom pull request, which targets the stack base.
+- All layer pull requests are in one stack of the layer count, each at its layer number: the run sends nothing.
+- Any other state, or an HTTP 422 answer to the POST, is `land_stack_mismatch`. The message names each pull request with its stack and position.
+
+Every layer and the parent then store `land_step` `review`.
+The JSON result has `review_pending` true, a `layers` list (`id`, `branch`, `head`, `pr_url`, `land_step`), and the GitHub `stack` number.
+Fledge never uses the `gh stack` extension.
+
+**Merge.** Each layer from the lowest unlanded layer up to the selected layer must be at `review` with a `pr_url` (`land_stack_not_open`).
+Each of them must be verified at its current head, with green checks.
+The run sends `PUT repos/{owner}/{repo}/pulls/{n}/merge-async` with `merge_method=merge` and the current head of the selected layer.
+The selected layer stores the `uuid` of a pending answer as `merge_request`.
+The run then polls `GET repos/{owner}/{repo}/pulls/{n}/merge-async/{uuid}` every 2 seconds for at most 120 seconds:
+
+- `pending` or `enqueued` at the end is `land_merge_pending`. The `uuid` stays stored.
+  The next `task land` on the parent or on any layer continues the poll and sends no new request.
+- `failed` is `land_merge_failed` with GitHub's message, and the run clears the `uuid`.
+- `merged` runs the reconcile again. Each merged layer gets the one merge commit of the stack merge.
+- An HTTP 404 answer clears the `uuid` and reads the pull request again. This rule is an assumption, because no probe saw the answer to an expired `uuid`.
+
+A pull request that still reads open after a `merged` answer gets 3 more reads, 2 seconds apart.
+Then the refusal is `land_unconfirmed`, and the next `task land` records the merge.
+
+**Records.** The reconcile writes in one locked step, bottom first, after every check passes.
+A merged layer at another head with another patch id is `land_pr_merged_other_head`. A closed layer pull request is `land_pr_closed`.
+A refusal for one layer gives no write on any layer.
+Each merged layer gets `landed`, the merge commit of its pull request, `target_branch` set to the stack base, and `land_step` `confirm`.
+When every layer is `landed`, the parent gets `landed` with the merge commit of the top layer.
+When only some layers are `landed`, the parent stays `verified` at `review`.
+A failed write is `land_record_incomplete`. The message names the written records and the command to run again.
+A run with no change on GitHub writes nothing and exits 0.
+After a reconcile that writes a layer, `land` runs `git fetch origin <stack base>`, so that `agent cleanup` sees the merge commit. A failed `git fetch` is a warning.
+The text output then names the recorded layers, for example `Recorded a GitHub merge of layers 1 to 2.`
+
+**Layer runs.** `task land --id <layer>` before the parent reached `review` is `land_stack_not_open`, and the message names `fledge task land --id <parent>`.
+Without `--merge`, a layer never lands alone.
+A `landed` parent with a layer that is not `landed` is `task_invalid_state`.
+
+Nothing in `task land` or `agent cleanup` deletes a branch, because a deleted lower branch closes every upper pull request.
+`agent cleanup` judges the checkout of a layer by the merge commit of its task (see [Cleanup](agents.md#cleanup)).
+
+### Features
+
+A `feature` parent collects the members of one feature on one feature branch.
+
+- A `feature` parent must have a `branch`, in a proposal and in `create --shape feature`.
+- A member without a delivery mode gets `local`.
+- A member without a base branch gets the parent's `branch`.
+- Another explicit mode of a member is `task_feature_member_mode` in `create`, and invalid input in `import`.
+- Another explicit base branch of a member is `task_feature_member_base` in `create`, and invalid input in `import`.
+
+A member thus lands with a local merge into the feature branch, in the checkout that has the feature branch checked out (see [Landing](#landing)).
+The parent keeps its own delivery mode.
+It lands as a pull request from its `branch` into its target, with the `pr` steps of [Landing](#landing).
+It needs a `verified_commit` at the head of the feature branch.
+
+No command refreshes a feature branch from the dev branch.
+To refresh it, run `git merge <dev>` by hand in the feature checkout.
+Then verify the parent again with `fledge task verify --id <parent> --commit HEAD`.
+
 ## Size
 
 `task size --id TASK [--json]` reports how large a task's branch is for review, as `task land` measures it.
-It is read-only: it writes nothing and does not contact Herdr.
+It does not contact Herdr.
+It writes only a carry-forward (see [Patch id carry-forward](#patch-id-carry-forward)).
 
 The diff is `<base>...<head>`, from the merge base of the two:
 
-- `head` is the task's `verified_commit`, else the head of its branch.
+- `head` is the head of the task's branch.
   The branch is found as in [Landing](#landing) (`size_branch_unknown`).
   A task without a `verified_commit` whose branch does not exist is `size_branch_missing`.
+  A task with a `verified_commit` uses that commit in three cases:
+  the branch is at it, the branch does not exist, or the task is not `verified`.
+  For a `verified` task, a branch head with the verified patch id gets a carry-forward. A branch head with another patch id is `land_head_mismatch`.
 - The target is the task's `base_branch`, else the integration branch (`size_target_missing`, `size_target_invalid`).
+  For a stack layer, the target is the [layer base](#the-layer-base).
 - `base` is `refs/heads/<target>` for modes `local` and `none`, and `refs/remotes/origin/<target>` for `pr` and `auto`.
   When that ref is missing, the other one is used and the output says so (`base_missing` in JSON).
   When both are missing, the refusal is `size_target_missing`.
+
+A layer thus counts only its own lines, not the lines of the layers below it.
+For a stack parent, the diff is `<stack base>...<head of the top layer>`, so the report shows the total of the stack.
+A `feature` parent measures its own `branch`, as any other task does.
 
 The measures follow [Review units](../plan/review-units.md):
 
@@ -315,7 +496,7 @@ Modes `local` and `none` compare with the task limits, and `pr` and `auto` with 
 
 | Measure | Task limit | Pull request target | Pull request ceiling |
 | --- | --- | --- | --- |
-| Source lines | 200 | 200 | 300 |
+| Source lines | 300 | 200 | 300 |
 | Files | 20 | 20 | 30 |
 | Code domains | 3 | 3 | 5 |
 | Total read | 750 | 750 | 750 |
@@ -340,6 +521,8 @@ brief = '''
 ## Objective
 ...
 '''
+shape = "stack"              # optional: stack or feature
+delivery_mode = "pr"         # optional: the parent's own mode
 
 [[tasks]]
 key = "brief-lib"            # names the task within this file
@@ -351,6 +534,7 @@ brief = '''
 after = []                   # local keys or existing 8-hex task ids
 delivery_mode = "local"      # optional: local, pr, auto, or none
 base_branch = "dev"          # optional: the branch it lands into
+branch = "feat/brief-lib"    # optional: the branch of the task
 
 [[tasks]]
 key = "import"
@@ -367,6 +551,9 @@ Each `title` is nonempty and single-line.
 Every brief, including the parent's, must be nonblank, valid UTF-8 without NUL after TOML decoding (so an escaped `\u0000` is rejected too), with no required headings.
 Each `after` entry names a key in the file or an existing task id.
 Local dependencies must not form a cycle.
+The `[parent]` table also takes `shape`, `branch`, `base_branch`, and `delivery_mode` (see [Stacks and features](#stacks-and-features)).
+A `[parent]` with `shape = "stack"` needs tasks that form one `after` chain.
+A `[parent]` with `shape = "feature"` needs a `branch`, and its tasks get the member defaults.
 
 ```sh
 fledge task import --file plan.toml --dry-run            # validate and preview

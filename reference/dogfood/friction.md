@@ -1832,9 +1832,11 @@ per-session keying that wave 2A designed.
 
 **Issue:** `gh stack link` retargets the bottom pull request to the repository default branch
 
-**Status:** Open
+**Status:** Resolved 2026-10-14
 
 **Summary:** On 2026-10-13, during stacked delivery, `gh stack link` set the stack base to the repository default branch (`main`) and silently retargeted the bottom pull request: PR #19 moved from `dev` to `main`. Passing `--base dev` avoids it.
+
+Resolved 2026-10-14 by layer 11 (`stack-link`) of the stack wave: `fledge task land` forms the GitHub stack with `POST repos/{owner}/{repo}/stacks`. GitHub takes the stack base from the bottom pull request, and Fledge never runs `gh stack link`.
 
 **Reproduction steps:**
 1. Open a pull request into `dev` in a repository whose default branch is `main`.
@@ -1845,9 +1847,11 @@ per-session keying that wave 2A designed.
 
 **Issue:** `agent cleanup` holds stacked layers merged through a GitHub stack merge
 
-**Status:** Open
+**Status:** Resolved 2026-10-14
 
 **Summary:** On 2026-10-13, `fledge agent cleanup` judged each stacked layer merged against its recorded parent branch, not the stack base. Upper layers merged into `dev` by one GitHub stack merge were held as unmerged, and their checkouts needed `fledge worktree remove --force`.
+
+Resolved 2026-10-14 by layer 15 (`cleanup-stack`) of the stack wave: `agent cleanup` judges the checkout of a stacked layer against the stack base. The layer counts as merged when the merge commit of its task is in the local or the origin stack base branch.
 
 **Reproduction steps:**
 1. Create a stack of task branches, each based on the one below, with pull requests stacked on `dev`.
@@ -1858,9 +1862,11 @@ per-session keying that wave 2A designed.
 
 **Issue:** `task land` cannot record a GitHub stack merge
 
-**Status:** Open
+**Status:** Resolved 2026-10-14
 
 **Summary:** On 2026-10-13, the four stack A tasks were merged into `dev` by a GitHub stack merge, but `fledge task land` could not record it: `gh pr merge` is refused for stacked pull requests, and one merge commit covers several pull requests. The four tasks stay `verified`, not `landed`.
+
+Resolved 2026-10-14 by layers 12 to 14 (`stack-merge-request`, `stack-merge-record`, `stack-github-merge`) of the stack wave: `fledge task land --merge` requests the stack merge with the merge-async API. Every `task land` on a stack first records each layer that GitHub reports merged, also a merge made with the GitHub button. The orchestrator landed the stack wave's own tasks by hand, and they stay `verified`. The code closes this entry.
 
 **Reproduction steps:**
 1. Verify the tasks of a stack and merge the stack in GitHub.
@@ -1871,9 +1877,11 @@ per-session keying that wave 2A designed.
 
 **Issue:** A stacked task has no record of its parent layer, so size counts lower layers
 
-**Status:** Open
+**Status:** Resolved 2026-10-14
 
 **Summary:** On 2026-10-13, a stacked task records no parent layer branch. `fledge task size` and the `task land` size report measure against the integration branch, so a layer's report includes every lower layer's changes.
+
+Resolved 2026-10-14 by layers 03 (`task-shape-branch`), 04 (`stack-chain`), and 05 (`layer-base`) of the stack wave. A stack parent has `shape = stack`, and its layers form one `after` chain. `task size` and the `task land` size report measure each layer against the branch of the layer below.
 
 **Reproduction steps:**
 1. Create a task whose branch is based on another task's unmerged branch.
@@ -1892,3 +1900,16 @@ per-session keying that wave 2A designed.
 1. Create a new directory under `.fledge/tmp/`.
 2. Spawn a Claude worker there with an absolute `--cwd` and a `--prompt`.
 3. Observe the trust dialog and the `partial` spawn outcome.
+
+---
+
+**Issue:** A Codex SessionStart hook review dialog blocks the first prompt of a spawn
+
+**Status:** Open
+
+**Summary:** On 2026-10-14, a hook in `~/.codex/hooks.json` changed after Codex last trusted it. A Codex spawn then stopped on a "SessionStart hooks" review screen. `fledge agent spawn` reported success, but the first prompt with the role brief was lost. The supervisor then reported the worker as done while it had an assigned task. The orchestrator answered the dialog with `fledge agent send` (Down, Enter, `t`, Esc, Esc). The brief was gone, so the orchestrator stopped the agent and spawned a new one.
+
+**Reproduction steps:**
+1. Change a trusted SessionStart hook script in `~/.codex/hooks.json`.
+2. Spawn a Codex agent with `--profile` and `--prompt`.
+3. Read its pane. Observe the "SessionStart hooks" review screen and the lost prompt.
