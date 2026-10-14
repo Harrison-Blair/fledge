@@ -3,6 +3,6 @@
 // repository's land lock, and moving the task to landed.
 //
 //	land.go   options, result, task and guard checks, locked record writes, rendering
-//	local.go  local mode: the merge in the primary checkout and its verified undo
+//	local.go  local mode: the merge in the target's checkout and its verified undo
 //	pr.go     pr mode: push, pull request, checks, merge, and confirmation through gh
 package land

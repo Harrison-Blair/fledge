@@ -93,14 +93,14 @@ func TestLandRefusesPrimaryNotReady(t *testing.T) {
 	f := setup(t, task.ModeLocal)
 	git(t, f.repo, "checkout", "-qb", "other")
 	out := f.land(t, Options{Branch: "feat", BranchSet: true})
-	f.refused(t, out, "land_primary_not_ready")
-	if !strings.Contains(out.Error.Message, "other") {
+	f.refused(t, out, "land_target_checkout_missing")
+	if !strings.Contains(out.Error.Message, "main") {
 		t.Fatalf("%s", out.Error.Message)
 	}
 	git(t, f.repo, "checkout", "-q", "main")
 	writeFile(t, f.repo, "base", "edited\n")
 	out = f.land(t, Options{Branch: "feat", BranchSet: true})
-	f.refused(t, out, "land_primary_not_ready")
+	f.refused(t, out, "land_target_checkout_dirty")
 	if !strings.Contains(out.Error.Message, "base") {
 		t.Fatalf("%s", out.Error.Message)
 	}

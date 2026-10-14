@@ -20,9 +20,11 @@ func New() *cobra.Command {
 			"created. The target is the task's base branch, else the repository\n" +
 			"integration branch. --mode overrides the task's delivery mode; --branch and\n" +
 			"--mode are stored on the task even when the landing is refused.\n\n" +
-			"local merges the verified commit with a merge commit in the primary checkout,\n" +
-			"which must have the target checked out with no staged or unstaged changes. A\n" +
-			"failed merge is aborted and the checkout is checked to be exactly as before.\n\n" +
+			"local merges the verified commit with a merge commit in the checkout that has\n" +
+			"the target checked out: the primary checkout or a managed worktree. That\n" +
+			"checkout must have no staged or unstaged changes; untracked files are\n" +
+			"permitted. A failed merge is aborted and the checkout is checked to be exactly\n" +
+			"as before.\n\n" +
 			"pr lands in two steps. First, task land pushes the verified commit to the\n" +
 			"branch on origin, opens or reuses one pull request with gh, and waits until it\n" +
 			"is not a draft, is mergeable, has the verified head, and every check passed\n" +
