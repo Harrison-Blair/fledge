@@ -37,6 +37,12 @@ func New() *cobra.Command {
 			"one merged at another head or closed. auto does the same\n" +
 			"steps and merges in one command, with no review stop. Every step is stored\n" +
 			"as land_step and can be run again after a refusal.\n\n" +
+			"A stack parent lands in pr mode only. The parent must be verified, and each\n" +
+			"layer must be verified with --commit. task land --id <parent> checks every\n" +
+			"layer. Then it pushes each layer branch to origin, bottom first, without force.\n" +
+			"The records store the branch and the mode. Thus --branch and --mode are\n" +
+			"invalid input for a stack task. A layer does not land alone. Use\n" +
+			"fledge task land --id <parent>.\n\n" +
 			"Every attempt that passes the head check prints the advisory review-size\n" +
 			"report of the verified commit against the target, as task size does, also in\n" +
 			"the JSON size field and the body of a pull request it opens; the size never\n" +

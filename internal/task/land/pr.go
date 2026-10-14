@@ -33,10 +33,8 @@ func (l *lander) pr(ctx context.Context) error {
 	if err := l.reach(stepPush, nil); err != nil {
 		return err
 	}
-	if landing.RefCommit(ctx, l.root, "refs/remotes/origin/"+l.branch) != l.commit {
-		if output, err := l.git(ctx, "push", "origin", l.commit+":refs/heads/"+l.branch).CombinedOutput(); err != nil {
-			return refuse("land_push_rejected", "pushing %s to origin %s failed: %s", l.commit, l.branch, strings.TrimSpace(string(output)))
-		}
+	if err := l.push(ctx); err != nil {
+		return err
 	}
 	if err := l.reach(stepPR, nil); err != nil {
 		return err
@@ -77,6 +75,18 @@ func (l *lander) pr(ctx context.Context) error {
 	}
 	_, err = l.confirm(ctx, m.MergeCommit, pr.URL)
 	return err
+}
+
+// push pushes the verified commit to the branch on origin, without force.
+// It pushes nothing when origin already has the commit there.
+func (l *lander) push(ctx context.Context) error {
+	if landing.RefCommit(ctx, l.root, "refs/remotes/origin/"+l.branch) == l.commit {
+		return nil
+	}
+	if output, err := l.git(ctx, "push", "origin", l.commit+":refs/heads/"+l.branch).CombinedOutput(); err != nil {
+		return refuse("land_push_rejected", "pushing %s to origin %s failed: %s", l.commit, l.branch, strings.TrimSpace(string(output)))
+	}
+	return nil
 }
 
 // mergedInGitHub checks the stored pull request of a pr task. It records a

@@ -37,8 +37,17 @@ type Result struct {
 	Warnings      []string           `json:"warnings"`
 	ReviewPending bool               `json:"review_pending"`
 	Size          *reviewsize.Report `json:"size"`
+	Layers        []Layer            `json:"layers"`
 	target        string
 	base          string
+}
+
+// Layer is one layer of a stack landing.
+type Layer struct {
+	ID       string `json:"id"`
+	Branch   string `json:"branch"`
+	Head     string `json:"head"`
+	LandStep string `json:"land_step"`
 }
 
 // errMergeMode refuses --merge outside pr mode.
@@ -67,6 +76,7 @@ type lander struct {
 	warnings                     []string
 	size                         *reviewsize.Report
 	base                         string // the size base ref, and the missing ref of the mode
+	layers                       []Layer
 }
 
 // Run lands task o.ID. The caller must be a registered agent other than the
@@ -129,7 +139,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 	if l.size != nil && !l.review {
 		l.warnings = append(l.warnings, sizeWarnings(*l.size)...)
 	}
-	out.Result = Result{Record: l.r, Mode: l.mode, Warnings: l.warnings, ReviewPending: l.review, Size: l.size, target: l.target, base: l.base}
+	out.Result = Result{Record: l.r, Mode: l.mode, Warnings: l.warnings, ReviewPending: l.review, Size: l.size, Layers: l.layers, target: l.target, base: l.base}
 	return out
 }
 
@@ -143,6 +153,12 @@ func (l *lander) land(ctx context.Context, o Options) error {
 	switch {
 	case r.Owner != nil && *r.Owner == l.caller:
 		return refuse("task_self_landing", "task %s is owned by the caller (%s); another agent must land it", r.ID, l.caller)
+	}
+	if p, ok, err := stackParent(l.s, r); err != nil || ok {
+		if err != nil {
+			return err
+		}
+		return l.stack(ctx, o, p)
 	}
 	if err := task.Require(&r, "land", task.Verified); err != nil {
 		return err
@@ -182,7 +198,10 @@ func (l *lander) land(ctx context.Context, o Options) error {
 		}
 		return err
 	}
-	if err := l.guard(ctx); err != nil {
+	if err := l.guard(ctx, landing.RefCommit(ctx, l.root, "refs/heads/"+l.branch)); err != nil {
+		return err
+	}
+	if err := l.checkTarget(ctx); err != nil {
 		return err
 	}
 	if l.mode == task.ModeLocal {
@@ -191,17 +210,17 @@ func (l *lander) land(ctx context.Context, o Options) error {
 	return l.pr(ctx)
 }
 
-// guard runs the checks common to both modes and the mode's target check,
-// then refuses a commit the target already contains, except for a pr task
-// with a pull request.
-func (l *lander) guard(ctx context.Context) error {
+// guard runs the local checks common to both modes. It checks that head, the
+// current head of the branch, is the verified commit or has its patch id.
+// The target is the layer base.
+func (l *lander) guard(ctx context.Context, head string) error {
 	if err := landing.ValidBranch(ctx, "branch", l.branch); err != nil {
 		return refuse("land_branch_invalid", "%v", err)
 	}
 	if !landing.FullHash(l.commit) {
 		return refuse("land_unverified_commit", "task %s has a malformed verified commit %q", l.r.ID, l.commit)
 	}
-	target, err := landing.TaskTarget(ctx, l.root, l.r, "land")
+	target, err := landing.LayerBase(ctx, l.s, l.root, l.r, "land")
 	if err != nil {
 		return err
 	}
@@ -209,7 +228,7 @@ func (l *lander) guard(ctx context.Context) error {
 	if l.target == l.branch {
 		return refuse("land_same_branch", "task %s would land branch %s into itself", l.r.ID, l.branch)
 	}
-	if head := landing.RefCommit(ctx, l.root, "refs/heads/"+l.branch); head != l.commit {
+	if head != l.commit {
 		if err := l.carry(ctx, head); err != nil {
 			return err
 		}
@@ -230,6 +249,13 @@ func (l *lander) guard(ctx context.Context) error {
 			return refuse("land_dirty", "checkout %s of branch %s has uncommitted changes: %s", path, l.branch, strings.Join(changes, ", "))
 		}
 	}
+	return nil
+}
+
+// checkTarget runs the target check of the mode. Then it refuses a commit
+// that the target already contains, except for a pr task with a pull
+// request.
+func (l *lander) checkTarget(ctx context.Context) error {
 	targetRef := "refs/heads/" + l.target
 	if l.mode != task.ModeLocal {
 		if _, err := exec.LookPath("gh"); err != nil {
@@ -335,7 +361,7 @@ func sizeText(r reviewsize.Report, base string) string {
 // verified commit this landing read.
 func (l *lander) update(mutate func(*task.Record)) error {
 	r, err := task.Update(l.s, l.r.ID, func(r *task.Record) error {
-		if r.Status != task.Verified || r.VerifiedCommit == nil || *r.VerifiedCommit != l.commit {
+		if r.Status != task.Verified || commit(r) != l.commit {
 			return refuse("task_state_changed", "task %s changed while it was being landed; inspect it with fledge task get --id %s", r.ID, r.ID)
 		}
 		mutate(r)
@@ -356,6 +382,14 @@ func (l *lander) record(merge string, prURL *string) error {
 			r.PRURL = prURL
 		}
 	})
+}
+
+// commit is the verified commit of r, or "" when r has none.
+func commit(r *task.Record) string {
+	if r.VerifiedCommit == nil {
+		return ""
+	}
+	return *r.VerifiedCommit
 }
 
 func refuse(code, format string, args ...any) error {
@@ -379,6 +413,10 @@ func Render(w io.Writer, o cli.Outcome) error {
 	switch {
 	case o.Error != nil:
 		fmt.Fprintf(&b, "Land step reached: %s.\n", *r.LandStep)
+	case len(r.Layers) > 0:
+		for _, layer := range r.Layers {
+			fmt.Fprintf(&b, "Layer %s: branch %s at %s, land step %s.\n", layer.ID, layer.Branch, layer.Head, layer.LandStep)
+		}
 	case r.ReviewPending:
 		fmt.Fprintf(&b, "Task %s is ready for review: pull request %s merges %s into %s (%s), and its checks passed.\n", r.ID, *r.PRURL, *r.Branch, r.target, r.Mode)
 		fmt.Fprintf(&b, "Merge it only on the owner's word: fledge task land --id %s --merge\n", r.ID)
