@@ -25,10 +25,13 @@ import (
 // set, names the exact checkout to remove: the one carrying that marker (see
 // worktree.Mark) with MarkedBranch checked out, still at PlannedPath, its
 // canonical path when planned, below .fledge/worktrees; any other checkout, or one moved since,
-// is kept, whatever Force says.
+// is kept, whatever Force says. MergeCommit, when set, is the commit that
+// merged the checkout into Base, as for a stack layer: the merged check then
+// uses that commit instead of the checkout head (see MergedBy).
 type Options struct {
 	Path, Branch, Cwd, Base           string
 	Marker, MarkedBranch, PlannedPath string
+	MergeCommit                       string
 	Force                             bool
 }
 type Result struct {
@@ -68,6 +71,9 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 			target, targetErr = gitstatus.DefaultBranch(ctx, listing.Root)
 		}
 		dirty, merged := worktree.State(ctx, listing.Root, target, row)
+		if o.MergeCommit != "" {
+			merged = MergedBy(ctx, listing.Root, o.MergeCommit, o.Base)
+		}
 		var reasons []string
 		if dirty != "no" {
 			reasons = append(reasons, "dirty: "+dirty)
@@ -137,6 +143,23 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 		cli.Effect{Action: "closed", Kind: "workspace", ID: *row.OpenWorkspaceID})
 	out.Result = result
 	return out
+}
+
+// MergedBy reports whether commit is in refs/heads/<base> or in
+// refs/remotes/origin/<base> of the repository at root: "yes" when one ref
+// holds it, "unknown" when git cannot say for a ref, else "no". It does not
+// run git fetch.
+func MergedBy(ctx context.Context, root, commit, base string) string {
+	merged := "no"
+	for _, ref := range []string{"refs/heads/" + base, "refs/remotes/origin/" + base} {
+		switch gitstatus.Merged(ctx, root, commit, ref) {
+		case "yes":
+			return "yes"
+		case "unknown":
+			merged = "unknown"
+		}
+	}
+	return merged
 }
 
 // target selects the checkout named by o, comparing canonical paths.

@@ -11,9 +11,11 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/gitstatus"
 	"github.com/Harrison-Blair/fledge/internal/lib/herdr"
 	"github.com/Harrison-Blair/fledge/internal/lib/identity"
+	"github.com/Harrison-Blair/fledge/internal/lib/landing"
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 	"github.com/Harrison-Blair/fledge/internal/lib/worktree"
+	"github.com/Harrison-Blair/fledge/internal/worktree/remove"
 )
 
 // liveByTerminal is replaceable so tests can count reads of the agent records.
@@ -60,7 +62,7 @@ func plan(ctx context.Context, c libagent.Client, o Options) (planned, error) {
 		return planned{}, err
 	}
 	p.root = listing.Root
-	p.Checkouts = planCheckouts(ctx, caller.ID, children, p.Workers, agents, live, listing)
+	p.Checkouts = planCheckouts(ctx, caller.ID, children, p.Workers, agents, live, tasks, listing)
 	return p, nil
 }
 
@@ -189,8 +191,10 @@ func taskHold(tasks []task.Record, owner string, collected bool) string {
 // clean and merged into that base, and no live agent other than the workers
 // being stopped uses it. A path several workers recorded is decided once:
 // under the worker whose recorded checkout it still is, or, when none owns
-// it, under the latest to record it.
-func planCheckouts(ctx context.Context, caller string, records []identity.Record, workers []Worker, agents []herdr.AgentDetails, live map[string]identity.Record, listing worktree.Checkouts) []Checkout {
+// it, under the latest to record it. The checkout of a stacked layer, whose
+// worker owns a task under a stack parent, is judged against the stack base
+// by the merge commit of that task instead (see remove.MergedBy).
+func planCheckouts(ctx context.Context, caller string, records []identity.Record, workers []Worker, agents []herdr.AgentDetails, live map[string]identity.Record, tasks []task.Record, listing worktree.Checkouts) []Checkout {
 	outcomes := map[string]string{}
 	for _, w := range workers {
 		outcomes[w.ID] = w.Outcome
@@ -233,7 +237,19 @@ func planCheckouts(ctx context.Context, caller string, records []identity.Record
 		if owned {
 			c.marker, c.markedBranch = *rec.WorktreeMarker, *rec.WorktreeBranch
 		}
-		if reasons := checkoutHold(ctx, rec, owned, row, listing.Root, outcomes, others, live); len(reasons) > 0 {
+		layer, parent := stackLayer(tasks, rec.ID)
+		var reasons []string
+		if layer != nil {
+			base, err := landing.TaskTarget(ctx, listing.Root, parent, "cleanup")
+			c.Base, c.mergeCommit = &base, cli.Display(layer.MergeCommit)
+			if err != nil {
+				c.Base, reasons = nil, []string{"no stack base: " + err.Error()}
+			}
+		}
+		if len(reasons) == 0 {
+			reasons = checkoutHold(ctx, rec, c.Base, layer, owned, row, listing.Root, outcomes, others, live)
+		}
+		if len(reasons) > 0 {
 			c.Outcome, c.Reason = "skipped", cli.Pointer(strings.Join(reasons, "; "))
 		}
 		checkouts = append(checkouts, c)
@@ -248,11 +264,27 @@ func owns(rec identity.Record, marker string, branch *string) bool {
 		rec.WorktreeBranch != nil && branch != nil && *rec.WorktreeBranch == *branch
 }
 
+// stackLayer returns the task that owner owns under a stack parent, and
+// that parent, or nil when owner owns none.
+func stackLayer(tasks []task.Record, owner string) (*task.Record, task.Record) {
+	for _, t := range tasks {
+		if t.Owner == nil || *t.Owner != owner || t.Parent == nil {
+			continue
+		}
+		if i := slices.IndexFunc(tasks, func(p task.Record) bool { return p.ID == *t.Parent }); i >= 0 && tasks[i].Shape == task.ShapeStack {
+			return &t, tasks[i]
+		}
+	}
+	return nil, task.Record{}
+}
+
 // checkoutHold explains why checkout row, recorded by rec, is kept, or
-// returns none. owned reports whether rec's spawn created row itself.
+// returns none. base is the branch row is judged against. layer, when set,
+// is its stack layer task, which merged row when its merge commit is in
+// base. owned reports whether rec's spawn created row itself.
 // outcomes maps each worker with a live record to its planned outcome; others
 // are the live agents that are not being stopped.
-func checkoutHold(ctx context.Context, rec identity.Record, owned bool, row herdr.Worktree, root string, outcomes map[string]string, others []herdr.AgentDetails, live map[string]identity.Record) []string {
+func checkoutHold(ctx context.Context, rec identity.Record, base *string, layer *task.Record, owned bool, row herdr.Worktree, root string, outcomes map[string]string, others []herdr.AgentDetails, live map[string]identity.Record) []string {
 	const manual = "; remove it with fledge worktree remove once it is no longer needed"
 	switch {
 	case !rec.WorktreeCreated:
@@ -265,19 +297,25 @@ func checkoutHold(ctx context.Context, rec identity.Record, owned bool, row herd
 		return []string{"no recorded checkout identity, so it may not be the one its worker's spawn created" + manual}
 	case !owned:
 		return []string{"replaced since the worker's spawn" + manual}
-	case rec.WorktreeBase == nil:
+	case base == nil:
 		return []string{"no recorded base branch; check it and remove it with fledge worktree remove"}
 	}
 	var reasons []string
 	if outcome, ok := outcomes[rec.ID]; ok && outcome != "planned" {
 		reasons = append(reasons, "its worker "+rec.ID+" is held")
 	}
-	dirty, merged := worktree.State(ctx, root, *rec.WorktreeBase, row)
+	dirty, merged := worktree.State(ctx, root, *base, row)
+	switch {
+	case layer != nil && layer.MergeCommit == nil:
+		merged = "no, its task " + layer.ID + " has no merge commit"
+	case layer != nil:
+		merged = remove.MergedBy(ctx, root, *layer.MergeCommit, *base)
+	}
 	if dirty != "no" {
 		reasons = append(reasons, "dirty: "+dirty)
 	}
 	if merged != "yes" {
-		reasons = append(reasons, "merged into "+*rec.WorktreeBase+": "+merged)
+		reasons = append(reasons, "merged into "+*base+": "+merged)
 	}
 	if user := worktree.User(others, live, row); user != "" {
 		reasons = append(reasons, user)

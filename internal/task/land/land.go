@@ -441,9 +441,9 @@ func Render(w io.Writer, o cli.Outcome) error {
 		if r.PRURL != nil {
 			fmt.Fprintf(&b, "Pull request: %s\n", *r.PRURL)
 		}
-		for _, warning := range r.Warnings {
-			fmt.Fprintf(&b, "Warning: %s.\n", warning)
-		}
+	}
+	for _, warning := range r.Warnings {
+		fmt.Fprintf(&b, "Warning: %s.\n", warning)
 	}
 	if r.Size != nil {
 		b.WriteString(sizeText(*r.Size, r.base))

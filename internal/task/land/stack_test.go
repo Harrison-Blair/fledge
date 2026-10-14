@@ -1680,6 +1680,20 @@ func TestLandStackWarnsOnAFailedFetch(t *testing.T) {
 	}
 }
 
+// TestLandStackPrintsFetchWarning: origin does not exist. The human output
+// of the run that records l1 and l2 prints the warning about the failed
+// git fetch after the stack summary.
+func TestLandStackPrintsFetchWarning(t *testing.T) {
+	s := setupStack(t)
+	s.buttonMerge(t)
+	git(t, s.repo, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing.git"))
+	out := s.land(t, Options{})
+	ok(t, out, "Recorded a GitHub merge of layers 1 to 2.")
+	if got := render(t, out); !strings.Contains(got, "landed.\nWarning: git fetch origin main failed: ") {
+		t.Fatalf("%q", got)
+	}
+}
+
 // TestLandStackNamesNonPrefixLayers: the landed layers do not form a prefix,
 // so the stack line names each landed layer.
 func TestLandStackNamesNonPrefixLayers(t *testing.T) {

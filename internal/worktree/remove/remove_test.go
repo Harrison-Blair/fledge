@@ -736,3 +736,38 @@ func TestPlannedPathGuardsMarkedCheckout(t *testing.T) {
 		})
 	}
 }
+
+// MergeCommit replaces the head in the merged check: the checkout is merged
+// when that commit is in refs/heads/<Base> or in refs/remotes/origin/<Base>.
+// The checkout head itself is in neither ref, as after a rebase on GitHub.
+func TestMergeCommitReplacesHeadForMergedCheck(t *testing.T) {
+	for _, tc := range []struct {
+		name, ref string
+		removed   bool
+	}{{"in local dev", "refs/heads/dev", true}, {"in origin dev", "refs/remotes/origin/dev", true}, {"in neither ref", "", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRepo(t)
+			gittest.Git(t, r.root, "branch", "dev")
+			gittest.Git(t, r.root, "update-ref", "refs/remotes/origin/dev", "dev")
+			gittest.Git(t, r.topic, "commit", "-qm", "work", "--allow-empty")
+			merge := strings.TrimSpace(gittest.Git(t, r.root, "commit-tree", "-p", "dev", "-m", "merge", "dev^{tree}"))
+			if tc.ref != "" {
+				gittest.Git(t, r.root, "update-ref", tc.ref, merge)
+			}
+			calls := []call{{Method: "worktree.list", Result: r.listing(false)}, agentList()}
+			if tc.removed {
+				calls = append(calls, agentList())
+			}
+			out := Run(context.Background(), herdrscript.Client(t, calls...), Options{Path: r.topic, Cwd: r.root, Base: "dev", MergeCommit: merge})
+			if _, err := os.Stat(r.topic); tc.removed != os.IsNotExist(err) {
+				t.Fatalf("removed=%v: %+v", !tc.removed, out)
+			}
+			if !tc.removed && (out.ExitCode() != 2 || !strings.Contains(out.Error.Message, "merged: no")) {
+				t.Fatalf("%+v", out)
+			}
+			if !strings.Contains(gittest.Git(t, r.root, "branch", "--list", "topic"), "topic") {
+				t.Fatal("branch deleted")
+			}
+		})
+	}
+}
