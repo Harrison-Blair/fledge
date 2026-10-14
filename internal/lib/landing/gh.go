@@ -193,6 +193,31 @@ func (g GH) Pull(ctx context.Context, n int) (Pull, error) {
 	return p, nil
 }
 
+// CreateStack forms a GitHub stack of the pull requests numbers, bottom
+// first, and returns the stack number. It sends no base: GitHub takes the base
+// of the bottom pull request. An HTTP 422 answer is land_stack_mismatch.
+func (g GH) CreateStack(ctx context.Context, numbers []int) (int, error) {
+	args := []string{"api", "--method=POST", "repos/{owner}/{repo}/stacks"}
+	for _, n := range numbers {
+		args = append(args, "--field=pull_requests[]="+strconv.Itoa(n))
+	}
+	b, err := g.run(ctx, args...)
+	if err != nil {
+		var answer struct{ Message, Status string }
+		if json.Unmarshal(b, &answer) == nil && answer.Status == "422" {
+			return 0, &cli.Error{Code: "land_stack_mismatch", Message: "GitHub refused the stack: " + answer.Message}
+		}
+		return 0, apiError(err, b)
+	}
+	var raw struct {
+		Number *int `json:"number"`
+	}
+	if err := json.Unmarshal(b, &raw); err != nil || raw.Number == nil {
+		return 0, invalidOutput("api stacks", err)
+	}
+	return *raw.Number, nil
+}
+
 // Merge merges pull request n with a merge commit titled subject, only while
 // its head is still head.
 func (g GH) Merge(ctx context.Context, n int, head, subject string) error {

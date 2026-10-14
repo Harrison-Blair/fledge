@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -132,6 +133,7 @@ func setupStack(t *testing.T) stack {
 		s.layers, s.heads, below = append(s.layers, tasktest.Seed(t, f.repo, r)), append(s.heads, head), name
 	}
 	git(t, f.repo, "checkout", "-q", "main")
+	s.gh.set(t, apiStacks, `{"id":2120746,"number":11,"base":{"ref":"main"},"open":true,"pull_requests":[]}`)
 	real, err := exec.LookPath("git")
 	if err != nil {
 		t.Fatal(err)
@@ -152,6 +154,31 @@ func pullURL(i int) string { return "https://example.com/pr/" + strconv.Itoa(i+1
 // apiPull is the fake gh file that answers the REST read of the pull request
 // of layer i.
 func apiPull(i int) string { return "api-GET-repos_{owner}_{repo}_pulls_" + strconv.Itoa(i+1) }
+
+// apiStacks is the fake gh file that answers the POST of a stack.
+const apiStacks = "api-POST-repos_{owner}_{repo}_stacks"
+
+// stackPosts are the commands in the fake gh log that post a stack.
+func (s stack) stackPosts(t *testing.T) []string {
+	t.Helper()
+	return slices.DeleteFunc(s.gh.log(t), func(l string) bool { return !strings.HasPrefix(l, "api --method=POST repos/{owner}/{repo}/stacks") })
+}
+
+// inStack makes the REST read of the pull request of layer i answer with
+// stack, a JSON object or null.
+func (s stack) inStack(t *testing.T, i int, stack string) {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(s.gh.dir, apiPull(i)))
+	if err != nil || !strings.Contains(string(b), `"stack":null`) {
+		t.Fatalf("%v %s", err, b)
+	}
+	s.gh.set(t, apiPull(i), strings.Replace(string(b), `"stack":null`, `"stack":`+stack, 1))
+}
+
+// stackJSON is the stack of a pull request with number, size, and position.
+func stackJSON(number, size, position int) string {
+	return fmt.Sprintf(`{"id":2120746,"number":%d,"base":{"ref":"main","sha":"cccc"},"size":%d,"position":%d}`, number, size, position)
+}
 
 // restPull is the REST pull request of layer i at head on base.
 func restPull(i int, head, base string) string {
@@ -262,7 +289,7 @@ func TestLandStackOpensPullRequestsAndStopsForReview(t *testing.T) {
 	if p := s.load(t); p.Status != task.Verified || p.LandStep == nil || *p.LandStep != stepReview || p.Branch != nil || p.PRURL != nil {
 		t.Fatalf("%+v", p)
 	}
-	if !res.ReviewPending || len(res.Layers) != 3 || strings.Count(text, "\n") != 4 ||
+	if !res.ReviewPending || len(res.Layers) != 3 || strings.Count(text, "\n") != 5 ||
 		!strings.HasSuffix(text, "Merge the stack only on the owner's word: fledge task land --id "+s.id+" --merge\n") {
 		t.Fatalf("%q", text)
 	}
@@ -548,5 +575,114 @@ func TestLandStackDeletesNothing(t *testing.T) {
 		if strings.Contains(line, "DELETE") {
 			t.Fatalf("%q", line)
 		}
+	}
+}
+
+// TestLandStackFormsTheStack: no layer pull request is in a stack, so the
+// landing reads each one and posts one stack of all of them, bottom first,
+// with no base. No gh stack command runs.
+func TestLandStackFormsTheStack(t *testing.T) {
+	s := setupStack(t)
+	out := s.land(t, Options{})
+	if out.Error != nil || out.ExitCode() != 0 {
+		t.Fatalf("%+v", out.Error)
+	}
+	log := s.gh.log(t)
+	for i := range 3 {
+		if !slices.Contains(log, "api --method=GET repos/{owner}/{repo}/pulls/"+strconv.Itoa(i+1)) {
+			t.Fatalf("pull request %d not read: %q", i+1, log)
+		}
+	}
+	want := "api --method=POST repos/{owner}/{repo}/stacks --field=pull_requests[]=1 --field=pull_requests[]=2 --field=pull_requests[]=3"
+	if posts := s.stackPosts(t); len(posts) != 1 || posts[0] != want {
+		t.Fatalf("%q", posts)
+	}
+	for _, line := range log {
+		if strings.HasPrefix(line, "stack ") || strings.Contains(line, "base") && strings.Contains(line, "stacks") {
+			t.Fatalf("%q", line)
+		}
+	}
+	res := out.Result.(Result)
+	text := render(t, out)
+	layers, _, _ := strings.Cut(text, "GitHub stack")
+	if res.Stack != 11 || strings.Count(layers, "\n") != 3 || !strings.Contains(text, "\nThe layer pull requests form GitHub stack 11.\n") {
+		t.Fatalf("%d %q", res.Stack, text)
+	}
+	if b, err := json.Marshal(res); err != nil || !strings.Contains(string(b), `"stack":11`) {
+		t.Fatalf("%s %v", b, err)
+	}
+}
+
+// TestLandStackKeepsTheStack: every layer pull request is in stack 11 at its
+// layer position, so the landing posts nothing.
+func TestLandStackKeepsTheStack(t *testing.T) {
+	s := setupStack(t)
+	for i := range 3 {
+		s.inStack(t, i, stackJSON(11, 3, i+1))
+	}
+	out := s.land(t, Options{})
+	if out.Error != nil || out.ExitCode() != 0 {
+		t.Fatalf("%+v", out.Error)
+	}
+	if posts := s.stackPosts(t); len(posts) != 0 {
+		t.Fatalf("%q", posts)
+	}
+	if res := out.Result.(Result); res.Stack != 11 || !strings.Contains(render(t, out), "GitHub stack 11.") {
+		t.Fatalf("%+v", res)
+	}
+}
+
+// TestLandStackRefusesAnotherStack: a partial stack, another order, another
+// size, or two stacks is land_stack_mismatch. The message names each pull
+// request with its stack number and position. No stack is posted.
+func TestLandStackRefusesAnotherStack(t *testing.T) {
+	for name, stacks := range map[string][3]string{
+		"partial":  {stackJSON(11, 3, 1), stackJSON(11, 3, 2), "null"},
+		"order":    {stackJSON(11, 3, 2), stackJSON(11, 3, 1), stackJSON(11, 3, 3)},
+		"size":     {stackJSON(11, 4, 1), stackJSON(11, 4, 2), stackJSON(11, 4, 3)},
+		"two":      {stackJSON(11, 3, 1), stackJSON(11, 3, 2), stackJSON(12, 3, 3)},
+		"top only": {"null", "null", stackJSON(12, 1, 1)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := setupStack(t)
+			for i, stack := range stacks {
+				if stack != "null" {
+					s.inStack(t, i, stack)
+				}
+			}
+			out := s.land(t, Options{})
+			s.stackRefusedAt(t, out, "land_stack_mismatch", stepChecks, "")
+			for i, stack := range stacks {
+				want := fmt.Sprintf("#%d in no stack", i+1)
+				if stack != "null" {
+					var st landing.Stack
+					json.Unmarshal([]byte(stack), &st)
+					want = fmt.Sprintf("#%d in stack %d at position %d of %d", i+1, st.Number, st.Position, st.Size)
+				}
+				if !strings.Contains(out.Error.Message, want) {
+					t.Fatalf("no %q in %q", want, out.Error.Message)
+				}
+			}
+			if posts := s.stackPosts(t); len(posts) != 0 {
+				t.Fatalf("%q", posts)
+			}
+			for _, id := range s.layers {
+				if r := tasktest.Load(t, s.repo, id); *r.LandStep == stepReview {
+					t.Fatalf("%+v", r)
+				}
+			}
+		})
+	}
+}
+
+// TestLandStackRefusesARefusedPost: GitHub answers the POST with HTTP 422.
+func TestLandStackRefusesARefusedPost(t *testing.T) {
+	s := setupStack(t)
+	s.gh.set(t, apiStacks, `{"message":"Pull requests #1, #2 are already part of a stack","status":"422"}`)
+	s.gh.set(t, apiStacks+".exit", "1")
+	out := s.land(t, Options{})
+	s.stackRefusedAt(t, out, "land_stack_mismatch", stepChecks, "Pull requests #1, #2 are already part of a stack")
+	if posts := s.stackPosts(t); len(posts) != 1 {
+		t.Fatalf("%q", posts)
 	}
 }

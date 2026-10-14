@@ -119,7 +119,8 @@ func (l *lander) pushLayers(ctx context.Context) ([]*lander, error) {
 // openLayers finds or opens the pull request of each layer into its layer
 // base, bottom first, and stores its pr_url. A layer with a stored pr_url
 // uses that pull request and never opens another. Then it checks each pull
-// request. Then every layer and the parent store the review step.
+// request and forms their GitHub stack. Then every layer and the parent store
+// the review step.
 func (l *lander) openLayers(ctx context.Context, layers []*lander) error {
 	gh := landing.GH{Dir: l.root}
 	if err := l.reachParent(stepPR); err != nil {
@@ -157,6 +158,9 @@ func (l *lander) openLayers(ctx context.Context, layers []*lander) error {
 			return err
 		}
 	}
+	if err := l.formStack(ctx, gh, prs); err != nil {
+		return err
+	}
 	for i, layer := range layers {
 		if err := layer.reach(stepReview, nil); err != nil {
 			return err
@@ -165,6 +169,46 @@ func (l *lander) openLayers(ctx context.Context, layers []*lander) error {
 	}
 	l.review = true
 	return l.reachParent(stepReview)
+}
+
+// formStack reads every layer pull request. One pull request shows only its
+// own stack, so the check needs all of them. When no pull request is in a
+// stack, formStack posts one stack of all of them, bottom first. When all are
+// in one stack of the layer count, each at its layer number, it posts
+// nothing. Any other state is land_stack_mismatch.
+func (l *lander) formStack(ctx context.Context, gh landing.GH, prs []landing.PR) error {
+	numbers := make([]int, len(prs))
+	var states []string
+	var first *landing.Stack
+	none, same := true, true
+	for i, pr := range prs {
+		p, err := gh.Pull(ctx, pr.Number)
+		if err != nil {
+			return err
+		}
+		numbers[i] = pr.Number
+		if p.Stack == nil {
+			same = false
+			states = append(states, fmt.Sprintf("#%d in no stack", pr.Number))
+			continue
+		}
+		if first == nil {
+			first = p.Stack
+		}
+		none = false
+		same = same && p.Stack.Number == first.Number && p.Stack.Size == len(prs) && p.Stack.Position == i+1
+		states = append(states, fmt.Sprintf("#%d in stack %d at position %d of %d", pr.Number, p.Stack.Number, p.Stack.Position, p.Stack.Size))
+	}
+	switch {
+	case none:
+		n, err := gh.CreateStack(ctx, numbers)
+		l.stackNumber = n
+		return err
+	case same:
+		l.stackNumber = first.Number
+		return nil
+	}
+	return refuse("land_stack_mismatch", "the layer pull requests of stack %s are not one GitHub stack in layer order: %s", l.r.ID, strings.Join(states, ", "))
 }
 
 // pullHead reads the stored pull request of the layer through the REST API

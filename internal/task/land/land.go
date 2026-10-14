@@ -38,6 +38,7 @@ type Result struct {
 	ReviewPending bool               `json:"review_pending"`
 	Size          *reviewsize.Report `json:"size"`
 	Layers        []Layer            `json:"layers"`
+	Stack         int                `json:"stack"`
 	target        string
 	base          string
 }
@@ -78,6 +79,7 @@ type lander struct {
 	size                         *reviewsize.Report
 	base                         string // the size base ref, and the missing ref of the mode
 	layers                       []Layer
+	stackNumber                  int // the GitHub stack number of the layer pull requests
 }
 
 // Run lands task o.ID. The caller must be a registered agent other than the
@@ -140,7 +142,7 @@ func Run(ctx context.Context, c libagent.Client, o Options) cli.Outcome {
 	if l.size != nil && !l.review {
 		l.warnings = append(l.warnings, sizeWarnings(*l.size)...)
 	}
-	out.Result = Result{Record: l.r, Mode: l.mode, Warnings: l.warnings, ReviewPending: l.review, Size: l.size, Layers: l.layers, target: l.target, base: l.base}
+	out.Result = Result{Record: l.r, Mode: l.mode, Warnings: l.warnings, ReviewPending: l.review, Size: l.size, Layers: l.layers, Stack: l.stackNumber, target: l.target, base: l.base}
 	return out
 }
 
@@ -424,6 +426,7 @@ func Render(w io.Writer, o cli.Outcome) error {
 		for _, layer := range r.Layers {
 			fmt.Fprintf(&b, "Layer %s: branch %s at %s, pull request %s, land step %s.\n", layer.ID, layer.Branch, layer.Head, layer.PRURL, layer.LandStep)
 		}
+		fmt.Fprintf(&b, "The layer pull requests form GitHub stack %d.\n", r.Stack)
 		fmt.Fprintf(&b, "Merge the stack only on the owner's word: fledge task land --id %s --merge\n", r.ID)
 	case r.ReviewPending:
 		fmt.Fprintf(&b, "Task %s is ready for review: pull request %s merges %s into %s (%s), and its checks passed.\n", r.ID, *r.PRURL, *r.Branch, r.target, r.Mode)

@@ -86,3 +86,43 @@ func TestPullReadsTheBodyOfAnHTTPError(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// TestCreateStackPostsThePullRequestsBottomFirst: the POST body has the pull
+// request numbers in order and no base. The answer gives the stack number.
+func TestCreateStackPostsThePullRequestsBottomFirst(t *testing.T) {
+	dir := fakeAPI(t, `{"id":2120746,"number":17,"base":{"ref":"dev"},"open":true,"pull_requests":[]}`, 0)
+	n, err := GH{Dir: dir}.CreateStack(context.Background(), []int{3, 1, 2})
+	if err != nil || n != 17 {
+		t.Fatalf("%v %d", err, n)
+	}
+	want := "api --method=POST repos/{owner}/{repo}/stacks --field=pull_requests[]=3 --field=pull_requests[]=1 --field=pull_requests[]=2\n"
+	if log, _ := os.ReadFile(filepath.Join(dir, "log")); string(log) != want {
+		t.Fatalf("%q", log)
+	}
+}
+
+func TestCreateStackRefusesAnUnknownShape(t *testing.T) {
+	for _, body := range []string{`{"id":2120746,"open":true}`, `{"number":"17"}`, `[]`, `not json`} {
+		dir := fakeAPI(t, body, 0)
+		var coded *cli.Error
+		if _, err := (GH{Dir: dir}).CreateStack(context.Background(), []int{1, 2}); !errors.As(err, &coded) || coded.Code != "land_gh_output_invalid" {
+			t.Fatalf("%s: %v", body, err)
+		}
+	}
+}
+
+// TestCreateStackReadsTheBodyOfAnHTTPError: an HTTP 422 answer is
+// land_stack_mismatch with the GitHub message. Another HTTP error is
+// land_gh_failed with the GitHub message.
+func TestCreateStackReadsTheBodyOfAnHTTPError(t *testing.T) {
+	dir := fakeAPI(t, `{"message":"Pull requests #1, #2 are already part of a stack","documentation_url":"https://docs.github.com/rest/pulls/stacks#create-a-pull-request-stack","status":"422"}`, 1)
+	var coded *cli.Error
+	if _, err := (GH{Dir: dir}).CreateStack(context.Background(), []int{1, 2}); !errors.As(err, &coded) || coded.Code != "land_stack_mismatch" ||
+		!strings.Contains(coded.Message, "Pull requests #1, #2 are already part of a stack") {
+		t.Fatalf("%v", err)
+	}
+	dir = fakeAPI(t, `{"message":"Not Found","status":"404"}`, 1)
+	if _, err := (GH{Dir: dir}).CreateStack(context.Background(), []int{1, 2}); !errors.As(err, &coded) || coded.Code != "land_gh_failed" || !strings.Contains(coded.Message, "Not Found") {
+		t.Fatalf("%v", err)
+	}
+}
