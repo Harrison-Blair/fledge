@@ -218,6 +218,70 @@ func (g GH) CreateStack(ctx context.Context, numbers []int) (int, error) {
 	return *raw.Number, nil
 }
 
+// MergeAnswer is a merge-async answer. Status is pending, enqueued, merged,
+// or failed. UUID names a pending request. SHA is the merge commit of a
+// merged pull request. Message is the text of GitHub.
+type MergeAnswer struct{ Status, UUID, SHA, Message string }
+
+// ErrMergeRequestGone is an HTTP 404 answer to a poll. Fledge assumes that
+// GitHub gives it for an expired uuid. The probes did not observe it.
+var ErrMergeRequestGone = errors.New("GitHub has no merge request with this uuid")
+
+// MergeAsync requests a merge commit of pull request n at head sha.
+func (g GH) MergeAsync(ctx context.Context, n int, sha string) (MergeAnswer, error) {
+	return g.mergeAnswer(ctx, true, "api", "--method=PUT", "repos/{owner}/{repo}/pulls/"+strconv.Itoa(n)+"/merge-async",
+		"--raw-field=merge_method=merge", "--raw-field=sha="+sha)
+}
+
+// MergeStatus reads the status of merge request uuid of pull request n.
+func (g GH) MergeStatus(ctx context.Context, n int, uuid string) (MergeAnswer, error) {
+	return g.mergeAnswer(ctx, false, "api", "--method=GET", "repos/{owner}/{repo}/pulls/"+strconv.Itoa(n)+"/merge-async/"+uuid)
+}
+
+// mergeAnswer runs a merge-async call and decodes its answer, also from the
+// body of HTTP 400. A pending answer to the PUT needs a uuid, a merged answer
+// needs a full sha, and a failed answer needs a message.
+func (g GH) mergeAnswer(ctx context.Context, put bool, args ...string) (MergeAnswer, error) {
+	b, err := g.run(ctx, args...)
+	var raw struct {
+		Status  *string                              `json:"status"`
+		Details *struct{ Message, UUID, SHA string } `json:"details"`
+	}
+	decoded := json.Unmarshal(b, &raw)
+	if err != nil {
+		switch {
+		case !put && decoded == nil && raw.Status != nil && *raw.Status == "404":
+			return MergeAnswer{}, ErrMergeRequestGone
+		case decoded != nil || raw.Status == nil || *raw.Status != "failed":
+			return MergeAnswer{}, apiError(err, b)
+		}
+	}
+	if decoded != nil || raw.Status == nil {
+		return MergeAnswer{}, invalidOutput("api merge-async", decoded)
+	}
+	a := MergeAnswer{Status: *raw.Status}
+	if d := raw.Details; d != nil {
+		a.Message, a.UUID, a.SHA = d.Message, d.UUID, d.SHA
+	}
+	switch {
+	case a.Status == "pending" && put:
+		if a.UUID != "" {
+			return a, nil
+		}
+	case a.Status == "pending" || a.Status == "enqueued" && !put:
+		return a, nil
+	case a.Status == "merged":
+		if FullHash(a.SHA) {
+			return a, nil
+		}
+	case a.Status == "failed":
+		if a.Message != "" {
+			return a, nil
+		}
+	}
+	return MergeAnswer{}, invalidOutput("api merge-async", fmt.Errorf("a %q answer is missing a field or has an unknown status", a.Status))
+}
+
 // Merge merges pull request n with a merge commit titled subject, only while
 // its head is still head.
 func (g GH) Merge(ctx context.Context, n int, head, subject string) error {

@@ -65,7 +65,8 @@ var Shapes = []string{ShapeStack, ShapeFeature}
 // the verified commit before a carry-forward to a head with an equal patch
 // id. A new verification clears it. The landing
 // fields stay null until task land records them; LandStep is the last land
-// step reached, for refusals.
+// step reached, for refusals. MergeRequest is the uuid of a pending GitHub
+// merge request of a stack. At most one layer of a stack holds one.
 type Record struct {
 	ID                     string                  `json:"id"`
 	Title                  string                  `json:"title"`
@@ -101,6 +102,7 @@ type Record struct {
 	TargetBranch           *string                 `json:"target_branch"`
 	PRURL                  *string                 `json:"pr_url"`
 	LandStep               *string                 `json:"land_step"`
+	MergeRequest           *string                 `json:"merge_request"`
 }
 
 // UnmarshalJSON decodes a record, defaulting an absent delivery_mode to none.

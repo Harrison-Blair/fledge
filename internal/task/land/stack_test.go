@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/landing"
@@ -684,5 +685,290 @@ func TestLandStackRefusesARefusedPost(t *testing.T) {
 	s.stackRefusedAt(t, out, "land_stack_mismatch", stepChecks, "Pull requests #1, #2 are already part of a stack")
 	if posts := s.stackPosts(t); len(posts) != 1 {
 		t.Fatalf("%q", posts)
+	}
+}
+
+// The merge-async answers of the brief.
+const (
+	mergeUUID     = "d3a8ff89-475a-464b-9c87-02dc01da37ec"
+	putPending    = `{"status":"pending","details":{"message":"Merge request enqueued.","uuid":"` + mergeUUID + `","merge_method":"merge","merge_action":"default","expected_head_sha":"e0954a8e013aae0ce9290709bc0e00735f077617","bypass_rules":false}}`
+	getPending    = `{"status":"pending","details":{"message":"Merge request is in progress."}}`
+	getMerged     = `{"status":"merged","details":{"message":"Pull request was merged.","sha":"7a4be7028342660f46d0c0869c8c74c436df9cb1"}}`
+	putFailed     = `{"status":"failed","details":{"message":"Pull request head branch was modified."}}`
+	putAlready    = `{"status":"merged","details":{"message":"Pull request is already merged.","sha":"7a4be7028342660f46d0c0869c8c74c436df9cb1"}}`
+	putNoUUID     = `{"status":"pending","details":{"message":"Merge request enqueued."}}`
+	mergeUUIDPath = "pulls/2/merge-async/" + mergeUUID
+)
+
+// apiMerge is the fake gh file that answers the merge-async PUT of pull
+// request n.
+func apiMerge(n int) string {
+	return "api-PUT-repos_{owner}_{repo}_pulls_" + strconv.Itoa(n) + "_merge-async"
+}
+
+// apiPoll is the fake gh file that answers the poll of uuid on pull request n.
+func apiPoll(n int, uuid string) string {
+	return "api-GET-repos_{owner}_{repo}_pulls_" + strconv.Itoa(n) + "_merge-async_" + uuid
+}
+
+// putLine is the fake gh log line of a merge-async PUT on pull request n at
+// head.
+func putLine(n int, head string) string {
+	return "api --method=PUT repos/{owner}/{repo}/pulls/" + strconv.Itoa(n) + "/merge-async --raw-field=merge_method=merge --raw-field=sha=" + head
+}
+
+// review lands the stack to review. The poll runs every millisecond for at
+// most 20 milliseconds. The fake gh log starts empty.
+func (s stack) review(t *testing.T) {
+	t.Helper()
+	if out := s.land(t, Options{}); out.Error != nil {
+		t.Fatalf("%+v", out.Error)
+	}
+	interval, timeout := pollInterval, pollTimeout
+	pollInterval, pollTimeout = time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { pollInterval, pollTimeout = interval, timeout })
+	os.Remove(filepath.Join(s.gh.dir, "log"))
+}
+
+// mergeCalls returns the merge-async commands of the fake gh log and empties
+// the log.
+func (s stack) mergeCalls(t *testing.T) []string {
+	t.Helper()
+	calls := slices.DeleteFunc(s.gh.log(t), func(l string) bool { return !strings.Contains(l, "merge-async") })
+	os.Remove(filepath.Join(s.gh.dir, "log"))
+	return calls
+}
+
+// mergeRefused requires out to be exit 1 with code, a rejected line that
+// contains text, and the step line. The parent stays at review with a null
+// branch and pr_url.
+func (s stack) mergeRefused(t *testing.T, out cli.Outcome, code, step, text string) {
+	t.Helper()
+	if out.Error == nil || out.Error.Code != code || out.ExitCode() != 1 {
+		t.Fatalf("want %s, got %+v", code, out.Error)
+	}
+	got := render(t, out)
+	first, _, _ := strings.Cut(got, "\n")
+	if !strings.HasPrefix(first, "rejected: "+code+": ") || !strings.HasSuffix(first, " (land)") || !strings.Contains(first, text) ||
+		got != first+"\nLand step reached: "+step+".\n" {
+		t.Fatalf("%q", got)
+	}
+	if p := s.load(t); p.LandStep == nil || *p.LandStep != stepReview || p.Branch != nil || p.PRURL != nil {
+		t.Fatalf("%+v", p)
+	}
+}
+
+// mergeRequest is the stored merge_request of layer i, or "".
+func (s stack) mergeRequest(t *testing.T, i int) string {
+	t.Helper()
+	if r := tasktest.Load(t, s.repo, s.layers[i]); r.MergeRequest != nil {
+		return *r.MergeRequest
+	}
+	return ""
+}
+
+// TestLandStackMergeRequestsAndPolls: --merge on l2 sends one PUT on pull
+// request 2 at its head, then polls the uuid. Before the record step exists,
+// merged is land_unconfirmed, and the uuid stays stored.
+func TestLandStackMergeRequestsAndPolls(t *testing.T) {
+	s := setupStack(t)
+	s.review(t)
+	s.gh.set(t, apiMerge(2), putPending)
+	s.gh.set(t, apiPoll(2, mergeUUID), getMerged)
+	out := s.land(t, Options{ID: s.layers[1], Merge: true})
+	if calls := s.mergeCalls(t); !slices.Equal(calls, []string{putLine(2, s.heads[1]), "api --method=GET repos/{owner}/{repo}/" + mergeUUIDPath}) {
+		t.Fatalf("%q", calls)
+	}
+	s.mergeRefused(t, out, "land_unconfirmed", stepMerge, "fledge task land --id "+s.id)
+	if got := s.mergeRequest(t, 1); got != mergeUUID {
+		t.Fatalf("%q", got)
+	}
+	for _, i := range []int{0, 2} {
+		if got := s.mergeRequest(t, i); got != "" {
+			t.Fatalf("layer %d: %q", i, got)
+		}
+	}
+}
+
+// TestLandStackParentMergesTopLayer: --merge on the parent merges the top
+// layer. An already-merged PUT answer goes to the record step with no poll.
+func TestLandStackParentMergesTopLayer(t *testing.T) {
+	s := setupStack(t)
+	s.review(t)
+	s.gh.set(t, apiMerge(3), putAlready)
+	out := s.land(t, Options{Merge: true})
+	if calls := s.mergeCalls(t); !slices.Equal(calls, []string{putLine(3, s.heads[2])}) {
+		t.Fatalf("%q", calls)
+	}
+	s.mergeRefused(t, out, "land_unconfirmed", stepMerge, "fledge task land --id "+s.id)
+}
+
+// TestLandStackMergePendingContinues: a pending poll at the timeout is
+// land_merge_pending, and the uuid stays stored. The next run polls the
+// stored uuid and sends no new PUT.
+func TestLandStackMergePendingContinues(t *testing.T) {
+	s := setupStack(t)
+	s.review(t)
+	s.gh.set(t, apiMerge(2), putPending)
+	s.gh.set(t, apiPoll(2, mergeUUID), getPending)
+	out := s.land(t, Options{ID: s.layers[1], Merge: true})
+	s.mergeRefused(t, out, "land_merge_pending", stepMerge, "")
+	if calls := s.mergeCalls(t); len(calls) < 3 || calls[0] != putLine(2, s.heads[1]) || slices.Contains(calls[1:], calls[0]) {
+		t.Fatalf("%q", calls)
+	}
+	if b, err := json.Marshal(tasktest.Load(t, s.repo, s.layers[1])); err != nil || !strings.Contains(string(b), `"merge_request":"`+mergeUUID+`"`) {
+		t.Fatalf("%s %v", b, err)
+	}
+	s.gh.set(t, apiPoll(2, mergeUUID), getMerged)
+	out = s.land(t, Options{ID: s.layers[1], Merge: true})
+	s.mergeRefused(t, out, "land_unconfirmed", stepMerge, "")
+	if calls := s.mergeCalls(t); !slices.Equal(calls, []string{"api --method=GET repos/{owner}/{repo}/" + mergeUUIDPath}) {
+		t.Fatalf("%q", calls)
+	}
+}
+
+// TestLandStackContinuesFromAnyRun: after a timeout on l2, a run on the
+// parent continues the request of l2. It skips the new-request guards, also
+// without --merge. It sends no PUT and polls only pull request 2. The parent
+// guards still run.
+func TestLandStackContinuesFromAnyRun(t *testing.T) {
+	for name, o := range map[string]func(s stack) Options{
+		"parent merge": func(s stack) Options { return Options{Merge: true} },
+		"parent":       func(s stack) Options { return Options{} },
+		"layer 3":      func(s stack) Options { return Options{ID: s.layers[2], Merge: true} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := setupStack(t)
+			s.review(t)
+			s.gh.set(t, apiMerge(2), putPending)
+			s.gh.set(t, apiPoll(2, mergeUUID), getPending)
+			s.mergeRefused(t, s.land(t, Options{ID: s.layers[1], Merge: true}), "land_merge_pending", stepMerge, "")
+			s.mergeCalls(t)
+			s.pushes(t)
+			s.gh.set(t, apiPoll(2, mergeUUID), getMerged)
+			s.gh.set(t, "checks-2", checks(s.heads[1], "MERGEABLE", run("COMPLETED", "FAILURE")))
+			s.edit(t, s.layers[2], func(r *task.Record) { r.LandStep, r.PRURL = nil, nil })
+			s.mergeRefused(t, s.land(t, o(s)), "land_unconfirmed", stepMerge, "")
+			if calls := s.mergeCalls(t); !slices.Equal(calls, []string{"api --method=GET repos/{owner}/{repo}/" + mergeUUIDPath}) {
+				t.Fatalf("%q", calls)
+			}
+			if pushes := s.pushes(t); len(pushes) != 0 {
+				t.Fatalf("%q", pushes)
+			}
+			s.edit(t, s.id, func(r *task.Record) { r.Status = task.Created })
+			if out := s.land(t, o(s)); out.Error == nil || out.Error.Code != "task_invalid_state" || len(s.mergeCalls(t)) != 0 {
+				t.Fatalf("%+v", out.Error)
+			}
+		})
+	}
+}
+
+// TestLandStackMergeFailed: a failed answer is land_merge_failed with the
+// message of GitHub, from the PUT or from a poll. A failed poll clears the
+// stored uuid.
+func TestLandStackMergeFailed(t *testing.T) {
+	s := setupStack(t)
+	s.review(t)
+	s.gh.set(t, apiMerge(2), putFailed)
+	s.gh.set(t, apiMerge(2)+".exit", "1")
+	s.mergeRefused(t, s.land(t, Options{ID: s.layers[1], Merge: true}), "land_merge_failed", stepMerge, "Pull request head branch was modified.")
+	if got := s.mergeRequest(t, 1); got != "" {
+		t.Fatalf("%q", got)
+	}
+	s.gh.set(t, apiMerge(2), putPending)
+	s.gh.set(t, apiMerge(2)+".exit", "0")
+	s.gh.set(t, apiPoll(2, mergeUUID), putFailed)
+	s.gh.set(t, apiPoll(2, mergeUUID)+".exit", "1")
+	s.mergeRefused(t, s.land(t, Options{ID: s.layers[1], Merge: true}), "land_merge_failed", stepMerge, "Pull request head branch was modified.")
+	if got := s.mergeRequest(t, 1); got != "" {
+		t.Fatalf("%q", got)
+	}
+}
+
+// TestLandStackMergeRefusesPendingWithoutUUID: a pending PUT answer with no
+// uuid is land_gh_output_invalid, and the run stores nothing.
+func TestLandStackMergeRefusesPendingWithoutUUID(t *testing.T) {
+	s := setupStack(t)
+	s.review(t)
+	s.gh.set(t, apiMerge(2), putNoUUID)
+	s.mergeRefused(t, s.land(t, Options{ID: s.layers[1], Merge: true}), "land_gh_output_invalid", stepMerge, "")
+	if got := s.mergeRequest(t, 1); got != "" {
+		t.Fatalf("%q", got)
+	}
+}
+
+// TestLandStackMergesUnlandedSuffix: l1 is landed from an earlier merge. The
+// merge of l2 is not checked against l1 again, and l1 keeps its record.
+func TestLandStackMergesUnlandedSuffix(t *testing.T) {
+	s := setupStack(t)
+	s.review(t)
+	s.edit(t, s.layers[0], func(r *task.Record) { r.Status, r.MergeCommit = task.Landed, tasktest.Ptr(mergeHash) })
+	s.gh.set(t, "checks-1", checks(s.heads[0], "MERGEABLE", run("COMPLETED", "FAILURE")))
+	s.gh.set(t, apiMerge(2), putPending)
+	s.gh.set(t, apiPoll(2, mergeUUID), getPending)
+	s.mergeRefused(t, s.land(t, Options{ID: s.layers[1], Merge: true}), "land_merge_pending", stepMerge, "")
+	if calls := s.mergeCalls(t); len(calls) == 0 || calls[0] != putLine(2, s.heads[1]) {
+		t.Fatalf("%q", calls)
+	}
+	if r := tasktest.Load(t, s.repo, s.layers[0]); r.Status != task.Landed || r.MergeCommit == nil || *r.MergeCommit != mergeHash {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// TestLandStackMergeChecksEachSuffixLayer: each layer of the suffix needs
+// the review step, a pull request, and green checks at its current head
+// before the PUT.
+func TestLandStackMergeChecksEachSuffixLayer(t *testing.T) {
+	s := setupStack(t)
+	s.review(t)
+	s.edit(t, s.layers[1], func(r *task.Record) { r.PRURL = nil })
+	s.mergeRefused(t, s.land(t, Options{ID: s.layers[1], Merge: true}), "land_stack_not_open", stepCheck, s.layers[1])
+	s = setupStack(t)
+	s.review(t)
+	s.edit(t, s.layers[0], func(r *task.Record) { r.LandStep = tasktest.Ptr(stepChecks) })
+	s.mergeRefused(t, s.land(t, Options{ID: s.layers[1], Merge: true}), "land_stack_not_open", stepCheck, s.layers[0])
+	s = setupStack(t)
+	s.review(t)
+	s.gh.set(t, "checks-1", checks(s.heads[0], "MERGEABLE", run("COMPLETED", "FAILURE")))
+	s.mergeRefused(t, s.land(t, Options{ID: s.layers[1], Merge: true}), "land_checks_failed", stepCheck, "l1")
+	if calls := s.mergeCalls(t); len(calls) != 0 {
+		t.Fatalf("%q", calls)
+	}
+}
+
+// TestLandStackMergeSendsTheCurrentHead: GitHub rebased l2 after the
+// review stop. The PUT sends the head of the REST pull request, not the
+// verified commit that the review stored.
+func TestLandStackMergeSendsTheCurrentHead(t *testing.T) {
+	s := setupStack(t)
+	rebased := s.rebase(t, "l2\n")
+	s.gh.set(t, apiMerge(2), putAlready)
+	s.mergeRefused(t, s.land(t, Options{ID: s.layers[1], Merge: true}), "land_unconfirmed", stepMerge, "")
+	if calls := s.mergeCalls(t); !slices.Equal(calls, []string{putLine(2, rebased)}) {
+		t.Fatalf("%q", calls)
+	}
+}
+
+// TestLandStackMergeRequestGone tests an assumption, not a fact: GitHub
+// answers HTTP 404 to a poll of an expired uuid. The probes did not observe
+// that answer. The run clears the uuid, reads pull request 2, and sends a new
+// PUT for the open pull request. No other test uses an HTTP 404 answer.
+func TestLandStackMergeRequestGone(t *testing.T) {
+	s := setupStack(t)
+	s.review(t)
+	old := "00000000-0000-0000-0000-000000000000"
+	s.edit(t, s.layers[1], func(r *task.Record) { r.MergeRequest = &old })
+	s.gh.set(t, apiPoll(2, old), `{"message":"Not Found","documentation_url":"https://docs.github.com/rest","status":"404"}`)
+	s.gh.set(t, apiPoll(2, old)+".exit", "1")
+	s.gh.set(t, apiMerge(2), putPending)
+	s.gh.set(t, apiPoll(2, mergeUUID), getPending)
+	s.mergeRefused(t, s.land(t, Options{ID: s.layers[1], Merge: true}), "land_merge_pending", stepMerge, "")
+	calls := s.mergeCalls(t)
+	puts := slices.DeleteFunc(slices.Clone(calls), func(l string) bool { return !strings.Contains(l, "PUT") })
+	if !slices.Equal(puts, []string{putLine(2, s.heads[1])}) || !strings.HasSuffix(calls[0], "/"+old) {
+		t.Fatalf("%q", calls)
+	}
+	if got := s.mergeRequest(t, 1); got != mergeUUID {
+		t.Fatalf("%q", got)
 	}
 }

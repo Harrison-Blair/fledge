@@ -2,11 +2,13 @@ package land
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Harrison-Blair/fledge/internal/lib/cli"
 	"github.com/Harrison-Blair/fledge/internal/lib/gitstatus"
@@ -14,6 +16,10 @@ import (
 	"github.com/Harrison-Blair/fledge/internal/lib/state"
 	"github.com/Harrison-Blair/fledge/internal/lib/task"
 )
+
+// The poll of a stack merge request reads its status every pollInterval for
+// at most pollTimeout. Tests change them.
+var pollInterval, pollTimeout = 2 * time.Second, 120 * time.Second
 
 // stackParent returns the stack parent of r: r when r is a stack parent, or
 // the parent of r when that parent is a stack parent. ok is false for any
@@ -34,12 +40,15 @@ func stackParent(s *state.Store, r task.Record) (p task.Record, ok bool, err err
 // stack lands stack parent p. The parent and the layers store the branches
 // and the delivery mode, so --branch and --mode are invalid input. A layer
 // lands only after the parent reached review. The parent guards run on each
-// stack run. Then the push step and the pull request steps run.
+// stack run. Then a run continues the merge request that a layer holds. Else
+// --merge requests the merge of the selected layer, or of the top layer for
+// the parent. Else the push step and the pull request steps run.
 func (l *lander) stack(ctx context.Context, o Options, p task.Record) error {
 	if o.BranchSet || o.ModeSet {
 		return cli.Invalid("--branch and --mode do not apply to a stack task: the stack records store the branches and the delivery mode")
 	}
-	if o.Merge || l.r.ID != p.ID && (p.LandStep == nil || *p.LandStep != stepReview) {
+	selected := l.r.ID
+	if l.r.ID != p.ID && (p.LandStep == nil || *p.LandStep != stepReview) {
 		return refuse("land_stack_not_open", "stack %s has no open pull requests. Land the stack with fledge task land --id %s", p.ID, p.ID)
 	}
 	l.r, l.mode, l.commit = p, p.DeliveryMode, commit(&p)
@@ -49,11 +58,139 @@ func (l *lander) stack(ctx context.Context, o Options, p task.Record) error {
 	if p.DeliveryMode != task.ModePR {
 		return refuse("land_stack_mode", "stack %s has delivery mode %s. A stack lands only in pr mode", p.ID, p.DeliveryMode)
 	}
-	layers, err := l.pushLayers(ctx)
+	records, err := landing.StackLayers(l.s, p, "land")
+	if err != nil {
+		return err
+	}
+	gh := landing.GH{Dir: l.root}
+	for j, r := range records {
+		if r.MergeRequest != nil {
+			return l.poll(ctx, gh, records, j, *r.MergeRequest)
+		}
+	}
+	if o.Merge {
+		k := slices.IndexFunc(records, func(r task.Record) bool { return r.ID == selected })
+		if selected == p.ID {
+			k = len(records) - 1
+		}
+		return l.requestMerge(ctx, gh, records, k)
+	}
+	layers, err := l.pushLayers(ctx, records)
 	if err != nil {
 		return err
 	}
 	return l.openLayers(ctx, layers)
+}
+
+// requestMerge requests the merge of the unlanded layers up to layer k: from
+// the lowest layer that is not landed. Each of these layers needs the review
+// step, a pull request, and green checks at its current head. The PUT sends
+// the current head of layer k. Layer k stores the uuid of a pending answer
+// before the poll starts.
+func (l *lander) requestMerge(ctx context.Context, gh landing.GH, records []task.Record, k int) error {
+	low := slices.IndexFunc(records, func(r task.Record) bool { return r.Status != task.Landed })
+	if low < 0 || low > k {
+		return refuse("land_already_merged", "stack %s has no unlanded layer up to the selected layer; nothing to merge", l.r.ID)
+	}
+	var layer *lander
+	var pr landing.PR
+	for _, r := range records[low : k+1] {
+		if r.LandStep == nil || *r.LandStep != stepReview || r.PRURL == nil {
+			return refuse("land_stack_not_open", "layer %s of stack %s has no pull request at the review step. Open the pull requests with fledge task land --id %s", r.ID, l.r.ID, l.r.ID)
+		}
+		var err error
+		if layer, err = l.layer(ctx, r); err != nil {
+			return err
+		}
+		if pr, err = layer.pullHead(ctx, gh); err != nil {
+			return err
+		}
+		c, err := gh.Checks(ctx, pr.Number)
+		if err != nil {
+			return err
+		}
+		if err := layer.mergeable(pr, c); err != nil {
+			return err
+		}
+	}
+	l.step = stepMerge
+	a, err := gh.MergeAsync(ctx, pr.Number, pr.HeadRefOid)
+	switch {
+	case err != nil:
+		return err
+	case a.Status == "failed":
+		return mergeFailed(pr.Number, a)
+	case a.Status == "merged":
+		return l.recordMerge(pr.Number)
+	}
+	if err := layer.update(func(r *task.Record) { r.MergeRequest = &a.UUID }); err != nil {
+		return err
+	}
+	records[k] = layer.r
+	return l.poll(ctx, gh, records, k, a.UUID)
+}
+
+// poll reads the status of merge request uuid, which layer j holds, every
+// pollInterval for at most pollTimeout. It skips the guards of a new request.
+// A failed request clears the uuid. A pending request at the end keeps it.
+// An HTTP 404 answer clears the uuid. Then a merged pull request goes to the
+// record step, and any other one gets a new request. That rule is an
+// assumption: the probes did not observe the answer to an expired uuid.
+func (l *lander) poll(ctx context.Context, gh landing.GH, records []task.Record, j int, uuid string) error {
+	l.step = stepMerge
+	layer := &lander{s: l.s, root: l.root, caller: l.caller, r: records[j], commit: commit(&records[j])}
+	n, err := strconv.Atoi(path.Base(cli.Display(layer.r.PRURL)))
+	if err != nil {
+		return refuse("land_gh_output_invalid", "layer %s holds merge request %s but has no pull request number", layer.r.ID, uuid)
+	}
+	clear := func() error { return layer.update(func(r *task.Record) { r.MergeRequest = nil }) }
+	deadline := time.Now().Add(pollTimeout)
+	for {
+		a, err := gh.MergeStatus(ctx, n, uuid)
+		switch {
+		case errors.Is(err, landing.ErrMergeRequestGone):
+			if err := clear(); err != nil {
+				return err
+			}
+			p, err := gh.Pull(ctx, n)
+			if err != nil {
+				return err
+			}
+			if p.Merged {
+				return l.recordMerge(n)
+			}
+			l.step, records[j] = stepCheck, layer.r
+			return l.requestMerge(ctx, gh, records, j)
+		case err != nil:
+			return err
+		case a.Status == "failed":
+			if err := clear(); err != nil {
+				return err
+			}
+			return mergeFailed(n, a)
+		case a.Status == "merged":
+			return l.recordMerge(n)
+		case !time.Now().Before(deadline):
+			return refuse("land_merge_pending", "GitHub did not finish merge request %s of pull request %d in %s. Continue it with fledge task land --id %s", uuid, n, pollTimeout, l.r.ID)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
+// recordMerge is the record step after GitHub merged pull request n. Fledge
+// does not record a stack merge yet, so it refuses land_unconfirmed.
+func (l *lander) recordMerge(n int) error {
+	return refuse("land_unconfirmed", "GitHub merged pull request %d of stack %s, but this Fledge cannot record a stack merge. Record it later with fledge task land --id %s", n, l.r.ID, l.r.ID)
+}
+
+// mergeFailed refuses the failed merge request of pull request n with the
+// message of GitHub.
+func mergeFailed(n int, a landing.MergeAnswer) error {
+	return refuse("land_merge_failed", "GitHub could not merge pull request %d: %s", n, a.Message)
 }
 
 // pushLayers checks each layer and pushes the layer branches to origin,
@@ -64,22 +201,12 @@ func (l *lander) stack(ctx context.Context, o Options, p task.Record) error {
 // openLayers checks that head, so the local guards skip the head check. A
 // push without force cannot replace a remote head that GitHub rebased, so
 // pushLayers does not push over it.
-func (l *lander) pushLayers(ctx context.Context) ([]*lander, error) {
-	records, err := landing.StackLayers(l.s, l.r, "land")
-	if err != nil {
-		return nil, err
-	}
+func (l *lander) pushLayers(ctx context.Context, records []task.Record) ([]*lander, error) {
 	var layers []*lander
 	for _, r := range records {
-		if r.Status != task.Verified || r.VerifiedCommit == nil {
-			return nil, refuse("land_stack_layer_unverified", "layer %s of stack %s is %s and has no verified commit. Verify it with fledge task verify --id %s --commit <rev>", r.ID, l.r.ID, r.Status, r.ID)
-		}
-		layer := &lander{s: l.s, root: l.root, caller: l.caller, r: r, mode: task.ModePR, commit: *r.VerifiedCommit, step: stepCheck}
-		if layer.branch, err = landing.TaskBranch(ctx, l.s, r, "land"); err != nil {
+		layer, err := l.layer(ctx, r)
+		if err != nil {
 			return nil, err
-		}
-		if err := landing.ValidBranch(ctx, "branch", layer.branch); err != nil {
-			return nil, refuse("land_branch_invalid", "%v", err)
 		}
 		layers = append(layers, layer)
 	}
@@ -114,6 +241,23 @@ func (l *lander) pushLayers(ctx context.Context) ([]*lander, error) {
 		}
 	}
 	return layers, nil
+}
+
+// layer returns the lander of layer r with its branch. r must be verified
+// with a commit.
+func (l *lander) layer(ctx context.Context, r task.Record) (*lander, error) {
+	if r.Status != task.Verified || r.VerifiedCommit == nil {
+		return nil, refuse("land_stack_layer_unverified", "layer %s of stack %s is %s and has no verified commit. Verify it with fledge task verify --id %s --commit <rev>", r.ID, l.r.ID, r.Status, r.ID)
+	}
+	layer := &lander{s: l.s, root: l.root, caller: l.caller, r: r, mode: task.ModePR, commit: *r.VerifiedCommit, step: stepCheck}
+	var err error
+	if layer.branch, err = landing.TaskBranch(ctx, l.s, r, "land"); err != nil {
+		return nil, err
+	}
+	if err := landing.ValidBranch(ctx, "branch", layer.branch); err != nil {
+		return nil, refuse("land_branch_invalid", "%v", err)
+	}
+	return layer, nil
 }
 
 // openLayers finds or opens the pull request of each layer into its layer

@@ -126,3 +126,110 @@ func TestCreateStackReadsTheBodyOfAnHTTPError(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+const (
+	mergeUUID    = "d3a8ff89-475a-464b-9c87-02dc01da37ec"
+	mergeSHA     = "7a4be7028342660f46d0c0869c8c74c436df9cb1"
+	putPending   = `{"status":"pending","details":{"message":"Merge request enqueued.","uuid":"` + mergeUUID + `","merge_method":"merge","merge_action":"default","expected_head_sha":"e0954a8e013aae0ce9290709bc0e00735f077617","bypass_rules":false}}`
+	getPending   = `{"status":"pending","details":{"message":"Merge request is in progress."}}`
+	getMerged    = `{"status":"merged","details":{"message":"Pull request was merged.","sha":"` + mergeSHA + `"}}`
+	putFailed    = `{"status":"failed","details":{"message":"Pull request head branch was modified."}}`
+	putAlready   = `{"status":"merged","details":{"message":"Pull request is already merged.","sha":"` + mergeSHA + `"}}`
+	mergeHeadSHA = "e0954a8e013aae0ce9290709bc0e00735f077617"
+)
+
+// TestMergeAsyncDecodesEachAnswer: the PUT sends the merge method and the
+// head. Each answer gives the fields of its status. The failed answer comes
+// with HTTP 400, so gh exits 1.
+func TestMergeAsyncDecodesEachAnswer(t *testing.T) {
+	for _, c := range []struct {
+		body   string
+		status int
+		want   MergeAnswer
+	}{
+		{putPending, 0, MergeAnswer{Status: "pending", UUID: mergeUUID, Message: "Merge request enqueued."}},
+		{putAlready, 0, MergeAnswer{Status: "merged", SHA: mergeSHA, Message: "Pull request is already merged."}},
+		{putFailed, 1, MergeAnswer{Status: "failed", Message: "Pull request head branch was modified."}},
+	} {
+		dir := fakeAPI(t, c.body, c.status)
+		got, err := GH{Dir: dir}.MergeAsync(context.Background(), 2, mergeHeadSHA)
+		if err != nil || got != c.want {
+			t.Fatalf("%s: %v %+v", c.body, err, got)
+		}
+		want := "api --method=PUT repos/{owner}/{repo}/pulls/2/merge-async --raw-field=merge_method=merge --raw-field=sha=" + mergeHeadSHA + "\n"
+		if log, _ := os.ReadFile(filepath.Join(dir, "log")); string(log) != want {
+			t.Fatalf("%q", log)
+		}
+	}
+}
+
+// TestMergeStatusDecodesEachAnswer: the GET names the uuid. A pending or
+// enqueued answer needs only the status.
+func TestMergeStatusDecodesEachAnswer(t *testing.T) {
+	for _, c := range []struct {
+		body   string
+		status int
+		want   MergeAnswer
+	}{
+		{getPending, 0, MergeAnswer{Status: "pending", Message: "Merge request is in progress."}},
+		{`{"status":"enqueued"}`, 0, MergeAnswer{Status: "enqueued"}},
+		{getMerged, 0, MergeAnswer{Status: "merged", SHA: mergeSHA, Message: "Pull request was merged."}},
+		{putFailed, 1, MergeAnswer{Status: "failed", Message: "Pull request head branch was modified."}},
+	} {
+		dir := fakeAPI(t, c.body, c.status)
+		got, err := GH{Dir: dir}.MergeStatus(context.Background(), 2, mergeUUID)
+		if err != nil || got != c.want {
+			t.Fatalf("%s: %v %+v", c.body, err, got)
+		}
+		if log, _ := os.ReadFile(filepath.Join(dir, "log")); string(log) != "api --method=GET repos/{owner}/{repo}/pulls/2/merge-async/"+mergeUUID+"\n" {
+			t.Fatalf("%q", log)
+		}
+	}
+}
+
+// TestMergeAnswerRefusesAnUnknownShape: an unknown status or a missing
+// required field is land_gh_output_invalid. A PUT pending answer needs a
+// uuid, and a merged answer needs a 40-hex sha.
+func TestMergeAnswerRefusesAnUnknownShape(t *testing.T) {
+	for _, c := range []struct {
+		body string
+		put  bool
+	}{
+		{`{"status":"pending","details":{"message":"Merge request enqueued."}}`, true},
+		{`{"status":"pending"}`, true},
+		{`{"status":"merged","details":{"message":"Pull request was merged."}}`, false},
+		{`{"status":"merged","details":{"sha":"7a4be70"}}`, false},
+		{`{"status":"merged","details":{"sha":"` + strings.ToUpper(mergeSHA) + `"}}`, true},
+		{`{"status":"failed","details":{}}`, false},
+		{`{"status":"failed"}`, true},
+		{`{"status":"done","details":{"sha":"` + mergeSHA + `"}}`, false},
+		{`{"details":{"uuid":"` + mergeUUID + `"}}`, true},
+		{`not json`, false},
+	} {
+		dir := fakeAPI(t, c.body, 0)
+		g := GH{Dir: dir}
+		var err error
+		if c.put {
+			_, err = g.MergeAsync(context.Background(), 2, mergeHeadSHA)
+		} else {
+			_, err = g.MergeStatus(context.Background(), 2, mergeUUID)
+		}
+		var coded *cli.Error
+		if !errors.As(err, &coded) || coded.Code != "land_gh_output_invalid" {
+			t.Fatalf("%s: %v", c.body, err)
+		}
+	}
+}
+
+// TestMergeAsyncReadsTheBodyOfAnHTTPError: an HTTP error that is not a
+// failed answer is land_gh_failed with the GitHub message.
+func TestMergeAsyncReadsTheBodyOfAnHTTPError(t *testing.T) {
+	dir := fakeAPI(t, `{"message":"Server Error","status":"500"}`, 1)
+	var coded *cli.Error
+	if _, err := (GH{Dir: dir}).MergeAsync(context.Background(), 2, mergeHeadSHA); !errors.As(err, &coded) || coded.Code != "land_gh_failed" || !strings.Contains(coded.Message, "Server Error") {
+		t.Fatalf("%v", err)
+	}
+	if _, err := (GH{Dir: dir}).MergeStatus(context.Background(), 2, mergeUUID); !errors.As(err, &coded) || coded.Code != "land_gh_failed" || !strings.Contains(coded.Message, "Server Error") {
+		t.Fatalf("%v", err)
+	}
+}

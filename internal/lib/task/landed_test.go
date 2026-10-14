@@ -50,7 +50,7 @@ func TestRecordKeepsStoredDeliveryMode(t *testing.T) {
 	}
 	var m map[string]any
 	json.Unmarshal(b, &m)
-	for _, k := range []string{"delivery_mode", "branch", "base_branch", "verified_commit", "verified_patch_id", "carried_from", "landed_at", "landed_by", "merge_commit", "target_branch", "pr_url", "land_step"} {
+	for _, k := range []string{"delivery_mode", "branch", "base_branch", "verified_commit", "verified_patch_id", "carried_from", "landed_at", "landed_by", "merge_commit", "target_branch", "pr_url", "land_step", "merge_request"} {
 		if _, ok := m[k]; !ok {
 			t.Fatalf("missing %s in %s", k, b)
 		}

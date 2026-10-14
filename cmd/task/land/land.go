@@ -41,8 +41,15 @@ func New() *cobra.Command {
 			"layer must be verified with --commit. task land --id <parent> checks every\n" +
 			"layer. Then it pushes each layer branch to origin, bottom first, without force.\n" +
 			"The records store the branch and the mode. Thus --branch and --mode are\n" +
-			"invalid input for a stack task. A layer does not land alone. Use\n" +
-			"fledge task land --id <parent>.\n\n" +
+			"invalid input for a stack task. Without --merge, a layer does not land\n" +
+			"alone. Use fledge task land --id <parent>.\n\n" +
+			"task land --id <parent> --merge requests the GitHub merge of the top layer.\n" +
+			"task land --id <layer> --merge requests the merge of the unlanded layers up\n" +
+			"to that layer. Each of these layers must be at the review step, with green\n" +
+			"checks at its current head. The request sends the current head of the pull\n" +
+			"request. A layer stores the uuid of a pending request as merge_request.\n" +
+			"The next task land on the parent or on a layer continues a pending\n" +
+			"request and sends no new request.\n\n" +
 			"Every attempt that passes the head check prints the advisory review-size\n" +
 			"report of the verified commit against the target, as task size does, also in\n" +
 			"the JSON size field and the body of a pull request it opens; the size never\n" +
